@@ -131,7 +131,7 @@ use crate::case::{call, made, Abort, Case, Failure, Handle, Input, MetalSource, 
 use crate::fixture::{Fixture, METAL_TEXT, RUNTIME_TEXT};
 use crate::recording::ShaderRef;
 use crate::render::{
-    ColorState, PassColor, PassDepth, PassStencil, Plane, RenderPass, RenderPipelineSpec,
+    ColorState, PassColor, PassDepth, PassStencil, Plane, ReadAt, RenderPass, RenderPipelineSpec,
     RenderStep, RenderWork, ScissorBox, TargetSpec,
 };
 use crate::transcript::{
@@ -724,6 +724,7 @@ impl Case for ResolvedSample {
                 offset: 0,
                 row_pitch: SIDE,
                 size: [SIDE; 2],
+                at: ReadAt::BASE,
                 plane: Plane::Stencil,
             });
             names.push(format!("read:stencil:{name}"));
@@ -733,6 +734,7 @@ impl Case for ResolvedSample {
                 offset: 0,
                 row_pitch: DEPTH_TEXEL * SIDE,
                 size: [SIDE; 2],
+                at: ReadAt::BASE,
                 plane: Plane::Depth,
             });
             names.push(format!("read:depth:{name}"));

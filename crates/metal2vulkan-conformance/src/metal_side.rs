@@ -5033,8 +5033,27 @@ impl Side for MetalSide {
             true => MTLStorageMode::Shared,
             false => MTLStorageMode::Private,
         });
+        // The shape before the samples, so a multisampled array target keeps the array type the
+        // shape states rather than the plain multisample type the arm below would give it.
+        if let Some(shape) = &spec.shape {
+            descriptor.setTextureType(MTLTextureType(shape.texture_type.as_raw() as usize));
+            // SAFETY: the three counts are the case's own small numbers, each at least 1, and the
+            // descriptor is this call's own. Metal answers nil for a shape it will not make,
+            // which the caller reports.
+            unsafe {
+                descriptor.setMipmapLevelCount(shape.levels as usize);
+                descriptor.setArrayLength(shape.array_length as usize);
+                descriptor.setDepth(shape.depth as usize);
+            }
+        }
         if spec.samples > 1 {
-            descriptor.setTextureType(MTLTextureType::Type2DMultisample);
+            // The plain multisample type only where the shape named no type of its own: a
+            // multisampled array target keeps the array type its shape states. The **count** is
+            // set either way, since a descriptor of a multisample type at one sample fails
+            // `-[MTLTextureDescriptorInternal validateWithDevice:]` and ends Metal's process.
+            if spec.shape.is_none() {
+                descriptor.setTextureType(MTLTextureType::Type2DMultisample);
+            }
             // SAFETY: the count is 2 or 4, which the case's own guard keeps it to, and Metal takes
             // both on every device; the descriptor is this call's own.
             unsafe { descriptor.setSampleCount(spec.samples as usize) };
@@ -5046,8 +5065,8 @@ impl Side for MetalSide {
                 Failure::named(
                     "NewTextureWithDescriptor",
                     format!(
-                        "a {:?} {}x{} target at {} samples returned nil",
-                        spec.format, spec.size[0], spec.size[1], spec.samples
+                        "a {:?} {}x{} target at {} samples of {:?} returned nil",
+                        spec.format, spec.size[0], spec.size[1], spec.samples, spec.shape
                     ),
                 )
             })?;
@@ -5124,13 +5143,13 @@ impl Side for MetalSide {
                     row_pitch,
                     size,
                     plane,
+                    at,
                 } => self.encode_read_texture(
                     &command_buffer,
-                    *texture,
+                    (*texture, *at, *size),
                     *into,
                     *offset,
                     *row_pitch,
-                    *size,
                     *plane,
                 )?,
                 RenderWork::Dispatch(dispatch) => {
@@ -8093,6 +8112,12 @@ impl MetalSide {
             // case's own guard keeps it to.
             let attachment = unsafe { descriptor.colorAttachments().objectAtIndexedSubscript(at) };
             attachment.setTexture(Some(&texture));
+            attachment.setLevel(color.place.level as usize);
+            attachment.setSlice(color.place.slice as usize);
+            attachment.setDepthPlane(color.place.depth_plane as usize);
+            attachment.setResolveLevel(color.place.resolve_level as usize);
+            attachment.setResolveSlice(color.place.resolve_slice as usize);
+            attachment.setResolveDepthPlane(color.place.resolve_depth_plane as usize);
             attachment.setLoadAction(MTLLoadAction(color.load.raw() as usize));
             attachment.setStoreAction(MTLStoreAction(color.store.raw() as usize));
             attachment.setClearColor(MTLClearColor {
@@ -8115,6 +8140,12 @@ impl MetalSide {
                 Retained::from(self.held_texture(depth.texture)?);
             let attachment = descriptor.depthAttachment();
             attachment.setTexture(Some(&texture));
+            attachment.setLevel(depth.place.level as usize);
+            attachment.setSlice(depth.place.slice as usize);
+            attachment.setDepthPlane(depth.place.depth_plane as usize);
+            attachment.setResolveLevel(depth.place.resolve_level as usize);
+            attachment.setResolveSlice(depth.place.resolve_slice as usize);
+            attachment.setResolveDepthPlane(depth.place.resolve_depth_plane as usize);
             attachment.setLoadAction(MTLLoadAction(depth.load.raw() as usize));
             attachment.setStoreAction(MTLStoreAction(depth.store.raw() as usize));
             attachment.setClearDepth(depth.clear);
@@ -8135,6 +8166,12 @@ impl MetalSide {
                 Retained::from(self.held_texture(stencil.texture)?);
             let attachment = descriptor.stencilAttachment();
             attachment.setTexture(Some(&texture));
+            attachment.setLevel(stencil.place.level as usize);
+            attachment.setSlice(stencil.place.slice as usize);
+            attachment.setDepthPlane(stencil.place.depth_plane as usize);
+            attachment.setResolveLevel(stencil.place.resolve_level as usize);
+            attachment.setResolveSlice(stencil.place.resolve_slice as usize);
+            attachment.setResolveDepthPlane(stencil.place.resolve_depth_plane as usize);
             attachment.setLoadAction(MTLLoadAction(stencil.load.raw() as usize));
             attachment.setStoreAction(MTLStoreAction(stencil.store.raw() as usize));
             attachment.setClearStencil(stencil.clear);
@@ -8153,6 +8190,8 @@ impl MetalSide {
         if let Some(buffer) = pass.visibility {
             descriptor.setVisibilityResultBuffer(Some(self.held(buffer)?));
         }
+        // Written whatever it is, since 0 is Metal's own default and the property takes it.
+        descriptor.setRenderTargetArrayLength(pass.array_length as usize);
         if let Some(size) = pass.size {
             descriptor.setRenderTargetWidth(size[0] as usize);
             descriptor.setRenderTargetHeight(size[1] as usize);
@@ -9792,17 +9831,19 @@ impl MetalSide {
 
     /// Encode one texture-to-buffer blit of a program into `command_buffer`, through Metal's
     /// un-optioned selector at [`Plane::Whole`] and its optioned one for a stated plane.
-    #[allow(clippy::too_many_arguments)]
+    ///
+    /// `source` is the texture read, the level, slice and plane of it the read copies, and that
+    /// place's own extent, which for a level past the first is the level's and not the target's.
     fn encode_read_texture(
         &self,
         command_buffer: &ProtocolObject<dyn MTLCommandBuffer>,
-        texture: Handle,
+        source: (Handle, crate::render::ReadAt, [u32; 2]),
         into: Handle,
         offset: u64,
         row_pitch: u32,
-        extent: [u32; 2],
         plane: Plane,
     ) -> Answer<()> {
+        let (texture, at, extent) = source;
         let texture: Retained<ProtocolObject<dyn MTLTexture>> =
             Retained::from(self.held_texture(texture)?);
         let buffer: Retained<ProtocolObject<dyn MTLBuffer>> = Retained::from(self.held(into)?);
@@ -9819,7 +9860,11 @@ impl MetalSide {
         let encoder = command_buffer
             .blitCommandEncoder()
             .ok_or_else(|| Failure::named("BlitCommandEncoder", "returned nil".to_owned()))?;
-        let origin = MTLOrigin { x: 0, y: 0, z: 0 };
+        let origin = MTLOrigin {
+            x: 0,
+            y: 0,
+            z: at.depth_plane as usize,
+        };
         let size = MTLSize {
             width: extent[0] as usize,
             height: extent[1] as usize,
@@ -9839,13 +9884,14 @@ impl MetalSide {
         // claim the optioned selector for every module and name none of them.
         match plane {
             // SAFETY: the buffer holds `bytes` from `offset`, checked just above, and the region
-            // is level 0's whole extent of a texture the case made at that extent.
+            // is the whole extent of the level, slice and
+            // plane the case named, of a texture the case made with that place in it.
             Plane::Whole => unsafe {
                 encoder
                     .copyFromTexture_sourceSlice_sourceLevel_sourceOrigin_sourceSize_toBuffer_destinationOffset_destinationBytesPerRow_destinationBytesPerImage(
                         &texture,
-                        0,
-                        0,
+                        at.slice as usize,
+                        at.level as usize,
                         origin,
                         size,
                         &buffer,
@@ -9858,6 +9904,7 @@ impl MetalSide {
                 &encoder,
                 &texture,
                 &buffer,
+                at,
                 origin,
                 size,
                 offset,
@@ -9869,6 +9916,7 @@ impl MetalSide {
                 &encoder,
                 &texture,
                 &buffer,
+                at,
                 origin,
                 size,
                 offset,
@@ -9880,6 +9928,7 @@ impl MetalSide {
                 &encoder,
                 &texture,
                 &buffer,
+                at,
                 origin,
                 size,
                 offset,
@@ -9903,6 +9952,7 @@ impl MetalSide {
         encoder: &ProtocolObject<dyn MTLBlitCommandEncoder>,
         texture: &ProtocolObject<dyn MTLTexture>,
         buffer: &ProtocolObject<dyn MTLBuffer>,
+        at: crate::render::ReadAt,
         origin: MTLOrigin,
         size: MTLSize,
         offset: u64,
@@ -9911,14 +9961,14 @@ impl MetalSide {
         option: MTLBlitOption,
     ) {
         // SAFETY: as [`MetalSide::encode_read_texture`] states: the buffer holds `bytes` from
-        // `offset`, which it checked, and the region is level 0's whole extent of a texture the
-        // case made at that extent.
+        // `offset`, which it checked, and the region is the whole extent of
+        // the level, slice and plane the case named.
         unsafe {
             encoder
                 .copyFromTexture_sourceSlice_sourceLevel_sourceOrigin_sourceSize_toBuffer_destinationOffset_destinationBytesPerRow_destinationBytesPerImage_options(
                     texture,
-                    0,
-                    0,
+                    at.slice as usize,
+                    at.level as usize,
                     origin,
                     size,
                     buffer,

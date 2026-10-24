@@ -1,0 +1,3514 @@
+{
+  "format": 1,
+  "case": "layered-render-target-array-length",
+  "suite_version": 1,
+  "shaders": [
+    {
+      "fixture": "rt6_layered.ll",
+      "entry": "rt6_layered_vertex+rt6_layered_fragment",
+      "source_sha256": "dac7953dc974ba81ac0111b399725c8d6a0915f565122335998084e7bfa43e4d"
+    },
+    {
+      "fixture": "rt6_layered.air.ll",
+      "entry": "rt6_layered_vertex+rt6_layered_fragment",
+      "source_sha256": "766446b11ece395112d577cde889511591cbf1a54fcaf84f04864b701ac2a436"
+    },
+    {
+      "fixture": "rt6_samples.ll",
+      "entry": "rt6_fill_vertex+rt6_fill_r32uint",
+      "source_sha256": "857adcbb6951b3d5348087377c099c2b2b4733fe56cc754501b605496cb30fb9"
+    },
+    {
+      "fixture": "rt6_samples.air.ll",
+      "entry": "rt6_fill_vertex+rt6_fill_r32uint",
+      "source_sha256": "50449c6cad01f47ad3407cbf3bbbdfa4405c43f2cae14639e56d71b307a41d2c"
+    }
+  ],
+  "answers": [
+    {
+      "key": {
+        "chip": "apple-m3-max",
+        "os_version": "27.0.1",
+        "os_build": "26A434",
+        "metal_level": "27.0.1"
+      },
+      "provenance": "metal_run",
+      "device": "Apple M3 Max",
+      "runs": 8,
+      "outcomes": [
+        {
+          "runs": 8,
+          "transcript": {
+            "root": {
+              "name": "case",
+              "observed": {
+                "value": "absent"
+              },
+              "children": [
+                {
+                  "name": "inputs",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "air:rt6_layered",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "dac7953dc974ba81ac0111b399725c8d6a0915f565122335998084e7bfa43e4d"
+                        }
+                      }
+                    },
+                    {
+                      "name": "air-typed:rt6_layered",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "766446b11ece395112d577cde889511591cbf1a54fcaf84f04864b701ac2a436"
+                        }
+                      }
+                    },
+                    {
+                      "name": "air:rt6_samples",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "857adcbb6951b3d5348087377c099c2b2b4733fe56cc754501b605496cb30fb9"
+                        }
+                      }
+                    },
+                    {
+                      "name": "air-typed:rt6_samples",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "50449c6cad01f47ad3407cbf3bbbdfa4405c43f2cae14639e56d71b307a41d2c"
+                        }
+                      }
+                    },
+                    {
+                      "name": "layers",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "01acecb507abfe1a354aa8064f4af5d3f1acd019e37db3c11c97523b71c76e9d"
+                        }
+                      }
+                    },
+                    {
+                      "name": "bands",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "6d79f56658d5942678d01f1f46a0399470ef8adc14d5f2cbfadd29dbb7f4e756"
+                        }
+                      }
+                    },
+                    {
+                      "name": "target:rtal-1/layered/slice-0",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "da2867723ef0d0319b22105621e818a1684b5ec276579b7246c461a7de7e3d8d"
+                        }
+                      }
+                    },
+                    {
+                      "name": "place:rtal-1/layered/slice-0",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+                        }
+                      }
+                    },
+                    {
+                      "name": "pipeline:rtal-1/layered/slice-0",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "b95ff9b9c929224210d2ae40eeb0b147190190ebd9a69ccc7b6e8efb51f0dcab"
+                        }
+                      }
+                    },
+                    {
+                      "name": "values:rtal-1/layered/slice-0",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "e83596f1631ee6159068f1eb2588aac54b718052ff9fdc64b0b87264ec4a2ab7"
+                        }
+                      }
+                    },
+                    {
+                      "name": "shape:rtal-1/layered/slice-0",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "db49223a2cf9616171322e5325816a7a579582ebdce91c2f89df8df7aa8aac01"
+                        }
+                      }
+                    },
+                    {
+                      "name": "drawn-rect:rtal-1/layered/slice-0",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "754cebf866e7e0bf139b4fd08acfcf04b6e72d9db0d0214eefbcc7706a0ca914"
+                        }
+                      }
+                    },
+                    {
+                      "name": "prime:rtal-1/layered/slice-0:color/level-0/slice-0/plane-0",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "e86576aa6754cb0ffde5dbffd7be021a911a15d051509f1885a1da0daa860403"
+                        }
+                      }
+                    },
+                    {
+                      "name": "prime:rtal-1/layered/slice-0:color/level-0/slice-1/plane-0",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "89903443687427878c4e08e8ce366b818ae408b7d0e2960c3b23832fdd741626"
+                        }
+                      }
+                    },
+                    {
+                      "name": "prime:rtal-1/layered/slice-0:color/level-0/slice-2/plane-0",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "c037dd59316ef5cc32297b9121d13047e5d5cd4e54f411ed8eeb3668dd82b72d"
+                        }
+                      }
+                    },
+                    {
+                      "name": "prime:rtal-1/layered/slice-0:color/level-0/slice-3/plane-0",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "8c6e3560bf0fd3561ee97e2196673c38822736dfdad0bf33736b1b99b3cd00de"
+                        }
+                      }
+                    },
+                    {
+                      "name": "pass:rtal-1/layered/slice-0",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "1c38205c4c43133f977cb3d7635edcc6c219e2c8ebed37ec471a51eb251458b2"
+                        }
+                      }
+                    },
+                    {
+                      "name": "read:rtal-1/layered/slice-0:color/level-0/slice-0/plane-0",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "c0cdbb6e45249a718e7e605f801cf43f673a22fcf0347034da71f6be2e4f4d5e"
+                        }
+                      }
+                    },
+                    {
+                      "name": "read:rtal-1/layered/slice-0:color/level-0/slice-1/plane-0",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "382743fbb0f84201dd73b023926023f1634abc3a7de8c0b15420311324756515"
+                        }
+                      }
+                    },
+                    {
+                      "name": "read:rtal-1/layered/slice-0:color/level-0/slice-2/plane-0",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "223151575192a07a542b6685f6d6537285b7acef9fcb29a29e3b3d46f288e839"
+                        }
+                      }
+                    },
+                    {
+                      "name": "read:rtal-1/layered/slice-0:color/level-0/slice-3/plane-0",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "a2a6486ec4d83d7a604511bb0bb8da15c65938b1177fb00779ade1537f939fb4"
+                        }
+                      }
+                    },
+                    {
+                      "name": "target:rtal-2/layered/slice-0",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "da2867723ef0d0319b22105621e818a1684b5ec276579b7246c461a7de7e3d8d"
+                        }
+                      }
+                    },
+                    {
+                      "name": "place:rtal-2/layered/slice-0",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+                        }
+                      }
+                    },
+                    {
+                      "name": "pipeline:rtal-2/layered/slice-0",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "b95ff9b9c929224210d2ae40eeb0b147190190ebd9a69ccc7b6e8efb51f0dcab"
+                        }
+                      }
+                    },
+                    {
+                      "name": "values:rtal-2/layered/slice-0",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "e83596f1631ee6159068f1eb2588aac54b718052ff9fdc64b0b87264ec4a2ab7"
+                        }
+                      }
+                    },
+                    {
+                      "name": "shape:rtal-2/layered/slice-0",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "db49223a2cf9616171322e5325816a7a579582ebdce91c2f89df8df7aa8aac01"
+                        }
+                      }
+                    },
+                    {
+                      "name": "drawn-rect:rtal-2/layered/slice-0",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "754cebf866e7e0bf139b4fd08acfcf04b6e72d9db0d0214eefbcc7706a0ca914"
+                        }
+                      }
+                    },
+                    {
+                      "name": "prime:rtal-2/layered/slice-0:color/level-0/slice-0/plane-0",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "e86576aa6754cb0ffde5dbffd7be021a911a15d051509f1885a1da0daa860403"
+                        }
+                      }
+                    },
+                    {
+                      "name": "prime:rtal-2/layered/slice-0:color/level-0/slice-1/plane-0",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "89903443687427878c4e08e8ce366b818ae408b7d0e2960c3b23832fdd741626"
+                        }
+                      }
+                    },
+                    {
+                      "name": "prime:rtal-2/layered/slice-0:color/level-0/slice-2/plane-0",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "c037dd59316ef5cc32297b9121d13047e5d5cd4e54f411ed8eeb3668dd82b72d"
+                        }
+                      }
+                    },
+                    {
+                      "name": "prime:rtal-2/layered/slice-0:color/level-0/slice-3/plane-0",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "8c6e3560bf0fd3561ee97e2196673c38822736dfdad0bf33736b1b99b3cd00de"
+                        }
+                      }
+                    },
+                    {
+                      "name": "pass:rtal-2/layered/slice-0",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "4b6682f5a98b489ffce4a3286312475cf6b40fa5e8d806c5367cc64ab793ae17"
+                        }
+                      }
+                    },
+                    {
+                      "name": "read:rtal-2/layered/slice-0:color/level-0/slice-0/plane-0",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "c0cdbb6e45249a718e7e605f801cf43f673a22fcf0347034da71f6be2e4f4d5e"
+                        }
+                      }
+                    },
+                    {
+                      "name": "read:rtal-2/layered/slice-0:color/level-0/slice-1/plane-0",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "382743fbb0f84201dd73b023926023f1634abc3a7de8c0b15420311324756515"
+                        }
+                      }
+                    },
+                    {
+                      "name": "read:rtal-2/layered/slice-0:color/level-0/slice-2/plane-0",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "223151575192a07a542b6685f6d6537285b7acef9fcb29a29e3b3d46f288e839"
+                        }
+                      }
+                    },
+                    {
+                      "name": "read:rtal-2/layered/slice-0:color/level-0/slice-3/plane-0",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "a2a6486ec4d83d7a604511bb0bb8da15c65938b1177fb00779ade1537f939fb4"
+                        }
+                      }
+                    },
+                    {
+                      "name": "target:rtal-2/layered/slice-1",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "da2867723ef0d0319b22105621e818a1684b5ec276579b7246c461a7de7e3d8d"
+                        }
+                      }
+                    },
+                    {
+                      "name": "place:rtal-2/layered/slice-1",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "fa0313e842632733cb4f91b2464d6c9038dde238c2979678c1280b76ca80e54c"
+                        }
+                      }
+                    },
+                    {
+                      "name": "pipeline:rtal-2/layered/slice-1",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "b95ff9b9c929224210d2ae40eeb0b147190190ebd9a69ccc7b6e8efb51f0dcab"
+                        }
+                      }
+                    },
+                    {
+                      "name": "values:rtal-2/layered/slice-1",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "e83596f1631ee6159068f1eb2588aac54b718052ff9fdc64b0b87264ec4a2ab7"
+                        }
+                      }
+                    },
+                    {
+                      "name": "shape:rtal-2/layered/slice-1",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "db49223a2cf9616171322e5325816a7a579582ebdce91c2f89df8df7aa8aac01"
+                        }
+                      }
+                    },
+                    {
+                      "name": "drawn-rect:rtal-2/layered/slice-1",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "754cebf866e7e0bf139b4fd08acfcf04b6e72d9db0d0214eefbcc7706a0ca914"
+                        }
+                      }
+                    },
+                    {
+                      "name": "prime:rtal-2/layered/slice-1:color/level-0/slice-0/plane-0",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "e86576aa6754cb0ffde5dbffd7be021a911a15d051509f1885a1da0daa860403"
+                        }
+                      }
+                    },
+                    {
+                      "name": "prime:rtal-2/layered/slice-1:color/level-0/slice-1/plane-0",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "89903443687427878c4e08e8ce366b818ae408b7d0e2960c3b23832fdd741626"
+                        }
+                      }
+                    },
+                    {
+                      "name": "prime:rtal-2/layered/slice-1:color/level-0/slice-2/plane-0",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "c037dd59316ef5cc32297b9121d13047e5d5cd4e54f411ed8eeb3668dd82b72d"
+                        }
+                      }
+                    },
+                    {
+                      "name": "prime:rtal-2/layered/slice-1:color/level-0/slice-3/plane-0",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "8c6e3560bf0fd3561ee97e2196673c38822736dfdad0bf33736b1b99b3cd00de"
+                        }
+                      }
+                    },
+                    {
+                      "name": "pass:rtal-2/layered/slice-1",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "2256a855c07e8911a853d60e989ce8ede29943941e8dea780b1bc949d7689919"
+                        }
+                      }
+                    },
+                    {
+                      "name": "read:rtal-2/layered/slice-1:color/level-0/slice-0/plane-0",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "c0cdbb6e45249a718e7e605f801cf43f673a22fcf0347034da71f6be2e4f4d5e"
+                        }
+                      }
+                    },
+                    {
+                      "name": "read:rtal-2/layered/slice-1:color/level-0/slice-1/plane-0",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "382743fbb0f84201dd73b023926023f1634abc3a7de8c0b15420311324756515"
+                        }
+                      }
+                    },
+                    {
+                      "name": "read:rtal-2/layered/slice-1:color/level-0/slice-2/plane-0",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "223151575192a07a542b6685f6d6537285b7acef9fcb29a29e3b3d46f288e839"
+                        }
+                      }
+                    },
+                    {
+                      "name": "read:rtal-2/layered/slice-1:color/level-0/slice-3/plane-0",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "a2a6486ec4d83d7a604511bb0bb8da15c65938b1177fb00779ade1537f939fb4"
+                        }
+                      }
+                    },
+                    {
+                      "name": "target:rtal-0/plain/slice-0",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "da2867723ef0d0319b22105621e818a1684b5ec276579b7246c461a7de7e3d8d"
+                        }
+                      }
+                    },
+                    {
+                      "name": "place:rtal-0/plain/slice-0",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+                        }
+                      }
+                    },
+                    {
+                      "name": "pipeline:rtal-0/plain/slice-0",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "bff4ed2a99b0601e4032ddd5341e595e99c9b514ee4c82e3bd84afdba423a4c1"
+                        }
+                      }
+                    },
+                    {
+                      "name": "values:rtal-0/plain/slice-0",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "e83596f1631ee6159068f1eb2588aac54b718052ff9fdc64b0b87264ec4a2ab7"
+                        }
+                      }
+                    },
+                    {
+                      "name": "shape:rtal-0/plain/slice-0",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "db49223a2cf9616171322e5325816a7a579582ebdce91c2f89df8df7aa8aac01"
+                        }
+                      }
+                    },
+                    {
+                      "name": "drawn-rect:rtal-0/plain/slice-0",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "754cebf866e7e0bf139b4fd08acfcf04b6e72d9db0d0214eefbcc7706a0ca914"
+                        }
+                      }
+                    },
+                    {
+                      "name": "prime:rtal-0/plain/slice-0:color/level-0/slice-0/plane-0",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "e86576aa6754cb0ffde5dbffd7be021a911a15d051509f1885a1da0daa860403"
+                        }
+                      }
+                    },
+                    {
+                      "name": "prime:rtal-0/plain/slice-0:color/level-0/slice-1/plane-0",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "89903443687427878c4e08e8ce366b818ae408b7d0e2960c3b23832fdd741626"
+                        }
+                      }
+                    },
+                    {
+                      "name": "prime:rtal-0/plain/slice-0:color/level-0/slice-2/plane-0",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "c037dd59316ef5cc32297b9121d13047e5d5cd4e54f411ed8eeb3668dd82b72d"
+                        }
+                      }
+                    },
+                    {
+                      "name": "prime:rtal-0/plain/slice-0:color/level-0/slice-3/plane-0",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "8c6e3560bf0fd3561ee97e2196673c38822736dfdad0bf33736b1b99b3cd00de"
+                        }
+                      }
+                    },
+                    {
+                      "name": "pass:rtal-0/plain/slice-0",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "f5d96f50c19164015813804c5d3c798706ae4ca798a99d2e70abb494331a3b8f"
+                        }
+                      }
+                    },
+                    {
+                      "name": "read:rtal-0/plain/slice-0:color/level-0/slice-0/plane-0",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "c0cdbb6e45249a718e7e605f801cf43f673a22fcf0347034da71f6be2e4f4d5e"
+                        }
+                      }
+                    },
+                    {
+                      "name": "read:rtal-0/plain/slice-0:color/level-0/slice-1/plane-0",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "382743fbb0f84201dd73b023926023f1634abc3a7de8c0b15420311324756515"
+                        }
+                      }
+                    },
+                    {
+                      "name": "read:rtal-0/plain/slice-0:color/level-0/slice-2/plane-0",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "223151575192a07a542b6685f6d6537285b7acef9fcb29a29e3b3d46f288e839"
+                        }
+                      }
+                    },
+                    {
+                      "name": "read:rtal-0/plain/slice-0:color/level-0/slice-3/plane-0",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "a2a6486ec4d83d7a604511bb0bb8da15c65938b1177fb00779ade1537f939fb4"
+                        }
+                      }
+                    },
+                    {
+                      "name": "target:rtal-2/plain/slice-0",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "da2867723ef0d0319b22105621e818a1684b5ec276579b7246c461a7de7e3d8d"
+                        }
+                      }
+                    },
+                    {
+                      "name": "place:rtal-2/plain/slice-0",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+                        }
+                      }
+                    },
+                    {
+                      "name": "pipeline:rtal-2/plain/slice-0",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "bff4ed2a99b0601e4032ddd5341e595e99c9b514ee4c82e3bd84afdba423a4c1"
+                        }
+                      }
+                    },
+                    {
+                      "name": "values:rtal-2/plain/slice-0",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "e83596f1631ee6159068f1eb2588aac54b718052ff9fdc64b0b87264ec4a2ab7"
+                        }
+                      }
+                    },
+                    {
+                      "name": "shape:rtal-2/plain/slice-0",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "db49223a2cf9616171322e5325816a7a579582ebdce91c2f89df8df7aa8aac01"
+                        }
+                      }
+                    },
+                    {
+                      "name": "drawn-rect:rtal-2/plain/slice-0",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "754cebf866e7e0bf139b4fd08acfcf04b6e72d9db0d0214eefbcc7706a0ca914"
+                        }
+                      }
+                    },
+                    {
+                      "name": "prime:rtal-2/plain/slice-0:color/level-0/slice-0/plane-0",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "e86576aa6754cb0ffde5dbffd7be021a911a15d051509f1885a1da0daa860403"
+                        }
+                      }
+                    },
+                    {
+                      "name": "prime:rtal-2/plain/slice-0:color/level-0/slice-1/plane-0",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "89903443687427878c4e08e8ce366b818ae408b7d0e2960c3b23832fdd741626"
+                        }
+                      }
+                    },
+                    {
+                      "name": "prime:rtal-2/plain/slice-0:color/level-0/slice-2/plane-0",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "c037dd59316ef5cc32297b9121d13047e5d5cd4e54f411ed8eeb3668dd82b72d"
+                        }
+                      }
+                    },
+                    {
+                      "name": "prime:rtal-2/plain/slice-0:color/level-0/slice-3/plane-0",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "8c6e3560bf0fd3561ee97e2196673c38822736dfdad0bf33736b1b99b3cd00de"
+                        }
+                      }
+                    },
+                    {
+                      "name": "pass:rtal-2/plain/slice-0",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "3770a63f229327a2a9d2479e3cd46899de93e5dcc7e6a7edaa44255d993dd86e"
+                        }
+                      }
+                    },
+                    {
+                      "name": "read:rtal-2/plain/slice-0:color/level-0/slice-0/plane-0",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "c0cdbb6e45249a718e7e605f801cf43f673a22fcf0347034da71f6be2e4f4d5e"
+                        }
+                      }
+                    },
+                    {
+                      "name": "read:rtal-2/plain/slice-0:color/level-0/slice-1/plane-0",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "382743fbb0f84201dd73b023926023f1634abc3a7de8c0b15420311324756515"
+                        }
+                      }
+                    },
+                    {
+                      "name": "read:rtal-2/plain/slice-0:color/level-0/slice-2/plane-0",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "223151575192a07a542b6685f6d6537285b7acef9fcb29a29e3b3d46f288e839"
+                        }
+                      }
+                    },
+                    {
+                      "name": "read:rtal-2/plain/slice-0:color/level-0/slice-3/plane-0",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "a2a6486ec4d83d7a604511bb0bb8da15c65938b1177fb00779ade1537f939fb4"
+                        }
+                      }
+                    },
+                    {
+                      "name": "target:rtal-2/plain/slice-1",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "da2867723ef0d0319b22105621e818a1684b5ec276579b7246c461a7de7e3d8d"
+                        }
+                      }
+                    },
+                    {
+                      "name": "place:rtal-2/plain/slice-1",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "fa0313e842632733cb4f91b2464d6c9038dde238c2979678c1280b76ca80e54c"
+                        }
+                      }
+                    },
+                    {
+                      "name": "pipeline:rtal-2/plain/slice-1",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "bff4ed2a99b0601e4032ddd5341e595e99c9b514ee4c82e3bd84afdba423a4c1"
+                        }
+                      }
+                    },
+                    {
+                      "name": "values:rtal-2/plain/slice-1",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "e83596f1631ee6159068f1eb2588aac54b718052ff9fdc64b0b87264ec4a2ab7"
+                        }
+                      }
+                    },
+                    {
+                      "name": "shape:rtal-2/plain/slice-1",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "db49223a2cf9616171322e5325816a7a579582ebdce91c2f89df8df7aa8aac01"
+                        }
+                      }
+                    },
+                    {
+                      "name": "drawn-rect:rtal-2/plain/slice-1",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "754cebf866e7e0bf139b4fd08acfcf04b6e72d9db0d0214eefbcc7706a0ca914"
+                        }
+                      }
+                    },
+                    {
+                      "name": "prime:rtal-2/plain/slice-1:color/level-0/slice-0/plane-0",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "e86576aa6754cb0ffde5dbffd7be021a911a15d051509f1885a1da0daa860403"
+                        }
+                      }
+                    },
+                    {
+                      "name": "prime:rtal-2/plain/slice-1:color/level-0/slice-1/plane-0",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "89903443687427878c4e08e8ce366b818ae408b7d0e2960c3b23832fdd741626"
+                        }
+                      }
+                    },
+                    {
+                      "name": "prime:rtal-2/plain/slice-1:color/level-0/slice-2/plane-0",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "c037dd59316ef5cc32297b9121d13047e5d5cd4e54f411ed8eeb3668dd82b72d"
+                        }
+                      }
+                    },
+                    {
+                      "name": "prime:rtal-2/plain/slice-1:color/level-0/slice-3/plane-0",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "8c6e3560bf0fd3561ee97e2196673c38822736dfdad0bf33736b1b99b3cd00de"
+                        }
+                      }
+                    },
+                    {
+                      "name": "pass:rtal-2/plain/slice-1",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "1c649d915fd731a68f29427355abe93fa0a61a29ad1683119de5c8c1423893af"
+                        }
+                      }
+                    },
+                    {
+                      "name": "read:rtal-2/plain/slice-1:color/level-0/slice-0/plane-0",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "c0cdbb6e45249a718e7e605f801cf43f673a22fcf0347034da71f6be2e4f4d5e"
+                        }
+                      }
+                    },
+                    {
+                      "name": "read:rtal-2/plain/slice-1:color/level-0/slice-1/plane-0",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "382743fbb0f84201dd73b023926023f1634abc3a7de8c0b15420311324756515"
+                        }
+                      }
+                    },
+                    {
+                      "name": "read:rtal-2/plain/slice-1:color/level-0/slice-2/plane-0",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "223151575192a07a542b6685f6d6537285b7acef9fcb29a29e3b3d46f288e839"
+                        }
+                      }
+                    },
+                    {
+                      "name": "read:rtal-2/plain/slice-1:color/level-0/slice-3/plane-0",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "a2a6486ec4d83d7a604511bb0bb8da15c65938b1177fb00779ade1537f939fb4"
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "library:rt6_layered",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "library:rt6_samples",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "pipeline:rtal-1/layered/slice-0",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "target:rtal-1/layered/slice-0",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "buffer:values:rtal-1/layered/slice-0",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "buffer:shape:rtal-1/layered/slice-0",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "buffer:layers:rtal-1/layered/slice-0",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "buffer:read:rtal-1/layered/slice-0:color/level-0/slice-0/plane-0",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "buffer:read:rtal-1/layered/slice-0:color/level-0/slice-1/plane-0",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "buffer:read:rtal-1/layered/slice-0:color/level-0/slice-2/plane-0",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "buffer:read:rtal-1/layered/slice-0:color/level-0/slice-3/plane-0",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "pipeline:rtal-2/layered/slice-0",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "target:rtal-2/layered/slice-0",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "buffer:values:rtal-2/layered/slice-0",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "buffer:shape:rtal-2/layered/slice-0",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "buffer:layers:rtal-2/layered/slice-0",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "buffer:read:rtal-2/layered/slice-0:color/level-0/slice-0/plane-0",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "buffer:read:rtal-2/layered/slice-0:color/level-0/slice-1/plane-0",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "buffer:read:rtal-2/layered/slice-0:color/level-0/slice-2/plane-0",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "buffer:read:rtal-2/layered/slice-0:color/level-0/slice-3/plane-0",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "pipeline:rtal-2/layered/slice-1",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "target:rtal-2/layered/slice-1",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "buffer:values:rtal-2/layered/slice-1",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "buffer:shape:rtal-2/layered/slice-1",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "buffer:layers:rtal-2/layered/slice-1",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "buffer:read:rtal-2/layered/slice-1:color/level-0/slice-0/plane-0",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "buffer:read:rtal-2/layered/slice-1:color/level-0/slice-1/plane-0",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "buffer:read:rtal-2/layered/slice-1:color/level-0/slice-2/plane-0",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "buffer:read:rtal-2/layered/slice-1:color/level-0/slice-3/plane-0",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "pipeline:rtal-0/plain/slice-0",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "target:rtal-0/plain/slice-0",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "buffer:values:rtal-0/plain/slice-0",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "buffer:shape:rtal-0/plain/slice-0",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "buffer:layers:rtal-0/plain/slice-0",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "buffer:read:rtal-0/plain/slice-0:color/level-0/slice-0/plane-0",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "buffer:read:rtal-0/plain/slice-0:color/level-0/slice-1/plane-0",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "buffer:read:rtal-0/plain/slice-0:color/level-0/slice-2/plane-0",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "buffer:read:rtal-0/plain/slice-0:color/level-0/slice-3/plane-0",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "pipeline:rtal-2/plain/slice-0",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "target:rtal-2/plain/slice-0",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "buffer:values:rtal-2/plain/slice-0",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "buffer:shape:rtal-2/plain/slice-0",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "buffer:layers:rtal-2/plain/slice-0",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "buffer:read:rtal-2/plain/slice-0:color/level-0/slice-0/plane-0",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "buffer:read:rtal-2/plain/slice-0:color/level-0/slice-1/plane-0",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "buffer:read:rtal-2/plain/slice-0:color/level-0/slice-2/plane-0",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "buffer:read:rtal-2/plain/slice-0:color/level-0/slice-3/plane-0",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "pipeline:rtal-2/plain/slice-1",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "target:rtal-2/plain/slice-1",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "buffer:values:rtal-2/plain/slice-1",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "buffer:shape:rtal-2/plain/slice-1",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "buffer:layers:rtal-2/plain/slice-1",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "buffer:read:rtal-2/plain/slice-1:color/level-0/slice-0/plane-0",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "buffer:read:rtal-2/plain/slice-1:color/level-0/slice-1/plane-0",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "buffer:read:rtal-2/plain/slice-1:color/level-0/slice-2/plane-0",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "buffer:read:rtal-2/plain/slice-1:color/level-0/slice-3/plane-0",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "render",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": {
+                          "variant": {
+                            "name": "Completed",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "pieces",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "prime:rtal-1/layered/slice-0:color/level-0/slice-0/plane-0",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "prime:rtal-1/layered/slice-0:color/level-0/slice-1/plane-0",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "prime:rtal-1/layered/slice-0:color/level-0/slice-2/plane-0",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "prime:rtal-1/layered/slice-0:color/level-0/slice-3/plane-0",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "pass:rtal-1/layered/slice-0",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "read:rtal-1/layered/slice-0:color/level-0/slice-0/plane-0",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "read:rtal-1/layered/slice-0:color/level-0/slice-1/plane-0",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "read:rtal-1/layered/slice-0:color/level-0/slice-2/plane-0",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "read:rtal-1/layered/slice-0:color/level-0/slice-3/plane-0",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "prime:rtal-2/layered/slice-0:color/level-0/slice-0/plane-0",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "prime:rtal-2/layered/slice-0:color/level-0/slice-1/plane-0",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "prime:rtal-2/layered/slice-0:color/level-0/slice-2/plane-0",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "prime:rtal-2/layered/slice-0:color/level-0/slice-3/plane-0",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "pass:rtal-2/layered/slice-0",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "read:rtal-2/layered/slice-0:color/level-0/slice-0/plane-0",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "read:rtal-2/layered/slice-0:color/level-0/slice-1/plane-0",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "read:rtal-2/layered/slice-0:color/level-0/slice-2/plane-0",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "read:rtal-2/layered/slice-0:color/level-0/slice-3/plane-0",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "prime:rtal-2/layered/slice-1:color/level-0/slice-0/plane-0",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "prime:rtal-2/layered/slice-1:color/level-0/slice-1/plane-0",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "prime:rtal-2/layered/slice-1:color/level-0/slice-2/plane-0",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "prime:rtal-2/layered/slice-1:color/level-0/slice-3/plane-0",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "pass:rtal-2/layered/slice-1",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "read:rtal-2/layered/slice-1:color/level-0/slice-0/plane-0",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "read:rtal-2/layered/slice-1:color/level-0/slice-1/plane-0",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "read:rtal-2/layered/slice-1:color/level-0/slice-2/plane-0",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "read:rtal-2/layered/slice-1:color/level-0/slice-3/plane-0",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "prime:rtal-0/plain/slice-0:color/level-0/slice-0/plane-0",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "prime:rtal-0/plain/slice-0:color/level-0/slice-1/plane-0",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "prime:rtal-0/plain/slice-0:color/level-0/slice-2/plane-0",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "prime:rtal-0/plain/slice-0:color/level-0/slice-3/plane-0",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "pass:rtal-0/plain/slice-0",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "read:rtal-0/plain/slice-0:color/level-0/slice-0/plane-0",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "read:rtal-0/plain/slice-0:color/level-0/slice-1/plane-0",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "read:rtal-0/plain/slice-0:color/level-0/slice-2/plane-0",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "read:rtal-0/plain/slice-0:color/level-0/slice-3/plane-0",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "prime:rtal-2/plain/slice-0:color/level-0/slice-0/plane-0",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "prime:rtal-2/plain/slice-0:color/level-0/slice-1/plane-0",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "prime:rtal-2/plain/slice-0:color/level-0/slice-2/plane-0",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "prime:rtal-2/plain/slice-0:color/level-0/slice-3/plane-0",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "pass:rtal-2/plain/slice-0",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "read:rtal-2/plain/slice-0:color/level-0/slice-0/plane-0",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "read:rtal-2/plain/slice-0:color/level-0/slice-1/plane-0",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "read:rtal-2/plain/slice-0:color/level-0/slice-2/plane-0",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "read:rtal-2/plain/slice-0:color/level-0/slice-3/plane-0",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "prime:rtal-2/plain/slice-1:color/level-0/slice-0/plane-0",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "prime:rtal-2/plain/slice-1:color/level-0/slice-1/plane-0",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "prime:rtal-2/plain/slice-1:color/level-0/slice-2/plane-0",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "prime:rtal-2/plain/slice-1:color/level-0/slice-3/plane-0",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "pass:rtal-2/plain/slice-1",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "read:rtal-2/plain/slice-1:color/level-0/slice-0/plane-0",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "read:rtal-2/plain/slice-1:color/level-0/slice-1/plane-0",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "read:rtal-2/plain/slice-1:color/level-0/slice-2/plane-0",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "read:rtal-2/plain/slice-1:color/level-0/slice-3/plane-0",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "read-back/rtal-1/layered/slice-0/color/level-0/slice-0/plane-0",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "read-back/rtal-1/layered/slice-0/color/level-0/slice-1/plane-0",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "read-back/rtal-1/layered/slice-0/color/level-0/slice-2/plane-0",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "read-back/rtal-1/layered/slice-0/color/level-0/slice-3/plane-0",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "read-back/rtal-2/layered/slice-0/color/level-0/slice-0/plane-0",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "read-back/rtal-2/layered/slice-0/color/level-0/slice-1/plane-0",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "read-back/rtal-2/layered/slice-0/color/level-0/slice-2/plane-0",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "read-back/rtal-2/layered/slice-0/color/level-0/slice-3/plane-0",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "read-back/rtal-2/layered/slice-1/color/level-0/slice-0/plane-0",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "read-back/rtal-2/layered/slice-1/color/level-0/slice-1/plane-0",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "read-back/rtal-2/layered/slice-1/color/level-0/slice-2/plane-0",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "read-back/rtal-2/layered/slice-1/color/level-0/slice-3/plane-0",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "read-back/rtal-0/plain/slice-0/color/level-0/slice-0/plane-0",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "read-back/rtal-0/plain/slice-0/color/level-0/slice-1/plane-0",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "read-back/rtal-0/plain/slice-0/color/level-0/slice-2/plane-0",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "read-back/rtal-0/plain/slice-0/color/level-0/slice-3/plane-0",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "read-back/rtal-2/plain/slice-0/color/level-0/slice-0/plane-0",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "read-back/rtal-2/plain/slice-0/color/level-0/slice-1/plane-0",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "read-back/rtal-2/plain/slice-0/color/level-0/slice-2/plane-0",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "read-back/rtal-2/plain/slice-0/color/level-0/slice-3/plane-0",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "read-back/rtal-2/plain/slice-1/color/level-0/slice-0/plane-0",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "read-back/rtal-2/plain/slice-1/color/level-0/slice-1/plane-0",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "read-back/rtal-2/plain/slice-1/color/level-0/slice-2/plane-0",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "read-back/rtal-2/plain/slice-1/color/level-0/slice-3/plane-0",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "planes",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "rtal-1/layered/slice-0",
+                      "observed": {
+                        "value": "absent"
+                      },
+                      "children": [
+                        {
+                          "name": "color/level-0/slice-0/plane-0",
+                          "observed": {
+                            "value": {
+                              "bytes": "AQIAAAECAAABAgAAAQIAAAcAAAAHAAAABwAAAAcAAAABAgAAAQIAAAECAAABAgAABwAAAAcAAAAHAAAABwAAAAECAAABAgAAAQIAAAECAAAHAAAABwAAAAcAAAAHAAAAAQIAAAECAAABAgAAAQIAAAcAAAAHAAAABwAAAAcAAAAHAAAABwAAAAcAAAAHAAAABwAAAAcAAAAHAAAABwAAAAcAAAAHAAAABwAAAAcAAAAHAAAABwAAAAcAAAAHAAAABwAAAAcAAAAHAAAABwAAAAcAAAAHAAAABwAAAAcAAAAHAAAABwAAAAcAAAAHAAAABwAAAAcAAAAHAAAABwAAAA=="
+                            },
+                            "shape": {
+                              "bytes": {
+                                "region": {
+                                  "texture": {
+                                    "level": 0,
+                                    "slice": 0,
+                                    "aspect": "color",
+                                    "sample": 0,
+                                    "origin": [
+                                      0,
+                                      0,
+                                      0
+                                    ],
+                                    "size": [
+                                      8,
+                                      8,
+                                      1
+                                    ]
+                                  }
+                                },
+                                "element": "u32",
+                                "row_offset": 0,
+                                "row_elements": 8,
+                                "row_pitch": 32,
+                                "rows": 8,
+                                "image_pitch": 256,
+                                "images": 1,
+                                "gaps": "compared"
+                              }
+                            }
+                          }
+                        },
+                        {
+                          "name": "color/level-0/slice-1/plane-0",
+                          "observed": {
+                            "value": {
+                              "bytes": "kQEAAJEBAACRAQAAkQEAAJEBAACRAQAAkQEAAJEBAACRAQAAkQEAAJEBAACRAQAAkQEAAJEBAACRAQAAkQEAAJEBAACRAQAAkQEAAJEBAACRAQAAkQEAAJEBAACRAQAAkQEAAJEBAACRAQAAkQEAAJEBAACRAQAAkQEAAJEBAACRAQAAkQEAAJEBAACRAQAAkQEAAJEBAACRAQAAkQEAAJEBAACRAQAAkQEAAJEBAACRAQAAkQEAAJEBAACRAQAAkQEAAJEBAACRAQAAkQEAAJEBAACRAQAAkQEAAJEBAACRAQAAkQEAAJEBAACRAQAAkQEAAJEBAACRAQAAkQEAAA=="
+                            },
+                            "shape": {
+                              "bytes": {
+                                "region": {
+                                  "texture": {
+                                    "level": 0,
+                                    "slice": 1,
+                                    "aspect": "color",
+                                    "sample": 0,
+                                    "origin": [
+                                      0,
+                                      0,
+                                      0
+                                    ],
+                                    "size": [
+                                      8,
+                                      8,
+                                      1
+                                    ]
+                                  }
+                                },
+                                "element": "u32",
+                                "row_offset": 0,
+                                "row_elements": 8,
+                                "row_pitch": 32,
+                                "rows": 8,
+                                "image_pitch": 256,
+                                "images": 1,
+                                "gaps": "compared"
+                              }
+                            }
+                          }
+                        },
+                        {
+                          "name": "color/level-0/slice-2/plane-0",
+                          "observed": {
+                            "value": {
+                              "bytes": "kgEAAJIBAACSAQAAkgEAAJIBAACSAQAAkgEAAJIBAACSAQAAkgEAAJIBAACSAQAAkgEAAJIBAACSAQAAkgEAAJIBAACSAQAAkgEAAJIBAACSAQAAkgEAAJIBAACSAQAAkgEAAJIBAACSAQAAkgEAAJIBAACSAQAAkgEAAJIBAACSAQAAkgEAAJIBAACSAQAAkgEAAJIBAACSAQAAkgEAAJIBAACSAQAAkgEAAJIBAACSAQAAkgEAAJIBAACSAQAAkgEAAJIBAACSAQAAkgEAAJIBAACSAQAAkgEAAJIBAACSAQAAkgEAAJIBAACSAQAAkgEAAJIBAACSAQAAkgEAAA=="
+                            },
+                            "shape": {
+                              "bytes": {
+                                "region": {
+                                  "texture": {
+                                    "level": 0,
+                                    "slice": 2,
+                                    "aspect": "color",
+                                    "sample": 0,
+                                    "origin": [
+                                      0,
+                                      0,
+                                      0
+                                    ],
+                                    "size": [
+                                      8,
+                                      8,
+                                      1
+                                    ]
+                                  }
+                                },
+                                "element": "u32",
+                                "row_offset": 0,
+                                "row_elements": 8,
+                                "row_pitch": 32,
+                                "rows": 8,
+                                "image_pitch": 256,
+                                "images": 1,
+                                "gaps": "compared"
+                              }
+                            }
+                          }
+                        },
+                        {
+                          "name": "color/level-0/slice-3/plane-0",
+                          "observed": {
+                            "value": {
+                              "bytes": "kwEAAJMBAACTAQAAkwEAAJMBAACTAQAAkwEAAJMBAACTAQAAkwEAAJMBAACTAQAAkwEAAJMBAACTAQAAkwEAAJMBAACTAQAAkwEAAJMBAACTAQAAkwEAAJMBAACTAQAAkwEAAJMBAACTAQAAkwEAAJMBAACTAQAAkwEAAJMBAACTAQAAkwEAAJMBAACTAQAAkwEAAJMBAACTAQAAkwEAAJMBAACTAQAAkwEAAJMBAACTAQAAkwEAAJMBAACTAQAAkwEAAJMBAACTAQAAkwEAAJMBAACTAQAAkwEAAJMBAACTAQAAkwEAAJMBAACTAQAAkwEAAJMBAACTAQAAkwEAAA=="
+                            },
+                            "shape": {
+                              "bytes": {
+                                "region": {
+                                  "texture": {
+                                    "level": 0,
+                                    "slice": 3,
+                                    "aspect": "color",
+                                    "sample": 0,
+                                    "origin": [
+                                      0,
+                                      0,
+                                      0
+                                    ],
+                                    "size": [
+                                      8,
+                                      8,
+                                      1
+                                    ]
+                                  }
+                                },
+                                "element": "u32",
+                                "row_offset": 0,
+                                "row_elements": 8,
+                                "row_pitch": 32,
+                                "rows": 8,
+                                "image_pitch": 256,
+                                "images": 1,
+                                "gaps": "compared"
+                              }
+                            }
+                          }
+                        }
+                      ]
+                    },
+                    {
+                      "name": "rtal-2/layered/slice-0",
+                      "observed": {
+                        "value": "absent"
+                      },
+                      "children": [
+                        {
+                          "name": "color/level-0/slice-0/plane-0",
+                          "observed": {
+                            "value": {
+                              "bytes": "AAEAAAABAAAAAQAAAAEAAAcAAAAHAAAABwAAAAcAAAAAAQAAAAEAAAABAAAAAQAABwAAAAcAAAAHAAAABwAAAAABAAAAAQAAAAEAAAABAAAHAAAABwAAAAcAAAAHAAAAAAEAAAABAAAAAQAAAAEAAAcAAAAHAAAABwAAAAcAAAAHAAAABwAAAAcAAAAHAAAABwAAAAcAAAAHAAAABwAAAAcAAAAHAAAABwAAAAcAAAAHAAAABwAAAAcAAAAHAAAABwAAAAcAAAAHAAAABwAAAAcAAAAHAAAABwAAAAcAAAAHAAAABwAAAAcAAAAHAAAABwAAAAcAAAAHAAAABwAAAA=="
+                            },
+                            "shape": {
+                              "bytes": {
+                                "region": {
+                                  "texture": {
+                                    "level": 0,
+                                    "slice": 0,
+                                    "aspect": "color",
+                                    "sample": 0,
+                                    "origin": [
+                                      0,
+                                      0,
+                                      0
+                                    ],
+                                    "size": [
+                                      8,
+                                      8,
+                                      1
+                                    ]
+                                  }
+                                },
+                                "element": "u32",
+                                "row_offset": 0,
+                                "row_elements": 8,
+                                "row_pitch": 32,
+                                "rows": 8,
+                                "image_pitch": 256,
+                                "images": 1,
+                                "gaps": "compared"
+                              }
+                            }
+                          }
+                        },
+                        {
+                          "name": "color/level-0/slice-1/plane-0",
+                          "observed": {
+                            "value": {
+                              "bytes": "AQIAAAECAAABAgAAAQIAAAcAAAAHAAAABwAAAAcAAAABAgAAAQIAAAECAAABAgAABwAAAAcAAAAHAAAABwAAAAECAAABAgAAAQIAAAECAAAHAAAABwAAAAcAAAAHAAAAAQIAAAECAAABAgAAAQIAAAcAAAAHAAAABwAAAAcAAAAHAAAABwAAAAcAAAAHAAAABwAAAAcAAAAHAAAABwAAAAcAAAAHAAAABwAAAAcAAAAHAAAABwAAAAcAAAAHAAAABwAAAAcAAAAHAAAABwAAAAcAAAAHAAAABwAAAAcAAAAHAAAABwAAAAcAAAAHAAAABwAAAAcAAAAHAAAABwAAAA=="
+                            },
+                            "shape": {
+                              "bytes": {
+                                "region": {
+                                  "texture": {
+                                    "level": 0,
+                                    "slice": 1,
+                                    "aspect": "color",
+                                    "sample": 0,
+                                    "origin": [
+                                      0,
+                                      0,
+                                      0
+                                    ],
+                                    "size": [
+                                      8,
+                                      8,
+                                      1
+                                    ]
+                                  }
+                                },
+                                "element": "u32",
+                                "row_offset": 0,
+                                "row_elements": 8,
+                                "row_pitch": 32,
+                                "rows": 8,
+                                "image_pitch": 256,
+                                "images": 1,
+                                "gaps": "compared"
+                              }
+                            }
+                          }
+                        },
+                        {
+                          "name": "color/level-0/slice-2/plane-0",
+                          "observed": {
+                            "value": {
+                              "bytes": "kgEAAJIBAACSAQAAkgEAAJIBAACSAQAAkgEAAJIBAACSAQAAkgEAAJIBAACSAQAAkgEAAJIBAACSAQAAkgEAAJIBAACSAQAAkgEAAJIBAACSAQAAkgEAAJIBAACSAQAAkgEAAJIBAACSAQAAkgEAAJIBAACSAQAAkgEAAJIBAACSAQAAkgEAAJIBAACSAQAAkgEAAJIBAACSAQAAkgEAAJIBAACSAQAAkgEAAJIBAACSAQAAkgEAAJIBAACSAQAAkgEAAJIBAACSAQAAkgEAAJIBAACSAQAAkgEAAJIBAACSAQAAkgEAAJIBAACSAQAAkgEAAJIBAACSAQAAkgEAAA=="
+                            },
+                            "shape": {
+                              "bytes": {
+                                "region": {
+                                  "texture": {
+                                    "level": 0,
+                                    "slice": 2,
+                                    "aspect": "color",
+                                    "sample": 0,
+                                    "origin": [
+                                      0,
+                                      0,
+                                      0
+                                    ],
+                                    "size": [
+                                      8,
+                                      8,
+                                      1
+                                    ]
+                                  }
+                                },
+                                "element": "u32",
+                                "row_offset": 0,
+                                "row_elements": 8,
+                                "row_pitch": 32,
+                                "rows": 8,
+                                "image_pitch": 256,
+                                "images": 1,
+                                "gaps": "compared"
+                              }
+                            }
+                          }
+                        },
+                        {
+                          "name": "color/level-0/slice-3/plane-0",
+                          "observed": {
+                            "value": {
+                              "bytes": "kwEAAJMBAACTAQAAkwEAAJMBAACTAQAAkwEAAJMBAACTAQAAkwEAAJMBAACTAQAAkwEAAJMBAACTAQAAkwEAAJMBAACTAQAAkwEAAJMBAACTAQAAkwEAAJMBAACTAQAAkwEAAJMBAACTAQAAkwEAAJMBAACTAQAAkwEAAJMBAACTAQAAkwEAAJMBAACTAQAAkwEAAJMBAACTAQAAkwEAAJMBAACTAQAAkwEAAJMBAACTAQAAkwEAAJMBAACTAQAAkwEAAJMBAACTAQAAkwEAAJMBAACTAQAAkwEAAJMBAACTAQAAkwEAAJMBAACTAQAAkwEAAJMBAACTAQAAkwEAAA=="
+                            },
+                            "shape": {
+                              "bytes": {
+                                "region": {
+                                  "texture": {
+                                    "level": 0,
+                                    "slice": 3,
+                                    "aspect": "color",
+                                    "sample": 0,
+                                    "origin": [
+                                      0,
+                                      0,
+                                      0
+                                    ],
+                                    "size": [
+                                      8,
+                                      8,
+                                      1
+                                    ]
+                                  }
+                                },
+                                "element": "u32",
+                                "row_offset": 0,
+                                "row_elements": 8,
+                                "row_pitch": 32,
+                                "rows": 8,
+                                "image_pitch": 256,
+                                "images": 1,
+                                "gaps": "compared"
+                              }
+                            }
+                          }
+                        }
+                      ]
+                    },
+                    {
+                      "name": "rtal-2/layered/slice-1",
+                      "observed": {
+                        "value": "absent"
+                      },
+                      "children": [
+                        {
+                          "name": "color/level-0/slice-0/plane-0",
+                          "observed": {
+                            "value": {
+                              "bytes": "kAEAAJABAACQAQAAkAEAAJABAACQAQAAkAEAAJABAACQAQAAkAEAAJABAACQAQAAkAEAAJABAACQAQAAkAEAAJABAACQAQAAkAEAAJABAACQAQAAkAEAAJABAACQAQAAkAEAAJABAACQAQAAkAEAAJABAACQAQAAkAEAAJABAACQAQAAkAEAAJABAACQAQAAkAEAAJABAACQAQAAkAEAAJABAACQAQAAkAEAAJABAACQAQAAkAEAAJABAACQAQAAkAEAAJABAACQAQAAkAEAAJABAACQAQAAkAEAAJABAACQAQAAkAEAAJABAACQAQAAkAEAAJABAACQAQAAkAEAAA=="
+                            },
+                            "shape": {
+                              "bytes": {
+                                "region": {
+                                  "texture": {
+                                    "level": 0,
+                                    "slice": 0,
+                                    "aspect": "color",
+                                    "sample": 0,
+                                    "origin": [
+                                      0,
+                                      0,
+                                      0
+                                    ],
+                                    "size": [
+                                      8,
+                                      8,
+                                      1
+                                    ]
+                                  }
+                                },
+                                "element": "u32",
+                                "row_offset": 0,
+                                "row_elements": 8,
+                                "row_pitch": 32,
+                                "rows": 8,
+                                "image_pitch": 256,
+                                "images": 1,
+                                "gaps": "compared"
+                              }
+                            }
+                          }
+                        },
+                        {
+                          "name": "color/level-0/slice-1/plane-0",
+                          "observed": {
+                            "value": {
+                              "bytes": "AAEAAAABAAAAAQAAAAEAAAcAAAAHAAAABwAAAAcAAAAAAQAAAAEAAAABAAAAAQAABwAAAAcAAAAHAAAABwAAAAABAAAAAQAAAAEAAAABAAAHAAAABwAAAAcAAAAHAAAAAAEAAAABAAAAAQAAAAEAAAcAAAAHAAAABwAAAAcAAAAHAAAABwAAAAcAAAAHAAAABwAAAAcAAAAHAAAABwAAAAcAAAAHAAAABwAAAAcAAAAHAAAABwAAAAcAAAAHAAAABwAAAAcAAAAHAAAABwAAAAcAAAAHAAAABwAAAAcAAAAHAAAABwAAAAcAAAAHAAAABwAAAAcAAAAHAAAABwAAAA=="
+                            },
+                            "shape": {
+                              "bytes": {
+                                "region": {
+                                  "texture": {
+                                    "level": 0,
+                                    "slice": 1,
+                                    "aspect": "color",
+                                    "sample": 0,
+                                    "origin": [
+                                      0,
+                                      0,
+                                      0
+                                    ],
+                                    "size": [
+                                      8,
+                                      8,
+                                      1
+                                    ]
+                                  }
+                                },
+                                "element": "u32",
+                                "row_offset": 0,
+                                "row_elements": 8,
+                                "row_pitch": 32,
+                                "rows": 8,
+                                "image_pitch": 256,
+                                "images": 1,
+                                "gaps": "compared"
+                              }
+                            }
+                          }
+                        },
+                        {
+                          "name": "color/level-0/slice-2/plane-0",
+                          "observed": {
+                            "value": {
+                              "bytes": "AQIAAAECAAABAgAAAQIAAAcAAAAHAAAABwAAAAcAAAABAgAAAQIAAAECAAABAgAABwAAAAcAAAAHAAAABwAAAAECAAABAgAAAQIAAAECAAAHAAAABwAAAAcAAAAHAAAAAQIAAAECAAABAgAAAQIAAAcAAAAHAAAABwAAAAcAAAAHAAAABwAAAAcAAAAHAAAABwAAAAcAAAAHAAAABwAAAAcAAAAHAAAABwAAAAcAAAAHAAAABwAAAAcAAAAHAAAABwAAAAcAAAAHAAAABwAAAAcAAAAHAAAABwAAAAcAAAAHAAAABwAAAAcAAAAHAAAABwAAAAcAAAAHAAAABwAAAA=="
+                            },
+                            "shape": {
+                              "bytes": {
+                                "region": {
+                                  "texture": {
+                                    "level": 0,
+                                    "slice": 2,
+                                    "aspect": "color",
+                                    "sample": 0,
+                                    "origin": [
+                                      0,
+                                      0,
+                                      0
+                                    ],
+                                    "size": [
+                                      8,
+                                      8,
+                                      1
+                                    ]
+                                  }
+                                },
+                                "element": "u32",
+                                "row_offset": 0,
+                                "row_elements": 8,
+                                "row_pitch": 32,
+                                "rows": 8,
+                                "image_pitch": 256,
+                                "images": 1,
+                                "gaps": "compared"
+                              }
+                            }
+                          }
+                        },
+                        {
+                          "name": "color/level-0/slice-3/plane-0",
+                          "observed": {
+                            "value": {
+                              "bytes": "kwEAAJMBAACTAQAAkwEAAJMBAACTAQAAkwEAAJMBAACTAQAAkwEAAJMBAACTAQAAkwEAAJMBAACTAQAAkwEAAJMBAACTAQAAkwEAAJMBAACTAQAAkwEAAJMBAACTAQAAkwEAAJMBAACTAQAAkwEAAJMBAACTAQAAkwEAAJMBAACTAQAAkwEAAJMBAACTAQAAkwEAAJMBAACTAQAAkwEAAJMBAACTAQAAkwEAAJMBAACTAQAAkwEAAJMBAACTAQAAkwEAAJMBAACTAQAAkwEAAJMBAACTAQAAkwEAAJMBAACTAQAAkwEAAJMBAACTAQAAkwEAAJMBAACTAQAAkwEAAA=="
+                            },
+                            "shape": {
+                              "bytes": {
+                                "region": {
+                                  "texture": {
+                                    "level": 0,
+                                    "slice": 3,
+                                    "aspect": "color",
+                                    "sample": 0,
+                                    "origin": [
+                                      0,
+                                      0,
+                                      0
+                                    ],
+                                    "size": [
+                                      8,
+                                      8,
+                                      1
+                                    ]
+                                  }
+                                },
+                                "element": "u32",
+                                "row_offset": 0,
+                                "row_elements": 8,
+                                "row_pitch": 32,
+                                "rows": 8,
+                                "image_pitch": 256,
+                                "images": 1,
+                                "gaps": "compared"
+                              }
+                            }
+                          }
+                        }
+                      ]
+                    },
+                    {
+                      "name": "rtal-0/plain/slice-0",
+                      "observed": {
+                        "value": "absent"
+                      },
+                      "children": [
+                        {
+                          "name": "color/level-0/slice-0/plane-0",
+                          "observed": {
+                            "value": {
+                              "bytes": "ABAAAAEQAAACEAAAAxAAAAcAAAAHAAAABwAAAAcAAAAIEAAACRAAAAoQAAALEAAABwAAAAcAAAAHAAAABwAAABAQAAAREAAAEhAAABMQAAAHAAAABwAAAAcAAAAHAAAAGBAAABkQAAAaEAAAGxAAAAcAAAAHAAAABwAAAAcAAAAHAAAABwAAAAcAAAAHAAAABwAAAAcAAAAHAAAABwAAAAcAAAAHAAAABwAAAAcAAAAHAAAABwAAAAcAAAAHAAAABwAAAAcAAAAHAAAABwAAAAcAAAAHAAAABwAAAAcAAAAHAAAABwAAAAcAAAAHAAAABwAAAAcAAAAHAAAABwAAAA=="
+                            },
+                            "shape": {
+                              "bytes": {
+                                "region": {
+                                  "texture": {
+                                    "level": 0,
+                                    "slice": 0,
+                                    "aspect": "color",
+                                    "sample": 0,
+                                    "origin": [
+                                      0,
+                                      0,
+                                      0
+                                    ],
+                                    "size": [
+                                      8,
+                                      8,
+                                      1
+                                    ]
+                                  }
+                                },
+                                "element": "u32",
+                                "row_offset": 0,
+                                "row_elements": 8,
+                                "row_pitch": 32,
+                                "rows": 8,
+                                "image_pitch": 256,
+                                "images": 1,
+                                "gaps": "compared"
+                              }
+                            }
+                          }
+                        },
+                        {
+                          "name": "color/level-0/slice-1/plane-0",
+                          "observed": {
+                            "value": {
+                              "bytes": "kQEAAJEBAACRAQAAkQEAAJEBAACRAQAAkQEAAJEBAACRAQAAkQEAAJEBAACRAQAAkQEAAJEBAACRAQAAkQEAAJEBAACRAQAAkQEAAJEBAACRAQAAkQEAAJEBAACRAQAAkQEAAJEBAACRAQAAkQEAAJEBAACRAQAAkQEAAJEBAACRAQAAkQEAAJEBAACRAQAAkQEAAJEBAACRAQAAkQEAAJEBAACRAQAAkQEAAJEBAACRAQAAkQEAAJEBAACRAQAAkQEAAJEBAACRAQAAkQEAAJEBAACRAQAAkQEAAJEBAACRAQAAkQEAAJEBAACRAQAAkQEAAJEBAACRAQAAkQEAAA=="
+                            },
+                            "shape": {
+                              "bytes": {
+                                "region": {
+                                  "texture": {
+                                    "level": 0,
+                                    "slice": 1,
+                                    "aspect": "color",
+                                    "sample": 0,
+                                    "origin": [
+                                      0,
+                                      0,
+                                      0
+                                    ],
+                                    "size": [
+                                      8,
+                                      8,
+                                      1
+                                    ]
+                                  }
+                                },
+                                "element": "u32",
+                                "row_offset": 0,
+                                "row_elements": 8,
+                                "row_pitch": 32,
+                                "rows": 8,
+                                "image_pitch": 256,
+                                "images": 1,
+                                "gaps": "compared"
+                              }
+                            }
+                          }
+                        },
+                        {
+                          "name": "color/level-0/slice-2/plane-0",
+                          "observed": {
+                            "value": {
+                              "bytes": "kgEAAJIBAACSAQAAkgEAAJIBAACSAQAAkgEAAJIBAACSAQAAkgEAAJIBAACSAQAAkgEAAJIBAACSAQAAkgEAAJIBAACSAQAAkgEAAJIBAACSAQAAkgEAAJIBAACSAQAAkgEAAJIBAACSAQAAkgEAAJIBAACSAQAAkgEAAJIBAACSAQAAkgEAAJIBAACSAQAAkgEAAJIBAACSAQAAkgEAAJIBAACSAQAAkgEAAJIBAACSAQAAkgEAAJIBAACSAQAAkgEAAJIBAACSAQAAkgEAAJIBAACSAQAAkgEAAJIBAACSAQAAkgEAAJIBAACSAQAAkgEAAJIBAACSAQAAkgEAAA=="
+                            },
+                            "shape": {
+                              "bytes": {
+                                "region": {
+                                  "texture": {
+                                    "level": 0,
+                                    "slice": 2,
+                                    "aspect": "color",
+                                    "sample": 0,
+                                    "origin": [
+                                      0,
+                                      0,
+                                      0
+                                    ],
+                                    "size": [
+                                      8,
+                                      8,
+                                      1
+                                    ]
+                                  }
+                                },
+                                "element": "u32",
+                                "row_offset": 0,
+                                "row_elements": 8,
+                                "row_pitch": 32,
+                                "rows": 8,
+                                "image_pitch": 256,
+                                "images": 1,
+                                "gaps": "compared"
+                              }
+                            }
+                          }
+                        },
+                        {
+                          "name": "color/level-0/slice-3/plane-0",
+                          "observed": {
+                            "value": {
+                              "bytes": "kwEAAJMBAACTAQAAkwEAAJMBAACTAQAAkwEAAJMBAACTAQAAkwEAAJMBAACTAQAAkwEAAJMBAACTAQAAkwEAAJMBAACTAQAAkwEAAJMBAACTAQAAkwEAAJMBAACTAQAAkwEAAJMBAACTAQAAkwEAAJMBAACTAQAAkwEAAJMBAACTAQAAkwEAAJMBAACTAQAAkwEAAJMBAACTAQAAkwEAAJMBAACTAQAAkwEAAJMBAACTAQAAkwEAAJMBAACTAQAAkwEAAJMBAACTAQAAkwEAAJMBAACTAQAAkwEAAJMBAACTAQAAkwEAAJMBAACTAQAAkwEAAJMBAACTAQAAkwEAAA=="
+                            },
+                            "shape": {
+                              "bytes": {
+                                "region": {
+                                  "texture": {
+                                    "level": 0,
+                                    "slice": 3,
+                                    "aspect": "color",
+                                    "sample": 0,
+                                    "origin": [
+                                      0,
+                                      0,
+                                      0
+                                    ],
+                                    "size": [
+                                      8,
+                                      8,
+                                      1
+                                    ]
+                                  }
+                                },
+                                "element": "u32",
+                                "row_offset": 0,
+                                "row_elements": 8,
+                                "row_pitch": 32,
+                                "rows": 8,
+                                "image_pitch": 256,
+                                "images": 1,
+                                "gaps": "compared"
+                              }
+                            }
+                          }
+                        }
+                      ]
+                    },
+                    {
+                      "name": "rtal-2/plain/slice-0",
+                      "observed": {
+                        "value": "absent"
+                      },
+                      "children": [
+                        {
+                          "name": "color/level-0/slice-0/plane-0",
+                          "observed": {
+                            "value": {
+                              "bytes": "ABAAAAEQAAACEAAAAxAAAAcAAAAHAAAABwAAAAcAAAAIEAAACRAAAAoQAAALEAAABwAAAAcAAAAHAAAABwAAABAQAAAREAAAEhAAABMQAAAHAAAABwAAAAcAAAAHAAAAGBAAABkQAAAaEAAAGxAAAAcAAAAHAAAABwAAAAcAAAAHAAAABwAAAAcAAAAHAAAABwAAAAcAAAAHAAAABwAAAAcAAAAHAAAABwAAAAcAAAAHAAAABwAAAAcAAAAHAAAABwAAAAcAAAAHAAAABwAAAAcAAAAHAAAABwAAAAcAAAAHAAAABwAAAAcAAAAHAAAABwAAAAcAAAAHAAAABwAAAA=="
+                            },
+                            "shape": {
+                              "bytes": {
+                                "region": {
+                                  "texture": {
+                                    "level": 0,
+                                    "slice": 0,
+                                    "aspect": "color",
+                                    "sample": 0,
+                                    "origin": [
+                                      0,
+                                      0,
+                                      0
+                                    ],
+                                    "size": [
+                                      8,
+                                      8,
+                                      1
+                                    ]
+                                  }
+                                },
+                                "element": "u32",
+                                "row_offset": 0,
+                                "row_elements": 8,
+                                "row_pitch": 32,
+                                "rows": 8,
+                                "image_pitch": 256,
+                                "images": 1,
+                                "gaps": "compared"
+                              }
+                            }
+                          }
+                        },
+                        {
+                          "name": "color/level-0/slice-1/plane-0",
+                          "observed": {
+                            "value": {
+                              "bytes": "BwAAAAcAAAAHAAAABwAAAAcAAAAHAAAABwAAAAcAAAAHAAAABwAAAAcAAAAHAAAABwAAAAcAAAAHAAAABwAAAAcAAAAHAAAABwAAAAcAAAAHAAAABwAAAAcAAAAHAAAABwAAAAcAAAAHAAAABwAAAAcAAAAHAAAABwAAAAcAAAAHAAAABwAAAAcAAAAHAAAABwAAAAcAAAAHAAAABwAAAAcAAAAHAAAABwAAAAcAAAAHAAAABwAAAAcAAAAHAAAABwAAAAcAAAAHAAAABwAAAAcAAAAHAAAABwAAAAcAAAAHAAAABwAAAAcAAAAHAAAABwAAAAcAAAAHAAAABwAAAA=="
+                            },
+                            "shape": {
+                              "bytes": {
+                                "region": {
+                                  "texture": {
+                                    "level": 0,
+                                    "slice": 1,
+                                    "aspect": "color",
+                                    "sample": 0,
+                                    "origin": [
+                                      0,
+                                      0,
+                                      0
+                                    ],
+                                    "size": [
+                                      8,
+                                      8,
+                                      1
+                                    ]
+                                  }
+                                },
+                                "element": "u32",
+                                "row_offset": 0,
+                                "row_elements": 8,
+                                "row_pitch": 32,
+                                "rows": 8,
+                                "image_pitch": 256,
+                                "images": 1,
+                                "gaps": "compared"
+                              }
+                            }
+                          }
+                        },
+                        {
+                          "name": "color/level-0/slice-2/plane-0",
+                          "observed": {
+                            "value": {
+                              "bytes": "kgEAAJIBAACSAQAAkgEAAJIBAACSAQAAkgEAAJIBAACSAQAAkgEAAJIBAACSAQAAkgEAAJIBAACSAQAAkgEAAJIBAACSAQAAkgEAAJIBAACSAQAAkgEAAJIBAACSAQAAkgEAAJIBAACSAQAAkgEAAJIBAACSAQAAkgEAAJIBAACSAQAAkgEAAJIBAACSAQAAkgEAAJIBAACSAQAAkgEAAJIBAACSAQAAkgEAAJIBAACSAQAAkgEAAJIBAACSAQAAkgEAAJIBAACSAQAAkgEAAJIBAACSAQAAkgEAAJIBAACSAQAAkgEAAJIBAACSAQAAkgEAAJIBAACSAQAAkgEAAA=="
+                            },
+                            "shape": {
+                              "bytes": {
+                                "region": {
+                                  "texture": {
+                                    "level": 0,
+                                    "slice": 2,
+                                    "aspect": "color",
+                                    "sample": 0,
+                                    "origin": [
+                                      0,
+                                      0,
+                                      0
+                                    ],
+                                    "size": [
+                                      8,
+                                      8,
+                                      1
+                                    ]
+                                  }
+                                },
+                                "element": "u32",
+                                "row_offset": 0,
+                                "row_elements": 8,
+                                "row_pitch": 32,
+                                "rows": 8,
+                                "image_pitch": 256,
+                                "images": 1,
+                                "gaps": "compared"
+                              }
+                            }
+                          }
+                        },
+                        {
+                          "name": "color/level-0/slice-3/plane-0",
+                          "observed": {
+                            "value": {
+                              "bytes": "kwEAAJMBAACTAQAAkwEAAJMBAACTAQAAkwEAAJMBAACTAQAAkwEAAJMBAACTAQAAkwEAAJMBAACTAQAAkwEAAJMBAACTAQAAkwEAAJMBAACTAQAAkwEAAJMBAACTAQAAkwEAAJMBAACTAQAAkwEAAJMBAACTAQAAkwEAAJMBAACTAQAAkwEAAJMBAACTAQAAkwEAAJMBAACTAQAAkwEAAJMBAACTAQAAkwEAAJMBAACTAQAAkwEAAJMBAACTAQAAkwEAAJMBAACTAQAAkwEAAJMBAACTAQAAkwEAAJMBAACTAQAAkwEAAJMBAACTAQAAkwEAAJMBAACTAQAAkwEAAA=="
+                            },
+                            "shape": {
+                              "bytes": {
+                                "region": {
+                                  "texture": {
+                                    "level": 0,
+                                    "slice": 3,
+                                    "aspect": "color",
+                                    "sample": 0,
+                                    "origin": [
+                                      0,
+                                      0,
+                                      0
+                                    ],
+                                    "size": [
+                                      8,
+                                      8,
+                                      1
+                                    ]
+                                  }
+                                },
+                                "element": "u32",
+                                "row_offset": 0,
+                                "row_elements": 8,
+                                "row_pitch": 32,
+                                "rows": 8,
+                                "image_pitch": 256,
+                                "images": 1,
+                                "gaps": "compared"
+                              }
+                            }
+                          }
+                        }
+                      ]
+                    },
+                    {
+                      "name": "rtal-2/plain/slice-1",
+                      "observed": {
+                        "value": "absent"
+                      },
+                      "children": [
+                        {
+                          "name": "color/level-0/slice-0/plane-0",
+                          "observed": {
+                            "value": {
+                              "bytes": "kAEAAJABAACQAQAAkAEAAJABAACQAQAAkAEAAJABAACQAQAAkAEAAJABAACQAQAAkAEAAJABAACQAQAAkAEAAJABAACQAQAAkAEAAJABAACQAQAAkAEAAJABAACQAQAAkAEAAJABAACQAQAAkAEAAJABAACQAQAAkAEAAJABAACQAQAAkAEAAJABAACQAQAAkAEAAJABAACQAQAAkAEAAJABAACQAQAAkAEAAJABAACQAQAAkAEAAJABAACQAQAAkAEAAJABAACQAQAAkAEAAJABAACQAQAAkAEAAJABAACQAQAAkAEAAJABAACQAQAAkAEAAJABAACQAQAAkAEAAA=="
+                            },
+                            "shape": {
+                              "bytes": {
+                                "region": {
+                                  "texture": {
+                                    "level": 0,
+                                    "slice": 0,
+                                    "aspect": "color",
+                                    "sample": 0,
+                                    "origin": [
+                                      0,
+                                      0,
+                                      0
+                                    ],
+                                    "size": [
+                                      8,
+                                      8,
+                                      1
+                                    ]
+                                  }
+                                },
+                                "element": "u32",
+                                "row_offset": 0,
+                                "row_elements": 8,
+                                "row_pitch": 32,
+                                "rows": 8,
+                                "image_pitch": 256,
+                                "images": 1,
+                                "gaps": "compared"
+                              }
+                            }
+                          }
+                        },
+                        {
+                          "name": "color/level-0/slice-1/plane-0",
+                          "observed": {
+                            "value": {
+                              "bytes": "ABAAAAEQAAACEAAAAxAAAAcAAAAHAAAABwAAAAcAAAAIEAAACRAAAAoQAAALEAAABwAAAAcAAAAHAAAABwAAABAQAAAREAAAEhAAABMQAAAHAAAABwAAAAcAAAAHAAAAGBAAABkQAAAaEAAAGxAAAAcAAAAHAAAABwAAAAcAAAAHAAAABwAAAAcAAAAHAAAABwAAAAcAAAAHAAAABwAAAAcAAAAHAAAABwAAAAcAAAAHAAAABwAAAAcAAAAHAAAABwAAAAcAAAAHAAAABwAAAAcAAAAHAAAABwAAAAcAAAAHAAAABwAAAAcAAAAHAAAABwAAAAcAAAAHAAAABwAAAA=="
+                            },
+                            "shape": {
+                              "bytes": {
+                                "region": {
+                                  "texture": {
+                                    "level": 0,
+                                    "slice": 1,
+                                    "aspect": "color",
+                                    "sample": 0,
+                                    "origin": [
+                                      0,
+                                      0,
+                                      0
+                                    ],
+                                    "size": [
+                                      8,
+                                      8,
+                                      1
+                                    ]
+                                  }
+                                },
+                                "element": "u32",
+                                "row_offset": 0,
+                                "row_elements": 8,
+                                "row_pitch": 32,
+                                "rows": 8,
+                                "image_pitch": 256,
+                                "images": 1,
+                                "gaps": "compared"
+                              }
+                            }
+                          }
+                        },
+                        {
+                          "name": "color/level-0/slice-2/plane-0",
+                          "observed": {
+                            "value": {
+                              "bytes": "BwAAAAcAAAAHAAAABwAAAAcAAAAHAAAABwAAAAcAAAAHAAAABwAAAAcAAAAHAAAABwAAAAcAAAAHAAAABwAAAAcAAAAHAAAABwAAAAcAAAAHAAAABwAAAAcAAAAHAAAABwAAAAcAAAAHAAAABwAAAAcAAAAHAAAABwAAAAcAAAAHAAAABwAAAAcAAAAHAAAABwAAAAcAAAAHAAAABwAAAAcAAAAHAAAABwAAAAcAAAAHAAAABwAAAAcAAAAHAAAABwAAAAcAAAAHAAAABwAAAAcAAAAHAAAABwAAAAcAAAAHAAAABwAAAAcAAAAHAAAABwAAAAcAAAAHAAAABwAAAA=="
+                            },
+                            "shape": {
+                              "bytes": {
+                                "region": {
+                                  "texture": {
+                                    "level": 0,
+                                    "slice": 2,
+                                    "aspect": "color",
+                                    "sample": 0,
+                                    "origin": [
+                                      0,
+                                      0,
+                                      0
+                                    ],
+                                    "size": [
+                                      8,
+                                      8,
+                                      1
+                                    ]
+                                  }
+                                },
+                                "element": "u32",
+                                "row_offset": 0,
+                                "row_elements": 8,
+                                "row_pitch": 32,
+                                "rows": 8,
+                                "image_pitch": 256,
+                                "images": 1,
+                                "gaps": "compared"
+                              }
+                            }
+                          }
+                        },
+                        {
+                          "name": "color/level-0/slice-3/plane-0",
+                          "observed": {
+                            "value": {
+                              "bytes": "kwEAAJMBAACTAQAAkwEAAJMBAACTAQAAkwEAAJMBAACTAQAAkwEAAJMBAACTAQAAkwEAAJMBAACTAQAAkwEAAJMBAACTAQAAkwEAAJMBAACTAQAAkwEAAJMBAACTAQAAkwEAAJMBAACTAQAAkwEAAJMBAACTAQAAkwEAAJMBAACTAQAAkwEAAJMBAACTAQAAkwEAAJMBAACTAQAAkwEAAJMBAACTAQAAkwEAAJMBAACTAQAAkwEAAJMBAACTAQAAkwEAAJMBAACTAQAAkwEAAJMBAACTAQAAkwEAAJMBAACTAQAAkwEAAJMBAACTAQAAkwEAAJMBAACTAQAAkwEAAA=="
+                            },
+                            "shape": {
+                              "bytes": {
+                                "region": {
+                                  "texture": {
+                                    "level": 0,
+                                    "slice": 3,
+                                    "aspect": "color",
+                                    "sample": 0,
+                                    "origin": [
+                                      0,
+                                      0,
+                                      0
+                                    ],
+                                    "size": [
+                                      8,
+                                      8,
+                                      1
+                                    ]
+                                  }
+                                },
+                                "element": "u32",
+                                "row_offset": 0,
+                                "row_elements": 8,
+                                "row_pitch": 32,
+                                "rows": 8,
+                                "image_pitch": 256,
+                                "images": 1,
+                                "gaps": "compared"
+                              }
+                            }
+                          }
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "name": "notices",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "set",
+                      "observed": {
+                        "value": {
+                          "nothing": "announced_nothing"
+                        }
+                      }
+                    },
+                    {
+                      "name": "counts",
+                      "observed": {
+                        "value": {
+                          "fields": {}
+                        }
+                      }
+                    }
+                  ]
+                }
+              ]
+            }
+          }
+        }
+      ],
+      "validated": "ran"
+    }
+  ]
+}

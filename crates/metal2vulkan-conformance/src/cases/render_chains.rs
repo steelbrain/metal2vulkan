@@ -93,7 +93,7 @@ use crate::case::{
 use crate::fixture::{Fixture, METAL_TEXT, RUNTIME_TEXT};
 use crate::recording::ShaderRef;
 use crate::render::{
-    ColorState, PassColor, Plane, RenderPass, RenderPipelineSpec, RenderStep, RenderWork,
+    ColorState, PassColor, Plane, ReadAt, RenderPass, RenderPipelineSpec, RenderStep, RenderWork,
     TargetSpec,
 };
 use crate::transcript::{
@@ -607,6 +607,7 @@ impl Case for RenderChain {
                 row_pitch: TEXEL * subject.source_side,
                 size: [subject.source_side; 2],
                 plane: Plane::Whole,
+                at: ReadAt::BASE,
             },
             RenderWork::ReadTexture {
                 texture: target,
@@ -615,6 +616,7 @@ impl Case for RenderChain {
                 row_pitch: TEXEL * subject.target_side,
                 size: [subject.target_side; 2],
                 plane: Plane::Whole,
+                at: ReadAt::BASE,
             },
         ];
         let outcome = call(sites, "render", side.render(&work), |outcome| {

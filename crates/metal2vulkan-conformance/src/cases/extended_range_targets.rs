@@ -38,8 +38,8 @@ use crate::case::{call, made, Abort, Case, Failure, Input, MetalSource, Side};
 use crate::fixture::{Fixture, METAL_TEXT, RUNTIME_TEXT};
 use crate::recording::ShaderRef;
 use crate::render::{
-    ColorState, Dispatch, PassColor, Plane, RenderPass, RenderPipelineSpec, RenderStep, RenderWork,
-    TargetSpec,
+    ColorState, Dispatch, PassColor, Plane, ReadAt, RenderPass, RenderPipelineSpec, RenderStep,
+    RenderWork, TargetSpec,
 };
 use crate::transcript::{
     Aspect, ByteLayout, Digest, Element, Gaps, Node, Observed, Region, Sites, Value,
@@ -688,6 +688,7 @@ impl Case for TargetDraw {
                     row_pitch: WIDTH * self.format.texel,
                     size: [WIDTH, HEIGHT],
                     plane: Plane::Whole,
+                    at: ReadAt::BASE,
                 },
             ];
             let outcome = call(sites, "render", side.render(&work), |_| Value::Absent)?;
@@ -832,6 +833,7 @@ impl Case for ClearTexels {
                         row_pitch: self.format.texel,
                         size: [1, 1],
                         plane: Plane::Whole,
+                        at: ReadAt::BASE,
                     });
                 }
                 work.push(RenderWork::Dispatch(Dispatch {
@@ -1117,6 +1119,7 @@ impl Case for ClearRoutes {
                         row_pitch: route.side * self.format.texel,
                         size: [route.side, route.side],
                         plane: Plane::Whole,
+                        at: ReadAt::BASE,
                     },
                 ];
                 let outcome = call(

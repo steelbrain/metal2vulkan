@@ -93,8 +93,8 @@ use crate::allowance::Allowance;
 use crate::case::{call, made, Abort, Case, Input, MetalSource, Side};
 use crate::recording::ShaderRef;
 use crate::render::{
-    Blend, ColorState, PassColor, Plane, RenderPass, RenderPipelineSpec, RenderStep, RenderWork,
-    TargetSpec,
+    Blend, ColorState, PassColor, Plane, ReadAt, RenderPass, RenderPipelineSpec, RenderStep,
+    RenderWork, TargetSpec,
 };
 use crate::transcript::{Aspect, ByteLayout, Element, Gaps, Node, Observed, Region, Sites, Value};
 use metal2vulkan::metal::{BlendFactor as F, BlendOperation as O, PixelFormat};
@@ -497,6 +497,7 @@ impl Case for HalfOutputBlends {
                 row_pitch: pitch,
                 size: [WIDTH, HEIGHT],
                 plane: Plane::Whole,
+                at: ReadAt::BASE,
             });
             reads.push((sweep.name, into));
         }

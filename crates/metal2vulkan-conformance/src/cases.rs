@@ -109,6 +109,7 @@ pub mod indirect_command_depth;
 pub mod indirect_commands;
 pub mod indirect_private_types;
 pub mod int_attributes;
+pub mod layered_targets;
 pub mod level_sizes;
 pub mod library_facts;
 pub mod math_routines;
@@ -533,6 +534,7 @@ pub fn all() -> Vec<Box<dyn Case>> {
     cases.extend(depth_resolve_pairs::all());
     cases.extend(stencil_resolve_pairs::all());
     cases.extend(stencil_resolved_sample::all());
+    cases.extend(layered_targets::all());
     cases.extend(pass_attachment_pairs::all());
     cases.extend(pass_bound_pairs::all());
     cases.extend(pass_sequence_actions::all());

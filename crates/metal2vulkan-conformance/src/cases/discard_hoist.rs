@@ -34,7 +34,7 @@ use crate::case::{
 use crate::fixture::{Fixture, METAL_TEXT, RUNTIME_TEXT};
 use crate::recording::ShaderRef;
 use crate::render::{
-    ColorState, PassColor, Plane, RenderPass, RenderPipelineSpec, RenderStep, RenderWork,
+    ColorState, PassColor, Plane, ReadAt, RenderPass, RenderPipelineSpec, RenderStep, RenderWork,
     StageFunction, TargetSpec,
 };
 use crate::transcript::{
@@ -322,6 +322,7 @@ impl Case for DiscardHoist {
                 row_pitch: ROW_PITCH,
                 size: [WIDTH, HEIGHT],
                 plane: Plane::Whole,
+                at: ReadAt::BASE,
             });
         }
         let outcome = call(sites, "render", side.render(&work), |outcome| {

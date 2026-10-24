@@ -77,7 +77,7 @@
 use crate::allowance::Allowance;
 use crate::case::{call, made, Abort, Case, Handle, Input, MetalSource, Side};
 use crate::recording::ShaderRef;
-use crate::render::{ColorState, PassColor, RenderPass, RenderStep, RenderWork};
+use crate::render::{ColorState, PassColor, Plane, ReadAt, RenderPass, RenderStep, RenderWork};
 use crate::transcript::{Node, Observed, Sites, Value};
 use metal2vulkan::metal::{IndexType, PrimitiveType};
 
@@ -349,6 +349,8 @@ impl Case for RestartIndices {
                 offset: at as u64 * u64::from(plane(SIZE)),
                 row_pitch: TEXEL * SIZE[0],
                 size: SIZE,
+                at: ReadAt::BASE,
+                plane: Plane::Whole,
             });
         }
         let outcome = call(sites, "render", side.render(&work), |outcome| {

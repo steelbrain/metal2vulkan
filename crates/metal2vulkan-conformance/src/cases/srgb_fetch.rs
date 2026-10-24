@@ -36,7 +36,7 @@ use crate::case::{call, made, Abort, Case, Failure, Handle, Input, MetalSource, 
 use crate::fixture::{Fixture, METAL_TEXT, RUNTIME_TEXT};
 use crate::recording::ShaderRef;
 use crate::render::{
-    ColorState, PassColor, PassDepth, Plane, RenderPass, RenderPipelineSpec, RenderStep,
+    ColorState, PassColor, PassDepth, Plane, ReadAt, RenderPass, RenderPipelineSpec, RenderStep,
     RenderWork, StageFunction, TargetSpec,
 };
 use crate::transcript::{
@@ -383,6 +383,7 @@ impl Case for SrgbFetch {
                 row_pitch: SIDE * TEXEL,
                 size: [SIDE, SIDE],
                 plane: Plane::Whole,
+                at: ReadAt::BASE,
             });
             reads.push((at, texels));
         }

@@ -43,7 +43,7 @@ use crate::case::{
 use crate::fixture::{Fixture, METAL_TEXT, RUNTIME_TEXT};
 use crate::recording::ShaderRef;
 use crate::render::{
-    ColorState, PassColor, Plane, RenderPass, RenderPipelineSpec, RenderStep, RenderWork,
+    ColorState, PassColor, Plane, ReadAt, RenderPass, RenderPipelineSpec, RenderStep, RenderWork,
     TargetSpec, ViewportRect,
 };
 use crate::transcript::{
@@ -398,6 +398,7 @@ impl Case for DrawStateChanges {
                 row_pitch: TEXEL * SIDE,
                 size: [SIDE; 2],
                 plane: Plane::Whole,
+                at: ReadAt::BASE,
             },
         ];
         let outcome = call(sites, "render", side.render(&work), |outcome| {

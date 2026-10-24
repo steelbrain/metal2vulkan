@@ -4236,8 +4236,18 @@ impl Side for RuntimeSide<'_> {
             true => ResourceOptions::shared(),
             false => ResourceOptions::private(),
         };
+        // The shape before the samples, so a multisampled array target keeps the array type the
+        // shape states rather than the plain multisample type the arm below would give it.
+        if let Some(shape) = &spec.shape {
+            descriptor.texture_type = shape.texture_type;
+            descriptor.mipmap_level_count = u64::from(shape.levels);
+            descriptor.array_length = u64::from(shape.array_length);
+            descriptor.depth = u64::from(shape.depth);
+        }
         if spec.samples > 1 {
-            descriptor.texture_type = TextureType::Type2DMultisample;
+            if spec.shape.is_none() {
+                descriptor.texture_type = TextureType::Type2DMultisample;
+            }
             descriptor.sample_count = u64::from(spec.samples);
         }
         let texture = self
@@ -4710,6 +4720,7 @@ impl Side for RuntimeSide<'_> {
                     row_pitch,
                     size: extent,
                     plane,
+                    at,
                 } => texture(*from).and_then(|from| {
                     let into = buffer(*into)?;
                     let mut blit = command_buffer
@@ -4717,9 +4728,9 @@ impl Side for RuntimeSide<'_> {
                         .map_err(Failure::from_error)?;
                     blit.copy_from_texture_to_buffer(
                         from,
-                        0,
-                        0,
-                        Origin::new(0, 0, 0),
+                        u64::from(at.slice),
+                        u64::from(at.level),
+                        Origin::new(0, 0, u64::from(at.depth_plane)),
                         Size::new(u64::from(extent[0]), u64::from(extent[1]), 1),
                         into,
                         *offset,
@@ -6879,6 +6890,12 @@ fn encode_pass(command_buffer: &CommandBuffer, pass: &RenderPass, pools: &Pools)
             .get_mut(at)
             .ok_or_else(|| Failure::named("NoSuchAttachment", format!("color {at}")))?;
         attachment.texture = Some(texture(held)?.clone());
+        attachment.level = u64::from(color.place.level);
+        attachment.slice = u64::from(color.place.slice);
+        attachment.depth_plane = u64::from(color.place.depth_plane);
+        attachment.resolve_level = u64::from(color.place.resolve_level);
+        attachment.resolve_slice = u64::from(color.place.resolve_slice);
+        attachment.resolve_depth_plane = u64::from(color.place.resolve_depth_plane);
         attachment.load_action = color.load;
         attachment.store_action = color.store;
         attachment.clear_color = ClearColor::new(
@@ -6895,6 +6912,12 @@ fn encode_pass(command_buffer: &CommandBuffer, pass: &RenderPass, pools: &Pools)
     if let Some(depth) = &pass.depth {
         let attachment = &mut descriptor.depth_attachment;
         attachment.texture = Some(texture(depth.texture)?.clone());
+        attachment.level = u64::from(depth.place.level);
+        attachment.slice = u64::from(depth.place.slice);
+        attachment.depth_plane = u64::from(depth.place.depth_plane);
+        attachment.resolve_level = u64::from(depth.place.resolve_level);
+        attachment.resolve_slice = u64::from(depth.place.resolve_slice);
+        attachment.resolve_depth_plane = u64::from(depth.place.resolve_depth_plane);
         attachment.load_action = depth.load;
         attachment.store_action = depth.store;
         attachment.clear_depth = depth.clear;
@@ -6907,6 +6930,12 @@ fn encode_pass(command_buffer: &CommandBuffer, pass: &RenderPass, pools: &Pools)
     if let Some(stencil) = &pass.stencil {
         let attachment = &mut descriptor.stencil_attachment;
         attachment.texture = Some(texture(stencil.texture)?.clone());
+        attachment.level = u64::from(stencil.place.level);
+        attachment.slice = u64::from(stencil.place.slice);
+        attachment.depth_plane = u64::from(stencil.place.depth_plane);
+        attachment.resolve_level = u64::from(stencil.place.resolve_level);
+        attachment.resolve_slice = u64::from(stencil.place.resolve_slice);
+        attachment.resolve_depth_plane = u64::from(stencil.place.resolve_depth_plane);
         attachment.load_action = stencil.load;
         attachment.store_action = stencil.store;
         attachment.clear_stencil = stencil.clear;
@@ -6919,6 +6948,8 @@ fn encode_pass(command_buffer: &CommandBuffer, pass: &RenderPass, pools: &Pools)
     if let Some(held) = pass.visibility {
         descriptor.visibility_result_buffer = Some(buffer(held)?.clone());
     }
+    // Written whatever it is, since 0 is Metal's own default and the field takes it.
+    descriptor.render_target_array_length = u64::from(pass.array_length);
     // The runtime takes Metal's own positions where the case states none, and refuses what Metal
     // refuses, typed: no guard of the suite's stands between a case and that refusal, because the
     // refusal is what the case compares.

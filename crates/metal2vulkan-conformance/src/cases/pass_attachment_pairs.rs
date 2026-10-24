@@ -87,7 +87,7 @@ use crate::case::{call, made, Abort, Case, Failure, Handle, Input, MetalSource, 
 use crate::fixture::{Fixture, METAL_TEXT, RUNTIME_TEXT};
 use crate::recording::ShaderRef;
 use crate::render::{
-    ColorState, PassColor, Plane, RenderPass, RenderPipelineSpec, RenderStep, RenderWork,
+    ColorState, PassColor, Plane, ReadAt, RenderPass, RenderPipelineSpec, RenderStep, RenderWork,
     ScissorBox, StageFunction, TargetSpec,
 };
 use crate::transcript::{
@@ -857,6 +857,7 @@ impl Case for AttachmentPairs {
                     row_pitch: texel_bytes(*format) * SIDE,
                     size: [SIDE; 2],
                     plane: Plane::Whole,
+                    at: ReadAt::BASE,
                 });
                 names.push(format!("read:{}:{which}", cell.site));
             }

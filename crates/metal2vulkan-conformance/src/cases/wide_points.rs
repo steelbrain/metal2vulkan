@@ -43,7 +43,7 @@ use crate::case::{call, made, Abort, Case, Failure, Input, MetalSource, Side};
 use crate::fixture::{Fixture, METAL_TEXT, RUNTIME_TEXT};
 use crate::recording::ShaderRef;
 use crate::render::{
-    ColorState, PassColor, Plane, RenderPass, RenderPipelineSpec, RenderStep, RenderWork,
+    ColorState, PassColor, Plane, ReadAt, RenderPass, RenderPipelineSpec, RenderStep, RenderWork,
     StageFunction, TargetSpec, ViewportRect,
 };
 use crate::transcript::{Digest, Negative, Node, Observed, Sites, Value};
@@ -340,6 +340,7 @@ impl Case for WidePoints {
                 row_pitch: ROW_PITCH,
                 size: [SIDE; 2],
                 plane: Plane::Whole,
+                at: ReadAt::BASE,
             });
         }
         let outcome = call(sites, "render", side.render(&work), |outcome| {

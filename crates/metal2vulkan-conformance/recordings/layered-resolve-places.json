@@ -1,0 +1,1093 @@
+{
+  "format": 1,
+  "case": "layered-resolve-places",
+  "suite_version": 1,
+  "shaders": [
+    {
+      "fixture": "rt6_samples.ll",
+      "entry": "rt6_fill_vertex+rt6_fill_r32float",
+      "source_sha256": "857adcbb6951b3d5348087377c099c2b2b4733fe56cc754501b605496cb30fb9"
+    },
+    {
+      "fixture": "rt6_samples.air.ll",
+      "entry": "rt6_fill_vertex+rt6_fill_r32float",
+      "source_sha256": "50449c6cad01f47ad3407cbf3bbbdfa4405c43f2cae14639e56d71b307a41d2c"
+    }
+  ],
+  "answers": [
+    {
+      "key": {
+        "chip": "apple-m3-max",
+        "os_version": "27.0.1",
+        "os_build": "26A434",
+        "metal_level": "27.0.1"
+      },
+      "provenance": "metal_run",
+      "device": "Apple M3 Max",
+      "runs": 8,
+      "outcomes": [
+        {
+          "runs": 8,
+          "transcript": {
+            "root": {
+              "name": "case",
+              "observed": {
+                "value": "absent"
+              },
+              "children": [
+                {
+                  "name": "inputs",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "air:rt6_samples",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "857adcbb6951b3d5348087377c099c2b2b4733fe56cc754501b605496cb30fb9"
+                        }
+                      }
+                    },
+                    {
+                      "name": "air-typed:rt6_samples",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "50449c6cad01f47ad3407cbf3bbbdfa4405c43f2cae14639e56d71b307a41d2c"
+                        }
+                      }
+                    },
+                    {
+                      "name": "bands",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "6d79f56658d5942678d01f1f46a0399470ef8adc14d5f2cbfadd29dbb7f4e756"
+                        }
+                      }
+                    },
+                    {
+                      "name": "target:resolve-slice-1",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "49d9379395e4926ad5500d80d2139700442091ff7040cd9bf5f95f069547e546"
+                        }
+                      }
+                    },
+                    {
+                      "name": "resolve:resolve-slice-1",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "d4f7a6080233fd85f1f650cd3844619e2c289328dd5a357ccab9dd18052165ba"
+                        }
+                      }
+                    },
+                    {
+                      "name": "place:resolve-slice-1",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "62814ec17fd36709a76f23397c2766bbe4ac7f4825b0047a6d14b7237b52554a"
+                        }
+                      }
+                    },
+                    {
+                      "name": "pipeline:resolve-slice-1",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "9881e6d2ecc543bd94ad65a90a424004c42ed308828dc05e38c62383ae885739"
+                        }
+                      }
+                    },
+                    {
+                      "name": "values:resolve-slice-1",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "558715285a4929abe114a2c849c82345ab6ed86c5fc79ecdcb9a3353f67864ef"
+                        }
+                      }
+                    },
+                    {
+                      "name": "shape:resolve-slice-1",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "cc64e39e1d38c7bf38b8fccf98e0f9c424fd65bd40a7d3926b20ca79a9239df3"
+                        }
+                      }
+                    },
+                    {
+                      "name": "drawn-rect:resolve-slice-1",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "754cebf866e7e0bf139b4fd08acfcf04b6e72d9db0d0214eefbcc7706a0ca914"
+                        }
+                      }
+                    },
+                    {
+                      "name": "prime:resolve-slice-1:color/level-0/slice-0/plane-0",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "c5959a1e0586554613cbd0c094dcca90cc6a69b28f15c0602319d5f9e7ba9fae"
+                        }
+                      }
+                    },
+                    {
+                      "name": "prime:resolve-slice-1:color/level-0/slice-1/plane-0",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "dbddd2166469251156764aaf79b7845c4c144dec896852f1952d86ca2955d25d"
+                        }
+                      }
+                    },
+                    {
+                      "name": "prime:resolve-slice-1:color/level-0/slice-2/plane-0",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "091bd06f98d3a13d1dba2f591215aec08efc11d3c6f898f315be372111d4e528"
+                        }
+                      }
+                    },
+                    {
+                      "name": "pass:resolve-slice-1",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "04fc293d7e0544ee4b526966dcb018d34d06a5aa1a8b0198aec75f750565eaa2"
+                        }
+                      }
+                    },
+                    {
+                      "name": "read:resolve-slice-1:color/level-0/slice-0/plane-0",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "c0cdbb6e45249a718e7e605f801cf43f673a22fcf0347034da71f6be2e4f4d5e"
+                        }
+                      }
+                    },
+                    {
+                      "name": "read:resolve-slice-1:color/level-0/slice-1/plane-0",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "382743fbb0f84201dd73b023926023f1634abc3a7de8c0b15420311324756515"
+                        }
+                      }
+                    },
+                    {
+                      "name": "read:resolve-slice-1:color/level-0/slice-2/plane-0",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "223151575192a07a542b6685f6d6537285b7acef9fcb29a29e3b3d46f288e839"
+                        }
+                      }
+                    },
+                    {
+                      "name": "target:resolve-level-1",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "08dd5b7bc45d6f37093a196adb563fd5bbf12e70dc6cc2154089919d3e525f39"
+                        }
+                      }
+                    },
+                    {
+                      "name": "resolve:resolve-level-1",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "90a08c24e451bec1c8aa3c0a92a6a693d13d9e26ab91a5a3466a9dc6e4b87011"
+                        }
+                      }
+                    },
+                    {
+                      "name": "place:resolve-level-1",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "60f195a71d9b5cc0617a324f3dd79c533fc243d680dc8994d0e0c4f9bc2d27c9"
+                        }
+                      }
+                    },
+                    {
+                      "name": "pipeline:resolve-level-1",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "9881e6d2ecc543bd94ad65a90a424004c42ed308828dc05e38c62383ae885739"
+                        }
+                      }
+                    },
+                    {
+                      "name": "values:resolve-level-1",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "a3c6a06546f1e1daa1c3ddfc89b8a4b2d879ae0443c05089d8c4b9f2fce054c5"
+                        }
+                      }
+                    },
+                    {
+                      "name": "shape:resolve-level-1",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "267833806a8e9c01c5355ae70125042abfa3e90ca6708f00e944a4e6e5addd9f"
+                        }
+                      }
+                    },
+                    {
+                      "name": "drawn-rect:resolve-level-1",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "4e7de98684a483af6a8683603ec7241196683c7a4e0952e86b102c5dbf15cd5c"
+                        }
+                      }
+                    },
+                    {
+                      "name": "prime:resolve-level-1:color/level-0/slice-0/plane-0",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "c5959a1e0586554613cbd0c094dcca90cc6a69b28f15c0602319d5f9e7ba9fae"
+                        }
+                      }
+                    },
+                    {
+                      "name": "prime:resolve-level-1:color/level-1/slice-0/plane-0",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "3da5c85380d598273baf406e41599deb8e766872e4f1d0d0c9dc409230a65b6e"
+                        }
+                      }
+                    },
+                    {
+                      "name": "prime:resolve-level-1:color/level-2/slice-0/plane-0",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "a7eb6a785ba96974e0de06a4e50254c6c994fab8cd8f8beba33996d8da99529e"
+                        }
+                      }
+                    },
+                    {
+                      "name": "pass:resolve-level-1",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "6e3af2dfb9589bf583811d0c82e67edb7ccb3796907560d2debe385e417ba1d6"
+                        }
+                      }
+                    },
+                    {
+                      "name": "read:resolve-level-1:color/level-0/slice-0/plane-0",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "c0cdbb6e45249a718e7e605f801cf43f673a22fcf0347034da71f6be2e4f4d5e"
+                        }
+                      }
+                    },
+                    {
+                      "name": "read:resolve-level-1:color/level-1/slice-0/plane-0",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "2dddb518a426b3fd505e8e6e4c8c743bc962d254504ab3eaf4c43bca22faaac3"
+                        }
+                      }
+                    },
+                    {
+                      "name": "read:resolve-level-1:color/level-2/slice-0/plane-0",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "61a4d4e879ab54f57df6498149b9485fc4bce8b1c7ee434912446e6ed5da0e4f"
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "library:rt6_samples",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "pipeline:resolve-slice-1",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "target:resolve-slice-1",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "resolve:resolve-slice-1",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "buffer:values:resolve-slice-1",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "buffer:shape:resolve-slice-1",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "buffer:layers:resolve-slice-1",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "buffer:read:resolve-slice-1:color/level-0/slice-0/plane-0",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "buffer:read:resolve-slice-1:color/level-0/slice-1/plane-0",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "buffer:read:resolve-slice-1:color/level-0/slice-2/plane-0",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "pipeline:resolve-level-1",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "target:resolve-level-1",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "resolve:resolve-level-1",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "buffer:values:resolve-level-1",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "buffer:shape:resolve-level-1",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "buffer:layers:resolve-level-1",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "buffer:read:resolve-level-1:color/level-0/slice-0/plane-0",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "buffer:read:resolve-level-1:color/level-1/slice-0/plane-0",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "buffer:read:resolve-level-1:color/level-2/slice-0/plane-0",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "render",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": {
+                          "variant": {
+                            "name": "Completed",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "pieces",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "prime:resolve-slice-1:color/level-0/slice-0/plane-0",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "prime:resolve-slice-1:color/level-0/slice-1/plane-0",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "prime:resolve-slice-1:color/level-0/slice-2/plane-0",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "pass:resolve-slice-1",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "read:resolve-slice-1:color/level-0/slice-0/plane-0",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "read:resolve-slice-1:color/level-0/slice-1/plane-0",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "read:resolve-slice-1:color/level-0/slice-2/plane-0",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "prime:resolve-level-1:color/level-0/slice-0/plane-0",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "prime:resolve-level-1:color/level-1/slice-0/plane-0",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "prime:resolve-level-1:color/level-2/slice-0/plane-0",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "pass:resolve-level-1",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "read:resolve-level-1:color/level-0/slice-0/plane-0",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "read:resolve-level-1:color/level-1/slice-0/plane-0",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "read:resolve-level-1:color/level-2/slice-0/plane-0",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "read-back/resolve-slice-1/color/level-0/slice-0/plane-0",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "read-back/resolve-slice-1/color/level-0/slice-1/plane-0",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "read-back/resolve-slice-1/color/level-0/slice-2/plane-0",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "read-back/resolve-level-1/color/level-0/slice-0/plane-0",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "read-back/resolve-level-1/color/level-1/slice-0/plane-0",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "read-back/resolve-level-1/color/level-2/slice-0/plane-0",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "planes",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "resolve-slice-1",
+                      "observed": {
+                        "value": "absent"
+                      },
+                      "children": [
+                        {
+                          "name": "color/level-0/slice-0/plane-0",
+                          "observed": {
+                            "value": {
+                              "bytes": "AACAOQAAgDkAAIA5AACAOQAAgDkAAIA5AACAOQAAgDkAAIA5AACAOQAAgDkAAIA5AACAOQAAgDkAAIA5AACAOQAAgDkAAIA5AACAOQAAgDkAAIA5AACAOQAAgDkAAIA5AACAOQAAgDkAAIA5AACAOQAAgDkAAIA5AACAOQAAgDkAAIA5AACAOQAAgDkAAIA5AACAOQAAgDkAAIA5AACAOQAAgDkAAIA5AACAOQAAgDkAAIA5AACAOQAAgDkAAIA5AACAOQAAgDkAAIA5AACAOQAAgDkAAIA5AACAOQAAgDkAAIA5AACAOQAAgDkAAIA5AACAOQAAgDkAAIA5AACAOQ=="
+                            },
+                            "shape": {
+                              "bytes": {
+                                "region": {
+                                  "texture": {
+                                    "level": 0,
+                                    "slice": 0,
+                                    "aspect": "color",
+                                    "sample": 0,
+                                    "origin": [
+                                      0,
+                                      0,
+                                      0
+                                    ],
+                                    "size": [
+                                      8,
+                                      8,
+                                      1
+                                    ]
+                                  }
+                                },
+                                "element": "f32",
+                                "row_offset": 0,
+                                "row_elements": 8,
+                                "row_pitch": 32,
+                                "rows": 8,
+                                "image_pitch": 256,
+                                "images": 1,
+                                "gaps": "compared"
+                              }
+                            }
+                          }
+                        },
+                        {
+                          "name": "color/level-0/slice-1/plane-0",
+                          "observed": {
+                            "value": {
+                              "bytes": "AACAPgAggD4AQIA+AGCAPgAAAD4AAAA+AAAAPgAAAD4AAIE+ACCBPgBAgT4AYIE+AAAAPgAAAD4AAAA+AAAAPgAAgj4AIII+AECCPgBggj4AAAA+AAAAPgAAAD4AAAA+AACDPgAggz4AQIM+AGCDPgAAAD4AAAA+AAAAPgAAAD4AAAA+AAAAPgAAAD4AAAA+AAAAPgAAAD4AAAA+AAAAPgAAAD4AAAA+AAAAPgAAAD4AAAA+AAAAPgAAAD4AAAA+AAAAPgAAAD4AAAA+AAAAPgAAAD4AAAA+AAAAPgAAAD4AAAA+AAAAPgAAAD4AAAA+AAAAPgAAAD4AAAA+AAAAPg=="
+                            },
+                            "shape": {
+                              "bytes": {
+                                "region": {
+                                  "texture": {
+                                    "level": 0,
+                                    "slice": 1,
+                                    "aspect": "color",
+                                    "sample": 0,
+                                    "origin": [
+                                      0,
+                                      0,
+                                      0
+                                    ],
+                                    "size": [
+                                      8,
+                                      8,
+                                      1
+                                    ]
+                                  }
+                                },
+                                "element": "f32",
+                                "row_offset": 0,
+                                "row_elements": 8,
+                                "row_pitch": 32,
+                                "rows": 8,
+                                "image_pitch": 256,
+                                "images": 1,
+                                "gaps": "compared"
+                              }
+                            }
+                          }
+                        },
+                        {
+                          "name": "color/level-0/slice-2/plane-0",
+                          "observed": {
+                            "value": {
+                              "bytes": "AABAOgAAQDoAAEA6AABAOgAAQDoAAEA6AABAOgAAQDoAAEA6AABAOgAAQDoAAEA6AABAOgAAQDoAAEA6AABAOgAAQDoAAEA6AABAOgAAQDoAAEA6AABAOgAAQDoAAEA6AABAOgAAQDoAAEA6AABAOgAAQDoAAEA6AABAOgAAQDoAAEA6AABAOgAAQDoAAEA6AABAOgAAQDoAAEA6AABAOgAAQDoAAEA6AABAOgAAQDoAAEA6AABAOgAAQDoAAEA6AABAOgAAQDoAAEA6AABAOgAAQDoAAEA6AABAOgAAQDoAAEA6AABAOgAAQDoAAEA6AABAOgAAQDoAAEA6AABAOg=="
+                            },
+                            "shape": {
+                              "bytes": {
+                                "region": {
+                                  "texture": {
+                                    "level": 0,
+                                    "slice": 2,
+                                    "aspect": "color",
+                                    "sample": 0,
+                                    "origin": [
+                                      0,
+                                      0,
+                                      0
+                                    ],
+                                    "size": [
+                                      8,
+                                      8,
+                                      1
+                                    ]
+                                  }
+                                },
+                                "element": "f32",
+                                "row_offset": 0,
+                                "row_elements": 8,
+                                "row_pitch": 32,
+                                "rows": 8,
+                                "image_pitch": 256,
+                                "images": 1,
+                                "gaps": "compared"
+                              }
+                            }
+                          }
+                        }
+                      ]
+                    },
+                    {
+                      "name": "resolve-level-1",
+                      "observed": {
+                        "value": "absent"
+                      },
+                      "children": [
+                        {
+                          "name": "color/level-0/slice-0/plane-0",
+                          "observed": {
+                            "value": {
+                              "bytes": "AACAOQAAgDkAAIA5AACAOQAAgDkAAIA5AACAOQAAgDkAAIA5AACAOQAAgDkAAIA5AACAOQAAgDkAAIA5AACAOQAAgDkAAIA5AACAOQAAgDkAAIA5AACAOQAAgDkAAIA5AACAOQAAgDkAAIA5AACAOQAAgDkAAIA5AACAOQAAgDkAAIA5AACAOQAAgDkAAIA5AACAOQAAgDkAAIA5AACAOQAAgDkAAIA5AACAOQAAgDkAAIA5AACAOQAAgDkAAIA5AACAOQAAgDkAAIA5AACAOQAAgDkAAIA5AACAOQAAgDkAAIA5AACAOQAAgDkAAIA5AACAOQAAgDkAAIA5AACAOQ=="
+                            },
+                            "shape": {
+                              "bytes": {
+                                "region": {
+                                  "texture": {
+                                    "level": 0,
+                                    "slice": 0,
+                                    "aspect": "color",
+                                    "sample": 0,
+                                    "origin": [
+                                      0,
+                                      0,
+                                      0
+                                    ],
+                                    "size": [
+                                      8,
+                                      8,
+                                      1
+                                    ]
+                                  }
+                                },
+                                "element": "f32",
+                                "row_offset": 0,
+                                "row_elements": 8,
+                                "row_pitch": 32,
+                                "rows": 8,
+                                "image_pitch": 256,
+                                "images": 1,
+                                "gaps": "compared"
+                              }
+                            }
+                          }
+                        },
+                        {
+                          "name": "color/level-1/slice-0/plane-0",
+                          "observed": {
+                            "value": {
+                              "bytes": "AACAPgAggD4AAAA+AAAAPgCAgD4AoIA+AAAAPgAAAD4AAAA+AAAAPgAAAD4AAAA+AAAAPgAAAD4AAAA+AAAAPg=="
+                            },
+                            "shape": {
+                              "bytes": {
+                                "region": {
+                                  "texture": {
+                                    "level": 1,
+                                    "slice": 0,
+                                    "aspect": "color",
+                                    "sample": 0,
+                                    "origin": [
+                                      0,
+                                      0,
+                                      0
+                                    ],
+                                    "size": [
+                                      4,
+                                      4,
+                                      1
+                                    ]
+                                  }
+                                },
+                                "element": "f32",
+                                "row_offset": 0,
+                                "row_elements": 4,
+                                "row_pitch": 16,
+                                "rows": 4,
+                                "image_pitch": 64,
+                                "images": 1,
+                                "gaps": "compared"
+                              }
+                            }
+                          }
+                        },
+                        {
+                          "name": "color/level-2/slice-0/plane-0",
+                          "observed": {
+                            "value": {
+                              "bytes": "AABAOgAAQDoAAEA6AABAOg=="
+                            },
+                            "shape": {
+                              "bytes": {
+                                "region": {
+                                  "texture": {
+                                    "level": 2,
+                                    "slice": 0,
+                                    "aspect": "color",
+                                    "sample": 0,
+                                    "origin": [
+                                      0,
+                                      0,
+                                      0
+                                    ],
+                                    "size": [
+                                      2,
+                                      2,
+                                      1
+                                    ]
+                                  }
+                                },
+                                "element": "f32",
+                                "row_offset": 0,
+                                "row_elements": 2,
+                                "row_pitch": 8,
+                                "rows": 2,
+                                "image_pitch": 16,
+                                "images": 1,
+                                "gaps": "compared"
+                              }
+                            }
+                          }
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "name": "notices",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "set",
+                      "observed": {
+                        "value": {
+                          "nothing": "announced_nothing"
+                        }
+                      }
+                    },
+                    {
+                      "name": "counts",
+                      "observed": {
+                        "value": {
+                          "fields": {}
+                        }
+                      }
+                    }
+                  ]
+                }
+              ]
+            }
+          }
+        }
+      ],
+      "validated": "ran"
+    }
+  ]
+}

@@ -104,7 +104,7 @@ use crate::indirect_commands::{
 };
 use crate::recording::ShaderRef;
 use crate::render::{
-    ColorState, PassColor, Plane, RenderPass, RenderPipelineSpec, RenderStep, RenderWork,
+    ColorState, PassColor, Plane, ReadAt, RenderPass, RenderPipelineSpec, RenderStep, RenderWork,
     StageFunction, TargetSpec,
 };
 use crate::transcript::{
@@ -1280,6 +1280,7 @@ impl Case for DrawnCommands {
                 row_pitch: DRAWN_TEXEL * DRAWN_SIDE,
                 size: [DRAWN_SIDE, DRAWN_SIDE],
                 plane: Plane::Whole,
+                at: ReadAt::BASE,
             },
         ];
         let outcome = call(sites, "render", side.render(&work), |outcome| {

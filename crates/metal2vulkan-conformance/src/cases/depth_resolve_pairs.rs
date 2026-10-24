@@ -109,7 +109,7 @@ use crate::case::{call, made, Abort, Case, Failure, Handle, Input, MetalSource, 
 use crate::fixture::{Fixture, METAL_TEXT, RUNTIME_TEXT};
 use crate::recording::ShaderRef;
 use crate::render::{
-    ColorState, PassColor, PassDepth, Plane, RenderPass, RenderPipelineSpec, RenderStep,
+    ColorState, PassColor, PassDepth, Plane, ReadAt, RenderPass, RenderPipelineSpec, RenderStep,
     RenderWork, ScissorBox, TargetSpec,
 };
 use crate::transcript::{
@@ -604,6 +604,7 @@ impl Case for DepthFilters {
                 row_pitch: DEPTH_TEXEL * SIDE,
                 size: [SIDE; 2],
                 plane: Plane::Whole,
+                at: ReadAt::BASE,
             });
             names.push(format!("read:{name}"));
         }

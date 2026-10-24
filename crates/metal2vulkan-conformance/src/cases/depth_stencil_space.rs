@@ -119,7 +119,7 @@ use crate::case::{call, made, Abort, Case, Failure, Handle, Input, MetalSource, 
 use crate::fixture::{Fixture, METAL_TEXT, RUNTIME_TEXT};
 use crate::recording::ShaderRef;
 use crate::render::{
-    ColorState, PassColor, PassDepth, PassStencil, Plane, RenderPass, RenderPipelineSpec,
+    ColorState, PassColor, PassDepth, PassStencil, Plane, ReadAt, RenderPass, RenderPipelineSpec,
     RenderStep, RenderWork, ScissorBox, StageFunction, TargetSpec,
 };
 use crate::transcript::{
@@ -713,6 +713,7 @@ impl Program {
                 row_pitch: TEXEL * SIDE,
                 size: [SIDE; 2],
                 plane: Plane::Whole,
+                at: ReadAt::BASE,
             });
             names.push("read-color");
         }
@@ -724,6 +725,7 @@ impl Program {
                 row_pitch: SIDE,
                 size: [SIDE; 2],
                 plane: Plane::Whole,
+                at: ReadAt::BASE,
             });
             names.push("read-stencil");
         }

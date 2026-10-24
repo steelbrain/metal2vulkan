@@ -1,0 +1,2851 @@
+{
+  "format": 1,
+  "case": "layered-attachment-places",
+  "suite_version": 1,
+  "shaders": [
+    {
+      "fixture": "rt6_samples.ll",
+      "entry": "rt6_fill_vertex+rt6_fill_r32float",
+      "source_sha256": "857adcbb6951b3d5348087377c099c2b2b4733fe56cc754501b605496cb30fb9"
+    },
+    {
+      "fixture": "rt6_samples.air.ll",
+      "entry": "rt6_fill_vertex+rt6_fill_r32float",
+      "source_sha256": "50449c6cad01f47ad3407cbf3bbbdfa4405c43f2cae14639e56d71b307a41d2c"
+    }
+  ],
+  "answers": [
+    {
+      "key": {
+        "chip": "apple-m3-max",
+        "os_version": "27.0.1",
+        "os_build": "26A434",
+        "metal_level": "27.0.1"
+      },
+      "provenance": "metal_run",
+      "device": "Apple M3 Max",
+      "runs": 8,
+      "outcomes": [
+        {
+          "runs": 8,
+          "transcript": {
+            "root": {
+              "name": "case",
+              "observed": {
+                "value": "absent"
+              },
+              "children": [
+                {
+                  "name": "inputs",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "air:rt6_samples",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "857adcbb6951b3d5348087377c099c2b2b4733fe56cc754501b605496cb30fb9"
+                        }
+                      }
+                    },
+                    {
+                      "name": "air-typed:rt6_samples",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "50449c6cad01f47ad3407cbf3bbbdfa4405c43f2cae14639e56d71b307a41d2c"
+                        }
+                      }
+                    },
+                    {
+                      "name": "bands",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "6d79f56658d5942678d01f1f46a0399470ef8adc14d5f2cbfadd29dbb7f4e756"
+                        }
+                      }
+                    },
+                    {
+                      "name": "target:array-slice-0",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "d4f7a6080233fd85f1f650cd3844619e2c289328dd5a357ccab9dd18052165ba"
+                        }
+                      }
+                    },
+                    {
+                      "name": "place:array-slice-0",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+                        }
+                      }
+                    },
+                    {
+                      "name": "pipeline:array-slice-0",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "df6a76eed55903c1567e0c164c06a01387cb46696df51c6f83236c17a4d7f41b"
+                        }
+                      }
+                    },
+                    {
+                      "name": "values:array-slice-0",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "735658eb1beeaeab26ee7f347d0adf1cf922288016fc909770266d0817605f2d"
+                        }
+                      }
+                    },
+                    {
+                      "name": "shape:array-slice-0",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "db49223a2cf9616171322e5325816a7a579582ebdce91c2f89df8df7aa8aac01"
+                        }
+                      }
+                    },
+                    {
+                      "name": "drawn-rect:array-slice-0",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "754cebf866e7e0bf139b4fd08acfcf04b6e72d9db0d0214eefbcc7706a0ca914"
+                        }
+                      }
+                    },
+                    {
+                      "name": "prime:array-slice-0:color/level-0/slice-0/plane-0",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "c5959a1e0586554613cbd0c094dcca90cc6a69b28f15c0602319d5f9e7ba9fae"
+                        }
+                      }
+                    },
+                    {
+                      "name": "prime:array-slice-0:color/level-0/slice-1/plane-0",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "dbddd2166469251156764aaf79b7845c4c144dec896852f1952d86ca2955d25d"
+                        }
+                      }
+                    },
+                    {
+                      "name": "prime:array-slice-0:color/level-0/slice-2/plane-0",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "091bd06f98d3a13d1dba2f591215aec08efc11d3c6f898f315be372111d4e528"
+                        }
+                      }
+                    },
+                    {
+                      "name": "pass:array-slice-0",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "b441812fdb7a1a792e7bd237b8103302349e33f690bb3d103e1fe2895355d630"
+                        }
+                      }
+                    },
+                    {
+                      "name": "read:array-slice-0:color/level-0/slice-0/plane-0",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "c0cdbb6e45249a718e7e605f801cf43f673a22fcf0347034da71f6be2e4f4d5e"
+                        }
+                      }
+                    },
+                    {
+                      "name": "read:array-slice-0:color/level-0/slice-1/plane-0",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "382743fbb0f84201dd73b023926023f1634abc3a7de8c0b15420311324756515"
+                        }
+                      }
+                    },
+                    {
+                      "name": "read:array-slice-0:color/level-0/slice-2/plane-0",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "223151575192a07a542b6685f6d6537285b7acef9fcb29a29e3b3d46f288e839"
+                        }
+                      }
+                    },
+                    {
+                      "name": "target:array-slice-1",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "d4f7a6080233fd85f1f650cd3844619e2c289328dd5a357ccab9dd18052165ba"
+                        }
+                      }
+                    },
+                    {
+                      "name": "place:array-slice-1",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "fa0313e842632733cb4f91b2464d6c9038dde238c2979678c1280b76ca80e54c"
+                        }
+                      }
+                    },
+                    {
+                      "name": "pipeline:array-slice-1",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "df6a76eed55903c1567e0c164c06a01387cb46696df51c6f83236c17a4d7f41b"
+                        }
+                      }
+                    },
+                    {
+                      "name": "values:array-slice-1",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "735658eb1beeaeab26ee7f347d0adf1cf922288016fc909770266d0817605f2d"
+                        }
+                      }
+                    },
+                    {
+                      "name": "shape:array-slice-1",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "db49223a2cf9616171322e5325816a7a579582ebdce91c2f89df8df7aa8aac01"
+                        }
+                      }
+                    },
+                    {
+                      "name": "drawn-rect:array-slice-1",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "754cebf866e7e0bf139b4fd08acfcf04b6e72d9db0d0214eefbcc7706a0ca914"
+                        }
+                      }
+                    },
+                    {
+                      "name": "prime:array-slice-1:color/level-0/slice-0/plane-0",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "c5959a1e0586554613cbd0c094dcca90cc6a69b28f15c0602319d5f9e7ba9fae"
+                        }
+                      }
+                    },
+                    {
+                      "name": "prime:array-slice-1:color/level-0/slice-1/plane-0",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "dbddd2166469251156764aaf79b7845c4c144dec896852f1952d86ca2955d25d"
+                        }
+                      }
+                    },
+                    {
+                      "name": "prime:array-slice-1:color/level-0/slice-2/plane-0",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "091bd06f98d3a13d1dba2f591215aec08efc11d3c6f898f315be372111d4e528"
+                        }
+                      }
+                    },
+                    {
+                      "name": "pass:array-slice-1",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "9df4a241b0cf3b952d6e45b41559a5e289211c5d867830f2ee9817b417fea736"
+                        }
+                      }
+                    },
+                    {
+                      "name": "read:array-slice-1:color/level-0/slice-0/plane-0",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "c0cdbb6e45249a718e7e605f801cf43f673a22fcf0347034da71f6be2e4f4d5e"
+                        }
+                      }
+                    },
+                    {
+                      "name": "read:array-slice-1:color/level-0/slice-1/plane-0",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "382743fbb0f84201dd73b023926023f1634abc3a7de8c0b15420311324756515"
+                        }
+                      }
+                    },
+                    {
+                      "name": "read:array-slice-1:color/level-0/slice-2/plane-0",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "223151575192a07a542b6685f6d6537285b7acef9fcb29a29e3b3d46f288e839"
+                        }
+                      }
+                    },
+                    {
+                      "name": "target:array-slice-2",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "d4f7a6080233fd85f1f650cd3844619e2c289328dd5a357ccab9dd18052165ba"
+                        }
+                      }
+                    },
+                    {
+                      "name": "place:array-slice-2",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "311725cc15d8aedd2ebf8c655cfc03a1b08a81e296e23aac2522a080568d71b4"
+                        }
+                      }
+                    },
+                    {
+                      "name": "pipeline:array-slice-2",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "df6a76eed55903c1567e0c164c06a01387cb46696df51c6f83236c17a4d7f41b"
+                        }
+                      }
+                    },
+                    {
+                      "name": "values:array-slice-2",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "735658eb1beeaeab26ee7f347d0adf1cf922288016fc909770266d0817605f2d"
+                        }
+                      }
+                    },
+                    {
+                      "name": "shape:array-slice-2",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "db49223a2cf9616171322e5325816a7a579582ebdce91c2f89df8df7aa8aac01"
+                        }
+                      }
+                    },
+                    {
+                      "name": "drawn-rect:array-slice-2",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "754cebf866e7e0bf139b4fd08acfcf04b6e72d9db0d0214eefbcc7706a0ca914"
+                        }
+                      }
+                    },
+                    {
+                      "name": "prime:array-slice-2:color/level-0/slice-0/plane-0",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "c5959a1e0586554613cbd0c094dcca90cc6a69b28f15c0602319d5f9e7ba9fae"
+                        }
+                      }
+                    },
+                    {
+                      "name": "prime:array-slice-2:color/level-0/slice-1/plane-0",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "dbddd2166469251156764aaf79b7845c4c144dec896852f1952d86ca2955d25d"
+                        }
+                      }
+                    },
+                    {
+                      "name": "prime:array-slice-2:color/level-0/slice-2/plane-0",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "091bd06f98d3a13d1dba2f591215aec08efc11d3c6f898f315be372111d4e528"
+                        }
+                      }
+                    },
+                    {
+                      "name": "pass:array-slice-2",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "4151c8a181c2d5be0590b98b5ecd1bf160d378a74b464a7a0e6474c656d76e71"
+                        }
+                      }
+                    },
+                    {
+                      "name": "read:array-slice-2:color/level-0/slice-0/plane-0",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "c0cdbb6e45249a718e7e605f801cf43f673a22fcf0347034da71f6be2e4f4d5e"
+                        }
+                      }
+                    },
+                    {
+                      "name": "read:array-slice-2:color/level-0/slice-1/plane-0",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "382743fbb0f84201dd73b023926023f1634abc3a7de8c0b15420311324756515"
+                        }
+                      }
+                    },
+                    {
+                      "name": "read:array-slice-2:color/level-0/slice-2/plane-0",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "223151575192a07a542b6685f6d6537285b7acef9fcb29a29e3b3d46f288e839"
+                        }
+                      }
+                    },
+                    {
+                      "name": "target:volume-plane-0",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "085d934571c5961b3f7df6f03bb1c97c60f6e23e82e4adbf401912d7358d4bfd"
+                        }
+                      }
+                    },
+                    {
+                      "name": "place:volume-plane-0",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+                        }
+                      }
+                    },
+                    {
+                      "name": "pipeline:volume-plane-0",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "df6a76eed55903c1567e0c164c06a01387cb46696df51c6f83236c17a4d7f41b"
+                        }
+                      }
+                    },
+                    {
+                      "name": "values:volume-plane-0",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "735658eb1beeaeab26ee7f347d0adf1cf922288016fc909770266d0817605f2d"
+                        }
+                      }
+                    },
+                    {
+                      "name": "shape:volume-plane-0",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "db49223a2cf9616171322e5325816a7a579582ebdce91c2f89df8df7aa8aac01"
+                        }
+                      }
+                    },
+                    {
+                      "name": "drawn-rect:volume-plane-0",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "754cebf866e7e0bf139b4fd08acfcf04b6e72d9db0d0214eefbcc7706a0ca914"
+                        }
+                      }
+                    },
+                    {
+                      "name": "prime:volume-plane-0:color/level-0/slice-0/plane-0",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "c5959a1e0586554613cbd0c094dcca90cc6a69b28f15c0602319d5f9e7ba9fae"
+                        }
+                      }
+                    },
+                    {
+                      "name": "prime:volume-plane-0:color/level-0/slice-0/plane-1",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "e915808cfc845943d9f0a29f0ea467c2368158dd4d0059c240b290ea7e7d0d54"
+                        }
+                      }
+                    },
+                    {
+                      "name": "prime:volume-plane-0:color/level-0/slice-0/plane-2",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "ec5a3ce7745ae3d53e81c4027985e3272d117b708990e36b2ea2813f84dba654"
+                        }
+                      }
+                    },
+                    {
+                      "name": "pass:volume-plane-0",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "b441812fdb7a1a792e7bd237b8103302349e33f690bb3d103e1fe2895355d630"
+                        }
+                      }
+                    },
+                    {
+                      "name": "read:volume-plane-0:color/level-0/slice-0/plane-0",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "c0cdbb6e45249a718e7e605f801cf43f673a22fcf0347034da71f6be2e4f4d5e"
+                        }
+                      }
+                    },
+                    {
+                      "name": "read:volume-plane-0:color/level-0/slice-0/plane-1",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "5773c7f7f6b3c0f2f4ca1625fc95bd3ea78b6f9787e49fb1849cbee5a9ef8901"
+                        }
+                      }
+                    },
+                    {
+                      "name": "read:volume-plane-0:color/level-0/slice-0/plane-2",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "25c332cde7f4e659634511b8caa33fd3697c197e41b36e15d776ac29d68ab2b1"
+                        }
+                      }
+                    },
+                    {
+                      "name": "target:volume-plane-1",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "085d934571c5961b3f7df6f03bb1c97c60f6e23e82e4adbf401912d7358d4bfd"
+                        }
+                      }
+                    },
+                    {
+                      "name": "place:volume-plane-1",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "64ae15b496dca6791fe16b3f9f080a2cade420d6b6af169e962b1106ec340048"
+                        }
+                      }
+                    },
+                    {
+                      "name": "pipeline:volume-plane-1",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "df6a76eed55903c1567e0c164c06a01387cb46696df51c6f83236c17a4d7f41b"
+                        }
+                      }
+                    },
+                    {
+                      "name": "values:volume-plane-1",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "735658eb1beeaeab26ee7f347d0adf1cf922288016fc909770266d0817605f2d"
+                        }
+                      }
+                    },
+                    {
+                      "name": "shape:volume-plane-1",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "db49223a2cf9616171322e5325816a7a579582ebdce91c2f89df8df7aa8aac01"
+                        }
+                      }
+                    },
+                    {
+                      "name": "drawn-rect:volume-plane-1",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "754cebf866e7e0bf139b4fd08acfcf04b6e72d9db0d0214eefbcc7706a0ca914"
+                        }
+                      }
+                    },
+                    {
+                      "name": "prime:volume-plane-1:color/level-0/slice-0/plane-0",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "c5959a1e0586554613cbd0c094dcca90cc6a69b28f15c0602319d5f9e7ba9fae"
+                        }
+                      }
+                    },
+                    {
+                      "name": "prime:volume-plane-1:color/level-0/slice-0/plane-1",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "e915808cfc845943d9f0a29f0ea467c2368158dd4d0059c240b290ea7e7d0d54"
+                        }
+                      }
+                    },
+                    {
+                      "name": "prime:volume-plane-1:color/level-0/slice-0/plane-2",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "ec5a3ce7745ae3d53e81c4027985e3272d117b708990e36b2ea2813f84dba654"
+                        }
+                      }
+                    },
+                    {
+                      "name": "pass:volume-plane-1",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "652049cb50febace506b5b555cd92494d57a52d8bf344cfc6c31325ed7ef5d16"
+                        }
+                      }
+                    },
+                    {
+                      "name": "read:volume-plane-1:color/level-0/slice-0/plane-0",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "c0cdbb6e45249a718e7e605f801cf43f673a22fcf0347034da71f6be2e4f4d5e"
+                        }
+                      }
+                    },
+                    {
+                      "name": "read:volume-plane-1:color/level-0/slice-0/plane-1",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "5773c7f7f6b3c0f2f4ca1625fc95bd3ea78b6f9787e49fb1849cbee5a9ef8901"
+                        }
+                      }
+                    },
+                    {
+                      "name": "read:volume-plane-1:color/level-0/slice-0/plane-2",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "25c332cde7f4e659634511b8caa33fd3697c197e41b36e15d776ac29d68ab2b1"
+                        }
+                      }
+                    },
+                    {
+                      "name": "target:volume-plane-2",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "085d934571c5961b3f7df6f03bb1c97c60f6e23e82e4adbf401912d7358d4bfd"
+                        }
+                      }
+                    },
+                    {
+                      "name": "place:volume-plane-2",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "87876ae77c73dedc08e1b100c49d415489287c33ddb9c53b67b004e7593c1a52"
+                        }
+                      }
+                    },
+                    {
+                      "name": "pipeline:volume-plane-2",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "df6a76eed55903c1567e0c164c06a01387cb46696df51c6f83236c17a4d7f41b"
+                        }
+                      }
+                    },
+                    {
+                      "name": "values:volume-plane-2",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "735658eb1beeaeab26ee7f347d0adf1cf922288016fc909770266d0817605f2d"
+                        }
+                      }
+                    },
+                    {
+                      "name": "shape:volume-plane-2",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "db49223a2cf9616171322e5325816a7a579582ebdce91c2f89df8df7aa8aac01"
+                        }
+                      }
+                    },
+                    {
+                      "name": "drawn-rect:volume-plane-2",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "754cebf866e7e0bf139b4fd08acfcf04b6e72d9db0d0214eefbcc7706a0ca914"
+                        }
+                      }
+                    },
+                    {
+                      "name": "prime:volume-plane-2:color/level-0/slice-0/plane-0",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "c5959a1e0586554613cbd0c094dcca90cc6a69b28f15c0602319d5f9e7ba9fae"
+                        }
+                      }
+                    },
+                    {
+                      "name": "prime:volume-plane-2:color/level-0/slice-0/plane-1",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "e915808cfc845943d9f0a29f0ea467c2368158dd4d0059c240b290ea7e7d0d54"
+                        }
+                      }
+                    },
+                    {
+                      "name": "prime:volume-plane-2:color/level-0/slice-0/plane-2",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "ec5a3ce7745ae3d53e81c4027985e3272d117b708990e36b2ea2813f84dba654"
+                        }
+                      }
+                    },
+                    {
+                      "name": "pass:volume-plane-2",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "fbbaf66f7ab5a687e828f5d86a82d14b8980757f7a2417353de24b11492e290b"
+                        }
+                      }
+                    },
+                    {
+                      "name": "read:volume-plane-2:color/level-0/slice-0/plane-0",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "c0cdbb6e45249a718e7e605f801cf43f673a22fcf0347034da71f6be2e4f4d5e"
+                        }
+                      }
+                    },
+                    {
+                      "name": "read:volume-plane-2:color/level-0/slice-0/plane-1",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "5773c7f7f6b3c0f2f4ca1625fc95bd3ea78b6f9787e49fb1849cbee5a9ef8901"
+                        }
+                      }
+                    },
+                    {
+                      "name": "read:volume-plane-2:color/level-0/slice-0/plane-2",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "25c332cde7f4e659634511b8caa33fd3697c197e41b36e15d776ac29d68ab2b1"
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "library:rt6_samples",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "pipeline:array-slice-0",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "target:array-slice-0",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "buffer:values:array-slice-0",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "buffer:shape:array-slice-0",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "buffer:layers:array-slice-0",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "buffer:read:array-slice-0:color/level-0/slice-0/plane-0",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "buffer:read:array-slice-0:color/level-0/slice-1/plane-0",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "buffer:read:array-slice-0:color/level-0/slice-2/plane-0",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "pipeline:array-slice-1",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "target:array-slice-1",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "buffer:values:array-slice-1",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "buffer:shape:array-slice-1",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "buffer:layers:array-slice-1",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "buffer:read:array-slice-1:color/level-0/slice-0/plane-0",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "buffer:read:array-slice-1:color/level-0/slice-1/plane-0",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "buffer:read:array-slice-1:color/level-0/slice-2/plane-0",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "pipeline:array-slice-2",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "target:array-slice-2",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "buffer:values:array-slice-2",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "buffer:shape:array-slice-2",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "buffer:layers:array-slice-2",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "buffer:read:array-slice-2:color/level-0/slice-0/plane-0",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "buffer:read:array-slice-2:color/level-0/slice-1/plane-0",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "buffer:read:array-slice-2:color/level-0/slice-2/plane-0",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "pipeline:volume-plane-0",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "target:volume-plane-0",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "buffer:values:volume-plane-0",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "buffer:shape:volume-plane-0",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "buffer:layers:volume-plane-0",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "buffer:read:volume-plane-0:color/level-0/slice-0/plane-0",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "buffer:read:volume-plane-0:color/level-0/slice-0/plane-1",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "buffer:read:volume-plane-0:color/level-0/slice-0/plane-2",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "pipeline:volume-plane-1",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "target:volume-plane-1",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "buffer:values:volume-plane-1",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "buffer:shape:volume-plane-1",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "buffer:layers:volume-plane-1",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "buffer:read:volume-plane-1:color/level-0/slice-0/plane-0",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "buffer:read:volume-plane-1:color/level-0/slice-0/plane-1",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "buffer:read:volume-plane-1:color/level-0/slice-0/plane-2",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "pipeline:volume-plane-2",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "target:volume-plane-2",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "buffer:values:volume-plane-2",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "buffer:shape:volume-plane-2",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "buffer:layers:volume-plane-2",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "buffer:read:volume-plane-2:color/level-0/slice-0/plane-0",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "buffer:read:volume-plane-2:color/level-0/slice-0/plane-1",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "buffer:read:volume-plane-2:color/level-0/slice-0/plane-2",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "render",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": {
+                          "variant": {
+                            "name": "Completed",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "pieces",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "prime:array-slice-0:color/level-0/slice-0/plane-0",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "prime:array-slice-0:color/level-0/slice-1/plane-0",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "prime:array-slice-0:color/level-0/slice-2/plane-0",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "pass:array-slice-0",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "read:array-slice-0:color/level-0/slice-0/plane-0",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "read:array-slice-0:color/level-0/slice-1/plane-0",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "read:array-slice-0:color/level-0/slice-2/plane-0",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "prime:array-slice-1:color/level-0/slice-0/plane-0",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "prime:array-slice-1:color/level-0/slice-1/plane-0",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "prime:array-slice-1:color/level-0/slice-2/plane-0",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "pass:array-slice-1",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "read:array-slice-1:color/level-0/slice-0/plane-0",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "read:array-slice-1:color/level-0/slice-1/plane-0",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "read:array-slice-1:color/level-0/slice-2/plane-0",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "prime:array-slice-2:color/level-0/slice-0/plane-0",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "prime:array-slice-2:color/level-0/slice-1/plane-0",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "prime:array-slice-2:color/level-0/slice-2/plane-0",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "pass:array-slice-2",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "read:array-slice-2:color/level-0/slice-0/plane-0",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "read:array-slice-2:color/level-0/slice-1/plane-0",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "read:array-slice-2:color/level-0/slice-2/plane-0",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "prime:volume-plane-0:color/level-0/slice-0/plane-0",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "prime:volume-plane-0:color/level-0/slice-0/plane-1",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "prime:volume-plane-0:color/level-0/slice-0/plane-2",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "pass:volume-plane-0",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "read:volume-plane-0:color/level-0/slice-0/plane-0",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "read:volume-plane-0:color/level-0/slice-0/plane-1",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "read:volume-plane-0:color/level-0/slice-0/plane-2",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "prime:volume-plane-1:color/level-0/slice-0/plane-0",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "prime:volume-plane-1:color/level-0/slice-0/plane-1",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "prime:volume-plane-1:color/level-0/slice-0/plane-2",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "pass:volume-plane-1",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "read:volume-plane-1:color/level-0/slice-0/plane-0",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "read:volume-plane-1:color/level-0/slice-0/plane-1",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "read:volume-plane-1:color/level-0/slice-0/plane-2",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "prime:volume-plane-2:color/level-0/slice-0/plane-0",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "prime:volume-plane-2:color/level-0/slice-0/plane-1",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "prime:volume-plane-2:color/level-0/slice-0/plane-2",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "pass:volume-plane-2",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "read:volume-plane-2:color/level-0/slice-0/plane-0",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "read:volume-plane-2:color/level-0/slice-0/plane-1",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "read:volume-plane-2:color/level-0/slice-0/plane-2",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "read-back/array-slice-0/color/level-0/slice-0/plane-0",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "read-back/array-slice-0/color/level-0/slice-1/plane-0",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "read-back/array-slice-0/color/level-0/slice-2/plane-0",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "read-back/array-slice-1/color/level-0/slice-0/plane-0",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "read-back/array-slice-1/color/level-0/slice-1/plane-0",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "read-back/array-slice-1/color/level-0/slice-2/plane-0",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "read-back/array-slice-2/color/level-0/slice-0/plane-0",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "read-back/array-slice-2/color/level-0/slice-1/plane-0",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "read-back/array-slice-2/color/level-0/slice-2/plane-0",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "read-back/volume-plane-0/color/level-0/slice-0/plane-0",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "read-back/volume-plane-0/color/level-0/slice-0/plane-1",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "read-back/volume-plane-0/color/level-0/slice-0/plane-2",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "read-back/volume-plane-1/color/level-0/slice-0/plane-0",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "read-back/volume-plane-1/color/level-0/slice-0/plane-1",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "read-back/volume-plane-1/color/level-0/slice-0/plane-2",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "read-back/volume-plane-2/color/level-0/slice-0/plane-0",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "read-back/volume-plane-2/color/level-0/slice-0/plane-1",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "read-back/volume-plane-2/color/level-0/slice-0/plane-2",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "planes",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "array-slice-0",
+                      "observed": {
+                        "value": "absent"
+                      },
+                      "children": [
+                        {
+                          "name": "color/level-0/slice-0/plane-0",
+                          "observed": {
+                            "value": {
+                              "bytes": "AACAPgAggD4AQIA+AGCAPgAAAD4AAAA+AAAAPgAAAD4AAIE+ACCBPgBAgT4AYIE+AAAAPgAAAD4AAAA+AAAAPgAAgj4AIII+AECCPgBggj4AAAA+AAAAPgAAAD4AAAA+AACDPgAggz4AQIM+AGCDPgAAAD4AAAA+AAAAPgAAAD4AAAA+AAAAPgAAAD4AAAA+AAAAPgAAAD4AAAA+AAAAPgAAAD4AAAA+AAAAPgAAAD4AAAA+AAAAPgAAAD4AAAA+AAAAPgAAAD4AAAA+AAAAPgAAAD4AAAA+AAAAPgAAAD4AAAA+AAAAPgAAAD4AAAA+AAAAPgAAAD4AAAA+AAAAPg=="
+                            },
+                            "shape": {
+                              "bytes": {
+                                "region": {
+                                  "texture": {
+                                    "level": 0,
+                                    "slice": 0,
+                                    "aspect": "color",
+                                    "sample": 0,
+                                    "origin": [
+                                      0,
+                                      0,
+                                      0
+                                    ],
+                                    "size": [
+                                      8,
+                                      8,
+                                      1
+                                    ]
+                                  }
+                                },
+                                "element": "f32",
+                                "row_offset": 0,
+                                "row_elements": 8,
+                                "row_pitch": 32,
+                                "rows": 8,
+                                "image_pitch": 256,
+                                "images": 1,
+                                "gaps": "compared"
+                              }
+                            }
+                          }
+                        },
+                        {
+                          "name": "color/level-0/slice-1/plane-0",
+                          "observed": {
+                            "value": {
+                              "bytes": "AAAAOgAAADoAAAA6AAAAOgAAADoAAAA6AAAAOgAAADoAAAA6AAAAOgAAADoAAAA6AAAAOgAAADoAAAA6AAAAOgAAADoAAAA6AAAAOgAAADoAAAA6AAAAOgAAADoAAAA6AAAAOgAAADoAAAA6AAAAOgAAADoAAAA6AAAAOgAAADoAAAA6AAAAOgAAADoAAAA6AAAAOgAAADoAAAA6AAAAOgAAADoAAAA6AAAAOgAAADoAAAA6AAAAOgAAADoAAAA6AAAAOgAAADoAAAA6AAAAOgAAADoAAAA6AAAAOgAAADoAAAA6AAAAOgAAADoAAAA6AAAAOgAAADoAAAA6AAAAOg=="
+                            },
+                            "shape": {
+                              "bytes": {
+                                "region": {
+                                  "texture": {
+                                    "level": 0,
+                                    "slice": 1,
+                                    "aspect": "color",
+                                    "sample": 0,
+                                    "origin": [
+                                      0,
+                                      0,
+                                      0
+                                    ],
+                                    "size": [
+                                      8,
+                                      8,
+                                      1
+                                    ]
+                                  }
+                                },
+                                "element": "f32",
+                                "row_offset": 0,
+                                "row_elements": 8,
+                                "row_pitch": 32,
+                                "rows": 8,
+                                "image_pitch": 256,
+                                "images": 1,
+                                "gaps": "compared"
+                              }
+                            }
+                          }
+                        },
+                        {
+                          "name": "color/level-0/slice-2/plane-0",
+                          "observed": {
+                            "value": {
+                              "bytes": "AABAOgAAQDoAAEA6AABAOgAAQDoAAEA6AABAOgAAQDoAAEA6AABAOgAAQDoAAEA6AABAOgAAQDoAAEA6AABAOgAAQDoAAEA6AABAOgAAQDoAAEA6AABAOgAAQDoAAEA6AABAOgAAQDoAAEA6AABAOgAAQDoAAEA6AABAOgAAQDoAAEA6AABAOgAAQDoAAEA6AABAOgAAQDoAAEA6AABAOgAAQDoAAEA6AABAOgAAQDoAAEA6AABAOgAAQDoAAEA6AABAOgAAQDoAAEA6AABAOgAAQDoAAEA6AABAOgAAQDoAAEA6AABAOgAAQDoAAEA6AABAOgAAQDoAAEA6AABAOg=="
+                            },
+                            "shape": {
+                              "bytes": {
+                                "region": {
+                                  "texture": {
+                                    "level": 0,
+                                    "slice": 2,
+                                    "aspect": "color",
+                                    "sample": 0,
+                                    "origin": [
+                                      0,
+                                      0,
+                                      0
+                                    ],
+                                    "size": [
+                                      8,
+                                      8,
+                                      1
+                                    ]
+                                  }
+                                },
+                                "element": "f32",
+                                "row_offset": 0,
+                                "row_elements": 8,
+                                "row_pitch": 32,
+                                "rows": 8,
+                                "image_pitch": 256,
+                                "images": 1,
+                                "gaps": "compared"
+                              }
+                            }
+                          }
+                        }
+                      ]
+                    },
+                    {
+                      "name": "array-slice-1",
+                      "observed": {
+                        "value": "absent"
+                      },
+                      "children": [
+                        {
+                          "name": "color/level-0/slice-0/plane-0",
+                          "observed": {
+                            "value": {
+                              "bytes": "AACAOQAAgDkAAIA5AACAOQAAgDkAAIA5AACAOQAAgDkAAIA5AACAOQAAgDkAAIA5AACAOQAAgDkAAIA5AACAOQAAgDkAAIA5AACAOQAAgDkAAIA5AACAOQAAgDkAAIA5AACAOQAAgDkAAIA5AACAOQAAgDkAAIA5AACAOQAAgDkAAIA5AACAOQAAgDkAAIA5AACAOQAAgDkAAIA5AACAOQAAgDkAAIA5AACAOQAAgDkAAIA5AACAOQAAgDkAAIA5AACAOQAAgDkAAIA5AACAOQAAgDkAAIA5AACAOQAAgDkAAIA5AACAOQAAgDkAAIA5AACAOQAAgDkAAIA5AACAOQ=="
+                            },
+                            "shape": {
+                              "bytes": {
+                                "region": {
+                                  "texture": {
+                                    "level": 0,
+                                    "slice": 0,
+                                    "aspect": "color",
+                                    "sample": 0,
+                                    "origin": [
+                                      0,
+                                      0,
+                                      0
+                                    ],
+                                    "size": [
+                                      8,
+                                      8,
+                                      1
+                                    ]
+                                  }
+                                },
+                                "element": "f32",
+                                "row_offset": 0,
+                                "row_elements": 8,
+                                "row_pitch": 32,
+                                "rows": 8,
+                                "image_pitch": 256,
+                                "images": 1,
+                                "gaps": "compared"
+                              }
+                            }
+                          }
+                        },
+                        {
+                          "name": "color/level-0/slice-1/plane-0",
+                          "observed": {
+                            "value": {
+                              "bytes": "AACAPgAggD4AQIA+AGCAPgAAAD4AAAA+AAAAPgAAAD4AAIE+ACCBPgBAgT4AYIE+AAAAPgAAAD4AAAA+AAAAPgAAgj4AIII+AECCPgBggj4AAAA+AAAAPgAAAD4AAAA+AACDPgAggz4AQIM+AGCDPgAAAD4AAAA+AAAAPgAAAD4AAAA+AAAAPgAAAD4AAAA+AAAAPgAAAD4AAAA+AAAAPgAAAD4AAAA+AAAAPgAAAD4AAAA+AAAAPgAAAD4AAAA+AAAAPgAAAD4AAAA+AAAAPgAAAD4AAAA+AAAAPgAAAD4AAAA+AAAAPgAAAD4AAAA+AAAAPgAAAD4AAAA+AAAAPg=="
+                            },
+                            "shape": {
+                              "bytes": {
+                                "region": {
+                                  "texture": {
+                                    "level": 0,
+                                    "slice": 1,
+                                    "aspect": "color",
+                                    "sample": 0,
+                                    "origin": [
+                                      0,
+                                      0,
+                                      0
+                                    ],
+                                    "size": [
+                                      8,
+                                      8,
+                                      1
+                                    ]
+                                  }
+                                },
+                                "element": "f32",
+                                "row_offset": 0,
+                                "row_elements": 8,
+                                "row_pitch": 32,
+                                "rows": 8,
+                                "image_pitch": 256,
+                                "images": 1,
+                                "gaps": "compared"
+                              }
+                            }
+                          }
+                        },
+                        {
+                          "name": "color/level-0/slice-2/plane-0",
+                          "observed": {
+                            "value": {
+                              "bytes": "AABAOgAAQDoAAEA6AABAOgAAQDoAAEA6AABAOgAAQDoAAEA6AABAOgAAQDoAAEA6AABAOgAAQDoAAEA6AABAOgAAQDoAAEA6AABAOgAAQDoAAEA6AABAOgAAQDoAAEA6AABAOgAAQDoAAEA6AABAOgAAQDoAAEA6AABAOgAAQDoAAEA6AABAOgAAQDoAAEA6AABAOgAAQDoAAEA6AABAOgAAQDoAAEA6AABAOgAAQDoAAEA6AABAOgAAQDoAAEA6AABAOgAAQDoAAEA6AABAOgAAQDoAAEA6AABAOgAAQDoAAEA6AABAOgAAQDoAAEA6AABAOgAAQDoAAEA6AABAOg=="
+                            },
+                            "shape": {
+                              "bytes": {
+                                "region": {
+                                  "texture": {
+                                    "level": 0,
+                                    "slice": 2,
+                                    "aspect": "color",
+                                    "sample": 0,
+                                    "origin": [
+                                      0,
+                                      0,
+                                      0
+                                    ],
+                                    "size": [
+                                      8,
+                                      8,
+                                      1
+                                    ]
+                                  }
+                                },
+                                "element": "f32",
+                                "row_offset": 0,
+                                "row_elements": 8,
+                                "row_pitch": 32,
+                                "rows": 8,
+                                "image_pitch": 256,
+                                "images": 1,
+                                "gaps": "compared"
+                              }
+                            }
+                          }
+                        }
+                      ]
+                    },
+                    {
+                      "name": "array-slice-2",
+                      "observed": {
+                        "value": "absent"
+                      },
+                      "children": [
+                        {
+                          "name": "color/level-0/slice-0/plane-0",
+                          "observed": {
+                            "value": {
+                              "bytes": "AACAOQAAgDkAAIA5AACAOQAAgDkAAIA5AACAOQAAgDkAAIA5AACAOQAAgDkAAIA5AACAOQAAgDkAAIA5AACAOQAAgDkAAIA5AACAOQAAgDkAAIA5AACAOQAAgDkAAIA5AACAOQAAgDkAAIA5AACAOQAAgDkAAIA5AACAOQAAgDkAAIA5AACAOQAAgDkAAIA5AACAOQAAgDkAAIA5AACAOQAAgDkAAIA5AACAOQAAgDkAAIA5AACAOQAAgDkAAIA5AACAOQAAgDkAAIA5AACAOQAAgDkAAIA5AACAOQAAgDkAAIA5AACAOQAAgDkAAIA5AACAOQAAgDkAAIA5AACAOQ=="
+                            },
+                            "shape": {
+                              "bytes": {
+                                "region": {
+                                  "texture": {
+                                    "level": 0,
+                                    "slice": 0,
+                                    "aspect": "color",
+                                    "sample": 0,
+                                    "origin": [
+                                      0,
+                                      0,
+                                      0
+                                    ],
+                                    "size": [
+                                      8,
+                                      8,
+                                      1
+                                    ]
+                                  }
+                                },
+                                "element": "f32",
+                                "row_offset": 0,
+                                "row_elements": 8,
+                                "row_pitch": 32,
+                                "rows": 8,
+                                "image_pitch": 256,
+                                "images": 1,
+                                "gaps": "compared"
+                              }
+                            }
+                          }
+                        },
+                        {
+                          "name": "color/level-0/slice-1/plane-0",
+                          "observed": {
+                            "value": {
+                              "bytes": "AAAAOgAAADoAAAA6AAAAOgAAADoAAAA6AAAAOgAAADoAAAA6AAAAOgAAADoAAAA6AAAAOgAAADoAAAA6AAAAOgAAADoAAAA6AAAAOgAAADoAAAA6AAAAOgAAADoAAAA6AAAAOgAAADoAAAA6AAAAOgAAADoAAAA6AAAAOgAAADoAAAA6AAAAOgAAADoAAAA6AAAAOgAAADoAAAA6AAAAOgAAADoAAAA6AAAAOgAAADoAAAA6AAAAOgAAADoAAAA6AAAAOgAAADoAAAA6AAAAOgAAADoAAAA6AAAAOgAAADoAAAA6AAAAOgAAADoAAAA6AAAAOgAAADoAAAA6AAAAOg=="
+                            },
+                            "shape": {
+                              "bytes": {
+                                "region": {
+                                  "texture": {
+                                    "level": 0,
+                                    "slice": 1,
+                                    "aspect": "color",
+                                    "sample": 0,
+                                    "origin": [
+                                      0,
+                                      0,
+                                      0
+                                    ],
+                                    "size": [
+                                      8,
+                                      8,
+                                      1
+                                    ]
+                                  }
+                                },
+                                "element": "f32",
+                                "row_offset": 0,
+                                "row_elements": 8,
+                                "row_pitch": 32,
+                                "rows": 8,
+                                "image_pitch": 256,
+                                "images": 1,
+                                "gaps": "compared"
+                              }
+                            }
+                          }
+                        },
+                        {
+                          "name": "color/level-0/slice-2/plane-0",
+                          "observed": {
+                            "value": {
+                              "bytes": "AACAPgAggD4AQIA+AGCAPgAAAD4AAAA+AAAAPgAAAD4AAIE+ACCBPgBAgT4AYIE+AAAAPgAAAD4AAAA+AAAAPgAAgj4AIII+AECCPgBggj4AAAA+AAAAPgAAAD4AAAA+AACDPgAggz4AQIM+AGCDPgAAAD4AAAA+AAAAPgAAAD4AAAA+AAAAPgAAAD4AAAA+AAAAPgAAAD4AAAA+AAAAPgAAAD4AAAA+AAAAPgAAAD4AAAA+AAAAPgAAAD4AAAA+AAAAPgAAAD4AAAA+AAAAPgAAAD4AAAA+AAAAPgAAAD4AAAA+AAAAPgAAAD4AAAA+AAAAPgAAAD4AAAA+AAAAPg=="
+                            },
+                            "shape": {
+                              "bytes": {
+                                "region": {
+                                  "texture": {
+                                    "level": 0,
+                                    "slice": 2,
+                                    "aspect": "color",
+                                    "sample": 0,
+                                    "origin": [
+                                      0,
+                                      0,
+                                      0
+                                    ],
+                                    "size": [
+                                      8,
+                                      8,
+                                      1
+                                    ]
+                                  }
+                                },
+                                "element": "f32",
+                                "row_offset": 0,
+                                "row_elements": 8,
+                                "row_pitch": 32,
+                                "rows": 8,
+                                "image_pitch": 256,
+                                "images": 1,
+                                "gaps": "compared"
+                              }
+                            }
+                          }
+                        }
+                      ]
+                    },
+                    {
+                      "name": "volume-plane-0",
+                      "observed": {
+                        "value": "absent"
+                      },
+                      "children": [
+                        {
+                          "name": "color/level-0/slice-0/plane-0",
+                          "observed": {
+                            "value": {
+                              "bytes": "AACAPgAggD4AQIA+AGCAPgAAAD4AAAA+AAAAPgAAAD4AAIE+ACCBPgBAgT4AYIE+AAAAPgAAAD4AAAA+AAAAPgAAgj4AIII+AECCPgBggj4AAAA+AAAAPgAAAD4AAAA+AACDPgAggz4AQIM+AGCDPgAAAD4AAAA+AAAAPgAAAD4AAAA+AAAAPgAAAD4AAAA+AAAAPgAAAD4AAAA+AAAAPgAAAD4AAAA+AAAAPgAAAD4AAAA+AAAAPgAAAD4AAAA+AAAAPgAAAD4AAAA+AAAAPgAAAD4AAAA+AAAAPgAAAD4AAAA+AAAAPgAAAD4AAAA+AAAAPgAAAD4AAAA+AAAAPg=="
+                            },
+                            "shape": {
+                              "bytes": {
+                                "region": {
+                                  "texture": {
+                                    "level": 0,
+                                    "slice": 0,
+                                    "aspect": "color",
+                                    "sample": 0,
+                                    "origin": [
+                                      0,
+                                      0,
+                                      0
+                                    ],
+                                    "size": [
+                                      8,
+                                      8,
+                                      1
+                                    ]
+                                  }
+                                },
+                                "element": "f32",
+                                "row_offset": 0,
+                                "row_elements": 8,
+                                "row_pitch": 32,
+                                "rows": 8,
+                                "image_pitch": 256,
+                                "images": 1,
+                                "gaps": "compared"
+                              }
+                            }
+                          }
+                        },
+                        {
+                          "name": "color/level-0/slice-0/plane-1",
+                          "observed": {
+                            "value": {
+                              "bytes": "AAAAOgAAADoAAAA6AAAAOgAAADoAAAA6AAAAOgAAADoAAAA6AAAAOgAAADoAAAA6AAAAOgAAADoAAAA6AAAAOgAAADoAAAA6AAAAOgAAADoAAAA6AAAAOgAAADoAAAA6AAAAOgAAADoAAAA6AAAAOgAAADoAAAA6AAAAOgAAADoAAAA6AAAAOgAAADoAAAA6AAAAOgAAADoAAAA6AAAAOgAAADoAAAA6AAAAOgAAADoAAAA6AAAAOgAAADoAAAA6AAAAOgAAADoAAAA6AAAAOgAAADoAAAA6AAAAOgAAADoAAAA6AAAAOgAAADoAAAA6AAAAOgAAADoAAAA6AAAAOg=="
+                            },
+                            "shape": {
+                              "bytes": {
+                                "region": {
+                                  "texture": {
+                                    "level": 0,
+                                    "slice": 0,
+                                    "aspect": "color",
+                                    "sample": 0,
+                                    "origin": [
+                                      0,
+                                      0,
+                                      1
+                                    ],
+                                    "size": [
+                                      8,
+                                      8,
+                                      1
+                                    ]
+                                  }
+                                },
+                                "element": "f32",
+                                "row_offset": 0,
+                                "row_elements": 8,
+                                "row_pitch": 32,
+                                "rows": 8,
+                                "image_pitch": 256,
+                                "images": 1,
+                                "gaps": "compared"
+                              }
+                            }
+                          }
+                        },
+                        {
+                          "name": "color/level-0/slice-0/plane-2",
+                          "observed": {
+                            "value": {
+                              "bytes": "AABAOgAAQDoAAEA6AABAOgAAQDoAAEA6AABAOgAAQDoAAEA6AABAOgAAQDoAAEA6AABAOgAAQDoAAEA6AABAOgAAQDoAAEA6AABAOgAAQDoAAEA6AABAOgAAQDoAAEA6AABAOgAAQDoAAEA6AABAOgAAQDoAAEA6AABAOgAAQDoAAEA6AABAOgAAQDoAAEA6AABAOgAAQDoAAEA6AABAOgAAQDoAAEA6AABAOgAAQDoAAEA6AABAOgAAQDoAAEA6AABAOgAAQDoAAEA6AABAOgAAQDoAAEA6AABAOgAAQDoAAEA6AABAOgAAQDoAAEA6AABAOgAAQDoAAEA6AABAOg=="
+                            },
+                            "shape": {
+                              "bytes": {
+                                "region": {
+                                  "texture": {
+                                    "level": 0,
+                                    "slice": 0,
+                                    "aspect": "color",
+                                    "sample": 0,
+                                    "origin": [
+                                      0,
+                                      0,
+                                      2
+                                    ],
+                                    "size": [
+                                      8,
+                                      8,
+                                      1
+                                    ]
+                                  }
+                                },
+                                "element": "f32",
+                                "row_offset": 0,
+                                "row_elements": 8,
+                                "row_pitch": 32,
+                                "rows": 8,
+                                "image_pitch": 256,
+                                "images": 1,
+                                "gaps": "compared"
+                              }
+                            }
+                          }
+                        }
+                      ]
+                    },
+                    {
+                      "name": "volume-plane-1",
+                      "observed": {
+                        "value": "absent"
+                      },
+                      "children": [
+                        {
+                          "name": "color/level-0/slice-0/plane-0",
+                          "observed": {
+                            "value": {
+                              "bytes": "AACAOQAAgDkAAIA5AACAOQAAgDkAAIA5AACAOQAAgDkAAIA5AACAOQAAgDkAAIA5AACAOQAAgDkAAIA5AACAOQAAgDkAAIA5AACAOQAAgDkAAIA5AACAOQAAgDkAAIA5AACAOQAAgDkAAIA5AACAOQAAgDkAAIA5AACAOQAAgDkAAIA5AACAOQAAgDkAAIA5AACAOQAAgDkAAIA5AACAOQAAgDkAAIA5AACAOQAAgDkAAIA5AACAOQAAgDkAAIA5AACAOQAAgDkAAIA5AACAOQAAgDkAAIA5AACAOQAAgDkAAIA5AACAOQAAgDkAAIA5AACAOQAAgDkAAIA5AACAOQ=="
+                            },
+                            "shape": {
+                              "bytes": {
+                                "region": {
+                                  "texture": {
+                                    "level": 0,
+                                    "slice": 0,
+                                    "aspect": "color",
+                                    "sample": 0,
+                                    "origin": [
+                                      0,
+                                      0,
+                                      0
+                                    ],
+                                    "size": [
+                                      8,
+                                      8,
+                                      1
+                                    ]
+                                  }
+                                },
+                                "element": "f32",
+                                "row_offset": 0,
+                                "row_elements": 8,
+                                "row_pitch": 32,
+                                "rows": 8,
+                                "image_pitch": 256,
+                                "images": 1,
+                                "gaps": "compared"
+                              }
+                            }
+                          }
+                        },
+                        {
+                          "name": "color/level-0/slice-0/plane-1",
+                          "observed": {
+                            "value": {
+                              "bytes": "AACAPgAggD4AQIA+AGCAPgAAAD4AAAA+AAAAPgAAAD4AAIE+ACCBPgBAgT4AYIE+AAAAPgAAAD4AAAA+AAAAPgAAgj4AIII+AECCPgBggj4AAAA+AAAAPgAAAD4AAAA+AACDPgAggz4AQIM+AGCDPgAAAD4AAAA+AAAAPgAAAD4AAAA+AAAAPgAAAD4AAAA+AAAAPgAAAD4AAAA+AAAAPgAAAD4AAAA+AAAAPgAAAD4AAAA+AAAAPgAAAD4AAAA+AAAAPgAAAD4AAAA+AAAAPgAAAD4AAAA+AAAAPgAAAD4AAAA+AAAAPgAAAD4AAAA+AAAAPgAAAD4AAAA+AAAAPg=="
+                            },
+                            "shape": {
+                              "bytes": {
+                                "region": {
+                                  "texture": {
+                                    "level": 0,
+                                    "slice": 0,
+                                    "aspect": "color",
+                                    "sample": 0,
+                                    "origin": [
+                                      0,
+                                      0,
+                                      1
+                                    ],
+                                    "size": [
+                                      8,
+                                      8,
+                                      1
+                                    ]
+                                  }
+                                },
+                                "element": "f32",
+                                "row_offset": 0,
+                                "row_elements": 8,
+                                "row_pitch": 32,
+                                "rows": 8,
+                                "image_pitch": 256,
+                                "images": 1,
+                                "gaps": "compared"
+                              }
+                            }
+                          }
+                        },
+                        {
+                          "name": "color/level-0/slice-0/plane-2",
+                          "observed": {
+                            "value": {
+                              "bytes": "AABAOgAAQDoAAEA6AABAOgAAQDoAAEA6AABAOgAAQDoAAEA6AABAOgAAQDoAAEA6AABAOgAAQDoAAEA6AABAOgAAQDoAAEA6AABAOgAAQDoAAEA6AABAOgAAQDoAAEA6AABAOgAAQDoAAEA6AABAOgAAQDoAAEA6AABAOgAAQDoAAEA6AABAOgAAQDoAAEA6AABAOgAAQDoAAEA6AABAOgAAQDoAAEA6AABAOgAAQDoAAEA6AABAOgAAQDoAAEA6AABAOgAAQDoAAEA6AABAOgAAQDoAAEA6AABAOgAAQDoAAEA6AABAOgAAQDoAAEA6AABAOgAAQDoAAEA6AABAOg=="
+                            },
+                            "shape": {
+                              "bytes": {
+                                "region": {
+                                  "texture": {
+                                    "level": 0,
+                                    "slice": 0,
+                                    "aspect": "color",
+                                    "sample": 0,
+                                    "origin": [
+                                      0,
+                                      0,
+                                      2
+                                    ],
+                                    "size": [
+                                      8,
+                                      8,
+                                      1
+                                    ]
+                                  }
+                                },
+                                "element": "f32",
+                                "row_offset": 0,
+                                "row_elements": 8,
+                                "row_pitch": 32,
+                                "rows": 8,
+                                "image_pitch": 256,
+                                "images": 1,
+                                "gaps": "compared"
+                              }
+                            }
+                          }
+                        }
+                      ]
+                    },
+                    {
+                      "name": "volume-plane-2",
+                      "observed": {
+                        "value": "absent"
+                      },
+                      "children": [
+                        {
+                          "name": "color/level-0/slice-0/plane-0",
+                          "observed": {
+                            "value": {
+                              "bytes": "AACAOQAAgDkAAIA5AACAOQAAgDkAAIA5AACAOQAAgDkAAIA5AACAOQAAgDkAAIA5AACAOQAAgDkAAIA5AACAOQAAgDkAAIA5AACAOQAAgDkAAIA5AACAOQAAgDkAAIA5AACAOQAAgDkAAIA5AACAOQAAgDkAAIA5AACAOQAAgDkAAIA5AACAOQAAgDkAAIA5AACAOQAAgDkAAIA5AACAOQAAgDkAAIA5AACAOQAAgDkAAIA5AACAOQAAgDkAAIA5AACAOQAAgDkAAIA5AACAOQAAgDkAAIA5AACAOQAAgDkAAIA5AACAOQAAgDkAAIA5AACAOQAAgDkAAIA5AACAOQ=="
+                            },
+                            "shape": {
+                              "bytes": {
+                                "region": {
+                                  "texture": {
+                                    "level": 0,
+                                    "slice": 0,
+                                    "aspect": "color",
+                                    "sample": 0,
+                                    "origin": [
+                                      0,
+                                      0,
+                                      0
+                                    ],
+                                    "size": [
+                                      8,
+                                      8,
+                                      1
+                                    ]
+                                  }
+                                },
+                                "element": "f32",
+                                "row_offset": 0,
+                                "row_elements": 8,
+                                "row_pitch": 32,
+                                "rows": 8,
+                                "image_pitch": 256,
+                                "images": 1,
+                                "gaps": "compared"
+                              }
+                            }
+                          }
+                        },
+                        {
+                          "name": "color/level-0/slice-0/plane-1",
+                          "observed": {
+                            "value": {
+                              "bytes": "AAAAOgAAADoAAAA6AAAAOgAAADoAAAA6AAAAOgAAADoAAAA6AAAAOgAAADoAAAA6AAAAOgAAADoAAAA6AAAAOgAAADoAAAA6AAAAOgAAADoAAAA6AAAAOgAAADoAAAA6AAAAOgAAADoAAAA6AAAAOgAAADoAAAA6AAAAOgAAADoAAAA6AAAAOgAAADoAAAA6AAAAOgAAADoAAAA6AAAAOgAAADoAAAA6AAAAOgAAADoAAAA6AAAAOgAAADoAAAA6AAAAOgAAADoAAAA6AAAAOgAAADoAAAA6AAAAOgAAADoAAAA6AAAAOgAAADoAAAA6AAAAOgAAADoAAAA6AAAAOg=="
+                            },
+                            "shape": {
+                              "bytes": {
+                                "region": {
+                                  "texture": {
+                                    "level": 0,
+                                    "slice": 0,
+                                    "aspect": "color",
+                                    "sample": 0,
+                                    "origin": [
+                                      0,
+                                      0,
+                                      1
+                                    ],
+                                    "size": [
+                                      8,
+                                      8,
+                                      1
+                                    ]
+                                  }
+                                },
+                                "element": "f32",
+                                "row_offset": 0,
+                                "row_elements": 8,
+                                "row_pitch": 32,
+                                "rows": 8,
+                                "image_pitch": 256,
+                                "images": 1,
+                                "gaps": "compared"
+                              }
+                            }
+                          }
+                        },
+                        {
+                          "name": "color/level-0/slice-0/plane-2",
+                          "observed": {
+                            "value": {
+                              "bytes": "AACAPgAggD4AQIA+AGCAPgAAAD4AAAA+AAAAPgAAAD4AAIE+ACCBPgBAgT4AYIE+AAAAPgAAAD4AAAA+AAAAPgAAgj4AIII+AECCPgBggj4AAAA+AAAAPgAAAD4AAAA+AACDPgAggz4AQIM+AGCDPgAAAD4AAAA+AAAAPgAAAD4AAAA+AAAAPgAAAD4AAAA+AAAAPgAAAD4AAAA+AAAAPgAAAD4AAAA+AAAAPgAAAD4AAAA+AAAAPgAAAD4AAAA+AAAAPgAAAD4AAAA+AAAAPgAAAD4AAAA+AAAAPgAAAD4AAAA+AAAAPgAAAD4AAAA+AAAAPgAAAD4AAAA+AAAAPg=="
+                            },
+                            "shape": {
+                              "bytes": {
+                                "region": {
+                                  "texture": {
+                                    "level": 0,
+                                    "slice": 0,
+                                    "aspect": "color",
+                                    "sample": 0,
+                                    "origin": [
+                                      0,
+                                      0,
+                                      2
+                                    ],
+                                    "size": [
+                                      8,
+                                      8,
+                                      1
+                                    ]
+                                  }
+                                },
+                                "element": "f32",
+                                "row_offset": 0,
+                                "row_elements": 8,
+                                "row_pitch": 32,
+                                "rows": 8,
+                                "image_pitch": 256,
+                                "images": 1,
+                                "gaps": "compared"
+                              }
+                            }
+                          }
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "name": "notices",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "set",
+                      "observed": {
+                        "value": {
+                          "nothing": "announced_nothing"
+                        }
+                      }
+                    },
+                    {
+                      "name": "counts",
+                      "observed": {
+                        "value": {
+                          "fields": {}
+                        }
+                      }
+                    }
+                  ]
+                }
+              ]
+            }
+          }
+        }
+      ],
+      "validated": "ran"
+    }
+  ]
+}

@@ -33,8 +33,8 @@ use crate::allowance::Allowance;
 use crate::case::{call, made, Abort, Bindings, Case, Input, MetalSource, Side};
 use crate::recording::ShaderRef;
 use crate::render::{
-    Blend, ColorState, Dispatch, PassColor, Plane, RenderPass, RenderPipelineSpec, RenderStep,
-    RenderWork, TargetSpec,
+    Blend, ColorState, Dispatch, PassColor, Plane, ReadAt, RenderPass, RenderPipelineSpec,
+    RenderStep, RenderWork, TargetSpec,
 };
 use crate::transcript::{Node, Observed, Sites, Value};
 use metal2vulkan::metal::BlendFactor;
@@ -379,6 +379,7 @@ impl Case for ExtendedRangeBlend {
                 row_pitch: WIDTH * self.format.texel,
                 size: [WIDTH, HEIGHT],
                 plane: Plane::Whole,
+                at: ReadAt::BASE,
             },
         ];
         // A two-plane target's alpha plane is not in the blit, so the case also records what

@@ -148,8 +148,8 @@ use crate::allowance::Allowance;
 use crate::case::{call, made, Abort, Case, Input, MetalSource, Side};
 use crate::recording::ShaderRef;
 use crate::render::{
-    Blend, BlendColorChannels, ColorState, PassColor, Plane, RenderPass, RenderPipelineSpec,
-    RenderStep, RenderWork, TargetSpec,
+    Blend, BlendColorChannels, ColorState, PassColor, Plane, ReadAt, RenderPass,
+    RenderPipelineSpec, RenderStep, RenderWork, TargetSpec,
 };
 use crate::transcript::{Aspect, ByteLayout, Element, Gaps, Node, Observed, Region, Sites, Value};
 use metal2vulkan::metal::{BlendFactor as F, BlendOperation as O, ColorWriteMask, PixelFormat};
@@ -1187,6 +1187,7 @@ impl Case for BlendSweep {
                 row_pitch: WIDTH * TEXEL,
                 size: [WIDTH, HEIGHT],
                 plane: Plane::Whole,
+                at: ReadAt::BASE,
             });
             reads.push((variant.name.clone(), into));
         }

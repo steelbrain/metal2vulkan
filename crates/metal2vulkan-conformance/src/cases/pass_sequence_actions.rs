@@ -115,8 +115,8 @@ use crate::case::{call, made, Abort, Case, Failure, Handle, Input, MetalSource, 
 use crate::fixture::{Fixture, METAL_TEXT, RUNTIME_TEXT};
 use crate::recording::ShaderRef;
 use crate::render::{
-    ColorState, PassColor, PassDepth, PassStencil, RenderPass, RenderPipelineSpec, RenderStep,
-    RenderWork, ScissorBox, StageFunction, TargetSpec, ViewportRect,
+    ColorState, PassColor, PassDepth, PassStencil, Plane, ReadAt, RenderPass, RenderPipelineSpec,
+    RenderStep, RenderWork, ScissorBox, StageFunction, TargetSpec, ViewportRect,
 };
 use crate::transcript::{
     Aspect, ByteLayout, Digest, Element, Gaps, Node, Observed, Region, Sites, Value,
@@ -1066,6 +1066,8 @@ impl SequenceActions {
                 offset: 0,
                 row_pitch: COLOR_TEXEL * SIDE,
                 size: [SIDE; 2],
+                at: ReadAt::BASE,
+                plane: Plane::Whole,
             });
             names.push(format!("read:{site}"));
             reads.push((site, into));
@@ -1190,6 +1192,8 @@ impl SequenceActions {
                 offset: 0,
                 row_pitch: 4 * SIDE,
                 size: [SIDE; 2],
+                at: ReadAt::BASE,
+                plane: Plane::Whole,
             });
             names.push(format!("read:depth:{site}"));
             work.push(RenderWork::ReadTexture {
@@ -1198,6 +1202,8 @@ impl SequenceActions {
                 offset: 0,
                 row_pitch: SIDE,
                 size: [SIDE; 2],
+                at: ReadAt::BASE,
+                plane: Plane::Whole,
             });
             names.push(format!("read:stencil:{site}"));
             reads.push((site, depth_into, stencil_into));

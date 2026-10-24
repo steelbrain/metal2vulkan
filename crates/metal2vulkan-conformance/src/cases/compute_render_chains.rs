@@ -58,8 +58,8 @@ use crate::case::{
 use crate::fixture::{Fixture, METAL_TEXT, RUNTIME_TEXT};
 use crate::recording::ShaderRef;
 use crate::render::{
-    ColorState, Dispatch, PassColor, Plane, RenderPass, RenderPipelineSpec, RenderStep, RenderWork,
-    TargetSpec,
+    ColorState, Dispatch, PassColor, Plane, ReadAt, RenderPass, RenderPipelineSpec, RenderStep,
+    RenderWork, TargetSpec,
 };
 use crate::transcript::{
     Aspect, ByteLayout, Digest, Element, Gaps, Node, Observed, Region, Sites, Value,
@@ -507,6 +507,7 @@ impl Case for ComputeRenderChain {
             row_pitch: TEXEL * SIDE,
             size: [SIDE; 2],
             plane: Plane::Whole,
+            at: ReadAt::BASE,
         };
         let (work, names): (Vec<RenderWork>, Vec<&str>) = match subject.crossing {
             Crossing::KernelToFragment => (
@@ -523,6 +524,7 @@ impl Case for ComputeRenderChain {
                         row_pitch: TEXEL * SIDE,
                         size: [SIDE; 2],
                         plane: Plane::Whole,
+                        at: ReadAt::BASE,
                     },
                 ],
                 vec!["dispatch", "pass", "read-handed-over", "read-sampled"],

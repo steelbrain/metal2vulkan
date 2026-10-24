@@ -44,7 +44,7 @@ use crate::case::{call, made, Abort, Case, Failure, Handle, Input, MetalSource, 
 use crate::fixture::{Fixture, METAL_TEXT, RUNTIME_TEXT};
 use crate::recording::ShaderRef;
 use crate::render::{
-    ColorState, PassColor, Plane, RenderPass, RenderPipelineSpec, RenderStep, RenderWork,
+    ColorState, PassColor, Plane, ReadAt, RenderPass, RenderPipelineSpec, RenderStep, RenderWork,
     StageFunction, TargetSpec,
 };
 use crate::transcript::{
@@ -380,6 +380,7 @@ impl Case for FetchOrdered {
                 row_pitch: SIDE * TEXEL,
                 size: [SIDE, SIDE],
                 plane: Plane::Whole,
+                at: ReadAt::BASE,
             });
             work.push(RenderWork::ReadTexture {
                 texture: wide,
@@ -388,6 +389,7 @@ impl Case for FetchOrdered {
                 row_pitch: SIDE * WIDE_TEXEL,
                 size: [SIDE, SIDE],
                 plane: Plane::Whole,
+                at: ReadAt::BASE,
             });
             reads.push((*draws, texels, wide_bytes));
         }

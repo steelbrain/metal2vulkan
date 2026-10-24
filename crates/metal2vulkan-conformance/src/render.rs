@@ -62,7 +62,8 @@ use metal2vulkan::metal::{
     BarrierScope, BlendFactor, BlendOperation, ColorWriteMask, CullMode, DepthClipMode, IndexType,
     PixelFormat, PrimitiveTopologyClass, PrimitiveType, RenderStages, ResourceUsage,
     TessellationControlPointIndexType, TessellationFactorFormat, TessellationFactorStepFunction,
-    TessellationPartitionMode, TriangleFillMode, VertexFormat, VertexStepFunction, Winding,
+    TessellationPartitionMode, TextureType, TriangleFillMode, VertexFormat, VertexStepFunction,
+    Winding,
 };
 use metal2vulkan_runtime::{
     LoadAction, MultisampleDepthResolveFilter, MultisampleStencilResolveFilter, SamplePosition,
@@ -114,6 +115,9 @@ pub struct TargetSpec {
     /// object, from [`Side::buffer`](crate::case::Side::buffer), so the case states its contents
     /// and reads them with [`Side::read_buffer`](crate::case::Side::read_buffer).
     pub over_buffer: Option<OverBuffer>,
+    /// The target's shape past a plain single-level 2D texture ([`TargetShape`]): `None` for the
+    /// one every other family makes, which is one level of one slice.
+    pub shape: Option<TargetShape>,
 }
 
 /// Where a target's texels lie in a buffer the case made:
@@ -176,6 +180,204 @@ impl OverBuffer {
     }
 }
 
+/// The name the shape's four fields fingerprint under, so a target that states a shape cannot
+/// collide with one that states a surface plane or a buffer backing.
+pub const TARGET_SHAPE_FIELDS: &str = "textureType:mipmapLevelCount:arrayLength:depth";
+
+/// A render target's shape past a plain single-level 2D texture: `textureType`,
+/// `mipmapLevelCount`, `arrayLength` and `depth`, which is what an attachment's `level`, `slice`
+/// or `depthPlane` ([`AttachmentPlace`]) needs there to be more than one of.
+///
+/// The four are one value rather than four fields of [`TargetSpec`] because Metal's descriptor
+/// refuses most of the combinations a case could otherwise state: an `arrayLength` above 1 wants
+/// an array type, a `depth` above 1 wants `Type3D`, and `Type3D` takes no `arrayLength`. A case
+/// names the shape it means and the type comes with it, so no case can state a type and a count
+/// that disagree.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct TargetShape {
+    /// `textureType`.
+    pub texture_type: TextureType,
+    /// `mipmapLevelCount`: 1, or the levels of a mip chain. Level `n` of a target of `size` has
+    /// the extent `size >> n` ([`TargetShape::level_size`]), which is what an attachment at that
+    /// level renders into and what a read of it copies.
+    pub levels: u32,
+    /// `arrayLength`: 1, or the slices of an array texture.
+    pub array_length: u32,
+    /// `depth`: 1, or the planes of a 3D texture.
+    pub depth: u32,
+}
+
+impl TargetShape {
+    /// An array texture of `slices`, single-level.
+    pub const fn array(slices: u32) -> Self {
+        Self {
+            texture_type: TextureType::Type2DArray,
+            levels: 1,
+            array_length: slices,
+            depth: 1,
+        }
+    }
+
+    /// A multisampled array texture of `slices`, which is what a resolve of a slice past the
+    /// first renders out of. The samples are [`TargetSpec::multisampled`]'s, as they are for a
+    /// single-slice multisampled target.
+    pub const fn multisample_array(slices: u32) -> Self {
+        Self {
+            texture_type: TextureType::Type2DMultisampleArray,
+            levels: 1,
+            array_length: slices,
+            depth: 1,
+        }
+    }
+
+    /// A 3D texture of `planes`, whose planes an attachment's `depthPlane` chooses between.
+    pub const fn volume(planes: u32) -> Self {
+        Self {
+            texture_type: TextureType::Type3D,
+            levels: 1,
+            array_length: 1,
+            depth: planes,
+        }
+    }
+
+    /// A plain 2D texture of a mip chain of `levels`.
+    pub const fn chain(levels: u32) -> Self {
+        Self {
+            texture_type: TextureType::Type2D,
+            levels,
+            array_length: 1,
+            depth: 1,
+        }
+    }
+
+    /// The shape with a mip chain of `levels` as well.
+    #[must_use]
+    pub const fn leveled(mut self, levels: u32) -> Self {
+        self.levels = levels;
+        self
+    }
+
+    /// The extent of level `level` of a target of `size`: each axis halved once a level, never
+    /// below 1, as Metal sizes a mip chain.
+    pub fn level_size(size: [u32; 2], level: u32) -> [u32; 2] {
+        size.map(|axis| (axis >> level).max(1))
+    }
+
+    /// The words a case's input fingerprint covers: the descriptor's own field names, then the
+    /// type and the three counts.
+    pub fn words(&self) -> Vec<u8> {
+        let mut bytes = TARGET_SHAPE_FIELDS.as_bytes().to_vec();
+        bytes.extend(self.texture_type.as_raw().to_le_bytes());
+        bytes.extend(self.levels.to_le_bytes());
+        bytes.extend(self.array_length.to_le_bytes());
+        bytes.extend(self.depth.to_le_bytes());
+        bytes
+    }
+}
+
+/// The name an attachment's place fingerprints under, for the reason
+/// [`TARGET_SHAPE_FIELDS`] is a name rather than a marker byte.
+pub const ATTACHMENT_PLACE_FIELDS: &str = "level:slice:depthPlane";
+
+/// Where in its texture an attachment renders, and where it resolves: `level`, `slice` and
+/// `depthPlane`, and `resolveLevel`, `resolveSlice` and `resolveDepthPlane`.
+///
+/// One value shared by the colour, depth and stencil attachments, because Metal states the six
+/// fields identically on all three descriptors and a side that reads one attachment's place for
+/// another's is the mistake a case over them is looking for. [`AttachmentPlace::BASE`] is Metal's
+/// own default -- the first level of the first slice -- and is what every family that states no
+/// place carries.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct AttachmentPlace {
+    /// `level`: the mipmap level the attachment renders into.
+    pub level: u32,
+    /// `slice`: the array slice the attachment renders into; under a layered pass
+    /// ([`RenderPass::array_length`]), the slice the shader's layer 0 reaches.
+    pub slice: u32,
+    /// `depthPlane`: the plane of a 3D texture the attachment renders into.
+    pub depth_plane: u32,
+    /// `resolveLevel`: the mipmap level of the resolve texture a resolving store writes.
+    pub resolve_level: u32,
+    /// `resolveSlice`: the slice of the resolve texture a resolving store writes.
+    pub resolve_slice: u32,
+    /// `resolveDepthPlane`: the plane of a 3D resolve texture a resolving store writes.
+    pub resolve_depth_plane: u32,
+}
+
+impl AttachmentPlace {
+    /// Metal's own default: the first level of the first slice, resolving into the same.
+    pub const BASE: Self = Self {
+        level: 0,
+        slice: 0,
+        depth_plane: 0,
+        resolve_level: 0,
+        resolve_slice: 0,
+        resolve_depth_plane: 0,
+    };
+
+    /// The place at `slice` of an array texture.
+    pub const fn slice(slice: u32) -> Self {
+        Self {
+            slice,
+            ..Self::BASE
+        }
+    }
+
+    /// The place at mipmap `level`.
+    pub const fn level(level: u32) -> Self {
+        Self {
+            level,
+            ..Self::BASE
+        }
+    }
+
+    /// The place at `plane` of a 3D texture.
+    pub const fn plane(plane: u32) -> Self {
+        Self {
+            depth_plane: plane,
+            ..Self::BASE
+        }
+    }
+
+    /// The place with the resolve texture's `level` and `slice` as well.
+    #[must_use]
+    pub const fn resolving_into(mut self, level: u32, slice: u32) -> Self {
+        self.resolve_level = level;
+        self.resolve_slice = slice;
+        self
+    }
+
+    /// The place with the resolve texture's `plane` as well.
+    #[must_use]
+    pub const fn resolving_plane(mut self, plane: u32) -> Self {
+        self.resolve_depth_plane = plane;
+        self
+    }
+
+    /// The words a case's input fingerprint covers, **empty** at Metal's own default so an
+    /// attachment that states no place fingerprints to exactly the bytes it always had and every
+    /// recording already committed still reads. A place that IS stated reaches the key in full,
+    /// keyed by the descriptor's field names, so a recording taken without it cannot read as
+    /// fresh for a case that now states one.
+    pub fn words(&self) -> Vec<u8> {
+        if *self == Self::BASE {
+            return Vec::new();
+        }
+        let mut bytes = ATTACHMENT_PLACE_FIELDS.as_bytes().to_vec();
+        for number in [
+            self.level,
+            self.slice,
+            self.depth_plane,
+            self.resolve_level,
+            self.resolve_slice,
+            self.resolve_depth_plane,
+        ] {
+            bytes.extend(number.to_le_bytes());
+        }
+        bytes
+    }
+}
+
 impl TargetSpec {
     /// A single-sampled target of `format` and `size` a shader also reads.
     pub const fn read(format: PixelFormat, size: [u32; 2]) -> Self {
@@ -188,6 +390,7 @@ impl TargetSpec {
             shared: false,
             surface: None,
             over_buffer: None,
+            shape: None,
         }
     }
 
@@ -207,6 +410,7 @@ impl TargetSpec {
             shared: false,
             surface: None,
             over_buffer: None,
+            shape: None,
         }
     }
 
@@ -240,6 +444,14 @@ impl TargetSpec {
     #[must_use]
     pub const fn multisampled(mut self, samples: u32) -> Self {
         self.samples = samples;
+        self
+    }
+
+    /// The target of `shape`: an array texture, a 3D texture or a mip chain, rather than the one
+    /// level of one slice every other family makes ([`TargetShape`]).
+    #[must_use]
+    pub const fn shaped(mut self, shape: TargetShape) -> Self {
+        self.shape = Some(shape);
         self
     }
 
@@ -277,6 +489,15 @@ impl TargetSpec {
         if let Some(over) = &self.over_buffer {
             bytes.push(1);
             bytes.extend(over.words());
+        }
+        // Written **only where the target states a shape**, and keyed by the descriptor's own
+        // field names rather than by a marker byte, for two reasons: a target of one level of one
+        // slice -- every other family's -- fingerprints to exactly the bytes it always had, so
+        // every recording already committed still reads; and a `1` here could not be told from
+        // the `1` a surface plane or a buffer backing pushes, which is the collision the two
+        // comments above were written about.
+        if let Some(shape) = &self.shape {
+            bytes.extend(shape.words());
         }
         bytes
     }
@@ -898,6 +1119,10 @@ pub struct PassDepth {
     /// `storeActionOptions`: Metal's default is none, and
     /// `MTLStoreActionOptionCustomSamplePositions` is the one option it defines.
     pub options: StoreActionOptions,
+    /// Where in its texture the attachment renders, and where it resolves
+    /// ([`AttachmentPlace`]): [`AttachmentPlace::BASE`], the first level of the first slice, is
+    /// Metal's own default and what every family that states no place carries.
+    pub place: AttachmentPlace,
 }
 
 impl PassDepth {
@@ -911,6 +1136,7 @@ impl PassDepth {
             resolve: None,
             filter: MultisampleDepthResolveFilter::Sample0,
             options: StoreActionOptions::NONE,
+            place: AttachmentPlace::BASE,
         }
     }
 
@@ -941,6 +1167,13 @@ impl PassDepth {
         self
     }
 
+    /// The attachment at `place` of its texture ([`AttachmentPlace`]).
+    #[must_use]
+    pub const fn placed(mut self, place: AttachmentPlace) -> Self {
+        self.place = place;
+        self
+    }
+
     /// The words a case's input fingerprint covers. Nothing of a handle is fingerprinted: a
     /// side's handle numbers are its own.
     ///
@@ -955,6 +1188,9 @@ impl PassDepth {
         if self.options != StoreActionOptions::NONE {
             bytes.extend(self.options.raw().to_le_bytes());
         }
+        // Empty at Metal's own default, so an attachment that states no place fingerprints to the
+        // bytes it always had ([`AttachmentPlace::words`]).
+        bytes.extend(self.place.words());
         bytes
     }
 }
@@ -975,6 +1211,10 @@ pub struct PassStencil {
     /// stops `CustomSamplePositions` here without positions, or under a store action that keeps no
     /// samples, where a color or a depth attachment's options change nothing.
     pub options: StoreActionOptions,
+    /// Where in its texture the attachment renders, and where it resolves
+    /// ([`AttachmentPlace`]): [`AttachmentPlace::BASE`], the first level of the first slice, is
+    /// Metal's own default and what every family that states no place carries.
+    pub place: AttachmentPlace,
 }
 
 impl PassStencil {
@@ -988,6 +1228,7 @@ impl PassStencil {
             resolve: None,
             filter: MultisampleStencilResolveFilter::Sample0,
             options: StoreActionOptions::NONE,
+            place: AttachmentPlace::BASE,
         }
     }
 
@@ -1018,6 +1259,13 @@ impl PassStencil {
         self
     }
 
+    /// The attachment at `place` of its texture ([`AttachmentPlace`]).
+    #[must_use]
+    pub const fn placed(mut self, place: AttachmentPlace) -> Self {
+        self.place = place;
+        self
+    }
+
     /// The words a case's input fingerprint covers; the options only where they are not Metal's
     /// default.
     pub fn words(&self) -> Vec<u8> {
@@ -1029,6 +1277,9 @@ impl PassStencil {
         if self.options != StoreActionOptions::NONE {
             bytes.extend(self.options.raw().to_le_bytes());
         }
+        // Empty at Metal's own default, so an attachment that states no place fingerprints to the
+        // bytes it always had ([`AttachmentPlace::words`]).
+        bytes.extend(self.place.words());
         bytes
     }
 }
@@ -1049,6 +1300,10 @@ pub struct PassColor {
     /// `storeActionOptions`: Metal's default is none, and
     /// `MTLStoreActionOptionCustomSamplePositions` is the one option it defines.
     pub options: StoreActionOptions,
+    /// Where in its texture the attachment renders, and where it resolves
+    /// ([`AttachmentPlace`]): [`AttachmentPlace::BASE`], the first level of the first slice, is
+    /// Metal's own default and what every family that states no place carries.
+    pub place: AttachmentPlace,
 }
 
 impl PassColor {
@@ -1061,6 +1316,7 @@ impl PassColor {
             clear: [0.0, 0.0, 0.0, 1.0],
             resolve: None,
             options: StoreActionOptions::NONE,
+            place: AttachmentPlace::BASE,
         }
     }
 
@@ -1073,6 +1329,7 @@ impl PassColor {
             clear,
             resolve: None,
             options: StoreActionOptions::NONE,
+            place: AttachmentPlace::BASE,
         }
     }
 
@@ -1085,6 +1342,7 @@ impl PassColor {
             clear: [0.0, 0.0, 0.0, 1.0],
             resolve: None,
             options: StoreActionOptions::NONE,
+            place: AttachmentPlace::BASE,
         }
     }
 
@@ -1098,6 +1356,7 @@ impl PassColor {
             clear: [0.0, 0.0, 0.0, 1.0],
             resolve: None,
             options: StoreActionOptions::NONE,
+            place: AttachmentPlace::BASE,
         }
     }
 
@@ -1124,6 +1383,13 @@ impl PassColor {
         self
     }
 
+    /// The attachment at `place` of its texture ([`AttachmentPlace`]).
+    #[must_use]
+    pub const fn placed(mut self, place: AttachmentPlace) -> Self {
+        self.place = place;
+        self
+    }
+
     /// The words a case's input fingerprint covers: the actions and the clear color's bits, so a
     /// clear value that moves by one `f64` step is a change to the case's inputs. Nothing of a
     /// handle is fingerprinted: a side's handle numbers are its own.
@@ -1142,6 +1408,8 @@ impl PassColor {
         if self.options != StoreActionOptions::NONE {
             bytes.extend(self.options.raw().to_le_bytes());
         }
+        // Empty at Metal's own default, for the same reason ([`AttachmentPlace::words`]).
+        bytes.extend(self.place.words());
         bytes
     }
 }
@@ -2115,6 +2383,9 @@ impl RenderStep {
 /// by a place in the words.
 pub const SAMPLE_POSITIONS_CALL: &str = "setSamplePositions";
 
+/// The name `renderTargetArrayLength` fingerprints under ([`RenderPass::words`]).
+pub const RENDER_TARGET_ARRAY_LENGTH: &str = "renderTargetArrayLength";
+
 /// The two sample-position shapes the **Metal leg** must never encode, refused before anything is
 /// made, decided from the positions themselves and the pass's sample count alone.
 ///
@@ -2180,6 +2451,15 @@ pub struct RenderPass {
     /// attachment at all must, because Metal takes the extent from the attachments otherwise and a
     /// pass without one has none to take it from.
     pub size: Option<[u32; 2]>,
+    /// `renderTargetArrayLength`: the layers a layered pass renders, **0** for Metal's own
+    /// default.
+    ///
+    /// 0 and 1 both render each attachment's own slice alone, measured on this M3 Max: a vertex
+    /// function's `[[render_target_array_index]]` is then ignored and every primitive lands in
+    /// the attachment's `slice`. Two or more renders the slices `slice` up, so the shader's layer
+    /// `i` reaches slice `place.slice + i`, and the load and store actions cover every one of
+    /// them.
+    pub array_length: u32,
     /// The commands, in order. **A pass of none is a pass with no draw call**, which is one of the
     /// facts Metal's clear route reads, so the empty list is a case rather than an oversight.
     pub steps: Vec<RenderStep>,
@@ -2201,6 +2481,7 @@ impl RenderPass {
             stencil: None,
             visibility: None,
             size: None,
+            array_length: 0,
             steps: Vec::new(),
             positions: Vec::new(),
         }
@@ -2239,6 +2520,13 @@ impl RenderPass {
     #[must_use]
     pub fn counting_into(mut self, buffer: Handle) -> Self {
         self.visibility = Some(buffer);
+        self
+    }
+
+    /// The pass that renders `layers` layers (`renderTargetArrayLength`).
+    #[must_use]
+    pub fn layered(mut self, layers: u32) -> Self {
+        self.array_length = layers;
         self
     }
 
@@ -2299,6 +2587,13 @@ impl RenderPass {
                 bytes.extend(position.y.to_bits().to_le_bytes());
             }
         }
+        // Appended, keyed by the property's own name and written **only where the pass states a
+        // layer count**, so a pass at Metal's default of 0 fingerprints to the bytes it always had
+        // and every recording already committed still reads.
+        if self.array_length != 0 {
+            bytes.extend(RENDER_TARGET_ARRAY_LENGTH.as_bytes());
+            bytes.extend(self.array_length.to_le_bytes());
+        }
         bytes
     }
 }
@@ -2318,14 +2613,76 @@ pub struct Dispatch {
     pub threads: [u32; 3],
 }
 
+/// Which level, slice and plane of a texture a read copies: the `sourceLevel`, `sourceSlice`
+/// and the `sourceOrigin`'s `z` of
+/// `copyFromTexture:sourceSlice:sourceLevel:sourceOrigin:sourceSize:toBuffer:...`.
+///
+/// [`ReadAt::BASE`] is the first level of the first slice, which is what every family that reads
+/// a plain target carries and what the call has always made. The plane is the origin's `z` rather
+/// than a slice because that is how Metal addresses a 3D texture: its `sourceSlice` is 0 whatever
+/// plane is wanted, and a case reading a plane of a volume target says so here.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ReadAt {
+    /// `sourceLevel`.
+    pub level: u32,
+    /// `sourceSlice`.
+    pub slice: u32,
+    /// The `sourceOrigin`'s `z`: the plane of a 3D texture.
+    pub depth_plane: u32,
+}
+
+impl ReadAt {
+    /// The first level of the first slice: what the call has always made.
+    pub const BASE: Self = Self {
+        level: 0,
+        slice: 0,
+        depth_plane: 0,
+    };
+
+    /// Level `level` of slice `slice`.
+    pub const fn new(level: u32, slice: u32) -> Self {
+        Self {
+            level,
+            slice,
+            depth_plane: 0,
+        }
+    }
+
+    /// Plane `depth_plane` of a 3D texture's first level, at slice 0.
+    pub const fn depth_plane(depth_plane: u32) -> Self {
+        Self {
+            level: 0,
+            slice: 0,
+            depth_plane,
+        }
+    }
+
+    /// The words a case's input fingerprint covers, **empty** at the first level of the first
+    /// slice, so a case that reads a plain target fingerprints its read as it always did.
+    pub fn words(&self) -> Vec<u8> {
+        if *self == Self::BASE {
+            return Vec::new();
+        }
+        let mut bytes = b"sourceLevel:sourceSlice:sourceOrigin".to_vec();
+        for number in [self.level, self.slice, self.depth_plane] {
+            bytes.extend(number.to_le_bytes());
+        }
+        bytes
+    }
+}
+
 /// One piece of the work a command buffer holds.
 #[derive(Clone, Debug, PartialEq)]
 pub enum RenderWork {
     /// One render pass, opened with its descriptor and ended.
     Pass(RenderPass),
     /// `copyFromTexture:sourceSlice:sourceLevel:sourceOrigin:sourceSize:toBuffer:
-    /// destinationOffset:destinationBytesPerRow:destinationBytesPerImage:options:` of level 0's
-    /// whole extent, which is how a private target's texels reach the host.
+    /// destinationOffset:destinationBytesPerRow:destinationBytesPerImage:options:` of `size` at `at`,
+    /// which is how a private target's texels reach the host.
+    ///
+    /// `size` is the extent the read copies, which for a level past the first is that **level's**
+    /// own extent ([`TargetShape::level_size`]) and not the target's: a case that renders to a
+    /// level reads it at the extent it rendered.
     ReadTexture {
         texture: Handle,
         into: Handle,
@@ -2345,6 +2702,8 @@ pub enum RenderWork {
         /// A case fingerprints it **only where it is not `Whole`**, so every recording taken
         /// before the field existed still reads as fresh.
         plane: Plane,
+        /// Which level, slice and plane of the texture the read copies ([`ReadAt`]).
+        at: ReadAt,
     },
     /// One compute dispatch.
     Dispatch(Dispatch),
@@ -2589,6 +2948,7 @@ mod tests {
                 row_pitch: 16,
                 size: [4, 4],
                 plane: Plane::Whole,
+                at: ReadAt::BASE,
             },
             RenderWork::ReadTexture { .. } => RenderWork::Dispatch(Dispatch {
                 pipeline: handle(),
