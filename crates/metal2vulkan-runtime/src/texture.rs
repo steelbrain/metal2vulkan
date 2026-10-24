@@ -5708,10 +5708,23 @@ impl Texture {
 
     /// The color words of `region` of a two-plane texture's image into `words`, packed 4 bytes a
     /// texel: each texel's first word.
+    ///
+    /// Read on the host where the image copies there (`texture/host_copy.rs`), with no submission
+    /// and no wait, as Metal's `getBytes` of such a texture waits for no GPU work; else through a
+    /// staging buffer, by a submission waited for.
     fn read_color_words(&self, region: &ImageRegion, words: &mut [u8]) -> Result<(), Error> {
         let Storage::Image(image) = &self.0.storage else {
             return Err(internal("a two-plane texture's copy without its image"));
         };
+        // A shadowed view's texels are its texture's (`texture/view_shadow.rs`).
+        let truth = view_shadow::truth(image);
+        if truth.takes_host_copies() {
+            let mut texels = vec![0; 2 * words.len()];
+            if truth.host_read(buffer_image_copy(region), &mut texels)? {
+                two_planes::narrow(&texels, words);
+                return Ok(());
+            }
+        }
         let mut staging = self.color_texels(image, region, words.len() as u64)?;
         two_planes::narrow(staging.bytes(), words);
         Ok(())
@@ -5720,17 +5733,34 @@ impl Texture {
     /// `words`, packed 4 bytes a texel, over the first word of each texel of `region` of a
     /// two-plane texture's `image`: its texels read first and written back, the alpha words as
     /// they were.
+    ///
+    /// Read and written back on the host where the image copies there (`texture/host_copy.rs`),
+    /// with no submission and no wait, as Metal's `replaceRegion` of such a texture waits for no
+    /// GPU work; else through a staging buffer, by submissions waited for.
     fn write_color_words(
         &self,
         image: &Arc<Image>,
         region: &ImageRegion,
         words: &[u8],
     ) -> Result<(), Error> {
+        // A shadowed view's texels are its texture's (`texture/view_shadow.rs`).
+        let truth = view_shadow::truth(image);
+        let copy = buffer_image_copy(region);
+        if truth.takes_host_copies() {
+            let mut texels = vec![0; 2 * words.len()];
+            if truth.host_read(copy, &mut texels)? {
+                two_planes::widen(words, &mut texels);
+                // A write the image declines (it presents a stand-in now, its texture's bytes
+                // detached meanwhile) goes through the staging buffer below, which reads its
+                // texels again.
+                if truth.host_write(copy, &texels)? {
+                    return Ok(());
+                }
+            }
+        }
         let mut staging = self.color_texels(image, region, words.len() as u64)?;
         two_planes::widen(words, staging.bytes());
-        let truth = view_shadow::truth(image);
         let (buffer, raw) = (staging.raw, truth.raw.get());
-        let copy = buffer_image_copy(region);
         truth.submit_copy(|commands, command_buffer| {
             transfer_barrier(commands, command_buffer, true);
             // SAFETY: the internal command buffer is recording; the staging buffer and the image

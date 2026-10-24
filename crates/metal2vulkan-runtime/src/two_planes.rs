@@ -26,10 +26,12 @@
 //! **Held** as one `R32G32_UINT` image (`metal::format::ExtendedRange::Planes`): each texel's
 //! color word, then its alpha byte in the second word.
 //!
-//! - **CPU copies** go through a staging buffer of the region's texels, 8 bytes each, repacked
-//!   on the host ([`narrow`], [`widen`]): `getBytes` takes each texel's first word; `replaceRegion`
-//!   reads the region's texels first and writes them back with their first words replaced, so the
-//!   alpha words stay.
+//! - **CPU copies** move the region's texels, 8 bytes each, repacked on the host ([`narrow`],
+//!   [`widen`]): `getBytes` takes each texel's first word; `replaceRegion` reads the region's
+//!   texels first and writes them back with their first words replaced, so the alpha words stay.
+//!   They move on the host where the image copies there (`texture/host_copy.rs`), with no
+//!   submission and so no wait, as Metal's `getBytes` and `replaceRegion` of such a texture wait
+//!   for no GPU work; else through a staging buffer, by a submission each waited for.
 //! - **Blits between a buffer and the texture** go through a scratch buffer of the encoder in
 //!   bands of rows ([`bands`]), one blit command: per band, one copy of its texels out of the
 //!   image, one dispatch of `bind::plane_words_module` moving each texel's first word into the
