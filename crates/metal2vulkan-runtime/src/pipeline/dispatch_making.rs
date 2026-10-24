@@ -32,6 +32,18 @@
 //!   drop, which Metal's never does. Its specialized notices wait for the first dispatch that
 //!   takes it, which announces them naming what it binds. A creation inside a host step, a tile
 //!   function's state and a stand-in compile make nothing here.
+//! - **What the prediction cannot know.** The guess is the threadgroup size and nothing else, so a
+//!   state whose dispatches choose their own size pays its per-pipeline compile twice: once here
+//!   and once on the pool. A creation cannot know the size, and no better guess reaches it. It
+//!   cannot know either whether the dispatch will be a `dispatchThreads:` with a ragged edge,
+//!   whose interior and edge regions are two local sizes and so two keys of which the prediction
+//!   can hold at most one; nor what the dispatch will bind, which decides its variant
+//!   (`VariantKey::extended_range` and `VariantKey::swizzled_storage` read the bound texture's
+//!   pixel format and swizzle, `bind::plan::resources`), so for a kernel whose dispatches all
+//!   bind a texture the prediction's base variant is one no dispatch takes and its stage's
+//!   `VkShaderModule` is a module of its own. Where the dispatches do follow Apple's guide the
+//!   prediction holds and the pool makes nothing. `creation_pipelines_made` against
+//!   `creation_pipelines_drawn` is the measure of it.
 //! - **Kept by the state** (`piece_holds.rs`). What a piece needs (its variant and its making's
 //!   ticket) is kept by the state, never by the pool's thread; the state's release stops a piece
 //!   not started, its making failing, and a dispatch that took it (of another state of the variant)
