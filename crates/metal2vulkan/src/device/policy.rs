@@ -60,6 +60,10 @@ pub struct DevicePolicy {
     /// attachment in the device's blend (the default) or in Metal's `half` arithmetic, which the
     /// function computes in the shader.
     pub half_blend: HalfBlendPolicy,
+    /// Whether a `half` or `float` read of a 16-bit float texture is the device's decode of the
+    /// texel (the default) or the texel's own bits, read through the texture's unsigned-integer
+    /// alias so no device decode sees them.
+    pub half_texel_bits: HalfTexelBitsPolicy,
     /// Whether a texture whose format the device lacks, held in a carrier (an ASTC LDR texture,
     /// or an EAC 11-bit one), samples a decoded twin of compact codes (the default) or of Metal's
     /// values exactly. The runtime's choice alone: no emitted code changes.
@@ -101,8 +105,8 @@ impl DevicePolicy {
     /// filter emulated exactly where the emulation runs, native device sampling (a two-plane YCbCr texture's samples among them),
     /// native device maths, the device's own texel
     /// conversions, native half rounding, the device's NaN and minimum and maximum, the device's
-    /// rounding order, the device's blend of a `half` output into a 16-bit float attachment,
-    /// compact codes in a carried texture's decoded twin, the driver's compressed image of a
+    /// rounding order, the device's blend of a `half` output into a 16-bit float attachment, the device's decode of a
+    /// 16-bit float texel a read answers, compact codes in a carried texture's decoded twin, the driver's compressed image of a
     /// heap's texture Metal keeps compressed, command buffers ready together in one kernel
     /// submission, the device's load and store of a signed normalized or `RGB9E5Float` color
     /// attachment, the device's resolve of a multisampled color attachment, batches of one
@@ -121,6 +125,7 @@ impl DevicePolicy {
         nan_and_min_max: NanMinMaxPolicy::Native,
         rounding_order: RoundingOrderPolicy::Native,
         half_blend: HalfBlendPolicy::Device,
+        half_texel_bits: HalfTexelBitsPolicy::Device,
         decoded_texels: DecodedTexelsPolicy::Compact,
         heap_compression: HeapCompressionPolicy::Compressed,
         completion: CompletionPolicy::Grouped,
@@ -135,7 +140,9 @@ impl DevicePolicy {
     /// ([`TexelConversionPolicy::Exact`]), its `half` rounding ([`HalfRoundingPolicy::Exact`]), its
     /// NaN and minimum and maximum ([`NanMinMaxPolicy::Exact`]), its rounding order
     /// ([`RoundingOrderPolicy::Exact`]), its 16-bit float blend of a `half` output
-    /// ([`HalfBlendPolicy::Exact`]), its filter of a two-plane YCbCr texture
+    /// ([`HalfBlendPolicy::Exact`]), a 16-bit float texel's own bits through a read of the
+    /// texture's unsigned-integer alias ([`HalfTexelBitsPolicy::Exact`]), its filter of a
+    /// two-plane YCbCr texture
     /// ([`YCbCrFilterPolicy::Exact`]), its decode of a carried texture's texels
     /// ([`DecodedTexelsPolicy::Exact`]), a heap's texture whose bytes alias the heap's
     /// as written ([`HeapCompressionPolicy::Uncompressed`]), each command buffer seen complete
@@ -154,6 +161,7 @@ impl DevicePolicy {
             nan_and_min_max: NanMinMaxPolicy::Exact,
             rounding_order: RoundingOrderPolicy::Exact,
             half_blend: HalfBlendPolicy::Exact,
+            half_texel_bits: HalfTexelBitsPolicy::Exact,
             decoded_texels: DecodedTexelsPolicy::Exact,
             heap_compression: HeapCompressionPolicy::Uncompressed,
             completion: CompletionPolicy::Exact,
@@ -434,6 +442,36 @@ pub enum HalfBlendPolicy {
     /// precede, alpha to coverage, multiview, a format the device does not store, a blend of the
     /// second source), the device blends and the pipeline records the note as under
     /// [`HalfBlendPolicy::Device`].
+    Exact,
+}
+
+/// Whose bits a `half` or `float` read of a 16-bit float texture (`R16Float`, `RG16Float`,
+/// `RGBA16Float`, `RGBX16Float`: `metal::texel_format::half_channels`) answers. Metal's
+/// `texture2d<half>` never widens, so a 16-bit float texel's NaN comes back as its own code, sign,
+/// payload and signalling bit kept; a device that decodes the texel into `f32` before the shader
+/// sees it canonicalizes that NaN, and the code is gone before any keep of ours. Measured on
+/// MoltenVK (Apple M3 Max, API 1.2): all three read sites of `half-texel-nans-r16f`, `-rg16f` and
+/// `-rgba16f` answer `0x7e00` for every NaN texel, 515, 1,026 and 2,045 words of 4,096 a site.
+/// A finite, zero, denormal or infinite texel is the device's own under either value, and every
+/// other format's NaN is Metal's `0x7e00` already.
+#[non_exhaustive]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub enum HalfTexelBitsPolicy {
+    /// The device's decode of the texel (the default): a NaN texel answers whatever the device's
+    /// decode of it into `f32` leaves, which the module records
+    /// [`PrecisionNote::DeviceNanEncoding`](crate::pipeline::PrecisionNote::DeviceNanEncoding),
+    /// whose docs state the bound. One descriptor a slot, and no decode in the shader.
+    #[default]
+    Device,
+    /// The texel's own bits: a read-only 16-bit float texture is read through its unsigned-integer
+    /// alias (`metal::format::half_bits_read_view`: `R16_UINT`, `R16G16_UINT` or
+    /// `R16G16B16A16_UINT`) at a second binding of the slot
+    /// (`pipeline::sym::ResourceKind::RawTexture`), and the shader widens each channel's 16 bits
+    /// exactly, as the write side of `StorageImageClass::HalfBits` stores them. Costs a sampled-image
+    /// descriptor and a view at each such slot, the texture's image a mutable format, and the
+    /// widening at each read. A slot the function also samples, gathers, compares, writes or
+    /// updates atomically keeps the device's decode and its note, the declaration being one.
     Exact,
 }
 

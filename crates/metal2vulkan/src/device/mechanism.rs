@@ -37,6 +37,9 @@ pub fn mechanism(fact: &RuntimeFact, profile: &DeviceProfile) -> Mechanism {
         | RuntimeFact::StorageTextureNumericType { .. } => Mechanism::Variant,
         // Keyed by the slots bound in an sRGB format whose raw code the function reads.
         RuntimeFact::SrgbTexture { .. } => Mechanism::Variant,
+        // The binder views a bound 16-bit float texture in its unsigned integer alias at the
+        // slot's second binding, and binds the unsigned integer neutral there for any other.
+        RuntimeFact::HalfBitsTexture { .. } => Mechanism::BinderView,
         // Keyed by the slots bound in a YCbCr format whose filter the function emulates on a
         // profile that takes the variant (`ProfileFields::ycbcr_variant`).
         RuntimeFact::YCbCrTexture { .. } => Mechanism::Variant,

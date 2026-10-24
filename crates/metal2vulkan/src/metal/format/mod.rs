@@ -3041,6 +3041,33 @@ fn half_bits_view(
     (declarable && profile.supports_format(view, use_.usage())).then_some(view)
 }
 
+/// The unsigned integer alias through which a function reads a 16-bit float texture's texels
+/// without a device decode seeing them (`DevicePolicy::half_texel_bits`,
+/// [`HalfTexelBitsPolicy::Exact`](crate::device::HalfTexelBitsPolicy::Exact)): `R16_UINT`,
+/// `R16G16_UINT` or `R16G16B16A16_UINT` for `R16Float`, `RG16Float`, and `RGBA16Float` or
+/// `RGBX16Float`, where `profile`'s device samples the alias, so the slot's second binding can
+/// view the texture in it. `None` for every other format, and where the device does not sample the
+/// alias. `RGBX16Float`'s alias is `RGBA16Float`'s: its read takes alpha 1 after the widening, as
+/// its own view's does.
+///
+/// Metal's `texture2d<half>` never widens a 16-bit float texel, so the texel's NaN comes back as
+/// its own code; a device whose decode into `f32` canonicalizes a NaN has destroyed the code
+/// before the shader sees it (MoltenVK on an Apple GPU, measured; ANV on Intel's GPUs, from the
+/// conformance suite's replay). Reading the alias hands the shader the 16 bits themselves, which
+/// it widens exactly ([`lower::arith::narrow::from_bits`](crate::lower) is the translation's).
+pub fn half_bits_read_view(pf: PixelFormat, profile: &DeviceProfile) -> Option<vk::Format> {
+    use vk::Format as F;
+    let view = match pf {
+        PixelFormat::R16Float => F::R16_UINT,
+        PixelFormat::RG16Float => F::R16G16_UINT,
+        PixelFormat::RGBA16Float | PixelFormat::RGBX16Float => F::R16G16B16A16_UINT,
+        _ => return None,
+    };
+    profile
+        .supports_format(view, FormatUsage::SampledImage)
+        .then_some(view)
+}
+
 /// The unsigned integer alias through which a heap's twin (`StorageFormatClass::HalfBits`, a
 /// formatless declaration) holds a written half-float texture of `pf` on `profile`:
 /// [`half_bits_view`]'s for a write, where the device writes it without a format. `None` for

@@ -304,6 +304,16 @@ pub enum RuntimeFact {
     /// `CombinedSampler::raw`. Bound in any other format, or unbound, the slot leaves the variant,
     /// and the function reads the texture's own view.
     SrgbTexture { slot: SlotRef },
+    /// The function reads a 16-bit float texel's own 16 bits from a second binding of texture slot
+    /// `slot`, the texture's unsigned integer alias view
+    /// (`metal::format::half_bits_read_view`: `R16_UINT`, `R16G16_UINT` or `R16G16B16A16_UINT`),
+    /// and widens them exactly, as Metal's `texture2d<half>` read answers a 16-bit float texel's
+    /// own code (`HalfTexelBitsPolicy::Exact`). The binder views a bound texture of such a format
+    /// at the slot's `ResourceKind::RawTexture` binding in the alias, and binds the unsigned
+    /// integer neutral there for any other format and for an unbound slot, which the read's own
+    /// arm on the bound class never reads. The slot's own binding stays the texture's own view,
+    /// which its queries and its other classes read.
+    HalfBitsTexture { slot: SlotRef },
 
     /// A `ulong` atomic (`atomic_{min,max}`) updates the `ulong` texture bound to the slot, so the
     /// slot is declared as an `R64ui` storage image: the binder views the bound `RG32Uint` texture

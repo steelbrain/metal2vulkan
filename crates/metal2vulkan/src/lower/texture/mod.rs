@@ -292,6 +292,12 @@ pub struct Read {
     /// The read takes an 8-bit sRGB texel's raw code from its slot's raw view, decoded as Metal
     /// decodes it (`emit::srgb_raw_texel`, `RuntimeFact::SrgbTexture`).
     pub raw: bool,
+    /// The read takes a 16-bit float texel's own 16 bits from its slot's unsigned integer alias
+    /// view where the bound format's class names such channels, and widens them exactly
+    /// (`HalfTexelBitsPolicy::Exact`, `RuntimeFact::HalfBitsTexture`); elsewhere it keeps the
+    /// device's decode of the texel, as under the default. A plain fetch alone
+    /// ([`half_bits_read`]).
+    pub half_bits_alias: bool,
     /// The read, of a storage slot whose class is `SrgbEncode`, takes the codes of an 8-bit sRGB
     /// format from its UNORM alias and decodes them as Metal does, through the module's table
     /// (`emit::srgb_raw_texel`).
@@ -1089,6 +1095,11 @@ pub struct Declared {
     /// The raw view of each slot a read of which takes an 8-bit sRGB texel's raw code
     /// (`ResourceKind::RawTexture`): its variable.
     pub raw: BTreeMap<u32, GlobalId>,
+    /// The declaration of the raw view of each slot a read of which takes a 16-bit float texel's
+    /// own bits (`SlotPlan::half_bits`): the unsigned integer image of the slot's shape, whose
+    /// class widens the bits (`StorageImageClass::HalfBits`). Its variable is the slot's in
+    /// [`raw`](Self::raw).
+    pub half_bits: BTreeMap<u32, ImageDecl>,
     /// The `TexelFormat` specialization constant of each slot whose texels a read, gather, or
     /// sample converts to a `half` result by the bound format's class.
     pub half_format: BTreeMap<u32, ConstId>,
@@ -1261,8 +1272,21 @@ pub fn declare(
                 mb.volatile(g)?;
             }
             d.images.insert(*index, (g, image));
-            // The raw view, of the same image type: a sampled slot's, never level views.
-            if s.raw {
+            // The raw view, a sampled slot's, never level views: an 8-bit sRGB texture's codes
+            // through an image of the same type, and a 16-bit float texture's own bits through an
+            // unsigned integer image of the same shape (`HalfTexelBitsPolicy::Exact`).
+            if s.raw || s.half_bits {
+                let (ty, alias) = match s.half_bits {
+                    true => {
+                        let alias = ImageDecl {
+                            texel: slot::TexelClass::Uint,
+                            class: StorageImageClass::HalfBits,
+                            ..*decl
+                        };
+                        (alias.declare(mb)?, Some(alias))
+                    }
+                    false => (image, None),
+                };
                 let r = mb.resource(
                     crate::pipeline::sym::ResourceSlot {
                         stage: s.slot.stage,
@@ -1270,9 +1294,12 @@ pub fn declare(
                         index: s.slot.index,
                     },
                     crate::spirv::ir::StorageClass::UniformConstant,
-                    image,
+                    ty,
                 )?;
                 d.raw.insert(*index, r);
+                if let Some(alias) = alias {
+                    d.half_bits.insert(*index, alias);
+                }
             }
         }
         if s.presence {
@@ -1691,6 +1718,57 @@ pub enum OneTexel {
 ///
 /// Where the access's texel is the device's (`device`, [`device_texels`]), it is rounded exactly as
 /// a heap element's, and noted alike.
+/// Whether a read of `image`, of shape `shape`, with a `half` or `float` result takes a 16-bit
+/// float texel's own bits from the slot's unsigned integer alias view, widened exactly
+/// ([`HalfTexelBitsPolicy::Exact`](crate::device::HalfTexelBitsPolicy::Exact)): Metal's
+/// `texture2d<half>` never widens, so such a texel's NaN is its own code, which a device whose
+/// decode into `f32` canonicalizes has destroyed before the shader sees it (MoltenVK on an Apple
+/// GPU, measured over every NaN code of the three formats; ANV on Intel's GPUs, from the
+/// conformance suite's replay).
+///
+/// Of a colour texture slot the function declares `access::read`, which Metal lets it only read,
+/// so the one declaration the slot has can be the alias's: a slot it may sample, gather, compare,
+/// write or update atomically keeps the device's decode. Not of a texture buffer, a depth texture,
+/// a heap element, or a device that does not sample the alias
+/// (`metal::format::half_bits_read_view` of every 16-bit float format). The slot takes a second
+/// binding of the alias view (`ResourceKind::RawTexture`, `RuntimeFact::HalfBitsTexture`), and
+/// states its `TexelFormat` class, on which the read branches: the device's texel stays the arm of
+/// every other class, whose NaN Metal answers `0x7e00` already.
+pub(crate) fn half_bits_read(
+    cx: &mut SelectCx<'_>,
+    image: ImageRef,
+    shape: ImageShape,
+) -> Result<bool, Error> {
+    use crate::air::abi::Access as AbiAccess;
+    if cx.profile.fields().half_texel_bits != crate::device::HalfTexelBitsPolicy::Exact {
+        return Ok(false);
+    }
+    let ImageRef::Slot(index) = image else {
+        return Ok(false);
+    };
+    if shape.depth || shape.dim == ImageDim::Buffer {
+        return Ok(false);
+    }
+    let s = slot_of(cx, index)?;
+    if s.access != AbiAccess::Read {
+        return Ok(false);
+    }
+    let slot = s.slot;
+    if !crate::metal::texel_format::HALF_BITS_FORMATS
+        .iter()
+        .all(|&pf| crate::metal::format::half_bits_read_view(pf, cx.profile).is_some())
+    {
+        return Ok(false);
+    }
+    texel_format_spec(cx, image)?;
+    if let Some(s) = cx.families.texture.slots.get_mut(&index) {
+        s.half_bits = true;
+    }
+    cx.facts
+        .insert(crate::pipeline::facts::RuntimeFact::HalfBitsTexture { slot });
+    Ok(true)
+}
+
 pub(crate) fn half_texels(
     cx: &mut SelectCx<'_>,
     image: ImageRef,
@@ -3465,6 +3543,15 @@ fn select_read_as(
             storage_class(cx, image)?,
             StorageImageClass::HalfBits | StorageImageClass::SharedExponentBits
         );
+    // A sampled slot's 16-bit float texels, through the texture's unsigned integer alias at the
+    // slot's second binding, widened exactly where the bound class names such channels
+    // ([`half_bits_read`]). The device's texel stays the arm of every other class, so the read
+    // keeps its conversion and its note below.
+    let half_bits_alias = !storage
+        && matches!(texel.conv, TexelConv::F16 | TexelConv::F32)
+        && !raw
+        && extended.is_none()
+        && half_bits_read(cx, image, shape)?;
     let exact = raw || srgb_codes || half_bits;
     // An extended-range texel is decoded exactly to `f32`, which a `half` result rounds to
     // nearest even, as Metal answers. A read is one texel.
@@ -3554,6 +3641,7 @@ fn select_read_as(
         alpha,
         edge,
         raw,
+        half_bits_alias,
         srgb_codes,
         swizzle,
         storage_swizzle,

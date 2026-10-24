@@ -67,7 +67,8 @@ pub(crate) use mechanism::mechanism;
 pub use metal::{MetalDeviceProperties, SimdSupport, StageSimd};
 pub use policy::{
     BatchOrderPolicy, CompletionPolicy, ContainmentPolicy, DecodedTexelsPolicy, DevicePolicy,
-    FloatMathsPolicy, HalfBlendPolicy, HalfRoundingPolicy, HeapCompressionPolicy, NanMinMaxPolicy,
+    FloatMathsPolicy, HalfBlendPolicy, HalfRoundingPolicy, HalfTexelBitsPolicy,
+    HeapCompressionPolicy, NanMinMaxPolicy,
     RenderLoweringPolicy, ResolvePolicy, RoundingOrderPolicy, SamplingPolicy,
     TexelConversionPolicy, TileStorePolicy, Unorm8LinearFilterPolicy, YCbCrFilterPolicy,
 };

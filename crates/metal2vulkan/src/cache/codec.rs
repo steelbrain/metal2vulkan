@@ -1181,6 +1181,7 @@ codec_enum! {
         InterlockedFramebufferFetch { color, format, writes, early_tests, kept, blend, rounded },
         ShadowStencil { formatless, multisampled },
         PredicationVote, TexelFormat { slot }, SrgbTexture { slot },
+        HalfBitsTexture { slot },
         UlongAtomicView { slot },
         ViewportCount,
         AliasedImageblock { data_size },
