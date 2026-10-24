@@ -395,8 +395,10 @@ driver's. Each is open work.
   output's writes and clears; a `half` output, a color input and a resolve are
   `NotImplemented(Format)`, and a blend or a mask of some of its channels is refused as the
   device lacking the format.
-- **ASTC textures on a device without ASTC.** A heap's or a sparse heap's such texture
-  (`RuntimeGap::DecodedHeapTexture`) and a view of another decode (its HDR form) are refused.
+- **ASTC textures on a device without ASTC.** Making a heap's or a sparse heap's such texture
+  (`RuntimeGap::DecodedHeapTexture`) and a view of another decode (its HDR form) are refused. The
+  heap size query answers one: its footprint is Metal's blocks, which no image of the device
+  decides.
 - **PVRTC textures on a device without PVRTC.** One without a decoded twin (a sparse heap's, or a
   heap's over the caller's host pages or laid out apart from its bytes) holds its blocks for copies
   alone: a command that reads it is refused.
