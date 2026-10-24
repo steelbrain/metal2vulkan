@@ -43,7 +43,7 @@ Its limits, measured rather than asserted:
 | committed recordings | 1099 |
 | distinct SDK items the Metal leg reaches, of any status | 797 |
 | of those, reached only where this cannot name the family | 7 |
-| ledger rows (a case whose gap is recorded) | 97 |
+| ledger rows (a case whose gap is recorded) | 559 |
 | declared crossings of the option space (pairs put to Metal at once) | 24 |
 | declared crossings that are no pair of it (a boolean or numeric field, or one type in two slots) | 30 |
 
@@ -2298,4 +2298,466 @@ A case whose difference from Metal is recorded rather than compared away. The le
 | `primitive-type-restart-indices` | Metal leaves these texels at the pass's clear and we draw a fragment there. All four `Line` and `LineStrip` cells differ from the M3 Max's recording with the sa… |
 | `primitive-type-restart-indices` | Metal leaves these texels at the pass's clear and we draw a fragment there. All four `Line` and `LineStrip` cells differ from the M3 Max's recording with the sa… |
 | `primitive-type-restart-indices` | Metal leaves these texels at the pass's clear and we draw a fragment there. All four `Line` and `LineStrip` cells differ from the M3 Max's recording with the sa… |
+| `heap-sizes-block-writes-only` | Plain Metal answers 128 bytes of alignment from `heapTextureSizeAndAlignWithDescriptor:` for every descriptor of this family, and we answer 1024 on this driver … |
+| `heap-sizes-block-writes-only` | Plain Metal answers 128 bytes of alignment from `heapTextureSizeAndAlignWithDescriptor:` for every descriptor of this family, and we answer 1024 on this driver … |
+| `heap-sizes-block-writes-only` | Plain Metal answers a smaller footprint from `heapTextureSizeAndAlignWithDescriptor:` than we do for this descriptor, and the row's two numbers are the pair. `D… |
+| `heap-sizes-block-writes-only` | Plain Metal answers 128 bytes of alignment from `heapTextureSizeAndAlignWithDescriptor:` for every descriptor of this family, and we answer 1024 on this driver … |
+| `heap-sizes-block-writes-only` | Plain Metal answers 128 bytes of alignment from `heapTextureSizeAndAlignWithDescriptor:` for every descriptor of this family, and we answer 1024 on this driver … |
+| `heap-sizes-block-writes-only` | Plain Metal answers a smaller footprint from `heapTextureSizeAndAlignWithDescriptor:` than we do for this descriptor, and the row's two numbers are the pair. `D… |
+| `heap-sizes-block-writes-only` | Plain Metal answers 128 bytes of alignment from `heapTextureSizeAndAlignWithDescriptor:` for every descriptor of this family, and we answer 1024 on this driver … |
+| `heap-sizes-block-writes-only` | Plain Metal answers 128 bytes of alignment from `heapTextureSizeAndAlignWithDescriptor:` for every descriptor of this family, and we answer 1024 on this driver … |
+| `heap-sizes-block-writes-only` | Plain Metal answers a smaller footprint from `heapTextureSizeAndAlignWithDescriptor:` than we do for this descriptor, and the row's two numbers are the pair. `D… |
+| `heap-sizes-block-writes-only` | Plain Metal answers 128 bytes of alignment from `heapTextureSizeAndAlignWithDescriptor:` for every descriptor of this family, and we answer 1024 on this driver … |
+| `heap-sizes-block-writes-only` | Plain Metal answers 128 bytes of alignment from `heapTextureSizeAndAlignWithDescriptor:` for every descriptor of this family, and we answer 1024 on this driver … |
+| `heap-sizes-block-writes-only` | Plain Metal answers a smaller footprint from `heapTextureSizeAndAlignWithDescriptor:` than we do for this descriptor, and the row's two numbers are the pair. `D… |
+| `heap-sizes-block-writes-only` | Plain Metal answers 128 bytes of alignment from `heapTextureSizeAndAlignWithDescriptor:` for every descriptor of this family, and we answer 1024 on this driver … |
+| `heap-sizes-block-writes-only` | Plain Metal answers 128 bytes of alignment from `heapTextureSizeAndAlignWithDescriptor:` for every descriptor of this family, and we answer 1024 on this driver … |
+| `heap-sizes-block-writes-only` | Plain Metal answers 128 bytes of alignment from `heapTextureSizeAndAlignWithDescriptor:` for every descriptor of this family, and we answer 1024 on this driver … |
+| `heap-sizes-block-writes-only` | Plain Metal answers 128 bytes of alignment from `heapTextureSizeAndAlignWithDescriptor:` for every descriptor of this family, and we answer 1024 on this driver … |
+| `heap-sizes-block-writes-only` | Plain Metal answers 128 bytes of alignment from `heapTextureSizeAndAlignWithDescriptor:` for every descriptor of this family, and we answer 1024 on this driver … |
+| `heap-sizes-block-writes-only` | Plain Metal answers 128 bytes of alignment from `heapTextureSizeAndAlignWithDescriptor:` for every descriptor of this family, and we answer 1024 on this driver … |
+| `heap-sizes-block-writes-only` | Plain Metal answers 128 bytes of alignment from `heapTextureSizeAndAlignWithDescriptor:` for every descriptor of this family, and we answer 1024 on this driver … |
+| `heap-sizes-block-writes-only` | Plain Metal answers 128 bytes of alignment from `heapTextureSizeAndAlignWithDescriptor:` for every descriptor of this family, and we answer 1024 on this driver … |
+| `heap-sizes-block-writes-only` | Plain Metal answers 128 bytes of alignment from `heapTextureSizeAndAlignWithDescriptor:` for every descriptor of this family, and we answer 1024 on this driver … |
+| `heap-sizes-block-writes-only` | Plain Metal answers 128 bytes of alignment from `heapTextureSizeAndAlignWithDescriptor:` for every descriptor of this family, and we answer 1024 on this driver … |
+| `heap-sizes-block-writes-only` | Plain Metal answers 128 bytes of alignment from `heapTextureSizeAndAlignWithDescriptor:` for every descriptor of this family, and we answer 1024 on this driver … |
+| `heap-sizes-block-writes-only` | Plain Metal answers 128 bytes of alignment from `heapTextureSizeAndAlignWithDescriptor:` for every descriptor of this family, and we answer 1024 on this driver … |
+| `heap-sizes-x32-stencil8` | Plain Metal answers a smaller footprint from `heapTextureSizeAndAlignWithDescriptor:` than we do for this descriptor, and the row's two numbers are the pair. `D… |
+| `heap-sizes-x32-stencil8` | Plain Metal answers a smaller footprint from `heapTextureSizeAndAlignWithDescriptor:` than we do for this descriptor, and the row's two numbers are the pair. `D… |
+| `heap-sizes-x32-stencil8` | Plain Metal answers a smaller footprint from `heapTextureSizeAndAlignWithDescriptor:` than we do for this descriptor, and the row's two numbers are the pair. `D… |
+| `heap-sizes-x32-stencil8` | Plain Metal answers a smaller footprint from `heapTextureSizeAndAlignWithDescriptor:` than we do for this descriptor, and the row's two numbers are the pair. `D… |
+| `heap-sizes-x32-stencil8` | Plain Metal answers a smaller footprint from `heapTextureSizeAndAlignWithDescriptor:` than we do for this descriptor, and the row's two numbers are the pair. `D… |
+| `heap-sizes-x32-stencil8` | Plain Metal answers a smaller footprint from `heapTextureSizeAndAlignWithDescriptor:` than we do for this descriptor, and the row's two numbers are the pair. `D… |
+| `heap-sizes-x32-stencil8` | Plain Metal answers 128 bytes of alignment from `heapTextureSizeAndAlignWithDescriptor:` for every descriptor of this family, and we answer 1024 on this driver … |
+| `heap-sizes-x32-stencil8` | Plain Metal answers a smaller footprint from `heapTextureSizeAndAlignWithDescriptor:` than we do for this descriptor, and the row's two numbers are the pair. `D… |
+| `heap-sizes-x32-stencil8` | Plain Metal answers 128 bytes of alignment from `heapTextureSizeAndAlignWithDescriptor:` for every descriptor of this family, and we answer 1024 on this driver … |
+| `heap-sizes-x32-stencil8` | Plain Metal answers a smaller footprint from `heapTextureSizeAndAlignWithDescriptor:` than we do for this descriptor, and the row's two numbers are the pair. `D… |
+| `heap-sizes-x32-stencil8` | Plain Metal answers 128 bytes of alignment from `heapTextureSizeAndAlignWithDescriptor:` for every descriptor of this family, and we answer 1024 on this driver … |
+| `heap-sizes-x32-stencil8` | Plain Metal answers 128 bytes of alignment from `heapTextureSizeAndAlignWithDescriptor:` for every descriptor of this family, and we answer 1024 on this driver … |
+| `heap-sizes-x32-stencil8` | Plain Metal answers a smaller footprint from `heapTextureSizeAndAlignWithDescriptor:` than we do for this descriptor, and the row's two numbers are the pair. `D… |
+| `heap-sizes-x32-stencil8` | Plain Metal answers 128 bytes of alignment from `heapTextureSizeAndAlignWithDescriptor:` for every descriptor of this family, and we answer 1024 on this driver … |
+| `heap-sizes-x32-stencil8` | Plain Metal answers a smaller footprint from `heapTextureSizeAndAlignWithDescriptor:` than we do for this descriptor, and the row's two numbers are the pair. `D… |
+| `heap-sizes-x32-stencil8` | Plain Metal answers 128 bytes of alignment from `heapTextureSizeAndAlignWithDescriptor:` for every descriptor of this family, and we answer 1024 on this driver … |
+| `heap-sizes-x32-stencil8` | Plain Metal answers 128 bytes of alignment from `heapTextureSizeAndAlignWithDescriptor:` for every descriptor of this family, and we answer 1024 on this driver … |
+| `heap-sizes-x32-stencil8` | Plain Metal answers a smaller footprint from `heapTextureSizeAndAlignWithDescriptor:` than we do for this descriptor, and the row's two numbers are the pair. `D… |
+| `heap-sizes-x32-stencil8` | Plain Metal answers 128 bytes of alignment from `heapTextureSizeAndAlignWithDescriptor:` for every descriptor of this family, and we answer 1024 on this driver … |
+| `heap-sizes-x32-stencil8` | Plain Metal answers a smaller footprint from `heapTextureSizeAndAlignWithDescriptor:` than we do for this descriptor, and the row's two numbers are the pair. `D… |
+| `heap-sizes-x32-stencil8` | Plain Metal answers 128 bytes of alignment from `heapTextureSizeAndAlignWithDescriptor:` for every descriptor of this family, and we answer 1024 on this driver … |
+| `heap-sizes-x32-stencil8` | Plain Metal answers 128 bytes of alignment from `heapTextureSizeAndAlignWithDescriptor:` for every descriptor of this family, and we answer 1024 on this driver … |
+| `heap-sizes-x32-stencil8` | Plain Metal answers a smaller footprint from `heapTextureSizeAndAlignWithDescriptor:` than we do for this descriptor, and the row's two numbers are the pair. `D… |
+| `heap-sizes-x32-stencil8` | Plain Metal answers 128 bytes of alignment from `heapTextureSizeAndAlignWithDescriptor:` for every descriptor of this family, and we answer 1024 on this driver … |
+| `heap-sizes-x32-stencil8` | Plain Metal answers a smaller footprint from `heapTextureSizeAndAlignWithDescriptor:` than we do for this descriptor, and the row's two numbers are the pair. `D… |
+| `heap-sizes-x32-stencil8` | Plain Metal answers 128 bytes of alignment from `heapTextureSizeAndAlignWithDescriptor:` for every descriptor of this family, and we answer 1024 on this driver … |
+| `texture-pairs-heap-texture-getters` | Plain Metal's `MTLHeap.usedSize` after this heap's textures are made is smaller than ours, and the row's two numbers are the pair. The heap getter is not a seco… |
+| `texture-pairs-heap-texture-getters` | Plain Metal's `MTLHeap.usedSize` after this heap's textures are made is smaller than ours, and the row's two numbers are the pair. The heap getter is not a seco… |
+| `texture-pairs-heap-texture-getters` | Plain Metal's `MTLHeap.usedSize` after this heap's textures are made is smaller than ours, and the row's two numbers are the pair. The heap getter is not a seco… |
+| `texture-pairs-heap-texture-getters` | Plain Metal's `MTLHeap.usedSize` after this heap's textures are made is smaller than ours, and the row's two numbers are the pair. The heap getter is not a seco… |
+| `texture-pairs-heap-texture-getters` | Plain Metal's `MTLHeap.usedSize` after this heap's textures are made is smaller than ours, and the row's two numbers are the pair. The heap getter is not a seco… |
+| `texture-pairs-heap-texture-getters` | Plain Metal's `MTLHeap.usedSize` after this heap's textures are made is smaller than ours, and the row's two numbers are the pair. The heap getter is not a seco… |
+| `texture-pairs-heap-texture-getters` | Plain Metal's `MTLHeap.usedSize` after this heap's textures are made is smaller than ours, and the row's two numbers are the pair. The heap getter is not a seco… |
+| `texture-pairs-heap-texture-getters` | Plain Metal's `MTLHeap.usedSize` after this heap's textures are made is smaller than ours, and the row's two numbers are the pair. The heap getter is not a seco… |
+| `texture-pairs-heap-texture-getters` | Plain Metal's `MTLHeap.usedSize` after this heap's textures are made is smaller than ours, and the row's two numbers are the pair. The heap getter is not a seco… |
+| `texture-pairs-heap-texture-getters` | Plain Metal's `MTLHeap.usedSize` after this heap's textures are made is smaller than ours, and the row's two numbers are the pair. The heap getter is not a seco… |
+| `texture-pairs-heap-texture-getters` | Plain Metal's `MTLHeap.usedSize` after this heap's textures are made is smaller than ours, and the row's two numbers are the pair. The heap getter is not a seco… |
+| `texture-pairs-heap-texture-getters` | Plain Metal's `MTLHeap.usedSize` after this heap's textures are made is smaller than ours, and the row's two numbers are the pair. The heap getter is not a seco… |
+| `texture-pairs-heap-texture-getters` | Plain Metal's `MTLHeap.usedSize` after this heap's textures are made is smaller than ours, and the row's two numbers are the pair. The heap getter is not a seco… |
+| `texture-pairs-heap-texture-getters` | Plain Metal's `MTLHeap.usedSize` after this heap's textures are made is smaller than ours, and the row's two numbers are the pair. The heap getter is not a seco… |
+| `texture-pairs-heap-texture-getters` | Plain Metal's `MTLHeap.usedSize` after this heap's textures are made is smaller than ours, and the row's two numbers are the pair. The heap getter is not a seco… |
+| `texture-pairs-heap-texture-getters` | Plain Metal's `MTLHeap.usedSize` after this heap's textures are made is smaller than ours, and the row's two numbers are the pair. The heap getter is not a seco… |
+| `texture-pairs-heap-texture-getters` | Plain Metal's `MTLHeap.usedSize` after this heap's textures are made is smaller than ours, and the row's two numbers are the pair. The heap getter is not a seco… |
+| `texture-pairs-heap-texture-getters` | Plain Metal's `MTLHeap.usedSize` after this heap's textures are made is smaller than ours, and the row's two numbers are the pair. The heap getter is not a seco… |
+| `texture-pairs-heap-texture-getters` | Plain Metal's `MTLHeap.usedSize` after this heap's textures are made is smaller than ours, and the row's two numbers are the pair. The heap getter is not a seco… |
+| `texture-pairs-heap-texture-getters` | Plain Metal's `MTLHeap.usedSize` after this heap's textures are made is smaller than ours, and the row's two numbers are the pair. The heap getter is not a seco… |
+| `texture-pairs-heap-texture-getters` | Plain Metal's `MTLHeap.usedSize` after this heap's textures are made is smaller than ours, and the row's two numbers are the pair. The heap getter is not a seco… |
+| `texture-pairs-heap-texture-getters` | Plain Metal's `MTLHeap.usedSize` after this heap's textures are made is smaller than ours, and the row's two numbers are the pair. The heap getter is not a seco… |
+| `texture-pairs-heap-texture-getters` | Plain Metal's `MTLHeap.usedSize` after this heap's textures are made is smaller than ours, and the row's two numbers are the pair. The heap getter is not a seco… |
+| `texture-pairs-heap-texture-getters` | Plain Metal's `MTLHeap.usedSize` after this heap's textures are made is smaller than ours, and the row's two numbers are the pair. The heap getter is not a seco… |
+| `texture-pairs-plain-contents` | Plain Metal answers `heapTextureSizeAndAlignWithDescriptor:` for a MTLStorageModeMemoryless descriptor and the runtime refuses it `Invalid(StorageMode)`, so eve… |
+| `texture-pairs-plain-contents` | Plain Metal answers `heapTextureSizeAndAlignWithDescriptor:` for a MTLStorageModeMemoryless descriptor and the runtime refuses it `Invalid(StorageMode)`, so eve… |
+| `texture-pairs-plain-contents` | Plain Metal answers a smaller footprint from `heapTextureSizeAndAlignWithDescriptor:` than we do for this descriptor, and the row's two numbers are the pair. `D… |
+| `texture-pairs-plain-contents` | Plain Metal answers a smaller footprint from `heapTextureSizeAndAlignWithDescriptor:` than we do for this descriptor, and the row's two numbers are the pair. `D… |
+| `texture-pairs-plain-contents` | Plain Metal answers a smaller footprint from `heapTextureSizeAndAlignWithDescriptor:` than we do for this descriptor, and the row's two numbers are the pair. `D… |
+| `texture-pairs-plain-contents` | Plain Metal answers a smaller footprint from `heapTextureSizeAndAlignWithDescriptor:` than we do for this descriptor, and the row's two numbers are the pair. `D… |
+| `texture-pairs-plain-contents` | Plain Metal answers 128 bytes of alignment from `heapTextureSizeAndAlignWithDescriptor:` for every descriptor of this family, and we answer 1024 on this driver … |
+| `texture-pairs-plain-contents` | Plain Metal answers a smaller footprint from `heapTextureSizeAndAlignWithDescriptor:` than we do for this descriptor, and the row's two numbers are the pair. `D… |
+| `texture-pairs-plain-contents` | Plain Metal answers 128 bytes of alignment from `heapTextureSizeAndAlignWithDescriptor:` for every descriptor of this family, and we answer 1024 on this driver … |
+| `texture-pairs-plain-contents` | Plain Metal answers a smaller footprint from `heapTextureSizeAndAlignWithDescriptor:` than we do for this descriptor, and the row's two numbers are the pair. `D… |
+| `texture-pairs-plain-contents` | Plain Metal answers 128 bytes of alignment from `heapTextureSizeAndAlignWithDescriptor:` for every descriptor of this family, and we answer 1024 on this driver … |
+| `texture-pairs-plain-contents` | Plain Metal answers 128 bytes of alignment from `heapTextureSizeAndAlignWithDescriptor:` for every descriptor of this family, and we answer 1024 on this driver … |
+| `texture-pairs-plain-contents` | Plain Metal answers 128 bytes of alignment from `heapTextureSizeAndAlignWithDescriptor:` for every descriptor of this family, and we answer 1024 on this driver … |
+| `texture-pairs-plain-contents` | Plain Metal answers 128 bytes of alignment from `heapTextureSizeAndAlignWithDescriptor:` for every descriptor of this family, and we answer 1024 on this driver … |
+| `texture-pairs-plain-contents` | Plain Metal answers 128 bytes of alignment from `heapTextureSizeAndAlignWithDescriptor:` for every descriptor of this family, and we answer 1024 on this driver … |
+| `texture-pairs-plain-contents` | Plain Metal answers 128 bytes of alignment from `heapTextureSizeAndAlignWithDescriptor:` for every descriptor of this family, and we answer 1024 on this driver … |
+| `texture-pairs-plain-contents` | Plain Metal answers 128 bytes of alignment from `heapTextureSizeAndAlignWithDescriptor:` for every descriptor of this family, and we answer 1024 on this driver … |
+| `texture-pairs-plain-contents` | Plain Metal answers 128 bytes of alignment from `heapTextureSizeAndAlignWithDescriptor:` for every descriptor of this family, and we answer 1024 on this driver … |
+| `texture-pairs-plain-contents` | Plain Metal answers 128 bytes of alignment from `heapTextureSizeAndAlignWithDescriptor:` for every descriptor of this family, and we answer 1024 on this driver … |
+| `texture-pairs-plain-contents` | Plain Metal answers 128 bytes of alignment from `heapTextureSizeAndAlignWithDescriptor:` for every descriptor of this family, and we answer 1024 on this driver … |
+| `texture-pairs-plain-contents` | Plain Metal answers 128 bytes of alignment from `heapTextureSizeAndAlignWithDescriptor:` for every descriptor of this family, and we answer 1024 on this driver … |
+| `texture-pairs-plain-contents` | Plain Metal answers 128 bytes of alignment from `heapTextureSizeAndAlignWithDescriptor:` for every descriptor of this family, and we answer 1024 on this driver … |
+| `texture-pairs-plain-contents` | Plain Metal answers 128 bytes of alignment from `heapTextureSizeAndAlignWithDescriptor:` for every descriptor of this family, and we answer 1024 on this driver … |
+| `texture-pairs-plain-contents` | Plain Metal answers 128 bytes of alignment from `heapTextureSizeAndAlignWithDescriptor:` for every descriptor of this family, and we answer 1024 on this driver … |
+| `texture-pairs-plain-contents` | Plain Metal answers 128 bytes of alignment from `heapTextureSizeAndAlignWithDescriptor:` for every descriptor of this family, and we answer 1024 on this driver … |
+| `texture-pairs-plain-contents` | Plain Metal answers 128 bytes of alignment from `heapTextureSizeAndAlignWithDescriptor:` for every descriptor of this family, and we answer 1024 on this driver … |
+| `texture-pairs-plain-contents` | Plain Metal answers `heapTextureSizeAndAlignWithDescriptor:` for a MTLStorageModeMemoryless descriptor and the runtime refuses it `Invalid(StorageMode)`, so eve… |
+| `texture-pairs-plain-contents` | Plain Metal answers `heapTextureSizeAndAlignWithDescriptor:` for a MTLStorageModeMemoryless descriptor and the runtime refuses it `Invalid(StorageMode)`, so eve… |
+| `texture-pairs-plain-contents` | Plain Metal answers 128 bytes of alignment from `heapTextureSizeAndAlignWithDescriptor:` for every descriptor of this family, and we answer 1024 on this driver … |
+| `texture-pairs-plain-contents` | Plain Metal answers a smaller footprint from `heapTextureSizeAndAlignWithDescriptor:` than we do for this descriptor, and the row's two numbers are the pair. `D… |
+| `texture-pairs-plain-contents` | Plain Metal answers 128 bytes of alignment from `heapTextureSizeAndAlignWithDescriptor:` for every descriptor of this family, and we answer 1024 on this driver … |
+| `texture-pairs-plain-contents` | Plain Metal answers a smaller footprint from `heapTextureSizeAndAlignWithDescriptor:` than we do for this descriptor, and the row's two numbers are the pair. `D… |
+| `texture-pairs-plain-contents` | Plain Metal answers 128 bytes of alignment from `heapTextureSizeAndAlignWithDescriptor:` for every descriptor of this family, and we answer 1024 on this driver … |
+| `texture-pairs-plain-contents` | Plain Metal answers a smaller footprint from `heapTextureSizeAndAlignWithDescriptor:` than we do for this descriptor, and the row's two numbers are the pair. `D… |
+| `texture-pairs-plain-contents` | Plain Metal answers 128 bytes of alignment from `heapTextureSizeAndAlignWithDescriptor:` for every descriptor of this family, and we answer 1024 on this driver … |
+| `texture-pairs-plain-contents` | Plain Metal answers a smaller footprint from `heapTextureSizeAndAlignWithDescriptor:` than we do for this descriptor, and the row's two numbers are the pair. `D… |
+| `texture-pairs-plain-contents` | Plain Metal answers 128 bytes of alignment from `heapTextureSizeAndAlignWithDescriptor:` for every descriptor of this family, and we answer 1024 on this driver … |
+| `texture-pairs-plain-contents` | Plain Metal answers 128 bytes of alignment from `heapTextureSizeAndAlignWithDescriptor:` for every descriptor of this family, and we answer 1024 on this driver … |
+| `texture-pairs-storage-crossings` | Plain Metal answers `heapTextureSizeAndAlignWithDescriptor:` for a MTLStorageModeMemoryless descriptor and the runtime refuses it `Invalid(StorageMode)`, so eve… |
+| `texture-pairs-storage-crossings` | Plain Metal answers `heapTextureSizeAndAlignWithDescriptor:` for a MTLStorageModeMemoryless descriptor and the runtime refuses it `Invalid(StorageMode)`, so eve… |
+| `texture-pairs-storage-crossings` | Plain Metal answers `heapTextureSizeAndAlignWithDescriptor:` for a MTLStorageModeMemoryless descriptor and the runtime refuses it `Invalid(StorageMode)`, so eve… |
+| `texture-pairs-storage-crossings` | Plain Metal makes a MTLStorageModeMemoryless TEXTURE BUFFER and the runtime refuses it `Invalid(StorageMode)` out of `new_buffer`, so the one texture type whose… |
+| `texture-pairs-storage-crossings` | Plain Metal answers `heapTextureSizeAndAlignWithDescriptor:` for a MTLStorageModeMemoryless descriptor and the runtime refuses it `Invalid(StorageMode)`, so eve… |
+| `texture-pairs-storage-crossings` | Plain Metal answers `heapTextureSizeAndAlignWithDescriptor:` for a MTLStorageModeMemoryless descriptor and the runtime refuses it `Invalid(StorageMode)`, so eve… |
+| `texture-pairs-storage-crossings` | Plain Metal answers `heapTextureSizeAndAlignWithDescriptor:` for a MTLStorageModeMemoryless descriptor and the runtime refuses it `Invalid(StorageMode)`, so eve… |
+| `texture-pairs-storage-crossings` | Plain Metal answers `heapTextureSizeAndAlignWithDescriptor:` for a MTLStorageModeMemoryless descriptor and the runtime refuses it `Invalid(StorageMode)`, so eve… |
+| `texture-pairs-storage-crossings` | Plain Metal answers `heapTextureSizeAndAlignWithDescriptor:` for a MTLStorageModeMemoryless descriptor and the runtime refuses it `Invalid(StorageMode)`, so eve… |
+| `texture-pairs-storage-crossings` | Plain Metal answers `heapTextureSizeAndAlignWithDescriptor:` for a MTLStorageModeMemoryless descriptor and the runtime refuses it `Invalid(StorageMode)`, so eve… |
+| `texture-pairs-storage-crossings` | Plain Metal answers `heapTextureSizeAndAlignWithDescriptor:` for a MTLStorageModeMemoryless descriptor and the runtime refuses it `Invalid(StorageMode)`, so eve… |
+| `texture-pairs-storage-crossings` | Plain Metal answers `heapTextureSizeAndAlignWithDescriptor:` for a MTLStorageModeMemoryless descriptor and the runtime refuses it `Invalid(StorageMode)`, so eve… |
+| `texture-pairs-storage-crossings` | Plain Metal answers `heapTextureSizeAndAlignWithDescriptor:` for a MTLStorageModeMemoryless descriptor and the runtime refuses it `Invalid(StorageMode)`, so eve… |
+| `texture-pairs-storage-crossings` | Plain Metal answers a smaller footprint from `heapTextureSizeAndAlignWithDescriptor:` than we do for this descriptor, and the row's two numbers are the pair. `D… |
+| `texture-pairs-storage-crossings` | Plain Metal answers `heapTextureSizeAndAlignWithDescriptor:` for a MTLStorageModeMemoryless descriptor and the runtime refuses it `Invalid(StorageMode)`, so eve… |
+| `texture-pairs-storage-crossings` | Plain Metal answers a smaller footprint from `heapTextureSizeAndAlignWithDescriptor:` than we do for this descriptor, and the row's two numbers are the pair. `D… |
+| `texture-pairs-storage-crossings` | Plain Metal answers a smaller footprint from `heapTextureSizeAndAlignWithDescriptor:` than we do for this descriptor, and the row's two numbers are the pair. `D… |
+| `texture-pairs-storage-crossings` | Plain Metal answers `heapTextureSizeAndAlignWithDescriptor:` for a MTLStorageModeMemoryless descriptor and the runtime refuses it `Invalid(StorageMode)`, so eve… |
+| `texture-pairs-storage-crossings` | Plain Metal answers `heapTextureSizeAndAlignWithDescriptor:` for a MTLStorageModeMemoryless descriptor and the runtime refuses it `Invalid(StorageMode)`, so eve… |
+| `texture-pairs-storage-crossings` | Plain Metal answers `heapTextureSizeAndAlignWithDescriptor:` for a MTLStorageModeMemoryless descriptor and the runtime refuses it `Invalid(StorageMode)`, so eve… |
+| `texture-pairs-storage-crossings` | Plain Metal answers `heapTextureSizeAndAlignWithDescriptor:` for a MTLStorageModeMemoryless descriptor and the runtime refuses it `Invalid(StorageMode)`, so eve… |
+| `texture-pairs-storage-crossings` | Plain Metal answers `heapTextureSizeAndAlignWithDescriptor:` for a MTLStorageModeMemoryless descriptor and the runtime refuses it `Invalid(StorageMode)`, so eve… |
+| `texture-pairs-storage-crossings` | Plain Metal answers 128 bytes of alignment from `heapTextureSizeAndAlignWithDescriptor:` for every descriptor of this family, and we answer 1024 on this driver … |
+| `texture-pairs-storage-crossings` | Plain Metal answers `heapTextureSizeAndAlignWithDescriptor:` for a MTLStorageModeMemoryless descriptor and the runtime refuses it `Invalid(StorageMode)`, so eve… |
+| `texture-pairs-storage-crossings` | Plain Metal answers `heapTextureSizeAndAlignWithDescriptor:` for a MTLStorageModeMemoryless descriptor and the runtime refuses it `Invalid(StorageMode)`, so eve… |
+| `texture-pairs-storage-crossings` | Plain Metal makes a MTLStorageModeMemoryless TEXTURE BUFFER and the runtime refuses it `Invalid(StorageMode)` out of `new_buffer`, so the one texture type whose… |
+| `texture-pairs-storage-crossings` | Plain Metal answers `heapTextureSizeAndAlignWithDescriptor:` for a MTLStorageModeMemoryless descriptor and the runtime refuses it `Invalid(StorageMode)`, so eve… |
+| `texture-pairs-storage-crossings` | Plain Metal answers 128 bytes of alignment from `heapTextureSizeAndAlignWithDescriptor:` for every descriptor of this family, and we answer 1024 on this driver … |
+| `texture-pairs-storage-crossings` | Plain Metal answers 128 bytes of alignment from `heapTextureSizeAndAlignWithDescriptor:` for every descriptor of this family, and we answer 1024 on this driver … |
+| `texture-pairs-storage-crossings` | Plain Metal answers `heapTextureSizeAndAlignWithDescriptor:` for a MTLStorageModeMemoryless descriptor and the runtime refuses it `Invalid(StorageMode)`, so eve… |
+| `texture-pairs-storage-crossings` | Plain Metal answers 128 bytes of alignment from `heapTextureSizeAndAlignWithDescriptor:` for every descriptor of this family, and we answer 1024 on this driver … |
+| `texture-pairs-storage-crossings` | Plain Metal answers 128 bytes of alignment from `heapTextureSizeAndAlignWithDescriptor:` for every descriptor of this family, and we answer 1024 on this driver … |
+| `texture-pairs-storage-crossings` | Plain Metal answers `heapTextureSizeAndAlignWithDescriptor:` for a MTLStorageModeMemoryless descriptor and the runtime refuses it `Invalid(StorageMode)`, so eve… |
+| `texture-pairs-storage-crossings` | Plain Metal answers 128 bytes of alignment from `heapTextureSizeAndAlignWithDescriptor:` for every descriptor of this family, and we answer 1024 on this driver … |
+| `texture-pairs-storage-crossings` | Plain Metal answers `heapTextureSizeAndAlignWithDescriptor:` for a MTLStorageModeMemoryless descriptor and the runtime refuses it `Invalid(StorageMode)`, so eve… |
+| `texture-pairs-storage-crossings` | Plain Metal answers 128 bytes of alignment from `heapTextureSizeAndAlignWithDescriptor:` for every descriptor of this family, and we answer 1024 on this driver … |
+| `texture-pairs-storage-crossings` | Plain Metal answers `heapTextureSizeAndAlignWithDescriptor:` for a MTLStorageModeMemoryless descriptor and the runtime refuses it `Invalid(StorageMode)`, so eve… |
+| `texture-pairs-storage-crossings` | Plain Metal answers 128 bytes of alignment from `heapTextureSizeAndAlignWithDescriptor:` for every descriptor of this family, and we answer 1024 on this driver … |
+| `texture-pairs-storage-crossings` | Plain Metal answers `heapTextureSizeAndAlignWithDescriptor:` for a MTLStorageModeMemoryless descriptor and the runtime refuses it `Invalid(StorageMode)`, so eve… |
+| `texture-pairs-storage-crossings` | Plain Metal answers 128 bytes of alignment from `heapTextureSizeAndAlignWithDescriptor:` for every descriptor of this family, and we answer 1024 on this driver … |
+| `texture-pairs-storage-crossings` | Plain Metal answers `heapTextureSizeAndAlignWithDescriptor:` for a MTLStorageModeMemoryless descriptor and the runtime refuses it `Invalid(StorageMode)`, so eve… |
+| `texture-pairs-storage-crossings` | Plain Metal answers 128 bytes of alignment from `heapTextureSizeAndAlignWithDescriptor:` for every descriptor of this family, and we answer 1024 on this driver … |
+| `texture-pairs-storage-crossings` | Plain Metal answers `heapTextureSizeAndAlignWithDescriptor:` for a MTLStorageModeMemoryless descriptor and the runtime refuses it `Invalid(StorageMode)`, so eve… |
+| `texture-pairs-storage-crossings` | Plain Metal answers 128 bytes of alignment from `heapTextureSizeAndAlignWithDescriptor:` for every descriptor of this family, and we answer 1024 on this driver … |
+| `texture-pairs-storage-crossings` | Plain Metal answers `heapTextureSizeAndAlignWithDescriptor:` for a MTLStorageModeMemoryless descriptor and the runtime refuses it `Invalid(StorageMode)`, so eve… |
+| `texture-pairs-storage-crossings` | Plain Metal answers 128 bytes of alignment from `heapTextureSizeAndAlignWithDescriptor:` for every descriptor of this family, and we answer 1024 on this driver … |
+| `texture-pairs-storage-crossings` | Plain Metal answers `heapTextureSizeAndAlignWithDescriptor:` for a MTLStorageModeMemoryless descriptor and the runtime refuses it `Invalid(StorageMode)`, so eve… |
+| `texture-pairs-storage-crossings` | Plain Metal answers 128 bytes of alignment from `heapTextureSizeAndAlignWithDescriptor:` for every descriptor of this family, and we answer 1024 on this driver … |
+| `texture-pairs-storage-crossings` | Plain Metal answers a smaller footprint from `heapTextureSizeAndAlignWithDescriptor:` than we do for this descriptor, and the row's two numbers are the pair. `D… |
+| `texture-pairs-storage-crossings` | Plain Metal answers `heapTextureSizeAndAlignWithDescriptor:` for a MTLStorageModeMemoryless descriptor and the runtime refuses it `Invalid(StorageMode)`, so eve… |
+| `texture-pairs-storage-crossings` | Plain Metal answers `heapTextureSizeAndAlignWithDescriptor:` for a MTLStorageModeMemoryless descriptor and the runtime refuses it `Invalid(StorageMode)`, so eve… |
+| `texture-pairs-storage-crossings` | Plain Metal answers 128 bytes of alignment from `heapTextureSizeAndAlignWithDescriptor:` for every descriptor of this family, and we answer 1024 on this driver … |
+| `texture-pairs-storage-crossings` | Plain Metal answers `heapTextureSizeAndAlignWithDescriptor:` for a MTLStorageModeMemoryless descriptor and the runtime refuses it `Invalid(StorageMode)`, so eve… |
+| `texture-pairs-storage-crossings` | Plain Metal answers `heapTextureSizeAndAlignWithDescriptor:` for a MTLStorageModeMemoryless descriptor and the runtime refuses it `Invalid(StorageMode)`, so eve… |
+| `texture-pairs-storage-crossings` | Plain Metal answers 128 bytes of alignment from `heapTextureSizeAndAlignWithDescriptor:` for every descriptor of this family, and we answer 1024 on this driver … |
+| `texture-pairs-type-levels-slices` | Plain Metal answers a smaller footprint from `heapTextureSizeAndAlignWithDescriptor:` than we do for this descriptor, and the row's two numbers are the pair. `D… |
+| `texture-pairs-type-levels-slices` | Plain Metal answers a smaller footprint from `heapTextureSizeAndAlignWithDescriptor:` than we do for this descriptor, and the row's two numbers are the pair. `D… |
+| `texture-pairs-type-levels-slices` | Plain Metal answers a smaller footprint from `heapTextureSizeAndAlignWithDescriptor:` than we do for this descriptor, and the row's two numbers are the pair. `D… |
+| `texture-pairs-type-levels-slices` | Plain Metal answers a smaller footprint from `heapTextureSizeAndAlignWithDescriptor:` than we do for this descriptor, and the row's two numbers are the pair. `D… |
+| `texture-pairs-type-levels-slices` | Plain Metal answers a smaller footprint from `heapTextureSizeAndAlignWithDescriptor:` than we do for this descriptor, and the row's two numbers are the pair. `D… |
+| `texture-pairs-type-levels-slices` | Plain Metal answers a smaller footprint from `heapTextureSizeAndAlignWithDescriptor:` than we do for this descriptor, and the row's two numbers are the pair. `D… |
+| `texture-pairs-type-levels-slices` | Plain Metal answers a smaller footprint from `heapTextureSizeAndAlignWithDescriptor:` than we do for this descriptor, and the row's two numbers are the pair. `D… |
+| `texture-pairs-type-levels-slices` | Plain Metal answers a smaller footprint from `heapTextureSizeAndAlignWithDescriptor:` than we do for this descriptor, and the row's two numbers are the pair. `D… |
+| `texture-pairs-type-levels-slices` | Plain Metal answers a smaller footprint from `heapTextureSizeAndAlignWithDescriptor:` than we do for this descriptor, and the row's two numbers are the pair. `D… |
+| `texture-pairs-type-levels-slices` | Plain Metal answers a smaller footprint from `heapTextureSizeAndAlignWithDescriptor:` than we do for this descriptor, and the row's two numbers are the pair. `D… |
+| `texture-pairs-type-levels-slices` | Plain Metal answers a smaller footprint from `heapTextureSizeAndAlignWithDescriptor:` than we do for this descriptor, and the row's two numbers are the pair. `D… |
+| `texture-pairs-type-levels-slices` | Plain Metal answers a smaller footprint from `heapTextureSizeAndAlignWithDescriptor:` than we do for this descriptor, and the row's two numbers are the pair. `D… |
+| `texture-pairs-type-levels-slices` | Plain Metal answers a smaller footprint from `heapTextureSizeAndAlignWithDescriptor:` than we do for this descriptor, and the row's two numbers are the pair. `D… |
+| `texture-pairs-type-levels-slices` | Plain Metal answers a smaller footprint from `heapTextureSizeAndAlignWithDescriptor:` than we do for this descriptor, and the row's two numbers are the pair. `D… |
+| `texture-pairs-type-levels-slices` | Plain Metal answers a smaller footprint from `heapTextureSizeAndAlignWithDescriptor:` than we do for this descriptor, and the row's two numbers are the pair. `D… |
+| `texture-pairs-type-levels-slices` | Plain Metal answers a smaller footprint from `heapTextureSizeAndAlignWithDescriptor:` than we do for this descriptor, and the row's two numbers are the pair. `D… |
+| `texture-pairs-type-levels-slices` | Plain Metal answers a smaller footprint from `heapTextureSizeAndAlignWithDescriptor:` than we do for this descriptor, and the row's two numbers are the pair. `D… |
+| `texture-pairs-type-levels-slices` | Plain Metal answers a smaller footprint from `heapTextureSizeAndAlignWithDescriptor:` than we do for this descriptor, and the row's two numbers are the pair. `D… |
+| `texture-pairs-type-levels-slices` | Plain Metal answers a smaller footprint from `heapTextureSizeAndAlignWithDescriptor:` than we do for this descriptor, and the row's two numbers are the pair. `D… |
+| `texture-pairs-type-levels-slices` | Plain Metal answers a smaller footprint from `heapTextureSizeAndAlignWithDescriptor:` than we do for this descriptor, and the row's two numbers are the pair. `D… |
+| `texture-pairs-type-levels-slices` | Plain Metal answers a smaller footprint from `heapTextureSizeAndAlignWithDescriptor:` than we do for this descriptor, and the row's two numbers are the pair. `D… |
+| `texture-pairs-type-levels-slices` | Plain Metal answers a smaller footprint from `heapTextureSizeAndAlignWithDescriptor:` than we do for this descriptor, and the row's two numbers are the pair. `D… |
+| `texture-pairs-type-levels-slices` | Plain Metal answers a smaller footprint from `heapTextureSizeAndAlignWithDescriptor:` than we do for this descriptor, and the row's two numbers are the pair. `D… |
+| `texture-pairs-type-levels-slices` | Plain Metal answers 128 bytes of alignment from `heapTextureSizeAndAlignWithDescriptor:` for every descriptor of this family, and we answer 1024 on this driver … |
+| `texture-pairs-type-levels-slices` | Plain Metal answers 128 bytes of alignment from `heapTextureSizeAndAlignWithDescriptor:` for every descriptor of this family, and we answer 1024 on this driver … |
+| `texture-pairs-type-levels-slices` | Plain Metal answers a smaller footprint from `heapTextureSizeAndAlignWithDescriptor:` than we do for this descriptor, and the row's two numbers are the pair. `D… |
+| `texture-pairs-type-levels-slices` | Plain Metal answers 128 bytes of alignment from `heapTextureSizeAndAlignWithDescriptor:` for every descriptor of this family, and we answer 1024 on this driver … |
+| `texture-pairs-type-levels-slices` | Plain Metal answers a smaller footprint from `heapTextureSizeAndAlignWithDescriptor:` than we do for this descriptor, and the row's two numbers are the pair. `D… |
+| `texture-pairs-type-levels-slices` | Plain Metal answers 128 bytes of alignment from `heapTextureSizeAndAlignWithDescriptor:` for every descriptor of this family, and we answer 1024 on this driver … |
+| `texture-pairs-type-levels-slices` | Plain Metal answers a smaller footprint from `heapTextureSizeAndAlignWithDescriptor:` than we do for this descriptor, and the row's two numbers are the pair. `D… |
+| `texture-pairs-type-levels-slices` | Plain Metal answers 128 bytes of alignment from `heapTextureSizeAndAlignWithDescriptor:` for every descriptor of this family, and we answer 1024 on this driver … |
+| `texture-pairs-type-levels-slices` | Plain Metal answers 128 bytes of alignment from `heapTextureSizeAndAlignWithDescriptor:` for every descriptor of this family, and we answer 1024 on this driver … |
+| `texture-pairs-type-levels-slices` | Plain Metal answers 128 bytes of alignment from `heapTextureSizeAndAlignWithDescriptor:` for every descriptor of this family, and we answer 1024 on this driver … |
+| `texture-pairs-type-levels-slices` | Plain Metal answers a smaller footprint from `heapTextureSizeAndAlignWithDescriptor:` than we do for this descriptor, and the row's two numbers are the pair. `D… |
+| `texture-pairs-type-levels-slices` | Plain Metal answers 128 bytes of alignment from `heapTextureSizeAndAlignWithDescriptor:` for every descriptor of this family, and we answer 1024 on this driver … |
+| `texture-pairs-type-levels-slices` | Plain Metal answers a smaller footprint from `heapTextureSizeAndAlignWithDescriptor:` than we do for this descriptor, and the row's two numbers are the pair. `D… |
+| `texture-pairs-type-levels-slices` | Plain Metal answers 128 bytes of alignment from `heapTextureSizeAndAlignWithDescriptor:` for every descriptor of this family, and we answer 1024 on this driver … |
+| `texture-pairs-type-levels-slices` | Plain Metal answers a smaller footprint from `heapTextureSizeAndAlignWithDescriptor:` than we do for this descriptor, and the row's two numbers are the pair. `D… |
+| `texture-pairs-type-levels-slices` | Plain Metal answers 128 bytes of alignment from `heapTextureSizeAndAlignWithDescriptor:` for every descriptor of this family, and we answer 1024 on this driver … |
+| `texture-pairs-type-levels-slices` | Plain Metal answers a smaller footprint from `heapTextureSizeAndAlignWithDescriptor:` than we do for this descriptor, and the row's two numbers are the pair. `D… |
+| `texture-pairs-type-levels-slices` | Plain Metal answers 128 bytes of alignment from `heapTextureSizeAndAlignWithDescriptor:` for every descriptor of this family, and we answer 1024 on this driver … |
+| `texture-pairs-type-levels-slices` | Plain Metal answers a smaller footprint from `heapTextureSizeAndAlignWithDescriptor:` than we do for this descriptor, and the row's two numbers are the pair. `D… |
+| `texture-pairs-type-levels-slices` | Plain Metal answers 128 bytes of alignment from `heapTextureSizeAndAlignWithDescriptor:` for every descriptor of this family, and we answer 1024 on this driver … |
+| `texture-pairs-type-levels-slices` | Plain Metal answers a smaller footprint from `heapTextureSizeAndAlignWithDescriptor:` than we do for this descriptor, and the row's two numbers are the pair. `D… |
+| `texture-pairs-type-levels-slices` | Plain Metal answers 128 bytes of alignment from `heapTextureSizeAndAlignWithDescriptor:` for every descriptor of this family, and we answer 1024 on this driver … |
+| `texture-pairs-type-levels-slices` | Plain Metal answers a smaller footprint from `heapTextureSizeAndAlignWithDescriptor:` than we do for this descriptor, and the row's two numbers are the pair. `D… |
+| `texture-pairs-type-levels-slices` | Plain Metal answers 128 bytes of alignment from `heapTextureSizeAndAlignWithDescriptor:` for every descriptor of this family, and we answer 1024 on this driver … |
+| `texture-pairs-type-levels-slices` | Plain Metal answers a smaller footprint from `heapTextureSizeAndAlignWithDescriptor:` than we do for this descriptor, and the row's two numbers are the pair. `D… |
+| `texture-pairs-type-levels-slices` | Plain Metal answers 128 bytes of alignment from `heapTextureSizeAndAlignWithDescriptor:` for every descriptor of this family, and we answer 1024 on this driver … |
+| `texture-pairs-type-levels-slices` | Plain Metal answers a smaller footprint from `heapTextureSizeAndAlignWithDescriptor:` than we do for this descriptor, and the row's two numbers are the pair. `D… |
+| `texture-pairs-type-levels-slices` | Plain Metal answers 128 bytes of alignment from `heapTextureSizeAndAlignWithDescriptor:` for every descriptor of this family, and we answer 1024 on this driver … |
+| `texture-pairs-type-levels-slices` | Plain Metal answers 128 bytes of alignment from `heapTextureSizeAndAlignWithDescriptor:` for every descriptor of this family, and we answer 1024 on this driver … |
+| `texture-pairs-type-levels-slices` | Plain Metal answers a smaller footprint from `heapTextureSizeAndAlignWithDescriptor:` than we do for this descriptor, and the row's two numbers are the pair. `D… |
+| `texture-pairs-type-levels-slices` | Plain Metal answers 128 bytes of alignment from `heapTextureSizeAndAlignWithDescriptor:` for every descriptor of this family, and we answer 1024 on this driver … |
+| `texture-pairs-type-levels-slices` | Plain Metal answers a smaller footprint from `heapTextureSizeAndAlignWithDescriptor:` than we do for this descriptor, and the row's two numbers are the pair. `D… |
+| `texture-pairs-type-levels-slices` | Plain Metal answers 128 bytes of alignment from `heapTextureSizeAndAlignWithDescriptor:` for every descriptor of this family, and we answer 1024 on this driver … |
+| `texture-pairs-type-levels-slices` | Plain Metal answers a smaller footprint from `heapTextureSizeAndAlignWithDescriptor:` than we do for this descriptor, and the row's two numbers are the pair. `D… |
+| `texture-pairs-type-levels-slices` | Plain Metal answers 128 bytes of alignment from `heapTextureSizeAndAlignWithDescriptor:` for every descriptor of this family, and we answer 1024 on this driver … |
+| `texture-pairs-type-levels-slices` | Plain Metal answers a smaller footprint from `heapTextureSizeAndAlignWithDescriptor:` than we do for this descriptor, and the row's two numbers are the pair. `D… |
+| `texture-pairs-type-levels-slices` | Plain Metal answers 128 bytes of alignment from `heapTextureSizeAndAlignWithDescriptor:` for every descriptor of this family, and we answer 1024 on this driver … |
+| `texture-pairs-type-levels-slices` | Plain Metal answers 128 bytes of alignment from `heapTextureSizeAndAlignWithDescriptor:` for every descriptor of this family, and we answer 1024 on this driver … |
+| `texture-pairs-type-levels-slices` | Plain Metal answers 128 bytes of alignment from `heapTextureSizeAndAlignWithDescriptor:` for every descriptor of this family, and we answer 1024 on this driver … |
+| `texture-pairs-type-levels-slices` | Plain Metal answers a smaller footprint from `heapTextureSizeAndAlignWithDescriptor:` than we do for this descriptor, and the row's two numbers are the pair. `D… |
+| `texture-pairs-type-levels-slices` | Plain Metal answers 128 bytes of alignment from `heapTextureSizeAndAlignWithDescriptor:` for every descriptor of this family, and we answer 1024 on this driver … |
+| `texture-pairs-type-levels-slices` | Plain Metal answers a smaller footprint from `heapTextureSizeAndAlignWithDescriptor:` than we do for this descriptor, and the row's two numbers are the pair. `D… |
+| `texture-pairs-type-levels-slices` | Plain Metal answers 128 bytes of alignment from `heapTextureSizeAndAlignWithDescriptor:` for every descriptor of this family, and we answer 1024 on this driver … |
+| `texture-pairs-type-levels-slices` | Plain Metal answers a smaller footprint from `heapTextureSizeAndAlignWithDescriptor:` than we do for this descriptor, and the row's two numbers are the pair. `D… |
+| `texture-pairs-type-levels-slices` | Plain Metal answers 128 bytes of alignment from `heapTextureSizeAndAlignWithDescriptor:` for every descriptor of this family, and we answer 1024 on this driver … |
+| `texture-pairs-type-levels-slices` | Plain Metal answers a smaller footprint from `heapTextureSizeAndAlignWithDescriptor:` than we do for this descriptor, and the row's two numbers are the pair. `D… |
+| `texture-pairs-type-levels-slices` | Plain Metal answers 128 bytes of alignment from `heapTextureSizeAndAlignWithDescriptor:` for every descriptor of this family, and we answer 1024 on this driver … |
+| `texture-pairs-type-levels-slices` | Plain Metal answers a smaller footprint from `heapTextureSizeAndAlignWithDescriptor:` than we do for this descriptor, and the row's two numbers are the pair. `D… |
+| `texture-pairs-type-levels-slices` | Plain Metal answers 128 bytes of alignment from `heapTextureSizeAndAlignWithDescriptor:` for every descriptor of this family, and we answer 1024 on this driver … |
+| `texture-pairs-type-levels-slices` | Plain Metal answers 128 bytes of alignment from `heapTextureSizeAndAlignWithDescriptor:` for every descriptor of this family, and we answer 1024 on this driver … |
+| `texture-pairs-type-levels-slices` | Plain Metal answers 128 bytes of alignment from `heapTextureSizeAndAlignWithDescriptor:` for every descriptor of this family, and we answer 1024 on this driver … |
+| `texture-pairs-type-levels-slices` | Plain Metal answers 128 bytes of alignment from `heapTextureSizeAndAlignWithDescriptor:` for every descriptor of this family, and we answer 1024 on this driver … |
+| `texture-pairs-type-levels-slices` | Plain Metal answers 128 bytes of alignment from `heapTextureSizeAndAlignWithDescriptor:` for every descriptor of this family, and we answer 1024 on this driver … |
+| `texture-pairs-type-levels-slices` | Plain Metal answers a smaller footprint from `heapTextureSizeAndAlignWithDescriptor:` than we do for this descriptor, and the row's two numbers are the pair. `D… |
+| `texture-pairs-type-levels-slices` | Plain Metal answers 128 bytes of alignment from `heapTextureSizeAndAlignWithDescriptor:` for every descriptor of this family, and we answer 1024 on this driver … |
+| `texture-pairs-type-levels-slices` | Plain Metal answers a smaller footprint from `heapTextureSizeAndAlignWithDescriptor:` than we do for this descriptor, and the row's two numbers are the pair. `D… |
+| `texture-pairs-type-levels-slices` | Plain Metal answers 128 bytes of alignment from `heapTextureSizeAndAlignWithDescriptor:` for every descriptor of this family, and we answer 1024 on this driver … |
+| `texture-pairs-type-levels-slices` | Plain Metal answers a smaller footprint from `heapTextureSizeAndAlignWithDescriptor:` than we do for this descriptor, and the row's two numbers are the pair. `D… |
+| `texture-pairs-type-levels-slices` | Plain Metal answers 128 bytes of alignment from `heapTextureSizeAndAlignWithDescriptor:` for every descriptor of this family, and we answer 1024 on this driver … |
+| `texture-pairs-type-levels-slices` | Plain Metal answers a smaller footprint from `heapTextureSizeAndAlignWithDescriptor:` than we do for this descriptor, and the row's two numbers are the pair. `D… |
+| `texture-pairs-type-levels-slices` | Plain Metal answers 128 bytes of alignment from `heapTextureSizeAndAlignWithDescriptor:` for every descriptor of this family, and we answer 1024 on this driver … |
+| `texture-pairs-type-levels-slices` | Plain Metal answers a smaller footprint from `heapTextureSizeAndAlignWithDescriptor:` than we do for this descriptor, and the row's two numbers are the pair. `D… |
+| `texture-pairs-type-levels-slices` | Plain Metal answers 128 bytes of alignment from `heapTextureSizeAndAlignWithDescriptor:` for every descriptor of this family, and we answer 1024 on this driver … |
+| `texture-pairs-type-levels-slices` | Plain Metal answers a smaller footprint from `heapTextureSizeAndAlignWithDescriptor:` than we do for this descriptor, and the row's two numbers are the pair. `D… |
+| `texture-pairs-type-levels-slices` | Plain Metal answers 128 bytes of alignment from `heapTextureSizeAndAlignWithDescriptor:` for every descriptor of this family, and we answer 1024 on this driver … |
+| `texture-pairs-type-levels-slices` | Plain Metal answers 128 bytes of alignment from `heapTextureSizeAndAlignWithDescriptor:` for every descriptor of this family, and we answer 1024 on this driver … |
+| `texture-pairs-type-levels-slices` | Plain Metal answers a smaller footprint from `heapTextureSizeAndAlignWithDescriptor:` than we do for this descriptor, and the row's two numbers are the pair. `D… |
+| `texture-pairs-type-levels-slices` | Plain Metal answers 128 bytes of alignment from `heapTextureSizeAndAlignWithDescriptor:` for every descriptor of this family, and we answer 1024 on this driver … |
+| `texture-pairs-type-levels-slices` | Plain Metal answers a smaller footprint from `heapTextureSizeAndAlignWithDescriptor:` than we do for this descriptor, and the row's two numbers are the pair. `D… |
+| `texture-pairs-type-levels-slices` | Plain Metal answers 128 bytes of alignment from `heapTextureSizeAndAlignWithDescriptor:` for every descriptor of this family, and we answer 1024 on this driver … |
+| `texture-pairs-type-levels-slices` | Plain Metal answers a smaller footprint from `heapTextureSizeAndAlignWithDescriptor:` than we do for this descriptor, and the row's two numbers are the pair. `D… |
+| `texture-pairs-type-levels-slices` | Plain Metal answers 128 bytes of alignment from `heapTextureSizeAndAlignWithDescriptor:` for every descriptor of this family, and we answer 1024 on this driver … |
+| `texture-pairs-type-levels-slices` | Plain Metal answers a smaller footprint from `heapTextureSizeAndAlignWithDescriptor:` than we do for this descriptor, and the row's two numbers are the pair. `D… |
+| `texture-pairs-type-levels-slices` | Plain Metal answers 128 bytes of alignment from `heapTextureSizeAndAlignWithDescriptor:` for every descriptor of this family, and we answer 1024 on this driver … |
+| `texture-pairs-type-levels-slices` | Plain Metal answers a smaller footprint from `heapTextureSizeAndAlignWithDescriptor:` than we do for this descriptor, and the row's two numbers are the pair. `D… |
+| `texture-pairs-type-levels-slices` | Plain Metal answers 128 bytes of alignment from `heapTextureSizeAndAlignWithDescriptor:` for every descriptor of this family, and we answer 1024 on this driver … |
+| `texture-pairs-type-levels-slices` | Plain Metal answers a smaller footprint from `heapTextureSizeAndAlignWithDescriptor:` than we do for this descriptor, and the row's two numbers are the pair. `D… |
+| `texture-pairs-type-levels-slices` | Plain Metal answers 128 bytes of alignment from `heapTextureSizeAndAlignWithDescriptor:` for every descriptor of this family, and we answer 1024 on this driver … |
+| `texture-pairs-type-levels-slices` | Plain Metal answers 128 bytes of alignment from `heapTextureSizeAndAlignWithDescriptor:` for every descriptor of this family, and we answer 1024 on this driver … |
+| `texture-pairs-type-levels-slices` | Plain Metal answers a smaller footprint from `heapTextureSizeAndAlignWithDescriptor:` than we do for this descriptor, and the row's two numbers are the pair. `D… |
+| `texture-pairs-type-levels-slices` | Plain Metal answers 128 bytes of alignment from `heapTextureSizeAndAlignWithDescriptor:` for every descriptor of this family, and we answer 1024 on this driver … |
+| `texture-pairs-type-levels-slices` | Plain Metal answers 128 bytes of alignment from `heapTextureSizeAndAlignWithDescriptor:` for every descriptor of this family, and we answer 1024 on this driver … |
+| `texture-pairs-type-levels-slices` | Plain Metal answers a smaller footprint from `heapTextureSizeAndAlignWithDescriptor:` than we do for this descriptor, and the row's two numbers are the pair. `D… |
+| `texture-pairs-type-levels-slices` | Plain Metal answers 128 bytes of alignment from `heapTextureSizeAndAlignWithDescriptor:` for every descriptor of this family, and we answer 1024 on this driver … |
+| `texture-pairs-type-levels-slices` | Plain Metal answers a smaller footprint from `heapTextureSizeAndAlignWithDescriptor:` than we do for this descriptor, and the row's two numbers are the pair. `D… |
+| `texture-pairs-type-levels-slices` | Plain Metal answers 128 bytes of alignment from `heapTextureSizeAndAlignWithDescriptor:` for every descriptor of this family, and we answer 1024 on this driver … |
+| `texture-pairs-type-levels-slices` | Plain Metal answers a smaller footprint from `heapTextureSizeAndAlignWithDescriptor:` than we do for this descriptor, and the row's two numbers are the pair. `D… |
+| `texture-pairs-type-levels-slices` | Plain Metal answers 128 bytes of alignment from `heapTextureSizeAndAlignWithDescriptor:` for every descriptor of this family, and we answer 1024 on this driver … |
+| `texture-pairs-type-levels-slices` | Plain Metal answers a smaller footprint from `heapTextureSizeAndAlignWithDescriptor:` than we do for this descriptor, and the row's two numbers are the pair. `D… |
+| `texture-pairs-type-levels-slices` | Plain Metal answers 128 bytes of alignment from `heapTextureSizeAndAlignWithDescriptor:` for every descriptor of this family, and we answer 1024 on this driver … |
+| `texture-pairs-type-levels-slices` | Plain Metal answers 128 bytes of alignment from `heapTextureSizeAndAlignWithDescriptor:` for every descriptor of this family, and we answer 1024 on this driver … |
+| `texture-pairs-type-levels-slices` | Plain Metal answers 128 bytes of alignment from `heapTextureSizeAndAlignWithDescriptor:` for every descriptor of this family, and we answer 1024 on this driver … |
+| `texture-pairs-type-levels-slices` | Plain Metal answers 128 bytes of alignment from `heapTextureSizeAndAlignWithDescriptor:` for every descriptor of this family, and we answer 1024 on this driver … |
+| `texture-pairs-type-levels-slices` | Plain Metal answers 128 bytes of alignment from `heapTextureSizeAndAlignWithDescriptor:` for every descriptor of this family, and we answer 1024 on this driver … |
+| `texture-pairs-type-levels-slices` | Plain Metal answers 128 bytes of alignment from `heapTextureSizeAndAlignWithDescriptor:` for every descriptor of this family, and we answer 1024 on this driver … |
+| `texture-pairs-type-levels-slices` | Plain Metal answers 128 bytes of alignment from `heapTextureSizeAndAlignWithDescriptor:` for every descriptor of this family, and we answer 1024 on this driver … |
+| `texture-pairs-type-levels-slices` | Plain Metal answers 128 bytes of alignment from `heapTextureSizeAndAlignWithDescriptor:` for every descriptor of this family, and we answer 1024 on this driver … |
+| `texture-pairs-type-levels-slices` | Plain Metal answers 128 bytes of alignment from `heapTextureSizeAndAlignWithDescriptor:` for every descriptor of this family, and we answer 1024 on this driver … |
+| `texture-pairs-type-levels-slices` | Plain Metal answers a smaller footprint from `heapTextureSizeAndAlignWithDescriptor:` than we do for this descriptor, and the row's two numbers are the pair. `D… |
+| `texture-pairs-type-levels-slices` | Plain Metal answers 128 bytes of alignment from `heapTextureSizeAndAlignWithDescriptor:` for every descriptor of this family, and we answer 1024 on this driver … |
+| `texture-pairs-type-levels-slices` | Plain Metal answers a smaller footprint from `heapTextureSizeAndAlignWithDescriptor:` than we do for this descriptor, and the row's two numbers are the pair. `D… |
+| `texture-pairs-type-levels-slices` | Plain Metal answers 128 bytes of alignment from `heapTextureSizeAndAlignWithDescriptor:` for every descriptor of this family, and we answer 1024 on this driver … |
+| `texture-pairs-type-levels-slices` | Plain Metal answers a smaller footprint from `heapTextureSizeAndAlignWithDescriptor:` than we do for this descriptor, and the row's two numbers are the pair. `D… |
+| `texture-pairs-type-levels-slices` | Plain Metal answers 128 bytes of alignment from `heapTextureSizeAndAlignWithDescriptor:` for every descriptor of this family, and we answer 1024 on this driver … |
+| `texture-pairs-type-levels-slices` | Plain Metal answers a smaller footprint from `heapTextureSizeAndAlignWithDescriptor:` than we do for this descriptor, and the row's two numbers are the pair. `D… |
+| `texture-pairs-type-levels-slices` | Plain Metal answers 128 bytes of alignment from `heapTextureSizeAndAlignWithDescriptor:` for every descriptor of this family, and we answer 1024 on this driver … |
+| `texture-pairs-type-levels-slices` | Plain Metal answers a smaller footprint from `heapTextureSizeAndAlignWithDescriptor:` than we do for this descriptor, and the row's two numbers are the pair. `D… |
+| `texture-pairs-type-levels-slices` | Plain Metal answers 128 bytes of alignment from `heapTextureSizeAndAlignWithDescriptor:` for every descriptor of this family, and we answer 1024 on this driver … |
+| `texture-pairs-type-levels-slices` | Plain Metal answers a smaller footprint from `heapTextureSizeAndAlignWithDescriptor:` than we do for this descriptor, and the row's two numbers are the pair. `D… |
+| `texture-pairs-type-levels-slices` | Plain Metal answers 128 bytes of alignment from `heapTextureSizeAndAlignWithDescriptor:` for every descriptor of this family, and we answer 1024 on this driver … |
+| `texture-pairs-type-levels-slices` | Plain Metal answers a smaller footprint from `heapTextureSizeAndAlignWithDescriptor:` than we do for this descriptor, and the row's two numbers are the pair. `D… |
+| `texture-pairs-type-levels-slices` | Plain Metal answers 128 bytes of alignment from `heapTextureSizeAndAlignWithDescriptor:` for every descriptor of this family, and we answer 1024 on this driver … |
+| `texture-pairs-type-levels-slices` | Plain Metal answers a smaller footprint from `heapTextureSizeAndAlignWithDescriptor:` than we do for this descriptor, and the row's two numbers are the pair. `D… |
+| `texture-pairs-type-levels-slices` | Plain Metal answers 128 bytes of alignment from `heapTextureSizeAndAlignWithDescriptor:` for every descriptor of this family, and we answer 1024 on this driver … |
+| `texture-pairs-type-levels-slices` | Plain Metal answers 128 bytes of alignment from `heapTextureSizeAndAlignWithDescriptor:` for every descriptor of this family, and we answer 1024 on this driver … |
+| `texture-pairs-type-levels-slices` | Plain Metal answers a smaller footprint from `heapTextureSizeAndAlignWithDescriptor:` than we do for this descriptor, and the row's two numbers are the pair. `D… |
+| `texture-pairs-type-levels-slices` | Plain Metal answers 128 bytes of alignment from `heapTextureSizeAndAlignWithDescriptor:` for every descriptor of this family, and we answer 1024 on this driver … |
+| `texture-pairs-type-levels-slices` | Plain Metal answers 128 bytes of alignment from `heapTextureSizeAndAlignWithDescriptor:` for every descriptor of this family, and we answer 1024 on this driver … |
+| `texture-pairs-type-levels-slices` | Plain Metal answers a smaller footprint from `heapTextureSizeAndAlignWithDescriptor:` than we do for this descriptor, and the row's two numbers are the pair. `D… |
+| `texture-pairs-type-levels-slices` | Plain Metal answers 128 bytes of alignment from `heapTextureSizeAndAlignWithDescriptor:` for every descriptor of this family, and we answer 1024 on this driver … |
+| `texture-pairs-type-levels-slices` | Plain Metal answers a smaller footprint from `heapTextureSizeAndAlignWithDescriptor:` than we do for this descriptor, and the row's two numbers are the pair. `D… |
+| `texture-pairs-type-levels-slices` | Plain Metal answers 128 bytes of alignment from `heapTextureSizeAndAlignWithDescriptor:` for every descriptor of this family, and we answer 1024 on this driver … |
+| `texture-pairs-type-levels-slices` | Plain Metal answers a smaller footprint from `heapTextureSizeAndAlignWithDescriptor:` than we do for this descriptor, and the row's two numbers are the pair. `D… |
+| `texture-pairs-type-levels-slices` | Plain Metal answers 128 bytes of alignment from `heapTextureSizeAndAlignWithDescriptor:` for every descriptor of this family, and we answer 1024 on this driver … |
+| `texture-pairs-type-levels-slices` | Plain Metal answers a smaller footprint from `heapTextureSizeAndAlignWithDescriptor:` than we do for this descriptor, and the row's two numbers are the pair. `D… |
+| `texture-pairs-type-levels-slices` | Plain Metal answers 128 bytes of alignment from `heapTextureSizeAndAlignWithDescriptor:` for every descriptor of this family, and we answer 1024 on this driver … |
+| `texture-pairs-type-levels-slices` | Plain Metal answers 128 bytes of alignment from `heapTextureSizeAndAlignWithDescriptor:` for every descriptor of this family, and we answer 1024 on this driver … |
+| `texture-pairs-type-levels-slices` | Plain Metal answers 128 bytes of alignment from `heapTextureSizeAndAlignWithDescriptor:` for every descriptor of this family, and we answer 1024 on this driver … |
+| `texture-pairs-type-levels-slices` | Plain Metal answers 128 bytes of alignment from `heapTextureSizeAndAlignWithDescriptor:` for every descriptor of this family, and we answer 1024 on this driver … |
+| `texture-pairs-type-levels-slices` | Plain Metal answers 128 bytes of alignment from `heapTextureSizeAndAlignWithDescriptor:` for every descriptor of this family, and we answer 1024 on this driver … |
+| `texture-pairs-type-levels-slices` | Plain Metal answers a smaller footprint from `heapTextureSizeAndAlignWithDescriptor:` than we do for this descriptor, and the row's two numbers are the pair. `D… |
+| `texture-pairs-type-levels-slices` | Plain Metal answers 128 bytes of alignment from `heapTextureSizeAndAlignWithDescriptor:` for every descriptor of this family, and we answer 1024 on this driver … |
+| `texture-pairs-type-levels-slices` | Plain Metal answers 128 bytes of alignment from `heapTextureSizeAndAlignWithDescriptor:` for every descriptor of this family, and we answer 1024 on this driver … |
+| `texture-pairs-type-levels-slices` | Plain Metal answers 128 bytes of alignment from `heapTextureSizeAndAlignWithDescriptor:` for every descriptor of this family, and we answer 1024 on this driver … |
+| `texture-pairs-type-levels-slices` | Plain Metal answers 128 bytes of alignment from `heapTextureSizeAndAlignWithDescriptor:` for every descriptor of this family, and we answer 1024 on this driver … |
+| `texture-pairs-type-levels-slices` | Plain Metal answers a smaller footprint from `heapTextureSizeAndAlignWithDescriptor:` than we do for this descriptor, and the row's two numbers are the pair. `D… |
+| `texture-pairs-type-levels-slices` | Plain Metal answers 128 bytes of alignment from `heapTextureSizeAndAlignWithDescriptor:` for every descriptor of this family, and we answer 1024 on this driver … |
+| `texture-pairs-type-levels-slices` | Plain Metal answers a smaller footprint from `heapTextureSizeAndAlignWithDescriptor:` than we do for this descriptor, and the row's two numbers are the pair. `D… |
+| `texture-pairs-usage-crossings` | Plain Metal answers `heapTextureSizeAndAlignWithDescriptor:` for an MTLPixelFormatASTC_4x4_LDR descriptor and we refuse it `NotImplemented(DecodedHeapTexture)`,… |
+| `texture-pairs-usage-crossings` | Plain Metal answers `heapTextureSizeAndAlignWithDescriptor:` for an MTLPixelFormatASTC_4x4_LDR descriptor and we refuse it `NotImplemented(DecodedHeapTexture)`,… |
+| `texture-pairs-usage-crossings` | Plain Metal answers `heapTextureSizeAndAlignWithDescriptor:` for an MTLPixelFormatASTC_4x4_LDR descriptor and we refuse it `NotImplemented(DecodedHeapTexture)`,… |
+| `texture-pairs-usage-crossings` | Plain Metal answers `heapTextureSizeAndAlignWithDescriptor:` for an MTLPixelFormatASTC_4x4_LDR descriptor and we refuse it `NotImplemented(DecodedHeapTexture)`,… |
+| `texture-pairs-usage-crossings` | Plain Metal answers a smaller footprint from `heapTextureSizeAndAlignWithDescriptor:` than we do for this descriptor, and the row's two numbers are the pair. `D… |
+| `texture-pairs-usage-crossings` | Plain Metal answers a smaller footprint from `heapTextureSizeAndAlignWithDescriptor:` than we do for this descriptor, and the row's two numbers are the pair. `D… |
+| `texture-pairs-usage-crossings` | Plain Metal answers a smaller footprint from `heapTextureSizeAndAlignWithDescriptor:` than we do for this descriptor, and the row's two numbers are the pair. `D… |
+| `texture-pairs-usage-crossings` | Plain Metal answers a smaller footprint from `heapTextureSizeAndAlignWithDescriptor:` than we do for this descriptor, and the row's two numbers are the pair. `D… |
+| `texture-pairs-usage-crossings` | Plain Metal answers a smaller footprint from `heapTextureSizeAndAlignWithDescriptor:` than we do for this descriptor, and the row's two numbers are the pair. `D… |
+| `texture-pairs-usage-crossings` | Plain Metal answers a smaller footprint from `heapTextureSizeAndAlignWithDescriptor:` than we do for this descriptor, and the row's two numbers are the pair. `D… |
+| `texture-pairs-usage-crossings` | Plain Metal answers a smaller footprint from `heapTextureSizeAndAlignWithDescriptor:` than we do for this descriptor, and the row's two numbers are the pair. `D… |
+| `texture-pairs-usage-crossings` | Plain Metal answers a smaller footprint from `heapTextureSizeAndAlignWithDescriptor:` than we do for this descriptor, and the row's two numbers are the pair. `D… |
+| `texture-pairs-usage-crossings` | Plain Metal answers a smaller footprint from `heapTextureSizeAndAlignWithDescriptor:` than we do for this descriptor, and the row's two numbers are the pair. `D… |
+| `texture-pairs-usage-crossings` | Plain Metal answers a smaller footprint from `heapTextureSizeAndAlignWithDescriptor:` than we do for this descriptor, and the row's two numbers are the pair. `D… |
+| `texture-pairs-usage-crossings` | Plain Metal answers a smaller footprint from `heapTextureSizeAndAlignWithDescriptor:` than we do for this descriptor, and the row's two numbers are the pair. `D… |
+| `texture-pairs-usage-crossings` | Plain Metal answers a smaller footprint from `heapTextureSizeAndAlignWithDescriptor:` than we do for this descriptor, and the row's two numbers are the pair. `D… |
+| `texture-pairs-usage-crossings` | Plain Metal answers a smaller footprint from `heapTextureSizeAndAlignWithDescriptor:` than we do for this descriptor, and the row's two numbers are the pair. `D… |
+| `texture-pairs-usage-crossings` | Plain Metal answers `heapTextureSizeAndAlignWithDescriptor:` for an MTLPixelFormatASTC_4x4_LDR descriptor and we refuse it `NotImplemented(DecodedHeapTexture)`,… |
+| `texture-pairs-usage-crossings` | Plain Metal answers `heapTextureSizeAndAlignWithDescriptor:` for an MTLPixelFormatASTC_4x4_LDR descriptor and we refuse it `NotImplemented(DecodedHeapTexture)`,… |
+| `texture-pairs-usage-crossings` | Plain Metal answers `heapTextureSizeAndAlignWithDescriptor:` for an MTLPixelFormatASTC_4x4_LDR descriptor and we refuse it `NotImplemented(DecodedHeapTexture)`,… |
+| `texture-pairs-usage-crossings` | Plain Metal answers `heapTextureSizeAndAlignWithDescriptor:` for an MTLPixelFormatASTC_4x4_LDR descriptor and we refuse it `NotImplemented(DecodedHeapTexture)`,… |
+| `texture-pairs-usage-crossings` | Plain Metal answers 128 bytes of alignment from `heapTextureSizeAndAlignWithDescriptor:` for every descriptor of this family, and we answer 1024 on this driver … |
+| `texture-pairs-usage-crossings` | Plain Metal answers 128 bytes of alignment from `heapTextureSizeAndAlignWithDescriptor:` for every descriptor of this family, and we answer 1024 on this driver … |
+| `texture-pairs-usage-crossings` | Plain Metal answers 128 bytes of alignment from `heapTextureSizeAndAlignWithDescriptor:` for every descriptor of this family, and we answer 1024 on this driver … |
+| `texture-pairs-usage-crossings` | Plain Metal answers 128 bytes of alignment from `heapTextureSizeAndAlignWithDescriptor:` for every descriptor of this family, and we answer 1024 on this driver … |
+| `texture-pairs-usage-crossings` | Plain Metal answers 128 bytes of alignment from `heapTextureSizeAndAlignWithDescriptor:` for every descriptor of this family, and we answer 1024 on this driver … |
+| `texture-pairs-usage-crossings` | Plain Metal answers 128 bytes of alignment from `heapTextureSizeAndAlignWithDescriptor:` for every descriptor of this family, and we answer 1024 on this driver … |
+| `texture-pairs-usage-crossings` | Plain Metal answers 128 bytes of alignment from `heapTextureSizeAndAlignWithDescriptor:` for every descriptor of this family, and we answer 1024 on this driver … |
+| `texture-pairs-usage-crossings` | Plain Metal answers 128 bytes of alignment from `heapTextureSizeAndAlignWithDescriptor:` for every descriptor of this family, and we answer 1024 on this driver … |
+| `texture-pairs-usage-crossings` | Plain Metal answers 128 bytes of alignment from `heapTextureSizeAndAlignWithDescriptor:` for every descriptor of this family, and we answer 1024 on this driver … |
+| `texture-pairs-usage-crossings` | Plain Metal answers 128 bytes of alignment from `heapTextureSizeAndAlignWithDescriptor:` for every descriptor of this family, and we answer 1024 on this driver … |
+| `texture-pairs-usage-crossings` | Plain Metal answers 128 bytes of alignment from `heapTextureSizeAndAlignWithDescriptor:` for every descriptor of this family, and we answer 1024 on this driver … |
+| `texture-pairs-usage-crossings` | Plain Metal answers 128 bytes of alignment from `heapTextureSizeAndAlignWithDescriptor:` for every descriptor of this family, and we answer 1024 on this driver … |
+| `texture-pairs-usage-crossings` | Plain Metal answers 128 bytes of alignment from `heapTextureSizeAndAlignWithDescriptor:` for every descriptor of this family, and we answer 1024 on this driver … |
+| `texture-pairs-usage-crossings` | Plain Metal answers 128 bytes of alignment from `heapTextureSizeAndAlignWithDescriptor:` for every descriptor of this family, and we answer 1024 on this driver … |
+| `texture-pairs-usage-crossings` | Plain Metal answers 128 bytes of alignment from `heapTextureSizeAndAlignWithDescriptor:` for every descriptor of this family, and we answer 1024 on this driver … |
+| `texture-pairs-usage-crossings` | Plain Metal answers 128 bytes of alignment from `heapTextureSizeAndAlignWithDescriptor:` for every descriptor of this family, and we answer 1024 on this driver … |
+| `texture-pairs-usage-crossings` | Plain Metal answers 128 bytes of alignment from `heapTextureSizeAndAlignWithDescriptor:` for every descriptor of this family, and we answer 1024 on this driver … |
+| `texture-pairs-usage-crossings` | Plain Metal answers 128 bytes of alignment from `heapTextureSizeAndAlignWithDescriptor:` for every descriptor of this family, and we answer 1024 on this driver … |
+| `texture-pairs-usage-crossings` | Plain Metal answers 128 bytes of alignment from `heapTextureSizeAndAlignWithDescriptor:` for every descriptor of this family, and we answer 1024 on this driver … |
+| `texture-pairs-usage-crossings` | Plain Metal answers 128 bytes of alignment from `heapTextureSizeAndAlignWithDescriptor:` for every descriptor of this family, and we answer 1024 on this driver … |
+| `texture-pairs-usage-crossings` | Plain Metal answers 128 bytes of alignment from `heapTextureSizeAndAlignWithDescriptor:` for every descriptor of this family, and we answer 1024 on this driver … |
+| `texture-pairs-usage-crossings` | Plain Metal answers 128 bytes of alignment from `heapTextureSizeAndAlignWithDescriptor:` for every descriptor of this family, and we answer 1024 on this driver … |
+| `texture-pairs-usage-crossings` | Plain Metal answers 128 bytes of alignment from `heapTextureSizeAndAlignWithDescriptor:` for every descriptor of this family, and we answer 1024 on this driver … |
+| `texture-pairs-usage-crossings` | Plain Metal answers a smaller footprint from `heapTextureSizeAndAlignWithDescriptor:` than we do for this descriptor, and the row's two numbers are the pair. `D… |
+| `texture-pairs-usage-crossings` | Plain Metal answers 128 bytes of alignment from `heapTextureSizeAndAlignWithDescriptor:` for every descriptor of this family, and we answer 1024 on this driver … |
+| `texture-pairs-usage-crossings` | Plain Metal answers a smaller footprint from `heapTextureSizeAndAlignWithDescriptor:` than we do for this descriptor, and the row's two numbers are the pair. `D… |
+| `texture-pairs-usage-crossings` | Plain Metal answers 128 bytes of alignment from `heapTextureSizeAndAlignWithDescriptor:` for every descriptor of this family, and we answer 1024 on this driver … |
+| `texture-pairs-usage-crossings` | Plain Metal answers a smaller footprint from `heapTextureSizeAndAlignWithDescriptor:` than we do for this descriptor, and the row's two numbers are the pair. `D… |
+| `texture-pairs-usage-crossings` | Plain Metal answers 128 bytes of alignment from `heapTextureSizeAndAlignWithDescriptor:` for every descriptor of this family, and we answer 1024 on this driver … |
+| `texture-pairs-usage-crossings` | Plain Metal answers a smaller footprint from `heapTextureSizeAndAlignWithDescriptor:` than we do for this descriptor, and the row's two numbers are the pair. `D… |
+| `texture-pairs-usage-crossings` | Plain Metal answers 128 bytes of alignment from `heapTextureSizeAndAlignWithDescriptor:` for every descriptor of this family, and we answer 1024 on this driver … |
+| `texture-pairs-usage-crossings` | Plain Metal answers a smaller footprint from `heapTextureSizeAndAlignWithDescriptor:` than we do for this descriptor, and the row's two numbers are the pair. `D… |
+| `texture-pairs-usage-crossings` | Plain Metal answers 128 bytes of alignment from `heapTextureSizeAndAlignWithDescriptor:` for every descriptor of this family, and we answer 1024 on this driver … |
+| `texture-pairs-usage-crossings` | Plain Metal answers a smaller footprint from `heapTextureSizeAndAlignWithDescriptor:` than we do for this descriptor, and the row's two numbers are the pair. `D… |
+| `texture-pairs-usage-crossings` | Plain Metal answers 128 bytes of alignment from `heapTextureSizeAndAlignWithDescriptor:` for every descriptor of this family, and we answer 1024 on this driver … |
+| `texture-pairs-usage-crossings` | Plain Metal answers a smaller footprint from `heapTextureSizeAndAlignWithDescriptor:` than we do for this descriptor, and the row's two numbers are the pair. `D… |
+| `texture-pairs-usage-crossings` | Plain Metal answers 128 bytes of alignment from `heapTextureSizeAndAlignWithDescriptor:` for every descriptor of this family, and we answer 1024 on this driver … |
+| `texture-pairs-usage-crossings` | Plain Metal answers a smaller footprint from `heapTextureSizeAndAlignWithDescriptor:` than we do for this descriptor, and the row's two numbers are the pair. `D… |
+| `texture-pairs-usage-crossings` | Plain Metal answers 128 bytes of alignment from `heapTextureSizeAndAlignWithDescriptor:` for every descriptor of this family, and we answer 1024 on this driver … |
+| `texture-pairs-usage-crossings` | Plain Metal answers a smaller footprint from `heapTextureSizeAndAlignWithDescriptor:` than we do for this descriptor, and the row's two numbers are the pair. `D… |
+| `texture-pairs-usage-crossings` | Plain Metal answers 128 bytes of alignment from `heapTextureSizeAndAlignWithDescriptor:` for every descriptor of this family, and we answer 1024 on this driver … |
+| `texture-pairs-usage-crossings` | Plain Metal answers a smaller footprint from `heapTextureSizeAndAlignWithDescriptor:` than we do for this descriptor, and the row's two numbers are the pair. `D… |
+| `texture-pairs-usage-crossings` | Plain Metal answers 128 bytes of alignment from `heapTextureSizeAndAlignWithDescriptor:` for every descriptor of this family, and we answer 1024 on this driver … |
+| `texture-pairs-usage-crossings` | Plain Metal answers a smaller footprint from `heapTextureSizeAndAlignWithDescriptor:` than we do for this descriptor, and the row's two numbers are the pair. `D… |
+| `texture-pairs-usage-crossings` | Plain Metal answers 128 bytes of alignment from `heapTextureSizeAndAlignWithDescriptor:` for every descriptor of this family, and we answer 1024 on this driver … |
+| `texture-pairs-usage-crossings` | Plain Metal answers a smaller footprint from `heapTextureSizeAndAlignWithDescriptor:` than we do for this descriptor, and the row's two numbers are the pair. `D… |
+| `texture-pairs-usage-crossings` | Plain Metal answers 128 bytes of alignment from `heapTextureSizeAndAlignWithDescriptor:` for every descriptor of this family, and we answer 1024 on this driver … |
+| `texture-pairs-usage-crossings` | Plain Metal answers a smaller footprint from `heapTextureSizeAndAlignWithDescriptor:` than we do for this descriptor, and the row's two numbers are the pair. `D… |
+| `texture-pairs-usage-crossings` | Plain Metal answers 128 bytes of alignment from `heapTextureSizeAndAlignWithDescriptor:` for every descriptor of this family, and we answer 1024 on this driver … |
+| `texture-pairs-usage-crossings` | Plain Metal answers 128 bytes of alignment from `heapTextureSizeAndAlignWithDescriptor:` for every descriptor of this family, and we answer 1024 on this driver … |
+| `texture-pairs-usage-crossings` | Plain Metal answers 128 bytes of alignment from `heapTextureSizeAndAlignWithDescriptor:` for every descriptor of this family, and we answer 1024 on this driver … |
+| `texture-pairs-usage-crossings` | Plain Metal answers 128 bytes of alignment from `heapTextureSizeAndAlignWithDescriptor:` for every descriptor of this family, and we answer 1024 on this driver … |
+| `texture-pairs-usage-crossings` | Plain Metal answers 128 bytes of alignment from `heapTextureSizeAndAlignWithDescriptor:` for every descriptor of this family, and we answer 1024 on this driver … |
+| `texture-pairs-usage-crossings` | Plain Metal answers 128 bytes of alignment from `heapTextureSizeAndAlignWithDescriptor:` for every descriptor of this family, and we answer 1024 on this driver … |
+| `texture-pairs-usage-crossings` | Plain Metal answers 128 bytes of alignment from `heapTextureSizeAndAlignWithDescriptor:` for every descriptor of this family, and we answer 1024 on this driver … |
+| `texture-pairs-usage-crossings` | Plain Metal answers 128 bytes of alignment from `heapTextureSizeAndAlignWithDescriptor:` for every descriptor of this family, and we answer 1024 on this driver … |
+| `texture-pairs-usage-crossings` | Plain Metal answers 128 bytes of alignment from `heapTextureSizeAndAlignWithDescriptor:` for every descriptor of this family, and we answer 1024 on this driver … |
+| `texture-pairs-usage-crossings` | Plain Metal answers 128 bytes of alignment from `heapTextureSizeAndAlignWithDescriptor:` for every descriptor of this family, and we answer 1024 on this driver … |
+| `texture-pairs-usage-crossings` | Plain Metal answers 128 bytes of alignment from `heapTextureSizeAndAlignWithDescriptor:` for every descriptor of this family, and we answer 1024 on this driver … |
+| `texture-pairs-usage-crossings` | Plain Metal answers 128 bytes of alignment from `heapTextureSizeAndAlignWithDescriptor:` for every descriptor of this family, and we answer 1024 on this driver … |
+| `texture-pairs-usage-crossings` | Plain Metal answers 128 bytes of alignment from `heapTextureSizeAndAlignWithDescriptor:` for every descriptor of this family, and we answer 1024 on this driver … |
+| `texture-pairs-usage-crossings` | Plain Metal answers 128 bytes of alignment from `heapTextureSizeAndAlignWithDescriptor:` for every descriptor of this family, and we answer 1024 on this driver … |
+| `texture-pairs-usage-crossings` | Plain Metal answers 128 bytes of alignment from `heapTextureSizeAndAlignWithDescriptor:` for every descriptor of this family, and we answer 1024 on this driver … |
+| `texture-pairs-usage-crossings` | Plain Metal answers 128 bytes of alignment from `heapTextureSizeAndAlignWithDescriptor:` for every descriptor of this family, and we answer 1024 on this driver … |
+| `texture-pairs-usage-crossings` | Plain Metal answers 128 bytes of alignment from `heapTextureSizeAndAlignWithDescriptor:` for every descriptor of this family, and we answer 1024 on this driver … |
+| `texture-pairs-usage-crossings` | Plain Metal answers 128 bytes of alignment from `heapTextureSizeAndAlignWithDescriptor:` for every descriptor of this family, and we answer 1024 on this driver … |
+| `texture-pairs-usage-crossings` | Plain Metal answers 128 bytes of alignment from `heapTextureSizeAndAlignWithDescriptor:` for every descriptor of this family, and we answer 1024 on this driver … |
+| `texture-pairs-usage-crossings` | Plain Metal answers 128 bytes of alignment from `heapTextureSizeAndAlignWithDescriptor:` for every descriptor of this family, and we answer 1024 on this driver … |
+| `texture-pairs-usage-crossings` | Plain Metal answers 128 bytes of alignment from `heapTextureSizeAndAlignWithDescriptor:` for every descriptor of this family, and we answer 1024 on this driver … |
+| `texture-pairs-usage-crossings` | Plain Metal answers 128 bytes of alignment from `heapTextureSizeAndAlignWithDescriptor:` for every descriptor of this family, and we answer 1024 on this driver … |
+| `texture-pairs-usage-crossings` | Plain Metal answers 128 bytes of alignment from `heapTextureSizeAndAlignWithDescriptor:` for every descriptor of this family, and we answer 1024 on this driver … |
+| `texture-pairs-usage-crossings` | Plain Metal answers 128 bytes of alignment from `heapTextureSizeAndAlignWithDescriptor:` for every descriptor of this family, and we answer 1024 on this driver … |
+| `texture-pairs-usage-crossings` | Plain Metal answers 128 bytes of alignment from `heapTextureSizeAndAlignWithDescriptor:` for every descriptor of this family, and we answer 1024 on this driver … |
+| `texture-pairs-usage-crossings` | Plain Metal answers 128 bytes of alignment from `heapTextureSizeAndAlignWithDescriptor:` for every descriptor of this family, and we answer 1024 on this driver … |
+| `texture-pairs-usage-crossings` | Plain Metal answers 128 bytes of alignment from `heapTextureSizeAndAlignWithDescriptor:` for every descriptor of this family, and we answer 1024 on this driver … |
+| `texture-pairs-usage-crossings` | Plain Metal answers 128 bytes of alignment from `heapTextureSizeAndAlignWithDescriptor:` for every descriptor of this family, and we answer 1024 on this driver … |
+| `texture-pairs-usage-crossings` | Plain Metal answers 128 bytes of alignment from `heapTextureSizeAndAlignWithDescriptor:` for every descriptor of this family, and we answer 1024 on this driver … |
+| `texture-pairs-usage-crossings` | Plain Metal answers 128 bytes of alignment from `heapTextureSizeAndAlignWithDescriptor:` for every descriptor of this family, and we answer 1024 on this driver … |
+| `texture-pairs-usage-crossings` | Plain Metal answers 128 bytes of alignment from `heapTextureSizeAndAlignWithDescriptor:` for every descriptor of this family, and we answer 1024 on this driver … |
+| `texture-pairs-usage-crossings` | Plain Metal answers 128 bytes of alignment from `heapTextureSizeAndAlignWithDescriptor:` for every descriptor of this family, and we answer 1024 on this driver … |
+| `texture-pairs-usage-crossings` | Plain Metal answers 128 bytes of alignment from `heapTextureSizeAndAlignWithDescriptor:` for every descriptor of this family, and we answer 1024 on this driver … |
+| `texture-pairs-usage-crossings` | Plain Metal answers 128 bytes of alignment from `heapTextureSizeAndAlignWithDescriptor:` for every descriptor of this family, and we answer 1024 on this driver … |
+| `texture-pairs-usage-crossings` | Plain Metal answers 128 bytes of alignment from `heapTextureSizeAndAlignWithDescriptor:` for every descriptor of this family, and we answer 1024 on this driver … |
+| `texture-pairs-usage-crossings` | Plain Metal answers 128 bytes of alignment from `heapTextureSizeAndAlignWithDescriptor:` for every descriptor of this family, and we answer 1024 on this driver … |
+| `texture-pairs-usage-crossings` | Plain Metal answers 128 bytes of alignment from `heapTextureSizeAndAlignWithDescriptor:` for every descriptor of this family, and we answer 1024 on this driver … |
+| `texture-pairs-usage-crossings` | Plain Metal answers 128 bytes of alignment from `heapTextureSizeAndAlignWithDescriptor:` for every descriptor of this family, and we answer 1024 on this driver … |
+| `texture-pairs-usage-crossings` | Plain Metal answers 128 bytes of alignment from `heapTextureSizeAndAlignWithDescriptor:` for every descriptor of this family, and we answer 1024 on this driver … |
+| `texture-pairs-usage-crossings` | Plain Metal answers 128 bytes of alignment from `heapTextureSizeAndAlignWithDescriptor:` for every descriptor of this family, and we answer 1024 on this driver … |
+| `texture-pairs-usage-crossings` | Plain Metal answers a smaller footprint from `heapTextureSizeAndAlignWithDescriptor:` than we do for this descriptor, and the row's two numbers are the pair. `D… |
+| `texture-pairs-usage-crossings` | Plain Metal answers 128 bytes of alignment from `heapTextureSizeAndAlignWithDescriptor:` for every descriptor of this family, and we answer 1024 on this driver … |
+| `texture-pairs-usage-crossings` | Plain Metal answers a smaller footprint from `heapTextureSizeAndAlignWithDescriptor:` than we do for this descriptor, and the row's two numbers are the pair. `D… |
+| `texture-pairs-usage-crossings` | Plain Metal answers 128 bytes of alignment from `heapTextureSizeAndAlignWithDescriptor:` for every descriptor of this family, and we answer 1024 on this driver … |
+| `texture-pairs-usage-crossings` | Plain Metal answers a smaller footprint from `heapTextureSizeAndAlignWithDescriptor:` than we do for this descriptor, and the row's two numbers are the pair. `D… |
+| `texture-pairs-usage-crossings` | Plain Metal answers 128 bytes of alignment from `heapTextureSizeAndAlignWithDescriptor:` for every descriptor of this family, and we answer 1024 on this driver … |
+| `texture-pairs-usage-crossings` | Plain Metal answers a smaller footprint from `heapTextureSizeAndAlignWithDescriptor:` than we do for this descriptor, and the row's two numbers are the pair. `D… |
+| `texture-pairs-usage-crossings` | Plain Metal answers 128 bytes of alignment from `heapTextureSizeAndAlignWithDescriptor:` for every descriptor of this family, and we answer 1024 on this driver … |
+| `texture-pairs-usage-crossings` | Plain Metal answers a smaller footprint from `heapTextureSizeAndAlignWithDescriptor:` than we do for this descriptor, and the row's two numbers are the pair. `D… |
+| `texture-pairs-usage-crossings` | Plain Metal answers 128 bytes of alignment from `heapTextureSizeAndAlignWithDescriptor:` for every descriptor of this family, and we answer 1024 on this driver … |
+| `texture-pairs-usage-crossings` | Plain Metal answers a smaller footprint from `heapTextureSizeAndAlignWithDescriptor:` than we do for this descriptor, and the row's two numbers are the pair. `D… |
+| `texture-pairs-usage-crossings` | Plain Metal answers 128 bytes of alignment from `heapTextureSizeAndAlignWithDescriptor:` for every descriptor of this family, and we answer 1024 on this driver … |
+| `texture-pairs-usage-crossings` | Plain Metal answers a smaller footprint from `heapTextureSizeAndAlignWithDescriptor:` than we do for this descriptor, and the row's two numbers are the pair. `D… |
+| `texture-pairs-usage-crossings` | Plain Metal answers 128 bytes of alignment from `heapTextureSizeAndAlignWithDescriptor:` for every descriptor of this family, and we answer 1024 on this driver … |
+| `texture-pairs-usage-crossings` | Plain Metal answers a smaller footprint from `heapTextureSizeAndAlignWithDescriptor:` than we do for this descriptor, and the row's two numbers are the pair. `D… |
+| `texture-pairs-usage-crossings` | Plain Metal answers 128 bytes of alignment from `heapTextureSizeAndAlignWithDescriptor:` for every descriptor of this family, and we answer 1024 on this driver … |
+| `texture-pairs-usage-crossings` | Plain Metal answers a smaller footprint from `heapTextureSizeAndAlignWithDescriptor:` than we do for this descriptor, and the row's two numbers are the pair. `D… |
+| `texture-pairs-usage-crossings` | Plain Metal answers 128 bytes of alignment from `heapTextureSizeAndAlignWithDescriptor:` for every descriptor of this family, and we answer 1024 on this driver … |
+| `texture-pairs-usage-crossings` | Plain Metal answers a smaller footprint from `heapTextureSizeAndAlignWithDescriptor:` than we do for this descriptor, and the row's two numbers are the pair. `D… |
+| `texture-pairs-usage-crossings` | Plain Metal answers 128 bytes of alignment from `heapTextureSizeAndAlignWithDescriptor:` for every descriptor of this family, and we answer 1024 on this driver … |
+| `texture-pairs-usage-crossings` | Plain Metal answers a smaller footprint from `heapTextureSizeAndAlignWithDescriptor:` than we do for this descriptor, and the row's two numbers are the pair. `D… |
+| `texture-pairs-usage-crossings` | Plain Metal answers 128 bytes of alignment from `heapTextureSizeAndAlignWithDescriptor:` for every descriptor of this family, and we answer 1024 on this driver … |
+| `texture-pairs-usage-crossings` | Plain Metal answers a smaller footprint from `heapTextureSizeAndAlignWithDescriptor:` than we do for this descriptor, and the row's two numbers are the pair. `D… |
+| `texture-pairs-usage-crossings` | Plain Metal answers 128 bytes of alignment from `heapTextureSizeAndAlignWithDescriptor:` for every descriptor of this family, and we answer 1024 on this driver … |
+| `texture-pairs-usage-crossings` | Plain Metal answers a smaller footprint from `heapTextureSizeAndAlignWithDescriptor:` than we do for this descriptor, and the row's two numbers are the pair. `D… |
 
