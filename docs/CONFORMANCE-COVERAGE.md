@@ -43,7 +43,7 @@ Its limits, measured rather than asserted:
 | committed recordings | 1079 |
 | distinct SDK items the Metal leg reaches, of any status | 797 |
 | of those, reached only where this cannot name the family | 7 |
-| ledger rows (a case whose gap is recorded) | 91 |
+| ledger rows (a case whose gap is recorded) | 89 |
 | declared crossings of the option space (pairs put to Metal at once) | 15 |
 
 A tolerance names a **site of a transcript**, not an item, so the last two rows are read as written: a case that loosens one site of its own transcript may compare every other field of it exactly, and this derivation cannot tell which of a case's fields came from which Metal call. Where the distinction matters, read the case.
@@ -2204,8 +2204,6 @@ A case whose difference from Metal is recorded rather than compared away. The le
 | `format-footprints-padded-wide-channels` | The runtime holds no image of the ten padded 10- and 12-bit display formats, so `heapTextureSizeAndAlignWithDescriptor:` -- CPU arithmetic over a descriptor, wh… |
 | `format-footprints-two-plane-ten-bit` | The runtime holds no image of the four two-plane RGB10A8_2P formats, so `heapTextureSizeAndAlignWithDescriptor:` -- CPU arithmetic over a descriptor, which Meta… |
 | `format-footprints-packed-without-textures` | The runtime holds no image of R10Unorm_PACKED and RG10Unorm_PACKED, whose texture Metal itself refuses, so `heapTextureSizeAndAlignWithDescriptor:` -- CPU arith… |
-| `indirect-commands-bind-count-limit` | The runtime refuses setKernelBuffer:offset:atIndex: at an index at or past the buffer's maxKernelBufferBindCount, Error::Invalid(IndexOutOfRange) out of Indirec… |
-| `indirect-commands-bind-count-limit` | The runtime refuses setKernelBuffer:offset:atIndex: at an index at or past the buffer's maxKernelBufferBindCount, Error::Invalid(IndexOutOfRange) out of Indirec… |
 | `a2one-on-1-blend-source-alpha` | The runtime refuses every render pipeline whose descriptor sets `alphaToOneEnabled`, `Unsupported(AlphaToOne, NotImplemented)` out of the link stage (crates/met… |
 | `a2one-on-1-mask-no-alpha` | The runtime refuses every render pipeline whose descriptor sets `alphaToOneEnabled`, `Unsupported(AlphaToOne, NotImplemented)` out of the link stage (crates/met… |
 | `texture-pairs-storage-crossings` | Plain Metal answers `heapTextureSizeAndAlignWithDescriptor:` for a MTLStorageModeMemoryless descriptor and the runtime refuses it `Invalid(StorageMode)`, so eve… |
