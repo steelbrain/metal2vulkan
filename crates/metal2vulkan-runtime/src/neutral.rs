@@ -81,12 +81,42 @@ impl Filled for NeutralTexels {
     }
 }
 
-/// A device's neutral images, texel buffers and samplers, made at first use.
+/// One neutral zero buffer and its memory: the buffer a plan binds where a function reads a
+/// **read-only** buffer binding that nothing is bound to
+/// ([`NeutralResource::ZeroBuffer`]).
+struct NeutralZeros {
+    buffer: vk::Buffer,
+    placement: Placement,
+}
+
+impl Filled for NeutralZeros {
+    /// Nothing to hold, as [`NeutralTexels`]: the device keeps it for its lifetime.
+    fn memory(&self) -> Option<Box<dyn Any + Send + Sync>> {
+        Some(Box::new(()))
+    }
+}
+
+/// A device's neutral images, texel buffers, zero buffers and samplers, made at first use.
 #[derive(Default)]
 pub(super) struct Neutrals {
     images: HashMap<NeutralResource, Arc<NeutralImage>>,
     /// By format and whether the view is a storage texel buffer's.
     texels: HashMap<(Format, bool), Arc<NeutralTexels>>,
+    /// By their length in bytes, which the plan asks for (`zero_buffer_bytes`, fixed for the
+    /// device): the read-only zero buffers, and how many the device has made.
+    ///
+    /// Before, a read-only buffer binding that nothing is bound to took a fresh zero-filled
+    /// region from the command buffer's upload arena at **every draw and dispatch** that bound
+    /// one, and a region of `maxUniformBufferRange` capped at 64 KiB is past half the arena's
+    /// chunk, so each took a dedicated 64 KiB `VkBuffer` of its own, allocated and written to
+    /// zero. A triangle drawn with neither of its two `setBytes` slots set cost 128 KiB of
+    /// allocate-and-zero a draw. Zeros of a length the device's own limits fix cannot have
+    /// changed since the device was made, so the device makes each length once and keeps it, as
+    /// it keeps its neutral images, texel buffers and samplers.
+    zeros: HashMap<u64, Arc<NeutralZeros>>,
+    /// How many zero buffers the device has made, for the check that draws share one
+    /// (`tests::neutral_zeros_shared`).
+    zeros_made: u64,
     /// By whether depth comparison is enabled.
     samplers: HashMap<bool, vk::Sampler>,
 }
@@ -102,6 +132,11 @@ impl Neutrals {
                 release::object(device, image.image);
             }
             memory.free(device, &image.placement);
+        }
+        for zeros in self.zeros.values() {
+            // SAFETY: the device is idle, so nothing uses the buffer.
+            unsafe { release::object(device, zeros.buffer) };
+            memory.free(device, &zeros.placement);
         }
         for texels in self.texels.values() {
             // SAFETY: as above.
@@ -260,6 +295,84 @@ impl Device {
             return Err(error);
         }
         Ok(texels)
+    }
+
+    /// The device's read-only zero buffer of `bytes` bytes, made at its first use and kept for
+    /// the device's lifetime ([`Neutrals::zeros`]).
+    ///
+    /// Only a **read-only** binding may be served from it: every draw and dispatch of the device
+    /// binds the one buffer, so a shader that could store through the binding would be writing
+    /// zeros another command reads. A Vulkan uniform-buffer descriptor is read-only by
+    /// construction, which is the binding `binding::descriptor` serves from here; a writable one
+    /// keeps its own region, as before.
+    pub(super) fn neutral_zero_buffer(&self, bytes: u64) -> Result<vk::Buffer, Error> {
+        let shared = self.shared();
+        if let Some(zeros) = lock(&shared.textures.neutrals).zeros.get(&bytes) {
+            return Ok(zeros.buffer);
+        }
+        let zeros = self.new_neutral_zeros(bytes)?;
+        let mut neutrals = lock(&shared.textures.neutrals);
+        neutrals.zeros_made += 1;
+        Ok(neutrals.zeros.entry(bytes).or_insert(zeros).buffer)
+    }
+
+    /// How many zero buffers the device has made: one per length its plans ask for, however many
+    /// draws and dispatches bind one (`tests::neutral_zeros_shared`).
+    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+    pub(crate) fn neutral_zeros_made(&self) -> u64 {
+        lock(&self.shared().textures.neutrals).zeros_made
+    }
+
+    /// A new zero buffer of `bytes` bytes: a `Private` buffer filled with zeros, as
+    /// [`Device::new_neutral_texels`] makes its one texel of zeros, so the fill is the device's
+    /// next submission's first work and waits for nothing.
+    fn new_neutral_zeros(&self, bytes: u64) -> Result<Arc<NeutralZeros>, Error> {
+        let shared = self.shared();
+        let raw_device = shared.vk();
+        let info = shared.sharing().buffer(
+            vk::BufferCreateInfo::default()
+                .size(bytes)
+                .usage(vk::BufferUsageFlags::UNIFORM_BUFFER | vk::BufferUsageFlags::TRANSFER_DST),
+        );
+        // SAFETY: the device is live and `info` valid.
+        let buffer = unsafe { crate::creation::buffer(raw_device, &info) }.map_err(vulkan)?;
+        // SAFETY: `buffer` is a live buffer of this device.
+        let requirements = unsafe { raw_device.get_buffer_memory_requirements(buffer) };
+        let placement = match crate::memory::allocate(
+            &shared.memory,
+            raw_device,
+            &requirements,
+            MemoryClass::Private,
+        ) {
+            Ok(placement) => placement,
+            Err(error) => {
+                // SAFETY: the buffer is unused.
+                unsafe { release::object(raw_device, buffer) };
+                return Err(error);
+            }
+        };
+        let release = |placement: &Placement| {
+            lock(&shared.memory).free(raw_device, placement);
+            // SAFETY: the buffer is unused.
+            unsafe { release::object(raw_device, buffer) };
+        };
+        // SAFETY: the placement meets the buffer's requirements and is not bound elsewhere.
+        if let Err(error) = unsafe {
+            crate::creation::bind_buffer(raw_device, buffer, placement.memory, placement.offset)
+        } {
+            release(&placement);
+            return Err(vulkan(error));
+        }
+        let zeros = Arc::new(NeutralZeros { buffer, placement });
+        let weak: Weak<NeutralZeros> = Arc::downgrade(&zeros);
+        let keeper: Weak<dyn Filled> = weak;
+        let filled = (shared.textures.first_moves).register_fill(self, keeper, buffer, 0..bytes);
+        if let Err(error) = filled {
+            // SAFETY: the buffer is unused: no submission took the fill.
+            release(&zeros.placement);
+            return Err(error);
+        }
+        Ok(zeros)
     }
 
     /// The neutral sampler, with depth comparison when `compare` is set.

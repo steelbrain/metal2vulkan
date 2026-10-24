@@ -146,6 +146,8 @@ mod multisample_buffer_copy;
 mod multisample_buffer_layouts;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod nan_signs;
+#[cfg(any(m2v_gpu, m2v_cpu_icd))]
+mod neutral_zeros_shared;
 mod noted_apart;
 mod numbered_samplers;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]

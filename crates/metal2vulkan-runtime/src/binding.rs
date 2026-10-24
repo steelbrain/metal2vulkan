@@ -781,6 +781,13 @@ pub(super) fn make_neutrals(device: &Device, plan: &BindingPlan) -> Result<(), E
                 let storage = ty == vk::DescriptorType::STORAGE_TEXEL_BUFFER;
                 device.neutral_texel_view(*format, storage)?;
             }
+            // The zero buffer a read-only binding shares, so a host step binds one already made
+            // (the module docs' "no wait"), as it finds the images and samplers made.
+            WriteSource::Neutral(
+                NeutralResource::ZeroBuffer { min_bytes } | NeutralResource::Sink { min_bytes },
+            ) if read_only_buffer(ty) => {
+                device.neutral_zero_buffer(padded(*min_bytes as usize))?;
+            }
             WriteSource::Neutral(kind @ NeutralResource::Image { .. }) => {
                 device.neutral_view(*kind)?;
             }
@@ -1801,6 +1808,20 @@ fn unexpected(source: &WriteSource) -> Error {
 }
 
 /// The buffer descriptor of `write`.
+/// Whether a buffer descriptor of `ty` is read-only to every shader that binds it: a uniform
+/// buffer, whose block Vulkan and SPIR-V make read-only, so no store can reach it. A storage
+/// buffer is not, whatever a particular shader does with it.
+///
+/// It decides which bindings may share the device's one neutral zero buffer (`neutral.rs`): a
+/// writable binding keeps a region of its own, so nothing a shader stores is ever seen by another
+/// command. Structural: the descriptor type alone, never a function or shader name.
+fn read_only_buffer(ty: vk::DescriptorType) -> bool {
+    matches!(
+        ty,
+        vk::DescriptorType::UNIFORM_BUFFER | vk::DescriptorType::UNIFORM_BUFFER_DYNAMIC
+    )
+}
+
 fn descriptor(
     device: &Device,
     state: &mut State,
@@ -1809,6 +1830,7 @@ fn descriptor(
     write: &DescriptorWrite,
 ) -> Result<vk::DescriptorBufferInfo, Error> {
     let key = (write.set, write.binding);
+    let ty: vk::DescriptorType = write.ty.into();
     let bytes = || {
         command
             .descriptor_bytes
@@ -1975,9 +1997,25 @@ fn descriptor(
             let table = metal2vulkan::bind::color_write_table();
             whole(upload(table, padded(table.len()))?)
         }
+        // A read-only binding takes the device's kept zero buffer, made once for its lifetime
+        // (`neutral.rs`): zeros of a length the device's own limits fix cannot have changed since
+        // it was made, and before this every draw and dispatch that bound one took a fresh
+        // zero-filled region, each past half the upload arena's chunk and so a dedicated 64 KiB
+        // `VkBuffer` allocated and written to zero. A WRITABLE binding keeps its own region, as
+        // every binding did: the one buffer is shared by every command of the device, so a
+        // shader that could store through the binding would write zeros another command reads.
         WriteSource::Neutral(
             NeutralResource::ZeroBuffer { min_bytes } | NeutralResource::Sink { min_bytes },
-        ) => whole(upload(&[], padded(*min_bytes as usize))?),
+        ) => {
+            let bytes = padded(*min_bytes as usize);
+            match read_only_buffer(ty) {
+                true => vk::DescriptorBufferInfo::default()
+                    .buffer(device.neutral_zero_buffer(bytes)?)
+                    .offset(0)
+                    .range(bytes),
+                false => whole(upload(&[], bytes)?),
+            }
+        }
         WriteSource::HeapEntry { .. } => {
             return Err(Error::NotImplemented(RuntimeGap::ResourceHeap))
         }
