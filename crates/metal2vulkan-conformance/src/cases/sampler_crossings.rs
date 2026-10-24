@@ -34,14 +34,14 @@
 //! sampler filters **nearest** on both filters, so its answer **names the texel it read** rather
 //! than a blend of two.
 //!
-//! The lanes are the whole 5 by 5 by 5 grid of [`AXIS_COORDS`] — one coordinate inside and four
+//! The lanes are the whole 5 by 5 by 5 grid of `AXIS_COORDS` — one coordinate inside and four
 //! outside, two of them negative — so every combination of "this axis is inside, that one is a
 //! period out, the third is far out the other way" is a lane of its own. That is the point: an
 //! implementation that decides *whether* to wrap from the coordinate as a whole, or that applies
 //! one axis's mode to all three, reads the right texel on every lane whose axes agree and the
 //! wrong one as soon as they do not.
 //!
-//! [`TRIPLES`]'s nine rows are three with all three modes equal — the controls, which no collapse
+//! `TRIPLES`'s nine rows are three with all three modes equal — the controls, which no collapse
 //! onto one axis can move — and six with them unequal: the three rotations of
 //! `(Repeat, MirrorRepeat, ClampToEdge)`, so a collapse onto `s` and a collapse onto `t` give
 //! different wrong answers, and three rotations of `(MirrorClampToEdge, Repeat, ClampToEdge)`,
@@ -53,7 +53,7 @@
 //! border colours (Metal fills a one-channel sample as `(r, 0, 0, 1)`, so transparent and opaque
 //! black both read 0 in the only channel there is — `sampler_filtering` measured that and the
 //! format is chosen for the same reason here). One case per `MTLSamplerBorderColor`, and
-//! [`BORDER_TRIPLES`]'s six rows put a border-reading mode on `s` alone, on `t` alone, on `r`
+//! `BORDER_TRIPLES`'s six rows put a border-reading mode on `s` alone, on `t` alone, on `r`
 //! alone, on all three (the control), and twice crossed with `ClampToZero` on another axis, which
 //! on this oracle reads the border colour too.
 //!
@@ -68,8 +68,8 @@
 //! centre, which is where a nearest and a linear filter inside one level read the same texel and
 //! where `sampler_filtering`'s mip sweep deliberately sits.
 //!
-//! One case per `MTLSamplerMipFilter`; [`FILTER_PAIRS`]'s four `(min, mag)` pairs crossed with
-//! [`PAIR_CLAMPS`]'s five `lodMinClamp` values are the twenty rows. The kernel samples at an
+//! One case per `MTLSamplerMipFilter`; `FILTER_PAIRS`'s four `(min, mag)` pairs crossed with
+//! `PAIR_CLAMPS`'s five `lodMinClamp` values are the twenty rows. The kernel samples at an
 //! explicit `level(0.0)` and Metal raises that level to `lodMinClamp`, so the row's clamp is the
 //! level — and **which filter reads it** is the crossing. Vulkan states the rule in its own terms
 //! (the magnifying filter at a level of zero or less, the minifying one above it), Metal's rule for
@@ -86,7 +86,7 @@
 //! The lanes sample at two coordinates with four texels in the footprint — the shared corner of
 //! texels `(1, 1)`, `(2, 1)`, `(1, 2)` and `(2, 2)`, where a linear filter weights them a quarter
 //! each, and a point three quarters of the way towards that corner, where the four weights are
-//! 9/16, 3/16, 3/16 and 1/16 — against [`compare_references`]'s nine references: below all four
+//! 9/16, 3/16, 3/16 and 1/16 — against `compare_references`'s nine references: below all four
 //! depths, exactly on each of them, between each adjacent pair, and above all four.
 //!
 //! A depth sampler compares **per texel** and filters the ones and zeros that come out. So a
