@@ -392,14 +392,22 @@ contrast between a case run alone and the same case inside the set, which for co
 apparent regressions into four counters that were never per-case facts.
 
 **The per-call rows are gated, and the gate withholds more than it judges.** `known-slow-calls.tsv`
-holds it in both directions, and the reason it is nearly empty is a measurement: over the two
-whole-set passes this tree has recorded, the 98 paired rows common to both moved a median **2.62x**,
-14.96x at the 90th percentile and 63.9x at worst. Six calls crossed the margin in one pass and sat
-well under it in the other. The earlier pass is not reproducible by the binary that produced it —
+holds it in both directions. Three independent whole-set passes have been recorded on this M3 Max,
+and `--write` keeps both legs' per-case figures in each case's recording, so a pass can be re-read
+without re-running it. One of the three is degraded, and the instrument says so: it cost 0.275 us a
+call against 0.236 us in the quietest, and it is not reproducible by the binary that produced it —
 re-run over the same fifteen cases, that binary reads `function_facts` at 46.3x and 40.9x against
-the 89.5x it recorded — and the cause is the CPU the measurement ran on: one binary and one case set
+the 89.5x it recorded. The cause is the CPU the measurement ran on: one binary and one case set
 inside one minute read 38.8x at the ordinary scheduling class and **75.5x** under a background one,
 with the one-minute load average holding at 6.1 and every load rule judging both.
+
+Nearly all the movement the ledger's band pays for is that one pass. The paired rows common to the
+degraded pass and a good one move a median 2.62x, 14.96x at the 90th percentile and 63.9x at worst;
+**the two undegraded passes move a median 1.12x, 1.51x at the 90th percentile and 2.00x at worst
+over all 100 rows.** So the ratio is not inherently unstable, and the gate did not refuse the pass
+that makes it look so: 0.275 against 0.236 us is 1.17x, inside the 1.5x the calibration check
+allows. `known-slow-calls.tsv`'s header carries the rest, including the four live per-call costs
+that went unwritten because that header had said they changed sides when they had not.
 
 So the gate judges a per-call row only when the measurement can say something about it. It withholds
 when the **instrument's own cost** disagrees with itself across a leg, across the two legs, or with

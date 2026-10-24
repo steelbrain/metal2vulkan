@@ -18,25 +18,91 @@
 # was 105x over the whole set and 1.2x over the three cases that obviously make it.
 #
 # A ratio here is a measurement and it moves MORE THAN EITHER OF ITS HALVES, because the two halves
-# move independently. Over the two whole-set passes this tree has recorded on this M3 Max -- the
-# only pair of independent whole-set measurements that exists -- the 98 paired rows common to both
-# moved a median 2.62x, 14.96x at the 90th percentile and 63.9x at worst. Restricted to the rows the
-# measurement can resolve at all it is a median 1.87x and 6.92x at the 90th percentile, which is why
-# the band is margin / 7.0 and not the margin / 2.5 that a measurement of Metal's own totals bought.
+# move independently. THREE independent whole-set passes have now been recorded on this M3 Max, and
+# every figure below is from their stored per-case records (`times --write` keeps both legs in each
+# case's recording, so a pass can be re-read without re-running it). They are not equal in quality:
 #
-# WHAT THAT MEANS FOR A ROW. Six calls read far over the margin in one of those two passes and far
-# under it in the other -- texture_accesses 19.3x and 102.4x, function_facts 89.5x and 40.6x,
-# function_facts_from_descriptor 86.2x and 28.5x, mesh_pipeline_bindings 74.5x and 18.5x,
-# compute_pipeline_with_stage_input 57.5x and 22.6x, compute_pipeline_bindings 7.5x and 21.7x.
-# NONE OF THEM HAS A ROW HERE, deliberately. The earlier pass is not reproducible by the binary that
-# produced it: re-run now over the same fifteen cases, that binary reads function_facts at 46.3x and
-# 40.9x against the 89.5x it recorded, and its per-case figures agree with today's to within 5%. The
-# cause is the CPU the measurement ran on, not the call -- one binary and one case set inside one
+#   pass    instrument (metal/ours)   load (metal/ours)   paired cases
+#   07:44   0.275 / 0.269 us          2.74 / 3.46         712
+#   16:06   0.244 / 0.240 us          4.95 / 4.36         761
+#   19:57   0.236 / 0.233 us          3.18 / 2.63         768
+#
+# The 07:44 pass is the degraded one, and the instrument says so: it cost 0.275 us a call against
+# 0.236 us in the quietest pass, and its figures are not reproducible by the binary that produced
+# them -- re-run over the same fifteen cases, that binary reads function_facts at 46.3x and 40.9x
+# against the 89.5x it recorded, and its per-case figures agree with the later passes' to within 5%.
+# The cause is the CPU the measurement ran on, not the call: one binary and one case set inside one
 # minute read 38.8x at the ordinary scheduling class and 75.5x under a background one, while the
-# one-minute load average held at 6.1. A figure nobody can reproduce is worse than no figure, so the
-# gate now withholds a verdict instead of demanding a row (src/slow_calls.rs: the instrument's own
-# cost is bracketed per leg and checked against what this chip's recordings carry, and a row the
-# measurement cannot resolve above that instrument is held in neither direction).
+# one-minute load average held at 6.1.
+#
+# WHAT THE THIRD PASS CHANGES. The movement this file's band was set from is almost entirely that
+# one pass. Over the paired rows common to each pair:
+#
+#   07:44 vs 16:06   n=98    median 2.62x   p90 14.96x   worst 63.90x
+#   07:44 vs 19:57   n=98    median 2.64x   p90 13.12x   worst 64.24x
+#   16:06 vs 19:57   n=100   median 1.12x   p90  1.51x   worst  2.00x
+#
+# and restricted to the rows both passes resolve above the instrument (RESOLVES_AT), 1.87x / 6.92x,
+# 1.58x / 4.96x, and 1.10x / 1.51x / worst 1.97x. The first line is the pair this file's band was
+# set from, and reading it back out of the stored recordings reproduces its published figures to
+# the digit, which is what says the other two lines are measured the same way. (The three passes
+# ran over 1031, 1084 and 1099 cases as the suite grew, so a pair's rows are its common ones; the
+# 98-row comparison the band was set from has the same property, and 15 cases of 1084 is 1.4%.)
+#
+# BETWEEN TWO UNDEGRADED PASSES THE WORST MOVEMENT OVER ALL 100 ROWS IS 2.00x -- below even the
+# 2.43x the original margin / 2.5 divisor was set from. So the ratio is not inherently unstable;
+# a degraded CPU is what makes it look that way, and `band` being margin / 7.0 rather than margin / 2.5 is paying for a pass the
+# gate should have refused. It did not refuse it: 0.275 against 0.236 us is 1.17x, under the 1.5x
+# CALIBRATION_MAY_MOVE allows, so the calibration reference check passed a pass whose figures move
+# 64x. Tightening that check is the fix, and it is the owner's call, not this file's.
+#
+# WHAT THAT MEANS FOR A ROW, CORRECTED. This header used to say that six calls "read far over the
+# margin in one of those two passes and far under it in the other", and name
+# texture_accesses, function_facts, function_facts_from_descriptor, mesh_pipeline_bindings,
+# compute_pipeline_with_stage_input and compute_pipeline_bindings. THAT WAS WRONG, and it is why
+# nobody localised them: of those six, only compute_pipeline_bindings actually crossed the margin
+# (7.5x then 21.7x and 23.6x -- and the pass that read it UNDER the margin is the degraded one).
+# 40.6x, 28.5x, 18.5x and 22.6x are not "far under" an order of magnitude; they are over it, in both
+# undegraded passes. The sentence confused a ratio MOVING a lot with a ratio CHANGING SIDES, and on
+# that confusion four live per-call costs went unwritten. The calls the degraded pass really did
+# invent, each over the margin at 07:44 and comfortably within the band in both undegraded passes,
+# are these, and none of them has or needs a row: argument_encoder 36.4x then 4.1x and 3.9x,
+# copy_rate_map_parameters 29.9x then 0.5x and 0.5x (we are twice as fast as Metal), dispatch 17.9x
+# then 4.4x and 4.0x, compute_pipeline 14.8x then 4.3x and 4.7x, and compute_pipeline_for_commands
+# 27.2x then 5.1x and 5.5x.
+#
+# WHAT BECAME OF THE FOUR. mesh_pipeline_bindings and compute_pipeline_with_stage_input have rows
+# below: they are pipeline creation, which AGENTS.md gives its own ceiling, so they are recorded
+# with their localisation and not attributed, as render_pipeline is. compute_pipeline_bindings has
+# one for the same reason. function_facts and function_facts_from_descriptor have rows too, and
+# they also have a FIX, because their cause was structural rather than a timing: both answer
+# through the suite's own
+# our_function_facts, which reads five MTLFunction property getters, and every one of the five
+# recomputed the function's properties from scratch -- a full AIR decode each, for a module-sourced
+# function -- so one reflection call decoded one function's AIR five times over, six with the
+# constants dictionary, and ten for a specialized function, which decodes again to specialize. The
+# stored pass says so without a timing: the one case of the family whose function needs no decode,
+# function-facts-visible, is the one case we are FASTER than Metal on (0.2x) while its fourteen
+# siblings run 19.0x to 101.6x, every microsecond of it the caller's own CPU with nothing blocked.
+# The runtime now memoizes a function's properties as Metal's MTLFunction already holds them
+# (metal2vulkan-runtime/src/library.rs), and the redundancy is held by a count rather than a time
+# (metal2vulkan-runtime tests::function_properties: reading the getters computes the properties
+# once; with the memo bypassed the same test reads ten). BOTH KEEP A ROW BELOW ANYWAY, with the
+# figure the stored pass read, because the fix has NOT been re-measured -- no window quiet enough
+# existed -- and a row is not a claim that the bug is open, it is the measurement that was taken.
+# The fix should divide our leg by about six, which puts function_facts near 8x and
+# function_facts_from_descriptor near 5.5x; both of those land between the band and the margin,
+# where a listed row fails nothing, so the row is safe whether or not the fix delivers. Whoever
+# takes the next undegraded pass replaces the figures: over the margin still means an open bug with
+# a wrong diagnosis, and under the band means the rows go.
+#
+# texture_accesses is a third thing again, and the gate has it right: 19.3x, 102.4x, 158.5x, on five
+# calls whose cheaper leg is a fifth of one instrument cost. It is WITHHELD in both undegraded
+# passes and was judged only at 07:44, where the degraded CPU inflated the absolute per-call cost
+# past the resolve line -- so a degraded pass can also move a row INTO the gate's judgement. A row
+# that thin must neither be added nor retired, which is what src/slow_calls.rs does: the
+# instrument's own cost is bracketed per leg and checked against what this chip's recordings carry,
+# and a row the measurement cannot resolve above that instrument is held in neither direction.
 #
 # So a row here needs a LOCALISED finding, not a pooled ratio: the first row below is 105x pooled
 # and 1.2x over the three cases that obviously make it, and 265x over the 16 that actually do.
@@ -54,6 +120,11 @@
 #   where the cost is   the family it is in, and what the figure splits into
 #   waiting on          what Metal does, what we do instead, and where the fix belongs
 replace_region	105.5x	all of it in the 16 xr-two-plane-samples cases: one replaceRegion each, Metal 4 us against our 1210 us, 92% of ours blocked; the other 86 cases that make the call are 1.3x together	Metal's replaceRegion on a two-plane extended-range texture answers in 4 us; ours waits about 1.1 ms, so we stage the upload and wait on it where Metal writes through. The fix is in the runtime's texture upload path for two-plane extended-range formats, not in the suite
-render_pipeline	33.3x	85 calls over the comparable set, Metal 5459 us against our 181742 us, of which 168004 us is our own CPU	Pipeline creation is CPU work we do and Metal does differently; AGENTS.md gives pipeline-creation time its own ceiling rather than the device API's, so this row records the size of the gap and is NOT yet attributed. It is unaudited: the alone-versus-in-set contrast has not been run on it
+function_facts	48.4x	15 calls over 15 cases, one each, Metal 216 us against our 10430 us, EVERY microsecond of ours our own CPU and nothing blocked. LOCALISED to the AIR decode: 14 of the 15 cases run 19.0x to 101.6x, and the one that does not is function-facts-visible at 0.2x -- a library's visible function, whose properties are a constant and need no decode. It is the only case of the family we are faster than Metal on. 40.6x in the other undegraded pass; the 89.5x on record elsewhere is the degraded pass and is not reproducible	The suite's our_function_facts reads five MTLFunction property getters, and each recomputed the function's properties from scratch -- a full AIR decode, for the module-sourced functions newLibraryWithAIR makes -- so one call decoded one function's AIR five times, six with the constants dictionary, and ten for a specialized function, which decodes again to specialize. Metal answers every getter from the MTLFunction it already made. FIXED in metal2vulkan-runtime/src/library.rs, which now memoizes the properties on the function object as Metal holds them, and held by a count rather than a time (tests::function_properties; with the memo bypassed the same test reads ten computations). The ratio has NOT been re-measured -- no quiet window existed -- so this row stands with its old figure until an undegraded pass replaces it; about 8x is expected and nothing is claimed
+function_facts_from_descriptor	33.0x	7 calls over 7 cases, one each, Metal 94 us against our 3111 us, all of it our own CPU and nothing blocked; every one of the 7 is over the margin, 21.9x to 40.9x. 28.5x in the other undegraded pass; the 86.2x on record elsewhere is the degraded pass	The same cause as function_facts and the same fix: newFunctionWithDescriptor: answers through the same our_function_facts, so it paid the same five-to-ten AIR decodes a call. Listed separately because the two calls are measured over different cases and a reader should not have to infer that one row covers both. Re-measurement is owed on the same terms as function_facts's
+render_pipeline	31.0x	660 calls over 120 cases, Metal 28606 us against our 886266 us, of which 831583 us is our own CPU. ATTRIBUTED, by the per-call cost against how many the case makes: Metal's marginal render pipeline gets cheap and ours does not. Metal costs a median 122.3 us a call in the 66 cases that make one, 31.0 us in the 11 that make 5 to 15 and 26.1 us in the 6 that make 36 or more -- it amortizes 4.7x. Ours costs 1686.0, 1277.5 and 1205.6 us over the same three groups, flat to within 1.4x. The ratio therefore climbs 13.8x, 41.3x, 46.1x with the call count while our own per-call cost barely moves, and on a case that makes ONE render pipeline we are faster than Metal (render-draw-forms-lines 0.4x). compute_pipeline is 0.4x at 26.2 us a call against Metal's 71.8, so this is the render path and not pipeline creation in general	The cases that make many are the sweeps, which vary only pipeline state over one vertex-and-fragment pair (blend-sweep-*, vertex-format-*, integer-vertex-attributes; the blend slot sweeps need nothing of the fragment function). Metal compiles the functions once and makes cheap state variants; our per-call cost says we do the per-pipeline work again for each. What it is NOT is the shader compile: the measurement carried our shader cache over between the cases of a round, so the second and later pipelines of a sweep meet a warm cache and still cost about 1200 us each. So the repeated work sits downstream of the shader -- the per-pipeline half, binding plan and layout and variant specialization -- and that is the narrowing this row adds. The contrast with compute_pipeline_bindings sharpens it: there our own cost falls 35x from the first pipeline on a shader to the eighth, so for compute the expensive part is once per shader; here it does not fall at all across 64, so for render it is once per pipeline. Whatever a render pipeline redoes, a compute pipeline keeps. It is a measurement and not yet an attribution: the counters half (creation_pipelines_made, variant_pipelines_made, shader_modules_made, pipeline_layouts_made) over these cases is what would name the repeated item, and no run of them has been made. AGENTS.md gives pipeline-creation time its own ceiling rather than the device API's, so the row records the gap meanwhile
+compute_pipeline_bindings	23.6x	13 calls over 13 cases, ONE call each, Metal 1755 us against our 41471 us, of which 40054 us is our own CPU: Metal a median 136.5 us a call against our 3004.8 us. 12 of the 13 cases are over the margin, 12.4x to 43.3x; the one that is not is function-bindings-argument-buffer at 0.3x. LOCALISED, by the one control the suite already contains: compute_pipeline_reflection_under makes the SAME runtime call (new_compute_pipeline_state_with_function_and_reflection) over the same three shader families and reads 0.7x -- because its cases make EIGHT each where these make one. On texture-slots, ours costs 1922 us for the one call here and 55 us a call over the eight there, while Metal costs 88 us and 29 us. OUR FIRST PIPELINE ON A SHADER COSTS ABOUT 1900-6900 us AND THE SECOND ONWARDS ABOUT 55 us; Metal's first costs 88-190 us. 21.7x in the other undegraded pass	This is a first-use cost on a shader, not a per-pipeline one, and the 22x is what it looks like undiluted: each function-bindings-* case uses a different shader and makes exactly one pipeline, so each pays the whole of it, while compute_pipeline_reflection_under's cases spread the same cost over eight and it disappears. The 35x our own figure amortizes across those eight says the repeated part is small and the once-per-shader part is large. It is NOT the AIR-to-SPIR-V translation: the measurement carried our shader cache over between the cases of a round. The cost rises with the richness of the reflected arguments -- arrays 43.3x and array strides 31.4x at the top, imageblock 12.4x at the bottom, and an argument buffer, whose arguments we do not walk one by one, at 0.3x -- so the binding reflection over a function's data types is where to look. AGENTS.md gives pipeline-creation time its own ceiling rather than the device API's, so this row records the gap; attributing it needs the counters half over these 13 cases, which has not been run
+compute_pipeline_with_stage_input	19.9x	48 calls over 5 cases, Metal 1863 us against our 37152 us, all of it our own CPU. LOCALISED, and it is not the pipeline being expensive, it is the second one onwards: in the 3 cases that make ONE such pipeline we cost 41.4 us a call against Metal's 83.4 and are TWICE AS FAST (0.5x), and in the 2 cases that make 16 and 29 we cost 791.2 us a call against Metal's 34.5 (22.9x). Metal's marginal pipeline gets 2.4x cheaper with siblings in the case; OUR OWN per-call cost rises 19x. 22.6x in the other undegraded pass	Our cost per pipeline growing with how many the case has already made is work that scales with the siblings, not with the pipeline, and a call that is cheaper than Metal's alone cannot be explained by pipeline creation being expensive. The two cases that make many are attribute-format sweeps over one kernel (attribute-format-fetches, attribute-format-class-crossings), so what varies between siblings is the stage-input descriptor alone. This is the sharpest lead of the pipeline rows and it is a measurement, not an attribution: what scales is unidentified. It is not the shader compile -- the measurement carried our shader cache over between the cases of a round, and the 29 siblings vary only the stage-input descriptor -- so a per-pipeline structure that grows with the siblings is what to look for, and the counters half over these two cases is what would name it
+mesh_pipeline_bindings	19.8x	16 calls over 2 cases, 8 each, Metal 962 us against our 19070 us, all of it our own CPU: 60.2 us a call against our 1191.9 us. Both cases are over the margin, 20.3x and 19.2x. 18.5x in the other undegraded pass	Mesh pipeline creation with reflection, for an object-and-mesh stage pair. Recorded and not attributed, and the one of the pipeline rows the stored pass can say least about: no case makes just one, so there is no single-call figure to set the 8-call one against and no way to tell a sibling-reuse gap (render_pipeline, compute_pipeline_with_stage_input) from a flat per-call one (compute_pipeline_bindings). A case that makes one mesh pipeline with reflection is what this row needs before it is worth attributing
 render_pipeline_with_reflection	14.7x	one call, Metal 291 us against our 4274 us, 3946 us of it our own CPU	The same pipeline-creation path as render_pipeline plus reflection; listed separately because one call is too thin a measurement to fold into that row
 tile_pipeline	11.9x	three calls, Metal 192 us against our 2292 us, all of it our own CPU	The same pipeline-creation path for tile pipelines. Closest of the four to the band, so a quiet run may read it either side; the band exists for exactly this row

@@ -76,12 +76,21 @@ const LEDGER: &str = include_str!("../known-slow-calls.tsv");
 /// **7.0, and the number it replaced was measured on the wrong quantity.** It was 2.5, above a
 /// 2.43x worst movement measured in *Metal's own per-call totals*. What the `NoLongerSlow`
 /// direction fires on is the **ratio**, and a ratio moves by more than either of its halves
-/// because the two halves move independently: over the two whole-set passes this tree recorded on
-/// this M3 Max, the 98 paired rows common to both moved a median 2.62x, 14.96x at the 90th
-/// percentile and 63.9x at worst. Restricted to the rows the measurement can resolve at all
-/// ([`RESOLVES_AT`]) it is a median 1.87x and 6.92x at the 90th percentile — so against a 10x
-/// margin, a divisor under 6.92 lets a pass read a row at 11x as fixed at 1.6x and delete a live
-/// bug's ledger row. 7.0 is the top of that measured range and nothing tighter is claimed.
+/// because the two halves move independently: over the degraded whole-set pass and a good one, the
+/// 98 paired rows common to both moved a median 2.62x, 14.96x at the 90th percentile and 63.9x at
+/// worst. Restricted to the rows the measurement can resolve at all ([`RESOLVES_AT`]) it is a
+/// median 1.87x and 6.92x at the 90th percentile — so against a 10x margin, a divisor under 6.92
+/// lets a pass read a row at 11x as fixed at 1.6x and delete a live bug's ledger row. 7.0 is the
+/// top of that measured range and nothing tighter is claimed.
+///
+/// **A third whole-set pass says that movement is the degraded pass and not the ratio.** Re-read
+/// from the stored recordings, the two **undegraded** passes move a median 1.12x, 1.51x at the
+/// 90th percentile and 2.00x at worst over all 100 rows they share — under even the 2.43x the
+/// 2.5 divisor was set from. So this divisor is paying for a pass [`judges`] should have refused
+/// and did not: that pass's instrument readings are 1.17x apart, inside what
+/// [`CALIBRATION_MAY_MOVE`] allows, while its ratios move 64x. Tightening that check rather than
+/// this divisor is the fix, and it is the owner's call; `known-slow-calls.tsv`'s header carries
+/// the three passes and their figures.
 ///
 /// The cost of the wider divisor is that a row genuinely fixed stays listed until it reads under
 /// 1.43x, and the `NoLongerSlow` direction therefore says less than it did. That is the honest
