@@ -81,6 +81,8 @@ use std::sync::{Arc, Mutex, OnceLock, Weak};
 
 mod residual;
 
+#[cfg(test)]
+pub(crate) use residual::views_read_at_bind;
 pub(crate) use residual::{reads_views_at_bind, residual_form};
 
 /// A Metal render pipeline state (`MTLRenderPipelineState`): one that draws, or a tile pipeline's

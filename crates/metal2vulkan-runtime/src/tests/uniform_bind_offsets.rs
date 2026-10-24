@@ -9,7 +9,9 @@
 //! read at its residual, and a draw whose own key is not made draws with it at once while its own
 //! is made on the device's pool (`pipeline/render/residual.rs`); a compute state's creation makes
 //! its predicted region's, which a dispatch takes alike (`pipeline/dispatch_making.rs`). A device
-//! that reads every view at its residual (MoltenVK) makes no other form.
+//! whose driver is not measured to load a uniform read at a constant offset ahead of the shader
+//! (`DriverFact::ConstantOffsetUniformReadsPreloaded`, which no driver carries today) makes no
+//! other form.
 //!
 //! A device test: compiled only under the validation crate's GPU safety cfgs (`m2v_gpu`,
 //! `m2v_cpu_icd`), on the kind of device the cfg selects. The functions are those of the owned
@@ -360,6 +362,11 @@ fn constants_bound_at_moving_offsets_keep_one_shape() {
 /// second key (the state reads the fragment slot at its residual from then on) takes its own. A
 /// device that reads every view at its residual makes no such key
 /// (`first_draws_make_no_second_pipeline_where_views_are_read_at_their_residual`).
+///
+/// The kept form, which the driver fact chooses
+/// (`DriverFact::ConstantOffsetUniformReadsPreloaded`): no driver carries the fact today, so this
+/// test skips on every venue and the test beside it runs on each. It is what a driver measured
+/// with the fact would be held to.
 #[test]
 fn draws_take_the_residual_form_while_their_own_keys_are_made() {
     let scratch = Scratch::new("uniform-residual-form");

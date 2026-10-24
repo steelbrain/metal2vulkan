@@ -1515,6 +1515,34 @@ pub enum DriverFact {
     /// Measured no faster, so not listed: RADV, Mesa 26.2.4 on the Radeon 780M and the Radeon RX
     /// 7900 XTX, where at 1080 rows the dispatch took 5% and 3% more GPU time.
     RowCopiesDispatchFaster,
+    /// A cost fact (the module docs): the driver loads a shader's uniform read at a constant
+    /// offset ahead of the shader, so a key that reads a buffer slot's uniform view at its bind
+    /// offset alone (`SpecKey::RangeAtBindOffset` 1) is worth the second `VkPipeline` a state
+    /// pays for it at its first draw, beside the residual form its creation made. On a driver
+    /// without it every key is its residual form, which reads the same bytes at every bind offset:
+    /// a state's draws at any offset take the one pipeline its creation made
+    /// (`pipeline/render/residual.rs` in the runtime), and nothing an answer depends on differs,
+    /// only when the driver is called.
+    ///
+    /// **No driver is measured with it.** The behaviour is ANV's by report -- Mesa's ANV loads a
+    /// uniform read at a constant offset ahead of the shader -- with no figure taken for it, on a
+    /// venue no measurement here could reach, so it carries no row and no driver takes it. A row
+    /// of ANV's, with its releases and its numbers, is how it would be taken later.
+    ///
+    /// Measured without it, so not listed, on `blend-sweep-write-masks` (32 render pipeline
+    /// states, 32 draws, `conformance cost --alone`), the second form counted and then its
+    /// absence timed in alternating rounds: llvmpipe (LLVM 23.1.1, Mesa 26.2.4) made 64
+    /// `VkPipeline`s against 32, at 100.5, 102.5 and 107.6 ms against 98.0, 96.3 and 103.1;
+    /// RADV, Mesa 26.2.4 on the Radeon 780M, 64 against 32 at 77.5 and 77.3 ms against 76.0 and
+    /// 74.5, and on the Radeon RX 7900 XTX 64 against 32; NVIDIA 615.71.09 on the RTX 5080 Laptop
+    /// GPU, 32 counted with 32 more still in the device's pipeline pool against 32 with none, at
+    /// 94.1, 85.7 and 84.7 ms against 92.3, 85.5 and 86.1. MoltenVK 1.4.2 on the Apple M3 Max
+    /// makes the one form either way, measured alike on 1.4.1 (the host benchmark's GPU workload,
+    /// two runs of each form: a heavy fragment 20.74 against 20.73 ms, a heavy kernel 19.18
+    /// against 19.47, a constant-buffer kernel 8.42 against 7.69) while each first draw of a key
+    /// with a 1 made a second `VkPipeline` there (Metal's specialization and pipeline compile,
+    /// 5.6 to 24.5 ms).
+    ConstantOffsetUniformReadsPreloaded,
     /// The driver answers a format's linear-tiling attachment features from memory it has not
     /// yet initialized, so they differ between instances of one process: MoltenVK 1.4.1 builds
     /// its format table in `MVKPhysicalDevice`'s member initializers, where

@@ -80,6 +80,10 @@ pub(super) use making::Pending;
 pub(super) use objects::ShaderModules;
 pub(super) use objects::{create_set_layout, set_needs, RawPipeline, VariantObjects};
 pub use options::{PipelineOption, PipelineOptions};
+/// The form a driver's facts choose, for the test that holds every committed profile to it
+/// (`tests::pipeline::every_committed_driver_reads_its_uniform_views_at_their_residuals`).
+#[cfg(test)]
+pub(super) use render::views_read_at_bind;
 pub(super) use render::DrawDynamic;
 pub(super) use render::DrawPipeline;
 pub use render::RenderPipelineState;

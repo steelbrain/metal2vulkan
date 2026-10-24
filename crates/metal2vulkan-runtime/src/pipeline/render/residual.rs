@@ -32,10 +32,14 @@
 //!   where a made pipeline has 1 waits for its own making, as any draw does. A dispatch or a tile
 //!   dispatch whose region's `VkPipeline` is not made takes its residual form's alike
 //!   (`Variant::begin_region_pipeline`).
-//! - **One form where the bind offset buys nothing** ([`reads_views_at_bind`]). On MoltenVK every
-//!   key is its residual form: a uniform view is a Metal constant buffer reached through an
-//!   argument buffer there, the two forms measured alike, and the other form cost each state a
-//!   second `VkPipeline` at its first draw. The plans' specializations and the dispatches'
+//! - **One form where the bind offset buys nothing** ([`reads_views_at_bind`]). Where the driver
+//!   is not measured to load a uniform read at a constant offset ahead of the shader
+//!   (`DriverFact::ConstantOffsetUniformReadsPreloaded`, which no driver carries today) every
+//!   key is its residual form, because the other form costs each state a second `VkPipeline` at
+//!   its first draw and buys nothing measurable: on MoltenVK a uniform view is a Metal constant
+//!   buffer reached through an argument buffer and the two forms were measured alike, and on
+//!   llvmpipe, RADV and NVIDIA the second form was counted and then timed no faster (the fact's
+//!   own documentation holds the figures). The plans' specializations and the dispatches'
 //!   regions take the residual form before any key is looked up (`RenderVariant::plan`,
 //!   `Variant::keyed_regions`): a state's creation makes the one pipeline its draws at every bind
 //!   offset take. The shapes and plans stay every device's (`argument_table::AtBindViews`): a bind
@@ -60,7 +64,9 @@ use crate::pipeline::making::Begun;
 use crate::pipeline::objects::RawPipeline;
 use crate::render_target::RenderPassObject;
 use metal2vulkan::cache::SpecializationKey;
+use metal2vulkan::device::DriverFact;
 use metal2vulkan::pipeline::{SpecConstant, SpecKey};
+use std::collections::BTreeSet;
 use std::sync::Arc;
 
 impl RenderVariant {
@@ -156,14 +162,20 @@ pub(crate) fn residual_form<'a>(
 /// Whether `device` reads a uniform view at its bind offset alone where the view's range starts
 /// there (`SpecKey::RangeAtBindOffset` 1), a `VkPipeline` of its own beside the residual form's
 /// (the module docs); where not, every key is its residual form, and a state's pipelines are the
-/// residual form's alone. Not on MoltenVK: there each uniform view is a Metal constant buffer
-/// reached through an argument buffer, its address loaded in the shader either way, and the two
-/// forms measured alike on an Apple M3 Max (MoltenVK 1.4.1, the host benchmark's GPU workload, two
-/// runs of each form: a heavy fragment 20.74 against 20.73 ms, a heavy kernel 19.18 against
-/// 19.47, a constant-buffer kernel 8.42 against 7.69), while each first draw of a key with a 1
-/// made a second `VkPipeline` (Metal's specialization and pipeline compile, 5.6 to 24.5 ms).
-/// Every other driver keeps both: Mesa's ANV loads a uniform read at a constant offset ahead of
-/// the shader.
+/// residual form's alone.
+///
+/// The question is the driver's, and it is the driver fact that answers it, never the driver's
+/// name: a driver that loads a uniform read at a constant offset ahead of the shader
+/// ([`DriverFact::ConstantOffsetUniformReadsPreloaded`]) is one where the second form earns the
+/// second pipeline. No driver is measured with the fact, so every device reads its views at their
+/// residuals today; the fact's own documentation holds what was measured where, and a driver
+/// measured with it takes the other form with no change here.
 pub(crate) fn reads_views_at_bind(device: &crate::Device) -> bool {
-    device.properties().description.driver_id != Some(metal2vulkan::vk::DriverId::MOLTENVK)
+    views_read_at_bind(&device.properties().driver_facts)
+}
+
+/// [`reads_views_at_bind`] of a device's driver facts alone, which a test can hand the facts of
+/// each committed profile: the fact, and nothing of the driver's identity.
+pub(crate) fn views_read_at_bind(facts: &BTreeSet<DriverFact>) -> bool {
+    facts.contains(&DriverFact::ConstantOffsetUniformReadsPreloaded)
 }
