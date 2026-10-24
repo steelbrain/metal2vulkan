@@ -711,6 +711,16 @@ driver's. Each is open work.
   neither pixel is required; both choices conform and there is no Vulkan control over the tie, so
   this is the driver's and not ours. RADV and ANV unrun.
 
+- **A heap multisample texture's sample moves on a GPU of 20 GiB or less**: a command queue keeps
+  the images such moves go through up to a sixty-fourth of the device's largest device-local heap
+  (`gpu_pools::device_share`, `texture/copy_images.rs`). A 4096 x 2160 `Depth32Float_Stencil8`
+  texture of 4 samples -- the consumer's surface -- needs 295 MiB of them per blit, over the
+  255 MiB a 16 GiB GPU keeps, so every copy makes all 16 again (measured on an RTX 5080 Laptop
+  GPU, 615.71.09; `heap_sample_moves` prints each copy's images made and lent, and its 256 x 256
+  shape, 2 MiB of images, makes none after the first). The images are correct and bounded; the
+  cost is the making. Raising the share, or holding the bound to at least one copy's images,
+  would reach it.
+
 - **Reflection after a compute descriptor reset on RADV**: `max_total_threads_per_threadgroup`
   answers 0 where Metal answers 96, `required_threads_per_threadgroup` `0x0x0` where Metal answers
   `8x6x2`, and `threadgroup_size_is_multiple_of_execution_width` false where Metal answers true
