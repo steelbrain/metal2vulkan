@@ -1,0 +1,3679 @@
+{
+  "format": 1,
+  "case": "pass-two-attachments-loads",
+  "suite_version": 1,
+  "shaders": [
+    {
+      "fixture": "rt6_pair.ll",
+      "entry": "rt6_pair_vertex+rt6_pair_two",
+      "source_sha256": "df95fc8504ed266dd72b14ddc460366aa4eb456a60d32204d10223b60b11de8b"
+    },
+    {
+      "fixture": "rt6_pair.ll",
+      "entry": "rt6_pair_vertex+rt6_pair_second",
+      "source_sha256": "df95fc8504ed266dd72b14ddc460366aa4eb456a60d32204d10223b60b11de8b"
+    },
+    {
+      "fixture": "rt6_pair.air.ll",
+      "entry": "rt6_pair_vertex+rt6_pair_two",
+      "source_sha256": "9fcfdf6c6627919775884bc44cfaeaa846380b3f48dc44f052efe0ea8efe07ed"
+    },
+    {
+      "fixture": "rt6_pair.air.ll",
+      "entry": "rt6_pair_vertex+rt6_pair_second",
+      "source_sha256": "9fcfdf6c6627919775884bc44cfaeaa846380b3f48dc44f052efe0ea8efe07ed"
+    }
+  ],
+  "answers": [
+    {
+      "key": {
+        "chip": "apple-m3-max",
+        "os_version": "27.0.1",
+        "os_build": "26A434",
+        "metal_level": "27.0.1"
+      },
+      "provenance": "metal_run",
+      "device": "Apple M3 Max",
+      "runs": 8,
+      "outcomes": [
+        {
+          "runs": 8,
+          "transcript": {
+            "root": {
+              "name": "case",
+              "observed": {
+                "value": "absent"
+              },
+              "children": [
+                {
+                  "name": "inputs",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "air",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "df95fc8504ed266dd72b14ddc460366aa4eb456a60d32204d10223b60b11de8b"
+                        }
+                      }
+                    },
+                    {
+                      "name": "air-typed",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "9fcfdf6c6627919775884bc44cfaeaa846380b3f48dc44f052efe0ea8efe07ed"
+                        }
+                      }
+                    },
+                    {
+                      "name": "drawn:color0",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "5a3e0f4972705f13b40c87c53a8d6ee44188b09fc4da18de30baad5feb4809cc"
+                        }
+                      }
+                    },
+                    {
+                      "name": "drawn:color1",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "83a37350bf62be805df0e3ae1e88b85bb8cbbc364142919c0124bef96dbd2f6f"
+                        }
+                      }
+                    },
+                    {
+                      "name": "width",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "dc765660b06ee03dd16fd7ca5b957e8c805161ac2c4af28c5a100ab2ab432ca1"
+                        }
+                      }
+                    },
+                    {
+                      "name": "drawn-rect",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "ba4ecb36aa38cb67509c4f872d0734944daf16d7776eb0ba024990488e676ad1"
+                        }
+                      }
+                    },
+                    {
+                      "name": "clear:prior",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "4a86464d47157c560adfa8eb8044c0221a9b68dbe4191b698a6891e908c1349d"
+                        }
+                      }
+                    },
+                    {
+                      "name": "clear:pass",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "7dde45e701804eb390051fa5996a36ac19f43bb07e1eceb16e67b21a267f5915"
+                        }
+                      }
+                    },
+                    {
+                      "name": "pipeline:MTLPixelFormatRGBA32Float+MTLPixelFormatRGBA32Float/MTLLoadActionLoad+MTLLoadActionLoad",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "bdc2b3baef9314f6f6d01007bee166887f4cc1cc3a0f5fa284b8b496c5571781"
+                        }
+                      }
+                    },
+                    {
+                      "name": "target:MTLPixelFormatRGBA32Float+MTLPixelFormatRGBA32Float/MTLLoadActionLoad+MTLLoadActionLoad:0",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "0342fefa4ae4e9dc0685d90d594984fd776435f7d370c168a57c2125222f0d01"
+                        }
+                      }
+                    },
+                    {
+                      "name": "target:MTLPixelFormatRGBA32Float+MTLPixelFormatRGBA32Float/MTLLoadActionLoad+MTLLoadActionLoad:1",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "0342fefa4ae4e9dc0685d90d594984fd776435f7d370c168a57c2125222f0d01"
+                        }
+                      }
+                    },
+                    {
+                      "name": "pass:MTLPixelFormatRGBA32Float+MTLPixelFormatRGBA32Float/MTLLoadActionLoad+MTLLoadActionLoad",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "5331102e0f35065fc85347a0c8db4d326f3f0b951ba1a6e033fbbc76dfcae9df"
+                        }
+                      }
+                    },
+                    {
+                      "name": "pipeline:MTLPixelFormatRGBA32Float+MTLPixelFormatRGBA32Float/MTLLoadActionLoad+MTLLoadActionClear",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "bdc2b3baef9314f6f6d01007bee166887f4cc1cc3a0f5fa284b8b496c5571781"
+                        }
+                      }
+                    },
+                    {
+                      "name": "target:MTLPixelFormatRGBA32Float+MTLPixelFormatRGBA32Float/MTLLoadActionLoad+MTLLoadActionClear:0",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "0342fefa4ae4e9dc0685d90d594984fd776435f7d370c168a57c2125222f0d01"
+                        }
+                      }
+                    },
+                    {
+                      "name": "target:MTLPixelFormatRGBA32Float+MTLPixelFormatRGBA32Float/MTLLoadActionLoad+MTLLoadActionClear:1",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "0342fefa4ae4e9dc0685d90d594984fd776435f7d370c168a57c2125222f0d01"
+                        }
+                      }
+                    },
+                    {
+                      "name": "pass:MTLPixelFormatRGBA32Float+MTLPixelFormatRGBA32Float/MTLLoadActionLoad+MTLLoadActionClear",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "252968c1b4c9a531b475cededbba80db957e104ee3b07cfecce2ad7c4ce1d2cd"
+                        }
+                      }
+                    },
+                    {
+                      "name": "pipeline:MTLPixelFormatRGBA32Float+MTLPixelFormatRGBA32Float/MTLLoadActionClear+MTLLoadActionLoad",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "bdc2b3baef9314f6f6d01007bee166887f4cc1cc3a0f5fa284b8b496c5571781"
+                        }
+                      }
+                    },
+                    {
+                      "name": "target:MTLPixelFormatRGBA32Float+MTLPixelFormatRGBA32Float/MTLLoadActionClear+MTLLoadActionLoad:0",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "0342fefa4ae4e9dc0685d90d594984fd776435f7d370c168a57c2125222f0d01"
+                        }
+                      }
+                    },
+                    {
+                      "name": "target:MTLPixelFormatRGBA32Float+MTLPixelFormatRGBA32Float/MTLLoadActionClear+MTLLoadActionLoad:1",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "0342fefa4ae4e9dc0685d90d594984fd776435f7d370c168a57c2125222f0d01"
+                        }
+                      }
+                    },
+                    {
+                      "name": "pass:MTLPixelFormatRGBA32Float+MTLPixelFormatRGBA32Float/MTLLoadActionClear+MTLLoadActionLoad",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "d85d69a0a7d083cd9d8a44cb0a97ca2b57d85650596657540e74c893fc8c6e89"
+                        }
+                      }
+                    },
+                    {
+                      "name": "pipeline:MTLPixelFormatRGBA32Float+MTLPixelFormatRGBA32Float/MTLLoadActionClear+MTLLoadActionClear",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "bdc2b3baef9314f6f6d01007bee166887f4cc1cc3a0f5fa284b8b496c5571781"
+                        }
+                      }
+                    },
+                    {
+                      "name": "target:MTLPixelFormatRGBA32Float+MTLPixelFormatRGBA32Float/MTLLoadActionClear+MTLLoadActionClear:0",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "0342fefa4ae4e9dc0685d90d594984fd776435f7d370c168a57c2125222f0d01"
+                        }
+                      }
+                    },
+                    {
+                      "name": "target:MTLPixelFormatRGBA32Float+MTLPixelFormatRGBA32Float/MTLLoadActionClear+MTLLoadActionClear:1",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "0342fefa4ae4e9dc0685d90d594984fd776435f7d370c168a57c2125222f0d01"
+                        }
+                      }
+                    },
+                    {
+                      "name": "pass:MTLPixelFormatRGBA32Float+MTLPixelFormatRGBA32Float/MTLLoadActionClear+MTLLoadActionClear",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "cff36a4947b65188f841e37a96c5e9f1bf240e48c274f8f351809a0816b6bc46"
+                        }
+                      }
+                    },
+                    {
+                      "name": "pipeline:MTLPixelFormatRGBA32Float+MTLPixelFormatR32Float/MTLLoadActionLoad+MTLLoadActionLoad",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "3e86b7bf06430d5030a2da601c88b95eccb24b2dcb392d56de29b2ba42c088b4"
+                        }
+                      }
+                    },
+                    {
+                      "name": "target:MTLPixelFormatRGBA32Float+MTLPixelFormatR32Float/MTLLoadActionLoad+MTLLoadActionLoad:0",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "0342fefa4ae4e9dc0685d90d594984fd776435f7d370c168a57c2125222f0d01"
+                        }
+                      }
+                    },
+                    {
+                      "name": "target:MTLPixelFormatRGBA32Float+MTLPixelFormatR32Float/MTLLoadActionLoad+MTLLoadActionLoad:1",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "e62b608329b3b67afe5f1b9ad130d1fbe9d1a0ea91fbe0690f118cd73ccd94aa"
+                        }
+                      }
+                    },
+                    {
+                      "name": "pass:MTLPixelFormatRGBA32Float+MTLPixelFormatR32Float/MTLLoadActionLoad+MTLLoadActionLoad",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "5331102e0f35065fc85347a0c8db4d326f3f0b951ba1a6e033fbbc76dfcae9df"
+                        }
+                      }
+                    },
+                    {
+                      "name": "pipeline:MTLPixelFormatRGBA32Float+MTLPixelFormatR32Float/MTLLoadActionLoad+MTLLoadActionClear",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "3e86b7bf06430d5030a2da601c88b95eccb24b2dcb392d56de29b2ba42c088b4"
+                        }
+                      }
+                    },
+                    {
+                      "name": "target:MTLPixelFormatRGBA32Float+MTLPixelFormatR32Float/MTLLoadActionLoad+MTLLoadActionClear:0",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "0342fefa4ae4e9dc0685d90d594984fd776435f7d370c168a57c2125222f0d01"
+                        }
+                      }
+                    },
+                    {
+                      "name": "target:MTLPixelFormatRGBA32Float+MTLPixelFormatR32Float/MTLLoadActionLoad+MTLLoadActionClear:1",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "e62b608329b3b67afe5f1b9ad130d1fbe9d1a0ea91fbe0690f118cd73ccd94aa"
+                        }
+                      }
+                    },
+                    {
+                      "name": "pass:MTLPixelFormatRGBA32Float+MTLPixelFormatR32Float/MTLLoadActionLoad+MTLLoadActionClear",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "252968c1b4c9a531b475cededbba80db957e104ee3b07cfecce2ad7c4ce1d2cd"
+                        }
+                      }
+                    },
+                    {
+                      "name": "pipeline:MTLPixelFormatRGBA32Float+MTLPixelFormatR32Float/MTLLoadActionClear+MTLLoadActionLoad",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "3e86b7bf06430d5030a2da601c88b95eccb24b2dcb392d56de29b2ba42c088b4"
+                        }
+                      }
+                    },
+                    {
+                      "name": "target:MTLPixelFormatRGBA32Float+MTLPixelFormatR32Float/MTLLoadActionClear+MTLLoadActionLoad:0",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "0342fefa4ae4e9dc0685d90d594984fd776435f7d370c168a57c2125222f0d01"
+                        }
+                      }
+                    },
+                    {
+                      "name": "target:MTLPixelFormatRGBA32Float+MTLPixelFormatR32Float/MTLLoadActionClear+MTLLoadActionLoad:1",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "e62b608329b3b67afe5f1b9ad130d1fbe9d1a0ea91fbe0690f118cd73ccd94aa"
+                        }
+                      }
+                    },
+                    {
+                      "name": "pass:MTLPixelFormatRGBA32Float+MTLPixelFormatR32Float/MTLLoadActionClear+MTLLoadActionLoad",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "d85d69a0a7d083cd9d8a44cb0a97ca2b57d85650596657540e74c893fc8c6e89"
+                        }
+                      }
+                    },
+                    {
+                      "name": "pipeline:MTLPixelFormatRGBA32Float+MTLPixelFormatR32Float/MTLLoadActionClear+MTLLoadActionClear",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "3e86b7bf06430d5030a2da601c88b95eccb24b2dcb392d56de29b2ba42c088b4"
+                        }
+                      }
+                    },
+                    {
+                      "name": "target:MTLPixelFormatRGBA32Float+MTLPixelFormatR32Float/MTLLoadActionClear+MTLLoadActionClear:0",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "0342fefa4ae4e9dc0685d90d594984fd776435f7d370c168a57c2125222f0d01"
+                        }
+                      }
+                    },
+                    {
+                      "name": "target:MTLPixelFormatRGBA32Float+MTLPixelFormatR32Float/MTLLoadActionClear+MTLLoadActionClear:1",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "e62b608329b3b67afe5f1b9ad130d1fbe9d1a0ea91fbe0690f118cd73ccd94aa"
+                        }
+                      }
+                    },
+                    {
+                      "name": "pass:MTLPixelFormatRGBA32Float+MTLPixelFormatR32Float/MTLLoadActionClear+MTLLoadActionClear",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "cff36a4947b65188f841e37a96c5e9f1bf240e48c274f8f351809a0816b6bc46"
+                        }
+                      }
+                    },
+                    {
+                      "name": "pipeline:MTLPixelFormatR32Float+MTLPixelFormatRGBA32Float/MTLLoadActionLoad+MTLLoadActionLoad",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "62779ad66d07eaef684298759dd33fec32dc673a0dbdca3fe3901243b419c8c6"
+                        }
+                      }
+                    },
+                    {
+                      "name": "target:MTLPixelFormatR32Float+MTLPixelFormatRGBA32Float/MTLLoadActionLoad+MTLLoadActionLoad:0",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "e62b608329b3b67afe5f1b9ad130d1fbe9d1a0ea91fbe0690f118cd73ccd94aa"
+                        }
+                      }
+                    },
+                    {
+                      "name": "target:MTLPixelFormatR32Float+MTLPixelFormatRGBA32Float/MTLLoadActionLoad+MTLLoadActionLoad:1",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "0342fefa4ae4e9dc0685d90d594984fd776435f7d370c168a57c2125222f0d01"
+                        }
+                      }
+                    },
+                    {
+                      "name": "pass:MTLPixelFormatR32Float+MTLPixelFormatRGBA32Float/MTLLoadActionLoad+MTLLoadActionLoad",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "5331102e0f35065fc85347a0c8db4d326f3f0b951ba1a6e033fbbc76dfcae9df"
+                        }
+                      }
+                    },
+                    {
+                      "name": "pipeline:MTLPixelFormatR32Float+MTLPixelFormatRGBA32Float/MTLLoadActionLoad+MTLLoadActionClear",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "62779ad66d07eaef684298759dd33fec32dc673a0dbdca3fe3901243b419c8c6"
+                        }
+                      }
+                    },
+                    {
+                      "name": "target:MTLPixelFormatR32Float+MTLPixelFormatRGBA32Float/MTLLoadActionLoad+MTLLoadActionClear:0",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "e62b608329b3b67afe5f1b9ad130d1fbe9d1a0ea91fbe0690f118cd73ccd94aa"
+                        }
+                      }
+                    },
+                    {
+                      "name": "target:MTLPixelFormatR32Float+MTLPixelFormatRGBA32Float/MTLLoadActionLoad+MTLLoadActionClear:1",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "0342fefa4ae4e9dc0685d90d594984fd776435f7d370c168a57c2125222f0d01"
+                        }
+                      }
+                    },
+                    {
+                      "name": "pass:MTLPixelFormatR32Float+MTLPixelFormatRGBA32Float/MTLLoadActionLoad+MTLLoadActionClear",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "252968c1b4c9a531b475cededbba80db957e104ee3b07cfecce2ad7c4ce1d2cd"
+                        }
+                      }
+                    },
+                    {
+                      "name": "pipeline:MTLPixelFormatR32Float+MTLPixelFormatRGBA32Float/MTLLoadActionClear+MTLLoadActionLoad",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "62779ad66d07eaef684298759dd33fec32dc673a0dbdca3fe3901243b419c8c6"
+                        }
+                      }
+                    },
+                    {
+                      "name": "target:MTLPixelFormatR32Float+MTLPixelFormatRGBA32Float/MTLLoadActionClear+MTLLoadActionLoad:0",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "e62b608329b3b67afe5f1b9ad130d1fbe9d1a0ea91fbe0690f118cd73ccd94aa"
+                        }
+                      }
+                    },
+                    {
+                      "name": "target:MTLPixelFormatR32Float+MTLPixelFormatRGBA32Float/MTLLoadActionClear+MTLLoadActionLoad:1",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "0342fefa4ae4e9dc0685d90d594984fd776435f7d370c168a57c2125222f0d01"
+                        }
+                      }
+                    },
+                    {
+                      "name": "pass:MTLPixelFormatR32Float+MTLPixelFormatRGBA32Float/MTLLoadActionClear+MTLLoadActionLoad",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "d85d69a0a7d083cd9d8a44cb0a97ca2b57d85650596657540e74c893fc8c6e89"
+                        }
+                      }
+                    },
+                    {
+                      "name": "pipeline:MTLPixelFormatR32Float+MTLPixelFormatRGBA32Float/MTLLoadActionClear+MTLLoadActionClear",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "62779ad66d07eaef684298759dd33fec32dc673a0dbdca3fe3901243b419c8c6"
+                        }
+                      }
+                    },
+                    {
+                      "name": "target:MTLPixelFormatR32Float+MTLPixelFormatRGBA32Float/MTLLoadActionClear+MTLLoadActionClear:0",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "e62b608329b3b67afe5f1b9ad130d1fbe9d1a0ea91fbe0690f118cd73ccd94aa"
+                        }
+                      }
+                    },
+                    {
+                      "name": "target:MTLPixelFormatR32Float+MTLPixelFormatRGBA32Float/MTLLoadActionClear+MTLLoadActionClear:1",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "0342fefa4ae4e9dc0685d90d594984fd776435f7d370c168a57c2125222f0d01"
+                        }
+                      }
+                    },
+                    {
+                      "name": "pass:MTLPixelFormatR32Float+MTLPixelFormatRGBA32Float/MTLLoadActionClear+MTLLoadActionClear",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "cff36a4947b65188f841e37a96c5e9f1bf240e48c274f8f351809a0816b6bc46"
+                        }
+                      }
+                    },
+                    {
+                      "name": "pipeline:MTLPixelFormatRGBA32Float+MTLPixelFormatRGBA32Float/MTLLoadActionLoad+MTLLoadActionLoad/second-only",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "657ffe45b0234800d834e412668bec3c936d85ccfa6fc14e66ab16c69e2ac880"
+                        }
+                      }
+                    },
+                    {
+                      "name": "target:MTLPixelFormatRGBA32Float+MTLPixelFormatRGBA32Float/MTLLoadActionLoad+MTLLoadActionLoad/second-only:0",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "0342fefa4ae4e9dc0685d90d594984fd776435f7d370c168a57c2125222f0d01"
+                        }
+                      }
+                    },
+                    {
+                      "name": "target:MTLPixelFormatRGBA32Float+MTLPixelFormatRGBA32Float/MTLLoadActionLoad+MTLLoadActionLoad/second-only:1",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "0342fefa4ae4e9dc0685d90d594984fd776435f7d370c168a57c2125222f0d01"
+                        }
+                      }
+                    },
+                    {
+                      "name": "pass:MTLPixelFormatRGBA32Float+MTLPixelFormatRGBA32Float/MTLLoadActionLoad+MTLLoadActionLoad/second-only",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "5331102e0f35065fc85347a0c8db4d326f3f0b951ba1a6e033fbbc76dfcae9df"
+                        }
+                      }
+                    },
+                    {
+                      "name": "pipeline:MTLPixelFormatRGBA32Float+MTLPixelFormatRGBA32Float/MTLLoadActionClear+MTLLoadActionLoad/second-only",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "657ffe45b0234800d834e412668bec3c936d85ccfa6fc14e66ab16c69e2ac880"
+                        }
+                      }
+                    },
+                    {
+                      "name": "target:MTLPixelFormatRGBA32Float+MTLPixelFormatRGBA32Float/MTLLoadActionClear+MTLLoadActionLoad/second-only:0",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "0342fefa4ae4e9dc0685d90d594984fd776435f7d370c168a57c2125222f0d01"
+                        }
+                      }
+                    },
+                    {
+                      "name": "target:MTLPixelFormatRGBA32Float+MTLPixelFormatRGBA32Float/MTLLoadActionClear+MTLLoadActionLoad/second-only:1",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "0342fefa4ae4e9dc0685d90d594984fd776435f7d370c168a57c2125222f0d01"
+                        }
+                      }
+                    },
+                    {
+                      "name": "pass:MTLPixelFormatRGBA32Float+MTLPixelFormatRGBA32Float/MTLLoadActionClear+MTLLoadActionLoad/second-only",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "d85d69a0a7d083cd9d8a44cb0a97ca2b57d85650596657540e74c893fc8c6e89"
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "library",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "buffer:color0",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "buffer:color1",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "buffer:width",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "pipeline:MTLPixelFormatRGBA32Float+MTLPixelFormatRGBA32Float/MTLLoadActionLoad+MTLLoadActionLoad",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "target:MTLPixelFormatRGBA32Float+MTLPixelFormatRGBA32Float/MTLLoadActionLoad+MTLLoadActionLoad:0",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "buffer:read:MTLPixelFormatRGBA32Float+MTLPixelFormatRGBA32Float/MTLLoadActionLoad+MTLLoadActionLoad:0",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "target:MTLPixelFormatRGBA32Float+MTLPixelFormatRGBA32Float/MTLLoadActionLoad+MTLLoadActionLoad:1",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "buffer:read:MTLPixelFormatRGBA32Float+MTLPixelFormatRGBA32Float/MTLLoadActionLoad+MTLLoadActionLoad:1",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "pipeline:MTLPixelFormatRGBA32Float+MTLPixelFormatRGBA32Float/MTLLoadActionLoad+MTLLoadActionClear",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "target:MTLPixelFormatRGBA32Float+MTLPixelFormatRGBA32Float/MTLLoadActionLoad+MTLLoadActionClear:0",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "buffer:read:MTLPixelFormatRGBA32Float+MTLPixelFormatRGBA32Float/MTLLoadActionLoad+MTLLoadActionClear:0",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "target:MTLPixelFormatRGBA32Float+MTLPixelFormatRGBA32Float/MTLLoadActionLoad+MTLLoadActionClear:1",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "buffer:read:MTLPixelFormatRGBA32Float+MTLPixelFormatRGBA32Float/MTLLoadActionLoad+MTLLoadActionClear:1",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "pipeline:MTLPixelFormatRGBA32Float+MTLPixelFormatRGBA32Float/MTLLoadActionClear+MTLLoadActionLoad",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "target:MTLPixelFormatRGBA32Float+MTLPixelFormatRGBA32Float/MTLLoadActionClear+MTLLoadActionLoad:0",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "buffer:read:MTLPixelFormatRGBA32Float+MTLPixelFormatRGBA32Float/MTLLoadActionClear+MTLLoadActionLoad:0",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "target:MTLPixelFormatRGBA32Float+MTLPixelFormatRGBA32Float/MTLLoadActionClear+MTLLoadActionLoad:1",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "buffer:read:MTLPixelFormatRGBA32Float+MTLPixelFormatRGBA32Float/MTLLoadActionClear+MTLLoadActionLoad:1",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "pipeline:MTLPixelFormatRGBA32Float+MTLPixelFormatRGBA32Float/MTLLoadActionClear+MTLLoadActionClear",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "target:MTLPixelFormatRGBA32Float+MTLPixelFormatRGBA32Float/MTLLoadActionClear+MTLLoadActionClear:0",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "buffer:read:MTLPixelFormatRGBA32Float+MTLPixelFormatRGBA32Float/MTLLoadActionClear+MTLLoadActionClear:0",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "target:MTLPixelFormatRGBA32Float+MTLPixelFormatRGBA32Float/MTLLoadActionClear+MTLLoadActionClear:1",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "buffer:read:MTLPixelFormatRGBA32Float+MTLPixelFormatRGBA32Float/MTLLoadActionClear+MTLLoadActionClear:1",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "pipeline:MTLPixelFormatRGBA32Float+MTLPixelFormatR32Float/MTLLoadActionLoad+MTLLoadActionLoad",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "target:MTLPixelFormatRGBA32Float+MTLPixelFormatR32Float/MTLLoadActionLoad+MTLLoadActionLoad:0",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "buffer:read:MTLPixelFormatRGBA32Float+MTLPixelFormatR32Float/MTLLoadActionLoad+MTLLoadActionLoad:0",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "target:MTLPixelFormatRGBA32Float+MTLPixelFormatR32Float/MTLLoadActionLoad+MTLLoadActionLoad:1",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "buffer:read:MTLPixelFormatRGBA32Float+MTLPixelFormatR32Float/MTLLoadActionLoad+MTLLoadActionLoad:1",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "pipeline:MTLPixelFormatRGBA32Float+MTLPixelFormatR32Float/MTLLoadActionLoad+MTLLoadActionClear",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "target:MTLPixelFormatRGBA32Float+MTLPixelFormatR32Float/MTLLoadActionLoad+MTLLoadActionClear:0",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "buffer:read:MTLPixelFormatRGBA32Float+MTLPixelFormatR32Float/MTLLoadActionLoad+MTLLoadActionClear:0",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "target:MTLPixelFormatRGBA32Float+MTLPixelFormatR32Float/MTLLoadActionLoad+MTLLoadActionClear:1",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "buffer:read:MTLPixelFormatRGBA32Float+MTLPixelFormatR32Float/MTLLoadActionLoad+MTLLoadActionClear:1",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "pipeline:MTLPixelFormatRGBA32Float+MTLPixelFormatR32Float/MTLLoadActionClear+MTLLoadActionLoad",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "target:MTLPixelFormatRGBA32Float+MTLPixelFormatR32Float/MTLLoadActionClear+MTLLoadActionLoad:0",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "buffer:read:MTLPixelFormatRGBA32Float+MTLPixelFormatR32Float/MTLLoadActionClear+MTLLoadActionLoad:0",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "target:MTLPixelFormatRGBA32Float+MTLPixelFormatR32Float/MTLLoadActionClear+MTLLoadActionLoad:1",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "buffer:read:MTLPixelFormatRGBA32Float+MTLPixelFormatR32Float/MTLLoadActionClear+MTLLoadActionLoad:1",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "pipeline:MTLPixelFormatRGBA32Float+MTLPixelFormatR32Float/MTLLoadActionClear+MTLLoadActionClear",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "target:MTLPixelFormatRGBA32Float+MTLPixelFormatR32Float/MTLLoadActionClear+MTLLoadActionClear:0",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "buffer:read:MTLPixelFormatRGBA32Float+MTLPixelFormatR32Float/MTLLoadActionClear+MTLLoadActionClear:0",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "target:MTLPixelFormatRGBA32Float+MTLPixelFormatR32Float/MTLLoadActionClear+MTLLoadActionClear:1",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "buffer:read:MTLPixelFormatRGBA32Float+MTLPixelFormatR32Float/MTLLoadActionClear+MTLLoadActionClear:1",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "pipeline:MTLPixelFormatR32Float+MTLPixelFormatRGBA32Float/MTLLoadActionLoad+MTLLoadActionLoad",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "target:MTLPixelFormatR32Float+MTLPixelFormatRGBA32Float/MTLLoadActionLoad+MTLLoadActionLoad:0",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "buffer:read:MTLPixelFormatR32Float+MTLPixelFormatRGBA32Float/MTLLoadActionLoad+MTLLoadActionLoad:0",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "target:MTLPixelFormatR32Float+MTLPixelFormatRGBA32Float/MTLLoadActionLoad+MTLLoadActionLoad:1",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "buffer:read:MTLPixelFormatR32Float+MTLPixelFormatRGBA32Float/MTLLoadActionLoad+MTLLoadActionLoad:1",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "pipeline:MTLPixelFormatR32Float+MTLPixelFormatRGBA32Float/MTLLoadActionLoad+MTLLoadActionClear",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "target:MTLPixelFormatR32Float+MTLPixelFormatRGBA32Float/MTLLoadActionLoad+MTLLoadActionClear:0",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "buffer:read:MTLPixelFormatR32Float+MTLPixelFormatRGBA32Float/MTLLoadActionLoad+MTLLoadActionClear:0",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "target:MTLPixelFormatR32Float+MTLPixelFormatRGBA32Float/MTLLoadActionLoad+MTLLoadActionClear:1",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "buffer:read:MTLPixelFormatR32Float+MTLPixelFormatRGBA32Float/MTLLoadActionLoad+MTLLoadActionClear:1",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "pipeline:MTLPixelFormatR32Float+MTLPixelFormatRGBA32Float/MTLLoadActionClear+MTLLoadActionLoad",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "target:MTLPixelFormatR32Float+MTLPixelFormatRGBA32Float/MTLLoadActionClear+MTLLoadActionLoad:0",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "buffer:read:MTLPixelFormatR32Float+MTLPixelFormatRGBA32Float/MTLLoadActionClear+MTLLoadActionLoad:0",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "target:MTLPixelFormatR32Float+MTLPixelFormatRGBA32Float/MTLLoadActionClear+MTLLoadActionLoad:1",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "buffer:read:MTLPixelFormatR32Float+MTLPixelFormatRGBA32Float/MTLLoadActionClear+MTLLoadActionLoad:1",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "pipeline:MTLPixelFormatR32Float+MTLPixelFormatRGBA32Float/MTLLoadActionClear+MTLLoadActionClear",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "target:MTLPixelFormatR32Float+MTLPixelFormatRGBA32Float/MTLLoadActionClear+MTLLoadActionClear:0",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "buffer:read:MTLPixelFormatR32Float+MTLPixelFormatRGBA32Float/MTLLoadActionClear+MTLLoadActionClear:0",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "target:MTLPixelFormatR32Float+MTLPixelFormatRGBA32Float/MTLLoadActionClear+MTLLoadActionClear:1",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "buffer:read:MTLPixelFormatR32Float+MTLPixelFormatRGBA32Float/MTLLoadActionClear+MTLLoadActionClear:1",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "pipeline:MTLPixelFormatRGBA32Float+MTLPixelFormatRGBA32Float/MTLLoadActionLoad+MTLLoadActionLoad/second-only",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "target:MTLPixelFormatRGBA32Float+MTLPixelFormatRGBA32Float/MTLLoadActionLoad+MTLLoadActionLoad/second-only:0",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "buffer:read:MTLPixelFormatRGBA32Float+MTLPixelFormatRGBA32Float/MTLLoadActionLoad+MTLLoadActionLoad/second-only:0",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "target:MTLPixelFormatRGBA32Float+MTLPixelFormatRGBA32Float/MTLLoadActionLoad+MTLLoadActionLoad/second-only:1",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "buffer:read:MTLPixelFormatRGBA32Float+MTLPixelFormatRGBA32Float/MTLLoadActionLoad+MTLLoadActionLoad/second-only:1",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "pipeline:MTLPixelFormatRGBA32Float+MTLPixelFormatRGBA32Float/MTLLoadActionClear+MTLLoadActionLoad/second-only",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "target:MTLPixelFormatRGBA32Float+MTLPixelFormatRGBA32Float/MTLLoadActionClear+MTLLoadActionLoad/second-only:0",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "buffer:read:MTLPixelFormatRGBA32Float+MTLPixelFormatRGBA32Float/MTLLoadActionClear+MTLLoadActionLoad/second-only:0",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "target:MTLPixelFormatRGBA32Float+MTLPixelFormatRGBA32Float/MTLLoadActionClear+MTLLoadActionLoad/second-only:1",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "buffer:read:MTLPixelFormatRGBA32Float+MTLPixelFormatRGBA32Float/MTLLoadActionClear+MTLLoadActionLoad/second-only:1",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "render",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": {
+                          "variant": {
+                            "name": "Completed",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "pieces",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "prime:MTLPixelFormatRGBA32Float+MTLPixelFormatRGBA32Float/MTLLoadActionLoad+MTLLoadActionLoad",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "pass:MTLPixelFormatRGBA32Float+MTLPixelFormatRGBA32Float/MTLLoadActionLoad+MTLLoadActionLoad",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "read:MTLPixelFormatRGBA32Float+MTLPixelFormatRGBA32Float/MTLLoadActionLoad+MTLLoadActionLoad:0",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "read:MTLPixelFormatRGBA32Float+MTLPixelFormatRGBA32Float/MTLLoadActionLoad+MTLLoadActionLoad:1",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "prime:MTLPixelFormatRGBA32Float+MTLPixelFormatRGBA32Float/MTLLoadActionLoad+MTLLoadActionClear",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "pass:MTLPixelFormatRGBA32Float+MTLPixelFormatRGBA32Float/MTLLoadActionLoad+MTLLoadActionClear",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "read:MTLPixelFormatRGBA32Float+MTLPixelFormatRGBA32Float/MTLLoadActionLoad+MTLLoadActionClear:0",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "read:MTLPixelFormatRGBA32Float+MTLPixelFormatRGBA32Float/MTLLoadActionLoad+MTLLoadActionClear:1",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "prime:MTLPixelFormatRGBA32Float+MTLPixelFormatRGBA32Float/MTLLoadActionClear+MTLLoadActionLoad",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "pass:MTLPixelFormatRGBA32Float+MTLPixelFormatRGBA32Float/MTLLoadActionClear+MTLLoadActionLoad",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "read:MTLPixelFormatRGBA32Float+MTLPixelFormatRGBA32Float/MTLLoadActionClear+MTLLoadActionLoad:0",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "read:MTLPixelFormatRGBA32Float+MTLPixelFormatRGBA32Float/MTLLoadActionClear+MTLLoadActionLoad:1",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "prime:MTLPixelFormatRGBA32Float+MTLPixelFormatRGBA32Float/MTLLoadActionClear+MTLLoadActionClear",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "pass:MTLPixelFormatRGBA32Float+MTLPixelFormatRGBA32Float/MTLLoadActionClear+MTLLoadActionClear",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "read:MTLPixelFormatRGBA32Float+MTLPixelFormatRGBA32Float/MTLLoadActionClear+MTLLoadActionClear:0",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "read:MTLPixelFormatRGBA32Float+MTLPixelFormatRGBA32Float/MTLLoadActionClear+MTLLoadActionClear:1",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "prime:MTLPixelFormatRGBA32Float+MTLPixelFormatR32Float/MTLLoadActionLoad+MTLLoadActionLoad",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "pass:MTLPixelFormatRGBA32Float+MTLPixelFormatR32Float/MTLLoadActionLoad+MTLLoadActionLoad",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "read:MTLPixelFormatRGBA32Float+MTLPixelFormatR32Float/MTLLoadActionLoad+MTLLoadActionLoad:0",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "read:MTLPixelFormatRGBA32Float+MTLPixelFormatR32Float/MTLLoadActionLoad+MTLLoadActionLoad:1",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "prime:MTLPixelFormatRGBA32Float+MTLPixelFormatR32Float/MTLLoadActionLoad+MTLLoadActionClear",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "pass:MTLPixelFormatRGBA32Float+MTLPixelFormatR32Float/MTLLoadActionLoad+MTLLoadActionClear",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "read:MTLPixelFormatRGBA32Float+MTLPixelFormatR32Float/MTLLoadActionLoad+MTLLoadActionClear:0",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "read:MTLPixelFormatRGBA32Float+MTLPixelFormatR32Float/MTLLoadActionLoad+MTLLoadActionClear:1",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "prime:MTLPixelFormatRGBA32Float+MTLPixelFormatR32Float/MTLLoadActionClear+MTLLoadActionLoad",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "pass:MTLPixelFormatRGBA32Float+MTLPixelFormatR32Float/MTLLoadActionClear+MTLLoadActionLoad",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "read:MTLPixelFormatRGBA32Float+MTLPixelFormatR32Float/MTLLoadActionClear+MTLLoadActionLoad:0",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "read:MTLPixelFormatRGBA32Float+MTLPixelFormatR32Float/MTLLoadActionClear+MTLLoadActionLoad:1",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "prime:MTLPixelFormatRGBA32Float+MTLPixelFormatR32Float/MTLLoadActionClear+MTLLoadActionClear",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "pass:MTLPixelFormatRGBA32Float+MTLPixelFormatR32Float/MTLLoadActionClear+MTLLoadActionClear",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "read:MTLPixelFormatRGBA32Float+MTLPixelFormatR32Float/MTLLoadActionClear+MTLLoadActionClear:0",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "read:MTLPixelFormatRGBA32Float+MTLPixelFormatR32Float/MTLLoadActionClear+MTLLoadActionClear:1",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "prime:MTLPixelFormatR32Float+MTLPixelFormatRGBA32Float/MTLLoadActionLoad+MTLLoadActionLoad",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "pass:MTLPixelFormatR32Float+MTLPixelFormatRGBA32Float/MTLLoadActionLoad+MTLLoadActionLoad",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "read:MTLPixelFormatR32Float+MTLPixelFormatRGBA32Float/MTLLoadActionLoad+MTLLoadActionLoad:0",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "read:MTLPixelFormatR32Float+MTLPixelFormatRGBA32Float/MTLLoadActionLoad+MTLLoadActionLoad:1",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "prime:MTLPixelFormatR32Float+MTLPixelFormatRGBA32Float/MTLLoadActionLoad+MTLLoadActionClear",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "pass:MTLPixelFormatR32Float+MTLPixelFormatRGBA32Float/MTLLoadActionLoad+MTLLoadActionClear",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "read:MTLPixelFormatR32Float+MTLPixelFormatRGBA32Float/MTLLoadActionLoad+MTLLoadActionClear:0",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "read:MTLPixelFormatR32Float+MTLPixelFormatRGBA32Float/MTLLoadActionLoad+MTLLoadActionClear:1",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "prime:MTLPixelFormatR32Float+MTLPixelFormatRGBA32Float/MTLLoadActionClear+MTLLoadActionLoad",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "pass:MTLPixelFormatR32Float+MTLPixelFormatRGBA32Float/MTLLoadActionClear+MTLLoadActionLoad",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "read:MTLPixelFormatR32Float+MTLPixelFormatRGBA32Float/MTLLoadActionClear+MTLLoadActionLoad:0",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "read:MTLPixelFormatR32Float+MTLPixelFormatRGBA32Float/MTLLoadActionClear+MTLLoadActionLoad:1",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "prime:MTLPixelFormatR32Float+MTLPixelFormatRGBA32Float/MTLLoadActionClear+MTLLoadActionClear",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "pass:MTLPixelFormatR32Float+MTLPixelFormatRGBA32Float/MTLLoadActionClear+MTLLoadActionClear",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "read:MTLPixelFormatR32Float+MTLPixelFormatRGBA32Float/MTLLoadActionClear+MTLLoadActionClear:0",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "read:MTLPixelFormatR32Float+MTLPixelFormatRGBA32Float/MTLLoadActionClear+MTLLoadActionClear:1",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "prime:MTLPixelFormatRGBA32Float+MTLPixelFormatRGBA32Float/MTLLoadActionLoad+MTLLoadActionLoad/second-only",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "pass:MTLPixelFormatRGBA32Float+MTLPixelFormatRGBA32Float/MTLLoadActionLoad+MTLLoadActionLoad/second-only",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "read:MTLPixelFormatRGBA32Float+MTLPixelFormatRGBA32Float/MTLLoadActionLoad+MTLLoadActionLoad/second-only:0",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "read:MTLPixelFormatRGBA32Float+MTLPixelFormatRGBA32Float/MTLLoadActionLoad+MTLLoadActionLoad/second-only:1",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "prime:MTLPixelFormatRGBA32Float+MTLPixelFormatRGBA32Float/MTLLoadActionClear+MTLLoadActionLoad/second-only",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "pass:MTLPixelFormatRGBA32Float+MTLPixelFormatRGBA32Float/MTLLoadActionClear+MTLLoadActionLoad/second-only",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "read:MTLPixelFormatRGBA32Float+MTLPixelFormatRGBA32Float/MTLLoadActionClear+MTLLoadActionLoad/second-only:0",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "read:MTLPixelFormatRGBA32Float+MTLPixelFormatRGBA32Float/MTLLoadActionClear+MTLLoadActionLoad/second-only:1",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "read-back/MTLPixelFormatRGBA32Float+MTLPixelFormatRGBA32Float/MTLLoadActionLoad+MTLLoadActionLoad/0",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "read-back/MTLPixelFormatRGBA32Float+MTLPixelFormatRGBA32Float/MTLLoadActionLoad+MTLLoadActionLoad/1",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "read-back/MTLPixelFormatRGBA32Float+MTLPixelFormatRGBA32Float/MTLLoadActionLoad+MTLLoadActionClear/0",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "read-back/MTLPixelFormatRGBA32Float+MTLPixelFormatRGBA32Float/MTLLoadActionLoad+MTLLoadActionClear/1",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "read-back/MTLPixelFormatRGBA32Float+MTLPixelFormatRGBA32Float/MTLLoadActionClear+MTLLoadActionLoad/0",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "read-back/MTLPixelFormatRGBA32Float+MTLPixelFormatRGBA32Float/MTLLoadActionClear+MTLLoadActionLoad/1",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "read-back/MTLPixelFormatRGBA32Float+MTLPixelFormatRGBA32Float/MTLLoadActionClear+MTLLoadActionClear/0",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "read-back/MTLPixelFormatRGBA32Float+MTLPixelFormatRGBA32Float/MTLLoadActionClear+MTLLoadActionClear/1",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "read-back/MTLPixelFormatRGBA32Float+MTLPixelFormatR32Float/MTLLoadActionLoad+MTLLoadActionLoad/0",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "read-back/MTLPixelFormatRGBA32Float+MTLPixelFormatR32Float/MTLLoadActionLoad+MTLLoadActionLoad/1",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "read-back/MTLPixelFormatRGBA32Float+MTLPixelFormatR32Float/MTLLoadActionLoad+MTLLoadActionClear/0",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "read-back/MTLPixelFormatRGBA32Float+MTLPixelFormatR32Float/MTLLoadActionLoad+MTLLoadActionClear/1",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "read-back/MTLPixelFormatRGBA32Float+MTLPixelFormatR32Float/MTLLoadActionClear+MTLLoadActionLoad/0",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "read-back/MTLPixelFormatRGBA32Float+MTLPixelFormatR32Float/MTLLoadActionClear+MTLLoadActionLoad/1",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "read-back/MTLPixelFormatRGBA32Float+MTLPixelFormatR32Float/MTLLoadActionClear+MTLLoadActionClear/0",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "read-back/MTLPixelFormatRGBA32Float+MTLPixelFormatR32Float/MTLLoadActionClear+MTLLoadActionClear/1",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "read-back/MTLPixelFormatR32Float+MTLPixelFormatRGBA32Float/MTLLoadActionLoad+MTLLoadActionLoad/0",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "read-back/MTLPixelFormatR32Float+MTLPixelFormatRGBA32Float/MTLLoadActionLoad+MTLLoadActionLoad/1",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "read-back/MTLPixelFormatR32Float+MTLPixelFormatRGBA32Float/MTLLoadActionLoad+MTLLoadActionClear/0",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "read-back/MTLPixelFormatR32Float+MTLPixelFormatRGBA32Float/MTLLoadActionLoad+MTLLoadActionClear/1",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "read-back/MTLPixelFormatR32Float+MTLPixelFormatRGBA32Float/MTLLoadActionClear+MTLLoadActionLoad/0",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "read-back/MTLPixelFormatR32Float+MTLPixelFormatRGBA32Float/MTLLoadActionClear+MTLLoadActionLoad/1",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "read-back/MTLPixelFormatR32Float+MTLPixelFormatRGBA32Float/MTLLoadActionClear+MTLLoadActionClear/0",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "read-back/MTLPixelFormatR32Float+MTLPixelFormatRGBA32Float/MTLLoadActionClear+MTLLoadActionClear/1",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "read-back/MTLPixelFormatRGBA32Float+MTLPixelFormatRGBA32Float/MTLLoadActionLoad+MTLLoadActionLoad/second-only/0",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "read-back/MTLPixelFormatRGBA32Float+MTLPixelFormatRGBA32Float/MTLLoadActionLoad+MTLLoadActionLoad/second-only/1",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "read-back/MTLPixelFormatRGBA32Float+MTLPixelFormatRGBA32Float/MTLLoadActionClear+MTLLoadActionLoad/second-only/0",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "read-back/MTLPixelFormatRGBA32Float+MTLPixelFormatRGBA32Float/MTLLoadActionClear+MTLLoadActionLoad/second-only/1",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "planes",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "MTLPixelFormatRGBA32Float+MTLPixelFormatRGBA32Float/MTLLoadActionLoad+MTLLoadActionLoad",
+                      "observed": {
+                        "value": "absent"
+                      },
+                      "children": [
+                        {
+                          "name": "color0",
+                          "observed": {
+                            "value": {
+                              "bytes": "AACAPgAggD4AQIA+AGCAPgAAgT4AIIE+AECBPgBggT4AAII+ACCCPgBAgj4AYII+AACDPgAggz4AQIM+AGCDPgAAhD4AIIQ+AECEPgBghD4AAIU+ACCFPgBAhT4AYIU+AACGPgAghj4AQIY+AGCGPgAAhz4AIIc+AECHPgBghz4AAIg+ACCIPgBAiD4AYIg+AACJPgAgiT4AQIk+AGCJPgAAij4AIIo+AECKPgBgij4AAIs+ACCLPgBAiz4AYIs+AACMPgAgjD4AQIw+AGCMPgAAjT4AII0+AECNPgBgjT4AAI4+ACCOPgBAjj4AYI4+AACPPgAgjz4AQI8+AGCPPgAAkD4AIJA+AECQPgBgkD4AAJE+ACCRPgBAkT4AYJE+AACSPgAgkj4AQJI+AGCSPgAAkz4AIJM+AECTPgBgkz4AAJQ+ACCUPgBAlD4AYJQ+AACVPgAglT4AQJU+AGCVPgAAlj4AIJY+AECWPgBglj4AAJc+ACCXPgBAlz4AYJc+AACYPgAgmD4AQJg+AGCYPgAAmT4AIJk+AECZPgBgmT4AAJo+ACCaPgBAmj4AYJo+AACbPgAgmz4AQJs+AGCbPgAAnD4AIJw+AECcPgBgnD4AAJ0+ACCdPgBAnT4AYJ0+AACePgAgnj4AQJ4+AGCePgAAnz4AIJ8+AECfPgBgnz4AAIA5AAAAOgAAQDoAAIA6AACAOQAAADoAAEA6AACAOgAAgDkAAAA6AABAOgAAgDoAAIA5AAAAOgAAQDoAAIA6AACAOQAAADoAAEA6AACAOgAAgDkAAAA6AABAOgAAgDoAAIA5AAAAOgAAQDoAAIA6AACAOQAAADoAAEA6AACAOgAAgDkAAAA6AABAOgAAgDoAAIA5AAAAOgAAQDoAAIA6AACAOQAAADoAAEA6AACAOgAAgDkAAAA6AABAOgAAgDoAAIA5AAAAOgAAQDoAAIA6AACAOQAAADoAAEA6AACAOgAAgDkAAAA6AABAOgAAgDoAAIA5AAAAOgAAQDoAAIA6AACAOQAAADoAAEA6AACAOgAAgDkAAAA6AABAOgAAgDoAAIA5AAAAOgAAQDoAAIA6AACAOQAAADoAAEA6AACAOgAAgDkAAAA6AABAOgAAgDoAAIA5AAAAOgAAQDoAAIA6AACAOQAAADoAAEA6AACAOgAAgDkAAAA6AABAOgAAgDoAAIA5AAAAOgAAQDoAAIA6AACAOQAAADoAAEA6AACAOgAAgDkAAAA6AABAOgAAgDoAAIA5AAAAOgAAQDoAAIA6AACAOQAAADoAAEA6AACAOgAAgDkAAAA6AABAOgAAgDoAAIA5AAAAOgAAQDoAAIA6AACAOQAAADoAAEA6AACAOg=="
+                            },
+                            "shape": {
+                              "bytes": {
+                                "region": {
+                                  "texture": {
+                                    "level": 0,
+                                    "slice": 0,
+                                    "aspect": "color",
+                                    "sample": 0,
+                                    "origin": [
+                                      0,
+                                      0,
+                                      0
+                                    ],
+                                    "size": [
+                                      8,
+                                      8,
+                                      1
+                                    ]
+                                  }
+                                },
+                                "element": "f32",
+                                "row_offset": 0,
+                                "row_elements": 32,
+                                "row_pitch": 128,
+                                "rows": 8,
+                                "image_pitch": 1024,
+                                "images": 1,
+                                "gaps": "compared"
+                              }
+                            }
+                          }
+                        },
+                        {
+                          "name": "color1",
+                          "observed": {
+                            "value": {
+                              "bytes": "AICAPgCggD4AwIA+AOCAPgCAgT4AoIE+AMCBPgDggT4AgII+AKCCPgDAgj4A4II+AICDPgCggz4AwIM+AOCDPgCAhD4AoIQ+AMCEPgDghD4AgIU+AKCFPgDAhT4A4IU+AICGPgCghj4AwIY+AOCGPgCAhz4AoIc+AMCHPgDghz4AgIg+AKCIPgDAiD4A4Ig+AICJPgCgiT4AwIk+AOCJPgCAij4AoIo+AMCKPgDgij4AgIs+AKCLPgDAiz4A4Is+AICMPgCgjD4AwIw+AOCMPgCAjT4AoI0+AMCNPgDgjT4AgI4+AKCOPgDAjj4A4I4+AICPPgCgjz4AwI8+AOCPPgCAkD4AoJA+AMCQPgDgkD4AgJE+AKCRPgDAkT4A4JE+AICSPgCgkj4AwJI+AOCSPgCAkz4AoJM+AMCTPgDgkz4AgJQ+AKCUPgDAlD4A4JQ+AICVPgCglT4AwJU+AOCVPgCAlj4AoJY+AMCWPgDglj4AgJc+AKCXPgDAlz4A4Jc+AICYPgCgmD4AwJg+AOCYPgCAmT4AoJk+AMCZPgDgmT4AgJo+AKCaPgDAmj4A4Jo+AICbPgCgmz4AwJs+AOCbPgCAnD4AoJw+AMCcPgDgnD4AgJ0+AKCdPgDAnT4A4J0+AICePgCgnj4AwJ4+AOCePgCAnz4AoJ8+AMCfPgDgnz4AAKA6AADAOgAA4DoAAAA7AACgOgAAwDoAAOA6AAAAOwAAoDoAAMA6AADgOgAAADsAAKA6AADAOgAA4DoAAAA7AACgOgAAwDoAAOA6AAAAOwAAoDoAAMA6AADgOgAAADsAAKA6AADAOgAA4DoAAAA7AACgOgAAwDoAAOA6AAAAOwAAoDoAAMA6AADgOgAAADsAAKA6AADAOgAA4DoAAAA7AACgOgAAwDoAAOA6AAAAOwAAoDoAAMA6AADgOgAAADsAAKA6AADAOgAA4DoAAAA7AACgOgAAwDoAAOA6AAAAOwAAoDoAAMA6AADgOgAAADsAAKA6AADAOgAA4DoAAAA7AACgOgAAwDoAAOA6AAAAOwAAoDoAAMA6AADgOgAAADsAAKA6AADAOgAA4DoAAAA7AACgOgAAwDoAAOA6AAAAOwAAoDoAAMA6AADgOgAAADsAAKA6AADAOgAA4DoAAAA7AACgOgAAwDoAAOA6AAAAOwAAoDoAAMA6AADgOgAAADsAAKA6AADAOgAA4DoAAAA7AACgOgAAwDoAAOA6AAAAOwAAoDoAAMA6AADgOgAAADsAAKA6AADAOgAA4DoAAAA7AACgOgAAwDoAAOA6AAAAOwAAoDoAAMA6AADgOgAAADsAAKA6AADAOgAA4DoAAAA7AACgOgAAwDoAAOA6AAAAOw=="
+                            },
+                            "shape": {
+                              "bytes": {
+                                "region": {
+                                  "texture": {
+                                    "level": 0,
+                                    "slice": 0,
+                                    "aspect": "color",
+                                    "sample": 0,
+                                    "origin": [
+                                      0,
+                                      0,
+                                      0
+                                    ],
+                                    "size": [
+                                      8,
+                                      8,
+                                      1
+                                    ]
+                                  }
+                                },
+                                "element": "f32",
+                                "row_offset": 0,
+                                "row_elements": 32,
+                                "row_pitch": 128,
+                                "rows": 8,
+                                "image_pitch": 1024,
+                                "images": 1,
+                                "gaps": "compared"
+                              }
+                            }
+                          }
+                        }
+                      ]
+                    },
+                    {
+                      "name": "MTLPixelFormatRGBA32Float+MTLPixelFormatRGBA32Float/MTLLoadActionLoad+MTLLoadActionClear",
+                      "observed": {
+                        "value": "absent"
+                      },
+                      "children": [
+                        {
+                          "name": "color0",
+                          "observed": {
+                            "value": {
+                              "bytes": "AACAPgAggD4AQIA+AGCAPgAAgT4AIIE+AECBPgBggT4AAII+ACCCPgBAgj4AYII+AACDPgAggz4AQIM+AGCDPgAAhD4AIIQ+AECEPgBghD4AAIU+ACCFPgBAhT4AYIU+AACGPgAghj4AQIY+AGCGPgAAhz4AIIc+AECHPgBghz4AAIg+ACCIPgBAiD4AYIg+AACJPgAgiT4AQIk+AGCJPgAAij4AIIo+AECKPgBgij4AAIs+ACCLPgBAiz4AYIs+AACMPgAgjD4AQIw+AGCMPgAAjT4AII0+AECNPgBgjT4AAI4+ACCOPgBAjj4AYI4+AACPPgAgjz4AQI8+AGCPPgAAkD4AIJA+AECQPgBgkD4AAJE+ACCRPgBAkT4AYJE+AACSPgAgkj4AQJI+AGCSPgAAkz4AIJM+AECTPgBgkz4AAJQ+ACCUPgBAlD4AYJQ+AACVPgAglT4AQJU+AGCVPgAAlj4AIJY+AECWPgBglj4AAJc+ACCXPgBAlz4AYJc+AACYPgAgmD4AQJg+AGCYPgAAmT4AIJk+AECZPgBgmT4AAJo+ACCaPgBAmj4AYJo+AACbPgAgmz4AQJs+AGCbPgAAnD4AIJw+AECcPgBgnD4AAJ0+ACCdPgBAnT4AYJ0+AACePgAgnj4AQJ4+AGCePgAAnz4AIJ8+AECfPgBgnz4AAIA5AAAAOgAAQDoAAIA6AACAOQAAADoAAEA6AACAOgAAgDkAAAA6AABAOgAAgDoAAIA5AAAAOgAAQDoAAIA6AACAOQAAADoAAEA6AACAOgAAgDkAAAA6AABAOgAAgDoAAIA5AAAAOgAAQDoAAIA6AACAOQAAADoAAEA6AACAOgAAgDkAAAA6AABAOgAAgDoAAIA5AAAAOgAAQDoAAIA6AACAOQAAADoAAEA6AACAOgAAgDkAAAA6AABAOgAAgDoAAIA5AAAAOgAAQDoAAIA6AACAOQAAADoAAEA6AACAOgAAgDkAAAA6AABAOgAAgDoAAIA5AAAAOgAAQDoAAIA6AACAOQAAADoAAEA6AACAOgAAgDkAAAA6AABAOgAAgDoAAIA5AAAAOgAAQDoAAIA6AACAOQAAADoAAEA6AACAOgAAgDkAAAA6AABAOgAAgDoAAIA5AAAAOgAAQDoAAIA6AACAOQAAADoAAEA6AACAOgAAgDkAAAA6AABAOgAAgDoAAIA5AAAAOgAAQDoAAIA6AACAOQAAADoAAEA6AACAOgAAgDkAAAA6AABAOgAAgDoAAIA5AAAAOgAAQDoAAIA6AACAOQAAADoAAEA6AACAOgAAgDkAAAA6AABAOgAAgDoAAIA5AAAAOgAAQDoAAIA6AACAOQAAADoAAEA6AACAOg=="
+                            },
+                            "shape": {
+                              "bytes": {
+                                "region": {
+                                  "texture": {
+                                    "level": 0,
+                                    "slice": 0,
+                                    "aspect": "color",
+                                    "sample": 0,
+                                    "origin": [
+                                      0,
+                                      0,
+                                      0
+                                    ],
+                                    "size": [
+                                      8,
+                                      8,
+                                      1
+                                    ]
+                                  }
+                                },
+                                "element": "f32",
+                                "row_offset": 0,
+                                "row_elements": 32,
+                                "row_pitch": 128,
+                                "rows": 8,
+                                "image_pitch": 1024,
+                                "images": 1,
+                                "gaps": "compared"
+                              }
+                            }
+                          }
+                        },
+                        {
+                          "name": "color1",
+                          "observed": {
+                            "value": {
+                              "bytes": "AICAPgCggD4AwIA+AOCAPgCAgT4AoIE+AMCBPgDggT4AgII+AKCCPgDAgj4A4II+AICDPgCggz4AwIM+AOCDPgCAhD4AoIQ+AMCEPgDghD4AgIU+AKCFPgDAhT4A4IU+AICGPgCghj4AwIY+AOCGPgCAhz4AoIc+AMCHPgDghz4AgIg+AKCIPgDAiD4A4Ig+AICJPgCgiT4AwIk+AOCJPgCAij4AoIo+AMCKPgDgij4AgIs+AKCLPgDAiz4A4Is+AICMPgCgjD4AwIw+AOCMPgCAjT4AoI0+AMCNPgDgjT4AgI4+AKCOPgDAjj4A4I4+AICPPgCgjz4AwI8+AOCPPgCAkD4AoJA+AMCQPgDgkD4AgJE+AKCRPgDAkT4A4JE+AICSPgCgkj4AwJI+AOCSPgCAkz4AoJM+AMCTPgDgkz4AgJQ+AKCUPgDAlD4A4JQ+AICVPgCglT4AwJU+AOCVPgCAlj4AoJY+AMCWPgDglj4AgJc+AKCXPgDAlz4A4Jc+AICYPgCgmD4AwJg+AOCYPgCAmT4AoJk+AMCZPgDgmT4AgJo+AKCaPgDAmj4A4Jo+AICbPgCgmz4AwJs+AOCbPgCAnD4AoJw+AMCcPgDgnD4AgJ0+AKCdPgDAnT4A4J0+AICePgCgnj4AwJ4+AOCePgCAnz4AoJ8+AMCfPgDgnz4AAFA7AABgOwAAcDsAAIA7AABQOwAAYDsAAHA7AACAOwAAUDsAAGA7AABwOwAAgDsAAFA7AABgOwAAcDsAAIA7AABQOwAAYDsAAHA7AACAOwAAUDsAAGA7AABwOwAAgDsAAFA7AABgOwAAcDsAAIA7AABQOwAAYDsAAHA7AACAOwAAUDsAAGA7AABwOwAAgDsAAFA7AABgOwAAcDsAAIA7AABQOwAAYDsAAHA7AACAOwAAUDsAAGA7AABwOwAAgDsAAFA7AABgOwAAcDsAAIA7AABQOwAAYDsAAHA7AACAOwAAUDsAAGA7AABwOwAAgDsAAFA7AABgOwAAcDsAAIA7AABQOwAAYDsAAHA7AACAOwAAUDsAAGA7AABwOwAAgDsAAFA7AABgOwAAcDsAAIA7AABQOwAAYDsAAHA7AACAOwAAUDsAAGA7AABwOwAAgDsAAFA7AABgOwAAcDsAAIA7AABQOwAAYDsAAHA7AACAOwAAUDsAAGA7AABwOwAAgDsAAFA7AABgOwAAcDsAAIA7AABQOwAAYDsAAHA7AACAOwAAUDsAAGA7AABwOwAAgDsAAFA7AABgOwAAcDsAAIA7AABQOwAAYDsAAHA7AACAOwAAUDsAAGA7AABwOwAAgDsAAFA7AABgOwAAcDsAAIA7AABQOwAAYDsAAHA7AACAOw=="
+                            },
+                            "shape": {
+                              "bytes": {
+                                "region": {
+                                  "texture": {
+                                    "level": 0,
+                                    "slice": 0,
+                                    "aspect": "color",
+                                    "sample": 0,
+                                    "origin": [
+                                      0,
+                                      0,
+                                      0
+                                    ],
+                                    "size": [
+                                      8,
+                                      8,
+                                      1
+                                    ]
+                                  }
+                                },
+                                "element": "f32",
+                                "row_offset": 0,
+                                "row_elements": 32,
+                                "row_pitch": 128,
+                                "rows": 8,
+                                "image_pitch": 1024,
+                                "images": 1,
+                                "gaps": "compared"
+                              }
+                            }
+                          }
+                        }
+                      ]
+                    },
+                    {
+                      "name": "MTLPixelFormatRGBA32Float+MTLPixelFormatRGBA32Float/MTLLoadActionClear+MTLLoadActionLoad",
+                      "observed": {
+                        "value": "absent"
+                      },
+                      "children": [
+                        {
+                          "name": "color0",
+                          "observed": {
+                            "value": {
+                              "bytes": "AACAPgAggD4AQIA+AGCAPgAAgT4AIIE+AECBPgBggT4AAII+ACCCPgBAgj4AYII+AACDPgAggz4AQIM+AGCDPgAAhD4AIIQ+AECEPgBghD4AAIU+ACCFPgBAhT4AYIU+AACGPgAghj4AQIY+AGCGPgAAhz4AIIc+AECHPgBghz4AAIg+ACCIPgBAiD4AYIg+AACJPgAgiT4AQIk+AGCJPgAAij4AIIo+AECKPgBgij4AAIs+ACCLPgBAiz4AYIs+AACMPgAgjD4AQIw+AGCMPgAAjT4AII0+AECNPgBgjT4AAI4+ACCOPgBAjj4AYI4+AACPPgAgjz4AQI8+AGCPPgAAkD4AIJA+AECQPgBgkD4AAJE+ACCRPgBAkT4AYJE+AACSPgAgkj4AQJI+AGCSPgAAkz4AIJM+AECTPgBgkz4AAJQ+ACCUPgBAlD4AYJQ+AACVPgAglT4AQJU+AGCVPgAAlj4AIJY+AECWPgBglj4AAJc+ACCXPgBAlz4AYJc+AACYPgAgmD4AQJg+AGCYPgAAmT4AIJk+AECZPgBgmT4AAJo+ACCaPgBAmj4AYJo+AACbPgAgmz4AQJs+AGCbPgAAnD4AIJw+AECcPgBgnD4AAJ0+ACCdPgBAnT4AYJ0+AACePgAgnj4AQJ4+AGCePgAAnz4AIJ8+AECfPgBgnz4AABA7AAAgOwAAMDsAAEA7AAAQOwAAIDsAADA7AABAOwAAEDsAACA7AAAwOwAAQDsAABA7AAAgOwAAMDsAAEA7AAAQOwAAIDsAADA7AABAOwAAEDsAACA7AAAwOwAAQDsAABA7AAAgOwAAMDsAAEA7AAAQOwAAIDsAADA7AABAOwAAEDsAACA7AAAwOwAAQDsAABA7AAAgOwAAMDsAAEA7AAAQOwAAIDsAADA7AABAOwAAEDsAACA7AAAwOwAAQDsAABA7AAAgOwAAMDsAAEA7AAAQOwAAIDsAADA7AABAOwAAEDsAACA7AAAwOwAAQDsAABA7AAAgOwAAMDsAAEA7AAAQOwAAIDsAADA7AABAOwAAEDsAACA7AAAwOwAAQDsAABA7AAAgOwAAMDsAAEA7AAAQOwAAIDsAADA7AABAOwAAEDsAACA7AAAwOwAAQDsAABA7AAAgOwAAMDsAAEA7AAAQOwAAIDsAADA7AABAOwAAEDsAACA7AAAwOwAAQDsAABA7AAAgOwAAMDsAAEA7AAAQOwAAIDsAADA7AABAOwAAEDsAACA7AAAwOwAAQDsAABA7AAAgOwAAMDsAAEA7AAAQOwAAIDsAADA7AABAOwAAEDsAACA7AAAwOwAAQDsAABA7AAAgOwAAMDsAAEA7AAAQOwAAIDsAADA7AABAOw=="
+                            },
+                            "shape": {
+                              "bytes": {
+                                "region": {
+                                  "texture": {
+                                    "level": 0,
+                                    "slice": 0,
+                                    "aspect": "color",
+                                    "sample": 0,
+                                    "origin": [
+                                      0,
+                                      0,
+                                      0
+                                    ],
+                                    "size": [
+                                      8,
+                                      8,
+                                      1
+                                    ]
+                                  }
+                                },
+                                "element": "f32",
+                                "row_offset": 0,
+                                "row_elements": 32,
+                                "row_pitch": 128,
+                                "rows": 8,
+                                "image_pitch": 1024,
+                                "images": 1,
+                                "gaps": "compared"
+                              }
+                            }
+                          }
+                        },
+                        {
+                          "name": "color1",
+                          "observed": {
+                            "value": {
+                              "bytes": "AICAPgCggD4AwIA+AOCAPgCAgT4AoIE+AMCBPgDggT4AgII+AKCCPgDAgj4A4II+AICDPgCggz4AwIM+AOCDPgCAhD4AoIQ+AMCEPgDghD4AgIU+AKCFPgDAhT4A4IU+AICGPgCghj4AwIY+AOCGPgCAhz4AoIc+AMCHPgDghz4AgIg+AKCIPgDAiD4A4Ig+AICJPgCgiT4AwIk+AOCJPgCAij4AoIo+AMCKPgDgij4AgIs+AKCLPgDAiz4A4Is+AICMPgCgjD4AwIw+AOCMPgCAjT4AoI0+AMCNPgDgjT4AgI4+AKCOPgDAjj4A4I4+AICPPgCgjz4AwI8+AOCPPgCAkD4AoJA+AMCQPgDgkD4AgJE+AKCRPgDAkT4A4JE+AICSPgCgkj4AwJI+AOCSPgCAkz4AoJM+AMCTPgDgkz4AgJQ+AKCUPgDAlD4A4JQ+AICVPgCglT4AwJU+AOCVPgCAlj4AoJY+AMCWPgDglj4AgJc+AKCXPgDAlz4A4Jc+AICYPgCgmD4AwJg+AOCYPgCAmT4AoJk+AMCZPgDgmT4AgJo+AKCaPgDAmj4A4Jo+AICbPgCgmz4AwJs+AOCbPgCAnD4AoJw+AMCcPgDgnD4AgJ0+AKCdPgDAnT4A4J0+AICePgCgnj4AwJ4+AOCePgCAnz4AoJ8+AMCfPgDgnz4AAKA6AADAOgAA4DoAAAA7AACgOgAAwDoAAOA6AAAAOwAAoDoAAMA6AADgOgAAADsAAKA6AADAOgAA4DoAAAA7AACgOgAAwDoAAOA6AAAAOwAAoDoAAMA6AADgOgAAADsAAKA6AADAOgAA4DoAAAA7AACgOgAAwDoAAOA6AAAAOwAAoDoAAMA6AADgOgAAADsAAKA6AADAOgAA4DoAAAA7AACgOgAAwDoAAOA6AAAAOwAAoDoAAMA6AADgOgAAADsAAKA6AADAOgAA4DoAAAA7AACgOgAAwDoAAOA6AAAAOwAAoDoAAMA6AADgOgAAADsAAKA6AADAOgAA4DoAAAA7AACgOgAAwDoAAOA6AAAAOwAAoDoAAMA6AADgOgAAADsAAKA6AADAOgAA4DoAAAA7AACgOgAAwDoAAOA6AAAAOwAAoDoAAMA6AADgOgAAADsAAKA6AADAOgAA4DoAAAA7AACgOgAAwDoAAOA6AAAAOwAAoDoAAMA6AADgOgAAADsAAKA6AADAOgAA4DoAAAA7AACgOgAAwDoAAOA6AAAAOwAAoDoAAMA6AADgOgAAADsAAKA6AADAOgAA4DoAAAA7AACgOgAAwDoAAOA6AAAAOwAAoDoAAMA6AADgOgAAADsAAKA6AADAOgAA4DoAAAA7AACgOgAAwDoAAOA6AAAAOw=="
+                            },
+                            "shape": {
+                              "bytes": {
+                                "region": {
+                                  "texture": {
+                                    "level": 0,
+                                    "slice": 0,
+                                    "aspect": "color",
+                                    "sample": 0,
+                                    "origin": [
+                                      0,
+                                      0,
+                                      0
+                                    ],
+                                    "size": [
+                                      8,
+                                      8,
+                                      1
+                                    ]
+                                  }
+                                },
+                                "element": "f32",
+                                "row_offset": 0,
+                                "row_elements": 32,
+                                "row_pitch": 128,
+                                "rows": 8,
+                                "image_pitch": 1024,
+                                "images": 1,
+                                "gaps": "compared"
+                              }
+                            }
+                          }
+                        }
+                      ]
+                    },
+                    {
+                      "name": "MTLPixelFormatRGBA32Float+MTLPixelFormatRGBA32Float/MTLLoadActionClear+MTLLoadActionClear",
+                      "observed": {
+                        "value": "absent"
+                      },
+                      "children": [
+                        {
+                          "name": "color0",
+                          "observed": {
+                            "value": {
+                              "bytes": "AACAPgAggD4AQIA+AGCAPgAAgT4AIIE+AECBPgBggT4AAII+ACCCPgBAgj4AYII+AACDPgAggz4AQIM+AGCDPgAAhD4AIIQ+AECEPgBghD4AAIU+ACCFPgBAhT4AYIU+AACGPgAghj4AQIY+AGCGPgAAhz4AIIc+AECHPgBghz4AAIg+ACCIPgBAiD4AYIg+AACJPgAgiT4AQIk+AGCJPgAAij4AIIo+AECKPgBgij4AAIs+ACCLPgBAiz4AYIs+AACMPgAgjD4AQIw+AGCMPgAAjT4AII0+AECNPgBgjT4AAI4+ACCOPgBAjj4AYI4+AACPPgAgjz4AQI8+AGCPPgAAkD4AIJA+AECQPgBgkD4AAJE+ACCRPgBAkT4AYJE+AACSPgAgkj4AQJI+AGCSPgAAkz4AIJM+AECTPgBgkz4AAJQ+ACCUPgBAlD4AYJQ+AACVPgAglT4AQJU+AGCVPgAAlj4AIJY+AECWPgBglj4AAJc+ACCXPgBAlz4AYJc+AACYPgAgmD4AQJg+AGCYPgAAmT4AIJk+AECZPgBgmT4AAJo+ACCaPgBAmj4AYJo+AACbPgAgmz4AQJs+AGCbPgAAnD4AIJw+AECcPgBgnD4AAJ0+ACCdPgBAnT4AYJ0+AACePgAgnj4AQJ4+AGCePgAAnz4AIJ8+AECfPgBgnz4AABA7AAAgOwAAMDsAAEA7AAAQOwAAIDsAADA7AABAOwAAEDsAACA7AAAwOwAAQDsAABA7AAAgOwAAMDsAAEA7AAAQOwAAIDsAADA7AABAOwAAEDsAACA7AAAwOwAAQDsAABA7AAAgOwAAMDsAAEA7AAAQOwAAIDsAADA7AABAOwAAEDsAACA7AAAwOwAAQDsAABA7AAAgOwAAMDsAAEA7AAAQOwAAIDsAADA7AABAOwAAEDsAACA7AAAwOwAAQDsAABA7AAAgOwAAMDsAAEA7AAAQOwAAIDsAADA7AABAOwAAEDsAACA7AAAwOwAAQDsAABA7AAAgOwAAMDsAAEA7AAAQOwAAIDsAADA7AABAOwAAEDsAACA7AAAwOwAAQDsAABA7AAAgOwAAMDsAAEA7AAAQOwAAIDsAADA7AABAOwAAEDsAACA7AAAwOwAAQDsAABA7AAAgOwAAMDsAAEA7AAAQOwAAIDsAADA7AABAOwAAEDsAACA7AAAwOwAAQDsAABA7AAAgOwAAMDsAAEA7AAAQOwAAIDsAADA7AABAOwAAEDsAACA7AAAwOwAAQDsAABA7AAAgOwAAMDsAAEA7AAAQOwAAIDsAADA7AABAOwAAEDsAACA7AAAwOwAAQDsAABA7AAAgOwAAMDsAAEA7AAAQOwAAIDsAADA7AABAOw=="
+                            },
+                            "shape": {
+                              "bytes": {
+                                "region": {
+                                  "texture": {
+                                    "level": 0,
+                                    "slice": 0,
+                                    "aspect": "color",
+                                    "sample": 0,
+                                    "origin": [
+                                      0,
+                                      0,
+                                      0
+                                    ],
+                                    "size": [
+                                      8,
+                                      8,
+                                      1
+                                    ]
+                                  }
+                                },
+                                "element": "f32",
+                                "row_offset": 0,
+                                "row_elements": 32,
+                                "row_pitch": 128,
+                                "rows": 8,
+                                "image_pitch": 1024,
+                                "images": 1,
+                                "gaps": "compared"
+                              }
+                            }
+                          }
+                        },
+                        {
+                          "name": "color1",
+                          "observed": {
+                            "value": {
+                              "bytes": "AICAPgCggD4AwIA+AOCAPgCAgT4AoIE+AMCBPgDggT4AgII+AKCCPgDAgj4A4II+AICDPgCggz4AwIM+AOCDPgCAhD4AoIQ+AMCEPgDghD4AgIU+AKCFPgDAhT4A4IU+AICGPgCghj4AwIY+AOCGPgCAhz4AoIc+AMCHPgDghz4AgIg+AKCIPgDAiD4A4Ig+AICJPgCgiT4AwIk+AOCJPgCAij4AoIo+AMCKPgDgij4AgIs+AKCLPgDAiz4A4Is+AICMPgCgjD4AwIw+AOCMPgCAjT4AoI0+AMCNPgDgjT4AgI4+AKCOPgDAjj4A4I4+AICPPgCgjz4AwI8+AOCPPgCAkD4AoJA+AMCQPgDgkD4AgJE+AKCRPgDAkT4A4JE+AICSPgCgkj4AwJI+AOCSPgCAkz4AoJM+AMCTPgDgkz4AgJQ+AKCUPgDAlD4A4JQ+AICVPgCglT4AwJU+AOCVPgCAlj4AoJY+AMCWPgDglj4AgJc+AKCXPgDAlz4A4Jc+AICYPgCgmD4AwJg+AOCYPgCAmT4AoJk+AMCZPgDgmT4AgJo+AKCaPgDAmj4A4Jo+AICbPgCgmz4AwJs+AOCbPgCAnD4AoJw+AMCcPgDgnD4AgJ0+AKCdPgDAnT4A4J0+AICePgCgnj4AwJ4+AOCePgCAnz4AoJ8+AMCfPgDgnz4AAFA7AABgOwAAcDsAAIA7AABQOwAAYDsAAHA7AACAOwAAUDsAAGA7AABwOwAAgDsAAFA7AABgOwAAcDsAAIA7AABQOwAAYDsAAHA7AACAOwAAUDsAAGA7AABwOwAAgDsAAFA7AABgOwAAcDsAAIA7AABQOwAAYDsAAHA7AACAOwAAUDsAAGA7AABwOwAAgDsAAFA7AABgOwAAcDsAAIA7AABQOwAAYDsAAHA7AACAOwAAUDsAAGA7AABwOwAAgDsAAFA7AABgOwAAcDsAAIA7AABQOwAAYDsAAHA7AACAOwAAUDsAAGA7AABwOwAAgDsAAFA7AABgOwAAcDsAAIA7AABQOwAAYDsAAHA7AACAOwAAUDsAAGA7AABwOwAAgDsAAFA7AABgOwAAcDsAAIA7AABQOwAAYDsAAHA7AACAOwAAUDsAAGA7AABwOwAAgDsAAFA7AABgOwAAcDsAAIA7AABQOwAAYDsAAHA7AACAOwAAUDsAAGA7AABwOwAAgDsAAFA7AABgOwAAcDsAAIA7AABQOwAAYDsAAHA7AACAOwAAUDsAAGA7AABwOwAAgDsAAFA7AABgOwAAcDsAAIA7AABQOwAAYDsAAHA7AACAOwAAUDsAAGA7AABwOwAAgDsAAFA7AABgOwAAcDsAAIA7AABQOwAAYDsAAHA7AACAOw=="
+                            },
+                            "shape": {
+                              "bytes": {
+                                "region": {
+                                  "texture": {
+                                    "level": 0,
+                                    "slice": 0,
+                                    "aspect": "color",
+                                    "sample": 0,
+                                    "origin": [
+                                      0,
+                                      0,
+                                      0
+                                    ],
+                                    "size": [
+                                      8,
+                                      8,
+                                      1
+                                    ]
+                                  }
+                                },
+                                "element": "f32",
+                                "row_offset": 0,
+                                "row_elements": 32,
+                                "row_pitch": 128,
+                                "rows": 8,
+                                "image_pitch": 1024,
+                                "images": 1,
+                                "gaps": "compared"
+                              }
+                            }
+                          }
+                        }
+                      ]
+                    },
+                    {
+                      "name": "MTLPixelFormatRGBA32Float+MTLPixelFormatR32Float/MTLLoadActionLoad+MTLLoadActionLoad",
+                      "observed": {
+                        "value": "absent"
+                      },
+                      "children": [
+                        {
+                          "name": "color0",
+                          "observed": {
+                            "value": {
+                              "bytes": "AACAPgAggD4AQIA+AGCAPgAAgT4AIIE+AECBPgBggT4AAII+ACCCPgBAgj4AYII+AACDPgAggz4AQIM+AGCDPgAAhD4AIIQ+AECEPgBghD4AAIU+ACCFPgBAhT4AYIU+AACGPgAghj4AQIY+AGCGPgAAhz4AIIc+AECHPgBghz4AAIg+ACCIPgBAiD4AYIg+AACJPgAgiT4AQIk+AGCJPgAAij4AIIo+AECKPgBgij4AAIs+ACCLPgBAiz4AYIs+AACMPgAgjD4AQIw+AGCMPgAAjT4AII0+AECNPgBgjT4AAI4+ACCOPgBAjj4AYI4+AACPPgAgjz4AQI8+AGCPPgAAkD4AIJA+AECQPgBgkD4AAJE+ACCRPgBAkT4AYJE+AACSPgAgkj4AQJI+AGCSPgAAkz4AIJM+AECTPgBgkz4AAJQ+ACCUPgBAlD4AYJQ+AACVPgAglT4AQJU+AGCVPgAAlj4AIJY+AECWPgBglj4AAJc+ACCXPgBAlz4AYJc+AACYPgAgmD4AQJg+AGCYPgAAmT4AIJk+AECZPgBgmT4AAJo+ACCaPgBAmj4AYJo+AACbPgAgmz4AQJs+AGCbPgAAnD4AIJw+AECcPgBgnD4AAJ0+ACCdPgBAnT4AYJ0+AACePgAgnj4AQJ4+AGCePgAAnz4AIJ8+AECfPgBgnz4AAIA5AAAAOgAAQDoAAIA6AACAOQAAADoAAEA6AACAOgAAgDkAAAA6AABAOgAAgDoAAIA5AAAAOgAAQDoAAIA6AACAOQAAADoAAEA6AACAOgAAgDkAAAA6AABAOgAAgDoAAIA5AAAAOgAAQDoAAIA6AACAOQAAADoAAEA6AACAOgAAgDkAAAA6AABAOgAAgDoAAIA5AAAAOgAAQDoAAIA6AACAOQAAADoAAEA6AACAOgAAgDkAAAA6AABAOgAAgDoAAIA5AAAAOgAAQDoAAIA6AACAOQAAADoAAEA6AACAOgAAgDkAAAA6AABAOgAAgDoAAIA5AAAAOgAAQDoAAIA6AACAOQAAADoAAEA6AACAOgAAgDkAAAA6AABAOgAAgDoAAIA5AAAAOgAAQDoAAIA6AACAOQAAADoAAEA6AACAOgAAgDkAAAA6AABAOgAAgDoAAIA5AAAAOgAAQDoAAIA6AACAOQAAADoAAEA6AACAOgAAgDkAAAA6AABAOgAAgDoAAIA5AAAAOgAAQDoAAIA6AACAOQAAADoAAEA6AACAOgAAgDkAAAA6AABAOgAAgDoAAIA5AAAAOgAAQDoAAIA6AACAOQAAADoAAEA6AACAOgAAgDkAAAA6AABAOgAAgDoAAIA5AAAAOgAAQDoAAIA6AACAOQAAADoAAEA6AACAOg=="
+                            },
+                            "shape": {
+                              "bytes": {
+                                "region": {
+                                  "texture": {
+                                    "level": 0,
+                                    "slice": 0,
+                                    "aspect": "color",
+                                    "sample": 0,
+                                    "origin": [
+                                      0,
+                                      0,
+                                      0
+                                    ],
+                                    "size": [
+                                      8,
+                                      8,
+                                      1
+                                    ]
+                                  }
+                                },
+                                "element": "f32",
+                                "row_offset": 0,
+                                "row_elements": 32,
+                                "row_pitch": 128,
+                                "rows": 8,
+                                "image_pitch": 1024,
+                                "images": 1,
+                                "gaps": "compared"
+                              }
+                            }
+                          }
+                        },
+                        {
+                          "name": "color1",
+                          "observed": {
+                            "value": {
+                              "bytes": "AICAPgCAgT4AgII+AICDPgCAhD4AgIU+AICGPgCAhz4AgIg+AICJPgCAij4AgIs+AICMPgCAjT4AgI4+AICPPgCAkD4AgJE+AICSPgCAkz4AgJQ+AICVPgCAlj4AgJc+AICYPgCAmT4AgJo+AICbPgCAnD4AgJ0+AICePgCAnz4AAKA6AACgOgAAoDoAAKA6AACgOgAAoDoAAKA6AACgOgAAoDoAAKA6AACgOgAAoDoAAKA6AACgOgAAoDoAAKA6AACgOgAAoDoAAKA6AACgOgAAoDoAAKA6AACgOgAAoDoAAKA6AACgOgAAoDoAAKA6AACgOgAAoDoAAKA6AACgOg=="
+                            },
+                            "shape": {
+                              "bytes": {
+                                "region": {
+                                  "texture": {
+                                    "level": 0,
+                                    "slice": 0,
+                                    "aspect": "color",
+                                    "sample": 0,
+                                    "origin": [
+                                      0,
+                                      0,
+                                      0
+                                    ],
+                                    "size": [
+                                      8,
+                                      8,
+                                      1
+                                    ]
+                                  }
+                                },
+                                "element": "f32",
+                                "row_offset": 0,
+                                "row_elements": 8,
+                                "row_pitch": 32,
+                                "rows": 8,
+                                "image_pitch": 256,
+                                "images": 1,
+                                "gaps": "compared"
+                              }
+                            }
+                          }
+                        }
+                      ]
+                    },
+                    {
+                      "name": "MTLPixelFormatRGBA32Float+MTLPixelFormatR32Float/MTLLoadActionLoad+MTLLoadActionClear",
+                      "observed": {
+                        "value": "absent"
+                      },
+                      "children": [
+                        {
+                          "name": "color0",
+                          "observed": {
+                            "value": {
+                              "bytes": "AACAPgAggD4AQIA+AGCAPgAAgT4AIIE+AECBPgBggT4AAII+ACCCPgBAgj4AYII+AACDPgAggz4AQIM+AGCDPgAAhD4AIIQ+AECEPgBghD4AAIU+ACCFPgBAhT4AYIU+AACGPgAghj4AQIY+AGCGPgAAhz4AIIc+AECHPgBghz4AAIg+ACCIPgBAiD4AYIg+AACJPgAgiT4AQIk+AGCJPgAAij4AIIo+AECKPgBgij4AAIs+ACCLPgBAiz4AYIs+AACMPgAgjD4AQIw+AGCMPgAAjT4AII0+AECNPgBgjT4AAI4+ACCOPgBAjj4AYI4+AACPPgAgjz4AQI8+AGCPPgAAkD4AIJA+AECQPgBgkD4AAJE+ACCRPgBAkT4AYJE+AACSPgAgkj4AQJI+AGCSPgAAkz4AIJM+AECTPgBgkz4AAJQ+ACCUPgBAlD4AYJQ+AACVPgAglT4AQJU+AGCVPgAAlj4AIJY+AECWPgBglj4AAJc+ACCXPgBAlz4AYJc+AACYPgAgmD4AQJg+AGCYPgAAmT4AIJk+AECZPgBgmT4AAJo+ACCaPgBAmj4AYJo+AACbPgAgmz4AQJs+AGCbPgAAnD4AIJw+AECcPgBgnD4AAJ0+ACCdPgBAnT4AYJ0+AACePgAgnj4AQJ4+AGCePgAAnz4AIJ8+AECfPgBgnz4AAIA5AAAAOgAAQDoAAIA6AACAOQAAADoAAEA6AACAOgAAgDkAAAA6AABAOgAAgDoAAIA5AAAAOgAAQDoAAIA6AACAOQAAADoAAEA6AACAOgAAgDkAAAA6AABAOgAAgDoAAIA5AAAAOgAAQDoAAIA6AACAOQAAADoAAEA6AACAOgAAgDkAAAA6AABAOgAAgDoAAIA5AAAAOgAAQDoAAIA6AACAOQAAADoAAEA6AACAOgAAgDkAAAA6AABAOgAAgDoAAIA5AAAAOgAAQDoAAIA6AACAOQAAADoAAEA6AACAOgAAgDkAAAA6AABAOgAAgDoAAIA5AAAAOgAAQDoAAIA6AACAOQAAADoAAEA6AACAOgAAgDkAAAA6AABAOgAAgDoAAIA5AAAAOgAAQDoAAIA6AACAOQAAADoAAEA6AACAOgAAgDkAAAA6AABAOgAAgDoAAIA5AAAAOgAAQDoAAIA6AACAOQAAADoAAEA6AACAOgAAgDkAAAA6AABAOgAAgDoAAIA5AAAAOgAAQDoAAIA6AACAOQAAADoAAEA6AACAOgAAgDkAAAA6AABAOgAAgDoAAIA5AAAAOgAAQDoAAIA6AACAOQAAADoAAEA6AACAOgAAgDkAAAA6AABAOgAAgDoAAIA5AAAAOgAAQDoAAIA6AACAOQAAADoAAEA6AACAOg=="
+                            },
+                            "shape": {
+                              "bytes": {
+                                "region": {
+                                  "texture": {
+                                    "level": 0,
+                                    "slice": 0,
+                                    "aspect": "color",
+                                    "sample": 0,
+                                    "origin": [
+                                      0,
+                                      0,
+                                      0
+                                    ],
+                                    "size": [
+                                      8,
+                                      8,
+                                      1
+                                    ]
+                                  }
+                                },
+                                "element": "f32",
+                                "row_offset": 0,
+                                "row_elements": 32,
+                                "row_pitch": 128,
+                                "rows": 8,
+                                "image_pitch": 1024,
+                                "images": 1,
+                                "gaps": "compared"
+                              }
+                            }
+                          }
+                        },
+                        {
+                          "name": "color1",
+                          "observed": {
+                            "value": {
+                              "bytes": "AICAPgCAgT4AgII+AICDPgCAhD4AgIU+AICGPgCAhz4AgIg+AICJPgCAij4AgIs+AICMPgCAjT4AgI4+AICPPgCAkD4AgJE+AICSPgCAkz4AgJQ+AICVPgCAlj4AgJc+AICYPgCAmT4AgJo+AICbPgCAnD4AgJ0+AICePgCAnz4AAFA7AABQOwAAUDsAAFA7AABQOwAAUDsAAFA7AABQOwAAUDsAAFA7AABQOwAAUDsAAFA7AABQOwAAUDsAAFA7AABQOwAAUDsAAFA7AABQOwAAUDsAAFA7AABQOwAAUDsAAFA7AABQOwAAUDsAAFA7AABQOwAAUDsAAFA7AABQOw=="
+                            },
+                            "shape": {
+                              "bytes": {
+                                "region": {
+                                  "texture": {
+                                    "level": 0,
+                                    "slice": 0,
+                                    "aspect": "color",
+                                    "sample": 0,
+                                    "origin": [
+                                      0,
+                                      0,
+                                      0
+                                    ],
+                                    "size": [
+                                      8,
+                                      8,
+                                      1
+                                    ]
+                                  }
+                                },
+                                "element": "f32",
+                                "row_offset": 0,
+                                "row_elements": 8,
+                                "row_pitch": 32,
+                                "rows": 8,
+                                "image_pitch": 256,
+                                "images": 1,
+                                "gaps": "compared"
+                              }
+                            }
+                          }
+                        }
+                      ]
+                    },
+                    {
+                      "name": "MTLPixelFormatRGBA32Float+MTLPixelFormatR32Float/MTLLoadActionClear+MTLLoadActionLoad",
+                      "observed": {
+                        "value": "absent"
+                      },
+                      "children": [
+                        {
+                          "name": "color0",
+                          "observed": {
+                            "value": {
+                              "bytes": "AACAPgAggD4AQIA+AGCAPgAAgT4AIIE+AECBPgBggT4AAII+ACCCPgBAgj4AYII+AACDPgAggz4AQIM+AGCDPgAAhD4AIIQ+AECEPgBghD4AAIU+ACCFPgBAhT4AYIU+AACGPgAghj4AQIY+AGCGPgAAhz4AIIc+AECHPgBghz4AAIg+ACCIPgBAiD4AYIg+AACJPgAgiT4AQIk+AGCJPgAAij4AIIo+AECKPgBgij4AAIs+ACCLPgBAiz4AYIs+AACMPgAgjD4AQIw+AGCMPgAAjT4AII0+AECNPgBgjT4AAI4+ACCOPgBAjj4AYI4+AACPPgAgjz4AQI8+AGCPPgAAkD4AIJA+AECQPgBgkD4AAJE+ACCRPgBAkT4AYJE+AACSPgAgkj4AQJI+AGCSPgAAkz4AIJM+AECTPgBgkz4AAJQ+ACCUPgBAlD4AYJQ+AACVPgAglT4AQJU+AGCVPgAAlj4AIJY+AECWPgBglj4AAJc+ACCXPgBAlz4AYJc+AACYPgAgmD4AQJg+AGCYPgAAmT4AIJk+AECZPgBgmT4AAJo+ACCaPgBAmj4AYJo+AACbPgAgmz4AQJs+AGCbPgAAnD4AIJw+AECcPgBgnD4AAJ0+ACCdPgBAnT4AYJ0+AACePgAgnj4AQJ4+AGCePgAAnz4AIJ8+AECfPgBgnz4AABA7AAAgOwAAMDsAAEA7AAAQOwAAIDsAADA7AABAOwAAEDsAACA7AAAwOwAAQDsAABA7AAAgOwAAMDsAAEA7AAAQOwAAIDsAADA7AABAOwAAEDsAACA7AAAwOwAAQDsAABA7AAAgOwAAMDsAAEA7AAAQOwAAIDsAADA7AABAOwAAEDsAACA7AAAwOwAAQDsAABA7AAAgOwAAMDsAAEA7AAAQOwAAIDsAADA7AABAOwAAEDsAACA7AAAwOwAAQDsAABA7AAAgOwAAMDsAAEA7AAAQOwAAIDsAADA7AABAOwAAEDsAACA7AAAwOwAAQDsAABA7AAAgOwAAMDsAAEA7AAAQOwAAIDsAADA7AABAOwAAEDsAACA7AAAwOwAAQDsAABA7AAAgOwAAMDsAAEA7AAAQOwAAIDsAADA7AABAOwAAEDsAACA7AAAwOwAAQDsAABA7AAAgOwAAMDsAAEA7AAAQOwAAIDsAADA7AABAOwAAEDsAACA7AAAwOwAAQDsAABA7AAAgOwAAMDsAAEA7AAAQOwAAIDsAADA7AABAOwAAEDsAACA7AAAwOwAAQDsAABA7AAAgOwAAMDsAAEA7AAAQOwAAIDsAADA7AABAOwAAEDsAACA7AAAwOwAAQDsAABA7AAAgOwAAMDsAAEA7AAAQOwAAIDsAADA7AABAOw=="
+                            },
+                            "shape": {
+                              "bytes": {
+                                "region": {
+                                  "texture": {
+                                    "level": 0,
+                                    "slice": 0,
+                                    "aspect": "color",
+                                    "sample": 0,
+                                    "origin": [
+                                      0,
+                                      0,
+                                      0
+                                    ],
+                                    "size": [
+                                      8,
+                                      8,
+                                      1
+                                    ]
+                                  }
+                                },
+                                "element": "f32",
+                                "row_offset": 0,
+                                "row_elements": 32,
+                                "row_pitch": 128,
+                                "rows": 8,
+                                "image_pitch": 1024,
+                                "images": 1,
+                                "gaps": "compared"
+                              }
+                            }
+                          }
+                        },
+                        {
+                          "name": "color1",
+                          "observed": {
+                            "value": {
+                              "bytes": "AICAPgCAgT4AgII+AICDPgCAhD4AgIU+AICGPgCAhz4AgIg+AICJPgCAij4AgIs+AICMPgCAjT4AgI4+AICPPgCAkD4AgJE+AICSPgCAkz4AgJQ+AICVPgCAlj4AgJc+AICYPgCAmT4AgJo+AICbPgCAnD4AgJ0+AICePgCAnz4AAKA6AACgOgAAoDoAAKA6AACgOgAAoDoAAKA6AACgOgAAoDoAAKA6AACgOgAAoDoAAKA6AACgOgAAoDoAAKA6AACgOgAAoDoAAKA6AACgOgAAoDoAAKA6AACgOgAAoDoAAKA6AACgOgAAoDoAAKA6AACgOgAAoDoAAKA6AACgOg=="
+                            },
+                            "shape": {
+                              "bytes": {
+                                "region": {
+                                  "texture": {
+                                    "level": 0,
+                                    "slice": 0,
+                                    "aspect": "color",
+                                    "sample": 0,
+                                    "origin": [
+                                      0,
+                                      0,
+                                      0
+                                    ],
+                                    "size": [
+                                      8,
+                                      8,
+                                      1
+                                    ]
+                                  }
+                                },
+                                "element": "f32",
+                                "row_offset": 0,
+                                "row_elements": 8,
+                                "row_pitch": 32,
+                                "rows": 8,
+                                "image_pitch": 256,
+                                "images": 1,
+                                "gaps": "compared"
+                              }
+                            }
+                          }
+                        }
+                      ]
+                    },
+                    {
+                      "name": "MTLPixelFormatRGBA32Float+MTLPixelFormatR32Float/MTLLoadActionClear+MTLLoadActionClear",
+                      "observed": {
+                        "value": "absent"
+                      },
+                      "children": [
+                        {
+                          "name": "color0",
+                          "observed": {
+                            "value": {
+                              "bytes": "AACAPgAggD4AQIA+AGCAPgAAgT4AIIE+AECBPgBggT4AAII+ACCCPgBAgj4AYII+AACDPgAggz4AQIM+AGCDPgAAhD4AIIQ+AECEPgBghD4AAIU+ACCFPgBAhT4AYIU+AACGPgAghj4AQIY+AGCGPgAAhz4AIIc+AECHPgBghz4AAIg+ACCIPgBAiD4AYIg+AACJPgAgiT4AQIk+AGCJPgAAij4AIIo+AECKPgBgij4AAIs+ACCLPgBAiz4AYIs+AACMPgAgjD4AQIw+AGCMPgAAjT4AII0+AECNPgBgjT4AAI4+ACCOPgBAjj4AYI4+AACPPgAgjz4AQI8+AGCPPgAAkD4AIJA+AECQPgBgkD4AAJE+ACCRPgBAkT4AYJE+AACSPgAgkj4AQJI+AGCSPgAAkz4AIJM+AECTPgBgkz4AAJQ+ACCUPgBAlD4AYJQ+AACVPgAglT4AQJU+AGCVPgAAlj4AIJY+AECWPgBglj4AAJc+ACCXPgBAlz4AYJc+AACYPgAgmD4AQJg+AGCYPgAAmT4AIJk+AECZPgBgmT4AAJo+ACCaPgBAmj4AYJo+AACbPgAgmz4AQJs+AGCbPgAAnD4AIJw+AECcPgBgnD4AAJ0+ACCdPgBAnT4AYJ0+AACePgAgnj4AQJ4+AGCePgAAnz4AIJ8+AECfPgBgnz4AABA7AAAgOwAAMDsAAEA7AAAQOwAAIDsAADA7AABAOwAAEDsAACA7AAAwOwAAQDsAABA7AAAgOwAAMDsAAEA7AAAQOwAAIDsAADA7AABAOwAAEDsAACA7AAAwOwAAQDsAABA7AAAgOwAAMDsAAEA7AAAQOwAAIDsAADA7AABAOwAAEDsAACA7AAAwOwAAQDsAABA7AAAgOwAAMDsAAEA7AAAQOwAAIDsAADA7AABAOwAAEDsAACA7AAAwOwAAQDsAABA7AAAgOwAAMDsAAEA7AAAQOwAAIDsAADA7AABAOwAAEDsAACA7AAAwOwAAQDsAABA7AAAgOwAAMDsAAEA7AAAQOwAAIDsAADA7AABAOwAAEDsAACA7AAAwOwAAQDsAABA7AAAgOwAAMDsAAEA7AAAQOwAAIDsAADA7AABAOwAAEDsAACA7AAAwOwAAQDsAABA7AAAgOwAAMDsAAEA7AAAQOwAAIDsAADA7AABAOwAAEDsAACA7AAAwOwAAQDsAABA7AAAgOwAAMDsAAEA7AAAQOwAAIDsAADA7AABAOwAAEDsAACA7AAAwOwAAQDsAABA7AAAgOwAAMDsAAEA7AAAQOwAAIDsAADA7AABAOwAAEDsAACA7AAAwOwAAQDsAABA7AAAgOwAAMDsAAEA7AAAQOwAAIDsAADA7AABAOw=="
+                            },
+                            "shape": {
+                              "bytes": {
+                                "region": {
+                                  "texture": {
+                                    "level": 0,
+                                    "slice": 0,
+                                    "aspect": "color",
+                                    "sample": 0,
+                                    "origin": [
+                                      0,
+                                      0,
+                                      0
+                                    ],
+                                    "size": [
+                                      8,
+                                      8,
+                                      1
+                                    ]
+                                  }
+                                },
+                                "element": "f32",
+                                "row_offset": 0,
+                                "row_elements": 32,
+                                "row_pitch": 128,
+                                "rows": 8,
+                                "image_pitch": 1024,
+                                "images": 1,
+                                "gaps": "compared"
+                              }
+                            }
+                          }
+                        },
+                        {
+                          "name": "color1",
+                          "observed": {
+                            "value": {
+                              "bytes": "AICAPgCAgT4AgII+AICDPgCAhD4AgIU+AICGPgCAhz4AgIg+AICJPgCAij4AgIs+AICMPgCAjT4AgI4+AICPPgCAkD4AgJE+AICSPgCAkz4AgJQ+AICVPgCAlj4AgJc+AICYPgCAmT4AgJo+AICbPgCAnD4AgJ0+AICePgCAnz4AAFA7AABQOwAAUDsAAFA7AABQOwAAUDsAAFA7AABQOwAAUDsAAFA7AABQOwAAUDsAAFA7AABQOwAAUDsAAFA7AABQOwAAUDsAAFA7AABQOwAAUDsAAFA7AABQOwAAUDsAAFA7AABQOwAAUDsAAFA7AABQOwAAUDsAAFA7AABQOw=="
+                            },
+                            "shape": {
+                              "bytes": {
+                                "region": {
+                                  "texture": {
+                                    "level": 0,
+                                    "slice": 0,
+                                    "aspect": "color",
+                                    "sample": 0,
+                                    "origin": [
+                                      0,
+                                      0,
+                                      0
+                                    ],
+                                    "size": [
+                                      8,
+                                      8,
+                                      1
+                                    ]
+                                  }
+                                },
+                                "element": "f32",
+                                "row_offset": 0,
+                                "row_elements": 8,
+                                "row_pitch": 32,
+                                "rows": 8,
+                                "image_pitch": 256,
+                                "images": 1,
+                                "gaps": "compared"
+                              }
+                            }
+                          }
+                        }
+                      ]
+                    },
+                    {
+                      "name": "MTLPixelFormatR32Float+MTLPixelFormatRGBA32Float/MTLLoadActionLoad+MTLLoadActionLoad",
+                      "observed": {
+                        "value": "absent"
+                      },
+                      "children": [
+                        {
+                          "name": "color0",
+                          "observed": {
+                            "value": {
+                              "bytes": "AACAPgAAgT4AAII+AACDPgAAhD4AAIU+AACGPgAAhz4AAIg+AACJPgAAij4AAIs+AACMPgAAjT4AAI4+AACPPgAAkD4AAJE+AACSPgAAkz4AAJQ+AACVPgAAlj4AAJc+AACYPgAAmT4AAJo+AACbPgAAnD4AAJ0+AACePgAAnz4AAIA5AACAOQAAgDkAAIA5AACAOQAAgDkAAIA5AACAOQAAgDkAAIA5AACAOQAAgDkAAIA5AACAOQAAgDkAAIA5AACAOQAAgDkAAIA5AACAOQAAgDkAAIA5AACAOQAAgDkAAIA5AACAOQAAgDkAAIA5AACAOQAAgDkAAIA5AACAOQ=="
+                            },
+                            "shape": {
+                              "bytes": {
+                                "region": {
+                                  "texture": {
+                                    "level": 0,
+                                    "slice": 0,
+                                    "aspect": "color",
+                                    "sample": 0,
+                                    "origin": [
+                                      0,
+                                      0,
+                                      0
+                                    ],
+                                    "size": [
+                                      8,
+                                      8,
+                                      1
+                                    ]
+                                  }
+                                },
+                                "element": "f32",
+                                "row_offset": 0,
+                                "row_elements": 8,
+                                "row_pitch": 32,
+                                "rows": 8,
+                                "image_pitch": 256,
+                                "images": 1,
+                                "gaps": "compared"
+                              }
+                            }
+                          }
+                        },
+                        {
+                          "name": "color1",
+                          "observed": {
+                            "value": {
+                              "bytes": "AICAPgCggD4AwIA+AOCAPgCAgT4AoIE+AMCBPgDggT4AgII+AKCCPgDAgj4A4II+AICDPgCggz4AwIM+AOCDPgCAhD4AoIQ+AMCEPgDghD4AgIU+AKCFPgDAhT4A4IU+AICGPgCghj4AwIY+AOCGPgCAhz4AoIc+AMCHPgDghz4AgIg+AKCIPgDAiD4A4Ig+AICJPgCgiT4AwIk+AOCJPgCAij4AoIo+AMCKPgDgij4AgIs+AKCLPgDAiz4A4Is+AICMPgCgjD4AwIw+AOCMPgCAjT4AoI0+AMCNPgDgjT4AgI4+AKCOPgDAjj4A4I4+AICPPgCgjz4AwI8+AOCPPgCAkD4AoJA+AMCQPgDgkD4AgJE+AKCRPgDAkT4A4JE+AICSPgCgkj4AwJI+AOCSPgCAkz4AoJM+AMCTPgDgkz4AgJQ+AKCUPgDAlD4A4JQ+AICVPgCglT4AwJU+AOCVPgCAlj4AoJY+AMCWPgDglj4AgJc+AKCXPgDAlz4A4Jc+AICYPgCgmD4AwJg+AOCYPgCAmT4AoJk+AMCZPgDgmT4AgJo+AKCaPgDAmj4A4Jo+AICbPgCgmz4AwJs+AOCbPgCAnD4AoJw+AMCcPgDgnD4AgJ0+AKCdPgDAnT4A4J0+AICePgCgnj4AwJ4+AOCePgCAnz4AoJ8+AMCfPgDgnz4AAKA6AADAOgAA4DoAAAA7AACgOgAAwDoAAOA6AAAAOwAAoDoAAMA6AADgOgAAADsAAKA6AADAOgAA4DoAAAA7AACgOgAAwDoAAOA6AAAAOwAAoDoAAMA6AADgOgAAADsAAKA6AADAOgAA4DoAAAA7AACgOgAAwDoAAOA6AAAAOwAAoDoAAMA6AADgOgAAADsAAKA6AADAOgAA4DoAAAA7AACgOgAAwDoAAOA6AAAAOwAAoDoAAMA6AADgOgAAADsAAKA6AADAOgAA4DoAAAA7AACgOgAAwDoAAOA6AAAAOwAAoDoAAMA6AADgOgAAADsAAKA6AADAOgAA4DoAAAA7AACgOgAAwDoAAOA6AAAAOwAAoDoAAMA6AADgOgAAADsAAKA6AADAOgAA4DoAAAA7AACgOgAAwDoAAOA6AAAAOwAAoDoAAMA6AADgOgAAADsAAKA6AADAOgAA4DoAAAA7AACgOgAAwDoAAOA6AAAAOwAAoDoAAMA6AADgOgAAADsAAKA6AADAOgAA4DoAAAA7AACgOgAAwDoAAOA6AAAAOwAAoDoAAMA6AADgOgAAADsAAKA6AADAOgAA4DoAAAA7AACgOgAAwDoAAOA6AAAAOwAAoDoAAMA6AADgOgAAADsAAKA6AADAOgAA4DoAAAA7AACgOgAAwDoAAOA6AAAAOw=="
+                            },
+                            "shape": {
+                              "bytes": {
+                                "region": {
+                                  "texture": {
+                                    "level": 0,
+                                    "slice": 0,
+                                    "aspect": "color",
+                                    "sample": 0,
+                                    "origin": [
+                                      0,
+                                      0,
+                                      0
+                                    ],
+                                    "size": [
+                                      8,
+                                      8,
+                                      1
+                                    ]
+                                  }
+                                },
+                                "element": "f32",
+                                "row_offset": 0,
+                                "row_elements": 32,
+                                "row_pitch": 128,
+                                "rows": 8,
+                                "image_pitch": 1024,
+                                "images": 1,
+                                "gaps": "compared"
+                              }
+                            }
+                          }
+                        }
+                      ]
+                    },
+                    {
+                      "name": "MTLPixelFormatR32Float+MTLPixelFormatRGBA32Float/MTLLoadActionLoad+MTLLoadActionClear",
+                      "observed": {
+                        "value": "absent"
+                      },
+                      "children": [
+                        {
+                          "name": "color0",
+                          "observed": {
+                            "value": {
+                              "bytes": "AACAPgAAgT4AAII+AACDPgAAhD4AAIU+AACGPgAAhz4AAIg+AACJPgAAij4AAIs+AACMPgAAjT4AAI4+AACPPgAAkD4AAJE+AACSPgAAkz4AAJQ+AACVPgAAlj4AAJc+AACYPgAAmT4AAJo+AACbPgAAnD4AAJ0+AACePgAAnz4AAIA5AACAOQAAgDkAAIA5AACAOQAAgDkAAIA5AACAOQAAgDkAAIA5AACAOQAAgDkAAIA5AACAOQAAgDkAAIA5AACAOQAAgDkAAIA5AACAOQAAgDkAAIA5AACAOQAAgDkAAIA5AACAOQAAgDkAAIA5AACAOQAAgDkAAIA5AACAOQ=="
+                            },
+                            "shape": {
+                              "bytes": {
+                                "region": {
+                                  "texture": {
+                                    "level": 0,
+                                    "slice": 0,
+                                    "aspect": "color",
+                                    "sample": 0,
+                                    "origin": [
+                                      0,
+                                      0,
+                                      0
+                                    ],
+                                    "size": [
+                                      8,
+                                      8,
+                                      1
+                                    ]
+                                  }
+                                },
+                                "element": "f32",
+                                "row_offset": 0,
+                                "row_elements": 8,
+                                "row_pitch": 32,
+                                "rows": 8,
+                                "image_pitch": 256,
+                                "images": 1,
+                                "gaps": "compared"
+                              }
+                            }
+                          }
+                        },
+                        {
+                          "name": "color1",
+                          "observed": {
+                            "value": {
+                              "bytes": "AICAPgCggD4AwIA+AOCAPgCAgT4AoIE+AMCBPgDggT4AgII+AKCCPgDAgj4A4II+AICDPgCggz4AwIM+AOCDPgCAhD4AoIQ+AMCEPgDghD4AgIU+AKCFPgDAhT4A4IU+AICGPgCghj4AwIY+AOCGPgCAhz4AoIc+AMCHPgDghz4AgIg+AKCIPgDAiD4A4Ig+AICJPgCgiT4AwIk+AOCJPgCAij4AoIo+AMCKPgDgij4AgIs+AKCLPgDAiz4A4Is+AICMPgCgjD4AwIw+AOCMPgCAjT4AoI0+AMCNPgDgjT4AgI4+AKCOPgDAjj4A4I4+AICPPgCgjz4AwI8+AOCPPgCAkD4AoJA+AMCQPgDgkD4AgJE+AKCRPgDAkT4A4JE+AICSPgCgkj4AwJI+AOCSPgCAkz4AoJM+AMCTPgDgkz4AgJQ+AKCUPgDAlD4A4JQ+AICVPgCglT4AwJU+AOCVPgCAlj4AoJY+AMCWPgDglj4AgJc+AKCXPgDAlz4A4Jc+AICYPgCgmD4AwJg+AOCYPgCAmT4AoJk+AMCZPgDgmT4AgJo+AKCaPgDAmj4A4Jo+AICbPgCgmz4AwJs+AOCbPgCAnD4AoJw+AMCcPgDgnD4AgJ0+AKCdPgDAnT4A4J0+AICePgCgnj4AwJ4+AOCePgCAnz4AoJ8+AMCfPgDgnz4AAFA7AABgOwAAcDsAAIA7AABQOwAAYDsAAHA7AACAOwAAUDsAAGA7AABwOwAAgDsAAFA7AABgOwAAcDsAAIA7AABQOwAAYDsAAHA7AACAOwAAUDsAAGA7AABwOwAAgDsAAFA7AABgOwAAcDsAAIA7AABQOwAAYDsAAHA7AACAOwAAUDsAAGA7AABwOwAAgDsAAFA7AABgOwAAcDsAAIA7AABQOwAAYDsAAHA7AACAOwAAUDsAAGA7AABwOwAAgDsAAFA7AABgOwAAcDsAAIA7AABQOwAAYDsAAHA7AACAOwAAUDsAAGA7AABwOwAAgDsAAFA7AABgOwAAcDsAAIA7AABQOwAAYDsAAHA7AACAOwAAUDsAAGA7AABwOwAAgDsAAFA7AABgOwAAcDsAAIA7AABQOwAAYDsAAHA7AACAOwAAUDsAAGA7AABwOwAAgDsAAFA7AABgOwAAcDsAAIA7AABQOwAAYDsAAHA7AACAOwAAUDsAAGA7AABwOwAAgDsAAFA7AABgOwAAcDsAAIA7AABQOwAAYDsAAHA7AACAOwAAUDsAAGA7AABwOwAAgDsAAFA7AABgOwAAcDsAAIA7AABQOwAAYDsAAHA7AACAOwAAUDsAAGA7AABwOwAAgDsAAFA7AABgOwAAcDsAAIA7AABQOwAAYDsAAHA7AACAOw=="
+                            },
+                            "shape": {
+                              "bytes": {
+                                "region": {
+                                  "texture": {
+                                    "level": 0,
+                                    "slice": 0,
+                                    "aspect": "color",
+                                    "sample": 0,
+                                    "origin": [
+                                      0,
+                                      0,
+                                      0
+                                    ],
+                                    "size": [
+                                      8,
+                                      8,
+                                      1
+                                    ]
+                                  }
+                                },
+                                "element": "f32",
+                                "row_offset": 0,
+                                "row_elements": 32,
+                                "row_pitch": 128,
+                                "rows": 8,
+                                "image_pitch": 1024,
+                                "images": 1,
+                                "gaps": "compared"
+                              }
+                            }
+                          }
+                        }
+                      ]
+                    },
+                    {
+                      "name": "MTLPixelFormatR32Float+MTLPixelFormatRGBA32Float/MTLLoadActionClear+MTLLoadActionLoad",
+                      "observed": {
+                        "value": "absent"
+                      },
+                      "children": [
+                        {
+                          "name": "color0",
+                          "observed": {
+                            "value": {
+                              "bytes": "AACAPgAAgT4AAII+AACDPgAAhD4AAIU+AACGPgAAhz4AAIg+AACJPgAAij4AAIs+AACMPgAAjT4AAI4+AACPPgAAkD4AAJE+AACSPgAAkz4AAJQ+AACVPgAAlj4AAJc+AACYPgAAmT4AAJo+AACbPgAAnD4AAJ0+AACePgAAnz4AABA7AAAQOwAAEDsAABA7AAAQOwAAEDsAABA7AAAQOwAAEDsAABA7AAAQOwAAEDsAABA7AAAQOwAAEDsAABA7AAAQOwAAEDsAABA7AAAQOwAAEDsAABA7AAAQOwAAEDsAABA7AAAQOwAAEDsAABA7AAAQOwAAEDsAABA7AAAQOw=="
+                            },
+                            "shape": {
+                              "bytes": {
+                                "region": {
+                                  "texture": {
+                                    "level": 0,
+                                    "slice": 0,
+                                    "aspect": "color",
+                                    "sample": 0,
+                                    "origin": [
+                                      0,
+                                      0,
+                                      0
+                                    ],
+                                    "size": [
+                                      8,
+                                      8,
+                                      1
+                                    ]
+                                  }
+                                },
+                                "element": "f32",
+                                "row_offset": 0,
+                                "row_elements": 8,
+                                "row_pitch": 32,
+                                "rows": 8,
+                                "image_pitch": 256,
+                                "images": 1,
+                                "gaps": "compared"
+                              }
+                            }
+                          }
+                        },
+                        {
+                          "name": "color1",
+                          "observed": {
+                            "value": {
+                              "bytes": "AICAPgCggD4AwIA+AOCAPgCAgT4AoIE+AMCBPgDggT4AgII+AKCCPgDAgj4A4II+AICDPgCggz4AwIM+AOCDPgCAhD4AoIQ+AMCEPgDghD4AgIU+AKCFPgDAhT4A4IU+AICGPgCghj4AwIY+AOCGPgCAhz4AoIc+AMCHPgDghz4AgIg+AKCIPgDAiD4A4Ig+AICJPgCgiT4AwIk+AOCJPgCAij4AoIo+AMCKPgDgij4AgIs+AKCLPgDAiz4A4Is+AICMPgCgjD4AwIw+AOCMPgCAjT4AoI0+AMCNPgDgjT4AgI4+AKCOPgDAjj4A4I4+AICPPgCgjz4AwI8+AOCPPgCAkD4AoJA+AMCQPgDgkD4AgJE+AKCRPgDAkT4A4JE+AICSPgCgkj4AwJI+AOCSPgCAkz4AoJM+AMCTPgDgkz4AgJQ+AKCUPgDAlD4A4JQ+AICVPgCglT4AwJU+AOCVPgCAlj4AoJY+AMCWPgDglj4AgJc+AKCXPgDAlz4A4Jc+AICYPgCgmD4AwJg+AOCYPgCAmT4AoJk+AMCZPgDgmT4AgJo+AKCaPgDAmj4A4Jo+AICbPgCgmz4AwJs+AOCbPgCAnD4AoJw+AMCcPgDgnD4AgJ0+AKCdPgDAnT4A4J0+AICePgCgnj4AwJ4+AOCePgCAnz4AoJ8+AMCfPgDgnz4AAKA6AADAOgAA4DoAAAA7AACgOgAAwDoAAOA6AAAAOwAAoDoAAMA6AADgOgAAADsAAKA6AADAOgAA4DoAAAA7AACgOgAAwDoAAOA6AAAAOwAAoDoAAMA6AADgOgAAADsAAKA6AADAOgAA4DoAAAA7AACgOgAAwDoAAOA6AAAAOwAAoDoAAMA6AADgOgAAADsAAKA6AADAOgAA4DoAAAA7AACgOgAAwDoAAOA6AAAAOwAAoDoAAMA6AADgOgAAADsAAKA6AADAOgAA4DoAAAA7AACgOgAAwDoAAOA6AAAAOwAAoDoAAMA6AADgOgAAADsAAKA6AADAOgAA4DoAAAA7AACgOgAAwDoAAOA6AAAAOwAAoDoAAMA6AADgOgAAADsAAKA6AADAOgAA4DoAAAA7AACgOgAAwDoAAOA6AAAAOwAAoDoAAMA6AADgOgAAADsAAKA6AADAOgAA4DoAAAA7AACgOgAAwDoAAOA6AAAAOwAAoDoAAMA6AADgOgAAADsAAKA6AADAOgAA4DoAAAA7AACgOgAAwDoAAOA6AAAAOwAAoDoAAMA6AADgOgAAADsAAKA6AADAOgAA4DoAAAA7AACgOgAAwDoAAOA6AAAAOwAAoDoAAMA6AADgOgAAADsAAKA6AADAOgAA4DoAAAA7AACgOgAAwDoAAOA6AAAAOw=="
+                            },
+                            "shape": {
+                              "bytes": {
+                                "region": {
+                                  "texture": {
+                                    "level": 0,
+                                    "slice": 0,
+                                    "aspect": "color",
+                                    "sample": 0,
+                                    "origin": [
+                                      0,
+                                      0,
+                                      0
+                                    ],
+                                    "size": [
+                                      8,
+                                      8,
+                                      1
+                                    ]
+                                  }
+                                },
+                                "element": "f32",
+                                "row_offset": 0,
+                                "row_elements": 32,
+                                "row_pitch": 128,
+                                "rows": 8,
+                                "image_pitch": 1024,
+                                "images": 1,
+                                "gaps": "compared"
+                              }
+                            }
+                          }
+                        }
+                      ]
+                    },
+                    {
+                      "name": "MTLPixelFormatR32Float+MTLPixelFormatRGBA32Float/MTLLoadActionClear+MTLLoadActionClear",
+                      "observed": {
+                        "value": "absent"
+                      },
+                      "children": [
+                        {
+                          "name": "color0",
+                          "observed": {
+                            "value": {
+                              "bytes": "AACAPgAAgT4AAII+AACDPgAAhD4AAIU+AACGPgAAhz4AAIg+AACJPgAAij4AAIs+AACMPgAAjT4AAI4+AACPPgAAkD4AAJE+AACSPgAAkz4AAJQ+AACVPgAAlj4AAJc+AACYPgAAmT4AAJo+AACbPgAAnD4AAJ0+AACePgAAnz4AABA7AAAQOwAAEDsAABA7AAAQOwAAEDsAABA7AAAQOwAAEDsAABA7AAAQOwAAEDsAABA7AAAQOwAAEDsAABA7AAAQOwAAEDsAABA7AAAQOwAAEDsAABA7AAAQOwAAEDsAABA7AAAQOwAAEDsAABA7AAAQOwAAEDsAABA7AAAQOw=="
+                            },
+                            "shape": {
+                              "bytes": {
+                                "region": {
+                                  "texture": {
+                                    "level": 0,
+                                    "slice": 0,
+                                    "aspect": "color",
+                                    "sample": 0,
+                                    "origin": [
+                                      0,
+                                      0,
+                                      0
+                                    ],
+                                    "size": [
+                                      8,
+                                      8,
+                                      1
+                                    ]
+                                  }
+                                },
+                                "element": "f32",
+                                "row_offset": 0,
+                                "row_elements": 8,
+                                "row_pitch": 32,
+                                "rows": 8,
+                                "image_pitch": 256,
+                                "images": 1,
+                                "gaps": "compared"
+                              }
+                            }
+                          }
+                        },
+                        {
+                          "name": "color1",
+                          "observed": {
+                            "value": {
+                              "bytes": "AICAPgCggD4AwIA+AOCAPgCAgT4AoIE+AMCBPgDggT4AgII+AKCCPgDAgj4A4II+AICDPgCggz4AwIM+AOCDPgCAhD4AoIQ+AMCEPgDghD4AgIU+AKCFPgDAhT4A4IU+AICGPgCghj4AwIY+AOCGPgCAhz4AoIc+AMCHPgDghz4AgIg+AKCIPgDAiD4A4Ig+AICJPgCgiT4AwIk+AOCJPgCAij4AoIo+AMCKPgDgij4AgIs+AKCLPgDAiz4A4Is+AICMPgCgjD4AwIw+AOCMPgCAjT4AoI0+AMCNPgDgjT4AgI4+AKCOPgDAjj4A4I4+AICPPgCgjz4AwI8+AOCPPgCAkD4AoJA+AMCQPgDgkD4AgJE+AKCRPgDAkT4A4JE+AICSPgCgkj4AwJI+AOCSPgCAkz4AoJM+AMCTPgDgkz4AgJQ+AKCUPgDAlD4A4JQ+AICVPgCglT4AwJU+AOCVPgCAlj4AoJY+AMCWPgDglj4AgJc+AKCXPgDAlz4A4Jc+AICYPgCgmD4AwJg+AOCYPgCAmT4AoJk+AMCZPgDgmT4AgJo+AKCaPgDAmj4A4Jo+AICbPgCgmz4AwJs+AOCbPgCAnD4AoJw+AMCcPgDgnD4AgJ0+AKCdPgDAnT4A4J0+AICePgCgnj4AwJ4+AOCePgCAnz4AoJ8+AMCfPgDgnz4AAFA7AABgOwAAcDsAAIA7AABQOwAAYDsAAHA7AACAOwAAUDsAAGA7AABwOwAAgDsAAFA7AABgOwAAcDsAAIA7AABQOwAAYDsAAHA7AACAOwAAUDsAAGA7AABwOwAAgDsAAFA7AABgOwAAcDsAAIA7AABQOwAAYDsAAHA7AACAOwAAUDsAAGA7AABwOwAAgDsAAFA7AABgOwAAcDsAAIA7AABQOwAAYDsAAHA7AACAOwAAUDsAAGA7AABwOwAAgDsAAFA7AABgOwAAcDsAAIA7AABQOwAAYDsAAHA7AACAOwAAUDsAAGA7AABwOwAAgDsAAFA7AABgOwAAcDsAAIA7AABQOwAAYDsAAHA7AACAOwAAUDsAAGA7AABwOwAAgDsAAFA7AABgOwAAcDsAAIA7AABQOwAAYDsAAHA7AACAOwAAUDsAAGA7AABwOwAAgDsAAFA7AABgOwAAcDsAAIA7AABQOwAAYDsAAHA7AACAOwAAUDsAAGA7AABwOwAAgDsAAFA7AABgOwAAcDsAAIA7AABQOwAAYDsAAHA7AACAOwAAUDsAAGA7AABwOwAAgDsAAFA7AABgOwAAcDsAAIA7AABQOwAAYDsAAHA7AACAOwAAUDsAAGA7AABwOwAAgDsAAFA7AABgOwAAcDsAAIA7AABQOwAAYDsAAHA7AACAOw=="
+                            },
+                            "shape": {
+                              "bytes": {
+                                "region": {
+                                  "texture": {
+                                    "level": 0,
+                                    "slice": 0,
+                                    "aspect": "color",
+                                    "sample": 0,
+                                    "origin": [
+                                      0,
+                                      0,
+                                      0
+                                    ],
+                                    "size": [
+                                      8,
+                                      8,
+                                      1
+                                    ]
+                                  }
+                                },
+                                "element": "f32",
+                                "row_offset": 0,
+                                "row_elements": 32,
+                                "row_pitch": 128,
+                                "rows": 8,
+                                "image_pitch": 1024,
+                                "images": 1,
+                                "gaps": "compared"
+                              }
+                            }
+                          }
+                        }
+                      ]
+                    },
+                    {
+                      "name": "MTLPixelFormatRGBA32Float+MTLPixelFormatRGBA32Float/MTLLoadActionLoad+MTLLoadActionLoad/second-only",
+                      "observed": {
+                        "value": "absent"
+                      },
+                      "children": [
+                        {
+                          "name": "color0",
+                          "observed": {
+                            "value": {
+                              "bytes": "AACAOQAAADoAAEA6AACAOgAAgDkAAAA6AABAOgAAgDoAAIA5AAAAOgAAQDoAAIA6AACAOQAAADoAAEA6AACAOgAAgDkAAAA6AABAOgAAgDoAAIA5AAAAOgAAQDoAAIA6AACAOQAAADoAAEA6AACAOgAAgDkAAAA6AABAOgAAgDoAAIA5AAAAOgAAQDoAAIA6AACAOQAAADoAAEA6AACAOgAAgDkAAAA6AABAOgAAgDoAAIA5AAAAOgAAQDoAAIA6AACAOQAAADoAAEA6AACAOgAAgDkAAAA6AABAOgAAgDoAAIA5AAAAOgAAQDoAAIA6AACAOQAAADoAAEA6AACAOgAAgDkAAAA6AABAOgAAgDoAAIA5AAAAOgAAQDoAAIA6AACAOQAAADoAAEA6AACAOgAAgDkAAAA6AABAOgAAgDoAAIA5AAAAOgAAQDoAAIA6AACAOQAAADoAAEA6AACAOgAAgDkAAAA6AABAOgAAgDoAAIA5AAAAOgAAQDoAAIA6AACAOQAAADoAAEA6AACAOgAAgDkAAAA6AABAOgAAgDoAAIA5AAAAOgAAQDoAAIA6AACAOQAAADoAAEA6AACAOgAAgDkAAAA6AABAOgAAgDoAAIA5AAAAOgAAQDoAAIA6AACAOQAAADoAAEA6AACAOgAAgDkAAAA6AABAOgAAgDoAAIA5AAAAOgAAQDoAAIA6AACAOQAAADoAAEA6AACAOgAAgDkAAAA6AABAOgAAgDoAAIA5AAAAOgAAQDoAAIA6AACAOQAAADoAAEA6AACAOgAAgDkAAAA6AABAOgAAgDoAAIA5AAAAOgAAQDoAAIA6AACAOQAAADoAAEA6AACAOgAAgDkAAAA6AABAOgAAgDoAAIA5AAAAOgAAQDoAAIA6AACAOQAAADoAAEA6AACAOgAAgDkAAAA6AABAOgAAgDoAAIA5AAAAOgAAQDoAAIA6AACAOQAAADoAAEA6AACAOgAAgDkAAAA6AABAOgAAgDoAAIA5AAAAOgAAQDoAAIA6AACAOQAAADoAAEA6AACAOgAAgDkAAAA6AABAOgAAgDoAAIA5AAAAOgAAQDoAAIA6AACAOQAAADoAAEA6AACAOgAAgDkAAAA6AABAOgAAgDoAAIA5AAAAOgAAQDoAAIA6AACAOQAAADoAAEA6AACAOgAAgDkAAAA6AABAOgAAgDoAAIA5AAAAOgAAQDoAAIA6AACAOQAAADoAAEA6AACAOgAAgDkAAAA6AABAOgAAgDoAAIA5AAAAOgAAQDoAAIA6AACAOQAAADoAAEA6AACAOgAAgDkAAAA6AABAOgAAgDoAAIA5AAAAOgAAQDoAAIA6AACAOQAAADoAAEA6AACAOg=="
+                            },
+                            "shape": {
+                              "bytes": {
+                                "region": {
+                                  "texture": {
+                                    "level": 0,
+                                    "slice": 0,
+                                    "aspect": "color",
+                                    "sample": 0,
+                                    "origin": [
+                                      0,
+                                      0,
+                                      0
+                                    ],
+                                    "size": [
+                                      8,
+                                      8,
+                                      1
+                                    ]
+                                  }
+                                },
+                                "element": "f32",
+                                "row_offset": 0,
+                                "row_elements": 32,
+                                "row_pitch": 128,
+                                "rows": 8,
+                                "image_pitch": 1024,
+                                "images": 1,
+                                "gaps": "compared"
+                              }
+                            }
+                          }
+                        },
+                        {
+                          "name": "color1",
+                          "observed": {
+                            "value": {
+                              "bytes": "AICAPgCggD4AwIA+AOCAPgCAgT4AoIE+AMCBPgDggT4AgII+AKCCPgDAgj4A4II+AICDPgCggz4AwIM+AOCDPgCAhD4AoIQ+AMCEPgDghD4AgIU+AKCFPgDAhT4A4IU+AICGPgCghj4AwIY+AOCGPgCAhz4AoIc+AMCHPgDghz4AgIg+AKCIPgDAiD4A4Ig+AICJPgCgiT4AwIk+AOCJPgCAij4AoIo+AMCKPgDgij4AgIs+AKCLPgDAiz4A4Is+AICMPgCgjD4AwIw+AOCMPgCAjT4AoI0+AMCNPgDgjT4AgI4+AKCOPgDAjj4A4I4+AICPPgCgjz4AwI8+AOCPPgCAkD4AoJA+AMCQPgDgkD4AgJE+AKCRPgDAkT4A4JE+AICSPgCgkj4AwJI+AOCSPgCAkz4AoJM+AMCTPgDgkz4AgJQ+AKCUPgDAlD4A4JQ+AICVPgCglT4AwJU+AOCVPgCAlj4AoJY+AMCWPgDglj4AgJc+AKCXPgDAlz4A4Jc+AICYPgCgmD4AwJg+AOCYPgCAmT4AoJk+AMCZPgDgmT4AgJo+AKCaPgDAmj4A4Jo+AICbPgCgmz4AwJs+AOCbPgCAnD4AoJw+AMCcPgDgnD4AgJ0+AKCdPgDAnT4A4J0+AICePgCgnj4AwJ4+AOCePgCAnz4AoJ8+AMCfPgDgnz4AAKA6AADAOgAA4DoAAAA7AACgOgAAwDoAAOA6AAAAOwAAoDoAAMA6AADgOgAAADsAAKA6AADAOgAA4DoAAAA7AACgOgAAwDoAAOA6AAAAOwAAoDoAAMA6AADgOgAAADsAAKA6AADAOgAA4DoAAAA7AACgOgAAwDoAAOA6AAAAOwAAoDoAAMA6AADgOgAAADsAAKA6AADAOgAA4DoAAAA7AACgOgAAwDoAAOA6AAAAOwAAoDoAAMA6AADgOgAAADsAAKA6AADAOgAA4DoAAAA7AACgOgAAwDoAAOA6AAAAOwAAoDoAAMA6AADgOgAAADsAAKA6AADAOgAA4DoAAAA7AACgOgAAwDoAAOA6AAAAOwAAoDoAAMA6AADgOgAAADsAAKA6AADAOgAA4DoAAAA7AACgOgAAwDoAAOA6AAAAOwAAoDoAAMA6AADgOgAAADsAAKA6AADAOgAA4DoAAAA7AACgOgAAwDoAAOA6AAAAOwAAoDoAAMA6AADgOgAAADsAAKA6AADAOgAA4DoAAAA7AACgOgAAwDoAAOA6AAAAOwAAoDoAAMA6AADgOgAAADsAAKA6AADAOgAA4DoAAAA7AACgOgAAwDoAAOA6AAAAOwAAoDoAAMA6AADgOgAAADsAAKA6AADAOgAA4DoAAAA7AACgOgAAwDoAAOA6AAAAOw=="
+                            },
+                            "shape": {
+                              "bytes": {
+                                "region": {
+                                  "texture": {
+                                    "level": 0,
+                                    "slice": 0,
+                                    "aspect": "color",
+                                    "sample": 0,
+                                    "origin": [
+                                      0,
+                                      0,
+                                      0
+                                    ],
+                                    "size": [
+                                      8,
+                                      8,
+                                      1
+                                    ]
+                                  }
+                                },
+                                "element": "f32",
+                                "row_offset": 0,
+                                "row_elements": 32,
+                                "row_pitch": 128,
+                                "rows": 8,
+                                "image_pitch": 1024,
+                                "images": 1,
+                                "gaps": "compared"
+                              }
+                            }
+                          }
+                        }
+                      ]
+                    },
+                    {
+                      "name": "MTLPixelFormatRGBA32Float+MTLPixelFormatRGBA32Float/MTLLoadActionClear+MTLLoadActionLoad/second-only",
+                      "observed": {
+                        "value": "absent"
+                      },
+                      "children": [
+                        {
+                          "name": "color0",
+                          "observed": {
+                            "value": {
+                              "bytes": "AAAQOwAAIDsAADA7AABAOwAAEDsAACA7AAAwOwAAQDsAABA7AAAgOwAAMDsAAEA7AAAQOwAAIDsAADA7AABAOwAAEDsAACA7AAAwOwAAQDsAABA7AAAgOwAAMDsAAEA7AAAQOwAAIDsAADA7AABAOwAAEDsAACA7AAAwOwAAQDsAABA7AAAgOwAAMDsAAEA7AAAQOwAAIDsAADA7AABAOwAAEDsAACA7AAAwOwAAQDsAABA7AAAgOwAAMDsAAEA7AAAQOwAAIDsAADA7AABAOwAAEDsAACA7AAAwOwAAQDsAABA7AAAgOwAAMDsAAEA7AAAQOwAAIDsAADA7AABAOwAAEDsAACA7AAAwOwAAQDsAABA7AAAgOwAAMDsAAEA7AAAQOwAAIDsAADA7AABAOwAAEDsAACA7AAAwOwAAQDsAABA7AAAgOwAAMDsAAEA7AAAQOwAAIDsAADA7AABAOwAAEDsAACA7AAAwOwAAQDsAABA7AAAgOwAAMDsAAEA7AAAQOwAAIDsAADA7AABAOwAAEDsAACA7AAAwOwAAQDsAABA7AAAgOwAAMDsAAEA7AAAQOwAAIDsAADA7AABAOwAAEDsAACA7AAAwOwAAQDsAABA7AAAgOwAAMDsAAEA7AAAQOwAAIDsAADA7AABAOwAAEDsAACA7AAAwOwAAQDsAABA7AAAgOwAAMDsAAEA7AAAQOwAAIDsAADA7AABAOwAAEDsAACA7AAAwOwAAQDsAABA7AAAgOwAAMDsAAEA7AAAQOwAAIDsAADA7AABAOwAAEDsAACA7AAAwOwAAQDsAABA7AAAgOwAAMDsAAEA7AAAQOwAAIDsAADA7AABAOwAAEDsAACA7AAAwOwAAQDsAABA7AAAgOwAAMDsAAEA7AAAQOwAAIDsAADA7AABAOwAAEDsAACA7AAAwOwAAQDsAABA7AAAgOwAAMDsAAEA7AAAQOwAAIDsAADA7AABAOwAAEDsAACA7AAAwOwAAQDsAABA7AAAgOwAAMDsAAEA7AAAQOwAAIDsAADA7AABAOwAAEDsAACA7AAAwOwAAQDsAABA7AAAgOwAAMDsAAEA7AAAQOwAAIDsAADA7AABAOwAAEDsAACA7AAAwOwAAQDsAABA7AAAgOwAAMDsAAEA7AAAQOwAAIDsAADA7AABAOwAAEDsAACA7AAAwOwAAQDsAABA7AAAgOwAAMDsAAEA7AAAQOwAAIDsAADA7AABAOwAAEDsAACA7AAAwOwAAQDsAABA7AAAgOwAAMDsAAEA7AAAQOwAAIDsAADA7AABAOwAAEDsAACA7AAAwOwAAQDsAABA7AAAgOwAAMDsAAEA7AAAQOwAAIDsAADA7AABAOw=="
+                            },
+                            "shape": {
+                              "bytes": {
+                                "region": {
+                                  "texture": {
+                                    "level": 0,
+                                    "slice": 0,
+                                    "aspect": "color",
+                                    "sample": 0,
+                                    "origin": [
+                                      0,
+                                      0,
+                                      0
+                                    ],
+                                    "size": [
+                                      8,
+                                      8,
+                                      1
+                                    ]
+                                  }
+                                },
+                                "element": "f32",
+                                "row_offset": 0,
+                                "row_elements": 32,
+                                "row_pitch": 128,
+                                "rows": 8,
+                                "image_pitch": 1024,
+                                "images": 1,
+                                "gaps": "compared"
+                              }
+                            }
+                          }
+                        },
+                        {
+                          "name": "color1",
+                          "observed": {
+                            "value": {
+                              "bytes": "AICAPgCggD4AwIA+AOCAPgCAgT4AoIE+AMCBPgDggT4AgII+AKCCPgDAgj4A4II+AICDPgCggz4AwIM+AOCDPgCAhD4AoIQ+AMCEPgDghD4AgIU+AKCFPgDAhT4A4IU+AICGPgCghj4AwIY+AOCGPgCAhz4AoIc+AMCHPgDghz4AgIg+AKCIPgDAiD4A4Ig+AICJPgCgiT4AwIk+AOCJPgCAij4AoIo+AMCKPgDgij4AgIs+AKCLPgDAiz4A4Is+AICMPgCgjD4AwIw+AOCMPgCAjT4AoI0+AMCNPgDgjT4AgI4+AKCOPgDAjj4A4I4+AICPPgCgjz4AwI8+AOCPPgCAkD4AoJA+AMCQPgDgkD4AgJE+AKCRPgDAkT4A4JE+AICSPgCgkj4AwJI+AOCSPgCAkz4AoJM+AMCTPgDgkz4AgJQ+AKCUPgDAlD4A4JQ+AICVPgCglT4AwJU+AOCVPgCAlj4AoJY+AMCWPgDglj4AgJc+AKCXPgDAlz4A4Jc+AICYPgCgmD4AwJg+AOCYPgCAmT4AoJk+AMCZPgDgmT4AgJo+AKCaPgDAmj4A4Jo+AICbPgCgmz4AwJs+AOCbPgCAnD4AoJw+AMCcPgDgnD4AgJ0+AKCdPgDAnT4A4J0+AICePgCgnj4AwJ4+AOCePgCAnz4AoJ8+AMCfPgDgnz4AAKA6AADAOgAA4DoAAAA7AACgOgAAwDoAAOA6AAAAOwAAoDoAAMA6AADgOgAAADsAAKA6AADAOgAA4DoAAAA7AACgOgAAwDoAAOA6AAAAOwAAoDoAAMA6AADgOgAAADsAAKA6AADAOgAA4DoAAAA7AACgOgAAwDoAAOA6AAAAOwAAoDoAAMA6AADgOgAAADsAAKA6AADAOgAA4DoAAAA7AACgOgAAwDoAAOA6AAAAOwAAoDoAAMA6AADgOgAAADsAAKA6AADAOgAA4DoAAAA7AACgOgAAwDoAAOA6AAAAOwAAoDoAAMA6AADgOgAAADsAAKA6AADAOgAA4DoAAAA7AACgOgAAwDoAAOA6AAAAOwAAoDoAAMA6AADgOgAAADsAAKA6AADAOgAA4DoAAAA7AACgOgAAwDoAAOA6AAAAOwAAoDoAAMA6AADgOgAAADsAAKA6AADAOgAA4DoAAAA7AACgOgAAwDoAAOA6AAAAOwAAoDoAAMA6AADgOgAAADsAAKA6AADAOgAA4DoAAAA7AACgOgAAwDoAAOA6AAAAOwAAoDoAAMA6AADgOgAAADsAAKA6AADAOgAA4DoAAAA7AACgOgAAwDoAAOA6AAAAOwAAoDoAAMA6AADgOgAAADsAAKA6AADAOgAA4DoAAAA7AACgOgAAwDoAAOA6AAAAOw=="
+                            },
+                            "shape": {
+                              "bytes": {
+                                "region": {
+                                  "texture": {
+                                    "level": 0,
+                                    "slice": 0,
+                                    "aspect": "color",
+                                    "sample": 0,
+                                    "origin": [
+                                      0,
+                                      0,
+                                      0
+                                    ],
+                                    "size": [
+                                      8,
+                                      8,
+                                      1
+                                    ]
+                                  }
+                                },
+                                "element": "f32",
+                                "row_offset": 0,
+                                "row_elements": 32,
+                                "row_pitch": 128,
+                                "rows": 8,
+                                "image_pitch": 1024,
+                                "images": 1,
+                                "gaps": "compared"
+                              }
+                            }
+                          }
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "name": "notices",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "set",
+                      "observed": {
+                        "value": {
+                          "nothing": "announced_nothing"
+                        }
+                      }
+                    },
+                    {
+                      "name": "counts",
+                      "observed": {
+                        "value": {
+                          "fields": {}
+                        }
+                      }
+                    }
+                  ]
+                }
+              ]
+            }
+          }
+        }
+      ],
+      "validated": {
+        "stopped": {
+          "call": "render",
+          "message": "End Encoding Validation\nunused fragment binding in render encoder at Buffer index 0.\nEnd Encoding Validation\nunused fragment binding in render encoder at Buffer index 0."
+        }
+      }
+    }
+  ]
+}

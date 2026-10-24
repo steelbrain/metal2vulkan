@@ -119,6 +119,7 @@ pub mod mesh_pipeline_descriptors;
 pub mod mesh_pipeline_reflection;
 pub mod nearest_positions;
 pub mod norm_storage_writes;
+pub mod pass_attachment_pairs;
 pub mod pass_bytes;
 pub mod pipeline_descriptors;
 pub mod pipeline_facts;
@@ -524,6 +525,7 @@ pub fn all() -> Vec<Box<dyn Case>> {
     cases.extend(depth_stencil_space::all());
     cases.extend(depth_resolve_pairs::all());
     cases.extend(stencil_resolve_pairs::all());
+    cases.extend(pass_attachment_pairs::all());
     cases.extend(render_residency::all());
     cases.extend(frame_chains::boxed());
     cases
