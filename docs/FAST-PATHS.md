@@ -327,18 +327,6 @@ driver's. Each is open work.
   indices an earlier draw of the encoder wrote) takes the index rewrite pass's three dispatches
   between barriers before its render pass: there 77 us per draw.
 
-- **A multisampled `Depth32Float` render target's fill on a device whose depth images may not keep
-  a denormal** (RADV: no `DriverFact::DepthImageKeepsDenormals`, and a multisampled image takes no
-  CPU store, so no write reaches it exactly): the fill's samples go through the depth image, where
-  `0x00000001` comes back as `0x00000000`, and `depth-denormals` announces it
-  (`sample-fills-d32-2`, `-d32-4`, `-d32s8-4`, listed in the conformance suite's `known-gaps.tsv`).
-  `MultisampleDepthTwinPolicy::Exact` holds such a texture's texels in colour only where no pass
-  renders it. The exact form for a render target is the texels of record in the multisampled
-  `R32_SFLOAT` image for the texture's life, with a `D32_SFLOAT` stand-in each pass renders into
-  (`attachment_stand_in::kept_backing`, as `Cause::Magnitude` keeps one for a signed depth), copied
-  in where Metal loads the depth and back where it stores it: the pass's own texels still pass
-  through the depth image, every fill and copy writes colour exactly. Not built.
-
 - **An indirect render command's draw of primitive type 9 that its execution's call cannot see**:
   one the CPU wrote after the call, or among a range the execution reads from a buffer. It runs
   nothing, counted as a record fault in the execution report (`RECORD`), where Metal's GPU hangs
@@ -698,8 +686,14 @@ driver's. Each is open work.
   store's, which is why it carries no `DriverFact::DepthImageKeepsDenormals`
   (`device/driver_facts.rs`), and a multisampled image takes no CPU store. The runtime announces
   `depth-denormals` and the case declares it at its notices site while still comparing every depth
-  word. The exact form, not built: hold such a texture's texels in a colour twin, as a read-only
-  depth texture's already are.
+  word. Each of these textures is a render target, which is the half still open:
+  `MultisampleDepthTwinPolicy::Exact` holds a multisampled `Depth32Float` texture's texels in a
+  colour image, as a read-only depth texture's already are, only where no pass renders it. The exact
+  form for a render target, not built: the texels of record in the multisampled `R32_SFLOAT` image
+  for the texture's life, with a `D32_SFLOAT` stand-in each pass renders into
+  (`attachment_stand_in::kept_backing`, as `Cause::Magnitude` keeps one for a signed depth), copied
+  in where Metal loads the depth and back where it stores it, so that every fill and copy writes the
+  colour image exactly and only a pass's own texels pass through the depth image.
 
 - **A blend's result on RADV, by 1 to 64 codes** (`half-output-blends-*`, `blend-sweep-operations`,
   `blend-interaction-format-unorm8` and `-srgb8`, `argb8-targets-*`, `a2c-on-*`; 24 cases). The
