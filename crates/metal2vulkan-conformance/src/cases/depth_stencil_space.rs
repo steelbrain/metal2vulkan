@@ -3529,8 +3529,8 @@ mod tests {
         for held in [&one, &other] {
             // Under `CullMode::None` nothing is culled, so each of the four cells holds a face's
             // own answer and the two windings of one setting disagree.
-            for at in 0..4 {
-                assert_ne!(held[at], FACE_START, "cell {at} is culled under no culling");
+            for (at, value) in held.iter().enumerate().take(4) {
+                assert_ne!(*value, FACE_START, "cell {at} is culled under no culling");
             }
             assert_ne!(held[0], held[1]);
             assert_ne!(held[2], held[3]);
@@ -3549,11 +3549,11 @@ mod tests {
             // `CullMode::Front` keeps the back face's answer and `CullMode::Back` the front's,
             // which is what says the cull mode and the face choice are read from the same setting
             // and are not the same thing.
-            for at in 4..8 {
-                assert!(held[at] == FACE_START || held[at] == FACE_START - 1);
+            for value in held.iter().take(8).skip(4) {
+                assert!(*value == FACE_START || *value == FACE_START - 1);
             }
-            for at in 8..12 {
-                assert!(held[at] == FACE_START || held[at] == FACE_START + 1);
+            for value in held.iter().take(12).skip(8) {
+                assert!(*value == FACE_START || *value == FACE_START + 1);
             }
         }
         // The three values a cell can hold are distinct, so a cell's answer is one reading.
