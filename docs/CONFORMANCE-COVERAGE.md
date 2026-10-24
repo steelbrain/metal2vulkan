@@ -43,7 +43,7 @@ Its limits, measured rather than asserted:
 | committed recordings | 1100 |
 | distinct SDK items the Metal leg reaches, of any status | 797 |
 | of those, reached only where this cannot name the family | 7 |
-| ledger rows (a case whose gap is recorded) | 813 |
+| ledger rows (a case whose gap is recorded) | 809 |
 | declared crossings of the option space (pairs put to Metal at once) | 24 |
 | declared crossings that are no pair of it (a boolean or numeric field, or one type in two slots) | 30 |
 
@@ -2299,14 +2299,10 @@ A case whose difference from Metal is recorded rather than compared away. The le
 | `sample-fills-d32-2` | Metal's fill stores every depth value as given, a denormal included, so sample 0 of texel (1,1) holds 0x00000001 (verified: the carried probe `ms.m` on an M3 Ma… |
 | `sample-fills-d32-4` | Metal's fill stores every depth value as given, a denormal included, so sample 0 of texel (1,1) holds 0x00000001 (verified: the carried probe `ms.m` on an M3 Ma… |
 | `sample-fills-d32s8-4` | Metal's fill stores every depth value as given, a denormal included, so sample 0 of texel (1,1) holds 0x00000001 (verified: the carried probe `ms.m` on an M3 Ma… |
-| `primitive-type-restart-indices` | Metal leaves these texels at the pass's clear and we draw a fragment there. All four `Line` and `LineStrip` cells differ from the M3 Max's recording with the sa… |
-| `primitive-type-restart-indices` | Metal leaves these texels at the pass's clear and we draw a fragment there. All four `Line` and `LineStrip` cells differ from the M3 Max's recording with the sa… |
-| `primitive-type-restart-indices` | Metal leaves these texels at the pass's clear and we draw a fragment there. All four `Line` and `LineStrip` cells differ from the M3 Max's recording with the sa… |
-| `primitive-type-restart-indices` | Metal leaves these texels at the pass's clear and we draw a fragment there. All four `Line` and `LineStrip` cells differ from the M3 Max's recording with the sa… |
-| `primitive-type-restart-indices` | Metal leaves these texels at the pass's clear and we draw a fragment there. All four `Line` and `LineStrip` cells differ from the M3 Max's recording with the sa… |
-| `primitive-type-restart-indices` | Metal leaves these texels at the pass's clear and we draw a fragment there. All four `Line` and `LineStrip` cells differ from the M3 Max's recording with the sa… |
-| `primitive-type-restart-indices` | Metal leaves these texels at the pass's clear and we draw a fragment there. All four `Line` and `LineStrip` cells differ from the M3 Max's recording with the sa… |
-| `primitive-type-restart-indices` | Metal leaves these texels at the pass's clear and we draw a fragment there. All four `Line` and `LineStrip` cells differ from the M3 Max's recording with the sa… |
+| `primitive-type-restart-indices` | Metal rasterizes a line by the diamond-exit rule and this driver's Bresenham mode breaks one tie the other way. The line of vertices 0 and 1 runs exactly throug… |
+| `primitive-type-restart-indices` | Metal rasterizes a line by the diamond-exit rule and this driver's Bresenham mode breaks one tie the other way. The line of vertices 0 and 1 runs exactly throug… |
+| `primitive-type-restart-indices` | Metal rasterizes a line by the diamond-exit rule and this driver's Bresenham mode breaks one tie the other way. The line of vertices 0 and 1 runs exactly throug… |
+| `primitive-type-restart-indices` | Metal rasterizes a line by the diamond-exit rule and this driver's Bresenham mode breaks one tie the other way. The line of vertices 0 and 1 runs exactly throug… |
 | `heap-sizes-block-writes-only` | Plain Metal answers 128 bytes of alignment from `heapTextureSizeAndAlignWithDescriptor:` for every descriptor of this family, and we answer 1024 on this driver … |
 | `heap-sizes-block-writes-only` | Plain Metal answers 128 bytes of alignment from `heapTextureSizeAndAlignWithDescriptor:` for every descriptor of this family, and we answer 1024 on this driver … |
 | `heap-sizes-block-writes-only` | Plain Metal answers a smaller footprint from `heapTextureSizeAndAlignWithDescriptor:` than we do for this descriptor, and the row's two numbers are the pair. `D… |

@@ -86,11 +86,31 @@
 //! is no sentinel there. Every `Point`, `Line`, `Triangle` and `LineStrip` cell is untouched by it,
 //! the first three because they carry no restart at all. RADV and ANV are unrun.
 //!
-//! The baseline is not exact at the four `Line` and `LineStrip` cells, and that is **ours**, not one
-//! driver's line rasterization: llvmpipe differs by 7, 7, 5 and 13 texels against the M3 Max's
-//! recording, and an RTX 5080 Laptop GPU (615.71.09) differs at the same first site, Metal holding
-//! the texel clear where we draw there. The falsification above is read against that baseline,
-//! which it leaves unmoved; the difference itself is `docs/FAST-PATHS.md`'s known gap.
+//! # What the `Line` cells also read: the line rasterization mode
+//!
+//! The four `Line` and `LineStrip` cells read a second switch of the runtime's beside the restart
+//! bit, because every one of them rasterizes lines. Metal covers the pixels whose diamond a line
+//! exits, so a line that runs through a pixel boundary covers the one pixel and not the other, and
+//! a line's last pixel is the next primitive's first. Vulkan's default mode is the device's own,
+//! and a device whose `strictLines` is set covers every pixel inside the rectangle of the line's
+//! width instead, which covers both pixels either side of such a boundary and takes the
+//! rectangle's own fill rule at the two ends. The runtime asks for Bresenham's mode
+//! (`VK_LINE_RASTERIZATION_MODE_BRESENHAM_EXT`, `pipeline/graphics.rs`), which is Metal's rule,
+//! wherever the device offers it.
+//!
+//! **That switch is evidenced on llvmpipe too**, which sets `strictLines`: without the mode the
+//! four cells differ from the recording by 7, 7, 5 and 13 texels, each first at
+//! `[image 0, row 0, 12]` — the texel at row 0 column 3, where the line of vertices 0 and 1 runs
+//! exactly through the boundary point (3.5, 1.0), Metal draws the lower pixel alone and the
+//! rectangle covers both. With it every texel of the ten cells is Metal's on llvmpipe, and on an
+//! RTX 5080 Laptop GPU (615.71.09), which sets `strictLines` and differed by the same four counts,
+//! the four cells fall to **two** texels each: that one boundary point, where the driver draws the
+//! upper pixel and Metal the lower. Vulkan's Bresenham diamond is open
+//! (`|p - x| + |q - y| < 0.5`), so a line that only touches a diamond vertex exits no diamond and
+//! neither pixel is required of a conforming driver; the two make opposite choices and no Vulkan
+//! control decides it, which is why the cells' remaining `known-gaps.tsv` rows are the driver's
+//! own. MoltenVK leaves `strictLines` clear and its lines are Metal's own, which is why no Metal
+//! venue could read this switch either.
 //!
 //! # Nothing here can fault a GPU
 //!

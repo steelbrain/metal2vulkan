@@ -717,15 +717,14 @@ driver's. Each is open work.
   than a fix. The largest, 64 codes at `blended/sas-1msa`, is **too large for rounding** and is a
   separate open question.
 
-- **A line's first texels where Metal draws nothing** (`primitive-type-restart-indices`): all four
-  `Line` and `LineStrip` cells differ from the M3 Max's recording on llvmpipe (7, 7, 5 and 13
-  texels) and on an RTX 5080 Laptop GPU (615.71.09) at the same first site, `[image 0, row 0, 12]`,
-  where Metal leaves the texel clear and this draws there (3 at `Line`/`UInt16`, 4 at
-  `Line`/`UInt32`, 5 and 6 at the `LineStrip` pair). Two unrelated drivers answering the same thing
-  makes it ours rather than one rasterizer's. `primitiveRestartEnable` does not explain it:
-  `MTLPrimitiveTypeLine` is a list, where Vulkan's restart bit has no effect, and under `UInt32`
-  Vulkan's restart index is `0xFFFFFFFF` rather than the case's 65535 — an out-of-range fetch of
-  index 65535 is the other candidate. RADV and ANV unrun.
+- **One line texel at a diamond vertex on the RTX 5080** (`primitive-type-restart-indices`): all
+  four `Line` and `LineStrip` cells differ from the M3 Max's recording by two texels on an RTX 5080
+  Laptop GPU (615.71.09), and by none on llvmpipe (LLVM 23.1.1, 256 bits). The line of vertices 0
+  and 1 runs exactly through (3.5, 1.0), a vertex of the diamonds of the two pixels either side of
+  it: Metal draws the lower one and this driver draws the upper one. Vulkan's Bresenham diamond is
+  open (`|p - x| + |q - y| < 0.5`), so a line that only touches a vertex exits no diamond and
+  neither pixel is required; both choices conform and there is no Vulkan control over the tie, so
+  this is the driver's and not ours. RADV and ANV unrun.
 
 - **A heap texture at an offset below the device's own alignment on Navi31**: `new_texture_at_offset`
   answers nil at offset 327680, two and a half times the 128 KiB a Navi31 depth image wants
