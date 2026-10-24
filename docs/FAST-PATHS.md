@@ -677,8 +677,9 @@ driver's. Each is open work.
 
 - **A multisampled `Depth32Float` texture's fill of a denormal on RADV**: Metal's private fill
   stores the pattern's bytes, `0x00000001`, where this stores `0x00000000` (`sample-fills-d32-2`,
-  `-d32-4`, `-d32s8-4`, and `runtime_lane::sample_fills::multisample_fills_write_metal_s_samples`
-  independently; both RADV chips, exact on MoltenVK). **The device's, and announced**: RADV gives a
+  `-d32-4`, `-d32s8-4`; both RADV chips, exact on MoltenVK;
+  `runtime_lane::sample_fills::multisample_fills_write_metal_s_samples` takes the word where the
+  device announces the loss and compares every other). **The device's, and announced**: RADV gives a
   denormal that a GPU write puts into a `D32_SFLOAT` depth image back as a zero and keeps only a CPU
   store's, which is why it carries no `DriverFact::DepthImageKeepsDenormals`
   (`device/driver_facts.rs`), and a multisampled image takes no CPU store. The runtime announces

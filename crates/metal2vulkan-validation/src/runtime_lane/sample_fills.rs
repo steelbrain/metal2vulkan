@@ -17,6 +17,7 @@
 //! changes (`drawn-depth-copy`), whose samples it prints on a `SAMPLE-FILLS-DRAWN` line; a
 //! differing case prints a `SAMPLE-FILLS-DIFFERS` line.
 
+use super::degrade_notices::loses_depth_denormals;
 use super::resolves::{lane, quiet, Lane};
 use super::WAIT;
 use crate::candidate::runtime_samples::encode_through;
@@ -556,6 +557,48 @@ fn unlike_metal(lines: &[String], metal: &[String]) -> Option<String> {
     }
 }
 
+/// The head of a read-back line and its hex words: `after  s0 y1: | 3e800000 3e800000 | ...`.
+fn line_words(line: &str) -> Option<(&str, Vec<&str>)> {
+    let (head, words) = line.split_once(':')?;
+    let words = words.split(['|', ' ']).filter(|w| !w.is_empty()).collect();
+    Some((head, words))
+}
+
+/// Whether Metal's word `want` is a denormal 32-bit float and `got` is its zero, the sign kept.
+fn flushed(got: &str, want: &str) -> bool {
+    let (Ok(got), Ok(want)) = (u32::from_str_radix(got, 16), u32::from_str_radix(want, 16)) else {
+        return false;
+    };
+    want & 0x7f80_0000 == 0 && want & 0x007f_ffff != 0 && got == want & 0x8000_0000
+}
+
+/// Whether `lines` differ from Metal's `metal` only where Metal holds a denormal 32-bit float
+/// depth and this device holds its zero ([`flushed`]).
+fn only_flushed_denormals(lines: &[String], metal: &[String]) -> bool {
+    lines.len() == metal.len()
+        && lines.iter().zip(metal).all(|(got, want)| {
+            got == want
+                || match (line_words(got), line_words(want)) {
+                    (Some((got_head, got)), Some((want_head, want))) => {
+                        got_head == want_head
+                            && got.len() == want.len()
+                            && (got.iter().zip(&want)).all(|(g, w)| g == w || flushed(g, w))
+                    }
+                    _ => false,
+                }
+        })
+}
+
+/// Whether `case` fills a 32-bit float depth aspect with [`DEPTHS`], whose first word is a
+/// denormal: the only case shape whose answer a device that flushes depth denormals may differ in.
+fn fills_a_depth_denormal(case: &Case) -> bool {
+    let pf = PixelFormat::try_from(case.1).unwrap();
+    matches!(
+        pf,
+        PixelFormat::Depth32Float | PixelFormat::Depth32FloatStencil8
+    ) && matches!(case.7, Fill::Bytes(bytes) if bytes == DEPTHS)
+}
+
 /// The recorded lines are the probe's: their own SHA-256, and each case's digest the probe
 /// printed of its lines.
 #[test]
@@ -575,22 +618,33 @@ fn the_recorded_lines_are_the_probes() {
 }
 
 /// Every case's samples are Metal's, but a depth whose drawn copy announced (once a device, at
-/// the first depth fill) that it changes values out of `[0, 1]`.
+/// the first depth fill) that it changes values out of `[0, 1]`, and a denormal depth on a device
+/// that does not keep one a GPU write stores (`loses_depth_denormals`, announced
+/// `depth-denormals`): a multisampled image takes no CPU store, so Metal's `0x00000001` reads
+/// back as `0x00000000` there, and every other word is still compared.
 #[test]
 fn multisample_fills_write_metal_s_samples() {
     let (messages, _cache, lane) = lane();
     let name = lane.device.name().to_owned();
     let mut wrong = Vec::new();
     let mut drawn = false;
+    // Whether the device keeps no denormal a GPU write stores in a 32-bit float depth image, how
+    // many cases differ in those words alone, and whether it announced the loss.
+    let flushes = loses_depth_denormals(&lane.device, false);
+    let mut flushed_cases = 0;
+    let mut announced_denormals = false;
     for case in &CASES {
         let Some(lines) = run(&lane, case) else {
             continue;
         };
-        drawn |= messages
-            .take_notices()
+        let notices = messages.take_notices();
+        let kinds: Vec<Degradation> = notices
             .iter()
             .filter_map(|m| m.degradation.as_ref())
-            .any(|n| n.degradation == Degradation::DrawnDepthCopy);
+            .map(|n| n.degradation)
+            .collect();
+        drawn |= kinds.contains(&Degradation::DrawnDepthCopy);
+        announced_denormals |= kinds.contains(&Degradation::DepthDenormals);
         let case_name = case.0;
         let unlike = match metal_lines(case_name) {
             Some(metal) => unlike_metal(&lines, &metal),
@@ -608,6 +662,18 @@ fn multisample_fills_write_metal_s_samples() {
             );
             continue;
         }
+        let denormals = flushes
+            && fills_a_depth_denormal(case)
+            && metal_lines(case_name).is_some_and(|metal| only_flushed_denormals(&lines, &metal));
+        if denormals {
+            flushed_cases += 1;
+            println!(
+                "SAMPLE-FILLS-DENORMALS {name}: {case_name}: Metal's depth denormal reads back as \
+                 its zero here, every other word Metal's: {}",
+                lines[1]
+            );
+            continue;
+        }
         wrong.push(format!("{case_name}: {unlike}"));
     }
     for line in &wrong {
@@ -617,6 +683,11 @@ fn multisample_fills_write_metal_s_samples() {
         wrong.is_empty(),
         "{} cases differ from Metal's",
         wrong.len()
+    );
+    assert!(
+        flushed_cases == 0 || announced_denormals,
+        "{name}: {flushed_cases} case(s) hold Metal's depth denormal as its zero with no \
+         `depth-denormals` notice"
     );
     quiet(lane, &messages);
 }
