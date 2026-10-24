@@ -6471,3 +6471,534 @@ fn a_notice_one_case_provoked_does_not_excuse_the_nexts_difference() {
     // Never lost: the run reports it against no case.
     assert_eq!(notices.unattributed().len(), 1);
 }
+
+/// Every case carries a cost recording, or is named here with the reason it does not.
+///
+/// The suite records cost for **every** case by structure and not for a selection, so a recording
+/// with no cost record is a case the cost half does not cover. The absence is silent: the gate's
+/// reach shrinks with each case authored and nothing turns red. This test is the count, and it
+/// fails when a case that could carry a record does not.
+///
+/// **Both causes are a run's reach, and neither is a case's shape.** `cost --write` measures the
+/// selection it is given against the tree it runs in, and nothing in authoring a case produces a
+/// record, so a case is covered only where some later whole-set run happened to include it.
+///
+/// A case the venue honestly cannot measure would be a third cause and **no evidence places any
+/// case in it**, which is itself a defect: [`crate::run::record_costs`] turns a stopped run into
+/// an `Err` whose reason it prints and drops, so a refusal leaves a recording byte-identical to
+/// one nobody measured. Until that reason is written down, the two cannot be told apart from the
+/// recordings, and a silent absence is exactly what the owner's rule forbids.
+///
+/// Held in **both** directions: a case carrying no record and not named here fails, and a name
+/// here whose case now carries one fails, so the bill shrinks as runs fill it rather than going
+/// stale. [`the_cost_coverage_set_is_held_in_both_directions`] proves both halves refuse.
+#[test]
+fn every_case_carries_a_cost_recording() {
+    /// Cases authored after the last measurement that wrote cost records.
+    ///
+    /// **Not one recording added after that measurement carries a record**, which is what makes this
+    /// one cause and not a list of names: these cases postdate the only run that could have covered
+    /// them. A whole-set `cost --write` fills every one.
+    const AFTER_THE_LAST_RUN: [&str; 324] = [
+        "a2c-off-1-alpha-50",
+        "a2c-off-4-alpha-50",
+        "a2c-off-4-alpha-50-shadermask-5",
+        "a2c-off-4-no-alpha-output",
+        "a2c-on-1-alpha-50",
+        "a2c-on-4-alpha-00",
+        "a2c-on-4-alpha-100",
+        "a2c-on-4-alpha-25",
+        "a2c-on-4-alpha-50",
+        "a2c-on-4-alpha-50-mask-no-alpha",
+        "a2c-on-4-alpha-50-shadermask-5",
+        "a2c-on-4-alpha-50-shadermask-a",
+        "a2c-on-4-alpha-75",
+        "a2c-on-4-no-alpha-output",
+        "a2one-off-1-blend-source-alpha",
+        "a2one-on-1-blend-source-alpha",
+        "a2one-on-1-mask-no-alpha",
+        "argument-encoder-cross-nested",
+        "argument-encoder-cross-offsets",
+        "argument-encoder-cross-type-mixtures",
+        "argument-encoder-cross-type-sizes",
+        "astc-10x10-hdr",
+        "astc-10x5-hdr",
+        "astc-10x6-hdr",
+        "astc-10x8-hdr",
+        "astc-12x10-hdr",
+        "astc-12x12-hdr",
+        "astc-4x4-hdr",
+        "astc-5x4-hdr",
+        "astc-5x5-hdr",
+        "astc-6x5-hdr",
+        "astc-6x6-hdr",
+        "astc-8x5-hdr",
+        "astc-8x6-hdr",
+        "astc-8x8-hdr",
+        "attribute-format-class-crossings",
+        "attribute-format-fetches",
+        "attribute-stride-buffer",
+        "attribute-stride-buffer-offset",
+        "attribute-stride-inline-bytes",
+        "attribute-stride-plural-buffers",
+        "binary-archive-adders",
+        "binary-archive-fail-on-miss",
+        "binary-archive-mesh-adder",
+        "binary-archive-round-trip",
+        "binary-archive-serializing",
+        "binary-archive-sources",
+        "blend-interaction-format-float32",
+        "blend-interaction-format-srgb8",
+        "blend-interaction-format-unorm8",
+        "blend-interaction-mask-blend",
+        "blend-sweep-blend-color",
+        "blend-sweep-blend-color-order",
+        "blend-sweep-destination-alpha",
+        "blend-sweep-destination-rgb",
+        "blend-sweep-enabled",
+        "blend-sweep-operation-pairs",
+        "blend-sweep-operations",
+        "blend-sweep-second-source",
+        "blend-sweep-source-alpha",
+        "blend-sweep-source-rgb",
+        "blend-sweep-write-masks",
+        "blit-copy-indirect-command-buffer",
+        "blit-optimize-indirect-command-buffer",
+        "blit-reset-commands-in-buffer",
+        "command-buffer-facts",
+        "compute-descriptor-defaults",
+        "compute-descriptor-reset",
+        "compute-descriptor-set",
+        "compute-heap-residency",
+        "depthstencil-depth-codes",
+        "depthstencil-depth-compares",
+        "depthstencil-depth-slot",
+        "depthstencil-faces",
+        "depthstencil-facing-faces",
+        "depthstencil-mask-crossings",
+        "depthstencil-stencil-compares",
+        "depthstencil-stencil-operations",
+        "detach-in-a-completed-handler",
+        "device-heap-buffer-sizes",
+        "device-linear-texture-alignments",
+        "device-rate-map-layer-counts",
+        "device-sparse-region-conversions",
+        "device-vertex-amplification-counts",
+        "dynamic-library-from-a-library",
+        "dynamic-library-from-a-url",
+        "format-footprints-astc-4x2-and-8x4",
+        "format-footprints-one-plane-ycbcr",
+        "format-footprints-packed-without-textures",
+        "format-footprints-padded-wide-channels",
+        "format-footprints-plain-stragglers",
+        "format-footprints-two-plane-ten-bit",
+        "fragment-imageblock-reflection",
+        "function-bindings-data-types-array-strides",
+        "function-bindings-data-types-arrays",
+        "function-bindings-data-types-member-floats",
+        "function-bindings-data-types-member-integers",
+        "function-bindings-data-types-member-narrow",
+        "function-bindings-data-types-pointer-floats",
+        "function-bindings-data-types-pointer-integers",
+        "function-bindings-data-types-pointer-narrow",
+        "function-bindings-data-types-tables",
+        "function-bindings-data-types-texture-components",
+        "function-bindings-imageblock",
+        "function-bindings-visible-function-table",
+        "function-facts-mesh",
+        "function-facts-object",
+        "function-facts-visible",
+        "heap-available-sizes",
+        "heap-labels",
+        "heap-own-getters",
+        "heap-placed-buffer-sizes",
+        "heap-purgeable-states",
+        "indirect-commands-bind-count-limit",
+        "indirect-compute-commands-reset-and-ranges",
+        "indirect-compute-commands-residency-usage",
+        "indirect-render-commands-inherited-state",
+        "indirect-render-commands-patch-draws",
+        "indirect-render-commands-under-the-pass-state",
+        "layered-attachment-levels",
+        "layered-attachment-places",
+        "layered-depth-other-slice",
+        "layered-render-target-array-length",
+        "layered-resolve-places",
+        "library-facts-descriptor",
+        "library-facts-descriptor-compile-to-binary",
+        "library-facts-descriptor-constants",
+        "library-facts-descriptor-every-option",
+        "library-facts-descriptor-fail-on-binary-archive-miss",
+        "library-facts-descriptor-options",
+        "library-facts-descriptor-pipeline-independent",
+        "library-facts-many-functions",
+        "library-facts-one-function",
+        "library-from-data",
+        "mesh-descriptor-defaults",
+        "mesh-descriptor-reset",
+        "mesh-descriptor-set",
+        "mesh-pipeline-reflection-no-object-stage",
+        "mesh-pipeline-reflection-object-stage",
+        "pass-attachment-actions",
+        "pass-attachment-filters",
+        "pass-attachment-indices",
+        "pass-bound-clear-reach",
+        "pass-clear-colors",
+        "pass-clear-depths",
+        "pass-clear-stencils",
+        "pass-descriptor-assigned",
+        "pass-descriptor-cleared",
+        "pass-descriptor-defaults",
+        "pass-descriptor-set",
+        "pass-numbers",
+        "pass-sample-positions",
+        "pass-sequence-aspect-actions",
+        "pass-sequence-color-actions",
+        "pass-two-attachments-loads",
+        "pass-two-attachments-resolves",
+        "pipeline-descriptor-defaults",
+        "pipeline-descriptor-reset",
+        "pipeline-descriptor-set",
+        "pipeline-functions-cleared",
+        "pipeline-functions-emptied",
+        "pipeline-functions-every-stage",
+        "pipeline-functions-fragment-only",
+        "pipeline-functions-replaced",
+        "pipeline-functions-tile-only",
+        "pipeline-functions-untouched",
+        "pipeline-functions-vertex-only",
+        "pipeline-handler-compute-descriptor-options-binding-info",
+        "pipeline-handler-compute-descriptor-options-none",
+        "pipeline-handler-compute-descriptor-options-refused",
+        "pipeline-handler-compute-function",
+        "pipeline-handler-compute-function-options-all-three",
+        "pipeline-handler-compute-function-options-binding-and-buffer-type",
+        "pipeline-handler-compute-function-options-binding-and-fail-on-miss",
+        "pipeline-handler-compute-function-options-binding-info",
+        "pipeline-handler-compute-function-options-buffer-type-and-fail-on-miss",
+        "pipeline-handler-compute-function-options-buffer-type-info",
+        "pipeline-handler-compute-function-options-fail-on-archive-miss",
+        "pipeline-handler-compute-function-options-none",
+        "pipeline-handler-compute-function-options-refused",
+        "pipeline-handler-compute-function-refused",
+        "pipeline-handler-mesh-options-binding-info",
+        "pipeline-handler-mesh-options-none",
+        "pipeline-handler-render",
+        "pipeline-handler-render-options-binding-info",
+        "pipeline-handler-render-options-none",
+        "pipeline-handler-render-options-refused",
+        "pipeline-handler-render-refused",
+        "pipeline-handler-tile-options-binding-info",
+        "pipeline-handler-tile-options-none",
+        "pipeline-handler-tile-options-refused",
+        "pipeline-options-argument-buffer",
+        "pipeline-options-compute-archive-miss",
+        "pipeline-options-compute-binding-and-buffer-type",
+        "pipeline-options-compute-binding-info",
+        "pipeline-options-compute-binding-info-and-archive-miss",
+        "pipeline-options-compute-binding-info-and-undefined-bit",
+        "pipeline-options-compute-buffer-type-and-archive-miss",
+        "pipeline-options-compute-buffer-type-info",
+        "pipeline-options-compute-every-defined-bit",
+        "pipeline-options-compute-none",
+        "pipeline-options-compute-undefined-bit-3",
+        "pipeline-options-compute-undefined-bit-31",
+        "pipeline-options-compute-undefined-bit-40",
+        "pipeline-options-render-archive-miss",
+        "pipeline-options-render-binding-and-buffer-type",
+        "pipeline-options-render-binding-info",
+        "pipeline-options-render-binding-info-and-archive-miss",
+        "pipeline-options-render-buffer-type-and-archive-miss",
+        "pipeline-options-render-buffer-type-info",
+        "pipeline-options-render-every-defined-bit",
+        "pipeline-options-render-none",
+        "pipeline-options-render-undefined-bit-40",
+        "pipeline-options-texture-slots",
+        "pipeline-options-threadgroup-memory",
+        "primitive-type-restart-indices",
+        "rate-map-descriptor-forms",
+        "rate-map-layer-sweep",
+        "rate-map-parameters-identity",
+        "rate-map-parameters-partial-tile",
+        "rate-map-parameters-two-layers",
+        "rate-map-quality-sweep",
+        "rate-map-sample-sweep",
+        "rate-map-screen-sweep",
+        "render-draw-forms-empty",
+        "render-draw-forms-lines",
+        "render-draw-forms-points",
+        "render-draw-forms-triangles",
+        "resolve-depth-filters-2",
+        "resolve-depth-filters-4",
+        "resolve-stencil-depth-resolved-sample",
+        "resolve-stencil-sample0",
+        "resolve-stencil-under-depth-filters",
+        "resource-aliasing",
+        "resource-labels",
+        "resource-own-getters",
+        "resource-purgeable-states",
+        "sampler-axis-border-opaque-black",
+        "sampler-axis-border-opaque-white",
+        "sampler-axis-border-transparent-black",
+        "sampler-axis-mode-triples",
+        "sampler-border-colours",
+        "sampler-compare-always",
+        "sampler-compare-equal",
+        "sampler-compare-filter-pairs",
+        "sampler-compare-greater",
+        "sampler-compare-greater-equal",
+        "sampler-compare-less",
+        "sampler-compare-less-equal",
+        "sampler-compare-never",
+        "sampler-compare-not-equal",
+        "sampler-cubic-filter",
+        "sampler-mip-filter-pairs-linear",
+        "sampler-mip-filter-pairs-nearest",
+        "sampler-mip-filter-pairs-not-mipmapped",
+        "sampler-mip-linear",
+        "sampler-mip-nearest",
+        "sampler-mip-not-mipmapped",
+        "sampler-r-address-modes",
+        "sampler-reduction-modes",
+        "shared-event-handle-round-trip",
+        "sparse-mapping-a-level-past-the-textures",
+        "sparse-mapping-fences",
+        "sparse-mapping-indirect-updates",
+        "sparse-mapping-levels-and-the-tail",
+        "sparse-mapping-mapped-tiles-hold-their-texels",
+        "sparse-mapping-modes-and-region-sizes",
+        "sparse-mapping-moves",
+        "sparse-mapping-plural-updates",
+        "sparse-mapping-slices-of-an-array",
+        "tessellation-edge-factors",
+        "tessellation-factor-scales",
+        "tessellation-factor-steps",
+        "tessellation-non-finite-factors",
+        "tessellation-partition-degenerates",
+        "tessellation-partition-factors",
+        "tessellation-partition-insides-quad",
+        "tessellation-partition-insides-triangle",
+        "tessellation-partition-modes-quad",
+        "tessellation-partition-modes-triangle",
+        "tessellation-partition-scales",
+        "tessellation-partition-steps",
+        "tessellation-patch-indices",
+        "texture-pairs-heap-texture-getters",
+        "texture-pairs-plain-contents",
+        "texture-pairs-storage-crossings",
+        "texture-pairs-type-levels-slices",
+        "texture-pairs-usage-crossings",
+        "texture-shared-handles",
+        "texture-view-descriptors",
+        "texture-view-parents",
+        "texture-view-selectors",
+        "tile-descriptor-defaults",
+        "tile-descriptor-reset",
+        "tile-descriptor-set",
+        "tile-pipeline-reflection-imageblock",
+        "topology-class-plain-function",
+        "topology-class-point-size-function",
+        "vertex-format-constant-step",
+        "vertex-format-float4",
+        "vertex-format-half4",
+        "vertex-format-instance-step",
+        "vertex-format-int4",
+        "vertex-format-uint4",
+        "visible-tables-compute-a-private-function-has-no-handle",
+        "visible-tables-compute-an-unlinked-function-has-no-handle",
+        "visible-tables-compute-count-3-two-entries-written",
+        "visible-tables-compute-every-entry-nil",
+        "visible-tables-compute-one-entry-nil",
+        "visible-tables-compute-size-0",
+        "visible-tables-compute-size-1",
+        "visible-tables-compute-size-2",
+        "visible-tables-compute-size-2-swapped",
+        "visible-tables-compute-size-3",
+        "visible-tables-compute-table-unbound",
+        "visible-tables-compute-whole-range",
+        "visible-tables-stage-fragment",
+        "visible-tables-stage-mesh",
+        "visible-tables-stage-object",
+        "visible-tables-stage-tile",
+        "visible-tables-stage-vertex",
+        "visible-tables-stage-vertex-and-fragment",
+        "write-mask-unspecialized",
+        "write-mask-unspecialized-and-red",
+    ];
+
+    /// Cases already committed when that measurement ran, still carrying no record.
+    ///
+    /// These are plain cases a venue runs -- `compute-inline-bytes`, `blit-whole-texture-copy`,
+    /// `function-facts-vertex` -- so the cause is the measurement's tree and not the case. Cases land
+    /// from concurrent branches and a run sees only the tree it runs in, so commit order is not
+    /// coverage order. A whole-set run fills these too.
+    const OLDER_THAN_THE_LAST_RUN: [&str; 74] = [
+        "argb8-targets-destination-alpha",
+        "argument-encoder-array-element",
+        "argument-encoder-mixed-descriptors",
+        "argument-encoder-ranges",
+        "argument-encoder-state-descriptors",
+        "argument-encoder-texture-sampler",
+        "blit-fenced-encoders",
+        "blit-generated-mipmaps",
+        "blit-optimized-contents",
+        "blit-synchronized-managed-buffer",
+        "blit-synchronized-managed-texture",
+        "blit-texture-counts-of-none",
+        "blit-texture-slice-and-level-counts",
+        "blit-unoptioned-buffer-and-texture-copies",
+        "blit-whole-texture-copy",
+        "buffer-depth-samples-d16-54-2",
+        "buffer-depth-samples-d16-54-4",
+        "buffer-target-clears-pitch-16-dont-care",
+        "buffer-target-clears-pitch-16-stored",
+        "buffer-target-clears-pitch-256-dont-care",
+        "buffer-target-clears-pitch-256-stored",
+        "buffer-target-clears-pitch-32-dont-care",
+        "buffer-target-clears-pitch-32-stored",
+        "buffer-texture-blits-overlapping",
+        "buffer-texture-blits-to-and-from",
+        "compute-indirect-threadgroup-grid",
+        "compute-inline-bytes",
+        "compute-plural-buffer-binding",
+        "compute-plural-texture-and-sampler-binding",
+        "compute-resource-barrier",
+        "compute-resource-residency",
+        "compute-scope-barrier",
+        "compute-threadgroup-memory-and-grid",
+        "fragment-writes-then-kernel-reads",
+        "frame-length-chain",
+        "function-bindings-argument-buffer",
+        "function-bindings-texture-slots",
+        "function-bindings-threadgroup-memory",
+        "function-facts-constants",
+        "function-facts-fragment",
+        "function-facts-gated-attribute",
+        "function-facts-kernel",
+        "function-facts-optional-constant",
+        "function-facts-patch-attributes",
+        "function-facts-specialized-by-index",
+        "function-facts-specialized-by-name",
+        "function-facts-specialized-by-range",
+        "function-facts-stage-in-kernel",
+        "function-facts-vertex",
+        "function-facts-vertex-attributes",
+        "host-page-writes-kernel-store-read-only",
+        "host-page-writes-kernel-store-writable",
+        "host-page-writes-visibility-read-only",
+        "host-page-writes-visibility-writable",
+        "indirect-command-buffer-descriptor-properties",
+        "indirect-compute-commands-executed",
+        "indirect-compute-commands-reset",
+        "indirect-compute-commands-stage-in-stride",
+        "indirect-render-commands-drawn",
+        "indirect-render-commands-executed",
+        "kernel-writes-then-fragment-samples",
+        "mesh-object-draws-partial-threadgroup-5x3-by-4x2",
+        "mesh-object-draws-partial-threadgroup-6-by-4",
+        "multi-draw-state-changes",
+        "pass-writes-then-kernel-reads",
+        "pipeline-facts-compute-described",
+        "pipeline-facts-compute-imageblock",
+        "pipeline-facts-compute-plain",
+        "pipeline-facts-render-multisampled",
+        "pipeline-facts-render-plain",
+        "pipeline-facts-render-two-attachments",
+        "render-then-sample-exact",
+        "render-then-sample-magnified-linear",
+        "render-then-sample-magnified-nearest",
+    ];
+
+    let mut missing: std::collections::BTreeSet<&str> = std::collections::BTreeSet::new();
+    let mut checked = 0usize;
+    for case in crate::cases::all() {
+        checked += 1;
+        match crate::recording::read(case.name()) {
+            Ok(recording) if !recording.costs.is_empty() => {}
+            // A case with no recording at all has no cost record either, and for this count the
+            // two are the same hole: the cost half does not cover it.
+            _ => {
+                missing.insert(case.name());
+            }
+        }
+    }
+    assert!(
+        checked > 0,
+        "the suite holds no case, so this count would pass by covering nothing"
+    );
+    let named: std::collections::BTreeSet<&str> = AFTER_THE_LAST_RUN
+        .iter()
+        .chain(OLDER_THAN_THE_LAST_RUN.iter())
+        .copied()
+        .collect();
+    assert_eq!(
+        named.len(),
+        AFTER_THE_LAST_RUN.len() + OLDER_THAN_THE_LAST_RUN.len(),
+        "a case is named under both causes, so the two counts do not add up"
+    );
+    if let Some(said) = cost_coverage_diff(&missing, &named) {
+        panic!(
+            "{checked} case(s) checked, {} carrying no cost record against {} named:\n{said}",
+            missing.len(),
+            named.len()
+        );
+    }
+}
+
+/// Both directions of the cost-coverage set: what the recordings hold against what is named.
+///
+/// Kept apart from [`stale_set_diff`] because the two answer different questions and share only
+/// their shape; folding them would make one message describe the other's failure.
+fn cost_coverage_diff(
+    missing: &std::collections::BTreeSet<&str>,
+    named: &std::collections::BTreeSet<&str>,
+) -> Option<String> {
+    if missing == named {
+        return None;
+    }
+    let mut said = Vec::new();
+    let unexpected: Vec<&str> = missing.difference(named).copied().collect();
+    if !unexpected.is_empty() {
+        said.push(format!(
+            "these cases carry no cost record and are not named as uncovered, so the cost half \
+             stopped covering them with nothing turning red. Measure them (`conformance cost \
+             --write`, naming them) or name them above with the reason: {unexpected:?}"
+        ));
+    }
+    let filled: Vec<&str> = named.difference(missing).copied().collect();
+    if !filled.is_empty() {
+        said.push(format!(
+            "these cases are named as uncovered but now carry a cost record, so each name stands \
+             behind nothing and must go: {filled:?}"
+        ));
+    }
+    Some(said.join("\n"))
+}
+
+/// Both directions of the cost-coverage set hold, over fabricated sets.
+///
+/// The check this proves is a set comparison, so it is provable with no device, no venue and no
+/// recording. A check nobody has watched refuse is not a check: an earlier synthetic test of mine
+/// passed and failed for the same reason and proved nothing, so each direction is driven here.
+#[test]
+fn the_cost_coverage_set_is_held_in_both_directions() {
+    fn set(names: &[&'static str]) -> std::collections::BTreeSet<&'static str> {
+        names.iter().copied().collect()
+    }
+    // Agreement passes, which is the only outcome that may pass.
+    assert!(cost_coverage_diff(&set(&["a", "b"]), &set(&["a", "b"])).is_none());
+    // A case that carries no record and is not named fails, and the message names it so the
+    // reader knows which case lost coverage.
+    let said = cost_coverage_diff(&set(&["a", "b"]), &set(&["a"]))
+        .expect("an unnamed case with no cost record must fail");
+    assert!(said.contains("\"b\""), "{said}");
+    assert!(said.contains("not named as uncovered"), "{said}");
+    // A name whose case carries a record again fails, so filling the hole shrinks the bill
+    // instead of leaving a name standing behind nothing.
+    let said = cost_coverage_diff(&set(&["a"]), &set(&["a", "b"]))
+        .expect("a name whose case now carries a record must fail");
+    assert!(said.contains("must go"), "{said}");
+    assert!(said.contains("\"b\""), "{said}");
+    // Empty on both sides is the state this work is for: every case covered, nothing named.
+    assert!(cost_coverage_diff(&set(&[]), &set(&[])).is_none());
+}
