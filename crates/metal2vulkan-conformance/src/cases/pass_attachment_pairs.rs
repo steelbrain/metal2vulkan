@@ -24,7 +24,7 @@
 //! whose last bits are a rasterizer's answer rather than Metal's, so a cross over it would have
 //! needed a tolerance — which defeats a cross whose whole point is an exact texel; and
 //! `engine/fbl_fetch_blend16_safe.metal` writes a constant to colour 1 and *fetches* colour 0.
-//! The owned fixture [`FIXTURE`] is the shape `engine/xrb_dual.metal` already had for dual-source
+//! The owned fixture `rt6_pair` is the shape `engine/xrb_dual.metal` already had for dual-source
 //! blending, moved across two attachment **indices**: `rt6_pair_two` returns colour 0 from
 //! fragment buffer 0 and colour 1 from fragment buffer 2, each at `[[position]]`'s own texel, and
 //! `rt6_pair_second` returns colour 1 alone.
@@ -35,7 +35,7 @@
 //! # What each axis of the loads case is for
 //!
 //! The pass draws into a rectangle that covers the **top half** of the target
-//! ([`DRAWN`]), so every cell's two planes hold two regions a reader can tell apart: what the
+//! (`DRAWN`), so every cell's two planes hold two regions a reader can tell apart: what the
 //! fragment wrote, and what the attachment's own load action left where no fragment ran.
 //!
 //! - **The load actions.** `Load` and `Clear` at each attachment, all four pairs. An earlier pass
@@ -653,7 +653,7 @@ impl Handles {
 }
 
 /// One cell's test pass: the two attachments under their own load and store actions, and one draw
-/// confined to [`DRAWN`].
+/// confined to `DRAWN`.
 fn pass(loads: [LoadAction; 2], stores: [StoreAction; 2], handles: Handles) -> RenderPass {
     RenderPass::clearing(
         INDICES

@@ -54,7 +54,7 @@
 //!
 //! # The seven patterns, and what each tells apart
 //!
-//! `-` is a sample no draw's mask named, which keeps the clear [`CLEAR_STENCIL`].
+//! `-` is a sample no draw's mask named, which keeps the clear `CLEAR_STENCIL`.
 //!
 //! | pattern | sample 0 | 1 | 2 | 3 | `Sample0` resolves |
 //! |---|---|---|---|---|---|
@@ -231,7 +231,7 @@ const STENCIL_FILTER: MultisampleStencilResolveFilter = MultisampleStencilResolv
 /// depth attachment, the depth beside it. `None` is a sample no draw's mask named, which keeps the
 /// pass's clears.
 ///
-/// Four entries, one a sample at [`SAMPLES`].
+/// Four entries, one a sample at `SAMPLES`.
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct Pattern {
     name: &'static str,
@@ -506,7 +506,7 @@ impl Handles {
 }
 
 /// One cell's pass: the colour attachment stored `DontCare`, the stencil attachment cleared and
-/// resolved through [`STENCIL_FILTER`] under `store`, the separate depth attachment resolved
+/// resolved through `STENCIL_FILTER` under `store`, the separate depth attachment resolved
 /// through `filter` under the same store where the case states one, and the patterns' draws.
 fn pass(filter: MultisampleDepthResolveFilter, store: StoreAction, handles: Handles) -> RenderPass {
     let mut stencil = PassStencil::cleared(handles.stencil, CLEAR_STENCIL);
@@ -909,7 +909,7 @@ mod tests {
     /// Cells a target holds.
     const CELLS: usize = (GRID * GRID) as usize;
 
-    /// What [`STENCIL_FILTER`] resolves the pattern's stencils to: sample 0's own byte, and the
+    /// What `STENCIL_FILTER` resolves the pattern's stencils to: sample 0's own byte, and the
     /// clear where no draw covered sample 0.
     ///
     /// Metal's rule applied here rather than read back from a recording, which is what lets the

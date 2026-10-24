@@ -12,7 +12,7 @@
 //! else:
 //!
 //! - a **`Clear`** load of an attachment the pass stores clears it from the origin over the render
-//!   area **rounded up to whole tiles of [`TILE`] pixels a side**, clipped to the attachment, in a
+//!   area **rounded up to whole tiles of `TILE` pixels a side**, clipped to the attachment, in a
 //!   pass **with a draw call** — one whose primitives cover nothing included;
 //! - a pass of one layer **without a draw call** clears the whole level and slice, whatever its
 //!   render area;
@@ -81,9 +81,9 @@
 //! Our runtime reaches Metal's reach by clearing it before the pass itself
 //! (`clear_reach.rs`'s `ReachClears`) — but **on MoltenVK it would get the same answer without
 //! doing so**, because the driver underneath is Metal and Metal's own tiles do it. Measured:
-//! replacing [`reach`]'s rounding with the render area exactly, in the runtime, moves **not one
+//! replacing `reach`'s rounding with the render area exactly, in the runtime, moves **not one
 //! texel** of this grid on an M3 Max. So a green run here says the two legs agree and says
-//! **nothing** about whether our reach model is right; the [`TILE`] of 32, the rounding up and the
+//! **nothing** about whether our reach model is right; the `TILE` of 32, the rounding up and the
 //! clipping are still held by a probe alone on every non-Metal driver.
 //!
 //! What a green run here *does* say is measured too, by the falsification that does land: making
@@ -142,12 +142,12 @@ const FIXTURE: &str = "rt6_resolves";
 /// `rt6_resolve_full`: `float4(4 * a - 1, z, 1)` at each of three vertex ids.
 const VERTEX: &str = "rt6_resolve_full";
 
-/// `rt6_resolve_white`: `float4(1)`, whose red reaches the attachment as [`DRAWN`].
+/// `rt6_resolve_white`: `float4(1)`, whose red reaches the attachment as `DRAWN`.
 const FRAGMENT: &str = "rt6_resolve_white";
 
 /// The side of the attachment, in texels.
 ///
-/// **Not a round number on purpose**: a tile of [`TILE`] pixels does not divide it, so the reach's
+/// **Not a round number on purpose**: a tile of `TILE` pixels does not divide it, so the reach's
 /// rounding and its clipping to the attachment are two different things a cell can tell apart. A
 /// 32- or 64-wide attachment could not.
 const SIDE: u32 = 40;
@@ -294,7 +294,7 @@ fn drawing_viewport() -> ViewportRect {
 }
 
 /// The viewport a `CoveringNothing` draw states: the 16 by 16 at (16, 16), which is **inside the
-/// 32 by 32 render area** of every cell that states it and does not overlap [`MISSED_RECT`].
+/// 32 by 32 render area** of every cell that states it and does not overlap `MISSED_RECT`.
 ///
 /// Inside the render area deliberately: a viewport or a scissor past it is not a shape this family
 /// hands Metal, and the module's own test holds every cell to that.
@@ -304,7 +304,7 @@ fn missing_viewport() -> ViewportRect {
 
 /// The extent from the origin a `Clear` load of this family's attachment clears in a pass over
 /// `area` that has a draw call where `called`: Metal's rule as `clear_reach.rs` measured it — the
-/// render area rounded up to whole [`TILE`]s and clipped to the attachment, or the whole attachment
+/// render area rounded up to whole `TILE`s and clipped to the attachment, or the whole attachment
 /// in a pass of one layer without a draw call.
 ///
 /// Stated here as a rule and applied to every cell, so the recording is held to a reason rather
@@ -384,7 +384,7 @@ fn steps(draws: Draws, pipeline: Handle) -> Vec<RenderStep> {
     ]
 }
 
-/// The priming pass: the attachment cleared to [`PRIOR`] and stored, over **no stated render
+/// The priming pass: the attachment cleared to `PRIOR` and stored, over **no stated render
 /// area** and with no draw call, which Metal clears whole, so every texel holds a stated value
 /// before a test pass opens.
 fn priming(texture: Handle) -> RenderPass {
@@ -393,7 +393,7 @@ fn priming(texture: Handle) -> RenderPass {
     ])
 }
 
-/// A cell's test pass: the attachment under the cell's load action, cleared to [`CLEAR`] and
+/// A cell's test pass: the attachment under the cell's load action, cleared to `CLEAR` and
 /// stored, over the cell's stated render area, with the cell's own draw.
 fn pass(cell: &Cell, texture: Handle, pipeline: Handle) -> RenderPass {
     let mut color = PassColor::cleared(texture, [CLEAR; 4]);
