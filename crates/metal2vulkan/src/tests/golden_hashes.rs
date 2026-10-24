@@ -878,12 +878,22 @@ fn diff(committed: &Table, observed: &Observed) -> Diff {
                         d.changed.push(format!("{at}: {c} -> {cell}"));
                     }
                 } else {
-                    let what = if s == source {
-                        "profile"
+                    // Name the KEY that moved, not the cell. A re-keyed profile usually leaves the
+                    // cell alone, and printing the cell then reads "profile changed: <hash> ->
+                    // <same hash>", which says a cell moved when none did and sends the reader
+                    // looking for a behaviour change that is not there.
+                    let (what, was, now) = if s == source {
+                        ("profile", f, fp)
                     } else {
-                        "fixture source"
+                        ("fixture source", s, source)
                     };
-                    d.stale.push(format!("{what} changed: {at}: {c} -> {cell}"));
+                    let cell = if c == cell {
+                        String::new()
+                    } else {
+                        format!(", cell {c} -> {cell}")
+                    };
+                    d.stale
+                        .push(format!("{what} changed: {at}: {was} -> {now}{cell}"));
                 }
             }
         }
@@ -1034,6 +1044,58 @@ fn bless_golden_hashes() {
             devices.len()
         );
     }
+}
+
+/// A stale line names the key that moved, and says nothing about a cell that did not move.
+///
+/// The line used to print the cell on a message announcing a key change, so a profile that
+/// re-keyed while its output stayed put read `profile changed: <hash> -> <same hash>`: it says a
+/// cell moved when none did, and sends the reader after a behaviour change that is not there. A
+/// re-bless was diagnosed wrong that way, which is why this holds all four classes apart.
+#[test]
+fn a_stale_cell_names_the_key_that_moved_and_not_an_unmoved_cell() {
+    let at = ("f.ll".to_owned(), "main".to_owned());
+    let table = |fp: &str, source: &str, cell: &str| Table {
+        profiles: vec![("a-gpu".to_owned(), fp.to_owned())],
+        rows: BTreeMap::from([(
+            at.clone(),
+            Row {
+                source: source.to_owned(),
+                cells: vec![cell.to_owned()],
+            },
+        )]),
+    };
+    let observed = |fp: &str, cell: &str| Observed {
+        table: table(fp, "src", cell),
+        skipped: BTreeSet::new(),
+    };
+
+    // The profile re-keyed and the cell did not: the two fingerprints, and no word about a cell.
+    let d = diff(&table("old-fp", "src", "cell"), &observed("new-fp", "cell"));
+    assert!(d.changed.is_empty(), "{:?}", d.changed);
+    assert_eq!(
+        d.stale,
+        ["profile changed: f.ll | main | a-gpu: old-fp -> new-fp"]
+    );
+
+    // The cell moved with it: the same line, with the cell named after the key.
+    let d = diff(&table("old-fp", "src", "was"), &observed("new-fp", "now"));
+    assert_eq!(
+        d.stale,
+        ["profile changed: f.ll | main | a-gpu: old-fp -> new-fp, cell was -> now"]
+    );
+
+    // A fixture source that moved names the sources, not the profile's fingerprint.
+    let d = diff(&table("fp", "older", "cell"), &observed("fp", "cell"));
+    assert_eq!(
+        d.stale,
+        ["fixture source changed: f.ll | main | a-gpu: older -> src"]
+    );
+
+    // Output that moved under an unchanged key is the other class, and still names the cell.
+    let d = diff(&table("fp", "src", "was"), &observed("fp", "now"));
+    assert!(d.stale.is_empty(), "{:?}", d.stale);
+    assert_eq!(d.changed, ["f.ll | main | a-gpu: was -> now"]);
 }
 
 /// The exact table takes the fixtures whose sampling the policy changes, under the sampler's
