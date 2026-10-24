@@ -1725,7 +1725,8 @@ impl Device {
 
     /// Announce that a heap texture of `layout` takes `answer` of a heap for `call`, more bytes
     /// or a coarser alignment than Metal's modelled answer `metal`
-    /// (`Degradation::HeapTextureLargerThanMetal`): its device's image needs them.
+    /// (`Degradation::HeapTextureLargerThanMetal`): its images need them and no shadow of the
+    /// texture's bytes holds it to Metal's answer ([`held_to_metal`]).
     fn degrade_past_metal_size(
         &self,
         call: &'static str,
@@ -1740,9 +1741,10 @@ impl Device {
                 layout.pixel_format, layout.texture_type, layout.levels, layout.samples
             );
             let why = format!(
-                "the device's image takes {:#x} bytes at an alignment of {:#x} (its own, at \
-                 least bufferImageGranularity, in whole granularity pages), where Metal answers \
-                 {:#x} at {:#x}: the answer is the device's",
+                "the device's images take {:#x} bytes at an alignment of {:#x} (their own, in \
+                 whole chunks of compression data where the driver writes them past an image's \
+                 size), where Metal answers {:#x} at {:#x}, and no shadow of the texture's bytes \
+                 holds it to Metal's: the answer is the device's",
                 answer.size, answer.align, metal.size, metal.align
             );
             (object, why)

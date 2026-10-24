@@ -1787,13 +1787,14 @@ degradations! {
              idle at a resize) holds their submissions until it returns, where Metal's present \
              holds no other queue";
         /// A heap texture sized or made (`heap_texture_size_and_align`, `Heap::new_texture`)
-        /// whose image on the device takes more of a heap than Metal's answer, which the runtime
-        /// models (`texture/heap_tiled.rs`): more bytes, or a coarser alignment (the image's own,
-        /// at least `bufferImageGranularity`, its size in whole granularity pages). No image
-        /// binds at Metal's offsets then, so the runtime answers the device's (the consumer's
-        /// report: on NVIDIA 615.71.09, the RTX 3090, a 4 x 4 `Depth32Float` texture answered
-        /// 1024 bytes, where Metal answers 128). Not where `optimized-depth-stencil-texture`
-        /// says why.
+        /// whose images on the device need more bytes or a coarser alignment than Metal's answer,
+        /// which the runtime models (`texture/heap_tiled.rs`), and which no shadow of the
+        /// texture's bytes holds it to (`texture/heap::held_to_metal`): not a multisample texture,
+        /// whose image lies in memory of its own, nor one whose planes or Metal's tiles fit its
+        /// bytes, and not one held with a depth twin. The answer is then the larger of the two,
+        /// since no image binds at Metal's offsets. Every other such texture answers Metal's
+        /// numbers and announces nothing here. Not where `optimized-depth-stencil-texture` says
+        /// why.
         HeapTextureLargerThanMetal = "heap-texture-larger-than-metal", Precision,
             "heap_texture_size_and_align answers more bytes or a coarser alignment than Metal's, \
              so a heap sized by Metal's answers holds fewer such textures, and they lie at other \
