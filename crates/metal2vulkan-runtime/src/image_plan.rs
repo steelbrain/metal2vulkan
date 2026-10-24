@@ -570,6 +570,15 @@ fn holds_multisample_depth_in_colour(
         )
 }
 
+/// Whether `plan`'s texels are in a colour image although its pixel format is a depth format: a
+/// `Depth32Float` texture held in `R32_SFLOAT`, which keeps every `float` a copy writes where the
+/// device's depth images may not ([`plan_depth_twin`] for a single-sampled one, with the
+/// `D32_SFLOAT` twin beside it; [`holds_multisample_depth_in_colour`] for a multisampled one, with
+/// no twin). `false` for every other plan, a depth plan among them.
+pub(super) fn holds_depth_in_colour(plan: &ImagePlan) -> bool {
+    plan.pixel_format == PixelFormat::Depth32Float && plan.format == Format::R32_SFLOAT
+}
+
 /// The flags a 3D image rendered into needs: 2D-array compatible, for the 2D view of its depth
 /// planes, but on a device whose portability subset withholds `imageView2DOn3DImage`
 /// (`VUID-VkImageCreateInfo-imageView2DOn3DImage-04459`), whose pass refuses the attachment
@@ -1009,8 +1018,9 @@ fn plan_held(
 /// ([`ImageFacts::depth_loss`]: without `VK_EXT_depth_range_unrestricted` enabled or a driver
 /// measured to keep a value outside `[0, 1]`, or without a driver measured to keep a denormal),
 /// whose `R32_SFLOAT` is sampled and copied and whose
-/// `D32_SFLOAT` is sampled and copied into, has one; `None` for every other. (A multisampled
-/// texture without a render target usage has no writer.)
+/// `D32_SFLOAT` is sampled and copied into, has one; `None` for every other. A multisampled
+/// texture takes no twin: nothing compares it, and no copy writes a multisampled depth image from
+/// a colour one ([`holds_multisample_depth_in_colour`] holds its texels in colour alone).
 fn plan_depth_twin(
     layout: &TextureLayout,
     usage: TextureUsage,

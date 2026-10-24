@@ -239,8 +239,10 @@ pub(super) fn copy_unit(
     if !is_depth_stencil(pf) {
         return colour_unit(pf);
     }
-    // A texture with a depth twin holds its depth in an `R32_SFLOAT` image, Metal's 4 bytes a
-    // texel in its colour aspect; `Depth32Float` has no stencil to name.
+    // A texture holding a depth format's texels in a colour image
+    // (`image_plan::holds_depth_in_colour`: one with a depth twin, and a multisampled
+    // `Depth32Float` one under `MultisampleDepthTwinPolicy::Exact`) holds them in an `R32_SFLOAT`
+    // image, Metal's 4 bytes a texel in its colour aspect; `Depth32Float` has no stencil to name.
     if mapping.aspects == ImageAspectFlags::COLOR {
         if pf != PixelFormat::Depth32Float || mapping.format != Format::R32_SFLOAT {
             return Err(CopyRefusal::Unsupported(

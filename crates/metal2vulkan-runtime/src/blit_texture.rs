@@ -2165,21 +2165,22 @@ impl Held {
     }
 }
 
-/// The images holding `texture`'s texels, the one its texels are read from first: a texture
-/// with a depth twin holds them in colour in its image and in `aspect` (depth) in its twin; any
+/// The images holding `texture`'s texels, the one its texels are read from first: a texture that
+/// holds a depth format's texels in a colour image ([`Texture::holds_depth_in_colour`]) holds them
+/// in colour in its image, and a depth twin beside it, where it has one, in `aspect` (depth); any
 /// other texture in `aspect` of its image.
 fn held(texture: &Texture, aspect: ImageAspectFlags) -> Result<Vec<Held>, Error> {
     let image = Held {
         image: texture.raw_image()?,
-        aspect,
+        aspect: match texture.holds_depth_in_colour() {
+            true => ImageAspectFlags::COLOR,
+            false => aspect,
+        },
         format: texture.image_plan()?.format,
     };
     Ok(match texture.twin_image() {
         Some(twin) => vec![
-            Held {
-                aspect: ImageAspectFlags::COLOR,
-                ..image
-            },
+            image,
             Held {
                 image: twin,
                 aspect,

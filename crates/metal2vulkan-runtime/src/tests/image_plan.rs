@@ -3,11 +3,12 @@
 
 use super::super::blit_plan::BufferImageRegion;
 use super::super::chroma_pairs::{holds_pairs, CARRIER as PAIRS_CARRIER};
-use super::super::copy_plan::ImageRegion;
+use super::super::copy_plan::{copy_unit, BlitOption, CopyUnit, ImageRegion};
 use super::super::driver_defects;
 use super::super::image_plan::{
-    block_family, check_image_limits, compatible, cube_compatible, holds_srgb_twin, plan_image,
-    plan_images, sample_count, srgb_twin, DepthImageFacts, ImageFacts, ImagePlan, ImageRefusal,
+    block_family, check_image_limits, compatible, cube_compatible, holds_depth_in_colour,
+    holds_srgb_twin, plan_image, plan_images, sample_count, srgb_twin, DepthImageFacts, ImageFacts,
+    ImagePlan, ImageRefusal,
 };
 use super::super::memory::MemoryClass;
 use super::super::pvrtc::{holds_blocks, image_buffer_region, image_region, CARRIERS};
@@ -2305,6 +2306,32 @@ fn the_switch_holds_a_multisampled_depth_texture_s_texels_in_colour() {
                     .usage
                     .contains(ImageUsageFlags::DEPTH_STENCIL_ATTACHMENT),
                 "{name}: {samples} samples: a read-only texture keeps no attachment usage"
+            );
+            // The plan every blit and binding reads the choice by (`Texture::holds_depth_in_colour`
+            // for the facts and `blit_texture::held` for the images a copy moves).
+            assert!(
+                holds_depth_in_colour(&switched_plan) && !holds_depth_in_colour(&plan),
+                "{name}: {samples} samples"
+            );
+            // Every copy of the texture's texels moves them in colour, 4 bytes a texel, as a
+            // texture with a depth twin's are: a fill of its samples
+            // (`blit_fill::sample_fill` through `blit_texture::unit`) and a copy between textures
+            // (`blit_plan::pair_unit`) alike.
+            assert_eq!(
+                copy_unit(P::Depth32Float, &switched_plan.mapping, BlitOption::None).ok(),
+                Some(CopyUnit {
+                    bytes: 4,
+                    extent: [1, 1],
+                    aspect: ImageAspectFlags::COLOR
+                }),
+                "{name}: {samples} samples"
+            );
+            assert_eq!(
+                copy_unit(P::Depth32Float, &plan.mapping, BlitOption::None)
+                    .map(|unit| unit.aspect)
+                    .ok(),
+                Some(ImageAspectFlags::DEPTH),
+                "{name}: {samples} samples, default"
             );
             held.push(format!("{name} {samples}"));
         }

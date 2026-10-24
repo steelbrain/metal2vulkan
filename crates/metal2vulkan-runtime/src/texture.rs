@@ -79,8 +79,8 @@ use super::heap::{Heap, HeapProblem, HeapType};
 use super::heap_sets;
 use super::host_bytes::HostBytes;
 use super::image_plan::{
-    check_image_limits, plan_image, plan_images, DepthImageFacts, ImageFacts, ImagePlan,
-    ImageRefusal,
+    check_image_limits, holds_depth_in_colour, plan_image, plan_images, DepthImageFacts,
+    ImageFacts, ImagePlan, ImageRefusal,
 };
 use super::key_hash::KeyMap;
 use super::linear_plan::{
@@ -4424,14 +4424,11 @@ impl Texture {
 
     /// Whether the texture's texels are in a colour image: a `Depth32Float` texture held in
     /// `R32_SFLOAT`, which keeps every `float` a copy writes where the device's depth images may
-    /// not (`image_plan::plan_depth_twin` for a single-sampled one, with the `D32_SFLOAT` twin
-    /// beside it; `image_plan::holds_multisample_depth_in_colour` for a multisampled one, with
-    /// no twin). `false` for every other texture.
+    /// not ([`holds_depth_in_colour`] for which plans those are). `false` for every other
+    /// texture.
     pub(super) fn holds_depth_in_colour(&self) -> bool {
-        self.image().is_ok_and(|image| {
-            let plan = image.plan();
-            plan.pixel_format == PixelFormat::Depth32Float && plan.format == Format::R32_SFLOAT
-        })
+        self.image()
+            .is_ok_and(|image| holds_depth_in_colour(image.plan()))
     }
 
     /// The `VkImage` of the texture's depth twin, or `None` for a texture without one.
