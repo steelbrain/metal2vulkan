@@ -532,7 +532,13 @@ pub fn times_on_under(
     rounds: u32,
     shaders: Shaders,
 ) -> Result<crate::times::Measurement, String> {
-    let instrument = crate::times::instrument_nanos();
+    // Bracketed, not sampled once: a leg is minutes long and the reading from its first five
+    // milliseconds is of a freshly-spawned thread, which is the case a scheduler treats best
+    // ([`crate::slow_calls::Calibration`]).
+    let mut calibration = crate::slow_calls::Calibration {
+        before: crate::times::instrument_nanos(),
+        after: 0,
+    };
     let mut venue = String::new();
     let mut taken: Vec<Vec<crate::times::CaseRound>> = Vec::new();
     for _ in 0..rounds.max(1) {
@@ -560,11 +566,12 @@ pub fn times_on_under(
         }
         taken.push(round);
     }
+    calibration.after = crate::times::instrument_nanos();
     Ok(crate::times::fold(
         crate::times::Leg::Ours,
         venue,
         rounds.max(1),
-        instrument,
+        calibration,
         cases,
         &taken,
     ))
@@ -581,7 +588,10 @@ pub fn metal_times(
     cases: &[Box<dyn Case>],
     rounds: u32,
 ) -> Result<crate::times::Measurement, String> {
-    let instrument = crate::times::instrument_nanos();
+    let mut calibration = crate::slow_calls::Calibration {
+        before: crate::times::instrument_nanos(),
+        after: 0,
+    };
     let mut venue = String::new();
     let mut taken: Vec<Vec<crate::times::CaseRound>> = Vec::new();
     for _ in 0..rounds.max(1) {
@@ -619,11 +629,12 @@ pub fn metal_times(
         venue = "native Metal".to_owned();
         taken.push(round);
     }
+    calibration.after = crate::times::instrument_nanos();
     Ok(crate::times::fold(
         crate::times::Leg::Metal,
         venue,
         rounds.max(1),
-        instrument,
+        calibration,
         cases,
         &taken,
     ))

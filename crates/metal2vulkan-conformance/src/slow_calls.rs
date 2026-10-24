@@ -73,10 +73,20 @@ const LEDGER: &str = include_str!("../known-slow-calls.tsv");
 /// Where a listed row stops being reported and starts failing as fixed: [`crate::times::MARGIN`]
 /// divided by this.
 ///
-/// 2.5, which is above the 2.43x worst run-to-run movement measured over two whole-set runs of one
-/// binary on this Mac. A smaller number would make a row's `NoLongerSlow` direction fire on a quiet
-/// machine.
-pub const BAND_DIVISOR: f64 = 2.5;
+/// **7.0, and the number it replaced was measured on the wrong quantity.** It was 2.5, above a
+/// 2.43x worst movement measured in *Metal's own per-call totals*. What the `NoLongerSlow`
+/// direction fires on is the **ratio**, and a ratio moves by more than either of its halves
+/// because the two halves move independently: over the two whole-set passes this tree recorded on
+/// this M3 Max, the 98 paired rows common to both moved a median 2.62x, 14.96x at the 90th
+/// percentile and 63.9x at worst. Restricted to the rows the measurement can resolve at all
+/// ([`RESOLVES_AT`]) it is a median 1.87x and 6.92x at the 90th percentile — so against a 10x
+/// margin, a divisor under 6.92 lets a pass read a row at 11x as fixed at 1.6x and delete a live
+/// bug's ledger row. 7.0 is the top of that measured range and nothing tighter is claimed.
+///
+/// The cost of the wider divisor is that a row genuinely fixed stays listed until it reads under
+/// 1.43x, and the `NoLongerSlow` direction therefore says less than it did. That is the honest
+/// trade: the measurement cannot tell 11x from 1.6x across two passes, so neither can the gate.
+pub const BAND_DIVISOR: f64 = 7.0;
 
 /// The ratio a listed row must fall under before the run reads it as fixed.
 pub fn band() -> f64 {
@@ -135,6 +145,113 @@ pub const QUIET_ENOUGH: f64 = 26.0;
 /// through the whole run's endpoints; that is the next change, not this one.
 pub const LOAD_MAY_MOVE: f64 = 2.0;
 
+/// **How far the instrument's own cost may move before the figures it took are not one
+/// measurement.** A factor.
+///
+/// **This is the check the load average cannot do, and the measurement says so in one line.** Run
+/// twice inside one minute, on one binary, over the same fifteen cases, with the one-minute load
+/// average reading 6.06 before the first and 6.26 before the second: at the ordinary scheduling
+/// class `function_facts` read 38.8x, and under a background scheduling class
+/// (`taskpolicy -b`) it read **75.5x** — our leg's total 48,271 us against 11,565 us and Metal's
+/// 639 us against 298 us. Nothing about the host's load changed, and the gate the load readings
+/// hold would have judged both. What did change by the same kind of factor is the instrument's own
+/// self-calibration: **0.647 us a call against 0.242 us, a factor of 2.67**.
+///
+/// So the quantity worth a gate here is the cost of the instrument on the CPU the figures were
+/// actually taken on. Measured on this M3 Max: eleven readings over nine ordinary passes today
+/// span 0.216 to 0.247 us, a factor of 1.14, and the four readings the two whole-set passes
+/// recorded span 0.240 to 0.275 us, a factor of 1.15. 1.5 is above every spread an undegraded host
+/// gave and well under the degraded one.
+pub const CALIBRATION_MAY_MOVE: f64 = 1.5;
+
+/// **How many of the instrument's own costs a call must cost before a row is judged at all.**
+///
+/// Measured over the two whole-set passes this tree recorded, which is the only pair of
+/// independent whole-set measurements that exists: of the 41 paired rows whose smaller leg's
+/// typical call cost under four instrument costs, the ratio moved a median **4.23x** between the
+/// two passes and 19 of the 41 moved over 5x; of the 57 rows above that line it moved a median
+/// **1.87x** and 7 of 57 moved over 5x. The line more than halves the movement, which is why it is
+/// four and not a rounder number stated for tidiness.
+///
+/// What sits under it is not a short call being judged harshly, it is a call whose figure is a
+/// reading of the clock and the scheduler: `texture_accesses` is five calls a case at a Metal
+/// typical of 0.2 us against an instrument of 0.244 us, and its row read 19.3x in the morning pass
+/// and 102.4x in the afternoon one. `replace_region` sits there too, at about one instrument cost
+/// on Metal's leg, and its pooled row moved 7.4x to 31.3x across the two passes while the real
+/// finding behind its ledger row is 265x over the 16 cases that make it. A pooled row that
+/// unstable must neither add a row nor retire one.
+pub const RESOLVES_AT: u64 = 4;
+
+/// What the instrument itself cost on the CPU one leg ran on: one reading before that leg and one
+/// after it.
+///
+/// **Bracketed for the same reason the load readings are**, and against a blind spot that was
+/// measured rather than supposed. [`crate::times::instrument_nanos`] used to be read once, at the
+/// start of each leg, and a leg is minutes long: the morning whole-set pass recorded 0.275 us for
+/// Metal's leg and 0.269 us for ours — ordinary readings — while the figures that pass produced
+/// are not reproducible by the binary that produced it. Re-run now, that binary reads
+/// `function_facts` at 46.3x and 40.9x against the 89.5x it recorded, and its per-case figures
+/// agree with today's to within 5%. A reading taken in the first five milliseconds of an
+/// eleven-minute leg says what the CPU was doing then and nothing about the rest, and a
+/// freshly-spawned thread is exactly the case a scheduler treats best.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct Calibration {
+    /// The reading taken immediately before this leg started, in nanoseconds a call.
+    pub before: u64,
+    /// The reading taken immediately after it finished.
+    pub after: u64,
+}
+
+impl Calibration {
+    /// The cost to compare this leg by: the mean of its two readings, or whichever one was taken.
+    pub fn typical(self) -> Option<u64> {
+        match (self.before, self.after) {
+            (0, 0) => None,
+            (0, one) | (one, 0) => Some(one),
+            (before, after) => Some((before + after) / 2),
+        }
+    }
+
+    /// How far the instrument's cost moved while this one leg ran, as a factor.
+    fn moved(self) -> Option<f64> {
+        let (before, after) = (self.before, self.after);
+        if before == 0 || after == 0 {
+            return None;
+        }
+        let (low, high) = if before < after {
+            (before, after)
+        } else {
+            (after, before)
+        };
+        Some(high as f64 / low as f64)
+    }
+}
+
+/// The instrument's cost on each leg, and what this chip's own recordings say it costs.
+///
+/// The reference is the median of the readings the selection's recordings carry for this chip and
+/// this macOS build, and it is the only part of the gate that reaches outside the run. It is there
+/// because a run degraded from its first instruction to its last has nothing inside it to compare
+/// against: all four of its readings agree, and only a figure from another day says they are all
+/// wrong together. A recording holds that figure already ([`crate::times::TimeRecord::instrument`])
+/// and holds the chip and the build it was taken on, so the reference needs no constant per host.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct Calibrations {
+    pub metal: Calibration,
+    pub ours: Calibration,
+    /// What this chip's recordings say the instrument costs, in nanoseconds a call, where the
+    /// selection carries enough of them to say.
+    pub reference: Option<u64>,
+}
+
+impl Calibrations {
+    /// Nothing measured: the gate then judges on what it does have, the way a host answering no
+    /// load average is judged on the rest.
+    pub fn unmeasured() -> Self {
+        Self::default()
+    }
+}
+
 /// What the host was doing while one leg ran: its one-minute load average on each side of that
 /// leg, and nothing from the other leg's window.
 #[derive(Clone, Copy, Debug, Default)]
@@ -180,15 +297,28 @@ impl LegLoad {
 /// whole run could never see it, because the run's endpoints average over exactly the interval
 /// where the damage happens. These brackets measure it directly.
 ///
-/// Refused four ways, each with its reason for the caller to print: a cold reading, which does
+/// Refused seven ways, each with its reason for the caller to print: a cold reading, which does
 /// not separate our compile cost from first use on a new device; any reading over
 /// [`QUIET_ENOUGH`]; a single leg whose own load moved by more than [`LOAD_MAY_MOVE`], so that
-/// leg is not one measurement; and the two legs' loads differing by more than [`LOAD_MAY_MOVE`],
-/// so the ratio is of two machines.
+/// leg is not one measurement; the two legs' loads differing by more than [`LOAD_MAY_MOVE`],
+/// so the ratio is of two machines; a leg whose **instrument cost** moved by more than
+/// [`CALIBRATION_MAY_MOVE`] while it ran; the two legs' instrument costs differing by that much,
+/// so the ratio divides one CPU's figure by another's; and every reading of the instrument sitting
+/// that far off what this chip's own recordings say it costs, which is the only way a run degraded
+/// from start to finish can be caught from inside itself.
+///
+/// The load readings and the calibration readings are both kept because they see different things:
+/// measured on this host, a background scheduling class doubled a per-call ratio while the load
+/// average held at 6.06 and 6.26, and the calibration moved 2.67x over the same pair of runs.
 ///
 /// A host that answers no load average is judged on what it does answer, and judged outright if
 /// it answers nothing: a missing reading is not evidence of a busy machine.
-pub fn judges(shaders: crate::run::Shaders, metal: LegLoad, ours: LegLoad) -> Result<(), String> {
+pub fn judges(
+    shaders: crate::run::Shaders,
+    metal: LegLoad,
+    ours: LegLoad,
+    cpu: Calibrations,
+) -> Result<(), String> {
     if matches!(shaders, crate::run::Shaders::Cold) {
         return Err(WHY_COLD_IS_NOT_JUDGED.to_owned());
     }
@@ -240,6 +370,78 @@ pub fn judges(shaders: crate::run::Shaders, metal: LegLoad, ours: LegLoad) -> Re
                  Re-run it on a host that stays put for a verdict.",
                 high / low
             ));
+        }
+    }
+    // The instrument's own cost on the CPU each leg ran on. The load average is a measurement of
+    // the host and this is a measurement of the measurement, and the two do not substitute: a
+    // background scheduling class moves this 2.67x and the load average not at all.
+    for (whose, leg) in [("Metal's leg", cpu.metal), ("our leg", cpu.ours)] {
+        if let Some(moved) = leg.moved() {
+            if moved > CALIBRATION_MAY_MOVE {
+                return Err(format!(
+                    "the margin is reported and not judged: while {whose} ran, the instrument's \
+                     own cost moved\nfrom {:.3} us a call to {:.3} us, a factor of {moved:.2} and \
+                     more than the {CALIBRATION_MAY_MOVE:.1}x the gate allows. The\nfigures from \
+                     the two ends of that leg were taken on CPUs of different speeds, so they are \
+                     not one\nmeasurement. Re-run it where the measuring thread keeps what it \
+                     started with.",
+                    leg.before as f64 / 1_000.0,
+                    leg.after as f64 / 1_000.0
+                ));
+            }
+        }
+    }
+    if let (Some(metal_cost), Some(our_cost)) = (cpu.metal.typical(), cpu.ours.typical()) {
+        let (low, high) = if metal_cost < our_cost {
+            (metal_cost, our_cost)
+        } else {
+            (our_cost, metal_cost)
+        };
+        if low > 0 && high as f64 / low as f64 > CALIBRATION_MAY_MOVE {
+            return Err(format!(
+                "the margin is reported and not judged: the instrument cost {:.3} us a call while \
+                 Metal's leg\nran and {:.3} us while ours did, a factor of {:.2} apart and more \
+                 than the {CALIBRATION_MAY_MOVE:.1}x the gate\nallows. The legs run one after the \
+                 other, so a ratio across that gap divides one CPU's figure by\nanother's. Re-run \
+                 it on a host that stays put for a verdict.",
+                metal_cost as f64 / 1_000.0,
+                our_cost as f64 / 1_000.0,
+                high as f64 / low as f64
+            ));
+        }
+    }
+    // A run degraded from its first instruction to its last has nothing inside it to disagree
+    // with, so the reference is the only thing that can say its readings are all wrong together.
+    if let Some(reference) = cpu.reference {
+        if reference > 0 {
+            for (whose, reading) in [
+                ("before Metal's leg", cpu.metal.before),
+                ("after Metal's leg", cpu.metal.after),
+                ("before our leg", cpu.ours.before),
+                ("after our leg", cpu.ours.after),
+            ] {
+                if reading == 0 {
+                    continue;
+                }
+                let off = if reading > reference {
+                    reading as f64 / reference as f64
+                } else {
+                    reference as f64 / reading as f64
+                };
+                if off > CALIBRATION_MAY_MOVE {
+                    return Err(format!(
+                        "the margin is reported and not judged: the instrument cost {:.3} us a \
+                         call {whose},\nand this chip's own recordings say it costs {:.3} us -- a \
+                         factor of {off:.2} and more than the\n{CALIBRATION_MAY_MOVE:.1}x the \
+                         gate allows. Measured on this host, a background scheduling class reads \
+                         2.67x\nhere and doubles a per-call ratio while the load average does not \
+                         move at all, so this run's\nfigures are of a CPU the recorded ones were \
+                         not taken on. Re-run it unthrottled for a verdict.",
+                        reading as f64 / 1_000.0,
+                        reference as f64 / 1_000.0
+                    ));
+                }
+            }
         }
     }
     Ok(())
@@ -315,6 +517,16 @@ pub enum Expectation {
     NoLongerSlow { call: String, ratio: String },
     /// Listed, between the band and the margin, where one run cannot say which side it is on.
     InTheBand { call: String, ratio: String },
+    /// **The measurement cannot resolve the call above its own instrument**, so the row neither
+    /// adds a ledger row nor retires one ([`RESOLVES_AT`]).
+    Unresolved {
+        call: String,
+        ratio: String,
+        /// What one such call costs on the leg that costs less, in nanoseconds.
+        typical: u64,
+        /// What the instrument cost on this host, in nanoseconds a call.
+        instrument: u64,
+    },
 }
 
 impl Expectation {
@@ -324,6 +536,11 @@ impl Expectation {
             self,
             Expectation::Unlisted { .. } | Expectation::NoLongerSlow { .. }
         )
+    }
+
+    /// Whether the gate withheld a verdict on the row rather than reaching one.
+    pub fn withheld(&self) -> bool {
+        matches!(self, Expectation::Unresolved { .. })
     }
 }
 
@@ -351,6 +568,21 @@ impl std::fmt::Display for Expectation {
                 "{call} costs {ratio} what Metal's does, between the band and the margin, where \
                  one run cannot say which side it is on"
             ),
+            Expectation::Unresolved {
+                call,
+                ratio,
+                typical,
+                instrument,
+            } => write!(
+                out,
+                "{call} reads {ratio}, and the run withholds a verdict on it: one such call costs \
+                 {:.3} us on the cheaper leg against the instrument's own {:.3} us, under the \
+                 {RESOLVES_AT} instrument costs a row is judged at. A row this thin moved a median \
+                 4.23x between the two whole-set passes against 1.87x for the rest, so it neither \
+                 adds a ledger row nor retires one. Localise it with `times --call {call}`",
+                *typical as f64 / 1_000.0,
+                *instrument as f64 / 1_000.0
+            ),
         }
     }
 }
@@ -362,7 +594,16 @@ impl std::fmt::Display for Expectation {
 ///
 /// A cold measurement never reaches here: [`judges`] turns the gate off for one, because its
 /// readings do not separate our compile cost from the cost of first use on a new device.
-pub fn held(rows: &[crate::times::Paired], ledger: &[KnownSlowCall]) -> Vec<Expectation> {
+///
+/// A row the measurement cannot resolve above its own instrument is [`Expectation::Unresolved`]
+/// and is held in **neither** direction: it cannot add a row and it cannot retire one. That is a
+/// deliberate hole and it is the right one — the alternative is a pass reading `replace_region`'s
+/// pooled row at 7.4x and failing the run to delete a ledger row whose localised finding is 265x.
+pub fn held(
+    rows: &[crate::times::Paired],
+    ledger: &[KnownSlowCall],
+    instrument: u64,
+) -> Vec<Expectation> {
     let margin = crate::times::MARGIN as f64;
     let band = band();
     let mut held = Vec::new();
@@ -372,6 +613,19 @@ pub fn held(rows: &[crate::times::Paired], ledger: &[KnownSlowCall]) -> Vec<Expe
         };
         let listed = ledger.iter().find(|known| known.call == row.call);
         let said = format!("{ratio:.1}x");
+        // The row has to be of the call before it can be of anything: a call whose cheaper leg
+        // costs a couple of instrument costs is a reading of the clock and the scheduler, and the
+        // measurement says how much worse such a row behaves rather than supposing it.
+        let typical = row.metal.typical.min(row.ours.typical);
+        if instrument > 0 && typical < RESOLVES_AT.saturating_mul(instrument) {
+            held.push(Expectation::Unresolved {
+                call: row.call.clone(),
+                ratio: said,
+                typical,
+                instrument,
+            });
+            continue;
+        }
         held.push(match (listed, ratio) {
             (Some(known), ratio) if ratio > margin => Expectation::Known {
                 call: row.call.clone(),
@@ -400,8 +654,19 @@ mod tests {
     use super::*;
     use crate::times::{CallTotal, Paired};
 
-    /// A paired row at `ratio` times Metal's cost.
+    /// What the instrument costs in the gate's tests, in nanoseconds a call: a round number near
+    /// this host's measured 0.244 us.
+    const INSTRUMENT: u64 = 250;
+
+    /// A paired row at `ratio` times Metal's cost, resolved well clear of [`RESOLVES_AT`] so the
+    /// margin is what the test exercises.
     fn row(call: &str, ratio: u64) -> Paired {
+        resolved_at(call, ratio, INSTRUMENT * RESOLVES_AT * 10)
+    }
+
+    /// A paired row at `ratio` times Metal's cost whose cheaper leg's typical call costs `typical`
+    /// nanoseconds.
+    fn resolved_at(call: &str, ratio: u64, typical: u64) -> Paired {
         Paired {
             call: call.to_owned(),
             metal: CallTotal {
@@ -409,14 +674,14 @@ mod tests {
                 wall: 100,
                 on_cpu: 100,
                 blocked: 0,
-                typical: 100,
+                typical,
             },
             ours: CallTotal {
                 calls: 1,
                 wall: 100 * ratio,
                 on_cpu: 100 * ratio,
                 blocked: 0,
-                typical: 100 * ratio,
+                typical: typical * ratio.max(1),
             },
         }
     }
@@ -467,13 +732,55 @@ mod tests {
         }
     }
 
+    /// One leg whose instrument held still at `nanos` a call.
+    fn calibrated(nanos: u64) -> Calibration {
+        Calibration {
+            before: nanos,
+            after: nanos,
+        }
+    }
+
+    /// The gate over a warm measurement whose instrument said nothing: the load rules alone.
+    fn loads(metal: LegLoad, ours: LegLoad) -> Result<(), String> {
+        judges(
+            crate::run::Shaders::Warm,
+            metal,
+            ours,
+            Calibrations::unmeasured(),
+        )
+    }
+
+    /// The gate over a warm measurement on a quiet host, judged by its instrument alone.
+    fn instrument(
+        metal: Calibration,
+        ours: Calibration,
+        reference: Option<u64>,
+    ) -> Result<(), String> {
+        judges(
+            crate::run::Shaders::Warm,
+            steady(1.0),
+            steady(1.0),
+            Calibrations {
+                metal,
+                ours,
+                reference,
+            },
+        )
+    }
+
     #[test]
     fn the_gate_does_not_judge_a_cold_measurement() {
         assert!(
-            judges(crate::run::Shaders::Warm, steady(1.0), steady(1.0)).is_ok(),
+            loads(steady(1.0), steady(1.0)).is_ok(),
             "the warm gate is off on a quiet host"
         );
-        let cold = judges(crate::run::Shaders::Cold, steady(1.0), steady(1.0)).expect_err(
+        let cold = judges(
+            crate::run::Shaders::Cold,
+            steady(1.0),
+            steady(1.0),
+            Calibrations::unmeasured(),
+        )
+        .expect_err(
             "a cold measurement was judged, and its readings do not separate the two causes",
         );
         assert!(
@@ -487,41 +794,22 @@ mod tests {
     #[test]
     fn the_gate_does_not_judge_a_loaded_host() {
         // Either leg over the bound refuses, and the reason names which one.
-        let why = judges(
-            crate::run::Shaders::Warm,
-            steady(QUIET_ENOUGH + 0.01),
-            steady(QUIET_ENOUGH),
-        )
-        .expect_err("a loaded Metal leg was judged");
+        let why = loads(steady(QUIET_ENOUGH + 0.01), steady(QUIET_ENOUGH))
+            .expect_err("a loaded Metal leg was judged");
         assert!(
             why.contains("Metal's leg"),
             "the reason does not name the loaded leg: {why}"
         );
         assert!(
-            judges(
-                crate::run::Shaders::Warm,
-                steady(QUIET_ENOUGH),
-                steady(QUIET_ENOUGH + 0.01)
-            )
-            .is_err(),
+            loads(steady(QUIET_ENOUGH), steady(QUIET_ENOUGH + 0.01)).is_err(),
             "a loaded leg of ours was judged"
         );
         assert!(
-            judges(
-                crate::run::Shaders::Warm,
-                steady(QUIET_ENOUGH),
-                steady(QUIET_ENOUGH)
-            )
-            .is_ok(),
+            loads(steady(QUIET_ENOUGH), steady(QUIET_ENOUGH)).is_ok(),
             "the bound itself is refused, so no host can ever meet it"
         );
         assert!(
-            judges(
-                crate::run::Shaders::Warm,
-                LegLoad::default(),
-                LegLoad::default()
-            )
-            .is_ok(),
+            loads(LegLoad::default(), LegLoad::default()).is_ok(),
             "a host with no load average was refused a verdict for not having one"
         );
     }
@@ -543,14 +831,13 @@ mod tests {
             steady(1.0).after,
             "this test no longer pins the case the run-level bracket missed"
         );
-        let why = judges(crate::run::Shaders::Warm, moved, steady(1.0))
-            .expect_err("a leg whose own load moved was judged");
+        let why = loads(moved, steady(1.0)).expect_err("a leg whose own load moved was judged");
         assert!(
             why.contains("Metal's leg") && why.contains("moved from"),
             "the reason does not name the leg that moved: {why}"
         );
         assert!(
-            judges(crate::run::Shaders::Warm, steady(1.0), moved).is_err(),
+            loads(steady(1.0), moved).is_err(),
             "our leg moving under itself was judged"
         );
     }
@@ -562,31 +849,187 @@ mod tests {
     /// ones: a whole-set pass ran Metal's leg near 16.8 and ours near 55.9.
     #[test]
     fn the_gate_does_not_judge_a_ratio_taken_across_a_load_change() {
-        let why = judges(
-            crate::run::Shaders::Warm,
-            steady(1.0),
-            steady(LOAD_MAY_MOVE + 1.0),
-        )
-        .expect_err("a ratio taken across a load change between the legs was judged");
+        let why = loads(steady(1.0), steady(LOAD_MAY_MOVE + 1.0))
+            .expect_err("a ratio taken across a load change between the legs was judged");
         assert!(
             why.contains("Metal's leg ran at") && why.contains("ours at"),
             "the reason does not give both legs' loads: {why}"
         );
         // Exactly at the allowance is still one machine.
         assert!(
-            judges(
-                crate::run::Shaders::Warm,
-                steady(1.0),
-                steady(LOAD_MAY_MOVE)
-            )
-            .is_ok(),
+            loads(steady(1.0), steady(LOAD_MAY_MOVE)).is_ok(),
             "the allowance itself is refused"
         );
         // An idle host reads near zero on both legs and must not trip the ratio.
         assert!(
-            judges(crate::run::Shaders::Warm, steady(0.0), steady(0.0)).is_ok(),
+            loads(steady(0.0), steady(0.0)).is_ok(),
             "an idle host was refused for having no load to compare"
         );
+    }
+
+    /// **The instrument's own cost is the measurement of the measurement**, and a leg whose
+    /// instrument moved while it ran did not take its figures on one CPU.
+    ///
+    /// This is the case the single start-of-leg reading could not see, and it is not supposed: the
+    /// morning whole-set pass recorded 0.275 us for Metal's leg and 0.269 us for ours, both
+    /// ordinary, and the figures it produced are not reproducible by the binary that produced
+    /// them — re-run, that binary reads `function_facts` at 46.3x and 40.9x against the 89.5x it
+    /// recorded.
+    #[test]
+    fn the_gate_does_not_judge_a_leg_whose_instrument_moved_under_it() {
+        let moved = Calibration {
+            before: 240,
+            after: (240.0 * CALIBRATION_MAY_MOVE) as u64 + 1,
+        };
+        // The same blind spot the load brackets were introduced for: a bracket of the whole run
+        // reads 240 at both ends and reports an instrument that never moved.
+        assert_eq!(
+            moved.before,
+            calibrated(240).after,
+            "this test no longer pins the case a run-level reading misses"
+        );
+        let why = instrument(moved, calibrated(240), None)
+            .expect_err("a leg whose instrument moved under it was judged");
+        assert!(
+            why.contains("Metal's leg") && why.contains("own cost moved"),
+            "the reason does not name the leg whose instrument moved: {why}"
+        );
+        assert!(
+            instrument(calibrated(240), moved, None).is_err(),
+            "our leg's instrument moving under it was judged"
+        );
+        assert!(
+            instrument(calibrated(240), calibrated(240), None).is_ok(),
+            "a steady instrument was refused"
+        );
+        assert!(
+            instrument(Calibration::default(), Calibration::default(), None).is_ok(),
+            "a run that took no calibration was refused a verdict for not having one"
+        );
+    }
+
+    /// **The legs run one after the other**, so an instrument that cost one thing while Metal ran
+    /// and another while we did divides one CPU's figure by another's.
+    #[test]
+    fn the_gate_does_not_judge_a_ratio_taken_across_two_cpus() {
+        let why = instrument(
+            calibrated(240),
+            calibrated((240.0 * CALIBRATION_MAY_MOVE) as u64 + 1),
+            None,
+        )
+        .expect_err("a ratio across two instrument costs was judged");
+        assert!(
+            why.contains("while Metal's leg") && why.contains("while ours did"),
+            "the reason does not give both legs' instrument costs: {why}"
+        );
+        assert!(
+            instrument(
+                calibrated(240),
+                calibrated((240.0 * CALIBRATION_MAY_MOVE) as u64),
+                None
+            )
+            .is_ok(),
+            "the allowance itself is refused"
+        );
+    }
+
+    /// **A run degraded from its first instruction to its last agrees with itself**, so only a
+    /// figure from another day can say its readings are all wrong together.
+    ///
+    /// Measured on this host, one binary and fifteen cases inside one minute: at the ordinary
+    /// scheduling class the instrument read 0.242 us a call and `function_facts` read 38.8x; under
+    /// a background scheduling class the instrument read 0.647 us and the same row read 75.5x. The
+    /// one-minute load average was 6.06 and 6.26, so every load rule above judged both.
+    #[test]
+    fn the_gate_does_not_judge_a_run_whose_instrument_is_nothing_like_the_recorded_one() {
+        let degraded = calibrated(647);
+        let reference = Some(244);
+        // Internally consistent: all four readings agree and both legs agree with each other, so
+        // nothing above this rule can see it.
+        assert!(
+            degraded.moved().is_none() || degraded.moved() == Some(1.0),
+            "the degraded run must agree with itself, or this test proves nothing"
+        );
+        let why = instrument(degraded, degraded, reference)
+            .expect_err("a run 2.7x off this chip's recorded instrument was judged");
+        assert!(
+            why.contains("recordings say") && why.contains("0.647"),
+            "the reason does not give the reading and the reference: {why}"
+        );
+        // An instrument cheaper than the recorded one by the same factor is equally not the
+        // machine the reference was taken on.
+        assert!(
+            instrument(calibrated(100), calibrated(100), reference).is_err(),
+            "a run far faster than the reference was judged"
+        );
+        assert!(
+            instrument(calibrated(244), calibrated(244), reference).is_ok(),
+            "a run at this chip's own recorded instrument was refused"
+        );
+        // No reference, no refusal: a selection whose recordings carry no reading is not evidence
+        // of a degraded host.
+        assert!(
+            instrument(degraded, degraded, None).is_ok(),
+            "a run was refused for the recordings having nothing to compare it with"
+        );
+    }
+
+    /// **A row the measurement cannot resolve above its own instrument is held in neither
+    /// direction.**
+    ///
+    /// Measured over the two whole-set passes this tree recorded: of the 41 paired rows whose
+    /// cheaper leg's typical call cost under four instrument costs, the ratio moved a median 4.23x
+    /// between the passes and 19 of 41 moved over 5x, against 1.87x and 7 of 57 above the line.
+    /// `texture_accesses` is the row that names it — five calls a case at a Metal typical of 0.2 us
+    /// against an instrument of 0.244 us, reading 19.3x in one pass and 102.4x in the other.
+    #[test]
+    fn a_row_the_instrument_swamps_neither_adds_a_ledger_row_nor_retires_one() {
+        let thin = resolved_at("thin", 100, INSTRUMENT * RESOLVES_AT - 1);
+        let unlisted = held(std::slice::from_ref(&thin), &[], INSTRUMENT);
+        assert!(
+            matches!(&unlisted[0], Expectation::Unresolved { .. }),
+            "{unlisted:?}"
+        );
+        assert!(
+            !unlisted[0].fails(),
+            "an unresolvable row at 100x failed the run and would have demanded a ledger row \
+             nobody can reproduce"
+        );
+        assert!(unlisted[0].withheld());
+        // Listed and unresolvable: the row is neither confirmed nor retired. `replace_region`
+        // lives here -- about one instrument cost on Metal's leg, a pooled row that moved 7.4x to
+        // 31.3x across the two passes, and a localised finding of 265x over the 16 cases that make
+        // it.
+        let known = vec![KnownSlowCall {
+            call: "thin".to_owned(),
+            measured: "265.0x".to_owned(),
+            where_it_is: "somewhere".to_owned(),
+            waiting_on: "a gap written down at length somewhere".to_owned(),
+        }];
+        let fixed = held(
+            &[resolved_at("thin", 1, INSTRUMENT * RESOLVES_AT - 1)],
+            &known,
+            INSTRUMENT,
+        );
+        assert!(
+            matches!(&fixed[0], Expectation::Unresolved { .. }),
+            "{fixed:?}"
+        );
+        assert!(
+            !fixed[0].fails(),
+            "an unresolvable row read as fixed and would have deleted a live bug's ledger row"
+        );
+        // One instrument cost above the line, the same row is judged.
+        let resolved = held(
+            &[resolved_at("thin", 100, INSTRUMENT * RESOLVES_AT)],
+            &[],
+            INSTRUMENT,
+        );
+        assert!(
+            matches!(&resolved[0], Expectation::Unlisted { .. }),
+            "{resolved:?}"
+        );
+        assert!(resolved[0].fails());
     }
 
     /// **Both directions.** An unlisted call over the margin fails; a listed call back inside the
@@ -599,7 +1042,11 @@ mod tests {
             where_it_is: "somewhere".to_owned(),
             waiting_on: "a gap written down at length somewhere".to_owned(),
         }];
-        let over = held(&[row("listed", 100), row("unlisted", 50)], &known);
+        let over = held(
+            &[row("listed", 100), row("unlisted", 50)],
+            &known,
+            INSTRUMENT,
+        );
         assert!(matches!(&over[0], Expectation::Known { .. }), "{over:?}");
         assert!(matches!(&over[1], Expectation::Unlisted { .. }), "{over:?}");
         assert!(!over[0].fails());
@@ -608,8 +1055,9 @@ mod tests {
             "an unlisted call over the margin did not fail the run"
         );
 
-        // The listed call, fixed: now inside the band.
-        let fixed = held(&[row("listed", 2)], &known);
+        // The listed call, fixed: now inside the band, which the measured movement of a per-call
+        // ratio puts at 1.43x ([`BAND_DIVISOR`]).
+        let fixed = held(&[row("listed", 1)], &known, INSTRUMENT);
         assert!(
             matches!(&fixed[0], Expectation::NoLongerSlow { .. }),
             "{fixed:?}"
@@ -624,7 +1072,7 @@ mod tests {
     /// cost, and an unexplained win is not something a gate should bless.
     #[test]
     fn being_faster_than_metal_never_fires_the_gate() {
-        let quick = held(&[row("quick", 0)], &[]);
+        let quick = held(&[row("quick", 0)], &[], INSTRUMENT);
         assert!(quick.is_empty(), "{quick:?}");
     }
 
@@ -639,16 +1087,17 @@ mod tests {
             where_it_is: "somewhere".to_owned(),
             waiting_on: "a gap written down at length somewhere".to_owned(),
         }];
-        let inside = held(&[row("listed", 6)], &known);
+        let inside = held(&[row("listed", 3)], &known, INSTRUMENT);
         assert!(
             matches!(&inside[0], Expectation::InTheBand { .. }),
             "{inside:?}"
         );
         assert!(!inside[0].fails());
         assert!(
-            band() > 2.43,
-            "the band is inside the measured run-to-run movement"
+            band() * 6.92 <= crate::times::MARGIN as f64,
+            "the band is inside the measured 6.92x movement of a resolved per-call ratio, so a \
+             pass could read a listed row as fixed and delete a live bug's row"
         );
-        assert_eq!(band(), 4.0);
+        assert!((band() - 10.0 / 7.0).abs() < 1e-9, "{}", band());
     }
 }

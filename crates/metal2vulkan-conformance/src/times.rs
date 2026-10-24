@@ -460,8 +460,13 @@ pub struct Measurement {
     pub venue: String,
     /// The rounds taken.
     pub rounds: u32,
-    /// What the instrument itself cost on this host, in nanoseconds a call.
+    /// What the instrument itself cost on this host, in nanoseconds a call: the middle of the two
+    /// readings [`Measurement::calibration`] holds.
     pub instrument: u64,
+    /// What the instrument cost before this leg ran and again after it, which is what the gate
+    /// judges the measurement's own conditions by
+    /// ([`crate::slow_calls::Calibration`]).
+    pub calibration: crate::slow_calls::Calibration,
     /// Whether the host answered the thread CPU clock. Where it did not, `on_cpu` reads zero
     /// everywhere and `blocked` equals elapsed, and the report says so rather than letting a
     /// reader take the zeros for a fact.
@@ -609,6 +614,10 @@ pub struct TimeRecord {
 /// `taken` is one entry per round, each holding one [`CaseRound`] per case of the selection, in the
 /// selection's order. A case's figures are the median across rounds of its own per-round figures.
 ///
+/// `calibration` is what [`instrument_nanos`] read before this leg's rounds and again after them,
+/// bracketed rather than sampled once because a leg is minutes long and a reading from its first
+/// five milliseconds says nothing about the rest ([`crate::slow_calls::Calibration`]).
+///
 /// The pooled per-call table ([`Measurement::calls`]) is taken over the cases this leg did
 /// **exactly, start to finish**: a round that stopped part way did a part of the case, and a round
 /// that announced a notice did something cheaper than the exact form, so neither belongs in a
@@ -619,7 +628,7 @@ pub fn fold(
     leg: Leg,
     venue: String,
     rounds: u32,
-    instrument: u64,
+    calibration: crate::slow_calls::Calibration,
     cases: &[Box<dyn crate::case::Case>],
     taken: &[Vec<CaseRound>],
 ) -> Measurement {
@@ -643,7 +652,8 @@ pub fn fold(
         leg,
         venue,
         rounds,
-        instrument,
+        instrument: calibration.typical().unwrap_or_default(),
+        calibration,
         cpu_clock: crate::clocks::thread_cpu_nanos().is_some(),
         cases: folded,
         calls: per_call(&pooled.iter().collect::<Vec<_>>()),
@@ -916,6 +926,18 @@ pub fn render(metal: Option<&Measurement>, ours: &Measurement, show: bool) -> St
         "  a per-call ratio is only honest read beside the per-case total: the two legs put the \
          same work at different\n  calls, and the measured example is right here -- Metal \
          compiles at `library`, we translate at `compute_pipeline`\n",
+    );
+    // The reproducibility of the thing being printed, beside it rather than in a report nobody
+    // opens. Measured over the two whole-set passes this tree has recorded.
+    out.push_str(
+        "  A RATIO HERE IS NOT REPRODUCIBLE TO BETTER THAN A FACTOR THE MARGIN CARES ABOUT. Over \
+         the two whole-set passes this\n  tree has recorded, the 98 rows common to both moved a \
+         median 2.62x, 14.96x at the 90th percentile and 63.9x at\n  worst; the rows resolved \
+         above four instrument costs moved a median 1.87x and 6.92x at the 90th. The cause is \
+         the\n  CPU the measurement ran on: one binary and one case set inside one minute read \
+         38.8x on a call at the ordinary\n  scheduling class and 75.5x under a background one, \
+         with the load average unmoved. The gate below withholds a\n  verdict where it cannot \
+         stand behind one; a row of this table on its own is a figure to localise, not to quote.\n",
     );
     // A reader meeting a ratio hugely in our favour needs the reason beside it, not in a report
     // they may never open. Both sentences are measurements of this tree, not cautions in general.
@@ -1293,6 +1315,10 @@ mod tests {
             venue: "test".to_owned(),
             rounds: 1,
             instrument: 1,
+            calibration: crate::slow_calls::Calibration {
+                before: 1,
+                after: 1,
+            },
             cpu_clock: true,
             cases,
             calls: Vec::new(),

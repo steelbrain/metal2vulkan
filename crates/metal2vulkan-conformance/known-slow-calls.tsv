@@ -9,13 +9,37 @@
 # listed fails the run, and a listed call that has come back inside the band fails it too, saying
 # the row looks fixed and must go. So a row cannot outlive the bug it stands for.
 #
+# There is a third state, and it fails nothing: a row the measurement cannot resolve, or a whole
+# measurement whose own instrument says it was taken on a CPU the figures cannot be compared across,
+# is WITHHELD. Withholding neither adds a row nor retires one, and the run says which rows and why.
+#
 # Before adding a row, LOCALISE IT: `conformance times --runs 8 --call <name>` prints the call case
 # by case. A per-call total says that a call is expensive and never where, and the first row below
 # was 105x over the whole set and 1.2x over the three cases that obviously make it.
 #
-# A ratio here is a measurement and it moves: over two whole-set runs of one binary on this M3 Max,
-# Metal's own per-call totals moved a median 1.28x and as much as 2.43x. That is why the margin is
-# an order of magnitude and why a listed row is only read as fixed below the band (margin / 2.5).
+# A ratio here is a measurement and it moves MORE THAN EITHER OF ITS HALVES, because the two halves
+# move independently. Over the two whole-set passes this tree has recorded on this M3 Max -- the
+# only pair of independent whole-set measurements that exists -- the 98 paired rows common to both
+# moved a median 2.62x, 14.96x at the 90th percentile and 63.9x at worst. Restricted to the rows the
+# measurement can resolve at all it is a median 1.87x and 6.92x at the 90th percentile, which is why
+# the band is margin / 7.0 and not the margin / 2.5 that a measurement of Metal's own totals bought.
+#
+# WHAT THAT MEANS FOR A ROW. Six calls read far over the margin in one of those two passes and far
+# under it in the other -- texture_accesses 19.3x and 102.4x, function_facts 89.5x and 40.6x,
+# function_facts_from_descriptor 86.2x and 28.5x, mesh_pipeline_bindings 74.5x and 18.5x,
+# compute_pipeline_with_stage_input 57.5x and 22.6x, compute_pipeline_bindings 7.5x and 21.7x.
+# NONE OF THEM HAS A ROW HERE, deliberately. The earlier pass is not reproducible by the binary that
+# produced it: re-run now over the same fifteen cases, that binary reads function_facts at 46.3x and
+# 40.9x against the 89.5x it recorded, and its per-case figures agree with today's to within 5%. The
+# cause is the CPU the measurement ran on, not the call -- one binary and one case set inside one
+# minute read 38.8x at the ordinary scheduling class and 75.5x under a background one, while the
+# one-minute load average held at 6.1. A figure nobody can reproduce is worse than no figure, so the
+# gate now withholds a verdict instead of demanding a row (src/slow_calls.rs: the instrument's own
+# cost is bracketed per leg and checked against what this chip's recordings carry, and a row the
+# measurement cannot resolve above that instrument is held in neither direction).
+#
+# So a row here needs a LOCALISED finding, not a pooled ratio: the first row below is 105x pooled
+# and 1.2x over the three cases that obviously make it, and 265x over the 16 that actually do.
 #
 # Fields, tab-separated:
 #   call                the Side call

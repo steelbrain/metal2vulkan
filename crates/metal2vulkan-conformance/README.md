@@ -360,16 +360,32 @@ notice did a different amount of work: the device lacked the exact form and the 
 cheaper and said so. Its cost is `unmeasured`, never a fast row. Without that rule a device's honest
 gap reads as a cost win, which is the most flattering lie the suite could tell.
 
-**Reported, never gated.** `times::MARGIN` is an order of magnitude, computed and printed as a
-verdict, and it decides **no exit status**. Measured twice over the whole set on this Mac, eight
-rounds each: the verdicts were identical both times (221 within, 0 over, 162 unmeasured) while
-Metal's own per-call totals moved a median 1.28x and as much as 2.43x between the two runs, and the
-ratios moved a median 1.25x. So a 10x margin survived both runs and a 2x margin would not have. What
-the commit that turns the gate on has to show first: a bound per case rather than one margin for all,
-each naming its measurement the way a cost bound does; the contrast between a case run alone and the
-same case inside the set, which for counts turned five apparent regressions into four counters that
-were never per-case facts; and a rule for what happens when the machine is busy, since one of these
-two runs took 4m20s and the other 7m48s on the same binary over the same cases.
+**The per-case margin is reported, never gated.** `times::MARGIN` is an order of magnitude,
+computed and printed as a verdict, and the **per-case** rows decide no exit status. Measured twice
+over the whole set on this Mac, eight rounds each: the verdicts were identical both times (221
+within, 0 over, 162 unmeasured). What the commit that gates them has to show first: a bound per case
+rather than one margin for all, each naming its measurement the way a cost bound does; and the
+contrast between a case run alone and the same case inside the set, which for counts turned five
+apparent regressions into four counters that were never per-case facts.
+
+**The per-call rows are gated, and the gate withholds more than it judges.** `known-slow-calls.tsv`
+holds it in both directions, and the reason it is nearly empty is a measurement: over the two
+whole-set passes this tree has recorded, the 98 paired rows common to both moved a median **2.62x**,
+14.96x at the 90th percentile and 63.9x at worst. Six calls crossed the margin in one pass and sat
+well under it in the other. The earlier pass is not reproducible by the binary that produced it —
+re-run over the same fifteen cases, that binary reads `function_facts` at 46.3x and 40.9x against
+the 89.5x it recorded — and the cause is the CPU the measurement ran on: one binary and one case set
+inside one minute read 38.8x at the ordinary scheduling class and **75.5x** under a background one,
+with the one-minute load average holding at 6.1 and every load rule judging both.
+
+So the gate judges a per-call row only when the measurement can say something about it. It withholds
+when the **instrument's own cost** disagrees with itself across a leg, across the two legs, or with
+what this chip's recordings carry — bracketed per leg, because a single reading at a leg's start is
+from a freshly-spawned thread and a leg is minutes long. And it withholds a row whose cheaper leg's
+typical call costs under four instrument costs: of the 41 such rows, the ratio moved a median 4.23x
+between the two passes against 1.87x above the line. A withheld row neither adds a ledger row nor
+retires one, which is what protects `replace_region`'s row — a pooled ratio that moved 7.4x to 31.3x
+while its localised finding is 265x — from being deleted by a quiet pass.
 
 **What a recording keeps, and why.** Metal's cost on a given macOS build is the one half that cannot
 be re-taken: a measurement of ours is a command away on any host, but what Metal charged for a call

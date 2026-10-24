@@ -667,23 +667,37 @@ fn times(
     // It also needs a measurement whose readings localise: a warm one rather than a cold one, and
     // one taken on a quiet host rather than a busy one -- see `slow_calls::judges`.
     let mut green = true;
-    if let Err(why) = metal2vulkan_conformance::slow_calls::judges(shaders, metal_load, our_load) {
+    // The instrument's own cost on the CPU each leg ran on, and what this chip's recordings say it
+    // costs: the measurement of the measurement, which the load average cannot stand in for.
+    let cpu = metal2vulkan_conformance::slow_calls::Calibrations {
+        metal: metal
+            .as_ref()
+            .map(|one| one.calibration)
+            .unwrap_or_default(),
+        ours: ours.as_ref().map(|one| one.calibration).unwrap_or_default(),
+        reference: recorded_instrument(cases),
+    };
+    if let Err(why) =
+        metal2vulkan_conformance::slow_calls::judges(shaders, metal_load, our_load, cpu)
+    {
         println!("\n{why}");
     } else if let (Some(metal), Some(ours)) = (&metal, &ours) {
         let ledger = metal2vulkan_conformance::slow_calls::ledger()?;
         let held = metal2vulkan_conformance::slow_calls::held(
             &metal2vulkan_conformance::times::paired(metal, ours),
             &ledger,
+            ours.instrument,
         );
         println!();
         for one in &held {
             println!("{one}");
         }
         let failing: Vec<_> = held.iter().filter(|one| one.fails()).collect();
+        let withheld = held.iter().filter(|one| one.withheld()).count();
         if failing.is_empty() {
             println!(
-                "every call over the {}x margin is one known-slow-calls.tsv lists, each a bug \
-                 with a todo behind it",
+                "every call over the {}x margin that this measurement can resolve is one \
+                 known-slow-calls.tsv lists, each a bug with a todo behind it",
                 metal2vulkan_conformance::times::MARGIN
             );
         } else {
@@ -691,6 +705,12 @@ fn times(
             println!(
                 "\n{} per-call cost result(s) the ledger does not expect",
                 failing.len()
+            );
+        }
+        if withheld > 0 {
+            println!(
+                "{withheld} row(s) withheld: the measurement does not resolve the call above its \
+                 own instrument, so they neither add a ledger row nor retire one"
             );
         }
     }
@@ -711,6 +731,40 @@ fn times(
     }
     println!("{wrote} case(s) carry their timing");
     Ok(green && written_all)
+}
+
+/// What this chip's own recordings say the instrument costs, in nanoseconds a call: the median over
+/// the selection's recorded legs taken on this chip and this macOS build.
+///
+/// **It is the only part of the gate that reaches outside the run, and it is there for the one
+/// condition a run cannot see from inside itself.** A measurement degraded from its first
+/// instruction to its last has four calibration readings that all agree, and nothing but a figure
+/// from another day says they are all wrong together. Measured on this host: under a background
+/// scheduling class the instrument reads 0.647 us a call against the 0.244 us the recordings
+/// carry, and the per-call ratio it produces doubles, while the one-minute load average holds at
+/// 6.1.
+///
+/// A selection whose recordings carry no reading for this chip and build answers `None`, and the
+/// gate then judges on what it does have: a missing reading is not evidence of a degraded host,
+/// the same rule the load readings follow.
+fn recorded_instrument(cases: &[Box<dyn metal2vulkan_conformance::case::Case>]) -> Option<u64> {
+    use metal2vulkan_conformance::recording::{ORACLE_CHIP, ORACLE_OS_BUILD};
+    let mut seen: Vec<u64> = Vec::new();
+    for case in cases {
+        let Ok(recording) = metal2vulkan_conformance::recording::read(case.name()) else {
+            continue;
+        };
+        for held in &recording.times {
+            if held.chip == ORACLE_CHIP && held.os_build == ORACLE_OS_BUILD && held.instrument > 0 {
+                seen.push(held.instrument);
+            }
+        }
+    }
+    if seen.is_empty() {
+        return None;
+    }
+    seen.sort_unstable();
+    Some(seen[(seen.len() - 1) / 2])
 }
 
 /// The Metal leg's figures, where this host has Metal.
