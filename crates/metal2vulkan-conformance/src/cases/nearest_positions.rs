@@ -46,6 +46,7 @@
 //! Nothing here can fault a GPU: one compute pass a row, three read-only textures, two buffers, no
 //! loop, and every sample inside a bound texture.
 
+use crate::allowance::Allowance;
 use crate::case::{
     call, made, Abort, Bindings, Case, Failure, Handle, Input, MetalSource, SamplerSpec, Side,
     TextureRole, TextureSpec,
@@ -54,6 +55,7 @@ use crate::fixture::{Fixture, METAL_TEXT, RUNTIME_TEXT};
 use crate::recording::ShaderRef;
 use crate::transcript::{ByteLayout, Digest, Element, Gaps, Node, Observed, Region, Sites, Value};
 use metal2vulkan::metal::{PixelFormat, SamplerAddressMode, SamplerMinMagFilter};
+use metal2vulkan_runtime::Degradation;
 
 /// The fixture the case runs, whose entry point is its own name.
 const FIXTURE: Fixture = Fixture::new("a2_clamp_to_zero");
@@ -279,6 +281,20 @@ pub fn all() -> Vec<NearestPositions> {
     vec![NearestPositions]
 }
 
+/// The degrade notices this pass may announce. A list rather than a device query, because a case
+/// never branches on the device: it runs and reads what came back, and a venue that announces a
+/// kind not here fails the case until the kind is added.
+///
+/// Declaring a kind states what our side announced at the notices site and loosens no value: every
+/// lane's four words still compare exactly against the bytes Metal wrote.
+const PASS_NOTICES: &[Degradation] = &[
+    // The output buffer the threads write their samples into is `Shared`, and a device with no
+    // unified memory keeps a `Shared` allocation in system memory because that is the only memory
+    // both sides can reach. The difference belongs to the venue's memory model, not to the sampler
+    // this case is about: a device whose driver is Metal announces nothing here.
+    Degradation::SharedInSystemMemory,
+];
+
 impl Case for NearestPositions {
     fn name(&self) -> &'static str {
         "nearest-sample-positions"
@@ -286,6 +302,13 @@ impl Case for NearestPositions {
 
     fn metal_source(&self) -> MetalSource {
         MetalSource::Run
+    }
+
+    fn allowances(&self) -> Vec<Allowance> {
+        PASS_NOTICES
+            .iter()
+            .map(|kind| crate::replay::notice_allowance(kind.code()))
+            .collect()
     }
 
     fn shaders(&self) -> Result<Vec<ShaderRef>, String> {
