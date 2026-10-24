@@ -469,6 +469,18 @@ impl<T> Pool<T> {
         (self.walked, self.visited)
     }
 
+    /// Its live block slots, and the free ranges its pooled blocks hold: what one query of
+    /// [`Pool::room`] walks and visits where it derives per call.
+    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+    pub(super) fn room_per_call(&self) -> (u64, u64) {
+        let live = (self.blocks.iter().flatten()).count() as u64;
+        let ranges = (self.blocks.iter().flatten())
+            .filter(|block| !block.dedicated)
+            .map(|block| block.ranges.free_ranges())
+            .sum();
+        (live, ranges)
+    }
+
     /// [`Pool::room`] derived now, holding nothing: what the held answer must equal.
     #[cfg(test)]
     pub(super) fn room_derived_now(&self) -> u64 {
@@ -1331,6 +1343,18 @@ impl Memory {
             drop(unsafe { self.let_go(device, block, None) });
         }
         count
+    }
+
+    /// Over every pool: the block slots the room queries have walked and the free ranges they
+    /// have visited ([`Pool::room_work`]), then what one query of each pool would walk and visit
+    /// where it derived per call ([`Pool::room_per_call`]).
+    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+    pub(super) fn room_work(&self) -> (u64, u64, u64, u64) {
+        (self.pools.iter()).fold((0, 0, 0, 0), |(w, v, lw, lv), pool| {
+            let (walked, visited) = pool.room_work();
+            let (live, ranges) = pool.room_per_call();
+            (w + walked, v + visited, lw + live, lv + ranges)
+        })
     }
 
     /// The pooled blocks made and freed so far, of every pool.

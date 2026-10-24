@@ -164,6 +164,8 @@ mod pixel_format_info;
 #[cfg(all(any(m2v_gpu, m2v_cpu_icd), target_os = "linux"))]
 mod pointer_residency;
 mod pool_room;
+#[cfg(any(m2v_gpu, m2v_cpu_icd))]
+mod pool_room_creations;
 mod private_properties;
 mod queue;
 mod range;
