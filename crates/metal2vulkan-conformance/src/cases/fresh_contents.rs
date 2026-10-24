@@ -231,26 +231,17 @@ pub struct FreshBuffers {
     storage: Storage,
 }
 
-/// The notice every row of this family announces on a device whose GPU does not share the CPU's
-/// memory: each row reads its answer back through a `Shared` buffer, and without unified memory
-/// such a buffer lies in host-cached system memory rather than in the device's own
-/// ([`Degradation::SharedInSystemMemory`]).
+/// The notice every row of this family announces on a device without unified memory: each row
+/// reads its answer back through a `Shared` buffer ([`crate::replay::shared_memory_notice`], which
+/// holds the whole reason).
 ///
-/// **It is the venue's memory model, not ours, and no recording could have declared it.** Every
-/// recording of this suite was taken on a chip whose GPU shares the CPU's memory, where the notice
-/// cannot fire at all, so Metal recorded nothing to compare it against. The runtime announces it
-/// once per device, and the row is right either way: a discrete card really does read that buffer
-/// across the bus, which is what the notice says.
-///
-/// Measured on the **RTX 5080 Laptop (615.71.09)**, where it fired for all 87 rows of the family
-/// and each read `divergent` on this one field and nothing else
+/// Measured on the **RTX 5080 Laptop (615.71.09)**: it fired for all 87 rows of the family, and
+/// each row read `divergent` on that one field and nothing else
 /// (`replay-nvidia.log`, "we announced the degrade notice
 /// metal2vulkan-degrade-shared-in-system-memory, which the case declares nowhere"). MoltenVK and
-/// lavapipe announce it for no row.
-///
-/// It loosens the notices site alone, so every byte of the family still compares exactly.
+/// lavapipe announce it for no row of the family.
 fn shared_memory_notice() -> Allowance {
-    crate::replay::notice_allowance(Degradation::SharedInSystemMemory.code())
+    crate::replay::shared_memory_notice()
 }
 
 impl Case for FreshBuffers {

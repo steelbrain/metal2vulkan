@@ -345,3 +345,30 @@ pub fn notice_allowance(code: &str) -> crate::allowance::Allowance {
         Justification::Degradation(code.to_owned()),
     )
 }
+
+/// The declaration a case needs for the one notice a **venue's memory model** provokes and no
+/// recording of this suite could have declared: `shared-in-system-memory`, which the runtime
+/// announces for a `Shared` buffer or heap on a device whose GPU does not share the CPU's memory
+/// ([`metal2vulkan_runtime::Degradation::SharedInSystemMemory`]).
+///
+/// **Why it is the venue's and not ours.** Every recording here was taken on an Apple chip, where
+/// the GPU and the CPU hold one memory, so a `Shared` resource is in device memory by construction
+/// and the notice cannot fire at all — Metal recorded nothing for a case to compare it against,
+/// and MoltenVK on the same chip announces nothing either. A discrete card has no such memory: the
+/// same resource lies in host-cached system memory and the GPU reads it across the bus, which is
+/// exactly what the notice says. So the difference belongs to the device, the notice is the
+/// runtime reporting it honestly, and a case that reads its answer back through a `Shared` buffer
+/// has to name it or read `Divergent` on every such card for a reason that is not a wrong answer.
+///
+/// **It is a declaration and never an excuse.** Like every [`notice_allowance`] it loosens the
+/// notices site alone, so a case that names it holds every one of its values to Metal's exactly.
+/// A case whose values also differ on such a device is a separate finding and keeps its strict
+/// value comparison.
+///
+/// **It is still held to its evidence.** A case names it where a run on a device without unified
+/// memory announced it; where no run has, the suite counts the claim as one nothing checked
+/// ([`crate::report::Report::unchecked_everywhere`]), and the case that names it says in a comment
+/// which run it rests on.
+pub fn shared_memory_notice() -> crate::allowance::Allowance {
+    notice_allowance(metal2vulkan_runtime::Degradation::SharedInSystemMemory.code())
+}
