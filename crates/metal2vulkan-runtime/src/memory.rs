@@ -450,7 +450,7 @@ impl<T> Pool<T> {
             let longest = match block.longest {
                 Some(longest) => longest,
                 None => {
-                    visited += block.ranges.free_ranges();
+                    visited += block.ranges.range_count();
                     *block.longest.insert(block.ranges.longest(align))
                 }
             };
@@ -476,7 +476,7 @@ impl<T> Pool<T> {
         let live = (self.blocks.iter().flatten()).count() as u64;
         let ranges = (self.blocks.iter().flatten())
             .filter(|block| !block.dedicated)
-            .map(|block| block.ranges.free_ranges())
+            .map(|block| block.ranges.range_count())
             .sum();
         (live, ranges)
     }

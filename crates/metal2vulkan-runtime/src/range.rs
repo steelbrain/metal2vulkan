@@ -123,13 +123,13 @@ impl RangeAllocator {
 
     /// How many free ranges it holds: what one [`RangeAllocator::longest`] visits, which is why
     /// a pooled block derives its longest free range once (`memory.rs`'s `PoolBlock`).
-    pub(super) fn free_ranges(&self) -> u64 {
+    pub(super) fn range_count(&self) -> u64 {
         self.free.len() as u64
     }
 
     /// The most bytes one allocation aligned to `align` (a power of two) could take now: the
     /// longest free range, less what aligning its start skips. It visits every free range
-    /// ([`RangeAllocator::free_ranges`]).
+    /// ([`RangeAllocator::range_count`]).
     pub(super) fn longest(&self, align: u64) -> u64 {
         debug_assert!(align.is_power_of_two());
         self.free
