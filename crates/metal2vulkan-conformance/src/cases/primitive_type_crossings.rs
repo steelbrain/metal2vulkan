@@ -86,9 +86,11 @@
 //! is no sentinel there. Every `Point`, `Line`, `Triangle` and `LineStrip` cell is untouched by it,
 //! the first three because they carry no restart at all. RADV and ANV are unrun.
 //!
-//! llvmpipe's own baseline is not exact at the four `Line` and `LineStrip` cells — 7, 7, 5 and 13
-//! texels against the M3 Max's recording, its line rasterization rather than anything this case
-//! states — so the falsification above is read against that baseline, which it leaves unmoved.
+//! The baseline is not exact at the four `Line` and `LineStrip` cells, and that is **ours**, not one
+//! driver's line rasterization: llvmpipe differs by 7, 7, 5 and 13 texels against the M3 Max's
+//! recording, and an RTX 5080 Laptop GPU (615.71.09) differs at the same first site, Metal holding
+//! the texel clear where we draw there. The falsification above is read against that baseline,
+//! which it leaves unmoved; the difference itself is `docs/FAST-PATHS.md`'s known gap.
 //!
 //! # Nothing here can fault a GPU
 //!

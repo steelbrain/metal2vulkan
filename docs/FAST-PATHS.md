@@ -665,23 +665,26 @@ driver's. Each is open work.
   Max, macOS 27.0.1. A plain-Metal answer that looks undefined is not one to pin as a conformance
   expectation, and a case of it would end a recording run.
 
-- **A half or float NaN's bits through a texel read or a vertex fetch on RADV**: Metal answers
-  `0x7e00` where a nearest sample of a 16-bit float texture answers `0xfe00` here (the sign bit;
-  `half-texel-nans-r16f`, `-rg16f`, `-rgba16f`, 515, 1025 and 2045 elements), and `0x7fc00000` where
-  a float32 attribute fetch answers `0x7fc02000` (the payload; `vertex-format-float4`,
-  `-constant-step`, `-instance-step`, `attribute-format-fetches`, and `0x7ffe0000` for
-  `MTLVertexFormatFloatRG11B10`). Measured on a Radeon 780M (RADV PHOENIX) and an RX 7900 XTX (RADV
-  NAVI31), Mesa 26.2.4, identical on both chips and reproduced twice; exact on MoltenVK on an Apple
-  M3 Max. **Whose difference it is, is undetermined**: neither IEEE-754 nor SPIR-V pins a NaN's
-  payload or the sign of a produced NaN, so a driver canonicalizing differently is as plausible as a
-  step of ours. The discriminator is whether the module operates on the value at all: a nearest
-  sample that loads and stores moves no bits, so if the SPIR-V holds no arithmetic on it the
-  canonicalization is the driver's and the honest form is an announced note, not a fix.
+- **A 16-bit float texel's NaN through RADV's sampler**: Metal answers the texel's own bits,
+  `0x7e00`, where a nearest sample answers `0xfe00` here (`half-texel-nans-r16f`, `-rg16f`,
+  `-rgba16f`, 515, 1025 and 2045 elements; the `read` and `read-through-sample` sites of the same
+  cases are **exact** on both RADV chips, where all three differ on MoltenVK). RADV's sampler hands
+  back its own negative quiet NaN, `0xFFC00000`, where Apple's hands back `0x7FC00000`, so the
+  device's decode destroys the bits before any keep of ours. Announced (`device-nan-encoding`); the
+  exact form, not built, is the read side of the `StorageImageClass::HalfBits` write path — read the
+  image through an unsigned-integer alias so no device decode sees the texel. The fetch half of this
+  difference is the first gap above, which is a different cause and needs its own fix.
 
-- **A multisample depth fill's samples on RADV**: Metal writes `0x00000001` where this writes
-  `0x00000000` (`sample-fills-d32-2`, `-d32-4`, `-d32s8-4`, and
-  `runtime_lane::sample_fills::multisample_fills_write_metal_s_samples` independently). Both RADV
-  chips, exact on MoltenVK, so the path that differs is the one taken where the driver is not Metal.
+- **A multisampled `Depth32Float` texture's fill of a denormal on RADV**: Metal's private fill
+  stores the pattern's bytes, `0x00000001`, where this stores `0x00000000` (`sample-fills-d32-2`,
+  `-d32-4`, `-d32s8-4`, and `runtime_lane::sample_fills::multisample_fills_write_metal_s_samples`
+  independently; both RADV chips, exact on MoltenVK). **The device's, and announced**: RADV gives a
+  denormal that a GPU write puts into a `D32_SFLOAT` depth image back as a zero and keeps only a CPU
+  store's, which is why it carries no `DriverFact::DepthImageKeepsDenormals`
+  (`device/driver_facts.rs`), and a multisampled image takes no CPU store. The runtime announces
+  `depth-denormals` and the case declares it at its notices site while still comparing every depth
+  word. The exact form, not built: hold such a texture's texels in a colour twin, as a read-only
+  depth texture's already are.
 
 - **A blend's result on RADV, by 1 to 64 codes** (`half-output-blends-*`, `blend-sweep-operations`,
   `blend-interaction-format-unorm8` and `-srgb8`, `argb8-targets-*`, `a2c-on-*`; 24 cases). The
@@ -690,12 +693,15 @@ driver's. Each is open work.
   than a fix. The largest, 64 codes at `blended/sas-1msa`, is **too large for rounding** and is a
   separate open question.
 
-- **A new Shared buffer's pages where the driver puts them in write-combined device-local memory**:
-  they do not read zero (`tests::fresh_pages::a_long_new_buffer_reads_zero_with_nothing_written`,
-  left `(0, 33558544)`, right `(1, 0)`), measured 3 of 3 on an RX 7900 XTX and exact 3 of 3 on a
-  Radeon 780M. The zeroed-OS-pages the owner authorized for a new Shared buffer are a unified
-  memory's; on a discrete card the assumption does not hold, and the honest forms are a real zeroing
-  or a note the runtime announces.
+- **A line's first texels where Metal draws nothing** (`primitive-type-restart-indices`): all four
+  `Line` and `LineStrip` cells differ from the M3 Max's recording on llvmpipe (7, 7, 5 and 13
+  texels) and on an RTX 5080 Laptop GPU (615.71.09) at the same first site, `[image 0, row 0, 12]`,
+  where Metal leaves the texel clear and this draws there (3 at `Line`/`UInt16`, 4 at
+  `Line`/`UInt32`, 5 and 6 at the `LineStrip` pair). Two unrelated drivers answering the same thing
+  makes it ours rather than one rasterizer's. `primitiveRestartEnable` does not explain it:
+  `MTLPrimitiveTypeLine` is a list, where Vulkan's restart bit has no effect, and under `UInt32`
+  Vulkan's restart index is `0xFFFFFFFF` rather than the case's 65535 — an out-of-range fetch of
+  index 65535 is the other candidate. RADV and ANV unrun.
 
 - **A heap texture at an offset below the device's own alignment on Navi31**: `new_texture_at_offset`
   answers nil at offset 327680, two and a half times the 128 KiB a Navi31 depth image wants
@@ -705,7 +711,12 @@ driver's. Each is open work.
 - **Reflection after a compute descriptor reset on RADV**: `max_total_threads_per_threadgroup`
   answers 0 where Metal answers 96, `required_threads_per_threadgroup` `0x0x0` where Metal answers
   `8x6x2`, and `threadgroup_size_is_multiple_of_execution_width` false where Metal answers true
-  (`compute-descriptor-reset`). Both RADV chips, exact on MoltenVK.
+  (`compute-descriptor-reset`). Both RADV chips, the RTX 5080 and llvmpipe, exact on MoltenVK.
 
-These six were found by the first replays of the conformance suite on a driver that is not Metal.
-**NVIDIA and ANV are unaudited** for every one of them.
+These were found by replaying the conformance suite on a driver that is not Metal: RADV first, then
+the whole 1,099-case set on an RTX 5080 Laptop GPU (615.71.09) and on llvmpipe (Mesa 26.2.4), both
+at a tip before the narrow-float widening above was canonicalized. **ANV is unaudited** for every one
+of them, and on a card without unified memory the comparison is not yet readable at all: the runtime
+announces `shared-in-system-memory` for every `Shared` buffer and no recording taken on Metal could
+declare it, which counts 699 of the 5080's cases divergent with 655 of them differing in nothing
+else.
