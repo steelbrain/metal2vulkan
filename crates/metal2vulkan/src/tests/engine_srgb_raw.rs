@@ -29,7 +29,7 @@ use crate::bind::{
     BindState, BoundBuffer, BoundTexture, ImageSource, StageTable, TextureFacts, WriteSource,
 };
 use crate::budget::{Budget, SPIRV_WORDS};
-use crate::device::{Device, DeviceDescription, FormatUsage};
+use crate::device::{Device, DeviceDescription, DevicePolicy, FormatUsage};
 use crate::library::{FunctionConstantValues, Library};
 use crate::lower::select::{LowerInputs, Plan};
 use crate::metal::texel_format::srgb_raw_view;
@@ -243,12 +243,21 @@ fn twin_inputs() -> LowerInputs {
     i
 }
 
+/// `EXACT_SAMPLING` with the 16-bit float texel's bits left to the device: a slot of the sRGB
+/// variant takes no unsigned integer alias (a 16-bit float format is no 8-bit sRGB one), but a
+/// slot outside it would, at the same `ResourceKind::RawTexture` binding these tests read, and
+/// that row has its own tests (`tests::engine_half_texel_bits`).
+const SRGB_SAMPLING: DevicePolicy = DevicePolicy {
+    half_texel_bits: crate::device::HalfTexelBitsPolicy::Device,
+    ..EXACT_SAMPLING
+};
+
 fn lavapipe() -> crate::device::profile::DeviceProfile {
-    profile("lavapipe", EXACT_SAMPLING).expect("profile")
+    profile("lavapipe", SRGB_SAMPLING).expect("profile")
 }
 
 fn m3() -> crate::device::profile::DeviceProfile {
-    profile("moltenvk-m3", EXACT_SAMPLING).expect("profile")
+    profile("moltenvk-m3", SRGB_SAMPLING).expect("profile")
 }
 
 // ---- The reference ----------------------------------------------------------------------------

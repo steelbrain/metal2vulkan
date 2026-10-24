@@ -58,9 +58,9 @@ use crate::device::DeviceProfile;
 use crate::error::{BindError, Capability, Error, Feature, LowerFamily, Unsupported};
 use crate::metal::bicubic::{texels as bicubic_texels, BicubicTexels};
 use crate::metal::format::{
-    accessed_without_format, aspects, direct_format, is_depth_stencil, sampled_type, srgb_raw_twin,
-    storage_choice_viewed, texel_buffer_alpha_in_red, vk_format, writes_dropped,
-    ycbcr_writes_stored, ExtendedRange, FormatMapping, StorageUse,
+    accessed_without_format, aspects, direct_format, half_bits_read_view, is_depth_stencil,
+    sampled_type, srgb_raw_twin, storage_choice_viewed, texel_buffer_alpha_in_red, vk_format,
+    writes_dropped, ycbcr_writes_stored, ExtendedRange, FormatMapping, StorageUse,
 };
 use crate::metal::sampler::{
     check_border_view, check_sampler, opaque_black_reads_transparent, vk_filtering,
@@ -1042,6 +1042,18 @@ impl ResourcePlanner<'_> {
             }
             _ => base,
         };
+        // The slot's second binding of a 16-bit float texture's unsigned integer alias view
+        // (`RuntimeFact::HalfBitsTexture`): declared of the alias's numeric type, as its neutral
+        // is, whatever the texture bound there. The view is the alias's where the bound format
+        // has one, and the neutral where it has none ([`texel_view`]).
+        let half_bits = raw && self.has_fact(RuntimeFact::HalfBitsTexture { slot });
+        let base = match half_bits {
+            true => ImageHandleClass {
+                sampled_type: SampledType::Uint,
+                ..base
+            },
+            false => base,
+        };
         let mut variant = choice
             .filter(|(c, view)| {
                 (crossed && t.access.write)
@@ -1250,7 +1262,7 @@ impl ResourcePlanner<'_> {
                         shader_swizzle,
                     }
                 } else {
-                    match self.texel_view(pixel_format, &class, depth_twin, raw)? {
+                    match self.texel_view(pixel_format, &class, depth_twin, (raw, half_bits))? {
                         Some((view, _)) => ImageViewDesc {
                             shader_swizzle,
                             ..view
@@ -1283,13 +1295,26 @@ impl ResourcePlanner<'_> {
     /// the device's view (`RuntimeFact::SrgbDeviceDecode`), under the slot's
     /// `VariantKey::srgb_twins`, whose function decodes what the device samples there. With the
     /// view, the format whose sampled view it is (the twin's, where the twin serves).
+    ///
+    /// A binding of the unsigned integer alias view (`half_bits`, the second binding of a slot of
+    /// `RuntimeFact::HalfBitsTexture`) views a 16-bit float texture in the alias
+    /// (`metal::format::half_bits_read_view`), whose 16 bits the function widens itself;
+    /// `None` for every other bound format, whose arm of the read never reads the binding, so the
+    /// unsigned integer neutral stands there.
     fn texel_view(
         &self,
         pf: PixelFormat,
         class: &ImageHandleClass,
         twin: bool,
-        raw: bool,
+        (raw, half_bits): (bool, bool),
     ) -> Result<Option<(ImageViewDesc, PixelFormat)>, BindError> {
+        if half_bits {
+            let Some(format) = half_bits_read_view(pf, self.profile) else {
+                return Ok(None);
+            };
+            let own = self.sampled_view(pf, class, twin)?;
+            return Ok(Some((ImageViewDesc { format, ..own }, pf)));
+        }
         let missing = match self.sampled_view(pf, class, twin) {
             Ok(own) if raw => return Ok(raw_view(own).map(|view| (view, pf))),
             Ok(own) => return Ok(Some((own, pf))),
@@ -1703,7 +1728,7 @@ impl ResourcePlanner<'_> {
                 depth_twin,
                 swizzle,
                 ..
-            }) => match self.texel_view(pixel_format, &class, depth_twin, sampler.raw)? {
+            }) => match self.texel_view(pixel_format, &class, depth_twin, (sampler.raw, false))? {
                 Some((view, viewed)) => {
                     self.texture_use(texture, &t, false);
                     // A swizzled packed normalized texture's sampled view takes no swizzle where

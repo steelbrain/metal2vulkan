@@ -1760,6 +1760,12 @@ pub(crate) fn half_bits_read(
     {
         return Ok(false);
     }
+    // A slot of the sRGB variant is bound in an 8-bit sRGB format, never a 16-bit float one, and
+    // its second binding is that variant's raw view: the two aliases share the slot's one
+    // `ResourceKind::RawTexture` binding, so no slot takes both.
+    if cx.inputs.srgb_textures.contains(&slot) {
+        return Ok(false);
+    }
     texel_format_spec(cx, image)?;
     if let Some(s) = cx.families.texture.slots.get_mut(&index) {
         s.half_bits = true;

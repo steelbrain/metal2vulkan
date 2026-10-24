@@ -77,9 +77,9 @@ use metal2vulkan::error::{
     Capability, Error as CompileError, Feature, Needs, RuntimeDriverDefect, Unsupported,
 };
 use metal2vulkan::metal::format::{
-    alpha_in_red, alpha_in_red_format, direct_format, image_type, is_depth_stencil, srgb_raw_twin,
-    storage_image_choice, storage_view_formats, vk_format, FormatEmulation, FormatMapping,
-    WordAttachment,
+    alpha_in_red, alpha_in_red_format, direct_format, half_bits_read_view, image_type,
+    is_depth_stencil, srgb_raw_twin, storage_image_choice, storage_view_formats, vk_format,
+    FormatEmulation, FormatMapping, WordAttachment,
 };
 use metal2vulkan::metal::{PixelFormat, TextureType, TextureUsage};
 use metal2vulkan::vk::{
@@ -855,6 +855,10 @@ fn plan_held(
             views.insert(m.format);
         }
     }
+    // A 16-bit float texture a function reads through its unsigned integer alias, so no device
+    // decode sees the texel (`HalfTexelBitsPolicy::Exact`): the slot's second binding views the
+    // image in the alias, which the image must list, so the image is mutable and carries it.
+    views.extend(half_bits_views(pf, usage_flags, profile));
     let optimal = facts.optimal(format);
     if optimal.contains(FormatFeatureFlags2::TRANSFER_SRC) {
         usage_flags |= ImageUsageFlags::TRANSFER_SRC;
@@ -1038,6 +1042,9 @@ pub(super) fn view_formats(
             out.push(m.format);
         }
     }
+    // And the unsigned integer alias a read of a 16-bit float texture's own bits is viewed
+    // through ([`half_bits_views`]).
+    out.extend(half_bits_views(pf, usage, profile));
     // A storage binding's views, the read-and-write choice's and a written-only one's (a
     // half-float texture's unsigned integer alias where the device does not store a written
     // half's NaN as its bits).
@@ -1058,6 +1065,23 @@ pub(super) fn view_formats(
         }
     }
     out
+}
+
+/// The unsigned integer alias a sampled image of a 16-bit float texture is viewed in where a
+/// function reads the texel's own bits through it
+/// (`DeviceProfile::reads_half_texel_bits`, the slot's second binding;
+/// `metal::format::half_bits_read_view`). Empty under the default, for every other
+/// format, for an image nothing samples, and where the device does not sample the alias: the slot
+/// then takes no alias binding either, so no view of it is made.
+fn half_bits_views(
+    pf: PixelFormat,
+    usage: ImageUsageFlags,
+    profile: &DeviceProfile,
+) -> Option<Format> {
+    if !profile.reads_half_texel_bits() || !usage.contains(ImageUsageFlags::SAMPLED) {
+        return None;
+    }
+    half_bits_read_view(pf, profile)
 }
 
 /// Whether an image of `plan` takes the views the runtime makes of a texture of `pf` on
