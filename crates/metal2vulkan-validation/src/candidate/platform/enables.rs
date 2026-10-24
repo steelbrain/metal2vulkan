@@ -225,6 +225,8 @@ pub(super) enum Structure {
     ListRestart,
     /// `VkPhysicalDeviceProvokingVertexFeaturesEXT`.
     ProvokingVertex,
+    /// `VkPhysicalDeviceLineRasterizationFeaturesEXT`.
+    LineRasterization,
     /// `VkPhysicalDeviceMeshShaderFeaturesEXT`.
     MeshShader,
     AstcHdr,
@@ -251,7 +253,7 @@ pub(super) enum Structure {
 
 impl Structure {
     /// Every extension structure, in chain order.
-    const EXTENSIONS: [Structure; 42] = [
+    const EXTENSIONS: [Structure; 43] = [
         Structure::SubgroupSizeControl,
         Structure::Demote,
         Structure::Terminate,
@@ -282,6 +284,7 @@ impl Structure {
         Structure::DepthClampControl,
         Structure::ListRestart,
         Structure::ProvokingVertex,
+        Structure::LineRasterization,
         Structure::MeshShader,
         Structure::AstcHdr,
         Structure::RayQuery,
@@ -341,6 +344,7 @@ impl Structure {
             Structure::DepthClampControl => &[c"VK_EXT_depth_clamp_control"],
             Structure::ListRestart => &[c"VK_EXT_primitive_topology_list_restart"],
             Structure::ProvokingVertex => &[c"VK_EXT_provoking_vertex"],
+            Structure::LineRasterization => &[c"VK_EXT_line_rasterization"],
             // `VK_KHR_spirv_1_4`, which it requires, is core at the 1.2 floor.
             Structure::MeshShader => &[c"VK_EXT_mesh_shader"],
             Structure::AstcHdr => &[c"VK_EXT_texture_compression_astc_hdr"],
@@ -581,6 +585,7 @@ pub(super) struct FeatureChain {
     pub(super) depth_clamp_control: DepthClampControlFeatures,
     pub(super) list_restart: vk::PhysicalDevicePrimitiveTopologyListRestartFeaturesEXT<'static>,
     pub(super) provoking_vertex: vk::PhysicalDeviceProvokingVertexFeaturesEXT<'static>,
+    pub(super) line_rasterization: vk::PhysicalDeviceLineRasterizationFeaturesEXT<'static>,
     pub(super) mesh_shader: vk::PhysicalDeviceMeshShaderFeaturesEXT<'static>,
     pub(super) astc_hdr: vk::PhysicalDeviceTextureCompressionASTCHDRFeatures<'static>,
     pub(super) ray_query: vk::PhysicalDeviceRayQueryFeaturesKHR<'static>,
@@ -633,6 +638,7 @@ macro_rules! link_extensions {
             DepthClampControl => depth_clamp_control,
             ListRestart => list_restart,
             ProvokingVertex => provoking_vertex,
+            LineRasterization => line_rasterization,
             MeshShader => mesh_shader,
             AstcHdr => astc_hdr,
             RayQuery => ray_query,
@@ -697,6 +703,7 @@ impl FeatureChain {
             depth_clamp_control,
             list_restart,
             provoking_vertex,
+            line_rasterization,
             mesh_shader,
             astc_hdr,
             ray_query,
@@ -1130,6 +1137,12 @@ members! {
         Some(F::PrimitiveTopologyPatchListRestart);
     ProvokingVertex.provoking_vertex.provoking_vertex_last => Some(F::ProvokingVertexLast);
     ProvokingVertex.provoking_vertex.transform_feedback_preserves_provoking_vertex => None;
+    LineRasterization.line_rasterization.bresenham_lines => Some(F::BresenhamLines);
+    LineRasterization.line_rasterization.rectangular_lines => None;
+    LineRasterization.line_rasterization.smooth_lines => None;
+    LineRasterization.line_rasterization.stippled_bresenham_lines => None;
+    LineRasterization.line_rasterization.stippled_rectangular_lines => None;
+    LineRasterization.line_rasterization.stippled_smooth_lines => None;
     MeshShader.mesh_shader.task_shader => Some(F::TaskShader);
     MeshShader.mesh_shader.mesh_shader => Some(F::MeshShader);
     AstcHdr.astc_hdr.texture_compression_astc_hdr => None;
@@ -1335,6 +1348,7 @@ const EXTENSIONS: &[ExtensionName] = {
             Some(X::ExtPrimitiveTopologyListRestart),
         ),
         e(c"VK_EXT_provoking_vertex", Some(X::ExtProvokingVertex)),
+        e(c"VK_EXT_line_rasterization", Some(X::ExtLineRasterization)),
         e(c"VK_EXT_post_depth_coverage", Some(X::ExtPostDepthCoverage)),
         e(c"VK_EXT_mesh_shader", Some(X::ExtMeshShader)),
         e(c"VK_KHR_shader_float_controls2", None),
