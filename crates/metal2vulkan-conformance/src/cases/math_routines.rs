@@ -15,15 +15,33 @@
 //!
 //! Each word is a column of its own, because the eight words are different answers: a diff names
 //! `frexp-mantissa` or `ilogb` of one input rather than a row of eight numbers. Every column
-//! compares exactly; there is nothing here a device may round differently, and no allowance.
+//! compares exactly; there is nothing here a device may round differently, and no value is
+//! loosened. The only allowance is the declaration of the notice a device without unified memory
+//! announces for the pass's `Shared` buffers ([`PASS_NOTICES`]).
 //!
 //! Nothing here can fault a GPU: one compute pass a case, two buffers, no texture, no loop, and
 //! each thread reads its own word.
 
+use crate::allowance::Allowance;
 use crate::case::{call, made, Abort, Bindings, Case, Failure, Input, MetalSource, Side};
 use crate::fixture::{Fixture, METAL_TEXT, RUNTIME_TEXT};
 use crate::recording::ShaderRef;
 use crate::transcript::{ByteLayout, Digest, Element, Gaps, Node, Observed, Region, Sites, Value};
+use metal2vulkan_runtime::Degradation;
+
+/// The degrade notices one of these passes may announce. A list rather than a device query,
+/// because a case never branches on the device: it runs and reads what came back, and a venue that
+/// announces a kind not here fails the case until the kind is added.
+///
+/// Declaring a kind states what our side announced at the notices site and loosens no value: every
+/// column of every input still compares exactly.
+const PASS_NOTICES: &[Degradation] = &[
+    // The input and output buffers are both `Shared`, and a device with no unified memory keeps a
+    // `Shared` allocation in system memory because that is the only memory both sides can reach.
+    // The difference is the venue's memory model, not a choice of ours: a device whose driver is
+    // Metal announces nothing here, and the RTX 5080 announces it for these two buffers.
+    Degradation::SharedInSystemMemory,
+];
 
 /// The fixture both entry points live in.
 const FIXTURE: &str = "kernel_frexp_ilogb";
@@ -168,6 +186,13 @@ impl Case for MathRoutines {
 
     fn metal_source(&self) -> MetalSource {
         MetalSource::Run
+    }
+
+    fn allowances(&self) -> Vec<Allowance> {
+        PASS_NOTICES
+            .iter()
+            .map(|kind| crate::replay::notice_allowance(kind.code()))
+            .collect()
     }
 
     fn shaders(&self) -> Result<Vec<ShaderRef>, String> {
