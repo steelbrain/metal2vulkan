@@ -9218,6 +9218,81 @@ impl MetalSide {
                     );
                 }
             }
+            RenderCommandStep::DrawPatches {
+                control_points,
+                first,
+                count,
+                patch_indices,
+                patch_index_offset,
+                instances,
+                base_instance,
+                factors,
+                factor_offset,
+                factor_instance_stride,
+            } => {
+                let indices = match patch_indices {
+                    Some(handle) => Some(self.held(*handle)?),
+                    None => None,
+                };
+                let factor_buffer = self.held(*factors)?;
+                // SAFETY: the patch range lies inside the case's own patch index buffer where it
+                // has one, the factor buffer holds a record for every patch and instance the draw
+                // reaches, and the pipeline a step before this one set is a tessellating one of
+                // these control points.
+                unsafe {
+                    encoder.drawPatches_patchStart_patchCount_patchIndexBuffer_patchIndexBufferOffset_instanceCount_baseInstance_tessellationFactorBuffer_tessellationFactorBufferOffset_tessellationFactorBufferInstanceStride(
+                        *control_points as usize,
+                        *first as usize,
+                        *count as usize,
+                        indices,
+                        *patch_index_offset as usize,
+                        *instances as usize,
+                        *base_instance as usize,
+                        factor_buffer,
+                        *factor_offset as usize,
+                        *factor_instance_stride as usize,
+                    );
+                }
+            }
+            RenderCommandStep::DrawIndexedPatches {
+                control_points,
+                first,
+                count,
+                patch_indices,
+                patch_index_offset,
+                control_point_indices,
+                control_point_index_offset,
+                instances,
+                base_instance,
+                factors,
+                factor_offset,
+                factor_instance_stride,
+            } => {
+                let indices = match patch_indices {
+                    Some(handle) => Some(self.held(*handle)?),
+                    None => None,
+                };
+                let points = self.held(*control_point_indices)?;
+                let factor_buffer = self.held(*factors)?;
+                // SAFETY: as the plain patch draw's, and the control-point index buffer holds an
+                // index of the pipeline's own type for every control point the patches reach.
+                unsafe {
+                    encoder.drawIndexedPatches_patchStart_patchCount_patchIndexBuffer_patchIndexBufferOffset_controlPointIndexBuffer_controlPointIndexBufferOffset_instanceCount_baseInstance_tessellationFactorBuffer_tessellationFactorBufferOffset_tessellationFactorBufferInstanceStride(
+                        *control_points as usize,
+                        *first as usize,
+                        *count as usize,
+                        indices,
+                        *patch_index_offset as usize,
+                        points,
+                        *control_point_index_offset as usize,
+                        *instances as usize,
+                        *base_instance as usize,
+                        factor_buffer,
+                        *factor_offset as usize,
+                        *factor_instance_stride as usize,
+                    );
+                }
+            }
             RenderCommandStep::DrawMeshThreadgroups {
                 groups,
                 object,

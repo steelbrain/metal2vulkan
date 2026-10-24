@@ -1,0 +1,454 @@
+{
+  "format": 1,
+  "case": "indirect-render-commands-patch-draws",
+  "suite_version": 1,
+  "shaders": [
+    {
+      "fixture": "icb_render_patch_template.ll",
+      "entry": "icb_render_patch_template",
+      "source_sha256": "c44e970090b25f5b873cba8c6425b26ae135d6ba0dba314af9ec0e12887ef85d"
+    },
+    {
+      "fixture": "icb_render_patch_template.air.ll",
+      "entry": "icb_render_patch_template",
+      "source_sha256": "a7e3f78449ae36a11f8ac265908dea28063a11216930799a8cdc214845b32abb"
+    }
+  ],
+  "answers": [
+    {
+      "key": {
+        "chip": "apple-m3-max",
+        "os_version": "27.0.1",
+        "os_build": "26A434",
+        "metal_level": "27.0.1"
+      },
+      "provenance": "metal_run",
+      "device": "Apple M3 Max",
+      "runs": 3,
+      "outcomes": [
+        {
+          "runs": 3,
+          "transcript": {
+            "root": {
+              "name": "case",
+              "observed": {
+                "value": "absent"
+              },
+              "children": [
+                {
+                  "name": "inputs",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "air",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "c44e970090b25f5b873cba8c6425b26ae135d6ba0dba314af9ec0e12887ef85d"
+                        }
+                      }
+                    },
+                    {
+                      "name": "air-typed",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "a7e3f78449ae36a11f8ac265908dea28063a11216930799a8cdc214845b32abb"
+                        }
+                      }
+                    },
+                    {
+                      "name": "icb:descriptor",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "72feedacb98b0cf6e4ae3468b083382beeb7cace54e64bb7ae214117233f15c1"
+                        }
+                      }
+                    },
+                    {
+                      "name": "icb:commands",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "a1a38f0ad987178a85870a32caaa7aa135c8820e99a0ffa42c1c97fd3b04da54"
+                        }
+                      }
+                    },
+                    {
+                      "name": "pipeline:plain",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "290c95e74215e5a306f42eb82320cf0a8704c61812b61bd57227cc0c11d5495e"
+                        }
+                      }
+                    },
+                    {
+                      "name": "pipeline:indexed",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "b856ce311b5a185d62c209f1d7253d0e4551d04916616c951cad75c9df97298a"
+                        }
+                      }
+                    },
+                    {
+                      "name": "buffer:factors",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "37abee1037e30d5a696df0d229dd50cf3a784a92688ec5e4c2d572dea6649643"
+                        }
+                      }
+                    },
+                    {
+                      "name": "buffer:control-point-indices",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "245bbd9d484dcf27c714e2690cd6544973de5d54aa9cd82eab23d6046a65faa8"
+                        }
+                      }
+                    },
+                    {
+                      "name": "buffer:marks",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "56a43ef88ddfcd0f56f7dd973312c0e73d62f59655c01d7b4e59aaa3be8b3fb6"
+                        }
+                      }
+                    },
+                    {
+                      "name": "pass",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "01f8c989b5717a9b4b08d0fdf5564c54846a15de510a37fd9d46663159b0b41a"
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "library",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "pipeline:plain",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "pipeline:indexed",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "buffer:factors",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "buffer:control-point-indices",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "buffer:marks",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "command-buffer",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "encoded",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "command/0",
+                      "observed": {
+                        "value": "absent"
+                      },
+                      "children": [
+                        {
+                          "name": "0-setRenderPipelineState",
+                          "observed": {
+                            "value": {
+                              "variant": {
+                                "name": "Ok",
+                                "payload": "absent"
+                              }
+                            }
+                          }
+                        },
+                        {
+                          "name": "1-setVertexBuffer",
+                          "observed": {
+                            "value": {
+                              "variant": {
+                                "name": "Ok",
+                                "payload": "absent"
+                              }
+                            }
+                          }
+                        },
+                        {
+                          "name": "2-drawPatches",
+                          "observed": {
+                            "value": {
+                              "variant": {
+                                "name": "Ok",
+                                "payload": "absent"
+                              }
+                            }
+                          }
+                        }
+                      ]
+                    },
+                    {
+                      "name": "command/1",
+                      "observed": {
+                        "value": "absent"
+                      },
+                      "children": [
+                        {
+                          "name": "0-setRenderPipelineState",
+                          "observed": {
+                            "value": {
+                              "variant": {
+                                "name": "Ok",
+                                "payload": "absent"
+                              }
+                            }
+                          }
+                        },
+                        {
+                          "name": "1-setVertexBuffer",
+                          "observed": {
+                            "value": {
+                              "variant": {
+                                "name": "Ok",
+                                "payload": "absent"
+                              }
+                            }
+                          }
+                        },
+                        {
+                          "name": "2-drawIndexedPatches",
+                          "observed": {
+                            "value": {
+                              "variant": {
+                                "name": "Ok",
+                                "payload": "absent"
+                              }
+                            }
+                          }
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "name": "size",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": {
+                          "uint": 2
+                        }
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "render",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": {
+                          "variant": {
+                            "name": "Completed",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "program",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "calls",
+                      "observed": {
+                        "value": "absent"
+                      },
+                      "children": [
+                        {
+                          "name": "0-renderCommandEncoder",
+                          "observed": {
+                            "value": {
+                              "variant": {
+                                "name": "Ok",
+                                "payload": "absent"
+                              }
+                            }
+                          }
+                        }
+                      ]
+                    },
+                    {
+                      "name": "status",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "variant": {
+                                "name": "Completed",
+                                "payload": "absent"
+                              }
+                            }
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "command-buffer-error",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "None",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "marks",
+                  "observed": {
+                    "value": {
+                      "bytes": "AAABAAAAAAAAAAAAAAAAAAAAAQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAEAAAAAAAAAAAAAAAAAAAAAAAEAAQAAAAAAAQABAAAAAAABAAEAAAAAAAEAAQAAAAAAAAAAAAAAAAABAAEAAAAAAAEAAQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAQABAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAQEBAAAAAAABAQEAAAAAAAEBAQAAAAAAAQEBAAAAAAAAAAAAAAAAAAEBAQAAAAAAAQEBAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABAQEAAAAAAAAAAAAAAAAAAAAAAA=="
+                    },
+                    "shape": {
+                      "bytes": {
+                        "region": {
+                          "buffer": {
+                            "offset": 0,
+                            "length": 1000
+                          }
+                        },
+                        "element": "u32",
+                        "row_offset": 0,
+                        "row_elements": 250,
+                        "row_pitch": 1000,
+                        "rows": 1,
+                        "image_pitch": 1000,
+                        "images": 1,
+                        "gaps": "ignored"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "notices",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "set",
+                      "observed": {
+                        "value": {
+                          "nothing": "announced_nothing"
+                        }
+                      }
+                    },
+                    {
+                      "name": "counts",
+                      "observed": {
+                        "value": {
+                          "fields": {}
+                        }
+                      }
+                    }
+                  ]
+                }
+              ]
+            }
+          }
+        }
+      ],
+      "validated": "ran"
+    }
+  ]
+}

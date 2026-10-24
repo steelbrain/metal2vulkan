@@ -30,8 +30,10 @@
 //! ([`IcbDescriptor::inherit_depth_stencil_state`] and the five beside it). Metal's own API
 //! validation stops that creation, which is a fact the recording's second oracle keeps.
 //!
-//! **A patch draw.** `drawPatches:…` and `drawIndexedPatches:…` need a tessellation pipeline,
-//! which no side of this suite builds.
+//! Nothing else is left out on purpose. A patch draw is **here**
+//! ([`RenderCommandStep::DrawPatches`], [`RenderCommandStep::DrawIndexedPatches`]): it needs a
+//! tessellation pipeline, which [`crate::render::RenderPipelineSpec::tessellating`] builds, and
+//! `supportIndirectCommandBuffers` beside it.
 
 use crate::case::{Failure, Handle};
 use metal2vulkan::metal::{IndexType, IndirectCommandType, PrimitiveType};
@@ -321,6 +323,53 @@ pub enum RenderCommandStep {
         base_vertex: i32,
         base_instance: u32,
     },
+    /// `drawPatches:patchStart:patchCount:patchIndexBuffer:patchIndexBufferOffset:instanceCount:
+    /// baseInstance:tessellationFactorBuffer:tessellationFactorBufferOffset:
+    /// tessellationFactorBufferInstanceStride:`.
+    ///
+    /// A command's patch draw carries its **own** factor buffer, where a render encoder's draw
+    /// reads the one `setTessellationFactorBuffer:offset:instanceStride:` bound before it. So two
+    /// commands of one buffer can draw the same patches at different factors with no state
+    /// between them, which is the shape a case over a buffer of patch draws states.
+    DrawPatches {
+        control_points: u32,
+        /// `patchStart`.
+        first: u32,
+        /// `patchCount`.
+        count: u32,
+        /// `patchIndexBuffer`; `None` is Metal's nil, each patch drawn at its own index.
+        patch_indices: Option<Handle>,
+        patch_index_offset: u64,
+        instances: u32,
+        base_instance: u32,
+        /// `tessellationFactorBuffer`, which the call takes and never nil.
+        factors: Handle,
+        factor_offset: u64,
+        factor_instance_stride: u64,
+    },
+    /// `drawIndexedPatches:patchStart:patchCount:patchIndexBuffer:patchIndexBufferOffset:
+    /// controlPointIndexBuffer:controlPointIndexBufferOffset:instanceCount:baseInstance:
+    /// tessellationFactorBuffer:tessellationFactorBufferOffset:
+    /// tessellationFactorBufferInstanceStride:`: [`RenderCommandStep::DrawPatches`] whose control
+    /// point `k` of patch `p` is the index at position `p · N + k` of the control-point index
+    /// buffer, `N` the pipeline's control points.
+    DrawIndexedPatches {
+        control_points: u32,
+        first: u32,
+        count: u32,
+        patch_indices: Option<Handle>,
+        patch_index_offset: u64,
+        /// `controlPointIndexBuffer`. Not optional, though Metal's own selector takes nil:
+        /// `objc2`'s binding of it declares the parameter non-null, so no case of this suite can
+        /// state the nil that makes the call a plain patch draw.
+        control_point_indices: Handle,
+        control_point_index_offset: u64,
+        instances: u32,
+        base_instance: u32,
+        factors: Handle,
+        factor_offset: u64,
+        factor_instance_stride: u64,
+    },
     /// `drawMeshThreadgroups:threadsPerObjectThreadgroup:threadsPerMeshThreadgroup:`.
     DrawMeshThreadgroups {
         groups: [u32; 3],
@@ -356,6 +405,8 @@ impl RenderCommandStep {
             }
             RenderCommandStep::Draw { .. } => "drawPrimitives",
             RenderCommandStep::DrawIndexed { .. } => "drawIndexedPrimitives",
+            RenderCommandStep::DrawPatches { .. } => "drawPatches",
+            RenderCommandStep::DrawIndexedPatches { .. } => "drawIndexedPatches",
             RenderCommandStep::DrawMeshThreadgroups { .. } => "drawMeshThreadgroups",
             RenderCommandStep::DrawMeshThreads { .. } => "drawMeshThreads",
             RenderCommandStep::Barrier => "setBarrier",
@@ -423,6 +474,52 @@ impl RenderCommandStep {
                 out.extend(instances.to_le_bytes());
                 out.extend(base_vertex.to_le_bytes());
                 out.extend(base_instance.to_le_bytes());
+            }
+            RenderCommandStep::DrawPatches {
+                control_points,
+                first,
+                count,
+                patch_indices,
+                patch_index_offset,
+                instances,
+                base_instance,
+                factor_offset,
+                factor_instance_stride,
+                ..
+            } => {
+                out.extend(control_points.to_le_bytes());
+                out.extend(first.to_le_bytes());
+                out.extend(count.to_le_bytes());
+                out.push(u8::from(patch_indices.is_some()));
+                out.extend(patch_index_offset.to_le_bytes());
+                out.extend(instances.to_le_bytes());
+                out.extend(base_instance.to_le_bytes());
+                out.extend(factor_offset.to_le_bytes());
+                out.extend(factor_instance_stride.to_le_bytes());
+            }
+            RenderCommandStep::DrawIndexedPatches {
+                control_points,
+                first,
+                count,
+                patch_indices,
+                patch_index_offset,
+                control_point_index_offset,
+                instances,
+                base_instance,
+                factor_offset,
+                factor_instance_stride,
+                ..
+            } => {
+                out.extend(control_points.to_le_bytes());
+                out.extend(first.to_le_bytes());
+                out.extend(count.to_le_bytes());
+                out.push(u8::from(patch_indices.is_some()));
+                out.extend(patch_index_offset.to_le_bytes());
+                out.extend(control_point_index_offset.to_le_bytes());
+                out.extend(instances.to_le_bytes());
+                out.extend(base_instance.to_le_bytes());
+                out.extend(factor_offset.to_le_bytes());
+                out.extend(factor_instance_stride.to_le_bytes());
             }
             RenderCommandStep::DrawMeshThreadgroups {
                 groups: first,

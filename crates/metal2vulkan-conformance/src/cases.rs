@@ -104,6 +104,7 @@ pub mod heap_facts;
 pub mod heap_metal_sizes;
 pub mod host_detach;
 pub mod host_page_writes;
+pub mod indirect_command_depth;
 pub mod indirect_commands;
 pub mod indirect_private_types;
 pub mod int_attributes;
@@ -187,6 +188,7 @@ pub fn all() -> Vec<Box<dyn Case>> {
         cases.push(Box::new(case));
     }
     cases.push(Box::new(indirect_private_types::private_type_getters()));
+    cases.extend(indirect_command_depth::boxed());
     cases.extend(indirect_commands::boxed());
     for case in math_routines::all() {
         cases.push(Box::new(case));

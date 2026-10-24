@@ -985,6 +985,68 @@ impl<'a> RuntimeSide<'a> {
                 i64::from(*base_vertex),
                 u64::from(*base_instance),
             ),
+            RenderCommandStep::DrawPatches {
+                control_points,
+                first,
+                count,
+                patch_indices,
+                patch_index_offset,
+                instances,
+                base_instance,
+                factors,
+                factor_offset,
+                factor_instance_stride,
+            } => {
+                let indices = match patch_indices {
+                    Some(handle) => Some(self.held(*handle)?),
+                    None => None,
+                };
+                encoder.draw_patches(
+                    u64::from(*control_points),
+                    u64::from(*first),
+                    u64::from(*count),
+                    indices,
+                    *patch_index_offset,
+                    u64::from(*instances),
+                    u64::from(*base_instance),
+                    self.held(*factors)?,
+                    *factor_offset,
+                    *factor_instance_stride,
+                )
+            }
+            RenderCommandStep::DrawIndexedPatches {
+                control_points,
+                first,
+                count,
+                patch_indices,
+                patch_index_offset,
+                control_point_indices,
+                control_point_index_offset,
+                instances,
+                base_instance,
+                factors,
+                factor_offset,
+                factor_instance_stride,
+            } => {
+                let indices = match patch_indices {
+                    Some(handle) => Some(self.held(*handle)?),
+                    None => None,
+                };
+                encoder.draw_indexed_patches(
+                    u64::from(*control_points),
+                    u64::from(*first),
+                    u64::from(*count),
+                    indices,
+                    *patch_index_offset,
+                    Some(self.held(*control_point_indices)?),
+                    *control_point_index_offset,
+                    u64::from(*instances),
+                    u64::from(*base_instance),
+                    self.held(*factors)?,
+                    *factor_offset,
+                    *factor_instance_stride,
+                )
+            }
             RenderCommandStep::DrawMeshThreadgroups {
                 groups,
                 object,

@@ -1,0 +1,1661 @@
+{
+  "format": 1,
+  "case": "indirect-compute-commands-reset-and-ranges",
+  "suite_version": 1,
+  "shaders": [
+    {
+      "fixture": "icb_replay_template.ll",
+      "entry": "icb_replay_template",
+      "source_sha256": "fee2985635a8e466a450ee0fe473abdc5faa0694ddcc5b5bdc15d67c10842479"
+    },
+    {
+      "fixture": "icb_replay_template.air.ll",
+      "entry": "icb_replay_template",
+      "source_sha256": "dcfcf642972c3bc8d9d7a93a304adf8aecf78a19cd03e9468a8b3f90dee453c9"
+    }
+  ],
+  "answers": [
+    {
+      "key": {
+        "chip": "apple-m3-max",
+        "os_version": "27.0.1",
+        "os_build": "26A434",
+        "metal_level": "27.0.1"
+      },
+      "provenance": "metal_run",
+      "device": "Apple M3 Max",
+      "runs": 3,
+      "outcomes": [
+        {
+          "runs": 3,
+          "transcript": {
+            "root": {
+              "name": "case",
+              "observed": {
+                "value": "absent"
+              },
+              "children": [
+                {
+                  "name": "inputs",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "air",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "fee2985635a8e466a450ee0fe473abdc5faa0694ddcc5b5bdc15d67c10842479"
+                        }
+                      }
+                    },
+                    {
+                      "name": "air-typed",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "dcfcf642972c3bc8d9d7a93a304adf8aecf78a19cd03e9468a8b3f90dee453c9"
+                        }
+                      }
+                    },
+                    {
+                      "name": "reset-sub-range-whole-execution:descriptor",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "2eabc39eb6a932ff8294ff3e76704207a90169b9cf3d9962ea772370d5dc64f1"
+                        }
+                      }
+                    },
+                    {
+                      "name": "reset-sub-range-whole-execution:commands",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "97b237f1b3650afeecf54ce918f48a29d0260c71de4139858ba6d062b0032906"
+                        }
+                      }
+                    },
+                    {
+                      "name": "reset-sub-range-whole-execution:ranges",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "de92a5aea9e6905a74386c1b154ebfa5dbb704ac4af1663c0c2bd466c27760c9"
+                        }
+                      }
+                    },
+                    {
+                      "name": "reset-re-encoded-sub-range:descriptor",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "2eabc39eb6a932ff8294ff3e76704207a90169b9cf3d9962ea772370d5dc64f1"
+                        }
+                      }
+                    },
+                    {
+                      "name": "reset-re-encoded-sub-range:commands",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "6be735dfc1a0bd54a3d9a3c33bd111949f3686adc48255a8b036b6c36fafad78"
+                        }
+                      }
+                    },
+                    {
+                      "name": "reset-re-encoded-sub-range:ranges",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "03502d03cf4e674ca6246f0a15bf412e11b3b91203728906e3ac0a78446ab27d"
+                        }
+                      }
+                    },
+                    {
+                      "name": "empty-range:descriptor",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "2eabc39eb6a932ff8294ff3e76704207a90169b9cf3d9962ea772370d5dc64f1"
+                        }
+                      }
+                    },
+                    {
+                      "name": "empty-range:commands",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "ad7fc88b4da457e1cdf1d537ed65d49c0ca45b9a392890dad94d3bb954e9a049"
+                        }
+                      }
+                    },
+                    {
+                      "name": "empty-range:ranges",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "27b16d6aa54df78346a5a3970875799cea357cbd9c825d5a7e0c1273671d4cf3"
+                        }
+                      }
+                    },
+                    {
+                      "name": "range-ending-at-the-command-count:descriptor",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "2eabc39eb6a932ff8294ff3e76704207a90169b9cf3d9962ea772370d5dc64f1"
+                        }
+                      }
+                    },
+                    {
+                      "name": "range-ending-at-the-command-count:commands",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "b35d513c6c433388d91b59884fbf48ac536e6de6b68ff404e7d4383266b797b0"
+                        }
+                      }
+                    },
+                    {
+                      "name": "range-ending-at-the-command-count:ranges",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "9188e46a71551cf9b64ec366e9e44fd72989dcd458f93670901cf0a6b1b74591"
+                        }
+                      }
+                    },
+                    {
+                      "name": "buffer:params",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "d17bf5ff99e97d2cb89a433f2ee99c72ebad330516b19fa9c281c43dd0378c03"
+                        }
+                      }
+                    },
+                    {
+                      "name": "buffer:out",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "ac4c71356fea45ea2692ac5681f23ebf835f0ea3dea3e67fd58c2d3f8c7bbd8d"
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "library",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "pipeline",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "buffer:params",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "buffer:out",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "reset-sub-range-whole-execution/command-buffer",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "reset-sub-range-whole-execution/encoded",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "command/0",
+                      "observed": {
+                        "value": "absent"
+                      },
+                      "children": [
+                        {
+                          "name": "0-setComputePipelineState",
+                          "observed": {
+                            "value": {
+                              "variant": {
+                                "name": "Ok",
+                                "payload": "absent"
+                              }
+                            }
+                          }
+                        },
+                        {
+                          "name": "1-setKernelBuffer",
+                          "observed": {
+                            "value": {
+                              "variant": {
+                                "name": "Ok",
+                                "payload": "absent"
+                              }
+                            }
+                          }
+                        },
+                        {
+                          "name": "2-setKernelBuffer",
+                          "observed": {
+                            "value": {
+                              "variant": {
+                                "name": "Ok",
+                                "payload": "absent"
+                              }
+                            }
+                          }
+                        },
+                        {
+                          "name": "3-setThreadgroupMemoryLength",
+                          "observed": {
+                            "value": {
+                              "variant": {
+                                "name": "Ok",
+                                "payload": "absent"
+                              }
+                            }
+                          }
+                        },
+                        {
+                          "name": "4-concurrentDispatchThreadgroups",
+                          "observed": {
+                            "value": {
+                              "variant": {
+                                "name": "Ok",
+                                "payload": "absent"
+                              }
+                            }
+                          }
+                        }
+                      ]
+                    },
+                    {
+                      "name": "command/1",
+                      "observed": {
+                        "value": "absent"
+                      },
+                      "children": [
+                        {
+                          "name": "0-setComputePipelineState",
+                          "observed": {
+                            "value": {
+                              "variant": {
+                                "name": "Ok",
+                                "payload": "absent"
+                              }
+                            }
+                          }
+                        },
+                        {
+                          "name": "1-setKernelBuffer",
+                          "observed": {
+                            "value": {
+                              "variant": {
+                                "name": "Ok",
+                                "payload": "absent"
+                              }
+                            }
+                          }
+                        },
+                        {
+                          "name": "2-setKernelBuffer",
+                          "observed": {
+                            "value": {
+                              "variant": {
+                                "name": "Ok",
+                                "payload": "absent"
+                              }
+                            }
+                          }
+                        },
+                        {
+                          "name": "3-setThreadgroupMemoryLength",
+                          "observed": {
+                            "value": {
+                              "variant": {
+                                "name": "Ok",
+                                "payload": "absent"
+                              }
+                            }
+                          }
+                        },
+                        {
+                          "name": "4-concurrentDispatchThreadgroups",
+                          "observed": {
+                            "value": {
+                              "variant": {
+                                "name": "Ok",
+                                "payload": "absent"
+                              }
+                            }
+                          }
+                        }
+                      ]
+                    },
+                    {
+                      "name": "command/2",
+                      "observed": {
+                        "value": "absent"
+                      },
+                      "children": [
+                        {
+                          "name": "0-setComputePipelineState",
+                          "observed": {
+                            "value": {
+                              "variant": {
+                                "name": "Ok",
+                                "payload": "absent"
+                              }
+                            }
+                          }
+                        },
+                        {
+                          "name": "1-setKernelBuffer",
+                          "observed": {
+                            "value": {
+                              "variant": {
+                                "name": "Ok",
+                                "payload": "absent"
+                              }
+                            }
+                          }
+                        },
+                        {
+                          "name": "2-setKernelBuffer",
+                          "observed": {
+                            "value": {
+                              "variant": {
+                                "name": "Ok",
+                                "payload": "absent"
+                              }
+                            }
+                          }
+                        },
+                        {
+                          "name": "3-setThreadgroupMemoryLength",
+                          "observed": {
+                            "value": {
+                              "variant": {
+                                "name": "Ok",
+                                "payload": "absent"
+                              }
+                            }
+                          }
+                        },
+                        {
+                          "name": "4-concurrentDispatchThreadgroups",
+                          "observed": {
+                            "value": {
+                              "variant": {
+                                "name": "Ok",
+                                "payload": "absent"
+                              }
+                            }
+                          }
+                        }
+                      ]
+                    },
+                    {
+                      "name": "command/3",
+                      "observed": {
+                        "value": "absent"
+                      },
+                      "children": [
+                        {
+                          "name": "0-setComputePipelineState",
+                          "observed": {
+                            "value": {
+                              "variant": {
+                                "name": "Ok",
+                                "payload": "absent"
+                              }
+                            }
+                          }
+                        },
+                        {
+                          "name": "1-setKernelBuffer",
+                          "observed": {
+                            "value": {
+                              "variant": {
+                                "name": "Ok",
+                                "payload": "absent"
+                              }
+                            }
+                          }
+                        },
+                        {
+                          "name": "2-setKernelBuffer",
+                          "observed": {
+                            "value": {
+                              "variant": {
+                                "name": "Ok",
+                                "payload": "absent"
+                              }
+                            }
+                          }
+                        },
+                        {
+                          "name": "3-setThreadgroupMemoryLength",
+                          "observed": {
+                            "value": {
+                              "variant": {
+                                "name": "Ok",
+                                "payload": "absent"
+                              }
+                            }
+                          }
+                        },
+                        {
+                          "name": "4-concurrentDispatchThreadgroups",
+                          "observed": {
+                            "value": {
+                              "variant": {
+                                "name": "Ok",
+                                "payload": "absent"
+                              }
+                            }
+                          }
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "name": "reset-sub-range-whole-execution/reset-with-range",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "reset-re-encoded-sub-range/command-buffer",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "reset-re-encoded-sub-range/encoded",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "command/0",
+                      "observed": {
+                        "value": "absent"
+                      },
+                      "children": [
+                        {
+                          "name": "0-setComputePipelineState",
+                          "observed": {
+                            "value": {
+                              "variant": {
+                                "name": "Ok",
+                                "payload": "absent"
+                              }
+                            }
+                          }
+                        },
+                        {
+                          "name": "1-setKernelBuffer",
+                          "observed": {
+                            "value": {
+                              "variant": {
+                                "name": "Ok",
+                                "payload": "absent"
+                              }
+                            }
+                          }
+                        },
+                        {
+                          "name": "2-setKernelBuffer",
+                          "observed": {
+                            "value": {
+                              "variant": {
+                                "name": "Ok",
+                                "payload": "absent"
+                              }
+                            }
+                          }
+                        },
+                        {
+                          "name": "3-setThreadgroupMemoryLength",
+                          "observed": {
+                            "value": {
+                              "variant": {
+                                "name": "Ok",
+                                "payload": "absent"
+                              }
+                            }
+                          }
+                        },
+                        {
+                          "name": "4-concurrentDispatchThreadgroups",
+                          "observed": {
+                            "value": {
+                              "variant": {
+                                "name": "Ok",
+                                "payload": "absent"
+                              }
+                            }
+                          }
+                        }
+                      ]
+                    },
+                    {
+                      "name": "command/1",
+                      "observed": {
+                        "value": "absent"
+                      },
+                      "children": [
+                        {
+                          "name": "0-setComputePipelineState",
+                          "observed": {
+                            "value": {
+                              "variant": {
+                                "name": "Ok",
+                                "payload": "absent"
+                              }
+                            }
+                          }
+                        },
+                        {
+                          "name": "1-setKernelBuffer",
+                          "observed": {
+                            "value": {
+                              "variant": {
+                                "name": "Ok",
+                                "payload": "absent"
+                              }
+                            }
+                          }
+                        },
+                        {
+                          "name": "2-setKernelBuffer",
+                          "observed": {
+                            "value": {
+                              "variant": {
+                                "name": "Ok",
+                                "payload": "absent"
+                              }
+                            }
+                          }
+                        },
+                        {
+                          "name": "3-setThreadgroupMemoryLength",
+                          "observed": {
+                            "value": {
+                              "variant": {
+                                "name": "Ok",
+                                "payload": "absent"
+                              }
+                            }
+                          }
+                        },
+                        {
+                          "name": "4-concurrentDispatchThreadgroups",
+                          "observed": {
+                            "value": {
+                              "variant": {
+                                "name": "Ok",
+                                "payload": "absent"
+                              }
+                            }
+                          }
+                        },
+                        {
+                          "name": "5-reset",
+                          "observed": {
+                            "value": {
+                              "variant": {
+                                "name": "Ok",
+                                "payload": "absent"
+                              }
+                            }
+                          }
+                        },
+                        {
+                          "name": "6-setComputePipelineState",
+                          "observed": {
+                            "value": {
+                              "variant": {
+                                "name": "Ok",
+                                "payload": "absent"
+                              }
+                            }
+                          }
+                        },
+                        {
+                          "name": "7-setKernelBuffer",
+                          "observed": {
+                            "value": {
+                              "variant": {
+                                "name": "Ok",
+                                "payload": "absent"
+                              }
+                            }
+                          }
+                        },
+                        {
+                          "name": "8-setKernelBuffer",
+                          "observed": {
+                            "value": {
+                              "variant": {
+                                "name": "Ok",
+                                "payload": "absent"
+                              }
+                            }
+                          }
+                        },
+                        {
+                          "name": "9-setThreadgroupMemoryLength",
+                          "observed": {
+                            "value": {
+                              "variant": {
+                                "name": "Ok",
+                                "payload": "absent"
+                              }
+                            }
+                          }
+                        },
+                        {
+                          "name": "10-concurrentDispatchThreadgroups",
+                          "observed": {
+                            "value": {
+                              "variant": {
+                                "name": "Ok",
+                                "payload": "absent"
+                              }
+                            }
+                          }
+                        }
+                      ]
+                    },
+                    {
+                      "name": "command/2",
+                      "observed": {
+                        "value": "absent"
+                      },
+                      "children": [
+                        {
+                          "name": "0-setComputePipelineState",
+                          "observed": {
+                            "value": {
+                              "variant": {
+                                "name": "Ok",
+                                "payload": "absent"
+                              }
+                            }
+                          }
+                        },
+                        {
+                          "name": "1-setKernelBuffer",
+                          "observed": {
+                            "value": {
+                              "variant": {
+                                "name": "Ok",
+                                "payload": "absent"
+                              }
+                            }
+                          }
+                        },
+                        {
+                          "name": "2-setKernelBuffer",
+                          "observed": {
+                            "value": {
+                              "variant": {
+                                "name": "Ok",
+                                "payload": "absent"
+                              }
+                            }
+                          }
+                        },
+                        {
+                          "name": "3-setThreadgroupMemoryLength",
+                          "observed": {
+                            "value": {
+                              "variant": {
+                                "name": "Ok",
+                                "payload": "absent"
+                              }
+                            }
+                          }
+                        },
+                        {
+                          "name": "4-concurrentDispatchThreadgroups",
+                          "observed": {
+                            "value": {
+                              "variant": {
+                                "name": "Ok",
+                                "payload": "absent"
+                              }
+                            }
+                          }
+                        }
+                      ]
+                    },
+                    {
+                      "name": "command/3",
+                      "observed": {
+                        "value": "absent"
+                      },
+                      "children": [
+                        {
+                          "name": "0-setComputePipelineState",
+                          "observed": {
+                            "value": {
+                              "variant": {
+                                "name": "Ok",
+                                "payload": "absent"
+                              }
+                            }
+                          }
+                        },
+                        {
+                          "name": "1-setKernelBuffer",
+                          "observed": {
+                            "value": {
+                              "variant": {
+                                "name": "Ok",
+                                "payload": "absent"
+                              }
+                            }
+                          }
+                        },
+                        {
+                          "name": "2-setKernelBuffer",
+                          "observed": {
+                            "value": {
+                              "variant": {
+                                "name": "Ok",
+                                "payload": "absent"
+                              }
+                            }
+                          }
+                        },
+                        {
+                          "name": "3-setThreadgroupMemoryLength",
+                          "observed": {
+                            "value": {
+                              "variant": {
+                                "name": "Ok",
+                                "payload": "absent"
+                              }
+                            }
+                          }
+                        },
+                        {
+                          "name": "4-concurrentDispatchThreadgroups",
+                          "observed": {
+                            "value": {
+                              "variant": {
+                                "name": "Ok",
+                                "payload": "absent"
+                              }
+                            }
+                          }
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "name": "reset-re-encoded-sub-range/reset-with-range",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "empty-range/command-buffer",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "empty-range/encoded",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "command/0",
+                      "observed": {
+                        "value": "absent"
+                      },
+                      "children": [
+                        {
+                          "name": "0-setComputePipelineState",
+                          "observed": {
+                            "value": {
+                              "variant": {
+                                "name": "Ok",
+                                "payload": "absent"
+                              }
+                            }
+                          }
+                        },
+                        {
+                          "name": "1-setKernelBuffer",
+                          "observed": {
+                            "value": {
+                              "variant": {
+                                "name": "Ok",
+                                "payload": "absent"
+                              }
+                            }
+                          }
+                        },
+                        {
+                          "name": "2-setKernelBuffer",
+                          "observed": {
+                            "value": {
+                              "variant": {
+                                "name": "Ok",
+                                "payload": "absent"
+                              }
+                            }
+                          }
+                        },
+                        {
+                          "name": "3-setThreadgroupMemoryLength",
+                          "observed": {
+                            "value": {
+                              "variant": {
+                                "name": "Ok",
+                                "payload": "absent"
+                              }
+                            }
+                          }
+                        },
+                        {
+                          "name": "4-concurrentDispatchThreadgroups",
+                          "observed": {
+                            "value": {
+                              "variant": {
+                                "name": "Ok",
+                                "payload": "absent"
+                              }
+                            }
+                          }
+                        }
+                      ]
+                    },
+                    {
+                      "name": "command/1",
+                      "observed": {
+                        "value": "absent"
+                      },
+                      "children": [
+                        {
+                          "name": "0-setComputePipelineState",
+                          "observed": {
+                            "value": {
+                              "variant": {
+                                "name": "Ok",
+                                "payload": "absent"
+                              }
+                            }
+                          }
+                        },
+                        {
+                          "name": "1-setKernelBuffer",
+                          "observed": {
+                            "value": {
+                              "variant": {
+                                "name": "Ok",
+                                "payload": "absent"
+                              }
+                            }
+                          }
+                        },
+                        {
+                          "name": "2-setKernelBuffer",
+                          "observed": {
+                            "value": {
+                              "variant": {
+                                "name": "Ok",
+                                "payload": "absent"
+                              }
+                            }
+                          }
+                        },
+                        {
+                          "name": "3-setThreadgroupMemoryLength",
+                          "observed": {
+                            "value": {
+                              "variant": {
+                                "name": "Ok",
+                                "payload": "absent"
+                              }
+                            }
+                          }
+                        },
+                        {
+                          "name": "4-concurrentDispatchThreadgroups",
+                          "observed": {
+                            "value": {
+                              "variant": {
+                                "name": "Ok",
+                                "payload": "absent"
+                              }
+                            }
+                          }
+                        }
+                      ]
+                    },
+                    {
+                      "name": "command/2",
+                      "observed": {
+                        "value": "absent"
+                      },
+                      "children": [
+                        {
+                          "name": "0-setComputePipelineState",
+                          "observed": {
+                            "value": {
+                              "variant": {
+                                "name": "Ok",
+                                "payload": "absent"
+                              }
+                            }
+                          }
+                        },
+                        {
+                          "name": "1-setKernelBuffer",
+                          "observed": {
+                            "value": {
+                              "variant": {
+                                "name": "Ok",
+                                "payload": "absent"
+                              }
+                            }
+                          }
+                        },
+                        {
+                          "name": "2-setKernelBuffer",
+                          "observed": {
+                            "value": {
+                              "variant": {
+                                "name": "Ok",
+                                "payload": "absent"
+                              }
+                            }
+                          }
+                        },
+                        {
+                          "name": "3-setThreadgroupMemoryLength",
+                          "observed": {
+                            "value": {
+                              "variant": {
+                                "name": "Ok",
+                                "payload": "absent"
+                              }
+                            }
+                          }
+                        },
+                        {
+                          "name": "4-concurrentDispatchThreadgroups",
+                          "observed": {
+                            "value": {
+                              "variant": {
+                                "name": "Ok",
+                                "payload": "absent"
+                              }
+                            }
+                          }
+                        }
+                      ]
+                    },
+                    {
+                      "name": "command/3",
+                      "observed": {
+                        "value": "absent"
+                      },
+                      "children": [
+                        {
+                          "name": "0-setComputePipelineState",
+                          "observed": {
+                            "value": {
+                              "variant": {
+                                "name": "Ok",
+                                "payload": "absent"
+                              }
+                            }
+                          }
+                        },
+                        {
+                          "name": "1-setKernelBuffer",
+                          "observed": {
+                            "value": {
+                              "variant": {
+                                "name": "Ok",
+                                "payload": "absent"
+                              }
+                            }
+                          }
+                        },
+                        {
+                          "name": "2-setKernelBuffer",
+                          "observed": {
+                            "value": {
+                              "variant": {
+                                "name": "Ok",
+                                "payload": "absent"
+                              }
+                            }
+                          }
+                        },
+                        {
+                          "name": "3-setThreadgroupMemoryLength",
+                          "observed": {
+                            "value": {
+                              "variant": {
+                                "name": "Ok",
+                                "payload": "absent"
+                              }
+                            }
+                          }
+                        },
+                        {
+                          "name": "4-concurrentDispatchThreadgroups",
+                          "observed": {
+                            "value": {
+                              "variant": {
+                                "name": "Ok",
+                                "payload": "absent"
+                              }
+                            }
+                          }
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "name": "range-ending-at-the-command-count/command-buffer",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "range-ending-at-the-command-count/encoded",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "command/0",
+                      "observed": {
+                        "value": "absent"
+                      },
+                      "children": [
+                        {
+                          "name": "0-setComputePipelineState",
+                          "observed": {
+                            "value": {
+                              "variant": {
+                                "name": "Ok",
+                                "payload": "absent"
+                              }
+                            }
+                          }
+                        },
+                        {
+                          "name": "1-setKernelBuffer",
+                          "observed": {
+                            "value": {
+                              "variant": {
+                                "name": "Ok",
+                                "payload": "absent"
+                              }
+                            }
+                          }
+                        },
+                        {
+                          "name": "2-setKernelBuffer",
+                          "observed": {
+                            "value": {
+                              "variant": {
+                                "name": "Ok",
+                                "payload": "absent"
+                              }
+                            }
+                          }
+                        },
+                        {
+                          "name": "3-setThreadgroupMemoryLength",
+                          "observed": {
+                            "value": {
+                              "variant": {
+                                "name": "Ok",
+                                "payload": "absent"
+                              }
+                            }
+                          }
+                        },
+                        {
+                          "name": "4-concurrentDispatchThreadgroups",
+                          "observed": {
+                            "value": {
+                              "variant": {
+                                "name": "Ok",
+                                "payload": "absent"
+                              }
+                            }
+                          }
+                        }
+                      ]
+                    },
+                    {
+                      "name": "command/1",
+                      "observed": {
+                        "value": "absent"
+                      },
+                      "children": [
+                        {
+                          "name": "0-setComputePipelineState",
+                          "observed": {
+                            "value": {
+                              "variant": {
+                                "name": "Ok",
+                                "payload": "absent"
+                              }
+                            }
+                          }
+                        },
+                        {
+                          "name": "1-setKernelBuffer",
+                          "observed": {
+                            "value": {
+                              "variant": {
+                                "name": "Ok",
+                                "payload": "absent"
+                              }
+                            }
+                          }
+                        },
+                        {
+                          "name": "2-setKernelBuffer",
+                          "observed": {
+                            "value": {
+                              "variant": {
+                                "name": "Ok",
+                                "payload": "absent"
+                              }
+                            }
+                          }
+                        },
+                        {
+                          "name": "3-setThreadgroupMemoryLength",
+                          "observed": {
+                            "value": {
+                              "variant": {
+                                "name": "Ok",
+                                "payload": "absent"
+                              }
+                            }
+                          }
+                        },
+                        {
+                          "name": "4-concurrentDispatchThreadgroups",
+                          "observed": {
+                            "value": {
+                              "variant": {
+                                "name": "Ok",
+                                "payload": "absent"
+                              }
+                            }
+                          }
+                        }
+                      ]
+                    },
+                    {
+                      "name": "command/2",
+                      "observed": {
+                        "value": "absent"
+                      },
+                      "children": [
+                        {
+                          "name": "0-setComputePipelineState",
+                          "observed": {
+                            "value": {
+                              "variant": {
+                                "name": "Ok",
+                                "payload": "absent"
+                              }
+                            }
+                          }
+                        },
+                        {
+                          "name": "1-setKernelBuffer",
+                          "observed": {
+                            "value": {
+                              "variant": {
+                                "name": "Ok",
+                                "payload": "absent"
+                              }
+                            }
+                          }
+                        },
+                        {
+                          "name": "2-setKernelBuffer",
+                          "observed": {
+                            "value": {
+                              "variant": {
+                                "name": "Ok",
+                                "payload": "absent"
+                              }
+                            }
+                          }
+                        },
+                        {
+                          "name": "3-setThreadgroupMemoryLength",
+                          "observed": {
+                            "value": {
+                              "variant": {
+                                "name": "Ok",
+                                "payload": "absent"
+                              }
+                            }
+                          }
+                        },
+                        {
+                          "name": "4-concurrentDispatchThreadgroups",
+                          "observed": {
+                            "value": {
+                              "variant": {
+                                "name": "Ok",
+                                "payload": "absent"
+                              }
+                            }
+                          }
+                        }
+                      ]
+                    },
+                    {
+                      "name": "command/3",
+                      "observed": {
+                        "value": "absent"
+                      },
+                      "children": [
+                        {
+                          "name": "0-setComputePipelineState",
+                          "observed": {
+                            "value": {
+                              "variant": {
+                                "name": "Ok",
+                                "payload": "absent"
+                              }
+                            }
+                          }
+                        },
+                        {
+                          "name": "1-setKernelBuffer",
+                          "observed": {
+                            "value": {
+                              "variant": {
+                                "name": "Ok",
+                                "payload": "absent"
+                              }
+                            }
+                          }
+                        },
+                        {
+                          "name": "2-setKernelBuffer",
+                          "observed": {
+                            "value": {
+                              "variant": {
+                                "name": "Ok",
+                                "payload": "absent"
+                              }
+                            }
+                          }
+                        },
+                        {
+                          "name": "3-setThreadgroupMemoryLength",
+                          "observed": {
+                            "value": {
+                              "variant": {
+                                "name": "Ok",
+                                "payload": "absent"
+                              }
+                            }
+                          }
+                        },
+                        {
+                          "name": "4-concurrentDispatchThreadgroups",
+                          "observed": {
+                            "value": {
+                              "variant": {
+                                "name": "Ok",
+                                "payload": "absent"
+                              }
+                            }
+                          }
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "name": "render",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": {
+                          "variant": {
+                            "name": "Completed",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "program",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "calls",
+                      "observed": {
+                        "value": "absent"
+                      },
+                      "children": [
+                        {
+                          "name": "0-executeCommandsInBuffer",
+                          "observed": {
+                            "value": {
+                              "variant": {
+                                "name": "Ok",
+                                "payload": "absent"
+                              }
+                            }
+                          }
+                        },
+                        {
+                          "name": "1-executeCommandsInBuffer",
+                          "observed": {
+                            "value": {
+                              "variant": {
+                                "name": "Ok",
+                                "payload": "absent"
+                              }
+                            }
+                          }
+                        },
+                        {
+                          "name": "2-executeCommandsInBuffer",
+                          "observed": {
+                            "value": {
+                              "variant": {
+                                "name": "Ok",
+                                "payload": "absent"
+                              }
+                            }
+                          }
+                        },
+                        {
+                          "name": "3-executeCommandsInBuffer",
+                          "observed": {
+                            "value": {
+                              "variant": {
+                                "name": "Ok",
+                                "payload": "absent"
+                              }
+                            }
+                          }
+                        }
+                      ]
+                    },
+                    {
+                      "name": "status",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "variant": {
+                                "name": "Completed",
+                                "payload": "absent"
+                              }
+                            }
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "command-buffer-error",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "None",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "reset-sub-range-whole-execution/out",
+                  "observed": {
+                    "value": {
+                      "bytes": "ZwAAAGoAAABtAAAAcAAAAO7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7umwEAAO7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u"
+                    },
+                    "shape": {
+                      "bytes": {
+                        "region": {
+                          "buffer": {
+                            "offset": 0,
+                            "length": 192
+                          }
+                        },
+                        "element": "u32",
+                        "row_offset": 0,
+                        "row_elements": 48,
+                        "row_pitch": 192,
+                        "rows": 1,
+                        "image_pitch": 192,
+                        "images": 1,
+                        "gaps": "ignored"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "reset-re-encoded-sub-range/out",
+                  "observed": {
+                    "value": {
+                      "bytes": "7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u4BAgAADgIAAO7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u"
+                    },
+                    "shape": {
+                      "bytes": {
+                        "region": {
+                          "buffer": {
+                            "offset": 0,
+                            "length": 192
+                          }
+                        },
+                        "element": "u32",
+                        "row_offset": 0,
+                        "row_elements": 48,
+                        "row_pitch": 192,
+                        "rows": 1,
+                        "image_pitch": 192,
+                        "images": 1,
+                        "gaps": "ignored"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "empty-range/out",
+                  "observed": {
+                    "value": {
+                      "bytes": "7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u"
+                    },
+                    "shape": {
+                      "bytes": {
+                        "region": {
+                          "buffer": {
+                            "offset": 0,
+                            "length": 192
+                          }
+                        },
+                        "element": "u32",
+                        "row_offset": 0,
+                        "row_elements": 48,
+                        "row_pitch": 192,
+                        "rows": 1,
+                        "image_pitch": 192,
+                        "images": 1,
+                        "gaps": "ignored"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "range-ending-at-the-command-count/out",
+                  "observed": {
+                    "value": {
+                      "bytes": "7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7umwEAAO7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u"
+                    },
+                    "shape": {
+                      "bytes": {
+                        "region": {
+                          "buffer": {
+                            "offset": 0,
+                            "length": 192
+                          }
+                        },
+                        "element": "u32",
+                        "row_offset": 0,
+                        "row_elements": 48,
+                        "row_pitch": 192,
+                        "rows": 1,
+                        "image_pitch": 192,
+                        "images": 1,
+                        "gaps": "ignored"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "notices",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "set",
+                      "observed": {
+                        "value": {
+                          "nothing": "announced_nothing"
+                        }
+                      }
+                    },
+                    {
+                      "name": "counts",
+                      "observed": {
+                        "value": {
+                          "fields": {}
+                        }
+                      }
+                    }
+                  ]
+                }
+              ]
+            }
+          }
+        }
+      ],
+      "validated": "ran"
+    }
+  ]
+}

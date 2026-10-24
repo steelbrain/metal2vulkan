@@ -1,0 +1,911 @@
+{
+  "format": 1,
+  "case": "indirect-render-commands-inherited-state",
+  "suite_version": 1,
+  "shaders": [
+    {
+      "fixture": "icb_render_replay_template.ll",
+      "entry": "icb_render_replay_template",
+      "source_sha256": "ca8990a1c89d4a626e001a1f39aa72430a6ff74fde6eb9c7d2eb6d4f35a4e308"
+    },
+    {
+      "fixture": "icb_render_replay_template.air.ll",
+      "entry": "icb_render_replay_template",
+      "source_sha256": "29317c185ddd928f2ccf7ad7d201f8561781a1d30c4489c9279ba9686cbaab21"
+    }
+  ],
+  "answers": [
+    {
+      "key": {
+        "chip": "apple-m3-max",
+        "os_version": "27.0.1",
+        "os_build": "26A434",
+        "metal_level": "27.0.1"
+      },
+      "provenance": "metal_run",
+      "device": "Apple M3 Max",
+      "runs": 3,
+      "outcomes": [
+        {
+          "runs": 3,
+          "transcript": {
+            "root": {
+              "name": "case",
+              "observed": {
+                "value": "absent"
+              },
+              "children": [
+                {
+                  "name": "inputs",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "air",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "ca8990a1c89d4a626e001a1f39aa72430a6ff74fde6eb9c7d2eb6d4f35a4e308"
+                        }
+                      }
+                    },
+                    {
+                      "name": "air-typed",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "29317c185ddd928f2ccf7ad7d201f8561781a1d30c4489c9279ba9686cbaab21"
+                        }
+                      }
+                    },
+                    {
+                      "name": "own-state:descriptor",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "710562bd25b7b5ac582878d12cb4d27024615d23d3f5eddc91fffc8ca2030405"
+                        }
+                      }
+                    },
+                    {
+                      "name": "own-state:commands",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "bba0e88366223454ff02292efb075e6ce0a3a5fa4025c02ffd8a921fe8525eb8"
+                        }
+                      }
+                    },
+                    {
+                      "name": "inherit-buffers:descriptor",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "a89b77d10b201fbdeaf4048960c9f1d2666b7678b7afed2c77a982261795930c"
+                        }
+                      }
+                    },
+                    {
+                      "name": "inherit-buffers:commands",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "52957de75a2a80e3e4a7eaa2363a2c0a45d84abfba1cc63741ad0ad2f45e023a"
+                        }
+                      }
+                    },
+                    {
+                      "name": "inherit-pipeline-state:descriptor",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "9522e1af8bfff315ce71e502574ed1b8453219e12af1c0416289e0ea223b4681"
+                        }
+                      }
+                    },
+                    {
+                      "name": "inherit-pipeline-state:commands",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "9d5db2f15542365d08d04dae41eb3a3f172968133f8e8e6bb6d16da693be3d1f"
+                        }
+                      }
+                    },
+                    {
+                      "name": "render-pipeline",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "f5c07714205f71d533c6056b6bdfbec92bda9113db897c00b09a53e6fbd4eb8e"
+                        }
+                      }
+                    },
+                    {
+                      "name": "buffer:params",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "d17bf5ff99e97d2cb89a433f2ee99c72ebad330516b19fa9c281c43dd0378c03"
+                        }
+                      }
+                    },
+                    {
+                      "name": "buffer:out",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "3774f282071bee8df2737a293d403c60c918ab4ba14158394af0a7bef85e199c"
+                        }
+                      }
+                    },
+                    {
+                      "name": "parent",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "12b0221fced2b16c122dab91332a4408543dcbe1faf09d431160eb3b512b26e0"
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "library",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "pipeline",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "buffer:params",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "buffer:out",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "own-state/command-buffer",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "own-state/encoded",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "command/0",
+                      "observed": {
+                        "value": "absent"
+                      },
+                      "children": [
+                        {
+                          "name": "0-setRenderPipelineState",
+                          "observed": {
+                            "value": {
+                              "variant": {
+                                "name": "Ok",
+                                "payload": "absent"
+                              }
+                            }
+                          }
+                        },
+                        {
+                          "name": "1-setVertexBuffer",
+                          "observed": {
+                            "value": {
+                              "variant": {
+                                "name": "Ok",
+                                "payload": "absent"
+                              }
+                            }
+                          }
+                        },
+                        {
+                          "name": "2-setVertexBuffer",
+                          "observed": {
+                            "value": {
+                              "variant": {
+                                "name": "Ok",
+                                "payload": "absent"
+                              }
+                            }
+                          }
+                        },
+                        {
+                          "name": "3-drawPrimitives",
+                          "observed": {
+                            "value": {
+                              "variant": {
+                                "name": "Ok",
+                                "payload": "absent"
+                              }
+                            }
+                          }
+                        }
+                      ]
+                    },
+                    {
+                      "name": "command/1",
+                      "observed": {
+                        "value": "absent"
+                      },
+                      "children": [
+                        {
+                          "name": "0-setRenderPipelineState",
+                          "observed": {
+                            "value": {
+                              "variant": {
+                                "name": "Ok",
+                                "payload": "absent"
+                              }
+                            }
+                          }
+                        },
+                        {
+                          "name": "1-setVertexBuffer",
+                          "observed": {
+                            "value": {
+                              "variant": {
+                                "name": "Ok",
+                                "payload": "absent"
+                              }
+                            }
+                          }
+                        },
+                        {
+                          "name": "2-setVertexBuffer",
+                          "observed": {
+                            "value": {
+                              "variant": {
+                                "name": "Ok",
+                                "payload": "absent"
+                              }
+                            }
+                          }
+                        },
+                        {
+                          "name": "3-drawPrimitives",
+                          "observed": {
+                            "value": {
+                              "variant": {
+                                "name": "Ok",
+                                "payload": "absent"
+                              }
+                            }
+                          }
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "name": "own-state/size",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": {
+                          "uint": 2
+                        }
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "inherit-buffers/command-buffer",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "inherit-buffers/encoded",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "command/0",
+                      "observed": {
+                        "value": "absent"
+                      },
+                      "children": [
+                        {
+                          "name": "0-setRenderPipelineState",
+                          "observed": {
+                            "value": {
+                              "variant": {
+                                "name": "Ok",
+                                "payload": "absent"
+                              }
+                            }
+                          }
+                        },
+                        {
+                          "name": "1-setVertexBuffer",
+                          "observed": {
+                            "value": {
+                              "variant": {
+                                "name": "Ok",
+                                "payload": "absent"
+                              }
+                            }
+                          }
+                        },
+                        {
+                          "name": "2-setVertexBuffer",
+                          "observed": {
+                            "value": {
+                              "variant": {
+                                "name": "Ok",
+                                "payload": "absent"
+                              }
+                            }
+                          }
+                        },
+                        {
+                          "name": "3-drawPrimitives",
+                          "observed": {
+                            "value": {
+                              "variant": {
+                                "name": "Ok",
+                                "payload": "absent"
+                              }
+                            }
+                          }
+                        }
+                      ]
+                    },
+                    {
+                      "name": "command/1",
+                      "observed": {
+                        "value": "absent"
+                      },
+                      "children": [
+                        {
+                          "name": "0-setRenderPipelineState",
+                          "observed": {
+                            "value": {
+                              "variant": {
+                                "name": "Ok",
+                                "payload": "absent"
+                              }
+                            }
+                          }
+                        },
+                        {
+                          "name": "1-setVertexBuffer",
+                          "observed": {
+                            "value": {
+                              "variant": {
+                                "name": "Ok",
+                                "payload": "absent"
+                              }
+                            }
+                          }
+                        },
+                        {
+                          "name": "2-setVertexBuffer",
+                          "observed": {
+                            "value": {
+                              "variant": {
+                                "name": "Ok",
+                                "payload": "absent"
+                              }
+                            }
+                          }
+                        },
+                        {
+                          "name": "3-drawPrimitives",
+                          "observed": {
+                            "value": {
+                              "variant": {
+                                "name": "Ok",
+                                "payload": "absent"
+                              }
+                            }
+                          }
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "name": "inherit-buffers/size",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": {
+                          "uint": 2
+                        }
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "inherit-pipeline-state/command-buffer",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "inherit-pipeline-state/encoded",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "command/0",
+                      "observed": {
+                        "value": "absent"
+                      },
+                      "children": [
+                        {
+                          "name": "0-setVertexBuffer",
+                          "observed": {
+                            "value": {
+                              "variant": {
+                                "name": "Ok",
+                                "payload": "absent"
+                              }
+                            }
+                          }
+                        },
+                        {
+                          "name": "1-setVertexBuffer",
+                          "observed": {
+                            "value": {
+                              "variant": {
+                                "name": "Ok",
+                                "payload": "absent"
+                              }
+                            }
+                          }
+                        },
+                        {
+                          "name": "2-drawPrimitives",
+                          "observed": {
+                            "value": {
+                              "variant": {
+                                "name": "Ok",
+                                "payload": "absent"
+                              }
+                            }
+                          }
+                        }
+                      ]
+                    },
+                    {
+                      "name": "command/1",
+                      "observed": {
+                        "value": "absent"
+                      },
+                      "children": [
+                        {
+                          "name": "0-setVertexBuffer",
+                          "observed": {
+                            "value": {
+                              "variant": {
+                                "name": "Ok",
+                                "payload": "absent"
+                              }
+                            }
+                          }
+                        },
+                        {
+                          "name": "1-setVertexBuffer",
+                          "observed": {
+                            "value": {
+                              "variant": {
+                                "name": "Ok",
+                                "payload": "absent"
+                              }
+                            }
+                          }
+                        },
+                        {
+                          "name": "2-drawPrimitives",
+                          "observed": {
+                            "value": {
+                              "variant": {
+                                "name": "Ok",
+                                "payload": "absent"
+                              }
+                            }
+                          }
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "name": "inherit-pipeline-state/size",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": {
+                          "uint": 2
+                        }
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "render",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": {
+                          "variant": {
+                            "name": "Completed",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "program",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "calls",
+                      "observed": {
+                        "value": "absent"
+                      },
+                      "children": [
+                        {
+                          "name": "0-renderCommandEncoder",
+                          "observed": {
+                            "value": {
+                              "variant": {
+                                "name": "Ok",
+                                "payload": "absent"
+                              }
+                            }
+                          }
+                        }
+                      ]
+                    },
+                    {
+                      "name": "status",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "variant": {
+                                "name": "Completed",
+                                "payload": "absent"
+                              }
+                            }
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "command-buffer-error",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "None",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "own-state/segment-0",
+                  "observed": {
+                    "value": {
+                      "bytes": "ZwAAAGoAAABtAAAA7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7g=="
+                    },
+                    "shape": {
+                      "bytes": {
+                        "region": {
+                          "buffer": {
+                            "offset": 0,
+                            "length": 64
+                          }
+                        },
+                        "element": "u32",
+                        "row_offset": 0,
+                        "row_elements": 16,
+                        "row_pitch": 64,
+                        "rows": 1,
+                        "image_pitch": 64,
+                        "images": 1,
+                        "gaps": "ignored"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "own-state/segment-1",
+                  "observed": {
+                    "value": {
+                      "bytes": "7u7u7u7u7u7u7u7u7u7u7uEAAADmAAAA7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7g=="
+                    },
+                    "shape": {
+                      "bytes": {
+                        "region": {
+                          "buffer": {
+                            "offset": 0,
+                            "length": 64
+                          }
+                        },
+                        "element": "u32",
+                        "row_offset": 0,
+                        "row_elements": 16,
+                        "row_pitch": 64,
+                        "rows": 1,
+                        "image_pitch": 64,
+                        "images": 1,
+                        "gaps": "ignored"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "inherit-buffers/segment-2",
+                  "observed": {
+                    "value": {
+                      "bytes": "7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7g=="
+                    },
+                    "shape": {
+                      "bytes": {
+                        "region": {
+                          "buffer": {
+                            "offset": 0,
+                            "length": 64
+                          }
+                        },
+                        "element": "u32",
+                        "row_offset": 0,
+                        "row_elements": 16,
+                        "row_pitch": 64,
+                        "rows": 1,
+                        "image_pitch": 64,
+                        "images": 1,
+                        "gaps": "ignored"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "inherit-buffers/segment-3",
+                  "observed": {
+                    "value": {
+                      "bytes": "7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7g=="
+                    },
+                    "shape": {
+                      "bytes": {
+                        "region": {
+                          "buffer": {
+                            "offset": 0,
+                            "length": 64
+                          }
+                        },
+                        "element": "u32",
+                        "row_offset": 0,
+                        "row_elements": 16,
+                        "row_pitch": 64,
+                        "rows": 1,
+                        "image_pitch": 64,
+                        "images": 1,
+                        "gaps": "ignored"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "inherit-pipeline-state/segment-4",
+                  "observed": {
+                    "value": {
+                      "bytes": "ZwAAAGoAAABtAAAA7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7g=="
+                    },
+                    "shape": {
+                      "bytes": {
+                        "region": {
+                          "buffer": {
+                            "offset": 0,
+                            "length": 64
+                          }
+                        },
+                        "element": "u32",
+                        "row_offset": 0,
+                        "row_elements": 16,
+                        "row_pitch": 64,
+                        "rows": 1,
+                        "image_pitch": 64,
+                        "images": 1,
+                        "gaps": "ignored"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "inherit-pipeline-state/segment-5",
+                  "observed": {
+                    "value": {
+                      "bytes": "7u7u7u7u7u7u7u7u7u7u7uEAAADmAAAA7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7g=="
+                    },
+                    "shape": {
+                      "bytes": {
+                        "region": {
+                          "buffer": {
+                            "offset": 0,
+                            "length": 64
+                          }
+                        },
+                        "element": "u32",
+                        "row_offset": 0,
+                        "row_elements": 16,
+                        "row_pitch": 64,
+                        "rows": 1,
+                        "image_pitch": 64,
+                        "images": 1,
+                        "gaps": "ignored"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "parent-segment",
+                  "observed": {
+                    "value": {
+                      "bytes": "mwEAAKYBAACxAQAA7u7u7scBAADSAQAA7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7g=="
+                    },
+                    "shape": {
+                      "bytes": {
+                        "region": {
+                          "buffer": {
+                            "offset": 0,
+                            "length": 64
+                          }
+                        },
+                        "element": "u32",
+                        "row_offset": 0,
+                        "row_elements": 16,
+                        "row_pitch": 64,
+                        "rows": 1,
+                        "image_pitch": 64,
+                        "images": 1,
+                        "gaps": "ignored"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "tail",
+                  "observed": {
+                    "value": {
+                      "bytes": "7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7g=="
+                    },
+                    "shape": {
+                      "bytes": {
+                        "region": {
+                          "buffer": {
+                            "offset": 0,
+                            "length": 64
+                          }
+                        },
+                        "element": "u32",
+                        "row_offset": 0,
+                        "row_elements": 16,
+                        "row_pitch": 64,
+                        "rows": 1,
+                        "image_pitch": 64,
+                        "images": 1,
+                        "gaps": "ignored"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "notices",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "set",
+                      "observed": {
+                        "value": {
+                          "nothing": "announced_nothing"
+                        }
+                      }
+                    },
+                    {
+                      "name": "counts",
+                      "observed": {
+                        "value": {
+                          "fields": {}
+                        }
+                      }
+                    }
+                  ]
+                }
+              ]
+            }
+          }
+        }
+      ],
+      "validated": {
+        "stopped": {
+          "call": "indirect_command_buffer",
+          "message": "Vertex Buffer Validation\nSetting buffers on a indirect command buffer created with inheritBuffers = YES is invalid\nVertex Buffer Validation\nSetting buffers on a indirect command buffer created with inheritBuffers = YES is invalid\nVertex Buffer Validation\nSetting buffers on a indirect command buffer created with inheritBuffers = YES is invalid\nVertex Buffer Validation\nSetting buffers on a indirect command buffer created with inheritBuffers = YES is invalid"
+        }
+      }
+    }
+  ]
+}
