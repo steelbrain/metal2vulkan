@@ -131,7 +131,7 @@ impl ResourceStateCommandEncoder {
     ///
     /// A level or slice past the texture's own, and a region past a tiled level's tiles, are
     /// **taken**, mapping the tiles inside the texture and nothing else, as plain Metal maps
-    /// arguments its own validation layer stops ([`UnitGrid::clipped_region`], where the
+    /// arguments its own validation layer stops (`UnitGrid::clipped_region`, where the
     /// measurement is): level 9 of a nine-level texture and an origin past the level's tiles map
     /// nothing, and a region running past them maps the level's own tiles. A slice past the
     /// texture's maps none, where plain Metal's `usedSize` took one page for it.
@@ -261,7 +261,7 @@ impl ResourceStateCommandEncoder {
     /// Metal (validation stops it). A level or slice past a texture's own, and a source size past
     /// a tiled level's tiles, are **taken**, moving the tiles inside both textures and nothing
     /// else: plain Metal takes all three and leaves both heaps' `usedSize` where it was, measured
-    /// beside the update's ([`UnitGrid::clipped_region`]); which tiles it moved there is not
+    /// beside the update's (`UnitGrid::clipped_region`); which tiles it moved there is not
     /// measured, so moving the clipped pairs is a near-equivalent. Through a view, each side names its texture's own tiles as
     /// [`update_texture_mapping`](Self::update_texture_mapping)'s does (the levels the texture's,
     /// the slices the view's; validation stops a region past the view's own level). Plain Metal
