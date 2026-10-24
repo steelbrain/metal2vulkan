@@ -43,7 +43,7 @@ Its limits, measured rather than asserted:
 | committed recordings | 1099 |
 | distinct SDK items the Metal leg reaches, of any status | 797 |
 | of those, reached only where this cannot name the family | 7 |
-| ledger rows (a case whose gap is recorded) | 89 |
+| ledger rows (a case whose gap is recorded) | 97 |
 | declared crossings of the option space (pairs put to Metal at once) | 24 |
 | declared crossings that are no pair of it (a boolean or numeric field, or one type in two slots) | 30 |
 
@@ -2290,4 +2290,12 @@ A case whose difference from Metal is recorded rather than compared away. The le
 | `sample-fills-d32-2` | Metal's fill stores every depth value as given, a denormal included, so sample 0 of texel (1,1) holds 0x00000001 (verified: the carried probe `ms.m` on an M3 Ma… |
 | `sample-fills-d32-4` | Metal's fill stores every depth value as given, a denormal included, so sample 0 of texel (1,1) holds 0x00000001 (verified: the carried probe `ms.m` on an M3 Ma… |
 | `sample-fills-d32s8-4` | Metal's fill stores every depth value as given, a denormal included, so sample 0 of texel (1,1) holds 0x00000001 (verified: the carried probe `ms.m` on an M3 Ma… |
+| `primitive-type-restart-indices` | Metal leaves these texels at the pass's clear and we draw a fragment there. All four `Line` and `LineStrip` cells differ from the M3 Max's recording with the sa… |
+| `primitive-type-restart-indices` | Metal leaves these texels at the pass's clear and we draw a fragment there. All four `Line` and `LineStrip` cells differ from the M3 Max's recording with the sa… |
+| `primitive-type-restart-indices` | Metal leaves these texels at the pass's clear and we draw a fragment there. All four `Line` and `LineStrip` cells differ from the M3 Max's recording with the sa… |
+| `primitive-type-restart-indices` | Metal leaves these texels at the pass's clear and we draw a fragment there. All four `Line` and `LineStrip` cells differ from the M3 Max's recording with the sa… |
+| `primitive-type-restart-indices` | Metal leaves these texels at the pass's clear and we draw a fragment there. All four `Line` and `LineStrip` cells differ from the M3 Max's recording with the sa… |
+| `primitive-type-restart-indices` | Metal leaves these texels at the pass's clear and we draw a fragment there. All four `Line` and `LineStrip` cells differ from the M3 Max's recording with the sa… |
+| `primitive-type-restart-indices` | Metal leaves these texels at the pass's clear and we draw a fragment there. All four `Line` and `LineStrip` cells differ from the M3 Max's recording with the sa… |
+| `primitive-type-restart-indices` | Metal leaves these texels at the pass's clear and we draw a fragment there. All four `Line` and `LineStrip` cells differ from the M3 Max's recording with the sa… |
 
