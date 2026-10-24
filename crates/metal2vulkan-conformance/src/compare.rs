@@ -812,10 +812,25 @@ impl Walk<'_> {
         // typed error names capabilities a device could enable or a driver measured to run the
         // thing wrong, so the venue truly cannot run the call. It is not ours to answer for and
         // it is not a tolerance either.
-        if let Some((_, needs)) = self.device_gaps.iter().find(|(site, _)| site == path) {
+        //
+        // Read from the value **first** and from the path-keyed list second. The value is where
+        // [`crate::case::Failure::recorded`] puts the fact, so it is there whatever path a case
+        // named in its own abort; the list carries the sites a case stated by hand
+        // ([`crate::transcript::Sites::device_gap`]), which no failure of ours passes through.
+        // Reading only the list was how a device's gap read as a refusal of ours at a site whose
+        // case named its abort one path and pushed its node at another.
+        let lacks = crate::case::lacks_recorded(ours)
+            .map(str::to_owned)
+            .or_else(|| {
+                self.device_gaps
+                    .iter()
+                    .find(|(site, _)| site == path)
+                    .map(|(_, needs)| needs.clone())
+            });
+        if let Some(needs) = lacks {
             self.found.device_gaps.push(DeviceGap {
                 path: path.to_owned(),
-                needs: needs.clone(),
+                needs,
                 ours: crate::diff::print(ours),
             });
             return;

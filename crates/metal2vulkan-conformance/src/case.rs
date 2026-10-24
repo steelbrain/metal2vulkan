@@ -497,12 +497,38 @@ impl Failure {
         }
     }
 
-    /// What the transcript records at a site the call did not answer: `Err` of the typed error.
+    /// What the transcript records at a site the call did not answer: `Err` of the typed error,
+    /// with what the venue lacks beside it where the refusal is the venue's own gap.
     ///
     /// The only way out of a failure into a value, so every site a failure reaches holds the shape
-    /// the comparison reads a refusal from.
+    /// the comparison reads a refusal from — **and**, since [`Failure::lacks`] rides inside that
+    /// value, the shape it reads a device's own gap from.
+    ///
+    /// # Why `lacks` is in the value
+    ///
+    /// It used to reach the comparison only through
+    /// [`Sites::device_gap`](crate::transcript::Sites::device_gap), keyed by the site's path from
+    /// the root. Two places call that: [`call`] and [`probe`], as they emit the site, and
+    /// [`crate::replay::replay_against`], at the path a case's own [`Abort`] names. So a case that
+    /// pushed the failure's node itself — every case whose answer is a tree of facts has to, and
+    /// 268 build their own `Abort` — and named a **different** path in its abort than the node it
+    /// pushed had the fact filed under a site that does not exist. The refusal then read as a gap
+    /// of ours at the site that does exist, which is the one thing the
+    /// [`LacksFeature`](crate::verdict::Verdict::LacksFeature) verdict is there to prevent.
+    ///
+    /// Measured: `texture-fills-236` pushes its node at `work` and aborts at `work/236/<case>`, so
+    /// `MTLPixelFormatASTC_12x12_HDR` refused for want of `VK_EXT_texture_compression_astc_hdr`
+    /// read `refused` while the `astc-*-hdr` cases read `lacks-feature` for the same typed error
+    /// in the same run. A path a case states twice cannot be made to agree by a comment; carrying
+    /// the fact in the value removes the second path altogether.
     pub fn recorded(&self) -> Value {
-        Value::err(self.error.clone())
+        match &self.lacks {
+            None => Value::err(self.error.clone()),
+            Some(needs) => Value::err(Value::fields([
+                (LACKS, Value::Lines(vec![needs.clone()])),
+                (REFUSED, self.error.clone()),
+            ])),
+        }
     }
 
     /// The same failure, said to have happened at step `index` of a [`crate::work::Work`]
@@ -529,9 +555,39 @@ impl Failure {
         // Both fields are named, with no `..`, so the next field anyone adds to a failure is a
         // compile error here rather than a field silently dropped as a failure is annotated.
         Self {
-            error: Value::fields([(part, Value::Uint(index as u64)), ("refused", self.error)]),
+            error: Value::fields([(part, Value::Uint(index as u64)), (REFUSED, self.error)]),
             lacks: self.lacks,
         }
+    }
+}
+
+/// The field a failure's recorded value holds the typed error under, once anything is named beside
+/// it. Reserved: no typed error of the runtime records a field of this name.
+const REFUSED: &str = "refused";
+
+/// The field a failure's recorded value holds **what the venue lacks** under
+/// ([`Failure::recorded`]). Reserved, as [`REFUSED`] is.
+const LACKS: &str = "lacks";
+
+/// What the venue honestly lacks at a site a [`Failure`] recorded, read back out of the recorded
+/// value: `Some` where the typed refusal names capabilities a device could enable or a driver
+/// measured to run the thing wrong ([`device_gap`]), and `None` for a refusal that is ours.
+///
+/// The comparison's reading of [`Failure::recorded`], and the reason a case cannot lose the fact
+/// by naming its abort's site differently from the node it pushed: see that method.
+pub fn lacks_recorded(value: &Value) -> Option<&str> {
+    if !value.is_error() {
+        return None;
+    }
+    let Value::Variant { payload, .. } = value else {
+        return None;
+    };
+    let Value::Fields(named) = payload.as_ref() else {
+        return None;
+    };
+    match named.get(LACKS) {
+        Some(Value::Lines(words)) => words.first().map(String::as_str),
+        _ => None,
     }
 }
 

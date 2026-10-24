@@ -580,6 +580,164 @@ fn a_refusal_at_a_step_of_a_program_is_refused_and_the_ledger_holds_it() {
     );
 }
 
+/// A case shaped like the families whose answer is one digest per format: it pushes the failing
+/// site's node **itself**, and names its own [`Abort`] at a deeper path that says which row of the
+/// family failed.
+///
+/// That is `texture_fills.rs`'s shape, and `chroma_pairs.rs`'s, and `sample_fills.rs`'s: a case
+/// whose site is one node but whose rows are many has nothing else to put in the abort. The two
+/// paths are therefore different on purpose, which is exactly why the venue's own gap must not be
+/// filed under either of them.
+struct TwoPathCase {
+    name: &'static str,
+}
+
+impl TwoPathCase {
+    /// The site the case pushes its one node at.
+    const SITE: &'static str = "work";
+    /// The path the case names in its abort: which row of the family stopped.
+    const ROW: &'static str = "work/236/b1";
+
+    fn new(name: &'static str) -> Self {
+        Self { name }
+    }
+
+    /// Metal's answer: the program ran, and the family's digest stands at its own site.
+    fn metal(&self) -> Transcript {
+        let mut sites = Sites::new();
+        sites.push(crate::case::inputs_node(&self.inputs().unwrap()));
+        sites.value(Self::SITE, Value::ok(Value::Absent));
+        sites.leaf(
+            "format/236",
+            Observed::absent().digested(Digest::sha256_prefix16(b"what Metal filled")),
+        );
+        sites.notices(NOTICES_SITE, &[] as &[&str]);
+        sites.finish()
+    }
+}
+
+impl Case for TwoPathCase {
+    fn name(&self) -> &'static str {
+        self.name
+    }
+
+    fn metal_source(&self) -> MetalSource {
+        MetalSource::Run
+    }
+
+    fn inputs(&self) -> Result<Vec<Input>, String> {
+        Ok(vec![Input::bytes("calls", b"one fill of format 236")])
+    }
+
+    fn run(&self, side: &mut dyn Side, sites: &mut Sites) -> Result<(), Abort> {
+        let program = crate::work::Work::new();
+        match side.work(&program) {
+            Ok(_) => {
+                sites.value(Self::SITE, Value::ok(Value::Absent));
+                sites.leaf(
+                    "format/236",
+                    Observed::absent().digested(Digest::sha256_prefix16(b"what Metal filled")),
+                );
+                Ok(())
+            }
+            Err(failure) => {
+                sites.push(Node::leaf(Self::SITE, Observed::value(failure.recorded())));
+                Err(Abort {
+                    at: Self::ROW.to_owned(),
+                    failure,
+                })
+            }
+        }
+    }
+}
+
+/// A **venue's own gap** inside a program is `lacks-feature` even where the case names its abort
+/// at a path no site holds, and what the runtime has **not built** still reads `refused` there.
+///
+/// The gap this closes: [`Failure::lacks`] reached the comparison only through
+/// [`Sites::device_gap`](crate::transcript::Sites::device_gap), keyed by a path. Two callers file
+/// it as the site is emitted ([`call`] and [`crate::case::probe`]); the third is
+/// [`replay_against`], which files it at the path the case's own [`Abort`] names. A case that
+/// pushes the node itself and names a deeper row in its abort therefore filed the fact at a site
+/// that does not exist, and the refusal read as a gap of **ours** at the site that does.
+///
+/// Measured on the committed suite, which is what drove this: `texture-fills-236` answers
+/// `Unsupported { feature: Format, needs: AnyOf([[Extension(ExtTextureCompressionAstcHdr)]]) }`
+/// for `MTLPixelFormatASTC_12x12_HDR`, and the `astc-*-hdr` cases answer the same typed error
+/// through [`call`]. One run scored the first `refused` and the second `lacks-feature`: the same
+/// device gap, two verdicts, decided by which of two paths a case happened to write. A venue that
+/// honestly lacks `VK_EXT_texture_compression_astc_hdr` is not a gap of ours, so the run exited 1
+/// for nothing and two ledger rows would have been written for nothing.
+///
+/// Both directions, because the first alone is vacuous: a reader that answered "the venue lacks
+/// it" for every refusal would pass it and launder every unbuilt form in the suite.
+#[test]
+fn a_venue_gap_inside_a_program_is_the_venues_however_the_case_names_its_abort() {
+    use metal2vulkan::device::VkExtension;
+    use metal2vulkan::error::{Capability, Feature, Unsupported};
+    use metal2vulkan_runtime::Error;
+    let case = TwoPathCase::new("two-path-program");
+    let recording = recording_of(&case, case.metal(), 3);
+
+    // The venue's own gap: the extension `MTLPixelFormatASTC_12x12_HDR` needs, refused while the
+    // program's first resource was made, exactly as a work interpreter hands it over.
+    let theirs = Failure::of(&Error::Unsupported(Unsupported::needs(
+        Feature::Format,
+        Capability::Extension(VkExtension::ExtTextureCompressionAstcHdr),
+    )))
+    .at_resource(0);
+    assert!(
+        theirs.lacks.is_some(),
+        "the typed refusal names an extension a device could enable"
+    );
+    let mut side = StubSide::new(Vec::new()).refusing("work", theirs);
+    let replayed = replay_against(&case, &mut side, &recording).unwrap();
+    assert_eq!(
+        replayed.verdict.word(),
+        "lacks-feature",
+        "{}",
+        replayed.verdict
+    );
+    assert!(replayed.verdict.is_compliant());
+    let Verdict::LacksFeature { needs } = &replayed.verdict else {
+        panic!("{}", replayed.verdict);
+    };
+    // The site it names is the one the case pushed, not the row its abort named, and what the
+    // venue lacks is readable from it.
+    assert!(needs.contains("case/work:"), "{needs}");
+    assert!(needs.contains("ExtTextureCompressionAstcHdr"), "{needs}");
+    // And a gap of the venue's is not a gap of ours, so the ledger holds nothing against it.
+    assert_eq!(
+        crate::known_gaps::against(std::slice::from_ref(&replayed), &[]),
+        Vec::new()
+    );
+
+    // The other direction: the same case, the same two paths, a form the runtime has not built.
+    // That is ours to answer for and must still fail.
+    let ours = Failure::of(&Error::Unsupported(Unsupported::not_implemented(
+        Feature::Format,
+    )))
+    .at_resource(0);
+    assert!(ours.lacks.is_none());
+    let mut side = StubSide::new(Vec::new()).refusing("work", ours);
+    let refused = replay_against(&case, &mut side, &recording).unwrap();
+    assert_eq!(refused.verdict.word(), "refused", "{}", refused.verdict);
+    assert!(!refused.verdict.is_compliant());
+    let Verdict::Refused { at, .. } = &refused.verdict else {
+        panic!("{}", refused.verdict);
+    };
+    let [printed] = at.as_slice() else {
+        panic!("{at:?}");
+    };
+    assert!(printed.starts_with("case/work: "), "{printed}");
+    assert!(printed.contains("resource: 0"), "{printed}");
+    // And the run that made the program is still exact, so neither reading comes from the case
+    // being unable to pass at all.
+    let mut ran = StubSide::new(Vec::new());
+    let passed = replay_against(&case, &mut ran, &recording).unwrap();
+    assert_eq!(passed.verdict.word(), "exact", "{}", passed.verdict);
+}
+
 /// A failure records as the `Err` the comparison reads a refusal from, however it is annotated.
 ///
 /// The invariant [`Failure`] exists to hold, checked rather than described: every way the suite

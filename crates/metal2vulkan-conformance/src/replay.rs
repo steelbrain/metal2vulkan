@@ -136,15 +136,15 @@ pub fn replay_against(
     let mut sites = Sites::new();
     sites.push(inputs_node(&inputs));
     let abort = case.run(side, &mut sites).err();
-    // The venue's own gap at the site that **stopped** the case, recorded for the comparison
-    // whichever way the case said it.
+    // The venue's own gap at the site that **stopped** the case, for a case that recorded the
+    // site's value by some other route than [`crate::case::Failure::recorded`], which is where
+    // the fact otherwise rides ([`crate::case::lacks_recorded`]).
     //
-    // [`crate::case::call`] records it as it emits the site, but 122 sites build their own
-    // `Abort` — every site whose answer is a tree of facts has to, since `call` hands back a
-    // value and not a node — and those record the typed error without the fact that it is the
-    // device's. A forgotten one reads as a refusal of ours, which is the one thing the
-    // `lacks-feature` verdict exists to prevent. One place reads the abort, so this is the one
-    // place that cannot forget; it is idempotent, so `call` having recorded it already is fine.
+    // It is a second reading and not the one the comparison leans on: this one is keyed by the
+    // path the abort names, and a case whose site is one node but whose rows are many names the
+    // row there rather than the node, so the fact landed at a site that does not exist. Kept
+    // because it costs nothing and is idempotent, dropped from the comparison's critical path
+    // because a path a case states twice cannot be made to agree by a comment.
     if let Some(stopped) = &abort {
         if let Some(needs) = &stopped.failure.lacks {
             sites.device_gap(&stopped.at, needs.clone());
