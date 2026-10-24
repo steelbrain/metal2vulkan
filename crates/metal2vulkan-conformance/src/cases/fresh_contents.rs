@@ -33,11 +33,15 @@
 //!
 //! # What the rows are held to, and the one branch of the lane that is not exercised
 //!
-//! **Not one byte of this family is loosened.** Every row's bytes are Metal's own on both venues of
-//! this round — MoltenVK and lavapipe — so the only field that may differ is the set of degrade
-//! notices our side announced, and only four rows name one: lavapipe keeps a decoded twin of a
-//! `BC1_RGBA` image (`decoded-block-twin`) and cannot hold Metal's denormal depths
+//! **Not one byte of this family is loosened.** Every row's bytes are Metal's own on MoltenVK, on
+//! lavapipe and on an RTX 5080 Laptop, so the only field that may differ is the set of degrade
+//! notices our side announced. Four rows name a notice of their own: lavapipe keeps a decoded twin
+//! of a `BC1_RGBA` image (`decoded-block-twin`) and cannot hold Metal's denormal depths
 //! (`depth-denormals`). Each is named on the row that announced it, not on the family.
+//!
+//! Every row names one more, and it belongs to the venue rather than to any row:
+//! [`SHARED_MEMORY_NOTICE`], the notice a device without unified memory announces for the `Shared`
+//! buffer each row reads its answer back through.
 //!
 //! The lane also carries a branch for a device that **cannot** write Metal's pattern and so reads
 //! zero, announcing `fresh-pattern-zeroed`. That branch is right for the lane, which must run
@@ -227,6 +231,28 @@ pub struct FreshBuffers {
     storage: Storage,
 }
 
+/// The notice every row of this family announces on a device whose GPU does not share the CPU's
+/// memory: each row reads its answer back through a `Shared` buffer, and without unified memory
+/// such a buffer lies in host-cached system memory rather than in the device's own
+/// ([`Degradation::SharedInSystemMemory`]).
+///
+/// **It is the venue's memory model, not ours, and no recording could have declared it.** Every
+/// recording of this suite was taken on a chip whose GPU shares the CPU's memory, where the notice
+/// cannot fire at all, so Metal recorded nothing to compare it against. The runtime announces it
+/// once per device, and the row is right either way: a discrete card really does read that buffer
+/// across the bus, which is what the notice says.
+///
+/// Measured on the **RTX 5080 Laptop (615.71.09)**, where it fired for all 87 rows of the family
+/// and each read `divergent` on this one field and nothing else
+/// (`replay-nvidia.log`, "we announced the degrade notice
+/// metal2vulkan-degrade-shared-in-system-memory, which the case declares nowhere"). MoltenVK and
+/// lavapipe announce it for no row.
+///
+/// It loosens the notices site alone, so every byte of the family still compares exactly.
+fn shared_memory_notice() -> Allowance {
+    crate::replay::notice_allowance(Degradation::SharedInSystemMemory.code())
+}
+
 impl Case for FreshBuffers {
     fn name(&self) -> &'static str {
         self.case
@@ -234,6 +260,10 @@ impl Case for FreshBuffers {
 
     fn metal_source(&self) -> MetalSource {
         MetalSource::Run
+    }
+
+    fn allowances(&self) -> Vec<Allowance> {
+        vec![shared_memory_notice()]
     }
 
     fn inputs(&self) -> Result<Vec<Input>, String> {
@@ -1113,11 +1143,14 @@ impl Case for FreshTexture {
     }
 
     fn allowances(&self) -> Vec<Allowance> {
-        self.row
-            .notices
-            .iter()
-            .map(|kind| crate::replay::notice_allowance(kind.code()))
-            .collect()
+        let mut allowances = vec![shared_memory_notice()];
+        allowances.extend(
+            self.row
+                .notices
+                .iter()
+                .map(|kind| crate::replay::notice_allowance(kind.code())),
+        );
+        allowances
     }
 
     fn run(&self, side: &mut dyn Side, sites: &mut Sites) -> Result<(), Abort> {
@@ -1359,6 +1392,10 @@ impl Case for FreshPattern {
         MetalSource::Run
     }
 
+    fn allowances(&self) -> Vec<Allowance> {
+        vec![shared_memory_notice()]
+    }
+
     fn inputs(&self) -> Result<Vec<Input>, String> {
         let mut words = self.row.shape().words();
         words.push(BEFORE);
@@ -1458,6 +1495,10 @@ impl Case for FreshOverBuffer {
         MetalSource::Run
     }
 
+    fn allowances(&self) -> Vec<Allowance> {
+        vec![shared_memory_notice()]
+    }
+
     fn inputs(&self) -> Result<Vec<Input>, String> {
         let mut words = self.shape().words();
         words.extend(self.storage.word().as_bytes());
@@ -1501,6 +1542,7 @@ pub fn all() -> Vec<Box<dyn Case>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::allowance::Justification;
     use std::collections::BTreeSet;
 
     /// The runs the recorded site at `path` holds, rebuilt into the bytes they encode.
@@ -2048,20 +2090,30 @@ mod tests {
     }
 
     /// **A row loosens the notices site and nothing else.** Not one byte of this family is ever
-    /// loosened: both venues of this round read Metal's own bytes, and the only field that may
-    /// differ is the set of notices our side announced for a device that cannot hold a shape
-    /// exactly.
+    /// loosened: MoltenVK, lavapipe and an RTX 5080 Laptop all read Metal's own bytes, and the only
+    /// field that may differ is the set of notices our side announced.
     ///
-    /// Only the four rows a venue announced something for name anything at all, and each names the
-    /// kind that venue announced. A row whose notices were a guess would show here as a row
-    /// loosening a site nothing needed.
+    /// Every row names [`shared_memory_notice`], which is the venue's memory model and not the
+    /// row's; **only** the four rows a venue announced something of their own for name a second
+    /// kind, and each names the kind that venue announced. A row whose notices were a guess would
+    /// show here as a row loosening a site nothing needed.
     #[test]
     fn a_row_loosens_the_notices_site_alone() {
         let notices = format!("case/{}/*", crate::replay::NOTICES_SITE);
+        let shared = Degradation::SharedInSystemMemory.code().to_owned();
         for case in all() {
-            for allowance in case.allowances() {
+            let allowances = case.allowances();
+            for allowance in &allowances {
                 assert_eq!(allowance.path, notices, "{}", case.name());
             }
+            // The venue's notice is the one every row declares, and it is declared exactly once.
+            let declared = allowances
+                .iter()
+                .filter(|allowance| {
+                    allowance.justified_by == Justification::Degradation(shared.clone())
+                })
+                .count();
+            assert_eq!(declared, 1, "{}", case.name());
         }
         let named: Vec<&str> = TEXTURES
             .iter()
@@ -2080,26 +2132,28 @@ mod tests {
         for row in TEXTURES {
             assert_eq!(
                 FreshTexture { row }.allowances().len(),
-                row.notices.len(),
+                1 + row.notices.len(),
                 "{}",
                 row.case
             );
         }
-        // Everything else is held to Metal exactly, notices included.
+        // Everything else is held to Metal exactly, the venue's own notice apart.
         for (case, storage) in BUFFERS {
-            assert!(
-                FreshBuffers { case, storage }.allowances().is_empty(),
+            assert_eq!(
+                FreshBuffers { case, storage }.allowances().len(),
+                1,
                 "{case}"
             );
         }
         for (case, storage) in OVER_BUFFERS {
-            assert!(
-                FreshOverBuffer { case, storage }.allowances().is_empty(),
+            assert_eq!(
+                FreshOverBuffer { case, storage }.allowances().len(),
+                1,
                 "{case}"
             );
         }
         for row in PATTERNS {
-            assert!(FreshPattern { row }.allowances().is_empty(), "{}", row.case);
+            assert_eq!(FreshPattern { row }.allowances().len(), 1, "{}", row.case);
         }
     }
 
