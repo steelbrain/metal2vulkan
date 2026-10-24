@@ -8752,6 +8752,12 @@ impl MetalSide {
                     );
                 }
             }
+            // Metal's own validation complains at a scale that is 0, negative, NaN, infinite or
+            // a subnormal `float`; plain Metal takes each, which is what these cases ask about,
+            // and the validated leg runs in a child of the command.
+            RenderStep::TessellationFactorScale { bits } => {
+                encoder.setTessellationFactorScale(f32::from_bits(*bits));
+            }
             RenderStep::DrawPatches {
                 control_points,
                 first,

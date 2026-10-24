@@ -7222,6 +7222,9 @@ fn encode_pass(command_buffer: &CommandBuffer, pass: &RenderPass, pools: &Pools)
                     .set_tessellation_factor_buffer(factors, *offset, *instance_stride)
                     .map_err(Failure::from_error)?;
             }
+            RenderStep::TessellationFactorScale { bits } => {
+                encoder.set_tessellation_factor_scale(f32::from_bits(*bits));
+            }
             RenderStep::DrawPatches {
                 control_points,
                 first,

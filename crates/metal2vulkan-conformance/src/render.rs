@@ -628,6 +628,14 @@ impl TessellationState {
         self
     }
 
+    /// The state with `tessellationFactorScaleEnabled`, whose factors the encoder's
+    /// [`RenderStep::TessellationFactorScale`] multiplies.
+    #[must_use]
+    pub const fn scaled(mut self) -> Self {
+        self.factor_scale_enabled = true;
+        self
+    }
+
     /// The words a case's input fingerprint covers: every field, so any one of them moving moves
     /// the case's key.
     pub fn words(&self) -> Vec<u8> {
@@ -1568,6 +1576,13 @@ pub enum RenderStep {
         offset: u64,
         instance_stride: u64,
     },
+    /// `setTessellationFactorScale:`, which every factor of a pipeline with
+    /// `tessellationFactorScaleEnabled` is multiplied by. An encoder that never makes the call
+    /// holds no scale, which is its own shape: Metal culls every patch of such a draw.
+    ///
+    /// The scale is held as its `f32` bits, so a case can state one NaN payload rather than
+    /// whichever `f32::NAN` is, and two steps compare and fingerprint by those bits.
+    TessellationFactorScale { bits: u32 },
     /// `drawPatches:patchStart:patchCount:patchIndexBuffer:patchIndexBufferOffset:instanceCount:
     /// baseInstance:`: `count` patches of `control_points` control points from `first`, `instances`
     /// instances from `base_instance`, each patch's index taken from `patch_indices` where one is
@@ -1702,6 +1717,7 @@ impl RenderStep {
             RenderStep::UseHeaps(_) => "useHeaps",
             RenderStep::UseHeapsInStages { .. } => "useHeapsWithStages",
             RenderStep::TessellationFactorBuffer { .. } => "setTessellationFactorBuffer",
+            RenderStep::TessellationFactorScale { .. } => "setTessellationFactorScale",
             RenderStep::DrawPatches { .. } => "drawPatches",
             RenderStep::DrawIndexedPatches { .. } => "drawIndexedPatches",
         }
@@ -1987,6 +2003,9 @@ impl RenderStep {
                 bytes.extend(offset.to_le_bytes());
                 bytes.extend(instance_stride.to_le_bytes());
             }
+            // The scale's bits and not its value: a case states NaNs whose payloads differ, and a
+            // fingerprint that read them through `f32` equality would key two of them alike.
+            RenderStep::TessellationFactorScale { bits } => bytes.extend(bits.to_le_bytes()),
             RenderStep::DrawPatches {
                 control_points,
                 first,
@@ -2730,7 +2749,10 @@ mod tests {
                 offset: 0,
                 instance_stride: 0,
             },
-            RenderStep::TessellationFactorBuffer { .. } => RenderStep::DrawPatches {
+            RenderStep::TessellationFactorBuffer { .. } => RenderStep::TessellationFactorScale {
+                bits: 1.0f32.to_bits(),
+            },
+            RenderStep::TessellationFactorScale { .. } => RenderStep::DrawPatches {
                 control_points: 1,
                 first: 0,
                 count: 1,

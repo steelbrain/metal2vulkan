@@ -298,19 +298,7 @@ pub fn all() -> Vec<Box<dyn Case>> {
     for case in vertex_formats::all() {
         cases.push(Box::new(case));
     }
-    let (partitions, factors, steps, patches) = tessellation_sweeps::all();
-    for case in partitions {
-        cases.push(Box::new(case));
-    }
-    for case in factors {
-        cases.push(Box::new(case));
-    }
-    for case in steps {
-        cases.push(Box::new(case));
-    }
-    for case in patches {
-        cases.push(Box::new(case));
-    }
+    cases.extend(tessellation_sweeps::boxed());
     for case in attribute_formats::all() {
         cases.push(Box::new(case));
     }

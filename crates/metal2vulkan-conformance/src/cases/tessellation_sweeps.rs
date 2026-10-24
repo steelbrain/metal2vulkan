@@ -1,10 +1,17 @@
 //! Tessellation's option space: what the tessellator generates from a patch's factors, swept over
-//! every value of the five enumerations a patch draw can set.
+//! every value of the five enumerations a patch draw can set, over the factor values Metal's own
+//! rules single out, and over `setTessellationFactorScale:` crossed with the factor it scales.
 //!
 //! No case of the suite drew a patch before this family, so `MTLTessellationPartitionMode`,
 //! `MTLTessellationFactorStepFunction`, `MTLTessellationControlPointIndexType`, `MTLPatchType` and
 //! two values of `MTLVertexStepFunction` were set by a descriptor-fact case and read back by its
 //! getter, with nothing downstream of them ever running. This family runs them.
+//!
+//! `setTessellationFactorScale:` and `tessellationFactorScaleEnabled` were the same: the call
+//! reached no case at all, and the field was set and read back with nothing reading it. Metal's
+//! documentation describes the scale's special values — 0, a negative one, a NaN, an infinity — as
+//! culling, and nothing here had measured any of them. [`FactorScales`] measures them, and the
+//! answer is not the documentation's (below).
 //!
 //! # The observable
 //!
@@ -25,7 +32,12 @@
 //! those words would be comparing an invocation order. The cost is a resolution bound and the
 //! family states it: a 65-cell axis resolves a coordinate to `1/64`, so a position difference
 //! below `1/128` would not show in a mark. A sharper comparison needs a fixture that stores a
-//! point's coordinates at a word its own coordinates name, and no committed one does.
+//! point's coordinates at a word its own coordinates name, and no committed one does. It would buy
+//! the factor, scale and non-finite sweeps nothing: each of their answers is a **point count** at a
+//! whole level — a cull, a range end, or a level of 1, 2, 4, 8, 9 or 16 — and two such levels never
+//! place two points inside one cell of the grid the sweep states. The bound is open for the
+//! partition modes, whose fractional spacings differ in where they place a point and not in how
+//! many they place.
 //!
 //! The other two cases are built on `rt6_patch_index`, whose patch stores one word per patch
 //! holding its per-patch attribute, its patch index and its three control points' tags. Four words
@@ -35,8 +47,9 @@
 //! # The degrade notices every case here names
 //!
 //! A tessellation pipeline of ours announces `tessellation-winding` and
-//! `tessellation-factor-edge-cases` unconditionally, and `tessellation-factor-instance` where the
-//! factor step is a per-instance one: the control stage's own module docs say those are readings
+//! `tessellation-factor-edge-cases` unconditionally, `tessellation-factor-instance` where the
+//! factor step is a per-instance one, and `tessellation-factor-scale` where the descriptor enables
+//! the scale: the control stage's own module docs say those are readings
 //! taken from Metal's documentation **without a Metal observation**. Every case here therefore
 //! names them. It does not loosen one field with them: a notice declaration unchecks the notices
 //! site alone, and every observed value still compares exactly. What the family adds is that those
@@ -79,6 +92,34 @@
 //!   draw does **not** give. `pipeline::descriptor`'s `TessellationDescriptor` doc comment says a
 //!   control-point index type other than `None` "is not implemented"; it is, and the comment is
 //!   stale.
+//! - **Metal applies the factor scale before the clamp, not after.** A factor of 0.5 scaled by 2
+//!   marks the four corners, which is a level of 1 — the product clamped up to the floor. Clamped
+//!   first it would be `max(0.5, 1) = 1` scaled to 2, which marks nine cells. And 17 halved under a
+//!   ceiling of 16 marks 100 cells, which is a level of 9 (`8.5` rounded up), not the 81 cells a
+//!   level of 8 marks. Halving 2, which is 1 either way round, marks four cells in both: that is
+//!   the control beside the two, and it is what says they moved for the order.
+//! - **Metal rounds the scale to `half` before it multiplies.** 2.0005 marks exactly what a scale
+//!   of 2 marks, 81 cells. A scale of `2^-15`, which is subnormal as a `half`, does **not** cull:
+//!   its product with 4 clamps up to the floor and marks the four corners. A scale of `2^-30`,
+//!   which is 0 as a `half`, culls. So the rounding is where the scale stops being a number.
+//! - **Of the scales Metal's documentation calls culling, one does not cull.** 0, a negative one, a
+//!   NaN and `-∞` each mark nothing, and so does a draw of a pipeline that enables the scale and
+//!   never sets one. **`+∞` marks all 289 cells**, which is what the maximum factor draws — the
+//!   documentation's "infinity" covers only the negative one. Nothing before this measured any of
+//!   the four, and the runtime's reading of `+∞` (the scale pushed as `2^32`) is Metal's.
+//! - **`tessellationFactorScaleEnabled` gates the whole scale, setter and cull together.** A scale
+//!   of 2 on a pipeline that does not enable it marks what factor 4 marks, 25 cells, and so does a
+//!   scale of 0 — the same 0 that marks nothing on a pipeline that enables it.
+//! - **The edge factors Metal culls are one class, and two near-misses are not in it.** A NaN, a
+//!   negative number, a negative zero and `-∞` on the four edges each mark nothing, whatever the
+//!   inside factors are. `+∞` on the edges marks 73 cells (a level of 16 with the inside at 4) and
+//!   the least positive subnormal marks 13 (a level of 1 with the inside at 4), so neither culls.
+//! - **An inside factor is clamped and never culls.** Each of the five values that is not a finite
+//!   number above the floor — NaN, negative, negative zero, `-∞` and the least subnormal — marks
+//!   the same 17 cells, which is the inner level 1: the boundary ring plus the one centre point.
+//!   That collapse is Metal's own clamp, reaching the range's lower end from both directions, and
+//!   saying so is the result. `+∞` inside marks 241, the range's upper end, and the control marks
+//!   25.
 //!
 //! # Why no case here can hang the device
 //!
@@ -87,7 +128,10 @@
 //! points and 8192 triangles in one patch: less work than a single full-screen triangle's
 //! fragments. Rasterization is disabled in every pass, there is no fragment stage, and no case
 //! sets a factor above `maxTessellationFactor` without the pipeline stating that maximum, so
-//! nothing here can ask the tessellator for an unbounded stream.
+//! nothing here can ask the tessellator for an unbounded stream. The two sweeps that state a
+//! factor or a scale Metal's own validation refuses — a NaN, an infinity, a negative number — ask
+//! for **less** work and not more: each either culls the patch or reaches the ceiling the pipeline
+//! states, and both are bounded by that ceiling of 16.
 //!
 //! # The device's own bounds
 //!
@@ -361,34 +405,34 @@ pub struct PatchIndices {
 }
 
 /// Every case of the family, in the order the report lists them.
-pub fn all() -> (
-    Vec<PartitionModes>,
-    Vec<EdgeFactors>,
-    Vec<FactorSteps>,
-    Vec<PatchIndices>,
-) {
-    (
-        vec![
-            PartitionModes {
-                name: "tessellation-partition-modes-quad",
-                domain: Domain::Quad,
+pub fn boxed() -> Vec<Box<dyn Case>> {
+    let mut cases: Vec<Box<dyn Case>> = Vec::new();
+    for domain in [Domain::Quad, Domain::Triangle] {
+        cases.push(Box::new(PartitionModes {
+            name: match domain {
+                Domain::Quad => "tessellation-partition-modes-quad",
+                Domain::Triangle => "tessellation-partition-modes-triangle",
             },
-            PartitionModes {
-                name: "tessellation-partition-modes-triangle",
-                domain: Domain::Triangle,
-            },
-        ],
-        vec![EdgeFactors {
-            name: "tessellation-edge-factors",
-            domain: Domain::Quad,
-        }],
-        vec![FactorSteps {
-            name: "tessellation-factor-steps",
-        }],
-        vec![PatchIndices {
-            name: "tessellation-patch-indices",
-        }],
-    )
+            domain,
+        }));
+    }
+    cases.push(Box::new(EdgeFactors {
+        name: "tessellation-edge-factors",
+        domain: Domain::Quad,
+    }));
+    cases.push(Box::new(NonFiniteFactors {
+        name: "tessellation-non-finite-factors",
+    }));
+    cases.push(Box::new(FactorSteps {
+        name: "tessellation-factor-steps",
+    }));
+    cases.push(Box::new(FactorScales {
+        name: "tessellation-factor-scales",
+    }));
+    cases.push(Box::new(PatchIndices {
+        name: "tessellation-patch-indices",
+    }));
+    cases
 }
 
 impl PartitionModes {
@@ -654,6 +698,263 @@ impl Case for EdgeFactors {
     }
 }
 
+// ---- The factors Metal's rules treat as neither a number nor a positive one --------------------
+
+/// The grid scale the two sweeps below state: 16 cells on an axis, which tells the levels 1, 2, 4,
+/// 8, 9 and 16 apart and keeps each leg's compared region to seventeen rows of the mark grid.
+const MEDIUM_GRID: f32 = 16.0;
+
+/// Grid rows a medium leg can reach: `j = rint(v · 16)` for `v` in `[0, 1]`, so `j` is in `0..=16`.
+const MEDIUM_ROWS: u32 = 17;
+
+/// Words of a medium region a leg compares: `MEDIUM_ROWS` whole rows of the mark grid, so the
+/// prefix holds every mark such a draw can make and a diff names the cell.
+const MEDIUM_WORDS: u32 = MEDIUM_ROWS * AXIS;
+
+/// The ceiling both medium sweeps state, so a level of 16 is the maximum and a factor above it is
+/// clamped.
+const MEDIUM_MAX: u32 = 16;
+
+/// `half`'s bit pattern for 4.0, the finite factor the non-finite sweep puts where the value it is
+/// asking about does not go, and the one the scale sweep scales.
+const FINITE: u16 = 0x4400;
+
+/// The `half` bit patterns Metal's own factor rules single out, each neither a finite positive
+/// number nor the one the sweep's control states.
+///
+/// Metal's rules (the control stage's module docs, which take them from Metal's documentation):
+/// an **edge** factor that is negative, zero or NaN culls the patch, and every factor is then
+/// clamped to its partition's range, where a NaN takes the range's lower end and an infinity its
+/// upper one. That is two rules reading one value, and which of the two a value meets depends on
+/// where it sits, so the sweep crosses each value with its placement rather than setting all six
+/// factors at once.
+const NON_FINITE: [(&str, u16); 6] = [
+    ("nan", 0x7e00),
+    ("negative", 0xbc00),
+    ("negative-zero", 0x8000),
+    ("positive-infinity", 0x7c00),
+    ("negative-infinity", 0xfc00),
+    // The least positive subnormal `half`, which is a finite positive number and so meets neither
+    // rule: it is here because the control stage's own docs list a subnormal edge factor as a
+    // reading taken without a Metal observation.
+    ("subnormal", 0x0001),
+];
+
+/// Where a non-finite sweep cell puts the value it asks about; the other factors are [`FINITE`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Placement {
+    /// The four edge factors, where Metal's cull reads them.
+    Edges,
+    /// The two inside factors, which no cull reads and only the clamp does.
+    Inside,
+    /// Both, which is a question of its own only where the value does not cull.
+    Both,
+}
+
+impl Placement {
+    fn site(self) -> &'static str {
+        match self {
+            Placement::Edges => "edges",
+            Placement::Inside => "inside",
+            Placement::Both => "both",
+        }
+    }
+
+    /// One patch's quad factor record with `value` in this placement.
+    fn record(self, value: u16) -> Vec<u8> {
+        let (edges, inside) = match self {
+            Placement::Edges => (value, FINITE),
+            Placement::Inside => (FINITE, value),
+            Placement::Both => (value, value),
+        };
+        raw_quad_factors([edges; 4], [inside; 2])
+    }
+}
+
+/// One patch's `MTLQuadTessellationFactorsHalf` from the `half` bit patterns themselves, which is
+/// how a case states a factor [`half_bits`] refuses: a NaN, a negative number, an infinity or a
+/// subnormal.
+fn raw_quad_factors(edges: [u16; 4], inside: [u16; 2]) -> Vec<u8> {
+    let mut bytes = Vec::with_capacity(12);
+    for bits in edges.iter().chain(inside.iter()) {
+        bytes.extend(bits.to_le_bytes());
+    }
+    bytes
+}
+
+/// The cells the non-finite sweep states: the control, then each value of [`NON_FINITE`] in the
+/// two placements Metal's two rules read, and `Both` for the two values that cull under neither.
+///
+/// `Both` is **not** stated for a culling value, and that is a reason rather than an omission: an
+/// edge cull discards the patch whatever the inside factors are, which the value's `Edges` cell
+/// already asks (its insides are [`FINITE`]), so a `Both` cell beside it would compare one empty
+/// region twice.
+fn non_finite_cells() -> Vec<NonFiniteCell> {
+    let mut cells = vec![NonFiniteCell {
+        value: "all-finite",
+        placement: None,
+        record: raw_quad_factors([FINITE; 4], [FINITE; 2]),
+    }];
+    for (value, bits) in NON_FINITE {
+        for placement in [Placement::Edges, Placement::Inside, Placement::Both] {
+            if placement == Placement::Both && culls_an_edge(bits) {
+                continue;
+            }
+            cells.push(NonFiniteCell {
+                value,
+                placement: Some(placement),
+                record: placement.record(bits),
+            });
+        }
+    }
+    cells
+}
+
+/// One cell of the non-finite sweep: the value it asks about, where that value goes, and the
+/// patch's factor record it comes to.
+///
+/// A cell's answer is emitted at the placement's site under the value's, so the transcript is a
+/// tree of values each holding the placements asked of it, and the control — which has no
+/// placement, every factor being [`FINITE`] — holds its marks directly.
+struct NonFiniteCell {
+    value: &'static str,
+    placement: Option<Placement>,
+    record: Vec<u8>,
+}
+
+/// Whether Metal's first rule culls a patch whose edge factor is `bits`: a `half` that is
+/// negative, zero or NaN, which is every bit pattern outside `[0x0001, 0x7c00]`.
+fn culls_an_edge(bits: u16) -> bool {
+    !(0x0001..=0x7c00).contains(&bits)
+}
+
+/// The non-finite factor sweep: the edge and inside factors Metal's cull and clamp read as
+/// something other than a number, on the committed quad fixture.
+pub struct NonFiniteFactors {
+    name: &'static str,
+}
+
+impl NonFiniteFactors {
+    /// The one pipeline every cell draws with: `integer` partitioning, whose spacing is uniform,
+    /// so a level is the segment count and the marks say what each rule produced.
+    fn state(&self) -> TessellationState {
+        TessellationState::new()
+            .partitioned(Partition::Integer)
+            .clamped_to(MEDIUM_MAX)
+    }
+
+    /// The factor buffer: one 12-byte record a cell, in [`non_finite_cells`]' order.
+    fn records(&self) -> Vec<u8> {
+        let mut bytes = Vec::new();
+        for cell in non_finite_cells() {
+            bytes.extend(cell.record);
+        }
+        bytes
+    }
+}
+
+impl Case for NonFiniteFactors {
+    fn name(&self) -> &'static str {
+        self.name
+    }
+
+    fn metal_source(&self) -> MetalSource {
+        MetalSource::Run
+    }
+
+    fn allowances(&self) -> Vec<Allowance> {
+        tessellation_notices()
+    }
+
+    fn shaders(&self) -> Result<Vec<ShaderRef>, String> {
+        shaders_of(QUAD)
+    }
+
+    fn inputs(&self) -> Result<Vec<Input>, String> {
+        let mut inputs = air_inputs(QUAD)?;
+        inputs.push(Input::bytes("grid", &grid_record(MEDIUM_GRID)));
+        inputs.push(Input::bytes("factors", &self.records()));
+        inputs.push(Input::bytes(
+            "marks",
+            &vec![0u8; non_finite_cells().len() * REGION_BYTES as usize],
+        ));
+        inputs.push(Input::bytes(
+            "pipeline",
+            &domain_pipeline(QUAD.entry, self.state()).words(),
+        ));
+        Ok(inputs)
+    }
+
+    fn run(&self, side: &mut dyn Side, sites: &mut Sites) -> Result<(), Abort> {
+        let loaded = load(QUAD)?;
+        let library = made(sites, "library", side.library(&loaded.source()))?;
+        let grid = made(sites, "buffer/grid", side.buffer(&grid_record(MEDIUM_GRID)))?;
+        let factors = made(sites, "buffer/factors", side.buffer(&self.records()))?;
+        let cells = non_finite_cells();
+        let marks = made(
+            sites,
+            "buffer/marks",
+            side.buffer(&vec![0u8; cells.len() * REGION_BYTES as usize]),
+        )?;
+        let pipeline = probe(
+            sites,
+            "pipeline",
+            side.render_pipeline(library, &domain_pipeline(QUAD.entry, self.state())),
+            |_| Value::Absent,
+        );
+
+        let mut work = Vec::new();
+        if let Some(pipeline) = pipeline {
+            for at in 0..cells.len() {
+                let mut steps =
+                    one_patch_steps(pipeline, grid, factors, marks, at as u32 * REGION_BYTES, 1);
+                // The cell's own record, bound where the constant step reads it.
+                steps[1] = RenderStep::TessellationFactorBuffer {
+                    buffer: Some(factors),
+                    offset: at as u64 * u64::from(QUAD_FACTOR_BYTES),
+                    instance_stride: 0,
+                };
+                work.push(RenderWork::Pass(RenderPass::sized([1, 1]).drawing(steps)));
+            }
+        }
+        let outcome = call(sites, "render", side.render(&work), |outcome| {
+            outcome.status.clone()
+        })?;
+
+        // Each value is one branch holding the placements asked of it, and the control — which has
+        // no placement — holds its marks directly, so the transcript says which of Metal's two
+        // rules each answer is of.
+        let mut groups: Vec<(&'static str, Vec<Node>)> = Vec::new();
+        for (at, cell) in cells.iter().enumerate() {
+            let base = at as u64 * u64::from(REGION_BYTES);
+            let site = match cell.placement {
+                None => cell.value.to_owned(),
+                Some(placement) => format!("{}/{}", cell.value, placement.site()),
+            };
+            let region = read_medium_marks(side, sites, &site, marks, base)?;
+            let mut leaves = vec![Node::leaf(
+                "marks",
+                Observed::bytes(region, medium_layout(base)),
+            )];
+            if let Some(Some(failure)) = outcome.refused.get(at) {
+                leaves.push(Node::leaf("pass", Observed::value(failure.recorded())));
+            }
+            let held = match cell.placement {
+                None => leaves,
+                Some(placement) => vec![Node::branch(placement.site(), leaves)],
+            };
+            match groups.last_mut() {
+                Some((value, nodes)) if *value == cell.value => nodes.extend(held),
+                _ => groups.push((cell.value, held)),
+            }
+        }
+        for (value, nodes) in groups {
+            sites.push(Node::branch(value, nodes));
+        }
+        Ok(())
+    }
+}
+
 // ---- The factor step functions -----------------------------------------------------------------
 
 /// Every `MTLTessellationFactorStepFunction`, in the SDK table's own declaration order.
@@ -911,6 +1212,412 @@ impl Case for FactorSteps {
         }
         Ok(())
     }
+}
+
+// ---- The factor scale, crossed with the factor it scales ---------------------------------------
+
+/// A quiet NaN's `f32` bits, stated here rather than taken from `f32::NAN` so the payload a case
+/// sets is the case's own and a recording keys by it.
+const NAN_BITS: u32 = 0x7fc0_0000;
+
+/// `+∞` as `f32` bits.
+const POSITIVE_INFINITY_BITS: u32 = 0x7f80_0000;
+
+/// `-∞` as `f32` bits.
+const NEGATIVE_INFINITY_BITS: u32 = 0xff80_0000;
+
+/// `value`'s `f32` bits, as a scale a cell sets.
+const fn scale_bits(value: f32) -> Option<u32> {
+    Some(value.to_bits())
+}
+
+/// The factor records the scale sweep lays out, one a record of [`QUAD_FACTOR_BYTES`], every edge
+/// and inside factor the same number.
+///
+/// Four numbers, each there for a cell that crosses it with a scale: 4 is the one most cells
+/// scale, and 0.5, 2 and 17 are the three the clamp's two ends read — 0.5 below the floor, 17
+/// above the ceiling [`MEDIUM_MAX`] states, and 2 the number whose halving reaches the floor from
+/// above.
+const SCALE_FACTORS: [f32; 4] = [4.0, 0.5, 2.0, 17.0];
+
+/// One cell of the scale sweep.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct ScaleCell {
+    /// The site the cell's answer is emitted at.
+    site: &'static str,
+    /// Whether the cell's pipeline states `tessellationFactorScaleEnabled`.
+    enabled: bool,
+    /// The factor record, as an index of [`SCALE_FACTORS`].
+    record: usize,
+    /// The `f32` bits of the scale the pass sets, or `None` for a pass that sets **no** scale,
+    /// which is its own shape rather than a scale of 1.
+    scale: Option<u32>,
+}
+
+/// The cells the scale sweep states.
+///
+/// # What each cell is for
+///
+/// The first group holds the factor at 4 and moves the scale alone, which is the axis
+/// `setTessellationFactorScale:` is: `scale-unset` is the pass that never makes the call,
+/// `scale-1` and `scale-2` are two scales that draw two different point sets, and
+/// `scale-rounds-to-2-as-half` is a third number whose answer is `scale-2`'s **because Metal
+/// rounds the scale to `half` first** — a collapse that is the measurement rather than a hole.
+///
+/// `scale-subnormal-as-half` and `scale-zero-as-half` are the pair that says where that rounding
+/// takes the scale to nothing: `2^-15` is subnormal as a `half` and its product still draws,
+/// `2^-30` is 0 as a `half` and culls. Neither is a number Metal's own validation takes, and both
+/// are what plain Metal does with it. A scale that is subnormal as a **`f32`** is not a cell: it is
+/// 0 as a `half`, so it is `scale-zero-as-half`'s answer by the same rounding.
+///
+/// The second group is the three cells that read the **order** of the scale and the clamp, which is
+/// the one thing a scale crossed with a factor can ask and a scale alone cannot:
+///
+/// - `scale-2-of-below-1` scales 0.5 by 2. Scaled before the clamp that is `1`, clamped to 1;
+///   clamped first it is `max(0.5, 1) = 1` scaled to 2. One segment an edge against two.
+/// - `scale-half-of-above-max` halves 17 under a ceiling of 16. Scaled first that is 8.5, which
+///   `integer` rounds up to 9; clamped first it is 16 halved to 8.
+/// - `scale-half-of-2` halves 2, which is 1 **either way round**. It is the control beside the
+///   two above: a side that moved the clamp would leave this cell alone, so the cell says the
+///   other two moved for the order and not for the arithmetic.
+///
+/// The third group is `tessellationFactorScaleEnabled` itself, which is a field and not a call:
+/// `scale-disabled` sets a scale of 2 on a pipeline that does not enable it and draws what factor
+/// 4 draws, and `scale-0-disabled` sets a scale that culls every patch of an enabling pipeline and
+/// draws the same. Those two are what say the cull is the **field's** and not the setter's.
+const SCALE_CELLS: [ScaleCell; 16] = [
+    ScaleCell {
+        site: "scale-unset",
+        enabled: true,
+        record: 0,
+        scale: None,
+    },
+    ScaleCell {
+        site: "scale-1",
+        enabled: true,
+        record: 0,
+        scale: scale_bits(1.0),
+    },
+    ScaleCell {
+        site: "scale-2",
+        enabled: true,
+        record: 0,
+        scale: scale_bits(2.0),
+    },
+    ScaleCell {
+        site: "scale-rounds-to-2-as-half",
+        enabled: true,
+        record: 0,
+        scale: scale_bits(2.0005),
+    },
+    ScaleCell {
+        site: "scale-0",
+        enabled: true,
+        record: 0,
+        scale: scale_bits(0.0),
+    },
+    ScaleCell {
+        site: "scale-negative",
+        enabled: true,
+        record: 0,
+        scale: scale_bits(-1.0),
+    },
+    ScaleCell {
+        site: "scale-nan",
+        enabled: true,
+        record: 0,
+        scale: Some(NAN_BITS),
+    },
+    ScaleCell {
+        site: "scale-positive-infinity",
+        enabled: true,
+        record: 0,
+        scale: Some(POSITIVE_INFINITY_BITS),
+    },
+    ScaleCell {
+        site: "scale-negative-infinity",
+        enabled: true,
+        record: 0,
+        scale: Some(NEGATIVE_INFINITY_BITS),
+    },
+    ScaleCell {
+        site: "scale-subnormal-as-half",
+        enabled: true,
+        record: 0,
+        // 2^-15, below `half`'s least normal and well above its least subnormal.
+        scale: scale_bits(3.051_757_8e-5),
+    },
+    ScaleCell {
+        site: "scale-zero-as-half",
+        enabled: true,
+        record: 0,
+        // 2^-30, which rounds to 0 as a `half`.
+        scale: scale_bits(9.313_225_7e-10),
+    },
+    ScaleCell {
+        site: "scale-2-of-below-1",
+        enabled: true,
+        record: 1,
+        scale: scale_bits(2.0),
+    },
+    ScaleCell {
+        site: "scale-half-of-2",
+        enabled: true,
+        record: 2,
+        scale: scale_bits(0.5),
+    },
+    ScaleCell {
+        site: "scale-half-of-above-max",
+        enabled: true,
+        record: 3,
+        scale: scale_bits(0.5),
+    },
+    ScaleCell {
+        site: "scale-disabled",
+        enabled: false,
+        record: 0,
+        scale: scale_bits(2.0),
+    },
+    ScaleCell {
+        site: "scale-0-disabled",
+        enabled: false,
+        record: 0,
+        scale: scale_bits(0.0),
+    },
+];
+
+/// A sweep over `setTessellationFactorScale:` crossed with the factor it scales, and over
+/// `tessellationFactorScaleEnabled` beside it.
+pub struct FactorScales {
+    name: &'static str,
+}
+
+impl FactorScales {
+    /// The tessellation state of a cell's pipeline: `integer` partitioning, whose spacing is
+    /// uniform, so a level is the segment count and the marks read the product directly.
+    fn state(enabled: bool) -> TessellationState {
+        let state = TessellationState::new()
+            .partitioned(Partition::Integer)
+            .clamped_to(MEDIUM_MAX);
+        match enabled {
+            true => state.scaled(),
+            false => state,
+        }
+    }
+
+    /// The site a pipeline is made at, which is the field value it states: a case's transcript
+    /// holds `tessellationFactorScaleEnabled` by name on both legs.
+    fn pipeline_site(enabled: bool) -> &'static str {
+        match enabled {
+            true => "tessellationFactorScaleEnabled-true",
+            false => "tessellationFactorScaleEnabled-false",
+        }
+    }
+
+    /// The factor buffer: the four records of [`SCALE_FACTORS`], 12 bytes each.
+    fn records(&self) -> Vec<u8> {
+        let mut bytes = Vec::new();
+        for factor in SCALE_FACTORS {
+            bytes.extend(quad_factors([factor; 4], [factor; 2]));
+        }
+        bytes
+    }
+
+    /// The steps one cell's pass holds: the cell's pipeline, its factor record, the grid, the
+    /// marks region, the scale where the cell sets one, and a draw of one patch.
+    fn steps(cell: &ScaleCell, held: &Handles, at: usize) -> Vec<RenderStep> {
+        let mut steps = vec![
+            RenderStep::Pipeline(held.pipeline),
+            RenderStep::TessellationFactorBuffer {
+                buffer: Some(held.factors),
+                offset: cell.record as u64 * u64::from(QUAD_FACTOR_BYTES),
+                instance_stride: 0,
+            },
+            RenderStep::VertexBuffer {
+                buffer: held.grid,
+                offset: 0,
+                index: 0,
+            },
+            RenderStep::VertexBuffer {
+                buffer: held.marks,
+                offset: at as u64 * u64::from(REGION_BYTES),
+                index: 1,
+            },
+        ];
+        if let Some(bits) = cell.scale {
+            steps.push(RenderStep::TessellationFactorScale { bits });
+        }
+        steps.push(RenderStep::DrawPatches {
+            control_points: 1,
+            first: 0,
+            count: 1,
+            patch_indices: None,
+            patch_index_offset: 0,
+            instances: 1,
+            base_instance: 0,
+        });
+        steps
+    }
+}
+
+/// What one cell's pass of [`FactorScales`] binds, which is one pipeline and three buffers.
+struct Handles {
+    pipeline: Handle,
+    grid: Handle,
+    factors: Handle,
+    marks: Handle,
+}
+
+impl Case for FactorScales {
+    fn name(&self) -> &'static str {
+        self.name
+    }
+
+    fn metal_source(&self) -> MetalSource {
+        MetalSource::Run
+    }
+
+    fn allowances(&self) -> Vec<Allowance> {
+        // This is the one case that enables the factor scale, so it is the one case whose run can
+        // announce the notice the scale is read under.
+        let mut all = tessellation_notices();
+        all.push(crate::replay::notice_allowance(
+            Degradation::TessellationFactorScale.code(),
+        ));
+        all
+    }
+
+    fn shaders(&self) -> Result<Vec<ShaderRef>, String> {
+        shaders_of(QUAD)
+    }
+
+    fn inputs(&self) -> Result<Vec<Input>, String> {
+        let mut inputs = air_inputs(QUAD)?;
+        inputs.push(Input::bytes("grid", &grid_record(MEDIUM_GRID)));
+        inputs.push(Input::bytes("factors", &self.records()));
+        inputs.push(Input::bytes(
+            "marks",
+            &vec![0u8; SCALE_CELLS.len() * REGION_BYTES as usize],
+        ));
+        let mut pipelines = Vec::new();
+        for enabled in [true, false] {
+            pipelines.extend(Self::pipeline_site(enabled).as_bytes());
+            pipelines.extend(domain_pipeline(QUAD.entry, Self::state(enabled)).words());
+        }
+        inputs.push(Input::bytes("pipelines", &pipelines));
+        let mut cells = Vec::new();
+        for cell in SCALE_CELLS {
+            cells.extend(cell.site.as_bytes());
+            cells.push(u8::from(cell.enabled));
+            cells.extend((cell.record as u32).to_le_bytes());
+            cells.extend(cell.scale.unwrap_or(0).to_le_bytes());
+            cells.push(u8::from(cell.scale.is_some()));
+        }
+        inputs.push(Input::bytes("cells", &cells));
+        Ok(inputs)
+    }
+
+    fn run(&self, side: &mut dyn Side, sites: &mut Sites) -> Result<(), Abort> {
+        let loaded = load(QUAD)?;
+        let library = made(sites, "library", side.library(&loaded.source()))?;
+        let grid = made(sites, "buffer/grid", side.buffer(&grid_record(MEDIUM_GRID)))?;
+        let factors = made(sites, "buffer/factors", side.buffer(&self.records()))?;
+        let marks = made(
+            sites,
+            "buffer/marks",
+            side.buffer(&vec![0u8; SCALE_CELLS.len() * REGION_BYTES as usize]),
+        )?;
+        let mut pipelines = Vec::with_capacity(2);
+        for enabled in [true, false] {
+            pipelines.push(probe(
+                sites,
+                &format!("{}/pipeline", Self::pipeline_site(enabled)),
+                side.render_pipeline(library, &domain_pipeline(QUAD.entry, Self::state(enabled))),
+                |_| Value::Absent,
+            ));
+        }
+
+        let mut work = Vec::new();
+        let mut drawn = Vec::new();
+        for (at, cell) in SCALE_CELLS.iter().enumerate() {
+            let Some(pipeline) = pipelines[usize::from(!cell.enabled)] else {
+                continue;
+            };
+            drawn.push(at);
+            let held = Handles {
+                pipeline,
+                grid,
+                factors,
+                marks,
+            };
+            work.push(RenderWork::Pass(
+                RenderPass::sized([1, 1]).drawing(Self::steps(cell, &held, at)),
+            ));
+        }
+        let outcome = call(sites, "render", side.render(&work), |outcome| {
+            outcome.status.clone()
+        })?;
+
+        // Each cell hangs under the `tessellationFactorScaleEnabled` value its pipeline states, so
+        // the field is in the transcript by name beside the cells that ran under it.
+        for enabled in [true, false] {
+            let mut nodes = Vec::new();
+            for (at, cell) in SCALE_CELLS.iter().enumerate() {
+                if cell.enabled != enabled {
+                    continue;
+                }
+                let base = at as u64 * u64::from(REGION_BYTES);
+                let region = read_medium_marks(side, sites, cell.site, marks, base)?;
+                let mut node = Node::branch(cell.site, Vec::new()).with(Node::leaf(
+                    "marks",
+                    Observed::bytes(region, medium_layout(base)),
+                ));
+                if let Some(pass) = drawn.iter().position(|held| *held == at) {
+                    if let Some(Some(failure)) = outcome.refused.get(pass) {
+                        node = node.with(Node::leaf("pass", Observed::value(failure.recorded())));
+                    }
+                }
+                nodes.push(node);
+            }
+            sites.push(Node::branch(Self::pipeline_site(enabled), nodes));
+        }
+        Ok(())
+    }
+}
+
+/// The layout a medium mark region is compared under: [`MEDIUM_ROWS`] whole rows of the mark grid,
+/// one row of `AXIS` words a grid row, so a diff names the cell.
+fn medium_layout(offset: u64) -> ByteLayout {
+    ByteLayout {
+        region: Region::Buffer {
+            offset,
+            length: u64::from(MEDIUM_WORDS * 4),
+        },
+        element: Element::U32,
+        row_offset: 0,
+        row_elements: AXIS,
+        row_pitch: AXIS * 4,
+        rows: MEDIUM_ROWS,
+        image_pitch: MEDIUM_WORDS * 4,
+        images: 1,
+        gaps: Gaps::Compared,
+    }
+}
+
+/// The rows a medium grid can reach of the region at `base`.
+fn read_medium_marks(
+    side: &mut dyn Side,
+    sites: &mut Sites,
+    site: &str,
+    marks: Handle,
+    base: u64,
+) -> Result<Vec<u8>, Abort> {
+    call(
+        sites,
+        &format!("read-back/{site}"),
+        side.read_buffer(marks, base, MEDIUM_WORDS as usize * 4),
+        |_| Value::Absent,
+    )
 }
 
 /// The layout a coarse mark region is compared under: the [`COARSE_WORDS`] a grid of scale 8 can
@@ -1491,6 +2198,158 @@ mod tests {
         );
     }
 
+    /// The mark bytes the scale sweep's recording holds for `site`.
+    fn scaled_marks(site: &str) -> Vec<u8> {
+        let enabled = SCALE_CELLS
+            .iter()
+            .find(|cell| cell.site == site)
+            .unwrap_or_else(|| panic!("the table holds {site}"))
+            .enabled;
+        let path = format!("{}/{site}/marks", FactorScales::pipeline_site(enabled));
+        recorded_bytes("tessellation-factor-scales", &path)
+            .unwrap_or_else(|| panic!("the recording holds {path}"))
+    }
+
+    /// The mark bytes the non-finite sweep's recording holds for `site`.
+    fn non_finite_marks(site: &str) -> Vec<u8> {
+        recorded_bytes("tessellation-non-finite-factors", &format!("{site}/marks"))
+            .unwrap_or_else(|| panic!("the recording holds {site}"))
+    }
+
+    #[test]
+    fn metal_scales_a_factor_before_it_clamps_it() {
+        // What the scale sweep measured, held as the claim the module docs make. Clamping first
+        // would take `scale-2-of-below-1` to a level of 2 and `scale-half-of-above-max` to one of
+        // 8, so a side that moved the clamp parts both of these from Metal's answer — and leaves
+        // the control alone, which is what says the pair reads the order.
+        assert_eq!(
+            marked(&scaled_marks("scale-2-of-below-1")),
+            4,
+            "0.5 scaled by 2 is the floor, so it marks the corners and not a 3-by-3 grid"
+        );
+        assert_eq!(
+            marked(&scaled_marks("scale-half-of-above-max")),
+            100,
+            "17 halved under a ceiling of 16 is a level of 9, whose 10 points an axis mark 100 \
+             cells; clamping first would be a level of 8 and 81 cells"
+        );
+        assert_eq!(
+            marked(&scaled_marks("scale-half-of-2")),
+            4,
+            "the control: 2 halved is the floor whichever end the clamp is"
+        );
+    }
+
+    #[test]
+    fn metal_rounds_the_scale_to_half_before_it_multiplies() {
+        // The collapse the sweep states, and the pair that says where the rounding takes a scale to
+        // nothing: a scale subnormal as a `half` still draws, one that is 0 as a `half` culls.
+        assert_eq!(
+            scaled_marks("scale-rounds-to-2-as-half"),
+            scaled_marks("scale-2"),
+            "2.0005 is 2.0 as a `half`, so it draws what a scale of 2 draws"
+        );
+        assert_eq!(marked(&scaled_marks("scale-subnormal-as-half")), 4);
+        assert_eq!(marked(&scaled_marks("scale-zero-as-half")), 0);
+    }
+
+    #[test]
+    fn one_scale_metals_documentation_calls_culling_does_not_cull() {
+        // Metal's documentation describes a scale of 0, a negative one, a NaN and an infinity as
+        // culling. Measured on the oracle, three of the four do and `+∞` does not: it draws what
+        // the maximum factor draws. A pipeline that enables the scale and never sets one culls too,
+        // which is the fifth shape and is not a value at all.
+        for site in [
+            "scale-unset",
+            "scale-0",
+            "scale-negative",
+            "scale-nan",
+            "scale-negative-infinity",
+        ] {
+            assert_eq!(marked(&scaled_marks(site)), 0, "{site} culls the patch");
+        }
+        assert_eq!(
+            marked(&scaled_marks("scale-positive-infinity")),
+            MEDIUM_ROWS as usize * MEDIUM_ROWS as usize,
+            "`+∞` reaches the ceiling, which marks every cell a grid of scale 16 has"
+        );
+    }
+
+    #[test]
+    fn the_enable_field_gates_the_setter_and_the_cull_together() {
+        // `tessellationFactorScaleEnabled` false ignores the scale entirely: a scale of 2 draws
+        // what the unscaled factor draws, and so does the scale of 0 that culls every patch of an
+        // enabling pipeline. The last assertion is what makes the field's two values a real pair.
+        let unscaled = scaled_marks("scale-1");
+        assert_eq!(marked(&unscaled), 25, "factor 4 is a level of 4");
+        assert_eq!(scaled_marks("scale-disabled"), unscaled);
+        assert_eq!(scaled_marks("scale-0-disabled"), unscaled);
+        assert_ne!(
+            scaled_marks("scale-0"),
+            scaled_marks("scale-0-disabled"),
+            "the same scale culls under the field and is ignored without it"
+        );
+    }
+
+    #[test]
+    fn the_edge_factors_metal_culls_are_one_class_and_two_near_misses_are_not_in_it() {
+        // Metal's first rule reads "negative, zero, or NaN", and the four values the sweep states
+        // from that class answer one empty region each — a collapse that is Metal's own rule, with
+        // the inside factors at 4 beside them so the cull is seen to override a healthy inside.
+        // `+∞` and the least positive subnormal are the two that are **not** in the class: each
+        // draws, and the three answers are all different.
+        for named in ["nan", "negative", "negative-zero", "negative-infinity"] {
+            let site = format!("{named}/edges");
+            assert_eq!(marked(&non_finite_marks(&site)), 0, "{site}");
+        }
+        let control = non_finite_marks("all-finite");
+        assert_eq!(marked(&control), 25, "the control is a level of 4");
+        let infinite = non_finite_marks("positive-infinity/edges");
+        let subnormal = non_finite_marks("subnormal/edges");
+        assert_eq!(marked(&infinite), 73, "a level of 16 with the inside at 4");
+        assert_eq!(marked(&subnormal), 13, "a level of 1 with the inside at 4");
+        assert_ne!(infinite, control);
+        assert_ne!(subnormal, control);
+        assert_ne!(infinite, subnormal);
+    }
+
+    #[test]
+    fn an_inside_factor_reaches_a_range_end_and_never_culls() {
+        // No cull reads an inside factor, so each of the five values that is not a finite number
+        // above the floor reaches the range's **lower** end and marks the inner level 1: the
+        // boundary ring of 16 points and the one centre point. The five answers are equal, which
+        // is Metal's clamp arriving at one place from both directions and not a hole in the sweep;
+        // `+∞` reaches the other end, and the control is neither.
+        let lower = non_finite_marks("nan/inside");
+        assert_eq!(
+            marked(&lower),
+            17,
+            "the inner level 1: the ring and a centre"
+        );
+        for named in [
+            "negative",
+            "negative-zero",
+            "negative-infinity",
+            "subnormal",
+        ] {
+            let site = format!("{named}/inside");
+            assert_eq!(non_finite_marks(&site), lower, "{site}");
+        }
+        let upper = non_finite_marks("positive-infinity/inside");
+        assert_eq!(
+            marked(&upper),
+            241,
+            "the inner level 16 inside a level-4 ring"
+        );
+        assert_ne!(upper, lower);
+        assert_ne!(non_finite_marks("all-finite"), lower);
+        assert_ne!(non_finite_marks("all-finite"), upper);
+        // The `Both` cells the sweep does state are a third answer each, which is what earns them
+        // their place beside the one-sided pair.
+        assert_eq!(marked(&non_finite_marks("positive-infinity/both")), 289);
+        assert_eq!(marked(&non_finite_marks("subnormal/both")), 4);
+    }
+
     #[test]
     fn metals_factor_address_counts_the_base_instance() {
         // The reading the control stage took from Metal's documentation with no observation behind
@@ -1700,23 +2559,201 @@ mod tests {
 
     #[test]
     fn the_case_names_are_the_familys_own() {
-        let (modes, factors, steps, indices) = all();
-        let names: Vec<&str> = modes
-            .iter()
-            .map(|case| case.name())
-            .chain(factors.iter().map(|case| case.name()))
-            .chain(steps.iter().map(|case| case.name()))
-            .chain(indices.iter().map(|case| case.name()))
-            .collect();
+        let names: Vec<&str> = boxed().iter().map(|case| case.name()).collect();
         assert_eq!(
             names,
             vec![
                 "tessellation-partition-modes-quad",
                 "tessellation-partition-modes-triangle",
                 "tessellation-edge-factors",
+                "tessellation-non-finite-factors",
                 "tessellation-factor-steps",
+                "tessellation-factor-scales",
                 "tessellation-patch-indices",
             ]
         );
+    }
+
+    #[test]
+    fn a_medium_region_holds_every_cell_its_grid_can_reach() {
+        // A domain coordinate is in `[0, 1]`, so `rint(v * 16)` is in `0..=16` and the largest grid
+        // row a medium draw can mark is row 16. The compared prefix is whole rows up to it, so no
+        // mark the draw could make lies outside it, and it lies inside the mark grid, so a medium
+        // leg reads marks and never a stored coordinate.
+        assert_eq!(MEDIUM_ROWS, MEDIUM_GRID as u32 + 1);
+        assert_eq!(MEDIUM_WORDS, MEDIUM_ROWS * AXIS);
+        const { assert!(MEDIUM_WORDS <= MARK_WORDS) };
+        // The compared layout covers the region exactly: whole rows, no byte read twice and none
+        // left out.
+        assert_eq!(MEDIUM_ROWS * AXIS * 4, MEDIUM_WORDS * 4);
+    }
+
+    #[test]
+    fn the_non_finite_bit_patterns_are_the_halves_they_are_named_for() {
+        // Each is read back through `half`'s own fields — one sign bit, five exponent bits of bias
+        // 15, ten significand bits — so a table entry that is not the value its name says fails
+        // here rather than in a recording nobody can read.
+        let class = |bits: u16| {
+            let sign = bits >> 15;
+            let exponent = (bits >> 10) & 0x1f;
+            let significand = bits & 0x3ff;
+            (sign, exponent, significand)
+        };
+        assert_eq!(class(FINITE), (0, 17, 0), "4.0 is 2^2 · 1.0");
+        let at = |name: &str| {
+            NON_FINITE
+                .iter()
+                .find(|(held, _)| *held == name)
+                .map(|(_, bits)| *bits)
+                .unwrap_or_else(|| panic!("the table holds {name}"))
+        };
+        // A NaN: the maximum exponent with a non-zero significand.
+        let (sign, exponent, significand) = class(at("nan"));
+        assert_eq!((sign, exponent), (0, 0x1f));
+        assert_ne!(significand, 0);
+        assert_eq!(class(at("negative")), (1, 15, 0), "-1.0");
+        assert_eq!(class(at("negative-zero")), (1, 0, 0), "-0.0");
+        assert_eq!(class(at("positive-infinity")), (0, 0x1f, 0));
+        assert_eq!(class(at("negative-infinity")), (1, 0x1f, 0));
+        assert_eq!(
+            class(at("subnormal")),
+            (0, 0, 1),
+            "the least positive subnormal"
+        );
+    }
+
+    #[test]
+    fn metals_cull_rule_classifies_the_non_finite_table_as_its_words_do() {
+        // Metal's first rule is "negative, zero, or NaN", and `culls_an_edge` is the bit test the
+        // sweep's `Both` placements are left out by, so the two are held against each other over
+        // the table rather than only in prose.
+        for (name, bits) in NON_FINITE {
+            let culls = culls_an_edge(bits);
+            let expected = matches!(
+                name,
+                "nan" | "negative" | "negative-zero" | "negative-infinity"
+            );
+            assert_eq!(culls, expected, "{name}");
+        }
+        // And over every `half` there is, so the test is the rule and not six examples: a pattern
+        // culls exactly where it is a NaN, a negative number or a zero.
+        for bits in 0u16..=0xffff {
+            let sign = bits >> 15 == 1;
+            let exponent = (bits >> 10) & 0x1f;
+            let significand = bits & 0x3ff;
+            let nan = exponent == 0x1f && significand != 0;
+            let zero = bits & 0x7fff == 0;
+            assert_eq!(culls_an_edge(bits), sign || zero || nan, "{bits:#06x}");
+        }
+    }
+
+    #[test]
+    fn every_non_finite_cell_asks_a_record_no_other_cell_asks() {
+        // The sweep's non-vacuity at the input end: fifteen cells, fifteen different factor
+        // records. Two cells stating one record would compare one answer twice, and the `Both`
+        // placements the table leaves out are exactly the ones that would.
+        let cells = non_finite_cells();
+        assert_eq!(cells.len(), 15);
+        let named = |cell: &NonFiniteCell| match cell.placement {
+            None => cell.value.to_owned(),
+            Some(placement) => format!("{}/{}", cell.value, placement.site()),
+        };
+        for (a, first) in cells.iter().enumerate() {
+            for second in cells.iter().skip(a + 1) {
+                assert_ne!(
+                    first.record,
+                    second.record,
+                    "{} and {} state one record",
+                    named(first),
+                    named(second)
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn every_scale_cell_asks_a_question_no_other_cell_asks() {
+        // The same at the scale sweep's input end: no two cells state the same pipeline, record
+        // and scale. The scale is compared by bits, so the two NaN-free zeroes — no scale set and
+        // a scale of 0 — are two cells and not one.
+        for (a, first) in SCALE_CELLS.iter().enumerate() {
+            for second in SCALE_CELLS.iter().skip(a + 1) {
+                assert_ne!(
+                    (first.enabled, first.record, first.scale),
+                    (second.enabled, second.record, second.scale),
+                    "{} and {} state one question",
+                    first.site,
+                    second.site
+                );
+                assert_ne!(first.site, second.site);
+            }
+        }
+    }
+
+    #[test]
+    fn the_scale_cells_order_cells_part_under_one_order_and_not_the_other() {
+        // The three cells that read the order of the scale and the clamp, argued from the
+        // arithmetic rather than off a recording: two of them answer different levels depending on
+        // which comes first, and the third answers the same level either way. A table edited so
+        // that no cell parted would be a sweep that could not see the order at all, and a table
+        // whose control parted would not be a control.
+        let max = MEDIUM_MAX as f32;
+        // Scaled before the clamp, as the control stage does it, and an `integer` level rounded up.
+        let before = |factor: f32, scale: f32| (factor * scale).clamp(1.0, max).ceil();
+        // Clamped first, which is the falsification's order.
+        let after = |factor: f32, scale: f32| (factor.clamp(1.0, max) * scale).ceil();
+        let parts = |site: &str| {
+            let cell = SCALE_CELLS
+                .iter()
+                .find(|cell| cell.site == site)
+                .unwrap_or_else(|| panic!("the table holds {site}"));
+            let factor = SCALE_FACTORS[cell.record];
+            let scale = f32::from_bits(cell.scale.expect("the cell sets a scale"));
+            before(factor, scale) != after(factor, scale)
+        };
+        assert!(parts("scale-2-of-below-1"), "0.5 scaled by 2");
+        assert!(parts("scale-half-of-above-max"), "17 halved under 16");
+        assert!(
+            !parts("scale-half-of-2"),
+            "2 halved is 1 whichever end the clamp is"
+        );
+    }
+
+    #[test]
+    fn the_scale_sweep_reaches_both_values_of_the_enable_field_and_every_scale_class() {
+        // Every value of `tessellationFactorScaleEnabled` is drawn, and the scale axis reaches
+        // each class Metal's `half` rounding puts a scale in. Each membership is argued from
+        // `half`'s own boundaries rather than through a conversion this test would have to own:
+        // the least normal is `2^-14`, the least subnormal `2^-24`, and the gap above 2.0 is
+        // `2^-9`.
+        assert!(SCALE_CELLS.iter().any(|cell| cell.enabled));
+        assert!(SCALE_CELLS.iter().any(|cell| !cell.enabled));
+        let scales: Vec<Option<u32>> = SCALE_CELLS.iter().map(|cell| cell.scale).collect();
+        assert!(scales.contains(&None), "a pass that sets no scale");
+        assert!(scales.contains(&Some(NAN_BITS)));
+        assert!(scales.contains(&Some(POSITIVE_INFINITY_BITS)));
+        assert!(scales.contains(&Some(NEGATIVE_INFINITY_BITS)));
+        assert!(scales.contains(&scale_bits(0.0)));
+        assert!(scales.contains(&scale_bits(-1.0)));
+        let at = |site: &str| {
+            let cell = SCALE_CELLS
+                .iter()
+                .find(|cell| cell.site == site)
+                .unwrap_or_else(|| panic!("the table holds {site}"));
+            f32::from_bits(cell.scale.expect("the cell sets a scale"))
+        };
+        // The collapse `scale-rounds-to-2-as-half` states: the number is nearer 2.0 than the next
+        // `half` above it, so Metal's rounding takes it to 2.0 and its answer is `scale-2`'s.
+        let rounding = at("scale-rounds-to-2-as-half");
+        assert!(rounding > 2.0, "a third number and not 2.0 itself");
+        assert!(
+            rounding - 2.0 < 2f32.powi(-9) / 2.0,
+            "nearer 2.0 than the `half` above it"
+        );
+        // Subnormal as a `half`: below the least normal and above the least subnormal.
+        let subnormal = at("scale-subnormal-as-half");
+        assert!(subnormal < 2f32.powi(-14) && subnormal > 2f32.powi(-24));
+        // 0 as a `half`: below half the least subnormal, so nearest-even rounds it to zero.
+        assert!(at("scale-zero-as-half") < 2f32.powi(-25));
     }
 }
