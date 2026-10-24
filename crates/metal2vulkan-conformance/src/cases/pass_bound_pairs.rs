@@ -73,31 +73,52 @@
 //!   one, so a side that read the viewport or the scissor in render-area coordinates rather than
 //!   the attachment's fails it. A per-value sweep of `renderTargetWidth` cannot make either claim.
 //!
-//! # What this case can and cannot prove **on a device that renders through Metal**
+//! # Which driver each claim rests on
 //!
-//! Said here because it was measured rather than reasoned, and because a reader who skips it will
-//! over-read a green run on this Mac.
+//! Said here because it was measured rather than reasoned, and because a reader who takes a green
+//! run on a Metal venue for the whole proof will over-read it.
 //!
 //! Our runtime reaches Metal's reach by clearing it before the pass itself
-//! (`clear_reach.rs`'s `ReachClears`) — but **on MoltenVK it would get the same answer without
-//! doing so**, because the driver underneath is Metal and Metal's own tiles do it. Measured:
-//! replacing `reach`'s rounding with the render area exactly, in the runtime, moves **not one
-//! texel** of this grid on an M3 Max. So a green run here says the two legs agree and says
-//! **nothing** about whether our reach model is right; the `TILE` of 32, the rounding up and the
-//! clipping are still held by a probe alone on every non-Metal driver.
+//! (`clear_reach.rs`'s `ReachClears`) — but **on MoltenVK it gets the same answer without doing
+//! so**, because the driver underneath is Metal and Metal's own tiles do it. Measured: replacing
+//! `reach`'s rounding with the render area exactly, in the runtime, moves **not one texel** of this
+//! grid on an M3 Max. So a green run there says the two legs agree and says **nothing** about
+//! whether our reach model is right.
 //!
-//! What a green run here *does* say is measured too, by the falsification that does land: making
-//! the render area ignore `renderTargetWidth` and `renderTargetHeight` diverges at exactly the
-//! four cells whose area is smaller than the attachment **and** whose load is `Clear` **and** which
-//! have a draw call, and leaves `whole-area/*`, `area-33x33` (whose reach is already the whole
-//! attachment), `area-32x32/clear/no-draw-call` and every `Load` cell exact. So the two numbers
-//! reach the device and bound the clear, per axis, and that is a claim only the pair can make: at
-//! the whole-attachment value, or under a `Load` load, or without a draw call, the bound is
-//! invisible.
+//! What a green run on a Metal venue *does* say is measured too, by the falsification that does
+//! land there: making the render area ignore `renderTargetWidth` and `renderTargetHeight` diverges
+//! at exactly the four cells whose area is smaller than the attachment **and** whose load is
+//! `Clear` **and** which have a draw call, and leaves `whole-area/*`, `area-33x33` (whose reach is
+//! already the whole attachment), `area-32x32/clear/no-draw-call` and every `Load` cell exact. So
+//! the two numbers reach the device and bound the clear, per axis, and that is a claim only the
+//! pair can make: at the whole-attachment value, or under a `Load` load, or without a draw call,
+//! the bound is invisible.
 //!
-//! Closing the other half wants this case **replayed on a driver that is not Metal** (lavapipe,
-//! RADV, ANV), where the runtime must synthesize the reach and the model is on the observable path.
+//! **The reach model itself is evidenced on llvmpipe**, where the runtime must synthesize the reach
+//! and `reach` is on the observable path. The case replays exact there (llvmpipe, LLVM 23.1.1, 256
+//! bits, x86-64, Mesa's lavapipe), and the same one-line falsification — `reach` returning the
+//! render area clipped to the attachment, with no rounding — moves **three** of the ten cells and
+//! exactly those three:
 //!
+//! | cell | texels that move | the first of them |
+//! |---|---|---|
+//! | `area-33x33/clear/drawing` | 511 = 1600 − 33·33 | row 0, column 33 |
+//! | `area-8x40/clear/drawing` | 960 = 32·40 − 8·40 | row 0, column 8 |
+//! | `area-40x8/clear/drawing` | 960 = 40·32 − 40·8 | row 8, column 0 |
+//!
+//! Each moved texel holds the priming pass's value where Metal holds the test pass's clear, so the
+//! three say the rounding reaches those texels and nothing else does. `whole-area/*`,
+//! `area-32x32/clear/drawing`, `area-32x32/clear/no-draw-call`,
+//! `area-32x32/clear/draw-covers-nothing` and every `Load` cell stay exact under it, which is the
+//! model's own shape: 40 and 32 are whole tiles already, the no-draw cell clears the whole level
+//! whatever the area, and a `Load` load clears nothing. The pair `area-8x40` and `area-40x8` is
+//! what pins the tile to **32** rather than 16 or 64 — a tile of 16 would reach 16 and one of 64
+//! would reach the attachment's 40, and both are what the exact baseline run rules out — and it
+//! pins the rounding **per axis**, since each moves one axis alone. `area-33x33` is what pins the
+//! **clip**: its reach is the rounded 64 cut back to 40, and dropping the rounding leaves 33.
+//!
+//! So `TILE`, the rounding up, the per-axis rule and the clip are held by execution on a driver
+//! that is not Metal. RADV and ANV are unrun.
 //! # Why every value here is defined on both sides
 //!
 //! A texel past the render area is only a comparable answer because the attachment's prior value

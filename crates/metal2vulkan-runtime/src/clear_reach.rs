@@ -84,6 +84,15 @@ use std::collections::BTreeSet;
 /// both axes: Metal's on the M3 Max and an M4, the same at every format, sample count and tile
 /// size measured (the module docs). The one place the runtime states it: every device clears as
 /// Metal's do.
+///
+/// **Executed on a driver that is not Metal.** On MoltenVK this constant is unobservable — the
+/// driver is Metal and Metal's own tiles produce the reach whether [`reach`] rounds or not, so
+/// replacing the rounding with the render area exactly moves no texel of the conformance suite's
+/// `pass-bound-clear-reach` on an M3 Max. On llvmpipe (LLVM 23.1.1, x86-64) the runtime must
+/// synthesize the reach, the case replays exact, and that same one-line change moves 511, 960 and
+/// 960 texels of the case's `area-33x33`, `area-8x40` and `area-40x8` cells. The `8x40` and `40x8`
+/// pair is what pins the side to 32 rather than 16 or 64, and pins the rounding to each axis on its
+/// own; `area-33x33` is what pins the clip to the attachment. RADV and ANV are unrun.
 pub(super) const TILE: u32 = 32;
 
 /// The extent from the origin that a `Clear` load of an attachment of `extent` clears in a pass

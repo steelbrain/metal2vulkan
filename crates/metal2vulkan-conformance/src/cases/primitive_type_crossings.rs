@@ -67,6 +67,29 @@
 //! `tests::the_index_type_decides_only_for_a_strip` holds exactly that shape against the
 //! recording.
 //!
+//! # Which driver holds the leg's own switch
+//!
+//! The recorded answers above measure **Metal's** behaviour directly, on any venue. The *runtime's*
+//! reading of it is one pipeline bit — `primitiveRestartEnable`, set for strips only, in
+//! `metal::state::input_assembly` — and that bit is **unobservable on MoltenVK**: clearing it for
+//! `VK_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP` moved no texel of this case on an M3 Max, because the
+//! driver underneath is Metal and Metal restarts its own strips whatever the Vulkan pipeline asks.
+//! Swapping the strip topology for a list there does move the two `TriangleStrip` cells, so the
+//! case is not vacuous on a Metal venue, but it is not the bit that it reads.
+//!
+//! **The bit is evidenced on llvmpipe** (LLVM 23.1.1, 256 bits, x86-64, Mesa's lavapipe), which
+//! honours it. Clearing it for `TRIANGLE_STRIP` alone moves exactly one cell of the ten:
+//! `TriangleStrip`/`UInt16`, by **26** texels, the first at row 1 column 0, where Metal holds the
+//! clear (no fragment: the strip restarted) and we hold a fragment of the vertex the un-restarted
+//! index fetched. `TriangleStrip`/`UInt32` stays exact under it, which is the cross's own claim
+//! read back from the device: under `UInt32` the strip has no restart to suppress, because `0xffff`
+//! is no sentinel there. Every `Point`, `Line`, `Triangle` and `LineStrip` cell is untouched by it,
+//! the first three because they carry no restart at all. RADV and ANV are unrun.
+//!
+//! llvmpipe's own baseline is not exact at the four `Line` and `LineStrip` cells — 7, 7, 5 and 13
+//! texels against the M3 Max's recording, its line rasterization rather than anything this case
+//! states — so the falsification above is read against that baseline, which it leaves unmoved.
+//!
 //! # Nothing here can fault a GPU
 //!
 //! One pass a cell, one draw a pass, six indices a draw, over an 8 by 8 target, no loop in the
