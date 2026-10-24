@@ -43,7 +43,7 @@ Its limits, measured rather than asserted:
 | committed recordings | 1099 |
 | distinct SDK items the Metal leg reaches, of any status | 797 |
 | of those, reached only where this cannot name the family | 7 |
-| ledger rows (a case whose gap is recorded) | 87 |
+| ledger rows (a case whose gap is recorded) | 89 |
 | declared crossings of the option space (pairs put to Metal at once) | 24 |
 | declared crossings that are no pair of it (a boolean or numeric field, or one type in two slots) | 30 |
 
@@ -2235,16 +2235,6 @@ A case whose difference from Metal is recorded rather than compared away. The le
 | `attribute-stride-plural-buffers` | Metal's `MTLAttributeStrideStatic` on a `[[stage_in]]` layout of `MTLBufferLayoutStrideDynamic` is not "read at stride 0"; it fetches the element at the bind of… |
 | `attribute-stride-buffer-offset` | Metal's `MTLAttributeStrideStatic` on a `[[stage_in]]` layout of `MTLBufferLayoutStrideDynamic` is not "read at stride 0"; it fetches the element at the bind of… |
 | `attribute-stride-inline-bytes` | The runtime refuses a kernel's `[[stage_in]]` fetch of INLINE BYTES bound with `MTLAttributeStrideStatic`, where plain Metal answers. Measured on this M3 Max (m… |
-| `vertex-format-constant-step` | Metal's `MTLVertexFormatFloatRG11B10` fetch answers the positive quiet NaN 0x7FC00000 for a field whose 5-bit exponent is all ones (verified: this case's own re… |
-| `vertex-format-constant-step` | Metal's half vertex fetch canonicalizes a NaN: the half codes 0x7E01 and 0xFE01 both reach the shader as the positive quiet NaN 0x7FC00000, payload and sign dro… |
-| `vertex-format-constant-step` | Metal's half vertex fetch canonicalizes a NaN: the half codes 0x7E01 and 0xFE01 both reach the shader as the positive quiet NaN 0x7FC00000, payload and sign dro… |
-| `vertex-format-constant-step` | Metal's half vertex fetch canonicalizes a NaN: the half codes 0x7E01 and 0xFE01 both reach the shader as the positive quiet NaN 0x7FC00000, payload and sign dro… |
-| `vertex-format-constant-step` | Metal's half vertex fetch canonicalizes a NaN: the half codes 0x7E01 and 0xFE01 both reach the shader as the positive quiet NaN 0x7FC00000, payload and sign dro… |
-| `attribute-format-fetches` | Metal's half-to-float widening in a stage-in fetch canonicalizes a NaN -- the half codes 0x7E01 and 0xFE01 both reach a `float4` attribute as the positive quiet… |
-| `attribute-format-fetches` | Metal's half-to-float widening in a stage-in fetch canonicalizes a NaN -- the half codes 0x7E01 and 0xFE01 both reach a `float4` attribute as the positive quiet… |
-| `attribute-format-fetches` | Metal's half-to-float widening in a stage-in fetch canonicalizes a NaN -- the half codes 0x7E01 and 0xFE01 both reach a `float4` attribute as the positive quiet… |
-| `attribute-format-fetches` | Metal's half-to-float widening in a stage-in fetch canonicalizes a NaN -- the half codes 0x7E01 and 0xFE01 both reach a `float4` attribute as the positive quiet… |
-| `attribute-format-fetches` | Metal's `MTLAttributeFormatFloatRG11B10` stage-in fetch answers the positive quiet NaN 0x7FC00000 for a field whose 5-bit exponent is all ones, and ours answers… |
 | `half-texel-nans-r16f` | Metal's `half` result of a 16-bit float texel hands back the texel's own NaN code, with its sign, its payload and its signalling bit kept, and ours answers the … |
 | `half-texel-nans-r16f` | Metal's `half` result of a 16-bit float texel hands back the texel's own NaN code, with its sign, its payload and its signalling bit kept, and ours answers the … |
 | `half-texel-nans-r16f` | Metal's `half` result of a 16-bit float texel hands back the texel's own NaN code, with its sign, its payload and its signalling bit kept, and ours answers the … |
@@ -2288,4 +2278,16 @@ A case whose difference from Metal is recorded rather than compared away. The le
 | `texture-pairs-plain-contents` | Plain Metal answers `heapTextureSizeAndAlignWithDescriptor:` for a MTLStorageModeMemoryless descriptor and the runtime refuses it `Invalid(StorageMode)`, so eve… |
 | `texture-pairs-storage-crossings` | Plain Metal answers `heapTextureSizeAndAlignWithDescriptor:` for a MTLStorageModeMemoryless descriptor and the runtime refuses it `Invalid(StorageMode)`, so eve… |
 | `texture-pairs-storage-crossings` | Plain Metal answers `heapTextureSizeAndAlignWithDescriptor:` for a MTLStorageModeMemoryless descriptor and the runtime refuses it `Invalid(StorageMode)`, so eve… |
+| `vertex-format-float4` | Metal's fixed-function vertex fetch of a narrow float canonicalizes a NaN: a `half` code and a `FloatRG11B10` field whose 5-bit exponent is all ones both reach … |
+| `vertex-format-float4` | Metal's fixed-function vertex fetch of a narrow float canonicalizes a NaN: a `half` code and a `FloatRG11B10` field whose 5-bit exponent is all ones both reach … |
+| `vertex-format-float4` | Metal's fixed-function vertex fetch of a narrow float canonicalizes a NaN: a `half` code and a `FloatRG11B10` field whose 5-bit exponent is all ones both reach … |
+| `vertex-format-float4` | Metal's fixed-function vertex fetch of a narrow float canonicalizes a NaN: a `half` code and a `FloatRG11B10` field whose 5-bit exponent is all ones both reach … |
+| `vertex-format-float4` | Metal's fixed-function vertex fetch of a narrow float canonicalizes a NaN: a `half` code and a `FloatRG11B10` field whose 5-bit exponent is all ones both reach … |
+| `vertex-format-instance-step` | Metal's fixed-function vertex fetch of a narrow float canonicalizes a NaN: a `half` code and a `FloatRG11B10` field whose 5-bit exponent is all ones both reach … |
+| `half-texel-nans-r16f` | Metal's `texture2d<half>` never widens, so a 16-bit float texel's NaN comes back as its own bits (verified: this case's own recording of plain Metal on an M3 Ma… |
+| `half-texel-nans-rg16f` | Metal's `texture2d<half>` never widens, so a 16-bit float texel's NaN comes back as its own bits (verified: this case's own recording of plain Metal on an M3 Ma… |
+| `half-texel-nans-rgba16f` | Metal's `texture2d<half>` never widens, so a 16-bit float texel's NaN comes back as its own bits (verified: this case's own recording of plain Metal on an M3 Ma… |
+| `sample-fills-d32-2` | Metal's fill stores every depth value as given, a denormal included, so sample 0 of texel (1,1) holds 0x00000001 (verified: the carried probe `ms.m` on an M3 Ma… |
+| `sample-fills-d32-4` | Metal's fill stores every depth value as given, a denormal included, so sample 0 of texel (1,1) holds 0x00000001 (verified: the carried probe `ms.m` on an M3 Ma… |
+| `sample-fills-d32s8-4` | Metal's fill stores every depth value as given, a denormal included, so sample 0 of texel (1,1) holds 0x00000001 (verified: the carried probe `ms.m` on an M3 Ma… |
 
