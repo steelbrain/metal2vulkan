@@ -293,3 +293,67 @@ fn the_model_answers_metal_s_sizes_by_usage() {
     }
     println!("{unanswered:#?}");
 }
+
+/// Metal answers a `Memoryless` descriptor its texture's bytes **uncompressed**: a texture with no
+/// memory holds no lossless-compression metadata. `Device::heap_texture_size_and_align` answers it
+/// so (`texture/heap::Device::memoryless_answer`), where it refused the call before.
+///
+/// Every `Memoryless` answer the conformance suite recorded on an Apple M3 Max under macOS 27.0.1
+/// (`texture-pairs-storage-crossings` and `texture-pairs-plain-contents`, nineteen sites over
+/// seventeen distinct descriptors), each held against the model with the texture uncompressed.
+/// Where Metal compresses the same descriptor under another storage mode its answer is larger, and
+/// that compressed answer is listed beside each so the two cannot be confused: the modes that keep
+/// every texture uncompressed answer alike.
+#[test]
+fn a_memoryless_descriptor_answers_metal_s_uncompressed_size() {
+    // Type, extent, levels, Vulkan layers, samples, usage, Metal's `Memoryless` answer, and its
+    // `Private` answer for the same descriptor.
+    #[rustfmt::skip]
+    let rows: [(PixelFormat, T, [u32; 3], u32, u32, u32, u32, (u64, u64), u64); 17] = [
+        (P::RGBA8Unorm, T::Type2D, [64, 64, 1], 1, 1, 1, 0x1, (16384, 128), 16512),
+        (P::RGBA8Unorm, T::Type2D, [64, 64, 1], 7, 1, 1, 0x1, (22144, 128), 22528),
+        (P::RGBA8Unorm, T::Type2DArray, [64, 64, 1], 7, 3, 1, 0x1, (98304, 16384), 99456),
+        (P::RGBA8Unorm, T::Cube, [64, 64, 1], 7, 6, 1, 0x1, (196608, 16384), 198912),
+        (P::RGBA8Unorm, T::Type3D, [64, 64, 8], 7, 1, 1, 0x1, (262144, 16384), 265216),
+        (P::RGBA8Unorm, T::Type3D, [8, 8, 64], 4, 1, 1, 0x1, (65536, 128), 65536),
+        (P::RGBA8Unorm, T::Type2D, [64, 64, 1], 1, 1, 1, 0x0, (16384, 128), 16384),
+        (P::RGBA8Unorm, T::Type2D, [64, 64, 1], 1, 1, 1, 0x2, (16384, 128), 16384),
+        (P::RGBA8Unorm, T::Type2D, [64, 64, 1], 1, 1, 1, 0x3, (16384, 128), 16384),
+        (P::RGBA8Unorm, T::Type2D, [64, 64, 1], 1, 1, 1, 0x4, (16384, 128), 16512),
+        (P::RGBA8Unorm, T::Type2D, [64, 64, 1], 1, 1, 1, 0x5, (16384, 128), 16512),
+        (P::RGBA8Unorm, T::Type2D, [64, 64, 1], 1, 1, 1, 0x11, (16384, 128), 16384),
+        (P::RGBA8Unorm, T::Type2D, [64, 64, 1], 1, 1, 1, 0x4000, (16384, 128), 16512),
+        (P::RGBA8Unorm, T::Type2D, [64, 64, 1], 1, 1, 1, 0x8000, (16384, 128), 16512),
+        (P::Depth32Float, T::Type2D, [64, 64, 1], 1, 1, 1, 0x4, (16384, 128), 16512),
+        (P::RGBA8Unorm, T::Type2DMultisample, [64, 64, 1], 1, 1, 4, 0x4, (65536, 128), 66048),
+        (P::RGBA8Unorm, T::Type2D, [64, 64, 1], 1, 1, 1, 0x1, (16384, 128), 16512),
+    ];
+    for (pf, ty, extent, levels, layers, samples, raw, memoryless, private) in rows {
+        let layout = TextureLayout {
+            texture_type: ty,
+            pixel_format: pf,
+            extent,
+            levels,
+            layers,
+            samples,
+        };
+        let usage = effective_usage(TextureUsage::try_from(raw).unwrap());
+        let what = format!("{pf:?} {ty:?} {extent:?} l{levels} x{samples} {raw:#x}");
+        let format = image_format(pf);
+        let level = MetalLevel::MacOS27_0_1;
+        // Uncompressed, which is what the query answers for `Memoryless` storage.
+        let plain = metal_heap_layout(&layout, usage, false, format, level);
+        let answer = plain
+            .answer
+            .unwrap_or_else(|| panic!("no model answer: {what}"));
+        assert_eq!((answer.size, answer.align), memoryless, "{what}");
+        // The compressed answer for the same descriptor, which the other modes take: the two are
+        // the same only where Metal keeps the texture uncompressed anyway.
+        let optimized = metal_heap_layout(&layout, usage, true, format, level);
+        let other = optimized
+            .answer
+            .unwrap_or_else(|| panic!("no model answer: {what}"));
+        assert_eq!(other.size, private, "{what}");
+        assert_eq!(other.align, answer.align, "{what}");
+    }
+}

@@ -1376,8 +1376,9 @@ pub enum RuntimeGap {
     /// (`astc.rs`), or a sparse heap's texture of an ETC2 or EAC format on a device without them
     /// (`etc.rs`) or of a 4:2:2 format (`chroma_pairs.rs`), which Metal makes: an ASTC texture's
     /// blocks would lie in the heap's bytes, which its decoded twin would decode as the texture is
-    /// placed, and a sparse heap's tiles are mapped by GPU commands. A heap's size query for an
-    /// ASTC one is refused alike. A texture of its own takes them
+    /// placed, and a sparse heap's tiles are mapped by GPU commands. A heap's size query answers
+    /// an ASTC one Metal's model, which no image of the device decides. A texture of its own takes
+    /// them
     /// (`Degradation::CarriedDecodedTwin`), and so does an ETC2, EAC or 4:2:2 texture of a heap.
     DecodedHeapTexture,
     /// A draw (`drawPrimitives:` and its forms, or an indirect command buffer's command) that

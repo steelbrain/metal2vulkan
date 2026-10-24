@@ -478,6 +478,82 @@ fn a_depth_twin_lies_past_its_image_inside_the_heap_texture_s_bytes() {
     );
 }
 
+/// A heap texture's footprint is Metal's answer, not the running driver's granularity. A heap's
+/// own buffer covers its memory from end to end, so no `bufferImageGranularity` padding can put a
+/// heap's image in a granularity page no buffer lies in: the padding separates nothing there and
+/// would only widen the number a program places heap resources by. `ImagePlacement::in_heap` drops
+/// it and keeps the aux map's chunks, which are the image's own compression data past its reported
+/// size.
+///
+/// Driven by the shape the first conformance replay on an RTX 5080 Laptop GPU (NVIDIA 615.71.09)
+/// found, whose `bufferImageGranularity` is 1024 bytes where Metal answers 128 for every
+/// descriptor of the family: an image that asks Metal's own bytes at Metal's own alignment answers
+/// Metal's, where the padded placement answers 1024; an image that asks a coarser alignment or
+/// more bytes than Metal's answer does not fit it ([`images_fit`]), and `Device::heap_plan` holds
+/// such a texture to Metal's answer by a shadow of its bytes instead.
+#[test]
+fn a_heap_texture_s_footprint_takes_no_granularity_padding() {
+    use crate::texture::heap::{heap_extent, images_fit};
+    use crate::texture::ImagePlacement;
+    use crate::SizeAndAlign;
+    use ash::vk::MemoryRequirements;
+    use metal2vulkan::error::RuntimeDriverDefect;
+    use std::collections::BTreeSet;
+    let requirements = |size, alignment| MemoryRequirements {
+        size,
+        alignment,
+        memory_type_bits: 1,
+    };
+    let answer = |size, align| SizeAndAlign { size, align };
+    let nvidia = ImagePlacement::new(1024, &BTreeSet::new());
+    // Metal's answer for a 64x64 `RGBA8Unorm` texture a shader writes, which its driver's image
+    // asks exactly: the answer is Metal's, where the padded placement answers a 1024 alignment.
+    let metal = answer(16384, 128);
+    let image = requirements(16384, 128);
+    assert_eq!(heap_extent(&image, None, nvidia).0, answer(16384, 1024));
+    assert_eq!(heap_extent(&image, None, nvidia.in_heap()).0, metal);
+    assert!(images_fit(
+        heap_extent(&image, None, nvidia.in_heap()).0,
+        metal
+    ));
+    // The 64x64 `RGBA8Unorm` 7-level texture the replay found at 23552 bytes where Metal answers
+    // 22528: its image asks 22784 (llvmpipe answered that one for the same descriptor), which the
+    // padding carries to a whole page. Without the padding the footprint is the image's own, 256
+    // bytes past Metal's answer, which does not fit it: a shadow of the texture's bytes holds it.
+    let seven = requirements(22784, 128);
+    let metal_seven = answer(22528, 128);
+    assert_eq!(heap_extent(&seven, None, nvidia).0, answer(23552, 1024));
+    assert_eq!(
+        heap_extent(&seven, None, nvidia.in_heap()).0,
+        answer(22784, 128)
+    );
+    assert!(!images_fit(
+        heap_extent(&seven, None, nvidia.in_heap()).0,
+        metal_seven
+    ));
+    // An image whose own alignment is coarser than Metal's, and one that asks more bytes (the
+    // 5000-texel `Type1D` the replay found at 160768 bytes where Metal answers 32768), do not fit
+    // Metal's answer: a shadow of the texture's bytes holds those to it.
+    let coarse = heap_extent(&requirements(16384, 1024), None, nvidia.in_heap()).0;
+    assert_eq!(coarse, answer(16384, 1024));
+    assert!(!images_fit(coarse, metal));
+    let wide = heap_extent(&requirements(160768, 128), None, nvidia.in_heap()).0;
+    assert!(!images_fit(wide, answer(32768, 128)));
+    // A depth twin still lies past the image inside the texture's bytes, at its own alignment,
+    // with no page of the granularity's between them.
+    let (got, offset) = heap_extent(&image, Some(&requirements(16384, 256)), nvidia.in_heap());
+    assert_eq!((got, offset), (answer(32768, 256), Some(16384)));
+    // The aux map's chunks survive: ANV's compressed 4x4 `RGBA8Unorm` image on an Xe-LP GPU asks
+    // 4112 bytes and writes compression data to the end of the chunk it falls in.
+    let short = RuntimeDriverDefect::ImageSizeShortOfCompressionData;
+    let anv = ImagePlacement::new(64, &BTreeSet::from([short]));
+    let compressed = requirements(4112, 65536);
+    assert_eq!(
+        heap_extent(&compressed, None, anv.in_heap()).0,
+        answer(4352, 65536)
+    );
+}
+
 /// A heap's memory starts at a multiple of every image alignment measured, so a heap texture of
 /// such an image is placed, not refused: RADV's on an RX 7900 XTX (Mesa 26.0.8), 128 KiB for a
 /// `D16`, `D32F` or `D32FS8` image of 8 x 8 texels or more and 256 KiB for a multisample image from

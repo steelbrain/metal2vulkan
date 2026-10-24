@@ -2,23 +2,34 @@
 //! the texture's offset, so a heap's buffers and textures over the same bytes alias as Metal's do;
 //! a texture buffer, a buffer of the heap's.
 //!
-//! - **Size and alignment.** [`Device::heap_texture_size_and_align`] answers this device's
-//!   requirement for the image the runtime makes of the descriptor: the plan `new_texture`
-//!   makes, with the usage the runtime adds itself (`with_free_usage`), its alignment the
-//!   image's, at least `bufferImageGranularity`, and its size rounded up to whole granularity
-//!   pages, and, where the driver answers a compressed image's size short of its compression
-//!   data (ANV on Intel's Xe-LP GPUs), to whole 256-byte chunks of the aux map's, so no other
-//!   resource lies in the chunk (`texture::ImagePlacement`). Metal's answer is its GPU's own (an M4
-//!   on macOS 27.0.1 and an M3 Max on macOS 26.7 answer alike: 128-byte alignment and the sizes of
-//!   Apple's layouts, 16384 bytes for a 64x64 `RGBA8Unorm` texture a shader writes and 16512 for
-//!   one it only reads, which Metal compresses), and a program places
-//!   by the query's answer, so the runtime answers its own device's. It depends on the device and
-//!   the descriptor alone, never on what was allocated. Where Metal's layout is measured
-//!   (`heap_tiled.rs`: plain and block-compressed formats; multisample textures), it answers the
-//!   larger of that and Metal's answer, announcing `heap-texture-larger-than-metal` once where its
-//!   image's is the larger in size or alignment (no image binds at Metal's offsets there, so the
-//!   device's answer stands; every NVIDIA profile in `validation/profiles` states a
-//!   `bufferImageGranularity` of 1024 bytes, so there every texture's alignment is at least that).
+//! - **Size and alignment.** [`Device::heap_texture_size_and_align`] answers **Metal's** answer
+//!   wherever the runtime models it (`heap_tiled.rs`: plain and block-compressed formats;
+//!   multisample textures; the measured routes below), because that number is what a program sizes
+//!   a heap and places its resources by: a consumer that lays a heap out at Metal's offsets and is
+//!   told a coarser alignment or a larger size under-allocates and its placements do not fit. An
+//!   M4 on macOS 27.0.1 and an M3 Max on macOS 26.7 answer alike (128-byte alignment and the sizes
+//!   of Apple's layouts, 16384 bytes for a 64x64 `RGBA8Unorm` texture a shader writes and 16512
+//!   for one it only reads, which Metal compresses), so the answer is the device's only where the
+//!   model has none. It depends on the device and the descriptor alone, never on what was
+//!   allocated.
+//!
+//!   The texture is held to that answer in one of two ways ([`images_fit`]). Where the images the
+//!   runtime makes of the descriptor (the plan `new_texture` makes, with the usage the runtime
+//!   adds itself, `with_free_usage`, and a depth twin past it) ask no more bytes and no coarser
+//!   alignment, the image is bound at the texture's offset of the heap's memory. Their footprint
+//!   is the images' own: a heap's image takes **no** `bufferImageGranularity` padding, because the
+//!   heap's own buffer covers its memory from end to end, so no padding can put the image in a
+//!   granularity page no buffer lies in and the padding would only widen the answer
+//!   (`texture::ImagePlacement::in_heap`; every NVIDIA profile in `validation/profiles` states a
+//!   granularity of 1024 bytes where Metal answers 128). Where the driver answers a compressed
+//!   image's size short of its compression data (ANV on Intel's Xe-LP GPUs) the footprint still
+//!   takes whole 256-byte chunks of the aux map's, so no other resource lies in a chunk the image
+//!   writes. Where the images ask more, the texture is a shadow of its bytes with its image in
+//!   memory of its own (Metal's tiles where they serve, else rows) and takes Metal's answer all
+//!   the same; where no shadow serves, the answer is the larger of the two and the device
+//!   announces `heap-texture-larger-than-metal` once (a measured route's answer is refused
+//!   instead, `NotImplemented(HeapTextureMemory)`: its bytes are no layout the device's image
+//!   holds).
 //!   The usage changes Metal's answer only through whether Metal compresses the texture
 //!   (`heap_tiled::metal_keeps_uncompressed`, a colour texture of `ShaderWrite`, `PixelFormatView`
 //!   or `ShaderAtomic` usage stays uncompressed, a depth or stencil texture of no usage does), and
@@ -1043,10 +1054,12 @@ fn sized_as(descriptor: &TextureDescriptor) -> Option<TextureDescriptor> {
 /// where it has one, takes of a heap on a device that places images as `placement` does: the image
 /// at the texture's offset and the twin past it, at the next multiple of its alignment, each placed
 /// as `placement` places an image; the texture's alignment the largest of theirs and its size in
-/// `placement`'s units (whole granularity pages, and whole chunks of compression data where the
-/// driver needs them) over both, so each image's offset meets its own alignment wherever the
-/// texture lies, and neither shares a page (or a chunk) with bytes outside the texture's range.
-/// With the twin's offset from the texture's.
+/// `placement`'s units over both, so each image's offset meets its own alignment wherever the
+/// texture lies. `Device::heap_plan` passes `ImagePlacement::in_heap`, the images' own alignments
+/// and sizes in whole chunks of compression data where the driver writes them past the size (so
+/// no other resource lies in a chunk the image writes) and no `bufferImageGranularity` padding,
+/// which separates a heap's image from nothing: the heap's own buffer covers its memory from end
+/// to end. With the twin's offset from the texture's.
 pub(crate) fn heap_extent(
     image: &vk::MemoryRequirements,
     twin: Option<&vk::MemoryRequirements>,
@@ -1064,6 +1077,15 @@ pub(crate) fn heap_extent(
     });
     let size = end.next_multiple_of(placement.size_unit);
     (SizeAndAlign { size, align }, twin_offset)
+}
+
+/// Whether a heap texture whose images take `images` of the heap ([`heap_extent`]) lies inside
+/// Metal's answer `metal`, so the texture takes Metal's answer with its image bound at the
+/// texture's offset: no more bytes and no coarser alignment. A texture that does not is held to
+/// Metal's answer by a shadow of its bytes, its image in memory of its own, where one serves
+/// (`Device::heap_plan`); the number the query answers is Metal's either way.
+pub(crate) fn images_fit(images: SizeAndAlign, metal: SizeAndAlign) -> bool {
+    images.size <= metal.size && images.align <= metal.align
 }
 
 /// Whether a heap texture of alignment `align` lies at a multiple of it wherever a heap's memory
@@ -1208,22 +1230,27 @@ fn heap_offset(
 
 impl Device {
     /// `heapTextureSizeAndAlignWithDescriptor:`: the bytes and alignment a texture of
-    /// `descriptor` takes of a heap on this device (the module docs): its image's alignment, at
-    /// least `bufferImageGranularity`, and size in whole granularity pages, and whole chunks of
-    /// compression data where the driver needs them; with its depth twin's bytes after the image's
-    /// where it has one. The image of a descriptor with `allow_gpu_optimized_contents` off is one
-    /// of `PixelFormatView` usage, as Metal lays out a color texture with it off (the module docs).
-    /// A texture of the descriptor fits at any multiple of the alignment in any heap with room. A
-    /// texture buffer takes Metal's answer: its row of texels, at a multiple of 16 bytes.
+    /// `descriptor` takes of a heap on this device (the module docs). Metal's answer wherever the
+    /// runtime models it, so a program may size a heap and place its resources by Metal's
+    /// numbers; the device's images' own footprint, with a depth twin's bytes after the image's
+    /// where it has one and whole chunks of compression data where the driver writes them past an
+    /// image's size, where the model has none or no shadow holds the texture to Metal's answer
+    /// (then announced `heap-texture-larger-than-metal`). The image of a descriptor with
+    /// `allow_gpu_optimized_contents` off is one of `PixelFormatView` usage, as Metal lays out a
+    /// color texture with it off (the module docs). A texture of the descriptor fits at any
+    /// multiple of the alignment in any heap with room. A texture buffer takes Metal's answer: its
+    /// row of texels, at a multiple of 16 bytes.
     ///
     /// A descriptor of which plain Metal makes no texture (its creators answer [`Error::Nil`]:
     /// `Unspecialized`, a two-plane extended-range cube or cube array, a format Metal makes no
     /// texture of from a descriptor alone such as a two-plane YCbCr one) answers 0 bytes at the
     /// alignment Metal's query answers for it (`no_texture_alignment`), once every rule Metal stops
-    /// passed. Refused as [`Heap::new_texture`] refuses the descriptor: `Invalid` for a descriptor
-    /// Metal stops (ending the process, as Metal's query does) or `Memoryless` storage,
-    /// `Unsupported` for a format, size or sample count the device lacks, and `NotImplemented` for
-    /// an alignment past the heap's base (`HeapTextureAlignment`).
+    /// passed. A descriptor of `Memoryless` storage, which no heap holds, answers Metal's model
+    /// with the texture uncompressed, as plain Metal answers it (`memoryless_answer`); every other
+    /// refusal is [`Heap::new_texture`]'s for the descriptor: `Invalid` for a descriptor Metal
+    /// stops (ending the process, as Metal's query does), `Unsupported` for a format, size or
+    /// sample count the device lacks, and `NotImplemented` for an alignment past the heap's base
+    /// (`HeapTextureAlignment`).
     ///
     /// Metal's answer by usage (an Apple M4 under macOS 27.0.1, 63210 answers, the
     /// consumer's M3 Max rows under 26.7 alike): each shape has two answers, its compressed and its
@@ -1259,7 +1286,22 @@ impl Device {
         if layout.texture_type == TextureType::TextureBuffer {
             return texture_buffer_size_and_align(&layout);
         }
-        Ok(self.heap_plan(CALL, descriptor, layout)?.size_and_align)
+        if descriptor.resource_options.storage_mode()? == StorageMode::Memoryless {
+            return self.memoryless_answer(CALL, descriptor, &layout);
+        }
+        match self.heap_plan(CALL, descriptor, layout) {
+            // A heap texture whose image the device decodes as it is placed is refused its making
+            // (`heap_plan`: an ASTC carrier's decoded twin would decode what the heap's bytes
+            // held, `astc.rs`), where plain Metal makes it. Its footprint is Metal's blocks,
+            // which no image of the device decides, so the query answers Metal's model as plain
+            // Metal answers it; the making's refusal stands.
+            Err(Error::NotImplemented(RuntimeGap::DecodedHeapTexture)) => {
+                let optimized = descriptor.allow_gpu_optimized_contents;
+                let answer = self.modelled_answer(CALL, descriptor, &layout, optimized)?;
+                answer.ok_or(Error::NotImplemented(RuntimeGap::DecodedHeapTexture))
+            }
+            plan => Ok(plan?.size_and_align),
+        }
     }
 
     /// Metal's own answer to `heapTextureSizeAndAlignWithDescriptor:` for `descriptor`, as the
@@ -1270,19 +1312,21 @@ impl Device {
     /// [`Device::heap_texture_size_and_align`] announces `unmeasured-heap-texture-size`. No Metal
     /// counterpart: Metal answers its own GPU's.
     ///
-    /// [`Device::heap_texture_size_and_align`] stays the answer to place a texture by: it is at
-    /// least this one, and larger where the device's image needs more bytes or a coarser
-    /// alignment (announced `heap-texture-larger-than-metal`; every texture on NVIDIA, whose
-    /// `bufferImageGranularity` is 1024 bytes). This one is for bookkeeping that must follow
-    /// Metal's numbers, such as the range a texture of memory of its own takes of a guest's
-    /// address space. It announces nothing and makes no image.
+    /// [`Device::heap_texture_size_and_align`] stays the answer to place a texture by, and is
+    /// this one wherever the model has an answer: a texture whose images need more bytes or a
+    /// coarser alignment is held to it by a shadow of its bytes, and only where no shadow serves
+    /// is the answer the larger of the two (announced `heap-texture-larger-than-metal`). This one
+    /// is for bookkeeping that must follow Metal's numbers whatever the device does, such as the
+    /// range a texture of memory of its own takes of a guest's address space. It announces nothing
+    /// and makes no image.
     ///
     /// Answered as the size query answers Metal's: a descriptor of which plain Metal makes no
     /// texture 0 bytes at Metal's alignment for it, a texture buffer its row of texels at 16, a
     /// 4:2:2 or two-plane extended-range texture its measured planes, an `X32_Stencil8` texture a
-    /// `Stencil8` one's answer, one of `BlockWritesOnly` usage the answer without it. Refused as
+    /// `Stencil8` one's answer, one of `BlockWritesOnly` usage the answer without it, one of
+    /// `Memoryless` storage the uncompressed answer. Refused as
     /// [`Device::heap_texture_size_and_align`] refuses the descriptor before it plans an image:
-    /// `Invalid` for a descriptor Metal stops, or `Memoryless` storage.
+    /// `Invalid` for a descriptor Metal stops.
     pub fn metal_heap_texture_size_and_align(
         &self,
         descriptor: &TextureDescriptor,
@@ -1301,11 +1345,15 @@ impl Device {
         if layout.texture_type == TextureType::TextureBuffer {
             return texture_buffer_size_and_align(&layout).map(Some);
         }
-        self.modelled_answer(CALL, descriptor, &layout)
+        let optimized = descriptor.allow_gpu_optimized_contents
+            && descriptor.resource_options.storage_mode()? != StorageMode::Memoryless;
+        self.modelled_answer(CALL, descriptor, &layout, optimized)
     }
 
     /// Metal's modelled answer for a heap texture of `descriptor` (checked as `layout`, not a
-    /// texture buffer), for `call`: the planes' answer where Metal's is measured so
+    /// texture buffer), for `call`, where Metal may keep it losslessly compressed while
+    /// `optimized` (the descriptor's `allowGPUOptimizedContents`, and never for `Memoryless`
+    /// storage, [`Device::memoryless_answer`]): the planes' answer where Metal's is measured so
     /// ([`planes_answer`]), the answer of the descriptor Metal sizes it as ([`sized_as`]), else
     /// `heap_tiled`'s model ([`modelled_size`]); `None` where none answers.
     fn modelled_answer(
@@ -1313,23 +1361,25 @@ impl Device {
         call: &'static str,
         descriptor: &TextureDescriptor,
         layout: &TextureLayout,
+        optimized: bool,
     ) -> Result<Option<SizeAndAlign>, Error> {
         if let Some(answer) = planes_answer(layout) {
             return Ok(Some(answer));
         }
         if let Some(other) = sized_as(descriptor) {
             let layout = self.heap_layout(call, &other, Creator::SizeQuery)?;
-            return self.modelled_answer(call, &other, &layout);
+            return self.modelled_answer(call, &other, &layout, optimized);
         }
         let usage = effective_usage(descriptor.usage);
-        let optimized = descriptor.allow_gpu_optimized_contents;
         let level = self.properties().metal_level;
         Ok(modelled_size(layout, usage, optimized, level))
     }
 
     /// The layout of a heap texture of `descriptor`, for `call`: the descriptor checked for
     /// `creator` (a heap's, or the size query, which answers for what the runtime does not build
-    /// yet), its options too, and its storage one a heap has (`Shared` or `Private`).
+    /// yet), and its options too. A heap's storage is `Shared` or `Private`, so a heap's creator
+    /// refuses `Memoryless` storage (`Heap::placed_options` refuses it as the heap's own mismatch
+    /// too); the size query answers it, as plain Metal does ([`Device::memoryless_answer`]).
     fn heap_layout(
         &self,
         call: &'static str,
@@ -1343,14 +1393,44 @@ impl Device {
         let layout = descriptor
             .check_made(creator, self.properties().texture_rules())
             .map_err(|refused| refused.error(call))?;
-        // A heap's storage is `Shared` or `Private`.
-        if storage == StorageMode::Memoryless {
+        if storage == StorageMode::Memoryless && creator != Creator::SizeQuery {
             return Err(invalid(call, Problem::StorageMode));
         }
         if self.is_lost() {
             return Err(Error::DeviceLost);
         }
         Ok(layout)
+    }
+
+    /// What the heap size query answers for a `Memoryless` `descriptor` (checked as `layout`, not
+    /// a texture buffer), for `call`: Metal's modelled answer with the texture uncompressed,
+    /// because a texture with no memory holds no lossless-compression metadata. Measured on an
+    /// Apple M3 Max under macOS 27.0.1: every one of the 20 `Memoryless` answers of
+    /// `texture-pairs-storage-crossings` and `texture-pairs-plain-contents` is its descriptor's
+    /// uncompressed answer, where the other modes answer the compressed one (a 64x64
+    /// `RGBA8Unorm` texture a shader reads: 16384 against 16512; its 7-level twin 22144 against
+    /// 22528; a 3-slice array 98304 against 99456; a 4-sample one 65536 against 66048; a
+    /// `Depth32Float` render target 16384 against 16512), and the modes that keep every texture
+    /// uncompressed answer alike.
+    ///
+    /// No heap holds such a texture, so the runtime plans no image for it. Where the model has no
+    /// answer (a format or sample count not measured) it answers the `Private` twin's, as the
+    /// query answers every other mode, announcing `unmeasured-heap-texture-size` there.
+    fn memoryless_answer(
+        &self,
+        call: &'static str,
+        descriptor: &TextureDescriptor,
+        layout: &TextureLayout,
+    ) -> Result<SizeAndAlign, Error> {
+        if let Some(answer) = self.modelled_answer(call, descriptor, layout, false)? {
+            return Ok(answer);
+        }
+        let private = TextureDescriptor {
+            resource_options: (descriptor.resource_options).with_storage_mode(StorageMode::Private),
+            ..*descriptor
+        };
+        let layout = self.heap_layout(call, &private, Creator::SizeQuery)?;
+        Ok(self.heap_plan(call, &private, layout)?.size_and_align)
     }
 
     /// The images a heap texture of `descriptor` (checked as `layout`, not a texture buffer)
@@ -1370,7 +1450,8 @@ impl Device {
         let (plan, twin) = plan_images(&layout, usage, false, &facts)
             .map_err(|refusal| image_error(call, refusal))?;
         // A heap texture's samples read what its bytes hold, which an ASTC carrier's decoded twin
-        // would decode as it is placed (`astc.rs`): refused, its size query too.
+        // would decode as it is placed (`astc.rs`): refused. The size query answers Metal's model
+        // over this refusal (`Device::heap_texture_size_and_align`).
         if crate::astc::decode_of(&plan).is_some() {
             return Err(Error::NotImplemented(RuntimeGap::DecodedHeapTexture));
         }
@@ -1443,34 +1524,38 @@ impl Device {
             }
             None => None,
         };
+        // The images' own footprint: a heap's image takes neither the granularity padding nor a
+        // page of its own (`ImagePlacement::in_heap`).
+        let placement = self.shared().textures.placement().in_heap();
         let (mut size_and_align, twin_offset) = heap_extent(
             &image.requirements,
             twin.as_ref().map(|twin| &twin.requirements),
-            self.shared().textures.placement(),
+            placement,
         );
         if let Some(compressed) = compressed {
             let free = self.with_free_usage(compressed, layout.texture_type)?;
             let requirements =
                 self.planned_requirements(&free, layout.texture_type, vk::ImageTiling::OPTIMAL)?;
-            let placement = self.shared().textures.placement();
             let (answer, _) = heap_extent(&requirements, None, placement);
             size_and_align = SizeAndAlign {
                 size: size_and_align.size.max(answer.size),
                 align: size_and_align.align.max(answer.align),
             };
         }
-        // Metal's answer where it is not its GPU's image's (`metal_heap_answer`): the image lies
-        // in it where the device's own answer fits inside it, else it is a shadow of the
-        // texture's bytes there, in memory of its own. A 4:2:2 texture is always a shadow: its
-        // bytes then lie where Metal's linear rows do (`heap_plane_layout`). A two-plane
-        // texture's image lies apart from the heap's bytes (above).
+        // What the device's images take of the heap, kept apart from the answer: a texture held
+        // to Metal's answer takes those bytes of memory of its own instead.
+        let images = size_and_align;
+        // Metal's answer where it is not the answer the runtime models for every descriptor
+        // (`metal_heap_answer`): a 4:2:2 or two-plane extended-range texture's planes, an
+        // `X32_Stencil8` or `BlockWritesOnly` texture as the descriptor Metal sizes it as.
         let special = self.metal_heap_answer(call, descriptor, &layout, image.plan.format)?;
-        // Metal's modelled answer where the texture takes the larger of it and its image's.
-        let mut modelled = None;
-        // Metal's answer, where the runtime knows it.
-        let mut metal_answer = special.as_ref().map(|(metal, _)| *metal);
-        let mut metal_layout = match &special {
-            Some((_, metal_layout)) => metal_layout.clone(),
+        // Whether that is where Metal's answer comes from: a texture whose images do not fit such
+        // a measured route's answer is refused, where one that does not fit the model's keeps its
+        // device's answer, announced.
+        let measured_route = special.is_some();
+        // Metal's answer, where the runtime knows it, and the runtime's layout of the texture.
+        let (metal_answer, mut metal_layout) = match special {
+            Some((metal, metal_layout)) => (Some(metal), metal_layout),
             None => {
                 let usage = effective_usage(descriptor.usage);
                 let optimized = descriptor.allow_gpu_optimized_contents;
@@ -1480,47 +1565,53 @@ impl Device {
                 if measured.answer.is_none() {
                     self.degrade_unmeasured_size(call, &layout);
                 }
-                metal_answer = measured.answer;
-                if let Some(metal) = measured.answer {
-                    size_and_align = match image.route {
-                        // An image in memory of its own takes none of the heap's bytes: the
-                        // texture takes Metal's.
-                        AliasRoute::Lossless => metal,
-                        _ => {
-                            modelled = Some(metal);
-                            SizeAndAlign {
-                                size: size_and_align.size.max(metal.size),
-                                align: size_and_align.align.max(metal.align),
-                            }
-                        }
-                    };
-                }
-                measured.layout
+                (measured.answer, measured.layout)
             }
         };
-        if let Some((metal, _)) = special {
+        // Metal's answer, which a program sizes a heap and places its resources by, is the
+        // answer: the image lies in it where the images fit inside it, else the texture is a
+        // shadow of its bytes there, its image in memory of its own (Metal's tiles below). A
+        // 4:2:2 texture is always a shadow: its bytes then lie where Metal's linear rows do
+        // (`heap_plane_layout`). A two-plane texture's image lies apart from the heap's bytes
+        // (above). Metal's answer the texture cannot be held to, announced below.
+        let mut past_metal = None;
+        if let Some(metal) = metal_answer {
             let fits = matches!(
                 image.route,
                 AliasRoute::Unaliased | AliasRoute::Planes | AliasRoute::Lossless
             ) || (!chroma_pairs::is_four_two_two(layout.pixel_format)
-                && size_and_align.size <= metal.size
-                && size_and_align.align <= metal.align);
-            if !fits {
-                let shadowed = matches!(image.route, AliasRoute::Shadow | AliasRoute::MemoryShadow);
-                if twin.is_some() {
-                    return Err(Error::NotImplemented(RuntimeGap::HeapTextureMemory));
-                }
+                && images_fit(images, metal));
+            let shadowed = matches!(image.route, AliasRoute::Shadow | AliasRoute::MemoryShadow);
+            // Whether the texture is held to Metal's answer: its images inside it, or a shadow of
+            // its bytes that serves.
+            let held = if fits {
+                true
+            } else if twin.is_some() {
+                false
+            } else if layout.samples > 1 {
                 // A multisample image, which no copy of rows shadows, lies in memory of its own,
                 // as one the heap's memory cannot hold (above).
-                if layout.samples > 1 {
-                    image.route = AliasRoute::Lossless;
-                } else if !shadowable(&image.plan, metal.size) {
-                    return Err(Error::NotImplemented(RuntimeGap::HeapTextureMemory));
-                } else if !shadowed {
+                image.route = AliasRoute::Lossless;
+                true
+            } else if shadowable(&image.plan, metal.size) {
+                if !shadowed {
                     image.route = AliasRoute::MemoryShadow;
                 }
+                true
+            } else {
+                false
+            };
+            if held {
+                size_and_align = metal;
+            } else if measured_route {
+                return Err(Error::NotImplemented(RuntimeGap::HeapTextureMemory));
+            } else {
+                past_metal = Some(metal);
+                size_and_align = SizeAndAlign {
+                    size: size_and_align.size.max(metal.size),
+                    align: size_and_align.align.max(metal.align),
+                };
             }
-            size_and_align = metal;
         }
         // A texture whose image lies in memory of its own as a shadow of the heap's bytes (the
         // driver lays depth and stencil images apart from their memory, or the heap's memory
@@ -1561,7 +1652,7 @@ impl Device {
         if image.route != AliasRoute::Tiled {
             self.degrade_optimized_layout(descriptor, &layout);
         }
-        if let Some(metal) = modelled {
+        if let Some(metal) = past_metal {
             let past = size_and_align.size > metal.size || size_and_align.align > metal.align;
             if past && !self.keeps_optimized_layout(descriptor, &layout) {
                 self.degrade_past_metal_size(call, &layout, size_and_align, metal);

@@ -2260,11 +2260,14 @@ fast forms record, and each `PrecisionNote`'s rustdoc states its bound.
   submissions until it returns, where Metal's present holds no other queue.
 - `metal2vulkan-degrade-heap-texture-larger-than-metal` (precision). `HeapTextureLargerThanMetal`: A
   heap texture sized or made (`heap_texture_size_and_align`, `Heap::new_texture`) whose image on the
-  device takes more of a heap than Metal's answer, which the runtime models: more bytes, or a
-  coarser alignment (the image's own, at least `bufferImageGranularity`, its size in whole
-  granularity pages). Cost: heap_texture_size_and_align answers more bytes or a coarser alignment
-  than Metal's, so a heap sized by Metal's answers holds fewer such textures, and they lie at other
-  offsets; each texture keeps its own bytes.
+  device needs more bytes or a coarser alignment than Metal's answer, which the runtime models, and
+  which no shadow of the texture's bytes holds it to (`texture/heap.rs`: not a multisample texture,
+  whose image lies in memory of its own, nor one whose planes or Metal's tiles fit its bytes, and
+  not a texture held with a depth twin). The answer is then the larger of the two. Every other such
+  texture answers Metal's numbers and announces nothing here. Cost:
+  heap_texture_size_and_align answers more bytes or a coarser alignment than Metal's, so a heap
+  sized by Metal's answers holds fewer such textures, and they lie at other offsets; each texture
+  keeps its own bytes.
 - `metal2vulkan-degrade-linear-attachment-copies` (performance). `LinearAttachmentCopies`: A pass
   renders a color attachment whose texture's image is linear (a texture over a buffer's memory, a
   no-copy buffer's host pages included) through an image its texture keeps, where the device renders

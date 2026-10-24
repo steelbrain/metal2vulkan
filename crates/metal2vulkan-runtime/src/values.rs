@@ -217,6 +217,14 @@ impl ResourceOptions {
         )
     }
 
+    /// These options with the storage mode field set to `mode`, every other bit kept
+    /// ([`PRIVATE_BIT`](Self::PRIVATE_BIT) included).
+    pub(crate) fn with_storage_mode(self, mode: StorageMode) -> ResourceOptions {
+        ResourceOptions(
+            (self.0 & !(0xf << Self::STORAGE_SHIFT)) | (mode.raw() << Self::STORAGE_SHIFT),
+        )
+    }
+
     /// The options without [`PRIVATE_BIT`](Self::PRIVATE_BIT), and whether they set it.
     pub(crate) fn without_private_bit(self) -> (ResourceOptions, bool) {
         (

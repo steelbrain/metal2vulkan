@@ -321,6 +321,13 @@ const AUX_MAP_CHUNK: u64 = 256;
 /// the image's alignment and `bufferImageGranularity`, its size rounded up to whole granularity
 /// pages, so no linear resource shares a page with it.
 ///
+/// A heap's image takes neither ([`ImagePlacement::in_heap`]): the heap's own buffer covers its
+/// memory from end to end (`texture/heap.rs`), so no padding of the image's footprint can put it
+/// in a granularity page no buffer lies in, and the padding only widens the number a program
+/// places heap resources by, which is `heapTextureSizeAndAlignWithDescriptor:`'s answer. The aux
+/// map's chunks stay: those bytes are the image's own compression data, written past its reported
+/// size.
+///
 /// Where the device's driver answers a compressed image's size short of the memory its
 /// compression data takes ([`RuntimeDriverDefect::ImageSizeShortOfCompressionData`]: ANV on
 /// Intel's Xe-LP GPUs), the size is also rounded up to whole 256-byte chunks of the aux map's. ANV
@@ -337,6 +344,9 @@ pub(crate) struct ImagePlacement {
     /// The multiple an image's size is rounded up to: the granularity, or, where the driver needs
     /// it, at least the aux map's chunk; a power of two.
     size_unit: u64,
+    /// The bytes of compression data the driver writes past an image's reported size, rounded up
+    /// to: the aux map's chunk where the driver needs it, else 1; a power of two.
+    chunk: u64,
 }
 
 impl ImagePlacement {
@@ -352,6 +362,18 @@ impl ImagePlacement {
         ImagePlacement {
             granularity,
             size_unit: granularity.max(chunk),
+            chunk,
+        }
+    }
+
+    /// This placement for an image bound into a heap's memory: the image's own alignment and
+    /// size, in whole chunks of compression data where the driver writes them past the size (the
+    /// type docs).
+    pub(crate) fn in_heap(self) -> ImagePlacement {
+        ImagePlacement {
+            granularity: 1,
+            size_unit: self.chunk,
+            chunk: self.chunk,
         }
     }
 
