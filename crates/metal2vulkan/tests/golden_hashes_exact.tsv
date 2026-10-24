@@ -5,23 +5,23 @@
 # A cell is the first 64 bits of SHA-256 over the final SPIR-V of its subject, or its
 # refusal class. A cell that changes under an unchanged fixture source and profile
 # fingerprint needs cache::SEMANTICS_VERSION above its value at the last bless.
-profile	amd-780m-hawkpoint-radv	9ca26cb90b66a66c
-profile	amd-780m-radv	9ca26cb90b66a66c
-profile	amd-rdna2-apu-radv	9a3a2271b816c1fd
-profile	amd-rdna3-radv	fe29349094cff520
-profile	gate-lavapipe	f70c24a9173758ef
-profile	gate-lavapipe-x86_64	83a7b134dc157793
-profile	intel-arl-anv	521ccfda99ec3ad4
-profile	intel-irisxe-anv	3d0544e0c87158be
-profile	intel-irisxe-rplp-anv	c8b62c0f2e94de31
-profile	intel-uhd770-rpls-anv	c8b62c0f2e94de31
-profile	lavapipe	79d4e8daf0654c1c
+profile	amd-780m-hawkpoint-radv	97c20cce44919d90
+profile	amd-780m-radv	97c20cce44919d90
+profile	amd-rdna2-apu-radv	da1aafc12eaea484
+profile	amd-rdna3-radv	d1038b775158a7e3
+profile	gate-lavapipe	41288a6c2b62ef64
+profile	gate-lavapipe-x86_64	ff48305e8755d769
+profile	intel-arl-anv	7340ab6e52e44218
+profile	intel-irisxe-anv	599425a58f34fef3
+profile	intel-irisxe-rplp-anv	3ed446a117d733df
+profile	intel-uhd770-rpls-anv	3ed446a117d733df
+profile	lavapipe	e0740c85c861a40b
 profile	lunarg-desktop-baseline-2023	714c60d7048b6d6b
-profile	moltenvk-m3	a2c321db7978d21e
-profile	moltenvk-m4	a2c321db7978d21e
-profile	nvidia-pascal-linux	560c796d2cfc5e95
-profile	nvidia-rtx50-linux	64a79c56e3f408f3
-profile	nvidia-rtx5080-laptop	44726246eec8e8b7
+profile	moltenvk-m3	1c65f1233c332a7b
+profile	moltenvk-m4	1c65f1233c332a7b
+profile	nvidia-pascal-linux	224c6beefcbe3f76
+profile	nvidia-rtx50-linux	14defdc2a29aa435
+profile	nvidia-rtx5080-laptop	ffeb6c72f03de8e0
 profile	roadmap-2022	71e877c60c7a7ba1
 profile	swiftshader	5a325debe7c7eab3
 profile	vk12-floor	0498dfefb8a2686c
