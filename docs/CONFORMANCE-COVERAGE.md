@@ -43,7 +43,7 @@ Its limits, measured rather than asserted:
 | committed recordings | 1076 |
 | distinct SDK items the Metal leg reaches, of any status | 797 |
 | of those, reached only where this cannot name the family | 7 |
-| ledger rows (a case whose gap is recorded) | 89 |
+| ledger rows (a case whose gap is recorded) | 91 |
 | declared crossings of the option space (pairs put to Metal at once) | 15 |
 
 A tolerance names a **site of a transcript**, not an item, so the last two rows are read as written: a case that loosens one site of its own transcript may compare every other field of it exactly, and this derivation cannot tell which of a case's fields came from which Metal call. Where the distinction matters, read the case.
@@ -2227,4 +2227,6 @@ A case whose difference from Metal is recorded rather than compared away. The le
 | `texture-pairs-storage-crossings` | Plain Metal answers `heapTextureSizeAndAlignWithDescriptor:` for a MTLStorageModeMemoryless descriptor and the runtime refuses it `Invalid(StorageMode)`, so eve… |
 | `texture-pairs-plain-contents` | Plain Metal answers `heapTextureSizeAndAlignWithDescriptor:` for a MTLStorageModeMemoryless descriptor and the runtime refuses it `Invalid(StorageMode)`, so eve… |
 | `texture-pairs-plain-contents` | Plain Metal answers `heapTextureSizeAndAlignWithDescriptor:` for a MTLStorageModeMemoryless descriptor and the runtime refuses it `Invalid(StorageMode)`, so eve… |
+| `texture-pairs-storage-crossings` | Plain Metal answers `heapTextureSizeAndAlignWithDescriptor:` for a MTLStorageModeMemoryless descriptor and the runtime refuses it `Invalid(StorageMode)`, so eve… |
+| `texture-pairs-storage-crossings` | Plain Metal answers `heapTextureSizeAndAlignWithDescriptor:` for a MTLStorageModeMemoryless descriptor and the runtime refuses it `Invalid(StorageMode)`, so eve… |
 
