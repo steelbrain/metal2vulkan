@@ -233,6 +233,11 @@ impl<S: Side, W: Watcher> Side for Watching<S, W> {
             .set_argument_buffer(encoder, buffer, offset, element)
     }
 
+    fn nested_argument_encoder(&mut self, encoder: Handle, index: u32) -> Answer<Option<Handle>> {
+        let _span = self.watch("nested_argument_encoder");
+        self.inner.nested_argument_encoder(encoder, index)
+    }
+
     fn encode_argument(&mut self, encoder: Handle, write: &ArgumentWrite) -> Answer<()> {
         let _span = self.watch("encode_argument");
         self.inner.encode_argument(encoder, write)
