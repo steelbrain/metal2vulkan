@@ -175,11 +175,11 @@ fn until(what: &str, done: impl Fn() -> bool) {
 
 /// Where the device parks freed memory, a host import released while a batch submitted before it
 /// runs keeps its memory, its deallocator waiting, until that batch completed; then both go, on a
-/// thread of the runtime's, and the wait was announced once. Where the fills completed before the
-/// release, which the parking's count says (`WorkCounts::freed_memory_parked`), its memory and
-/// its deallocator go inside the release, on the releasing thread, as Metal's do: the release
-/// reads the value the queue's waiter published, which comes before the turn that finishes the
-/// command buffer, so the command buffer's status says nothing about which path the release took.
+/// thread of the runtime's, and the wait was announced once. Which path the release took is the
+/// parking's count (`WorkCounts::freed_memory_parked`), not the command buffer's status: the
+/// release reads the value the queue's waiter published, and the turn that finishes the command
+/// buffer comes after it. Where the fills had completed, the memory and the deallocator go inside
+/// the release, on the releasing thread, as Metal's do.
 #[test]
 fn a_release_waits_for_the_batch_in_flight_where_the_device_parks_freed_memory() {
     let scratch = Scratch::new("parked");
@@ -225,7 +225,7 @@ fn a_release_waits_for_the_batch_in_flight_where_the_device_parks_freed_memory()
         }
         false => {
             eprintln!("FREED-MEMORY: the fills completed before the release: none waited");
-            assert_eq!(parked, 0, "a release parked one block, not {parked}");
+            assert_eq!(parked, 0, "the release parked {parked} blocks");
             assert_eq!(
                 after.freed_memory_waiting, 0,
                 "a block waits although the release freed its memory"
