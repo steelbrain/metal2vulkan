@@ -3054,7 +3054,7 @@ fn half_bits_view(
 /// its own code; a device whose decode into `f32` canonicalizes a NaN has destroyed the code
 /// before the shader sees it (MoltenVK on an Apple GPU, measured; ANV on Intel's GPUs, from the
 /// conformance suite's replay). Reading the alias hands the shader the 16 bits themselves, which
-/// it widens exactly ([`lower::arith::narrow::from_bits`](crate::lower) is the translation's).
+/// it widens exactly (`lower::arith::narrow::from_bits` is the translation's, a private item).
 pub fn half_bits_read_view(pf: PixelFormat, profile: &DeviceProfile) -> Option<vk::Format> {
     use vk::Format as F;
     let view = match pf {
