@@ -49,7 +49,8 @@ struct Lane {
 }
 
 /// What a draw left: each pixel's samples as `cvo_read` reads them, each pixel's runs, and
-/// whether the pipeline announced `looped-sample-outputs`.
+/// whether the pipeline announced `looped-sample-outputs`, which the device announces for each
+/// pipeline here (`Lane::new`) and not once as it would by default.
 struct Drawn {
     samples: Vec<u32>,
     runs: Vec<u32>,
@@ -58,7 +59,12 @@ struct Drawn {
 
 impl Lane {
     fn new(messages: &Messages, cache: &ScratchCache) -> Lane {
-        let device = validated_device_with(TEST_DEVICE, messages, cache.path(), |_| {}).unwrap();
+        // Each pipeline's own notice: a device announces a kind once, and every pipeline here is
+        // read for whether it loops (`DeviceOptions::announce_each`).
+        let device = validated_device_with(TEST_DEVICE, messages, cache.path(), |options| {
+            options.announce_each = [Degradation::LoopedSampleOutputs].into();
+        })
+        .unwrap();
         let bitcode = llvm_assemble(&engine_dir().join("coverage_outputs.ll")).unwrap();
         Lane {
             queue: device.new_command_queue().unwrap(),

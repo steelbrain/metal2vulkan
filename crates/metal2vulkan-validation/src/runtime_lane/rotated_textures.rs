@@ -823,13 +823,15 @@ fn other_uses_address_the_plane_as_metal_does() {
     let device = validated_device(TEST_DEVICE, &messages, cache.path()).unwrap();
     let lane = Lane::new(&device);
     let gap = Error::NotImplemented(RuntimeGap::RotatedTexture);
-    // Rotation, extent, the plane's pitch, and bytes past the stored frame's last row.
+    // Rotation, extent, the plane's pitch (the least Metal takes, `tight_row`, some 16 bytes
+    // more), and bytes past the stored frame's last row.
+    let tight = |rotation, extent| tight_row(rotation, extent, TEXEL);
     let cases = [
-        (2u64, (64u64, 16u64), 64 * TEXEL + 16, 0u64),
-        (1, (64, 16), 16 * TEXEL, 0),
-        (3, (64, 16), 64 * TEXEL + 16, 0),
-        (1, (16, 64), 64 * TEXEL, 0),
-        (1, (16, 64), 64 * TEXEL, 48 * 64 * TEXEL),
+        (2u64, (64u64, 16u64), tight(2, (64, 16)) + 16, 0u64),
+        (1, (64, 16), tight(1, (64, 16)), 0),
+        (3, (64, 16), tight(3, (64, 16)) + 16, 0),
+        (1, (16, 64), tight(1, (16, 64)), 0),
+        (1, (16, 64), tight(1, (16, 64)), 48 * 64 * TEXEL),
     ];
     for (rotation, (w, h), bpr, past) in cases {
         let what = format!("rotation {rotation}, {w}x{h}, rows {bpr} bytes apart, {past} more");
