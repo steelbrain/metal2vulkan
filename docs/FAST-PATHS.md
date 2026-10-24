@@ -721,6 +721,16 @@ driver's. Each is open work.
   cost is the making. Raising the share, or holding the bound to at least one copy's images,
   would reach it.
 
+- **A folded object grid's cost per Metal threadgroup**: a device that runs object functions
+  through `VK_EXT_mesh_shader` takes one task workgroup per Metal object threadgroup
+  (`bind/mesh_arguments.rs`, the folded object form), and an RTX 5080 Laptop GPU (615.71.09) takes
+  2.4 to 2.7 microseconds over each: 4,587,520 of `mesh_object_grid`'s threadgroups in 12.0 s and
+  4,194,307 in 11.1 s. Metal's own GPU ran the 33.5 million-threadgroup grids of the same fixture
+  inside its 5 s watchdog, about sixteen times faster per threadgroup, so those grids are past any
+  bounded wait here and `mesh_draws::object_grids_run_as_metal_runs_them` now measures the device's
+  cost and skips them, printing both. Nothing is wrong with the words the smaller grids leave; the
+  cost is the dispatch.
+
 - **Reflection after a compute descriptor reset on RADV**: `max_total_threads_per_threadgroup`
   answers 0 where Metal answers 96, `required_threads_per_threadgroup` `0x0x0` where Metal answers
   `8x6x2`, and `threadgroup_size_is_multiple_of_execution_width` false where Metal answers true

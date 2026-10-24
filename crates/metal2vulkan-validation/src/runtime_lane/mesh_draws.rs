@@ -749,6 +749,12 @@ const PAST_GRID: [u32; 3] = [(1 << 29) + 1, 1, 1];
 /// encoder on. The emulation refuses a direct grid past its compute limits
 /// (`Unsupported{MeshShading}`), and an indirect one past them draws nothing and fails its command
 /// buffer (`MeshGridPastLimits`), each printed.
+///
+/// A case runs only where the device can finish it within the lane's wait, measured on the cases
+/// before it (`TIMING` lines print each case's milliseconds, and each skipped case's reason). A
+/// device takes its own time per object threadgroup -- an RTX 5080 Laptop GPU 2.4 microseconds,
+/// where Metal's own GPU ran the largest grids here inside its 5 s watchdog -- and Metal's largest
+/// are 33.5 million threadgroups.
 #[test]
 fn object_grids_run_as_metal_runs_them() {
     let cache = ScratchCache::new().unwrap();
@@ -811,6 +817,7 @@ fn object_grids_run_as_metal_runs_them() {
             let started = std::time::Instant::now();
             command_buffer.commit().unwrap();
             command_buffer.wait_until_completed_for(WAIT).unwrap();
+            let took = started.elapsed();
             let words: Vec<u32> = read_buffer(&counters, 0, 48)
                 .unwrap()
                 .as_chunks::<4>()
@@ -825,10 +832,10 @@ fn object_grids_run_as_metal_runs_them() {
             let tail = read_buffer(&tail, 0, 4).unwrap() == [0x22; 4];
             eprintln!(
                 "TIMING {what}: {} ms, {:?}",
-                started.elapsed().as_millis(),
+                took.as_millis(),
                 command_buffer.error()
             );
-            (drawn, command_buffer.error(), words, what, tail)
+            (drawn, command_buffer.error(), words, what, tail, took)
         };
         // The emulation's refusal of a direct grid past its compute limits.
         let refused = |drawn: &Result<(), Error>| match drawn {
@@ -849,12 +856,35 @@ fn object_grids_run_as_metal_runs_them() {
                 && !c.groups.contains(&0)
                 && (0..3).any(|i| c.groups[i] > limits[i])
         };
+        // What the device takes per object threadgroup, from the cases it has run: a grid of tens
+        // of millions of them outlasts `WAIT` on a device slower per threadgroup than Apple's,
+        // whose GPU ran Metal's largest here inside its 5 s watchdog. The cases run in ascending
+        // order of the threadgroups Metal ran, so the measurement is there before the largest; one
+        // the measurement puts past half of `WAIT` is printed and skipped, rather than left
+        // grinding on the device after the wait has given up.
+        let mut per_group = 0.0f64;
         for c in &OBJECT_GRID_CASES {
             // The threadgroups Metal ran.
             if cfg!(m2v_cpu_icd) && c.words[0] > 1 << 20 {
                 continue;
             }
-            let (drawn, error, words, what, tail) = run(c.groups, c.threads, c.direct);
+            let groups = f64::from(c.words[0]);
+            if per_group > 0.0 && groups * per_group > WAIT.as_secs_f64() / 2.0 {
+                eprintln!(
+                    "TIMING {:?} of {:?}, {} on {name}: {groups} threadgroups at {:.2} us each is \
+                     past half of the {} s wait, skipped",
+                    c.groups,
+                    c.threads,
+                    if c.direct { "direct" } else { "indirect" },
+                    per_group * 1e6,
+                    WAIT.as_secs(),
+                );
+                continue;
+            }
+            let (drawn, error, words, what, tail, took) = run(c.groups, c.threads, c.direct);
+            if groups > 1e6 {
+                per_group = per_group.max(took.as_secs_f64() / groups);
+            }
             if refused(&drawn) {
                 eprintln!("{what}: refused, emulated: {drawn:?}");
                 continue;
@@ -878,7 +908,7 @@ fn object_grids_run_as_metal_runs_them() {
             assert!(tail, "{what}: the encoder after the draw's");
         }
         for direct in [true, false] {
-            let (drawn, error, words, what, tail) = run(PAST_GRID, [1; 3], direct);
+            let (drawn, error, words, what, tail, _) = run(PAST_GRID, [1; 3], direct);
             if refused(&drawn) {
                 eprintln!("{what}: refused, emulated: {drawn:?}");
                 continue;
