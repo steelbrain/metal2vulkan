@@ -306,6 +306,8 @@ pub(crate) struct Counters {
     shadow_attachment_tiles_bounded: AtomicU64,
     shadows_sharing_truth: AtomicU64,
     owned_descriptor_pools: AtomicU64,
+    owned_kernels_made: AtomicU64,
+    owned_kernel_spirv_bytes: AtomicU64,
     shadow_texels_kept: AtomicU64,
     bounded_shadow_copies: AtomicU64,
     views_through_swizzle: AtomicU64,
@@ -2037,6 +2039,14 @@ impl Counters {
         self.owned_descriptor_pools.fetch_add(1, Ordering::Relaxed);
     }
 
+    /// One of the runtime's own kernels was built, of `spirv` words, by the call that first
+    /// needed it (`owned_kernel.rs`).
+    pub(crate) fn owned_kernel_made(&self, spirv: usize) {
+        self.owned_kernels_made.fetch_add(1, Ordering::Relaxed);
+        self.owned_kernel_spirv_bytes
+            .fetch_add(4 * spirv as u64, Ordering::Relaxed);
+    }
+
     /// An encoder planned keeps of shadowed textures that copy `texels` texels into their merges'
     /// scratch (`shadow_merge.rs`).
     pub(crate) fn shadow_texels_kept(&self, texels: u64) {
@@ -3731,6 +3741,22 @@ pub struct WorkCounts {
     /// pushes descriptor sets (`vkCmdPushDescriptorSet`): the rows copy's, and a shadowed
     /// texture's copy back's and merges'.
     pub owned_descriptor_pools: u64,
+    /// The runtime's own kernels (`owned_kernel.rs`) this device built: each a SPIR-V build, a
+    /// `VkShaderModule`, a descriptor set layout, a pipeline layout and a `VkPipeline`, which on
+    /// a driver that compiles a pipeline as it is created is a shader compile. A kernel is built
+    /// **by the Metal call that first needs it** and then kept for the device, so the count
+    /// attributes the build to that call: making a texture of a format the runtime emulates
+    /// (`ycbcr.rs`, `two_planes.rs`) where the making is what needs the kernel, encoding a
+    /// command where the command is. A later call that takes a kernel already built adds
+    /// nothing, so a reading of 0 beside a kernel's dispatch says the build landed in an earlier
+    /// call. Metal builds none of these: they are what the emulation costs, and the count is
+    /// where that cost fell.
+    pub owned_kernels_made: u64,
+    /// The SPIR-V those builds compiled, in bytes: what the pipeline creations were handed, which
+    /// is the measure a build's cost scales with. It counts no scratch an emulation's work
+    /// allocates besides (a YCbCr conversion's staging buffer, whose bytes are in
+    /// `device_memory_allocated`).
+    pub owned_kernel_spirv_bytes: u64,
     /// The texels the keeps among `shadow_copies` copy from a shadow into their merge's scratch:
     /// those inside the rectangle the encoder's commands write in, each row widened to whole
     /// words of the buffer, where the commands bound it and the merge goes in place; every texel
@@ -4419,6 +4445,8 @@ impl Device {
                 .load(Ordering::Relaxed),
             shadows_sharing_truth: counters.shadows_sharing_truth.load(Ordering::Relaxed),
             owned_descriptor_pools: counters.owned_descriptor_pools.load(Ordering::Relaxed),
+            owned_kernels_made: counters.owned_kernels_made.load(Ordering::Relaxed),
+            owned_kernel_spirv_bytes: counters.owned_kernel_spirv_bytes.load(Ordering::Relaxed),
             shadow_texels_kept: counters.shadow_texels_kept.load(Ordering::Relaxed),
             bounded_shadow_copies: counters.bounded_shadow_copies.load(Ordering::Relaxed),
             replay_logs_kept: counters.replay_logs_kept.load(Ordering::Relaxed),

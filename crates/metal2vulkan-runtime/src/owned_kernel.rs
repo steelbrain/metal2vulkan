@@ -809,6 +809,9 @@ impl Device {
         let (spirv, buffers, push_bytes) = which.build(self)?;
         let bindings = (which.images(), which.storage_images(), buffers);
         let kernel = make(self, &spirv, bindings, (push_bytes, which.pushed(self)))?;
+        // Counted here, so the build attributes to the call that first needed the kernel rather
+        // than to whichever path the kernel serves (`WorkCounts::owned_kernels_made`).
+        self.shared().counts.owned_kernel_made(spirv.len());
         kernels.put(which, kernel);
         Ok(kernel)
     }

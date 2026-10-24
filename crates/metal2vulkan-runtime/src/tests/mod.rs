@@ -157,6 +157,8 @@ mod optional_extensions;
 mod options;
 mod own;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
+mod owned_kernel_builds;
+#[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod owned_pushes;
 mod pipeline;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
