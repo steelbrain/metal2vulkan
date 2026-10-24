@@ -41,7 +41,7 @@ Its limits, measured rather than asserted:
 | committed recordings | 1031 |
 | distinct SDK items the Metal leg reaches, of any status | 794 |
 | of those, reached only where this cannot name the family | 7 |
-| ledger rows (a case whose gap is recorded) | 100 |
+| ledger rows (a case whose gap is recorded) | 67 |
 
 A tolerance names a **site of a transcript**, not an item, so the last two rows are read as written: a case that loosens one site of its own transcript may compare every other field of it exactly, and this derivation cannot tell which of a case's fields came from which Metal call. Where the distinction matters, read the case.
 
@@ -2086,23 +2086,6 @@ A case whose difference from Metal is recorded rather than compared away. The le
 | `compute-descriptor-reset` | Metal's `MTLComputePipelineDescriptor.reset` is PARTIAL. Measured on this M3 Max (macOS 27.0.1, build 26A434), from `compute-descriptor-reset`'s own committed r… |
 | `compute-descriptor-reset` | Metal's `MTLComputePipelineDescriptor.reset` is PARTIAL. Measured on this M3 Max (macOS 27.0.1, build 26A434), from `compute-descriptor-reset`'s own committed r… |
 | `compute-descriptor-reset` | Metal's `MTLComputePipelineDescriptor.reset` is PARTIAL. Measured on this M3 Max (macOS 27.0.1, build 26A434), from `compute-descriptor-reset`'s own committed r… |
-| `resource-aliasing` | `Texture::resource_options` does not carry the hazard tracking mode it resolved. Metal never reports `MTLHazardTrackingModeDefault` from a resource: it resolves… |
-| `resource-aliasing` | `Texture::resource_options` does not carry the hazard tracking mode it resolved. Metal never reports `MTLHazardTrackingModeDefault` from a resource: it resolves… |
-| `resource-labels` | `Texture::resource_options` does not carry the hazard tracking mode it resolved. Metal never reports `MTLHazardTrackingModeDefault` from a resource: it resolves… |
-| `resource-labels` | `Texture::resource_options` does not carry the hazard tracking mode it resolved. Metal never reports `MTLHazardTrackingModeDefault` from a resource: it resolves… |
-| `resource-labels` | `Texture::resource_options` does not carry the hazard tracking mode it resolved. Metal never reports `MTLHazardTrackingModeDefault` from a resource: it resolves… |
-| `resource-labels` | `Texture::resource_options` does not carry the hazard tracking mode it resolved. Metal never reports `MTLHazardTrackingModeDefault` from a resource: it resolves… |
-| `resource-labels` | `Texture::resource_options` does not carry the hazard tracking mode it resolved. Metal never reports `MTLHazardTrackingModeDefault` from a resource: it resolves… |
-| `resource-labels` | `Texture::resource_options` does not carry the hazard tracking mode it resolved. Metal never reports `MTLHazardTrackingModeDefault` from a resource: it resolves… |
-| `resource-labels` | `Texture::resource_options` does not carry the hazard tracking mode it resolved. Metal never reports `MTLHazardTrackingModeDefault` from a resource: it resolves… |
-| `resource-labels` | `Texture::resource_options` does not carry the hazard tracking mode it resolved. Metal never reports `MTLHazardTrackingModeDefault` from a resource: it resolves… |
-| `resource-labels` | `Texture::resource_options` does not carry the hazard tracking mode it resolved. Metal never reports `MTLHazardTrackingModeDefault` from a resource: it resolves… |
-| `resource-labels` | `Texture::resource_options` does not carry the hazard tracking mode it resolved. Metal never reports `MTLHazardTrackingModeDefault` from a resource: it resolves… |
-| `resource-labels` | `Texture::resource_options` does not carry the hazard tracking mode it resolved. Metal never reports `MTLHazardTrackingModeDefault` from a resource: it resolves… |
-| `resource-own-getters` | `Texture::resource_options` does not carry the hazard tracking mode it resolved. Metal never reports `MTLHazardTrackingModeDefault` from a resource: it resolves… |
-| `resource-own-getters` | `Texture::resource_options` does not carry the hazard tracking mode it resolved. Metal never reports `MTLHazardTrackingModeDefault` from a resource: it resolves… |
-| `resource-own-getters` | `Texture::resource_options` does not carry the hazard tracking mode it resolved. Metal never reports `MTLHazardTrackingModeDefault` from a resource: it resolves… |
-| `sparse-mapping-a-level-past-the-textures` | The runtime refuses a direct mapping update of a mip level past the texture's own levels, where plain Metal takes the call and maps nothing. Measured on this M3… |
 | `function-bindings-visible-function-table` | Metal compiles a kernel that takes a `visible_function_table` argument and links no visible function, and reflects it: the binding is listed as `MTLBindingTypeV… |
 | `function-bindings-data-types-tables` | The same gap as the `function-bindings-visible-function-table` row above, reached through an argument buffer instead of a buffer slot, which is why it is a seco… |
 | `binary-archive-mesh-adder` | `BinaryArchive` has three of Metal's four pipeline adders: `addMeshRenderPipelineFunctionsWithDescriptor:error:` has no counterpart at all. Metal takes the call… |
@@ -2116,22 +2099,6 @@ A case whose difference from Metal is recorded rather than compared away. The le
 | `vertex-format-constant-step` | Metal's half vertex fetch canonicalizes a NaN: the half codes 0x7E01 and 0xFE01 both reach the shader as the positive quiet NaN 0x7FC00000, payload and sign dro… |
 | `vertex-format-constant-step` | Metal's half vertex fetch canonicalizes a NaN: the half codes 0x7E01 and 0xFE01 both reach the shader as the positive quiet NaN 0x7FC00000, payload and sign dro… |
 | `vertex-format-constant-step` | Metal's half vertex fetch canonicalizes a NaN: the half codes 0x7E01 and 0xFE01 both reach the shader as the positive quiet NaN 0x7FC00000, payload and sign dro… |
-| `attribute-format-class-crossings` | Metal converts an 8- or 16-bit integer attribute format into a float `[[stage_in]]` attribute of a kernel, and we refuse to build the pipeline at all: `Unsuppor… |
-| `attribute-format-class-crossings` | Metal converts an 8- or 16-bit integer attribute format into a float `[[stage_in]]` attribute of a kernel, and we refuse to build the pipeline at all: `Unsuppor… |
-| `attribute-format-class-crossings` | Metal converts an 8- or 16-bit integer attribute format into a float `[[stage_in]]` attribute of a kernel, and we refuse to build the pipeline at all: `Unsuppor… |
-| `attribute-format-class-crossings` | Metal converts an 8- or 16-bit integer attribute format into a float `[[stage_in]]` attribute of a kernel, and we refuse to build the pipeline at all: `Unsuppor… |
-| `attribute-format-class-crossings` | Metal converts an 8- or 16-bit integer attribute format into a float `[[stage_in]]` attribute of a kernel, and we refuse to build the pipeline at all: `Unsuppor… |
-| `attribute-format-class-crossings` | Metal converts an 8- or 16-bit integer attribute format into a float `[[stage_in]]` attribute of a kernel, and we refuse to build the pipeline at all: `Unsuppor… |
-| `attribute-format-class-crossings` | Metal converts an 8- or 16-bit integer attribute format into a float `[[stage_in]]` attribute of a kernel, and we refuse to build the pipeline at all: `Unsuppor… |
-| `attribute-format-class-crossings` | Metal converts an 8- or 16-bit integer attribute format into a float `[[stage_in]]` attribute of a kernel, and we refuse to build the pipeline at all: `Unsuppor… |
-| `attribute-format-class-crossings` | Metal converts an 8- or 16-bit integer attribute format into a float `[[stage_in]]` attribute of a kernel, and we refuse to build the pipeline at all: `Unsuppor… |
-| `attribute-format-class-crossings` | Metal converts an 8- or 16-bit integer attribute format into a float `[[stage_in]]` attribute of a kernel, and we refuse to build the pipeline at all: `Unsuppor… |
-| `attribute-format-class-crossings` | Metal converts an 8- or 16-bit integer attribute format into a float `[[stage_in]]` attribute of a kernel, and we refuse to build the pipeline at all: `Unsuppor… |
-| `attribute-format-class-crossings` | Metal converts an 8- or 16-bit integer attribute format into a float `[[stage_in]]` attribute of a kernel, and we refuse to build the pipeline at all: `Unsuppor… |
-| `attribute-format-class-crossings` | Metal converts an 8- or 16-bit integer attribute format into a float `[[stage_in]]` attribute of a kernel, and we refuse to build the pipeline at all: `Unsuppor… |
-| `attribute-format-class-crossings` | Metal converts an 8- or 16-bit integer attribute format into a float `[[stage_in]]` attribute of a kernel, and we refuse to build the pipeline at all: `Unsuppor… |
-| `attribute-format-class-crossings` | Metal converts an 8- or 16-bit integer attribute format into a float `[[stage_in]]` attribute of a kernel, and we refuse to build the pipeline at all: `Unsuppor… |
-| `attribute-format-class-crossings` | Metal converts an 8- or 16-bit integer attribute format into a float `[[stage_in]]` attribute of a kernel, and we refuse to build the pipeline at all: `Unsuppor… |
 | `attribute-format-fetches` | Metal's half-to-float widening in a stage-in fetch canonicalizes a NaN -- the half codes 0x7E01 and 0xFE01 both reach a `float4` attribute as the positive quiet… |
 | `attribute-format-fetches` | Metal's half-to-float widening in a stage-in fetch canonicalizes a NaN -- the half codes 0x7E01 and 0xFE01 both reach a `float4` attribute as the positive quiet… |
 | `attribute-format-fetches` | Metal's half-to-float widening in a stage-in fetch canonicalizes a NaN -- the half codes 0x7E01 and 0xFE01 both reach a `float4` attribute as the positive quiet… |
