@@ -25,6 +25,42 @@ fn resource_options_pack_as_metal_does() {
     }
 }
 
+/// A resolved hazard tracking mode replaces the field and nothing else: the storage mode, the
+/// cache mode and Metal's private bit 24 all survive it, which is what lets a resource report the
+/// mode it resolved (`Texture::resource_options`) rather than its descriptor's `Default`.
+#[test]
+fn a_resolved_hazard_mode_replaces_its_field_alone() {
+    let private = ResourceOptions::private();
+    assert_eq!(
+        private.hazard_tracking_mode(),
+        Ok(HazardTrackingMode::Default)
+    );
+    for (mode, raw) in [
+        (HazardTrackingMode::Tracked, 0x220),
+        (HazardTrackingMode::Untracked, 0x120),
+        (HazardTrackingMode::Default, 0x20),
+    ] {
+        let held = private.with_hazard_tracking_mode(mode);
+        assert_eq!(held.raw(), raw, "{mode:?}");
+        assert_eq!(held.hazard_tracking_mode(), Ok(mode));
+        assert_eq!(held.storage_mode(), Ok(StorageMode::Private));
+        assert_eq!(held.cpu_cache_mode(), Ok(CpuCacheMode::DefaultCache));
+    }
+    // A shared texture outside a heap is Metal's 0x200, and the private bit survives the field.
+    assert_eq!(
+        ResourceOptions::shared()
+            .with_hazard_tracking_mode(HazardTrackingMode::Tracked)
+            .raw(),
+        0x200
+    );
+    let bit = ResourceOptions::from_raw(ResourceOptions::PRIVATE_BIT | 0x120).unwrap();
+    assert_eq!(
+        bit.with_hazard_tracking_mode(HazardTrackingMode::Tracked)
+            .raw(),
+        ResourceOptions::PRIVATE_BIT | 0x220
+    );
+}
+
 /// Metal's private bit 24 is taken beside the modes, as plain Metal takes it, and only the device's
 /// making of a resource drops it; bit 25 stays undefined.
 #[test]

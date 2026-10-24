@@ -4756,14 +4756,21 @@ impl Texture {
     }
 
     /// `resourceOptions`: the texture's (a view has its texture's; a texture over a buffer has
-    /// the buffer's, but a texture of an IOSurface plane its descriptor's).
+    /// the buffer's, but a texture of an IOSurface plane its descriptor's), with the hazard
+    /// tracking mode it resolved rather than its descriptor's.
+    ///
+    /// Metal reports no resource's options as `Default`: a texture outside a heap reads
+    /// `0x200` shared and `0x220` private, a texture in one reads the mode the heap gave it
+    /// ([`hazard_tracking_mode`](Self::hazard_tracking_mode), `Identity::new`). Measured on an
+    /// Apple M3 Max under macOS 27.0.1.
     pub fn resource_options(&self) -> ResourceOptions {
-        match &self.0.storage {
+        let options = match &self.0.storage {
             Storage::Image(image) => image.options,
             Storage::Texels(texels)
             | Storage::Alias { texels, .. }
             | Storage::Shadow { texels, .. } => texels.options(),
-        }
+        };
+        options.with_hazard_tracking_mode(self.hazard_tracking_mode())
     }
 
     /// `storageMode`.

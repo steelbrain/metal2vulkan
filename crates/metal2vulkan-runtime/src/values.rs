@@ -206,6 +206,17 @@ impl ResourceOptions {
         HazardTrackingMode::from_raw((self.0 >> Self::HAZARD_SHIFT) & 0x3)
     }
 
+    /// These options with the hazard tracking mode field set to `mode`, every other bit kept
+    /// ([`PRIVATE_BIT`](Self::PRIVATE_BIT) included).
+    ///
+    /// A resource reports the mode it resolved rather than the one its descriptor asked for, as
+    /// Metal's own resources do: no resource of Metal's answers `Default`.
+    pub(crate) fn with_hazard_tracking_mode(self, mode: HazardTrackingMode) -> ResourceOptions {
+        ResourceOptions(
+            (self.0 & !(0x3 << Self::HAZARD_SHIFT)) | (mode.raw() << Self::HAZARD_SHIFT),
+        )
+    }
+
     /// The options without [`PRIVATE_BIT`](Self::PRIVATE_BIT), and whether they set it.
     pub(crate) fn without_private_bit(self) -> (ResourceOptions, bool) {
         (
