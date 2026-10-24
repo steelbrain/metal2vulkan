@@ -277,14 +277,27 @@ class Item:
     `objc2-metal` binds and what each call answers, and the items axis's own join for which case
     modules' Metal legs reach the item. A field axis is checked against this and nothing else, so
     it names a call the suite is already measured to make rather than a word a row's author chose.
+
+    Reaching is held in two strengths, because the weaker one is not per **field**. The suite's
+    Metal leg builds a descriptor in one function, setting each of its fields under a guard on the
+    suite's own vocabulary (`if let Some(buffer) = pass.visibility`), so every case that opens a
+    pass reaches every one of those call sites by reachability alone -- which would let a case that
+    attaches no visibility buffer declare a crossing on `visibilityResultBuffer`. `modules` is the
+    stronger reading, and the one a field axis is checked against: the module's own data states
+    the field the guard tests.
     """
 
-    def __init__(self, modules: set[str], answers: str):
-        #: The case modules whose Metal leg reaches this item, as the items axis joins them.
+    def __init__(self, modules: set[str], answers: str, reached: set[str] | None = None):
+        #: The case modules whose Metal leg reaches this item through a call site **their own data
+        #: can take**: every guard around it is on a field the module's text states.
         self.modules = frozenset(modules)
         #: The Metal type the call answers, or `""`. A type with a generated value list here means
         #: the field is an enum under another name and belongs in `crossings.tsv`.
         self.answers = answers
+        #: The case modules whose Metal leg reaches this item at all, guards aside, which is what
+        #: the items axis counts. A module here and not in `modules` reaches the call only where
+        #: another case's data would have taken it, which is what the refusal says.
+        self.reached = frozenset(modules if reached is None else reached)
 
 
 def _read_rows(
@@ -506,9 +519,12 @@ def other_crossings(
     - a row every axis of which is a Metal enum named **once**. That is a pair of the option space:
       it belongs in `crossings.tsv`, under the check that the module states two values of each
       axis, and a row parked here would be the same claim under a weaker rule;
-    - a field axis naming an item `objc2-metal` binds nothing for, and one **this module's Metal
-      leg does not reach**. The second is the items axis's own join, so a field axis names a call
-      the suite is measured to make rather than a word chosen here;
+    - a field axis naming an item `objc2-metal` binds nothing for, and one **this module's own
+      data never reaches**: the leg must hold a call of that field at a site whose guards this
+      module's text satisfies. The reachability half is the items axis's own join, so a field axis
+      names a call the suite is measured to make rather than a word chosen here; the guard half is
+      what makes it a claim about that **field** and not about any field of its Metal type, since
+      one shared encoder sets fifty fields of a descriptor and every case reaches all fifty;
     - a field axis whose call answers a Metal type with a generated value list. Such a field is an
       enum under another name, and naming it as a field would dodge the two-values check that the
       enum spelling carries.
@@ -518,9 +534,10 @@ def other_crossings(
     own text states two values of.
 
     What **cannot** be checked, for a field axis, is that the module put two values of the field to
-    Metal. A boolean's two values and a number's range are nowhere in the text this reads, and
-    nothing in a recording names them, so that part of a field row is what only a reader can check.
-    The document says so where it prints the count.
+    Metal. The guard check reads that the module states the field, not which values it states: a
+    boolean's two values and a number's range are nowhere in the text this reads, and nothing in a
+    recording names them, so that part of a field row is what only a reader can check. The document
+    says so where it prints the count.
     """
     where = Path(OTHER).name
     modules_ran: dict[str, set[str]] = {}
@@ -559,6 +576,14 @@ def other_crossings(
                     "held to stating two of its values"
                 )
             if module not in held.modules:
+                if module in held.reached:
+                    raise SystemExit(
+                        f"{where} says {module} crosses {axis}, and every call of it {module}'s "
+                        f"Metal leg reaches sits behind a guard on a field of the suite's own "
+                        f"vocabulary that {module}'s text never states -- the leg sets {name} only "
+                        f"where a case asks for it, and this one does not, so no case of "
+                        f"{module} ever put a value to it"
+                    )
                 raise SystemExit(
                     f"{where} says {module} crosses {axis}, and {module}'s Metal leg reaches no "
                     f"call of it -- the items axis attributes {name} to "

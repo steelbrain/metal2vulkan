@@ -832,13 +832,19 @@ class Crossings(unittest.TestCase):
 
 #: The Metal items a field axis of the synthetic trees may name, as `coverage.py` hands them over:
 #: two fields of one type that answer no Metal type, one field whose call answers `MTLThing` --
-#: which is an enum under another name -- and a field of a type the `blends` module never touches.
+#: which is an enum under another name -- a field of a type the `blends` module never touches, and
+#: one the `blends` module's leg reaches only behind a guard its own data never takes, which is the
+#: two-strength reading `coverage.py` derives from the guards in the leg.
 def items(reached: str = "blends") -> dict[tuple[str, str], option_space.Item]:
     return {
         ("MTLWidget", "spun"): option_space.Item({reached}, ""),
         ("MTLWidget", "setSpread:atIndex:"): option_space.Item({reached}, ""),
         ("MTLWidget", "thing"): option_space.Item({reached}, "MTLThing"),
         ("MTLGadget", "whirred"): option_space.Item({"others"}, ""),
+        # Reached by `blends`, stated by nobody: the shape of a field one shared encoder sets
+        # under a guard, which every case that calls the encoder reaches and only the cases whose
+        # own data asks for it ever put a value to.
+        ("MTLWidget", "counted"): option_space.Item(set(), "", {reached}),
     }
 
 
@@ -955,6 +961,33 @@ class OtherCrossings(unittest.TestCase):
         with self.assertRaises(SystemExit) as refused:
             self.declared(reached="others")
         self.assertIn("attributes spun to others", str(refused.exception))
+
+    def test_a_field_reached_only_behind_a_guard_the_module_never_states_is_refused(self):
+        # The hole this closes: reachability alone is per shared encoder, so a field the leg sets
+        # under `if let Some(x) = pass.field` is reached by every case that opens a pass. A row
+        # whose module never states the field is a claim about the Metal **type** wearing a
+        # field's spelling, and is refused.
+        with self.assertRaises(SystemExit) as refused:
+            self.declared(axes="MTLThing+MTLWidget.counted")
+        held = str(refused.exception)
+        self.assertIn("sits behind a guard", held)
+        self.assertIn("ever put a value to it", held)
+
+    def test_a_field_reached_under_no_guard_at_all_is_taken(self):
+        # The other direction: a field the leg sets unconditionally has no guard to satisfy, so
+        # the stronger reading is the same as reachability and the row stands.
+        held = self.declared(axes="MTLThing+MTLWidget.spun")
+        self.assertEqual(held[0]["fields"], [("MTLWidget", "spun")])
+
+    def test_a_field_neither_reached_nor_stated_is_refused_as_unreached(self):
+        # A field of a type this module never touches is refused by the other message, which names
+        # who does reach it: the two refusals say different things and neither is the other's
+        # wording.
+        with self.assertRaises(SystemExit) as refused:
+            self.declared(axes="MTLThing+MTLGadget.whirred")
+        held = str(refused.exception)
+        self.assertIn("reaches no call of it", held)
+        self.assertNotIn("sits behind a guard", held)
 
     def test_an_axis_that_is_no_metal_item_is_refused(self):
         # The one kind of axis neither file can hold: a grouping that is no Metal item, so there is

@@ -22,15 +22,24 @@
 # decides, or whose module states fewer than TWO values of an ENUM axis by name. And on three of
 # its own: a row every axis of which is a Metal enum named once (that is a pair, and belongs in
 # crossings.tsv under its own checks); a field axis naming an item objc2-metal binds nothing for,
-# or one this module's Metal leg reaches no call of; and a field axis whose call answers a Metal
-# type with a generated value list, which is an enum under another name and must be crossed as
-# that enum.
+# or one this module's own data never reaches; and a field axis whose call answers a Metal type
+# with a generated value list, which is an enum under another name and must be crossed as that
+# enum.
+#
+# "Own data never reaches" is per FIELD and not per Metal type. The leg sets a pass descriptor's
+# fields in one function, each under a guard on the suite's own vocabulary
+# (`if let Some(b) = pass.visibility`), so by reachability alone every case that opens a pass
+# reaches them all; the check also requires this module's text to state the field the guard tests,
+# so a module that attaches no visibility buffer cannot declare a crossing on
+# visibilityResultBuffer.
 #
 # What the generator CANNOT check for a field axis is that the module put TWO values of the field
 # to Metal. A boolean's two values and a number's range are nowhere in the text this reads and in
-# no recording, so a field axis carries only that the field is Metal's and that this module's
-# Metal leg sets it. That, and whether the expected answer needs both axes, is what the last field
-# is for and what a reader checks against the case.
+# no recording, so a field axis carries only that the field is Metal's and that this module states
+# it -- a field stated as None or false reads like one stated with a value, which is also why a
+# bare boolean guard in the leg (`if descriptor.read_only {`) is no guard here. That, and whether
+# the expected answer needs both axes, is what the last field is for and what a reader checks
+# against the case.
 #
 # A crossing with an axis that is no Metal item at all -- a pixel format's class, the shape of a
 # shader's output, whether a fragment writes a sample mask -- can be declared in neither file, and

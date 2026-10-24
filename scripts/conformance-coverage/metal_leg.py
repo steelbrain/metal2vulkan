@@ -28,9 +28,17 @@ A message to a class — `MTLRenderPassDescriptor::renderPassDescriptor()` — n
 the path names its receiver. It is resolved against that class the same way an instance send is
 resolved against the type its receiver typed to.
 
-A call site also carries where it sits: the function that holds it, and the enclosing `match` arms,
-so a call made only for one step of the case vocabulary is attributed to that step and not to every
-case that encodes any step at all.
+A call site also carries where it sits: the function that holds it, and the **gates** around it, so
+a call made only for one step of the case vocabulary is attributed to that step and not to every
+case that encodes any step at all. Two kinds of gate are read, and a call carries every one that
+encloses it:
+
+* a `match` arm's variant, as `Enum::Variant` ([`arms_of`]), which a case satisfies by naming that
+  variant;
+* a guard on one field of the suite's **own** vocabulary, as `field:name` ([`guards_of`]), which a
+  case satisfies by stating that field. One shared encoder sets fifty fields of a descriptor, each
+  behind `if let Some(x) = pass.field`, so without this a case that states one of them reads as
+  reaching all fifty.
 """
 
 import re
@@ -223,8 +231,9 @@ class Call:
     file: str
     #: The function that holds it.
     function: str
-    #: The enclosing `match` arm variants, outermost first, as `Enum::Variant`.
-    arms: tuple[str, ...]
+    #: The gates around it, outermost first: a `match` arm's variant as `Enum::Variant`, and a
+    #: guard on one field of the suite's own vocabulary as `field:name`.
+    gates: tuple[str, ...]
     #: The Rust name, which is the selector with `:` as `_`.
     rust: str
     #: The receiver's type, or `""` where it could not be typed.
@@ -255,8 +264,9 @@ class Leg:
     by_uniqueness: list[tuple[str, str, str]] = field(default_factory=list)
     #: Which functions call which, by name, for the reachability closure.
     calls_function: dict[str, set[str]] = field(default_factory=dict)
-    #: The `match` arms each function's calls to other functions sit under.
-    function_arms: dict[tuple[str, str], set[tuple[str, ...]]] = field(default_factory=dict)
+    #: The gates each function's calls to other functions sit under, the same two kinds as
+    #: [`Call.gates`][Call]: what a case must name, and what it must state, to reach through here.
+    function_gates: dict[tuple[str, str], set[tuple[str, ...]]] = field(default_factory=dict)
 
 
 @dataclass
@@ -359,6 +369,84 @@ def arms_of(text: str, start: int, end: int, enums: set[str]) -> list[tuple[int,
                 if name.group(1) in enums:
                     out.append((arrow, body_end, f"{name.group(1)}::{name.group(2)}"))
             i = body_end + 1
+    return out
+
+
+#: How a gate on a field of the suite's own vocabulary is spelled, so a reader of a gate set can
+#: tell it from a `match` arm's `Enum::Variant` and strip it where only the variants are wanted.
+GATE_FIELD = "field:"
+
+#: The `if` conditions whose body is reached only where the field is **stated**, read from the
+#: condition text between `if` and the block it opens. An `Option` unwrapped, one asked whether it
+#: is there, and a collection asked whether it is not empty: in each the field names what the
+#: case had to state for the call inside to happen at all.
+#:
+#: A bare boolean field (`if descriptor.read_only {`) is **not** one of these. Its body is reached
+#: on one of the two values the field can hold, and which value a case states is nowhere in the
+#: text this reads -- the same limit that keeps a field axis from carrying a two-values check --
+#: so reading it as a gate would refuse a case that states the field and sets it false.
+STATED = (
+    # `if let Some(x) = pass.visibility`, `if let Some(depth) = &pass.depth`, and the same with an
+    # adapter on the end: `if let Some(label) = self.pass.label.as_ref()`.
+    re.compile(
+        r"^let\s+(?:Some|Ok)\s*\(.*\)\s*=\s*&?\s*(?:mut\s+)?[A-Za-z_][\w.]*?\.(\w+)\s*"
+        r"(?:\.\s*(?:as_ref|as_deref|as_mut|clone|to_owned)\s*\(\s*\))?$"
+    ),
+    re.compile(r"^&?\s*[A-Za-z_][\w.]*?\.(\w+)\s*\.\s*is_some\s*\(\s*\)$"),
+    re.compile(r"^!\s*&?\s*[A-Za-z_][\w.]*?\.(\w+)\s*\.\s*is_empty\s*\(\s*\)$"),
+)
+
+
+def _condition_end(text: str, start: int, end: int) -> int:
+    """Where the `if` condition that starts at `start` ends: the `{` it opens, or `-1`.
+
+    Only round and square brackets nest here: a `{` at bracket depth zero is the body's, and one
+    inside a call (`if let Some(x) = make(Thing { a: 1 })`) is not.
+    """
+    depth = 0
+    for i in range(start, end):
+        c = text[i]
+        if c in "([":
+            depth += 1
+        elif c in ")]":
+            depth -= 1
+        elif c == "{" and depth == 0:
+            return i
+        elif c == ";" and depth == 0:
+            # A `let .. else` or a statement boundary: this `if` opens no block here.
+            return -1
+    return -1
+
+
+def guards_of(text: str, start: int, end: int) -> list[tuple[int, int, str]]:
+    """Every guard in `text[start:end]` on a field of the suite's own vocabulary, with its span.
+
+    The gate is the **field's name**, as `field:name`, and the span is the guarded block alone: an
+    `else` branch opens its own block, which this one does not cover, so a call Metal makes only
+    where the field is absent carries no gate for it.
+
+    This is what makes an item's attribution per **field** rather than per shared encoder. The
+    Metal leg builds one descriptor in one function, setting each field under its own guard, so
+    every case that calls that encoder reaches every call site in it; the guard says which of them
+    the case's own data could ever have taken.
+
+    The field is read by name and not by the struct it belongs to, because the typing here follows
+    Metal's types and not the suite's. Two vocabulary structs with a field of one name are read as
+    one gate, which is generous in the safe direction: it can let a declaration through, never
+    refuse a true one.
+    """
+    out: list[tuple[int, int, str]] = []
+    for match in re.finditer(r"\bif\s", text[start:end]):
+        at = start + match.end()
+        brace = _condition_end(text, at, end)
+        if brace < 0:
+            continue
+        condition = " ".join(text[at:brace].split())
+        for shape in STATED:
+            found = shape.match(condition)
+            if found:
+                out.append((brace, block(text, brace)[1], GATE_FIELD + found.group(1)))
+                break
     return out
 
 
@@ -674,7 +762,7 @@ def read_leg(api: Api, src: Path, files: list[str], enums: set[str]) -> Leg:
                     answers[fn.name] = ty
     for name, text in blank.items():
         for fn in functions(text, name):
-            arms = arms_of(text, fn.start, fn.end, enums)
+            gates = arms_of(text, fn.start, fn.end, enums) + guards_of(text, fn.start, fn.end)
             typing = Typing(api, fields, answers)
             typing.param_types(fn.signature)
             typing.closure_params(text[fn.start : fn.end], fn.start)
@@ -698,7 +786,7 @@ def read_leg(api: Api, src: Path, files: list[str], enums: set[str]) -> Leg:
             ):
                 rust = match.group(1)
                 at = fn.start + match.start()
-                here = tuple(v for lo, hi, v in arms if lo <= at < hi)
+                here = tuple(v for lo, hi, v in gates if lo <= at < hi)
                 owners = api.receivers(rust)
                 recv = receiver_of(text, at)
                 if recv == "self" or not owners:
@@ -707,7 +795,7 @@ def read_leg(api: Api, src: Path, files: list[str], enums: set[str]) -> Leg:
                     # Not a Metal call at all. A call to another function of the leg is an edge of
                     # the reachability graph instead.
                     leg.calls_function.setdefault(fn.name, set()).add(rust)
-                    leg.function_arms.setdefault((fn.name, rust), set()).add(here)
+                    leg.function_gates.setdefault((fn.name, rust), set()).add(here)
                     continue
                 ty = typing.typed(recv, at)
                 if not ty and len(owners) == 1:
@@ -748,7 +836,7 @@ def read_leg(api: Api, src: Path, files: list[str], enums: set[str]) -> Leg:
                     # bitflags constructor whose name only looks like Metal's
                     # (`MTLBlitOption::empty`). The loop below reads it as the leg's own call.
                     continue
-                here = tuple(v for lo, hi, v in arms if lo <= at < hi)
+                here = tuple(v for lo, hi, v in gates if lo <= at < hi)
                 item = api.binds(ty, rust)
                 if item is None:
                     # The class named here does not bind this selector. Not `mistyped`: nothing was
@@ -781,9 +869,9 @@ def read_leg(api: Api, src: Path, files: list[str], enums: set[str]) -> Leg:
                 qualifier = [part for part in match.group(1).split("::") if part]
                 if qualifier and qualifier[-1][:1].isupper() and qualifier[-1] != "Self":
                     continue
-                here = tuple(v for lo, hi, v in arms if lo <= at < hi)
+                here = tuple(v for lo, hi, v in gates if lo <= at < hi)
                 leg.calls_function.setdefault(fn.name, set()).add(rust)
-                leg.function_arms.setdefault((fn.name, rust), set()).add(here)
+                leg.function_gates.setdefault((fn.name, rust), set()).add(here)
     return leg
 
 

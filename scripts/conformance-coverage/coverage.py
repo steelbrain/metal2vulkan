@@ -279,11 +279,13 @@ def messaged_rows(leg: metal_leg.Leg, api: metal_leg.Api, selves) -> dict[int, s
 
 
 def gated_items(leg: metal_leg.Leg, entry_points: set[str], keyed, messaged, frees):
-    """For each entry point, the items it reaches and the variants each reaching needs.
+    """For each entry point, the items it reaches and the gates each reaching needs.
 
     One walk of the leg's own call graph. A call inside `Step::GetBytes =>` is reached only by a
-    case that encodes that step, so the variants of the `match` arms around a call travel with it;
-    a call under no arm is reached by every case that calls the entry point at all.
+    case that encodes that step, and one inside `if let Some(b) = pass.visibility` only by a case
+    that states that field, so the gates around a call travel with it; a call under no gate is
+    reached by every case that calls the entry point at all. A gate set holds both kinds
+    (`metal_leg.GATE_FIELD` tells them apart) and a reaching needs every gate in it.
 
     Three things a call reaches, and the same gate over all three: the SDK item its selector
     resolves to (`keyed`), the containers' own rows its receiver messages (`messaged`), and, on an
@@ -300,19 +302,19 @@ def gated_items(leg: metal_leg.Leg, entry_points: set[str], keyed, messaged, fre
         for call in leg.calls:
             if call.function != fn:
                 continue
-            arms = frozenset(call.arms)
+            arms = frozenset(call.gates)
             if id(call) in keyed:
                 here[keyed[id(call)]].add(arms)
             for item in messaged.get(id(call), ()):
                 here[item].add(arms)
         for callee in leg.calls_function.get(fn, ()):
             if callee in frees:
-                for arms in leg.function_arms.get((fn, callee), {()}):
+                for arms in leg.function_gates.get((fn, callee), {()}):
                     here[frees[callee]].add(frozenset(arms))
             below = walk(callee, stack + (fn,))
             if not below:
                 continue
-            for arms in leg.function_arms.get((fn, callee), {()}):
+            for arms in leg.function_gates.get((fn, callee), {()}):
                 for item, gates in below.items():
                     for gate in gates:
                         here[item].add(frozenset(gate | set(arms)))
@@ -327,12 +329,64 @@ def gated_items(leg: metal_leg.Leg, entry_points: set[str], keyed, messaged, fre
 # The case set
 
 
-def case_families(side: list[str], enums: set[str], constructors) -> dict[str, dict]:
+def field_setters() -> dict[str, set[str]]:
+    """Each method of the suite's own vocabulary that assigns a field, to the fields it assigns.
+
+    A case states a field either in the struct literal or through the builder the vocabulary
+    offers for it — `RenderPass::counting_into(buffer)` is how a case attaches a visibility-result
+    buffer — so without this map a case that used the builder would read as stating nothing. The
+    same shape `variant_constructors` reads for an enum's helpers, over `self.field = ..` instead.
+
+    Keyed by the method's name alone, like the guards it answers: two structs with a setter of one
+    name credit each other's field, which is generous in the direction that cannot refuse a true
+    declaration.
+    """
+    out: dict[str, set[str]] = {}
+    for path in sorted(SRC.rglob("*.rs")):
+        text = metal_leg.blanked(path.read_text())
+        for fn in metal_leg.functions(text, str(path)):
+            assigned = {
+                match.group(1)
+                for match in re.finditer(
+                    r"\bself\s*\.\s*([a-z_][a-z0-9_]*)\s*=[^=]", text[fn.start : fn.end]
+                )
+            }
+            if assigned:
+                out.setdefault(fn.name, set()).update(assigned)
+    return out
+
+
+def stated_fields(text: str, setters: dict[str, set[str]]) -> set[str]:
+    """The vocabulary fields a case module's text states, as a guard in the leg reads them.
+
+    Three spellings, all of them the module's own text: a struct literal's `field: value`, an
+    assignment onto a value (`pass.size = cell.b_area`), and a call of a builder that assigns the
+    field (`setters`).
+
+    Read generously, and deliberately so. A `let size: u32` reads as stating `size`, and a field a
+    module states as `None` or `false` reads the same as one it states a value for — the two
+    values of a boolean are nowhere in this text, which is the limit a field axis already carries.
+    What the reading is exact about is the only thing the check turns on: a module that never
+    mentions the field at all states none of it.
+    """
+    out = {match.group(1) for match in re.finditer(r"\b([a-z_][a-z0-9_]*)\s*:", text)}
+    out |= {
+        match.group(1)
+        for match in re.finditer(r"\.\s*([a-z_][a-z0-9_]*)\s*=[^=]", text)
+    }
+    for match in re.finditer(r"\.\s*([a-z_][a-z0-9_]*)\s*\(", text):
+        out |= setters.get(match.group(1), set())
+    return out
+
+
+def case_families(
+    side: list[str], enums: set[str], constructors, setters: dict[str, set[str]]
+) -> dict[str, dict]:
     """Each case module, with the vocabulary its cases use and what it loosens.
 
     A module's cases share one `run`, so the module is the unit a call site can be attributed to
-    without running anything: which `Side` methods its text calls, and which variants of the
-    vocabulary its text builds.
+    without running anything: which `Side` methods its text calls, which variants of the
+    vocabulary its text builds, and which of its fields its text states.
     """
     out: dict[str, dict] = {}
     for path in sorted((SRC / "cases").glob("*.rs")):
@@ -353,6 +407,10 @@ def case_families(side: list[str], enums: set[str], constructors) -> dict[str, d
         out[path.stem] = {
             "calls": calls,
             "variants": variants,
+            # The vocabulary fields the module's text states, which is what a guard in the leg
+            # (`metal_leg.guards_of`) is satisfied by: a field written in a struct literal, one
+            # assigned onto a value, and one a builder of the vocabulary assigns for it.
+            "states": stated_fields(text, setters),
             # What the module loosens, and what it names as the justification. Comparison is
             # exact by default, so a module with no tolerance compares every measured field.
             #
@@ -483,14 +541,23 @@ def known_gaps() -> list[tuple[str, str]]:
 def metal_items(
     index: dict[tuple[str, str], dict[str, str]],
     by_item: dict[tuple[str, str], dict[str, set[str]]],
+    stated: dict[tuple[str, str], dict[str, set[str]]],
     api: metal_leg.Api,
 ) -> dict[tuple[str, str], option_space.Item]:
     """Every Metal item a crossing may name as a field axis, from the sources already read.
 
     The key is the items axis's own -- `(container, item name)` of `scripts/metal-coverage`'s map
     -- so a field axis names an item this document already has a row for rather than a word a
-    row's author chose. Each carries the case modules whose Metal leg reaches it, and the Metal
-    type its call answers, which is what tells a boolean or numeric field from an enum-valued one.
+    row's author chose. Each carries the Metal type its call answers, which is what tells a boolean
+    or numeric field from an enum-valued one, and the case modules that reach it, in the two
+    strengths the sources can say apart:
+
+    * `by_item` -- reached at all, which is the items axis's own join and what that axis counts;
+    * `stated` -- reached through a call site whose guards the module's own data can take. The leg
+      sets fifty fields of a pass descriptor in one function, each under `if let Some(x) =
+      pass.field`, so every case that opens a pass reaches all fifty by the first reading and only
+      the ones it states by the second. A crossing's field axis is checked against the second, so
+      a row says the module put a value to **that field** and not merely to that Metal type.
 
     The answered type is `objc2-metal`'s, keyed by the selector it binds for the item: a property
     is bound under its own name, and an Objective-C `BOOL` property under `isName` as well, so
@@ -513,7 +580,11 @@ def metal_items(
             # A free function's empty container, and a container's own row, which names the type
             # and not a field of it.
             continue
-        out[key] = option_space.Item(set(by_item.get(key, {})), answered.get(key, ""))
+        out[key] = option_space.Item(
+            set(stated.get(key, {})),
+            answered.get(key, ""),
+            set(by_item.get(key, {})),
+        )
     return out
 
 
@@ -538,15 +609,20 @@ def inventory():
     messaged = messaged_rows(leg, api, selves)
     side = side_methods()
     constructors = variant_constructors(enums)
-    families = case_families(side, enums, constructors)
+    setters = field_setters()
+    families = case_families(side, enums, constructors, setters)
     records = recordings(families)
 
     # The call graph, from each `Side` method the Metal leg implements.
     entries = {fn for fn in leg.calls_function} | {call.function for call in leg.calls}
     gated = gated_items(leg, entries & set(side), keyed, messaged, frees)
 
-    # An item to the families that reach it, and how.
+    # An item to the families that reach it, and how. And, apart from it, the stronger reading: the
+    # families whose own data can take the guards around the call site they reach it through.
+    # Only a crossing's field axis is checked against that second reading; the items axis counts
+    # reachability, which is what it has always claimed and what its own prose says.
     by_item: dict[tuple[str, str], dict[str, set[str]]] = defaultdict(lambda: defaultdict(set))
+    stated: dict[tuple[str, str], dict[str, set[str]]] = defaultdict(lambda: defaultdict(set))
     for module, family in families.items():
         if not family["ran"]:
             # Nothing of this module's Metal is ever executed.
@@ -554,9 +630,19 @@ def inventory():
         for method in family["calls"]:
             for item, gates in gated.get(method, {}).items():
                 for gate in gates:
-                    if gate <= family["variants"]:
-                        by_item[item][module].add(method)
-                        break
+                    named = {
+                        one for one in gate if not one.startswith(metal_leg.GATE_FIELD)
+                    }
+                    if not named <= family["variants"]:
+                        continue
+                    by_item[item][module].add(method)
+                    fields = {
+                        one.removeprefix(metal_leg.GATE_FIELD)
+                        for one in gate
+                        if one.startswith(metal_leg.GATE_FIELD)
+                    }
+                    if fields <= family["states"]:
+                        stated[item][module].add(method)
 
     # Calls the leg makes that no family was found to reach: a call site this cannot attribute.
     reached = {item for method in gated.values() for item in method}
@@ -575,6 +661,7 @@ def inventory():
         "records": records,
         "gated": gated,
         "by_item": by_item,
+        "stated": stated,
         "called": sorted(called),
         "unattributed": sorted(called - set(by_item)),
         "unreachable": sorted(called - reached),
@@ -599,7 +686,7 @@ def inventory():
                 for module, family in families.items()
                 for case in family["ran"]
             },
-            metal_items(index, by_item, api),
+            metal_items(index, by_item, stated, api),
         ),
     }
 
@@ -798,9 +885,15 @@ def write_other_crossings(w, other, slots, fields, with_slots, with_fields) -> N
         "of each axis, and a row parked here would be the same claim under a weaker rule;"
     )
     w(
-        "- **a field axis `objc2-metal` binds no such item for, or one this module's Metal leg "
-        "reaches no call of.** The second is the items axis's own join, so a field axis names a "
-        "call this document already reports as exercised rather than a word a row's author chose;"
+        "- **a field axis `objc2-metal` binds no such item for, or one this module's own data "
+        "never reaches.** The leg must hold a call of that field at a site whose guards this "
+        "module's text satisfies. Reachability is the items axis's own join, so a field axis names "
+        "a call this document already reports as exercised rather than a word a row's author "
+        "chose; the guards are what make the row a claim about that **field** and not about any "
+        "field of its Metal type. One shared encoder sets a pass descriptor's fields in one "
+        "function, each under `if let Some(x) = pass.field`, so by reachability alone every case "
+        "that opens a pass reaches them all — which would let a case attaching no visibility "
+        "buffer declare a crossing on `visibilityResultBuffer`;"
     )
     w(
         "- **a field axis whose call answers a Metal type with a generated value list.** Such a "
@@ -812,10 +905,14 @@ def write_other_crossings(w, other, slots, fields, with_slots, with_fields) -> N
         "What **cannot** be checked for a field axis, and is therefore what only a reader can "
         "check: that the module put **two values** of the field to Metal. A boolean's two values "
         "and a number's range are nowhere in the text this reads and in no recording's "
-        "transcript, so a field axis carries the field being Metal's and this module's leg setting "
-        "it, and nothing about variation. An enum axis carries the two-values check here exactly as "
-        "it does above, which is why a row's enum axes are the stronger half of it. The last "
-        "column, as above, is for a reader against the case."
+        "transcript, so a field axis carries the field being Metal's and this module stating it, "
+        "and nothing about variation — and a field a module states as `None` or `false` reads "
+        "here exactly like one it states a value for. For the same reason a **bare boolean** "
+        "guard in the leg (`if descriptor.read_only {`) is no guard here: its body is reached on "
+        "one of the field's two values, and which one a case states is what this cannot see. An "
+        "enum axis carries the two-values check here exactly as it does above, which is why a "
+        "row's enum axes are the stronger half of it. The last column, as above, is for a reader "
+        "against the case."
     )
     w("")
     w("| | |")
