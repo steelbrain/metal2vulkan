@@ -86,6 +86,8 @@ mod freed_memory;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod fresh_pages;
 mod fresh_unwritten;
+#[cfg(any(m2v_gpu, m2v_cpu_icd))]
+mod function_properties;
 mod function_table;
 mod gate;
 mod gpu_pools;

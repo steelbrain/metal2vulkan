@@ -11,7 +11,7 @@
 //! compiled to a binary is what Metal takes in a stage's `binaryFunctions` and adds to a made
 //! pipeline state.
 
-use super::device::device_error;
+use super::device::{device_error, lock};
 use super::error::{invalid, Problem, RuntimeGap};
 use super::Device;
 use super::Error;
@@ -50,6 +50,21 @@ pub struct Function {
     /// The layouts of the argument buffers the function takes, by buffer index, decoded when an
     /// argument encoder first asks (`argument_encoder.rs`).
     argument_layouts: Arc<Mutex<BTreeMap<u32, Arc<ArgumentBufferLayout>>>>,
+    /// The function's `MTLFunction` properties, computed when a getter first asks.
+    ///
+    /// All five property getters answer one field each of a **single** [`FunctionProperties`],
+    /// and computing it for a function whose library is a module decodes the function's AIR
+    /// ([`metal2vulkan::library::Function::properties`]). Computing it per getter therefore
+    /// decodes the same bitcode once per getter to answer one `MTLFunction`, where Metal answers
+    /// each getter from the object it already made; a specialized function pays twice over,
+    /// because [`metal2vulkan::library::Function::specialized_properties`] computes the
+    /// unspecialized properties first and then specializes the AIR again.
+    ///
+    /// The memo is sound because every input is fixed when the function is made: the library's
+    /// bytes are immutable behind an `Arc`, and `constants` and `specialized` never change. Only
+    /// a success is kept -- a refusal under the standard budget is deterministic, so recomputing
+    /// one answers the same refusal -- which keeps the error path exactly as it was.
+    properties: Arc<Mutex<PropertiesMemo>>,
     /// The options the function was made with (`newFunctionWithDescriptor:`); none for the
     /// other forms.
     options: FunctionOptions,
@@ -57,6 +72,18 @@ pub struct Function {
     /// numbered, shared with every function object of the same function of its library
     /// (`resource_ids/numbered.rs`); held for its drop.
     _holds: Arc<FunctionHolds>,
+}
+
+/// A function's memoized `MTLFunction` properties, and how many times it has computed them.
+///
+/// The count is what the redundancy is checked by: reading all five property getters must compute
+/// the properties **once**, and before the memo it computed them once per getter
+/// (`tests::function_properties`). A count is deterministic on any host under any load, which a
+/// time is not, so the check is a count.
+#[derive(Debug, Default)]
+pub(super) struct PropertiesMemo {
+    held: Option<FunctionProperties>,
+    computed: u32,
 }
 
 /// `MTLFunctionDescriptor`: the function [`Library::new_function_with_descriptor`] makes.
@@ -250,6 +277,7 @@ impl Library {
             constants: constants.clone(),
             specialized,
             argument_layouts: Arc::default(),
+            properties: Arc::default(),
             options: FunctionOptions::NONE,
             _holds: holds,
         })
@@ -300,14 +328,27 @@ impl Function {
     /// constant values its
     /// [`specialized_properties`](metal2vulkan::library::Function::specialized_properties).
     fn properties(&self) -> Result<FunctionProperties, Error> {
+        if let Some(held) = lock(&self.properties).held.clone() {
+            return Ok(held);
+        }
         let budget = Budget::standard();
-        if self.specialized {
+        let computed = if self.specialized {
             self.function
                 .specialized_properties(&self.constants, &budget)
-                .map_err(device_error)
+                .map_err(device_error)?
         } else {
-            self.function.properties(&budget).map_err(device_error)
-        }
+            self.function.properties(&budget).map_err(device_error)?
+        };
+        let mut memo = lock(&self.properties);
+        memo.computed += 1;
+        Ok(memo.held.get_or_insert(computed).clone())
+    }
+
+    /// How many times the function has computed its properties, for the check that reading all
+    /// five getters computes them once ([`PropertiesMemo`]).
+    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+    pub(crate) fn properties_computed(&self) -> u32 {
+        lock(&self.properties).computed
     }
 
     /// `functionType`. A metallib function answers from its container tags; a bitcode wrapper's
