@@ -547,6 +547,45 @@ fn texels(level: u32, layer: u32, origin: [u32; 2], size: [u32; 2]) -> TexelBox 
     }
 }
 
+/// Metal's bounds rule for a mapping update, which the direct and plural selectors, the indirect
+/// one and the move all share ([`UnitGrid::clipped_region`]): plain Metal **takes** an argument
+/// past the texture's own and maps the tiles inside it, where its own API validation layer stops
+/// the call.
+///
+/// Measured by `metal2vulkan-conformance/probes/sparse_mapping_past_the_bounds.m` on an Apple M3
+/// Max under macOS 27.0.1, through the direct
+/// `updateTextureMapping:mode:region:mipLevel:slice:` over this very shape — a 256 by 256
+/// nine-level `R32Float` texture whose level 0 holds 4 by 4 of Metal's 16-KiB tiles — the heap's
+/// `usedSize` 0 before each shape and the command buffer `Completed` with no error after. The one
+/// reading that is not this rule's is a **slice** past the texture's, which took one page there and
+/// maps none here.
+#[test]
+fn a_mapping_update_past_the_bounds_clips_as_plain_metal_does() {
+    let grid = grid([256, 256, 1], 9, 1, 3, false);
+    assert_eq!(grid.first_mipmap_in_tail, 3, "the tail of a 256 by 256");
+    let one = Region::new_2d(0, 0, 1, 1);
+    // The control, which says the readings below are not all empty by construction: one tile of
+    // level 0 maps one tile, where Metal took one 16-KiB page.
+    assert_eq!(grid.clipped_region(0, 0, &one), vec![tile(0, 0, [0, 0])]);
+    // A region of 8 by 8 tiles where the level holds 4 by 4 maps the level's own tiles and no
+    // more, which is what Metal's 16 pages were.
+    let whole = grid.clipped_region(0, 0, &Region::new_2d(0, 0, 4, 4));
+    assert_eq!(whole.len(), 16, "level 0 holds 4 by 4 tiles");
+    assert_eq!(
+        grid.clipped_region(0, 0, &Region::new_2d(0, 0, 8, 8)),
+        whole
+    );
+    // A level past the texture's levels, a slice past its slices, and an origin past the level's
+    // last tile each map nothing, where Metal's `usedSize` stayed at 0.
+    assert!(grid.clipped_region(9, 0, &one).is_empty(), "level 9 of 9");
+    assert!(grid.clipped_region(0, 1, &one).is_empty(), "slice 1 of 1");
+    assert!(
+        grid.clipped_region(0, 0, &Region::new_2d(4, 4, 1, 1))
+            .is_empty(),
+        "the tile past (3, 3)"
+    );
+}
+
 /// Four of Metal's 16-KiB tiles lie in one 64-KiB block, which holds memory while any of them is
 /// mapped: a tile maps alone, and the block is freed with its last.
 #[test]

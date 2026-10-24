@@ -12,7 +12,6 @@
 
 use super::emulated::Written;
 use super::texture::{SparseShape, VkSparseLayout};
-use super::SparseProblem;
 use crate::values::Region;
 use metal2vulkan::bind::TileMapping;
 use metal2vulkan::metal::TextureType;
@@ -456,14 +455,30 @@ impl UnitGrid {
         units
     }
 
-    /// Metal's units an indirect update's `region` (in tiles) of `level` and `slice` touches, as
-    /// plain Metal maps arguments its validation stops (the M3 Max under macOS 27.0.1): none at a
-    /// level or slice past the texture's, nor for a tiled level's region whose origin is past its
-    /// tiles or whose size is 0 on an axis; else the region's tiles inside the level, the rest of
-    /// it dropped. A level past `firstMipmapInTail` touches its slice's tail, as
-    /// [`checked_region`](Self::checked_region)'s. Differs: Metal's `usedSize` over a region of a
-    /// slice past the texture's varies (a tile more beside other regions, none alone, and an
-    /// unmap of it can take the count below zero); the runtime counts none.
+    /// Metal's units an update's `region` (in tiles) of `level` and `slice` touches, as plain Metal
+    /// maps arguments its validation stops (the M3 Max under macOS 27.0.1): none at a level or
+    /// slice past the texture's, nor for a tiled level's region whose origin is past its tiles or
+    /// whose size is 0 on an axis; else the region's tiles inside the level, the rest of it
+    /// dropped. A level past `firstMipmapInTail` touches its slice's tail.
+    ///
+    /// One rule for all three mapping selectors — the direct update, the plural one and the
+    /// indirect one — and for the move. Plain Metal **takes** each of these arguments where its own
+    /// API validation layer stops them, so a typed refusal of ours would be a refusal where Metal
+    /// allows. Measured through the direct
+    /// `updateTextureMapping:mode:region:mipLevel:slice:` on this M3 Max, macOS 27.0.1
+    /// (`metal2vulkan-conformance/probes/sparse_mapping_past_the_bounds.m`), over the suite's own
+    /// 256 by 256 nine-level `R32Float` texture whose level 0 holds 4 by 4 tiles, the heap's
+    /// `usedSize` 0 before each and the command buffer `Completed` with no error after: level 9
+    /// maps nothing; a region of 8 by 8 tiles at the origin maps 16 pages, the level's own tiles
+    /// and no more; an origin of (4, 4) maps nothing; and one tile of level 0 maps one page, which
+    /// is the control that says the measurement works at all. The three move shapes complete with
+    /// no error too, leaving `usedSize` where it was.
+    ///
+    /// Differs: Metal's `usedSize` over a region of a **slice** past the texture's varies — a tile
+    /// more beside other regions, and an unmap of it can take the count below zero, and the direct
+    /// selector alone took one page for it in the measurement above — where the runtime maps and
+    /// counts none. Which tiles a move past these bounds moves is not measured: `usedSize` cannot
+    /// show it and the probe reads no texels.
     pub(crate) fn clipped_region(&self, level: u64, slice: u64, region: &Region) -> Vec<MetalUnit> {
         if level >= self.shape.levels || slice >= u64::from(self.slices()) {
             return Vec::new();
@@ -486,51 +501,6 @@ impl UnitGrid {
             origin.map(|axis| axis as u32),
             clipped.map(|axis| axis as u32),
         )
-    }
-
-    /// Metal's units an update of `region` (in tiles) of `level` and `slice` touches
-    /// ([`update_units`](Self::update_units)), refused where Metal's validation stops it: a level
-    /// or slice past the texture's, or a tiled level's region past its tiles. A level past
-    /// `firstMipmapInTail` touches nothing, as plain Metal (validation stops it).
-    pub(crate) fn checked_region(
-        &self,
-        level: u64,
-        slice: u64,
-        region: &Region,
-    ) -> Result<Vec<MetalUnit>, SparseProblem> {
-        if level >= self.shape.levels {
-            let levels = self.shape.levels;
-            return Err(SparseProblem::Level { level, levels });
-        }
-        let slices = u64::from(self.slices());
-        if slice >= slices {
-            return Err(SparseProblem::Slice { slice, slices });
-        }
-        let (level32, slice32) = (level as u32, slice as u32);
-        let first = self.first_tail();
-        if level32 >= first {
-            return Ok(self.update_units(level32, slice32, [0; 3], [0; 3]));
-        }
-        let tiles = self.tiles(level32);
-        let origin = [region.origin.x, region.origin.y, region.origin.z];
-        let size = [region.size.width, region.size.height, region.size.depth];
-        let inside = (0..3).all(|axis| {
-            origin[axis]
-                .checked_add(size[axis])
-                .is_some_and(|end| end <= u64::from(tiles[axis]))
-        });
-        if !inside {
-            return Err(SparseProblem::Region {
-                level,
-                region: *region,
-            });
-        }
-        Ok(self.update_units(
-            level32,
-            slice32,
-            origin.map(|axis| axis as u32),
-            size.map(|axis| axis as u32),
-        ))
     }
 
     /// The bytes of memory `unit` binds.

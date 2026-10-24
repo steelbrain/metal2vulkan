@@ -129,9 +129,15 @@ impl ResourceStateCommandEncoder {
     /// macOS 27.0.1: its texels kept, the command buffer completed; Metal's
     /// validation stops it).
     ///
-    /// Refused, recording nothing: a texture of another device, a level or slice past the
-    /// texture's, or a tiled level's region past its tiles (`Invalid`); a view of a pixel format
-    /// whose tile is not its texture's (`NotImplemented(SparseHeaps)`: not measured).
+    /// A level or slice past the texture's own, and a region past a tiled level's tiles, are
+    /// **taken**, mapping the tiles inside the texture and nothing else, as plain Metal maps
+    /// arguments its own validation layer stops ([`UnitGrid::clipped_region`], where the
+    /// measurement is): level 9 of a nine-level texture and an origin past the level's tiles map
+    /// nothing, and a region running past them maps the level's own tiles. A slice past the
+    /// texture's maps none, where plain Metal's `usedSize` took one page for it.
+    ///
+    /// Refused, recording nothing: a texture of another device (`Invalid`); a view of a pixel
+    /// format whose tile is not its texture's (`NotImplemented(SparseHeaps)`: not measured).
     pub fn update_texture_mapping(
         &mut self,
         texture: &Texture,
@@ -147,7 +153,7 @@ impl ResourceStateCommandEncoder {
     /// [`update_texture_mapping`](Self::update_texture_mapping) maps it.
     ///
     /// Refused, recording nothing, as one region is, for any of them, and for lists of unequal
-    /// lengths (`Invalid`).
+    /// lengths (`Invalid`, `SparseProblem::Lengths`).
     pub fn update_texture_mappings(
         &mut self,
         texture: &Texture,
@@ -167,11 +173,7 @@ impl ResourceStateCommandEncoder {
         let mut units = Vec::new();
         for ((region, &level), &slice) in regions.iter().zip(levels).zip(slices) {
             let slice = slice.saturating_add(first);
-            let checked = sparse
-                .grid
-                .checked_region(level, slice, region)
-                .map_err(|problem| invalid(CALL, Problem::Sparse(problem)))?;
-            units.extend(checked);
+            units.extend(sparse.grid.clipped_region(level, slice, region));
         }
         if !units.is_empty() {
             self.updates.push(SparseUpdate::Units {
@@ -256,7 +258,11 @@ impl ResourceStateCommandEncoder {
     /// to 2 onto 1 to 3: only tile 2, onto 3). At `firstMipmapInTail` the slice's whole tail moves,
     /// onto the other side's tail or onto one tile of a tiled level, and one tile onto a whole
     /// tail, as Metal's validation takes and Metal moves them; past it nothing moves, as plain
-    /// Metal (validation stops it). Through a view, each side names its texture's own tiles as
+    /// Metal (validation stops it). A level or slice past a texture's own, and a source size past
+    /// a tiled level's tiles, are **taken**, moving the tiles inside both textures and nothing
+    /// else: plain Metal takes all three and leaves both heaps' `usedSize` where it was, measured
+    /// beside the update's ([`UnitGrid::clipped_region`]); which tiles it moved there is not
+    /// measured, so moving the clipped pairs is a near-equivalent. Through a view, each side names its texture's own tiles as
     /// [`update_texture_mapping`](Self::update_texture_mapping)'s does (the levels the texture's,
     /// the slices the view's; validation stops a region past the view's own level). Plain Metal
     /// moves between textures of different heaps and of different formats, tiles of different sizes
@@ -271,9 +277,8 @@ impl ResourceStateCommandEncoder {
     /// (an M4: both textures' texels kept).
     ///
     /// Refused, recording nothing: a texture of another device, a move between a sparse texture
-    /// and one that is not (`NotSparse`, not measured), a level or slice past a texture's, or a
-    /// region past a level's tiles (`Invalid`); a view of a pixel format whose tile is not its
-    /// texture's (`NotImplemented(SparseHeaps)`: not measured).
+    /// and one that is not (`NotSparse`, not measured) (`Invalid`); a view of a pixel format whose
+    /// tile is not its texture's (`NotImplemented(SparseHeaps)`: not measured).
     pub fn move_texture_mappings(
         &mut self,
         source: &Texture,
@@ -302,14 +307,11 @@ impl ResourceStateCommandEncoder {
             origin: destination_origin,
             size: source_size,
         };
-        let checked = |image: &SparseImage, level, slice, region: &Region| {
-            image
-                .grid
-                .checked_region(level, slice, region)
-                .map_err(|problem| invalid(CALL, Problem::Sparse(problem)))
+        let clipped = |image: &SparseImage, level, slice, region: &Region| {
+            image.grid.clipped_region(level, slice, region)
         };
-        let sources = checked(from, source_level, source_slice, &from_region)?;
-        let destinations = checked(to, destination_level, destination_slice, &to_region)?;
+        let sources = clipped(from, source_level, source_slice, &from_region);
+        let destinations = clipped(to, destination_level, destination_slice, &to_region);
         let pairs: Vec<(MetalUnit, MetalUnit)> = sources.into_iter().zip(destinations).collect();
         if !pairs.is_empty() {
             self.updates.push(SparseUpdate::Move {

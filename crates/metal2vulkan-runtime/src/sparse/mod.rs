@@ -135,29 +135,6 @@ pub enum SparseProblem {
     /// Lists of regions, levels and slices of unequal lengths (`update_texture_mappings`): Metal's
     /// one `numRegions` cannot state them, so no Metal call reaches this.
     Lengths,
-    /// A level past the texture's levels.
-    Level {
-        /// The level given.
-        level: u64,
-        /// The texture's levels.
-        levels: u64,
-    },
-    /// A slice past the texture's slices (a cube's six faces each), which validation stops and
-    /// which maps what memory decides without it.
-    Slice {
-        /// The slice given.
-        slice: u64,
-        /// The texture's slices.
-        slices: u64,
-    },
-    /// A region of a tiled level past its tiles, which validation stops and which maps what
-    /// memory decides without it.
-    Region {
-        /// The level.
-        level: u64,
-        /// The region, in tiles.
-        region: Region,
-    },
     /// An indirect update's count, `bytes` of it at `offset`, past the buffer's `length`, where it
     /// is encoded.
     IndirectArguments {

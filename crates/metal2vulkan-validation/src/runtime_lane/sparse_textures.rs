@@ -1341,7 +1341,8 @@ fn updates_through_views_map_the_texture_s_own_tiles() {
         one_update(&array, TileMapping::Unmap, 2).unwrap();
         assert_eq!(heap.used_size(), 9 * PAGE, "slice 2 unmapped on {name}");
         // Slices 1 and 2: the view's slice 2 is the texture's slice 3, past the view's; its slice
-        // 3 would be the texture's slice 4, past the texture's, refused as on the texture.
+        // 3 would be the texture's slice 4, past the texture's, which the call takes and maps
+        // nothing for, as on the texture and as plain Metal takes it.
         let middle = array
             .new_texture_view_with_levels_slices(r32, TextureType::Type2DArray, 0..1, 1..3)
             .unwrap();
@@ -1349,16 +1350,11 @@ fn updates_through_views_map_the_texture_s_own_tiles() {
         assert_eq!(heap.used_size(), 13 * PAGE, "{name}");
         one_update(&array, TileMapping::Unmap, 3).unwrap();
         assert_eq!(heap.used_size(), 9 * PAGE, "slice 3 unmapped on {name}");
-        let slice = SparseProblem::Slice {
-            slice: 4,
-            slices: 4,
-        };
+        one_update(&middle, TileMapping::Map, 3).unwrap();
         assert_eq!(
-            one_update(&middle, TileMapping::Map, 3),
-            Err(Error::Invalid(Invalid::new(
-                "update_texture_mappings",
-                Problem::Sparse(slice)
-            )))
+            heap.used_size(),
+            9 * PAGE,
+            "a slice past the texture's maps nothing on {name}"
         );
         // An indirect update's slice 1 through the view: the texture's slice 2.
         let shared = ResourceOptions::shared();

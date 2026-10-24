@@ -284,13 +284,12 @@ static LEVELS_AND_THE_TAIL: Row = Row {
 /// **A level past the texture's own**, on its own, because the two oracles disagree about it.
 ///
 /// Plain Metal takes the call and maps nothing: measured here, `usedSize` unchanged. Metal's own
-/// API validation layer stops it (`mipLevel(9) must be <= firstMipmapInTail(3)`), and our runtime
-/// refuses it typed, `Invalid(Sparse(Level { level: 9, levels: 9 }))`. Which of the two oracles the
-/// runtime should follow on a **direct** update is not this case's to decide — its own indirect
-/// path already follows plain Metal and maps nothing — so the row carries a known-gaps entry and
-/// the measurement stands in the suite rather than in somebody's notes.
+/// API validation layer stops it (`mipLevel(9) must be <= firstMipmapInTail(3)`), so the two
+/// oracles disagree, and the runtime follows plain Metal — the behavioural one — on the direct
+/// selector as it already did on the indirect one. It refused the call typed until this row made
+/// the disagreement visible.
 ///
-/// It is one step and a commit, so the refusal costs no other number: that is why it is not a row
+/// It is one step and a commit, so the reading costs no other number: that is why it is not a row
 /// of [`LEVELS_AND_THE_TAIL`].
 static A_LEVEL_PAST_THE_TEXTURES: Row = Row {
     case: "sparse-mapping-a-level-past-the-textures",
