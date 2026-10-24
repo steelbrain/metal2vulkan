@@ -567,6 +567,7 @@ const ONE_OF_METALS: DriverFact = DriverFact::DontCareStoreIsOneOfMetals;
 const COPY_BACK: DriverFact = DriverFact::ShadowCopyBackDispatchFaster;
 const COPY_IN: DriverFact = DriverFact::ShadowCopyInDispatchFaster;
 const ROWS: DriverFact = DriverFact::RowCopiesDispatchFaster;
+const MERGES: DriverFact = DriverFact::SubmissionsWithoutSignalsMerge;
 const LINEAR_UNINITIALIZED: DriverFact = DriverFact::LinearTilingFeaturesUninitialized;
 const STALL: DriverFact = DriverFact::SemaphoreOperationsStallSubmits;
 const SAMPLED_HIZ: DriverFact = DriverFact::SampledDepthKeepsHiZ;
@@ -635,6 +636,7 @@ fn the_committed_profiles_drivers_have_their_facts() {
                 BC6H,
                 BC7,
                 ONE_OF_METALS,
+                MERGES,
                 FOLLOWS,
             ],
         ),
@@ -648,6 +650,7 @@ fn the_committed_profiles_drivers_have_their_facts() {
                 BC6H,
                 BC7,
                 ONE_OF_METALS,
+                MERGES,
                 FOLLOWS,
             ],
         ),
@@ -674,6 +677,7 @@ fn the_committed_profiles_drivers_have_their_facts() {
                 ONE_OF_METALS,
                 COPY_BACK,
                 ROWS,
+                MERGES,
                 SAMPLED_HIZ,
                 MSAA_DEPTH,
                 FOLLOWS,
@@ -693,6 +697,7 @@ fn the_committed_profiles_drivers_have_their_facts() {
                 COPY_BACK,
                 COPY_IN,
                 ROWS,
+                MERGES,
             ],
         ),
         (
@@ -1026,7 +1031,7 @@ fn the_rx_7900_xtx_at_mesa_26_2_4_takes_the_facts_measured_on_it() {
     navi31.device_id = AMD_RX_7900_XTX;
     assert!(navi31.measured_identity());
     let measured =
-        std::collections::BTreeSet::from([FOLLOWS, DriverFact::RobustIndexFetchReadsZero]);
+        std::collections::BTreeSet::from([FOLLOWS, MERGES, DriverFact::RobustIndexFetchReadsZero]);
     assert_eq!(navi31.driver_facts(), measured);
     assert!(navi31.driver_facts_withheld().is_empty());
     for release in [mesa(26, 2, 3), mesa(26, 0, 8)] {
