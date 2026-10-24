@@ -74,7 +74,7 @@
 
 use crate::error::{DescriptorError, Error, Feature, LowerFamily, Unsupported};
 use crate::lower::access::pulled::{self, SourceRead};
-use crate::lower::arith::{exact_division, narrow, ops, FloatFmt, Form, Held};
+use crate::lower::arith::{exact_division, nan, narrow, ops, FloatFmt, Form, Held};
 use crate::lower::dispatch;
 use crate::lower::emit::EmitCx;
 use crate::lower::select::SelectCx;
@@ -135,6 +135,14 @@ impl Encoding {
             | Encoding::Rg11B10Float
             | Encoding::Rgb9E5Float => 4,
         }
+    }
+
+    /// Whether a component is a float narrower than 32 bits, which the fetch widens to `float`:
+    /// the `half` formats, and the 11- and 10-bit fields of `FloatRG11B10`, whose exponent field
+    /// is all ones for a NaN. The 9:9:9:5 shared-exponent format decodes every code to a finite
+    /// value, so none of its components is ever a NaN.
+    fn widens_narrow_float(self) -> bool {
+        matches!(self, Encoding::Half { .. } | Encoding::Rg11B10Float)
     }
 
     /// Whether the components are floats (every format except the unnormalized integers).
@@ -786,6 +794,25 @@ pub fn decode(
         let ft = ops::ty(fb, f32_scalar())?;
         for c in &mut comps {
             *c = fb.convert(op, *c, ft)?;
+        }
+    }
+    // A narrow float's widening to `float` answers Metal's canonical NaN, sign and payload
+    // dropped (`nan::NanAnswer::CanonicalExact`, the widening class of Metal's NaN model), where
+    // ours carries the 16-, 11- or 10-bit field's bits up into the payload by construction and a
+    // device whose own widening the module takes may carry them too. The select is Metal's answer
+    // on every device. A `half` parameter is not widened at all: it keeps the fetched bits, as
+    // Metal's does, and for a field of another width `narrow::round` answers the canonical `half`
+    // NaN. The test reads the bits, which no float mode lets a device fold.
+    if encoding.widens_narrow_float() && form.float_fmt() == Some(FloatFmt::F32) {
+        for c in &mut comps {
+            *c = nan::select(
+                fb,
+                f32_scalar(),
+                nan::NanAnswer::CanonicalExact,
+                nan::NanTest::Bits,
+                *c,
+                None,
+            )?;
         }
     }
     let scalar = Form { lanes: 1, ..form };

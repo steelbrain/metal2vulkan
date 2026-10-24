@@ -20,7 +20,11 @@
 //!   pooled block ([`FRESH_PAGES_PAST`]), not of a heap, whose bytes the host maps in memory of
 //!   its class (`Shared`, write-combined, `Managed` with unified memory). The device must import
 //!   host pointers (`host_memory.rs`'s `Importer`), and the class's best memory type for the buffer
-//!   must take the pages: else the buffer lies where it would have, made as ever. A shorter one
+//!   must take the pages: else the buffer lies where it would have, made as ever. Measured
+//!   (2026-10-24, RADV, Mesa 26.2.4): on the unified-memory Radeon 780M all three classes take the
+//!   pages; on the RX 7900 XTX the write-combined class's best type for the buffer is a device-local
+//!   host-visible one, which a host-pointer import cannot bind, so such a buffer is placed as ever
+//!   and `Buffer::clear_first` sets its bytes to zero. A shorter one
 //!   lies in a pooled block. There the bytes a buffer used before are set to zero by a memset of
 //!   pages already touched (about 4.5 us per MiB), which is cheaper than an import of fresh ones
 //!   (16 us per MiB). An import also costs 17 to 43 us whatever its size, against a pooled

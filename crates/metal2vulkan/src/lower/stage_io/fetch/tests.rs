@@ -722,3 +722,55 @@ fn every_ten_and_two_bit_code_is_correctly_rounded() {
         }
     }
 }
+
+/// A narrow float's widening to a `float` parameter answers Metal's canonical NaN, sign and
+/// payload dropped, while a `half` parameter keeps the fetched `half`'s own bits.
+///
+/// Metal's answer, from `vertex-format-float4`'s and `attribute-format-fetches`' recordings of
+/// plain Metal on an M3 Max under macOS 27.0.1: the `half` codes `0x7E01` and `0xFE01` both reach
+/// a `float` attribute as `0x7FC00000`, and so does a `FloatRG11B10` field whose 5-bit exponent
+/// is all ones; the same `half` codes reach a `half` attribute as themselves
+/// (`vertex-format-half4`). Every finite, zero, subnormal and infinite code is bit-exact either
+/// way, which `every_format_decodes_exactly` holds.
+#[test]
+fn a_narrow_floats_widening_answers_metals_canonical_nan() {
+    const CANONICAL: u32 = 0x7FC0_0000;
+    /// The `f32` bits of a `half` whose exponent field is all ones, by the IEEE widening: the
+    /// sign, an all-ones `f32` exponent, and the 10-bit mantissa in the top of the 23-bit one.
+    fn widened(h: u16) -> u32 {
+        (u32::from(h) & 0x8000) << 16 | 0x7F80_0000 | (u32::from(h) & 0x3FF) << 13
+    }
+    // half4: a quiet payload NaN, its negative, a signalling NaN, and +inf.
+    let halves = [0x7E01u16, 0xFE01, 0x7C01, 0x7C00];
+    let mut data = vec![0u8; 32];
+    for (i, h) in halves.iter().enumerate() {
+        data[2 * i..2 * i + 2].copy_from_slice(&h.to_le_bytes());
+    }
+    // The `FloatRG11B10` word whose three fields each hold an all-ones exponent and a non-zero
+    // mantissa: two 11-bit fields of six mantissa bits and a 10-bit one of five.
+    let rg11b10 = 0x7FFu32 | 0x7FF << 11 | 0x3FF << 22;
+    data[8..12].copy_from_slice(&rg11b10.to_le_bytes());
+    for check in [Check::None, Check::InShader] {
+        let e = encoding(VertexFormat::Half4).expect("encoding");
+        let m = module(e, float(4), Elem::Constant, 0, check);
+        let got = run(&m, &data, [0, 0, 0, 0], 4);
+        assert_eq!(
+            got,
+            [CANONICAL, CANONICAL, CANONICAL, f32::INFINITY.to_bits()],
+            "Half4 into float4 {check:?}"
+        );
+        // The same codes into a `half` parameter, held widened: their own bits, as Metal's
+        // `half` attribute keeps them.
+        let m = module(e, half_form(4), Elem::Constant, 0, check);
+        let got = run(&m, &data, [0, 0, 0, 0], 4);
+        assert_eq!(got, halves.map(widened), "Half4 into half4 {check:?}");
+        let e = encoding(VertexFormat::FloatRG11B10).expect("encoding");
+        let m = module(e, float(4), Elem::Constant, 8, check);
+        let got = run(&m, &data, [0, 0, 0, 0], 4);
+        assert_eq!(
+            got,
+            [CANONICAL, CANONICAL, CANONICAL, 1.0f32.to_bits()],
+            "FloatRG11B10 into float4 {check:?}"
+        );
+    }
+}

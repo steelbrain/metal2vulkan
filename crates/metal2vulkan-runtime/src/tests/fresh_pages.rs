@@ -1,11 +1,21 @@
 //! Long new buffers in fresh pages (`fresh_pages.rs`), on the device the GPU cfg selects.
 //!
 //! - **A long new buffer reads zero, nothing written.** A `Shared` buffer, a write-combined one
-//!   and a `Managed` one (with unified memory), each longer than half a pooled block: each lies in
-//!   fresh pages (`WorkCounts::fresh_page_buffers_made`), the host set none of its bytes to zero
-//!   (`new_buffer_bytes_cleared` unchanged), and it reads zero through `contents` and through a
-//!   blit out of it. Without the fresh pages each would be a memset of its length. A shorter one,
-//!   a `Private` one and a heap's are made as before: a pooled or device placement, cleared.
+//!   and a `Managed` one (with unified memory), each longer than half a pooled block: the `Shared`
+//!   one lies in fresh pages wherever the device imports host pointers
+//!   (`WorkCounts::fresh_page_buffers_made`), with the host setting none of its bytes to zero
+//!   (`new_buffer_bytes_cleared` unchanged); a class whose best memory type for the buffer takes
+//!   no import lies where it would have, the host clearing every byte of it
+//!   (a discrete card's write-combined class, measured below). Either way the buffer reads zero
+//!   through `contents` and through a blit out of it, and a buffer that is neither imported nor
+//!   cleared fails. A shorter one, a `Private` one and a heap's are made as before: a pooled or
+//!   device placement, cleared.
+//!
+//!   Measured (2026-10-24, RADV, Mesa 26.2.4): on the Radeon 780M, whose memory is unified, all
+//!   three classes take the pages; on the RX 7900 XTX the `Shared` and `Managed` classes do and
+//!   the write-combined one does not, its best memory type for the buffer being a device-local
+//!   host-visible one that a host-pointer import cannot bind, so that buffer is cleared on the
+//!   host (33,558,544 bytes).
 //! - **Right after a filled one of its length.** A buffer filled by the GPU and released, then one
 //!   of the same length: it takes the parked one (`buffers_recycled`), whose bytes the host sets
 //!   to zero (`new_buffer_bytes_cleared` grows by its padded length), and it reads zero. Past the
@@ -149,19 +159,36 @@ fn a_long_new_buffer_reads_zero_with_nothing_written() {
         let buffer = device.new_buffer(LONG, options).unwrap();
         let after = zeros(&device.work_counts());
         let padded = LONG.next_multiple_of(16);
-        match fresh {
+        let moved = (after.0 - before.0, after.1 - before.1);
+        // The `Shared` class is host memory on every device that imports host pointers, so its
+        // long buffer takes the pages wherever the device takes them at all. A class whose best
+        // memory type for the buffer is not among those an import may bind lies where it would
+        // have (`fresh_pages::Device::fresh_page_buffer`), which is a memory-type fact of the
+        // device and not a contract: the buffer is cleared on the host instead, and either way
+        // the buffer reads zero, which is what Metal's `newBuffer` promises.
+        if what == "shared" {
+            assert_eq!(
+                buffer.in_fresh_pages(),
+                fresh,
+                "{what}: a long Shared buffer takes the pages wherever the device imports them"
+            );
+        }
+        match buffer.in_fresh_pages() {
             true => assert_eq!(
-                (after.0 - before.0, after.1 - before.1),
+                moved,
                 (1, 0),
                 "{what}: the buffer lies in fresh pages, no byte of it written"
             ),
             false => assert_eq!(
-                (after.0 - before.0, after.1 - before.1),
+                moved,
                 (0, padded),
-                "{what}: the device takes no fresh pages: the host clears the buffer"
+                "{what}: the buffer lies where it would have: the host clears every byte"
             ),
         }
-        assert_eq!(buffer.in_fresh_pages(), fresh, "{what}");
+        assert!(
+            fresh || !buffer.in_fresh_pages(),
+            "{what}: a device that imports no host pointer takes no fresh pages"
+        );
         assert_eq!(
             first_nonzero(&read_on_cpu(&buffer)),
             None,
