@@ -906,14 +906,18 @@ mod every_case_reads_the_same_verdict_alone {
             "no case cites a degrade notice, so the guard has nothing to hold"
         );
 
-        let together = replay_on_under(VENUE, Policy::Exact, &selection).unwrap();
+        // One run of each leg: the property is that a verdict does not depend on what ran beside
+        // it, which a single run of the selection and a single run alone already decide. The
+        // stability a repeated run reports is a different property, held by `times`' own tests.
+        let (together, _) = replay_on_under(VENUE, Policy::Exact, &selection, 1).unwrap();
         let mut announced_anywhere = 0usize;
         for row in together.rows() {
             announced_anywhere += row.ours.announced_notices().len();
         }
 
         for case in &selection {
-            let alone = replay_on_under(VENUE, Policy::Exact, std::slice::from_ref(case)).unwrap();
+            let (alone, _) =
+                replay_on_under(VENUE, Policy::Exact, std::slice::from_ref(case), 1).unwrap();
             let alone_row = alone
                 .rows()
                 .iter()
