@@ -1,0 +1,1455 @@
+{
+  "format": 1,
+  "case": "blend-interaction-format-unorm8",
+  "suite_version": 1,
+  "shaders": [
+    {
+      "fixture": "rt6_samples.ll",
+      "entry": "rt6_fill_vertex",
+      "source_sha256": "857adcbb6951b3d5348087377c099c2b2b4733fe56cc754501b605496cb30fb9"
+    },
+    {
+      "fixture": "rt6_samples.air.ll",
+      "entry": "rt6_fill_vertex",
+      "source_sha256": "50449c6cad01f47ad3407cbf3bbbdfa4405c43f2cae14639e56d71b307a41d2c"
+    },
+    {
+      "fixture": "rt6_samples.ll",
+      "entry": "rt6_fill_rgba32float",
+      "source_sha256": "857adcbb6951b3d5348087377c099c2b2b4733fe56cc754501b605496cb30fb9"
+    },
+    {
+      "fixture": "rt6_samples.air.ll",
+      "entry": "rt6_fill_rgba32float",
+      "source_sha256": "50449c6cad01f47ad3407cbf3bbbdfa4405c43f2cae14639e56d71b307a41d2c"
+    }
+  ],
+  "answers": [
+    {
+      "key": {
+        "chip": "apple-m3-max",
+        "os_version": "27.0.1",
+        "os_build": "26A434",
+        "metal_level": "27.0.1"
+      },
+      "provenance": "metal_run",
+      "device": "Apple M3 Max",
+      "runs": 3,
+      "outcomes": [
+        {
+          "runs": 3,
+          "transcript": {
+            "root": {
+              "name": "case",
+              "observed": {
+                "value": "absent"
+              },
+              "children": [
+                {
+                  "name": "inputs",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "program:air",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "857adcbb6951b3d5348087377c099c2b2b4733fe56cc754501b605496cb30fb9"
+                        }
+                      }
+                    },
+                    {
+                      "name": "program:air-typed",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "50449c6cad01f47ad3407cbf3bbbdfa4405c43f2cae14639e56d71b307a41d2c"
+                        }
+                      }
+                    },
+                    {
+                      "name": "target",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "c1a81a5e0b496422ee7423675b9ac9b81d517d83bd5d8cec763c50c310686b37"
+                        }
+                      }
+                    },
+                    {
+                      "name": "buffer:source",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "246aa79c40f9844951fcb5425111b12a6b903ad405358ca9533421762c6272d3"
+                        }
+                      }
+                    },
+                    {
+                      "name": "buffer:shape",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "c4b0abe54ae451ca314522244a354d1ceca4772379b7a566e241b29c6d301bdc"
+                        }
+                      }
+                    },
+                    {
+                      "name": "texture:destination",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "0a6a04d6c3ea03e5848ea708512c2a3d8bb1d4b3551edc7d6a094d6a000dfea2"
+                        }
+                      }
+                    },
+                    {
+                      "name": "variant:off",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "ecb6476e3013b4f88e9d366800287385284f8179511163882b62bcdcb6c2f1f5"
+                        }
+                      }
+                    },
+                    {
+                      "name": "variant:one-zero-add",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "42a2789c31c4a64da6770e882dfb12d26ee7feac2c223776bcb685c0b8b28bf6"
+                        }
+                      }
+                    },
+                    {
+                      "name": "variant:one-one-add",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "b5cf083fe25eb77e96b826d8aded6c0580f9059cd6c801c9ddfc640dc72adb72"
+                        }
+                      }
+                    },
+                    {
+                      "name": "variant:one-one-subtract",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "320d9546258498c2bdc147597e5bc4be8ec2a8dc95d2359322de83428dd2463a"
+                        }
+                      }
+                    },
+                    {
+                      "name": "variant:one-one-reverse-subtract",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "43e161c2d3ac750e02c424a486b88603527d477ced41468c4ba525b9e6c88639"
+                        }
+                      }
+                    },
+                    {
+                      "name": "variant:one-one-min",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "1e0305f28c9a22c7d388f88ee2f765863f2da1962af8a12c5b580662ec29df5f"
+                        }
+                      }
+                    },
+                    {
+                      "name": "variant:one-one-max",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "d2fbb5fb2d6d24633ecb586d223c5795f6f26b65031e1872dd62828c98fa5f1f"
+                        }
+                      }
+                    },
+                    {
+                      "name": "variant:bc-in-range",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "88455390cb22de40a37ea9132d6d7562595e79fa1e52987b9ab64c5689bdc7bf"
+                        }
+                      }
+                    },
+                    {
+                      "name": "variant:bc-above",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "1f5986bc4fda167da5d0f306605a7d526cb91fff06b2d451caee942587406e6d"
+                        }
+                      }
+                    },
+                    {
+                      "name": "variant:bc-below",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "5b39a39041546a84745103be7d02e6839920225b72ba40589d7ba9e8f03e4731"
+                        }
+                      }
+                    },
+                    {
+                      "name": "variant:1mbc-above",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "b66a5ea9ca19e0608324b3d004314a41347e4e92423a11546fecceb1f429d78f"
+                        }
+                      }
+                    },
+                    {
+                      "name": "variant:1mbc-below",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "a14a680aedacb482eb46882a49c9b84189e4582745495b0c9353efcfa8ea34f8"
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "library",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "buffer/source",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "buffer/shape",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "pipeline/off",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "target/off",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "replace-region/off",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "buffer/texels/off",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "pipeline/one-zero-add",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "target/one-zero-add",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "replace-region/one-zero-add",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "buffer/texels/one-zero-add",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "pipeline/one-one-add",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "target/one-one-add",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "replace-region/one-one-add",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "buffer/texels/one-one-add",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "pipeline/one-one-subtract",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "target/one-one-subtract",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "replace-region/one-one-subtract",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "buffer/texels/one-one-subtract",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "pipeline/one-one-reverse-subtract",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "target/one-one-reverse-subtract",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "replace-region/one-one-reverse-subtract",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "buffer/texels/one-one-reverse-subtract",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "pipeline/one-one-min",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "target/one-one-min",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "replace-region/one-one-min",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "buffer/texels/one-one-min",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "pipeline/one-one-max",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "target/one-one-max",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "replace-region/one-one-max",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "buffer/texels/one-one-max",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "pipeline/bc-in-range",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "target/bc-in-range",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "replace-region/bc-in-range",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "buffer/texels/bc-in-range",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "pipeline/bc-above",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "target/bc-above",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "replace-region/bc-above",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "buffer/texels/bc-above",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "pipeline/bc-below",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "target/bc-below",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "replace-region/bc-below",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "buffer/texels/bc-below",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "pipeline/1mbc-above",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "target/1mbc-above",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "replace-region/1mbc-above",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "buffer/texels/1mbc-above",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "pipeline/1mbc-below",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "target/1mbc-below",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "replace-region/1mbc-below",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "buffer/texels/1mbc-below",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "render",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "program",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "status",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Completed",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "read-back/off",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "read-back/one-zero-add",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "read-back/one-one-add",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "read-back/one-one-subtract",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "read-back/one-one-reverse-subtract",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "read-back/one-one-min",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "read-back/one-one-max",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "read-back/bc-in-range",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "read-back/bc-above",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "read-back/bc-below",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "read-back/1mbc-above",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "read-back/1mbc-below",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "blended",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "off",
+                      "observed": {
+                        "value": {
+                          "bytes": "KFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyA=="
+                        },
+                        "shape": {
+                          "bytes": {
+                            "region": {
+                              "texture": {
+                                "level": 0,
+                                "slice": 0,
+                                "aspect": "color",
+                                "sample": 0,
+                                "origin": [
+                                  0,
+                                  0,
+                                  0
+                                ],
+                                "size": [
+                                  16,
+                                  16,
+                                  1
+                                ]
+                              }
+                            },
+                            "element": "u8",
+                            "row_offset": 0,
+                            "row_elements": 4,
+                            "row_pitch": 4,
+                            "rows": 256,
+                            "image_pitch": 1024,
+                            "images": 1,
+                            "gaps": "ignored"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "one-zero-add",
+                      "observed": {
+                        "value": {
+                          "bytes": "KFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyA=="
+                        },
+                        "shape": {
+                          "bytes": {
+                            "region": {
+                              "texture": {
+                                "level": 0,
+                                "slice": 0,
+                                "aspect": "color",
+                                "sample": 0,
+                                "origin": [
+                                  0,
+                                  0,
+                                  0
+                                ],
+                                "size": [
+                                  16,
+                                  16,
+                                  1
+                                ]
+                              }
+                            },
+                            "element": "u8",
+                            "row_offset": 0,
+                            "row_elements": 4,
+                            "row_pitch": 4,
+                            "rows": 256,
+                            "image_pitch": 1024,
+                            "images": 1,
+                            "gaps": "ignored"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "one-one-add",
+                      "observed": {
+                        "value": {
+                          "bytes": "KGX//ymKw/8qr///K9T//yz51Mkt////Lv///y9o5dAwjf//MbL//zLX9tcz/P//NP+s/zX//942a///N5C9/zi1/+U52v//Ov/O/zv//+w8////PW7f/z6T//M/uP//QN3w/0H///pC/6b/Q////0Rx//9Flrf/Rrv//0fg//9I/8j/Sf///0r///9LdNn/TJn//02+//9O4+r/T////1D/oP9R//vKUnf//1Ocsf9Uwf/RVeb//1b/wv9X///YWP///1l60/9an//fW8T//1zp5P9d///mXv///1//9f9gff/tYaKr/2LH//9j7P/0ZP+8/2X///9mW//7Z4DN/2il//9pyv//au/e/2v///9s////bV7v/26D//9vqKX/cM3//3Hy//9y/7b/c////3Rh//91hsf/dqv/y3fQ//949dj/ef//0nr///97ZOn/fIn/2X2u//9+0/r/f/j/4ID/sP+B////gmf/54OMwf+Esf//hdb/7ob70v+H////iP//9Ylq4/+Kj///i7T//IzZ9P+N/v//jv+q/4////+Qbf//kZK7/5K3//+T3P//lP/M/5X///+W////l3Dd/5iV//+Zuv//mt/u/5v//8yc/6T/nf///55z/9OfmLX/oL3//6Hi/9qi/8b/o////6T//+Gldtf/ppv//6fA/+io5ej/qf///6r//++r//n/rHn//62er/auw///r+j//7D/wP2x////sv///7N80f+0of//tcb//7br4v+3////uP///7la8/+6f///u6Sp/7zJ//+97v//vv+6/7/////AXf/NwYLL/8Kn///DzP/UxPHc/8X////G///bx2Dt/8iF///JqqPiys/+/8v0///M/7Tpzf///85j///PiMXw0K3//9HS///S99b30////9T////VZuf+1ov//9ew///Y1fj/2fr//9r/rv/b////3Gn//92Ov//es///39j//+D90P/h////4v///+Ns4f/kkf//5bb/zubb8v/n////6P+o1en////qb///65S53Oy5///t3v//7v/K4+/////w////8XLb6vKX///zvP//9OHs8fX////2/6L/9//9+Ph1///5mrP/+r////vk///8/8T//f////7/////eNX//53////C////5+b///////////////f//3v///+grcj/xf///+r/////vs////////////9+z9b/o////8j////t4N3///////////9c8eT/gf///6an///L/+v/8P////+4//////L/X////4TJ//+p//n/zv////Pa/////////////2Lr//+H////rKH//9H8///2/////7L//////w=="
+                        },
+                        "shape": {
+                          "bytes": {
+                            "region": {
+                              "texture": {
+                                "level": 0,
+                                "slice": 0,
+                                "aspect": "color",
+                                "sample": 0,
+                                "origin": [
+                                  0,
+                                  0,
+                                  0
+                                ],
+                                "size": [
+                                  16,
+                                  16,
+                                  1
+                                ]
+                              }
+                            },
+                            "element": "u8",
+                            "row_offset": 0,
+                            "row_elements": 4,
+                            "row_pitch": 4,
+                            "rows": 256,
+                            "image_pitch": 1024,
+                            "images": 1,
+                            "gaps": "ignored"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "one-one-subtract",
+                      "observed": {
+                        "value": {
+                          "bytes": "KE8AeycqfQAmBSIhJQAAdCQAbMcjABEaIgAAbSFMW8AgJwATHwIAZh4ASrkdAAAMHACUXxsAObIaSQAFGSSDWBgAKKsXAAAAFgByURUAF6QUAAAAE0ZhShIhBp0RAAAAEABQQw8AAJYOAJoADQA/PAxDAI8LHokACgAuNQkAAIgIAHgABwAdLgYAAIEFQGcABBsMJwMAAHoCAFYAAQAAIAAAoHMAAEXGAD0AGQAYj2wAADS/AAAAEgAAfmUAACO4AAAACwA6bV4AFRKxAAAABAAAXFcAAAGqAAAAAAAAS1AANwCjABKVAAAAOkkAAACcAACEAAAAKUIAWQCVADRzAAAPGDsAAACOAABiAAAABzQAAACHAFZRAAAxAC0ADJuAAABAAAAAACYAAIp5AAAvAABTAB8ALnlyAAkexQAAABgAAGhrAAANvgAAABEAUFdkACsAtwAGAAoAAEZdAAAAsAAAkAMAADVWAE0AqQAofwAAAyRPAAAAogAAbgAAABNIAAAAmwBKXQAAJQJBAAAAlAAATAAAAAA6AACWjQAAOwAARwAzACKFhgAAKgAAAAAsAAB0fwAAGQAAAAAlAERjeAAfCAAAAAAeAABScQAAAMQAAJwXAABBagBBAL0AHIsQAAAwYwAAALYAAHoJAAAfXAAAAK8APmkCABkOVQAAAKgAAFgAAAAATgAAAKEAAEcAADsARwAWkZoAADYAAAAAQAAAgJMAACUAAAAAOQA4b4wAExQAAAAAMgAAXoUAAAMAAAAAKwBaTX4ANQAAABCXJAAAPHcAAAAAAACGHQAAK3AAVwDDADJ1FgANGmkAAAC8AABkDwAACWIAAAC1AFRTCAAvAFsACp2uAABCAQAAAFQAAIynAAAxAABRAE0ALHugAAcgAAAAAEYAAGqZAAAPAAAAAD8ATlmSACkAAAAEADgAAEiLAAAAAAAAkjEAADeEAEsAAAAmgSoAASZ9AAAAAAAAcCMAABV2AAAAAABIXxwAIwRvAAAAwgAAThUAAABoAACYuwAAPQ4ARQBhACCHtAAALAcAAABaAAB2rQAAGwAAAABTAEJlpgAdCgAAAABMAABUnwAAAAAAAJ5FAABDmAA/AAAAGo0+AAAykQAAAAAAAHw3AAAhigAAAAAAPGswABcQgwAAAAAAAFopAAAAfAAAAAAAAEkiADkAdQAUk8gAADgbAAAAbgAAgsEAACcUAAAAZwA2cboAERYNAAAAYAAAYLMAAAUGAAAAWQBYT6wAMwAAAA6ZUgAAPqUAAAAAAACISwAALZ4AVQAAADB3RAALHJcAAAAAAABmPQAAC5AAAAAAAFJVNgAtAIkACJ8AAABELwAAAIIAAI4AAAAzKA=="
+                        },
+                        "shape": {
+                          "bytes": {
+                            "region": {
+                              "texture": {
+                                "level": 0,
+                                "slice": 0,
+                                "aspect": "color",
+                                "sample": 0,
+                                "origin": [
+                                  0,
+                                  0,
+                                  0
+                                ],
+                                "size": [
+                                  16,
+                                  16,
+                                  1
+                                ]
+                              }
+                            },
+                            "element": "u8",
+                            "row_offset": 0,
+                            "row_elements": 4,
+                            "row_pitch": 4,
+                            "rows": 256,
+                            "image_pitch": 1024,
+                            "images": 1,
+                            "gaps": "ignored"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "one-one-reverse-subtract",
+                      "observed": {
+                        "value": {
+                          "bytes": "AAAoAAAAADIAAAAAACA5AABFAAAAagAAAI9KAAAAAAAAAAAAAABbAAAjAAAASBEAAG0AAACSAAAAACIAAAAAAAABAAAAJjMCAEsAAABwAAAAlUQJAAAAAAAAAAAABFUQACkAAABOCwAAcwAXAJgAAAAAHAAAAAAeAAcAAAAsLQAAUQAlAHYAAACbPgAAAAAsAAAAAAAKTwAALwAzAFQFAAB5AAABngAAAgAWAAMAAAAEDQAABTInAAZXAAAHfAAACKE4AAkAAAAKAAAACxBJAAw1AAANWgAADn9aAw+kAAAQABAAEQAAChITAAATOCEAFF0AERWCAAAWADIAFwAAGBgAAAAZFkMAGjsAHxtgAAAchVQAHQAAJh4ACgAfAAAAIBkALSE+GwAiYwAAI4gANCQALAAlAAAAJgAAACccPQAoQQAAKWYAACqLTgArAAAALAAEAC0AXwAuHwAAL0QVADBpAAAxjgAAMgAmADMAAAQ0AAAANSI3ADZHAAs3bAAAOJFIADkAABI6AAAAOwBZADwlABk9Sg8APm8AAD+UACBAACAAQQAAAEIDACdDKDEARE0AAEVyAC5Gl0IARwAAAEgAADVJBlMASisAAEtQCQBMdQAATZoAAE4AGgBPAAAAUAkAAFEuKwBSUwAAU3gAAFSdPABVAAAAVgAAAFcMTQBYMQAFWVYDAFp7XgBboAAMXAAUAF0AAABeDwATXzQlAGBZAABhfgAaYqM2AGMAAABkAAAhZRJHAGY3AABnXAAoaIFYAGkAAABqAA4vawAAAGwVAABtOh82bl8AAG+EAABwADAAcQAAAHIAAABzGEEAdD0AAHViAAB2h1IAdwAAAHgACAB5AAAAehsAAHtAGQB8ZQAAfYoABn4AKgB/AAAAgAAADYEeOwCCQwAAg2gAFISNTACFAAAAhgACG4cAXQCIIQAAiUYTIoprAACLkAAAjAAkKY0AAACOAAAAjyQ1MJBJAACRbgAAkpNGN5MAAACUAAAAlQJXAJYnAACXTA0AmHEAAJmWAACaAB4AmwAAAJwFAACdKi8Ank8AAJ90AACgmUAAoQAAAKIAAAejCFEApC0AAKVSBw6mdwAAp5wAAKgAGBWpAAAAqgsAAKswKRysVQAArXoAAK6fOiOvAAAAsAAAALEOSyqyMwAAs1gBALR9XDG1ogAAtgASALcAAAC4EQAAuTYjALpbAAC7gAAAvKU0AL0AAAC+AAAAvxRFAMA5AADBXgAAwoNWAMMAAADEAAwBxQAAAMYXAADHPB0IyGEAAMmGAADKAC4PywAAAMwAAADNGj8Wzj8AAM9kAADQiVAd0QAAANIABgDTAAAk1B0AANVCFwDWZwAr14wAAA=="
+                        },
+                        "shape": {
+                          "bytes": {
+                            "region": {
+                              "texture": {
+                                "level": 0,
+                                "slice": 0,
+                                "aspect": "color",
+                                "sample": 0,
+                                "origin": [
+                                  0,
+                                  0,
+                                  0
+                                ],
+                                "size": [
+                                  16,
+                                  16,
+                                  1
+                                ]
+                              }
+                            },
+                            "element": "u8",
+                            "row_offset": 0,
+                            "row_elements": 4,
+                            "row_pitch": 4,
+                            "rows": 256,
+                            "image_pitch": 1024,
+                            "images": 1,
+                            "gaps": "ignored"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "one-one-min",
+                      "observed": {
+                        "value": {
+                          "bytes": "AAugTQEwI8gCVX6nA1qgVARaNAEFWo+uBlqgWwcORQgIM6C1CVigYgpaVg8LWqC8DFoMaQ1aZxYOEaDDDzYdcBBaeB0RWqDIEloudxNaiSQUWqDIFRQ/fhY5misXWqDIGFpQhRlaoDIaWgbIG1phjBwXoDkdPBfIHlpykx9aoEAgWijIIVqDmiJaoEcjGjnIJD+UoSVaoE4mWkrIJ1qgqChaAFUoWlsCKB2gryhCEVwoWmwJKFqgtihaImMoWn0QKFqgvSggM2ooRY4XKFqgxChaRHEoWp8eKFqgyChaVXgoI6AlKEgLyChaZn8oWqAsKFocyChad4YoAaAzKCYtyChLiI0oWqA6KFo+yChamZQoWqBBKARPyCgpoJsoTgVIKFpgyChaoKIoWhZPKFpxyCgHoKkoLCdWKFGCAyhaoLAoWjhdKFqTCihaoLcoCklkKC+gEShUoL4oWlprKFqgGChaEMUoWmtyKA2gHygyIcgoV3x5KFqgJihaMsgoWo2AKFqgLSgQQ8goNZ6HKFqgNChaVMgoWqCOKFoKOyhaZcgoE6CVKDgbQihadsgoWqCcKFosSShah8goWqCjKBY9UCg7mMgoWqCqKFpOVyhaoAQoWgSxKFpfXigZoAsoPhW4KFpwZShaoBIoWia/KFqBbChaoBkoHDfGKEGScyhaoCAoWkjIKFqgeihaoCcoWlnIKB+ggShEDy4oWmrIKFqgiChaIDUoWnvIKFqgjygiMTwoR4zIKFqglihaQkMoWp3IKFqgnSgAU0ooJaDIKEoJpChaZFEoWqDIKFoaqyhadVgoA6AFKCgrsihNhl8oWqAMKFo8uShal2YoWqATKAZNwCgroG0oUAMaKFpexyhaoHQoWhQhKFpvyCgJoHsoLiUoKFOAyChaoIIoWjYvKFqRyChaoIkoDEc2KDGgyChWoJAoWlg9KFqgyChaDpcoWmlEKA+gyCg0H54oWXpLKFqgyChaMKUoWotSKFqgyCgSQawoN5xZKFqgBihaUrMoWqBgKFoIDShaY7ooFaBnKDoZFChadMEoWqBuKFoqGyhahcgoWqB1KBg7Iig9lsgoWqB8KFpMKShaoMgoWgKDKFpdMCgboMgoQBOKKFpuNyhaoMgoWiSRKFp/PihaoMgoHjWYKEOQRShaoMgoWkafKFqgTChaoMgoWlemKCGgUyhGDQAoWmitKFqgWihaHgcoWnm0KFqgYSgkLw4oSYq7KFqgaChaQBUoWpvCKFqgbygCURwoJ6DIKEwHdihaYiMoWqDIKFoYfShacyooBaDIKCophChPhDEoWqDIKFo6iyhalTgoWqDIKAhLkigtoD8oUgHIKFpcmShaoEYoWhLIKFptoA=="
+                        },
+                        "shape": {
+                          "bytes": {
+                            "region": {
+                              "texture": {
+                                "level": 0,
+                                "slice": 0,
+                                "aspect": "color",
+                                "sample": 0,
+                                "origin": [
+                                  0,
+                                  0,
+                                  0
+                                ],
+                                "size": [
+                                  16,
+                                  16,
+                                  1
+                                ]
+                              }
+                            },
+                            "element": "u8",
+                            "row_offset": 0,
+                            "row_elements": 4,
+                            "row_pitch": 4,
+                            "rows": 256,
+                            "image_pitch": 1024,
+                            "images": 1,
+                            "gaps": "ignored"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "one-one-max",
+                      "observed": {
+                        "value": {
+                          "bytes": "KFrIyChaoPooWqDIKHrZyCifoMgoxKDIKOnqyChaoMgoWqDIKFr7yCh9oMgoorHIKMegyCjsoMgoWsLIKFqgyChboMgogNPKKKWgyCjKoMgo7+TRKFqgyChaoMgoXvXYKIOgyCioq8gozaDfKPKgyChavMgoWqDmKGGgyCiGzcgoq6DtKNCgyCj13sgoWqD0KFqgyChk78goiaD7KK6lyCjToMgp+KDIKlq2yCtaoMgsZ6DILYzHyC6xoMgv1qDIMPvYyDFaoMgyWqDIM2rpyDSPoMg1tKDINtn6yzf+oMg4WrDIOVqg0jptoMg7ksHIPLeg2T3coMg+WtLIP1qg4EBaoMhBcOPIQpWg50O6oMhE3/TIRVqg7kZaqshHWqDISHOg9UmYu8hKvaDIS+Kg/ExazMhNWqDITlqgyE923chQm6DIUcCgyFLl7shTWqDIVFqkyFVa/8hWeaDIV561yFjDoMhZ6KDIWlrGyFtaoMxcWqDIXXzXyF6hoNNfxqDIYOvoyGFaoNpiWqDIY1r5yGR/oOFlpK/IZsmgyGfuoOhoWsDIaVqgyGpdoO9rgtHIbKegyG3MoPZu8eLIb1qgyHBaoP1xYPPIcoWgyHOqqch0z6DIdfSgyHZaush3WqDIeGOgyHmIy8h6raDIe9KgyHz33Mh9WqDIflqgyH9m7ciAi6DNgbCjyILV/siD+qDUhFq0yIVaoMiGaaDbh47FyIizoMiJ2KDiiv3WyItaoMiMWqDpjWznyI6RoMiPtqDwkNv4yJFaoMiSWq73k1qgyJRvoMiVlL/+lrmgyJfeoMiYWtDImVqgyJpaoMibcuHInJegyJ28oMie4fLIn1qgyKBaqMihWqDIonWgyKOaucikv6DIpeSgzqZaysinWqDIqFqg1al428iqnaDIq8Kg3Kzn7MitWqDIrlqi469a/ciwe6DIsaCz6rLFoMiz6qDItFrE8bVaoMi2WqDIt37V+LijoMi5yKDIuu3m/7taoMi8WqDIvVz3yL6BoMi/pq3IwMugyMHwoMjCWr7Iw1qgyMRfoMjFhM/IxqmgyMfOoMjI8+DIyVqgyMpaoM/LYvHIzIegyM2sp9bO0aDIz/agyNBauN3RWqDI0mWgyNOKyeTUr6DI1dSgyNb52uvXWqDI2FqgyNlo6/LajaDI27KhyNzX/Pnd/KDI3lqyyN9aoMjga6DI4ZDDyOK1oMjj2qDI5P/UyOVaoMjmWqDI527lyOiToMjpuKDI6t32yOtaoMjsWqzJ7VqgyO5xoMjvlr3Q8LugyPHgoMjyWs7X81qgyPRaoMj1dN/e9pmgyPe+oMj44/Dl+VqgyPpapsj7WqDs/HegyP2ct8j+waDz/+agyA=="
+                        },
+                        "shape": {
+                          "bytes": {
+                            "region": {
+                              "texture": {
+                                "level": 0,
+                                "slice": 0,
+                                "aspect": "color",
+                                "sample": 0,
+                                "origin": [
+                                  0,
+                                  0,
+                                  0
+                                ],
+                                "size": [
+                                  16,
+                                  16,
+                                  1
+                                ]
+                              }
+                            },
+                            "element": "u8",
+                            "row_offset": 0,
+                            "row_elements": 4,
+                            "row_pitch": 4,
+                            "rows": 256,
+                            "image_pitch": 1024,
+                            "images": 1,
+                            "gaps": "ignored"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "bc-in-range",
+                      "observed": {
+                        "value": {
+                          "bytes": "FBd4yBQXeMgUF3jIFBd4yBQXeMgUF3jIFBd4yBQXeMgUF3jIFBd4yBQXeMgUF3jIFBd4yBQXeMgUF3jIFBd4yBQXeMgUF3jIFBd4yBQXeMgUF3jIFBd4yBQXeMgUF3jIFBd4yBQXeMgUF3jIFBd4yBQXeMgUF3jIFBd4yBQXeMgUF3jIFBd4yBQXeMgUF3jIFBd4yBQXeMgUF3jIFBd4yBQXeMgUF3jIFBd4yBQXeMgUF3jIFBd4yBQXeMgUF3jIFBd4yBQXeMgUF3jIFBd4yBQXeMgUF3jIFBd4yBQXeMgUF3jIFBd4yBQXeMgUF3jIFBd4yBQXeMgUF3jIFBd4yBQXeMgUF3jIFBd4yBQXeMgUF3jIFBd4yBQXeMgUF3jIFBd4yBQXeMgUF3jIFBd4yBQXeMgUF3jIFBd4yBQXeMgUF3jIFBd4yBQXeMgUF3jIFBd4yBQXeMgUF3jIFBd4yBQXeMgUF3jIFBd4yBQXeMgUF3jIFBd4yBQXeMgUF3jIFBd4yBQXeMgUF3jIFBd4yBQXeMgUF3jIFBd4yBQXeMgUF3jIFBd4yBQXeMgUF3jIFBd4yBQXeMgUF3jIFBd4yBQXeMgUF3jIFBd4yBQXeMgUF3jIFBd4yBQXeMgUF3jIFBd4yBQXeMgUF3jIFBd4yBQXeMgUF3jIFBd4yBQXeMgUF3jIFBd4yBQXeMgUF3jIFBd4yBQXeMgUF3jIFBd4yBQXeMgUF3jIFBd4yBQXeMgUF3jIFBd4yBQXeMgUF3jIFBd4yBQXeMgUF3jIFBd4yBQXeMgUF3jIFBd4yBQXeMgUF3jIFBd4yBQXeMgUF3jIFBd4yBQXeMgUF3jIFBd4yBQXeMgUF3jIFBd4yBQXeMgUF3jIFBd4yBQXeMgUF3jIFBd4yBQXeMgUF3jIFBd4yBQXeMgUF3jIFBd4yBQXeMgUF3jIFBd4yBQXeMgUF3jIFBd4yBQXeMgUF3jIFBd4yBQXeMgUF3jIFBd4yBQXeMgUF3jIFBd4yBQXeMgUF3jIFBd4yBQXeMgUF3jIFBd4yBQXeMgUF3jIFBd4yBQXeMgUF3jIFBd4yBQXeMgUF3jIFBd4yBQXeMgUF3jIFBd4yBQXeMgUF3jIFBd4yBQXeMgUF3jIFBd4yBQXeMgUF3jIFBd4yBQXeMgUF3jIFBd4yBQXeMgUF3jIFBd4yBQXeMgUF3jIFBd4yBQXeMgUF3jIFBd4yBQXeMgUF3jIFBd4yBQXeMgUF3jIFBd4yBQXeMgUF3jIFBd4yBQXeMgUF3jIFBd4yBQXeMgUF3jIFBd4yBQXeMgUF3jIFBd4yBQXeMgUF3jIFBd4yBQXeMgUF3jIFBd4yBQXeMgUF3jIFBd4yA=="
+                        },
+                        "shape": {
+                          "bytes": {
+                            "region": {
+                              "texture": {
+                                "level": 0,
+                                "slice": 0,
+                                "aspect": "color",
+                                "sample": 0,
+                                "origin": [
+                                  0,
+                                  0,
+                                  0
+                                ],
+                                "size": [
+                                  16,
+                                  16,
+                                  1
+                                ]
+                              }
+                            },
+                            "element": "u8",
+                            "row_offset": 0,
+                            "row_elements": 4,
+                            "row_pitch": 4,
+                            "rows": 256,
+                            "image_pitch": 1024,
+                            "images": 1,
+                            "gaps": "ignored"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "bc-above",
+                      "observed": {
+                        "value": {
+                          "bytes": "KFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyA=="
+                        },
+                        "shape": {
+                          "bytes": {
+                            "region": {
+                              "texture": {
+                                "level": 0,
+                                "slice": 0,
+                                "aspect": "color",
+                                "sample": 0,
+                                "origin": [
+                                  0,
+                                  0,
+                                  0
+                                ],
+                                "size": [
+                                  16,
+                                  16,
+                                  1
+                                ]
+                              }
+                            },
+                            "element": "u8",
+                            "row_offset": 0,
+                            "row_elements": 4,
+                            "row_pitch": 4,
+                            "rows": 256,
+                            "image_pitch": 1024,
+                            "images": 1,
+                            "gaps": "ignored"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "bc-below",
+                      "observed": {
+                        "value": {
+                          "bytes": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=="
+                        },
+                        "shape": {
+                          "bytes": {
+                            "region": {
+                              "texture": {
+                                "level": 0,
+                                "slice": 0,
+                                "aspect": "color",
+                                "sample": 0,
+                                "origin": [
+                                  0,
+                                  0,
+                                  0
+                                ],
+                                "size": [
+                                  16,
+                                  16,
+                                  1
+                                ]
+                              }
+                            },
+                            "element": "u8",
+                            "row_offset": 0,
+                            "row_elements": 4,
+                            "row_pitch": 4,
+                            "rows": 256,
+                            "image_pitch": 1024,
+                            "images": 1,
+                            "gaps": "ignored"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "1mbc-above",
+                      "observed": {
+                        "value": {
+                          "bytes": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=="
+                        },
+                        "shape": {
+                          "bytes": {
+                            "region": {
+                              "texture": {
+                                "level": 0,
+                                "slice": 0,
+                                "aspect": "color",
+                                "sample": 0,
+                                "origin": [
+                                  0,
+                                  0,
+                                  0
+                                ],
+                                "size": [
+                                  16,
+                                  16,
+                                  1
+                                ]
+                              }
+                            },
+                            "element": "u8",
+                            "row_offset": 0,
+                            "row_elements": 4,
+                            "row_pitch": 4,
+                            "rows": 256,
+                            "image_pitch": 1024,
+                            "images": 1,
+                            "gaps": "ignored"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "1mbc-below",
+                      "observed": {
+                        "value": {
+                          "bytes": "KFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyChaoMgoWqDIKFqgyA=="
+                        },
+                        "shape": {
+                          "bytes": {
+                            "region": {
+                              "texture": {
+                                "level": 0,
+                                "slice": 0,
+                                "aspect": "color",
+                                "sample": 0,
+                                "origin": [
+                                  0,
+                                  0,
+                                  0
+                                ],
+                                "size": [
+                                  16,
+                                  16,
+                                  1
+                                ]
+                              }
+                            },
+                            "element": "u8",
+                            "row_offset": 0,
+                            "row_elements": 4,
+                            "row_pitch": 4,
+                            "rows": 256,
+                            "image_pitch": 1024,
+                            "images": 1,
+                            "gaps": "ignored"
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "notices",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "set",
+                      "observed": {
+                        "value": {
+                          "nothing": "announced_nothing"
+                        }
+                      }
+                    },
+                    {
+                      "name": "counts",
+                      "observed": {
+                        "value": {
+                          "fields": {}
+                        }
+                      }
+                    }
+                  ]
+                }
+              ]
+            }
+          }
+        }
+      ],
+      "validated": "ran"
+    }
+  ]
+}

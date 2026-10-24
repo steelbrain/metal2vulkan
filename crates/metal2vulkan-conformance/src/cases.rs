@@ -47,6 +47,7 @@ pub mod astc_textures;
 pub mod attribute_formats;
 pub mod attribute_strides;
 pub mod binary_archives;
+pub mod blend_interactions;
 pub mod blend_sweeps;
 pub mod blit_encoder_commands;
 pub mod blit_indirect_commands;
@@ -407,6 +408,9 @@ pub fn all() -> Vec<Box<dyn Case>> {
         cases.push(Box::new(case));
     }
     for case in blend_sweeps::all() {
+        cases.push(Box::new(case));
+    }
+    for case in blend_interactions::all() {
         cases.push(Box::new(case));
     }
     for case in visibility::all() {
