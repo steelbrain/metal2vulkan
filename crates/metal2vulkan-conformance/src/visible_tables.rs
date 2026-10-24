@@ -416,9 +416,8 @@ impl Asked {
 /// **There is no `functionCount` here**, and that is Metal's shape and not a choice: the
 /// `MTLVisibleFunctionTable` protocol declares `gpuResourceID`, `setFunction:atIndex:` and
 /// `setFunctions:withRange:` and no count at all. The count lives on the **descriptor**, where
-/// this family reads it back ([`TableOutcome::descriptor_function_count`]). The runtime's
-/// `VisibleFunctionTable::function_count` is its own addition beyond Metal's surface, so a site
-/// for it would compare one side against nothing.
+/// this family reads it back ([`TableOutcome::descriptor_function_count`]); the runtime's table
+/// answers no count either, so there is nothing to compare a site against.
 #[derive(Clone, Debug, PartialEq)]
 pub struct TableFacts {
     /// Whether `gpuResourceID` is non-zero. The identifier itself is the host's own number

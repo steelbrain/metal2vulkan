@@ -425,7 +425,6 @@ fn render_states_give_handles_and_tables_per_stage() {
             let stageless = state
                 .new_visible_function_table(&VisibleFunctionTableDescriptor::new(2), stage)
                 .unwrap();
-            assert_eq!(stageless.function_count(), 2);
             stageless.set_function(None, 1).unwrap();
             assert_eq!(
                 stageless.set_function(Some(&handle), 0).unwrap_err(),

@@ -769,8 +769,10 @@ impl VisibleFunctionTable {
         self.0.state.device()
     }
 
-    /// The table's size (`MTLVisibleFunctionTableDescriptor.functionCount`).
-    pub fn function_count(&self) -> u32 {
+    /// The table's size, the `functionCount` of the descriptor it was made from. Not public:
+    /// `MTLVisibleFunctionTable` declares no count, so a consumer reads it from its own
+    /// descriptor.
+    fn function_count(&self) -> u32 {
         self.0.count
     }
 

@@ -186,14 +186,14 @@ fn tables_and_handles_answer_as_metal_s_do() {
         let tables: Vec<VisibleFunctionTable> = [0, 1, 4].map(|n| table(&state, n)).into();
         let answers: Vec<_> = tables
             .iter()
-            .map(|t| (t.function_count(), t.allocated_size(), t.gpu_resource_id()))
+            .map(|t| (t.allocated_size(), t.gpu_resource_id()))
             .collect();
         assert_eq!(
             answers,
             [
-                (0, 256, ResourceId(1)),
-                (1, 264, ResourceId(2)),
-                (4, 288, ResourceId(3)),
+                (256, ResourceId(1)),
+                (264, ResourceId(2)),
+                (288, ResourceId(3))
             ]
         );
         let t = &tables[2];
@@ -219,7 +219,18 @@ fn tables_and_handles_answer_as_metal_s_do() {
         let plain =
             device.new_compute_pipeline_state_with_function(&plain, &PipelineOptions::default());
         let plain = plain.unwrap_or_else(|e| panic!("{e}"));
-        assert_eq!(table(&plain, 3).function_count(), 3);
+        // A state that links nothing still makes a table of the size asked: its last index
+        // takes a handle and the next one is out of range (`MTLVisibleFunctionTable` answers no
+        // count, so its size is read through the calls that use it).
+        let three = table(&plain, 3);
+        three.set_function(None, 2).unwrap();
+        assert_eq!(
+            three.set_function(None, 3),
+            Err(invalid(
+                "set_function",
+                Problem::IndexOutOfRange { index: 3, limit: 3 }
+            ))
+        );
 
         let two = table(&state, 2);
         assert_eq!(
