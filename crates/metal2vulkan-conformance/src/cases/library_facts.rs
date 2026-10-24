@@ -151,6 +151,23 @@ pub fn all() -> Vec<LibraryFactsCase> {
                 options: FunctionOptions::STORE_FUNCTION_IN_METAL_PIPELINES_SCRIPT,
             }),
         },
+        // `MTLFunctionOptionCompileToBinary`, with **no** binary archive listed on the descriptor.
+        // The bit is what makes a function eligible for a `MTLBinaryArchive`, and what a case can
+        // ask of it on its own is whether the creation still succeeds and still answers the word
+        // back: plain Metal takes every combination of the four bits here and answers `options`
+        // verbatim, measured on an Apple M3 Max under macOS 27.0.1
+        // (`probes/argument_descriptor_types.m`, the `function` shape). What the bit does *with*
+        // an archive is `MTLBinaryArchive`'s question, which `cases/binary_archives` is about.
+        LibraryFactsCase {
+            name: "library-facts-descriptor-compile-to-binary",
+            fixture: "a27_ob1_threadgroup",
+            entry: "ob1_threadgroup",
+            reads: Reads::Descriptor(FunctionDescriptorSpec {
+                name: "ob1_threadgroup".to_owned(),
+                constants: Vec::new(),
+                options: FunctionOptions::COMPILE_TO_BINARY,
+            }),
+        },
     ]
 }
 

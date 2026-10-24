@@ -93,6 +93,7 @@ use crate::recording::ShaderRef;
 use crate::transcript::{Digest, Node, Observed, Sites};
 use metal2vulkan::metal::PixelFormat;
 use metal2vulkan_devtools::{fixtures_dir, llvm_assemble, AssembleError};
+use metal2vulkan_runtime::PipelineOption;
 
 /// The site the library's make sits at.
 const LIBRARY: &str = "library";
@@ -116,10 +117,19 @@ const FRAGMENT: &str = "texture_accesses_fragment";
 /// [`crate::cases::texture_accesses`]'.
 const ATTACHMENT: PixelFormat = PixelFormat::RGBA8Unorm;
 
-/// The three bits Metal defines, by Metal's own names.
-const BINDING_INFO: u64 = 1 << 0;
-const BUFFER_TYPE_INFO: u64 = 1 << 1;
-const FAIL_ON_BINARY_ARCHIVE_MISS: u64 = 1 << 2;
+/// The three bits Metal defines and the empty word, each taken from the runtime's own value for it
+/// rather than written as a literal.
+///
+/// Through [`PipelineOption`] and not `1 << 0`, because a raw ordinal is a value no reading of the
+/// text can attribute: `docs/CONFORMANCE-COVERAGE.md`'s option-space axis read this family as
+/// reaching **none** of `MTLPipelineOption`'s four values while it was sweeping all eight
+/// combinations of them, for exactly that reason. Naming each value also ties the sweep to the
+/// constant the runtime acts on, so a bit that moved in one place and not the other would not
+/// compile.
+const NONE: u64 = PipelineOption::NONE.raw();
+const BINDING_INFO: u64 = PipelineOption::BINDING_INFO.raw();
+const BUFFER_TYPE_INFO: u64 = PipelineOption::BUFFER_TYPE_INFO.raw();
+const FAIL_ON_BINARY_ARCHIVE_MISS: u64 = PipelineOption::FAIL_ON_BINARY_ARCHIVE_MISS.raw();
 
 /// The whole of the defined option space, every combination of the three bits in order of the
 /// raw value, as the **compute** sweep's cases, then the four undefined shapes.
@@ -132,7 +142,7 @@ const FAIL_ON_BINARY_ARCHIVE_MISS: u64 = 1 << 2;
 const COMPUTE: [(&str, OptionValue); 12] = [
     (
         "pipeline-options-compute-none",
-        OptionValue::new(0, "MTLPipelineOptionNone"),
+        OptionValue::new(NONE, "MTLPipelineOptionNone"),
     ),
     (
         "pipeline-options-compute-binding-info",
@@ -204,7 +214,7 @@ const COMPUTE: [(&str, OptionValue); 12] = [
 const RENDER: [(&str, OptionValue); 9] = [
     (
         "pipeline-options-render-none",
-        OptionValue::new(0, "MTLPipelineOptionNone"),
+        OptionValue::new(NONE, "MTLPipelineOptionNone"),
     ),
     (
         "pipeline-options-render-binding-info",

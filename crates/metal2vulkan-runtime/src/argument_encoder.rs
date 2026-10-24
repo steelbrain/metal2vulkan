@@ -761,21 +761,33 @@ impl ArgumentEncoder {
     }
 
     /// `newArgumentEncoderForBufferAtIndex:`: an encoder of the argument buffer the buffer
-    /// argument at `index` points to, with no argument buffer set. Refused: no buffer argument at
-    /// the index (`Invalid`), and one that points to no argument buffer (`Nil`,
-    /// [`NoNestedArgumentBuffer`](ArgumentEncoderProblem::NoNestedArgumentBuffer)), for which
-    /// Metal answers nil.
+    /// argument at `index` points to, with no argument buffer set.
+    ///
+    /// Every index that names no nested argument buffer answers `Nil`
+    /// ([`NoNestedArgumentBuffer`](ArgumentEncoderProblem::NoNestedArgumentBuffer)), because plain
+    /// Metal answers **nil** for each of them rather than raising: measured on an Apple M3 Max
+    /// under macOS 27.0.1 over one layout's own indices — a plain `device float *`, a pointer to a
+    /// struct of constants, an inline struct of a texture and a sampler, a texture, a sampler, an
+    /// array of textures, an array of samplers, an array of structs, an indirect command buffer, a
+    /// compute pipeline state, and an index past the layout — and an encoder only for a pointer
+    /// whose pointee holds a resource (`metal2vulkan-conformance`'s
+    /// `probes/argument_descriptor_types.m`, held by its `argument-encoder-cross-nested` case).
+    /// So the index's **reason** for having no nested buffer changes nothing a program sees, and
+    /// an `Invalid` here would refuse what plain Metal answers.
     pub fn new_argument_encoder_for_buffer_at_index(
         &self,
         index: u32,
     ) -> Result<ArgumentEncoder, Error> {
         const CALL: &str = "new_argument_encoder_for_buffer_at_index";
-        let place = argument_place(&self.layout, index, ArgumentType::Buffer)
-            .map_err(|p| problem(CALL, p))?;
-        let nested = place.nested.ok_or_else(|| {
-            let problem = ArgumentEncoderProblem::NoNestedArgumentBuffer { index };
-            nil(CALL, Problem::ArgumentEncoder(problem))
-        })?;
+        let nested = self
+            .layout
+            .argument(index)
+            .filter(|place| place.ty == ArgumentType::Buffer)
+            .and_then(|place| place.nested)
+            .ok_or_else(|| {
+                let problem = ArgumentEncoderProblem::NoNestedArgumentBuffer { index };
+                nil(CALL, Problem::ArgumentEncoder(problem))
+            })?;
         Ok(ArgumentEncoder::new(&self.device, nested))
     }
 }

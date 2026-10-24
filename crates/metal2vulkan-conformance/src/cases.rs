@@ -42,6 +42,7 @@
 //! has written it. Until somebody does, those two fields are held by construction alone, by
 //! `tests::the_runtime_side_forwards_every_field_of_a_pipeline_spec`.
 
+pub mod argument_encoder_crossings;
 pub mod argument_encoders;
 pub mod astc_textures;
 pub mod attribute_formats;
@@ -201,6 +202,9 @@ pub fn all() -> Vec<Box<dyn Case>> {
         cases.push(Box::new(case));
     }
     for case in argument_encoders::all() {
+        cases.push(Box::new(case));
+    }
+    for case in argument_encoder_crossings::all() {
         cases.push(Box::new(case));
     }
     for case in function_bindings::all() {

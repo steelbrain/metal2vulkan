@@ -845,6 +845,22 @@ pub trait Side {
         Err(Failure::unavailable("set_argument_buffer"))
     }
 
+    /// `newArgumentEncoderForBufferAtIndex:` of `index`: the encoder of the argument buffer the
+    /// buffer argument at that index points at, in the same handle space as
+    /// [`Side::argument_encoder`].
+    ///
+    /// `Ok(None)` is Metal's **nil**, which is what it answers for every index that names no
+    /// nested argument buffer — a plain pointer, a pointer to a struct of constants, an inline
+    /// struct of resources, a texture, an array, an index past the layout. Measured on an Apple
+    /// M3 Max under macOS 27.0.1 (`probes/argument_descriptor_types.m`): nil for each of those and
+    /// an encoder only for a pointer whose pointee holds a resource. So the answer is an
+    /// `Option` and not a handle: a side that could only answer a handle or an error would have to
+    /// call Metal's nil a refusal, and nil is Metal's answer rather than its refusal.
+    fn nested_argument_encoder(&mut self, encoder: Handle, index: u32) -> Answer<Option<Handle>> {
+        let _ = (encoder, index);
+        Err(Failure::unavailable("nested_argument_encoder"))
+    }
+
     /// One write through an argument encoder
     /// ([`ArgumentWrite`](crate::argument_encoders::ArgumentWrite)).
     ///

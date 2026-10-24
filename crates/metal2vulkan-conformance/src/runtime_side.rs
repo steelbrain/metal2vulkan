@@ -2345,6 +2345,24 @@ impl Side for RuntimeSide<'_> {
         Ok(())
     }
 
+    fn nested_argument_encoder(&mut self, encoder: Handle, index: u32) -> Answer<Option<Handle>> {
+        let held = self.held_encoder(encoder)?.encoder.clone();
+        match held.new_argument_encoder_for_buffer_at_index(index) {
+            Ok(nested) => Ok(Some(keep(
+                &mut self.argument_encoders,
+                EncoderAt {
+                    encoder: nested,
+                    target: None,
+                },
+            ))),
+            // The runtime's typed `Nil` is the same fact as Metal's nil object, so both sides
+            // answer `None` for it; every other error stays an error, which the case records as
+            // the refusal it is.
+            Err(metal2vulkan_runtime::Error::Nil(_)) => Ok(None),
+            Err(error) => Err(Failure::of(&error)),
+        }
+    }
+
     fn encode_argument(&mut self, encoder: Handle, write: &ArgumentWrite) -> Answer<()> {
         // The encoder is cloned so the resources it writes can be looked up in the same pools
         // while it is in hand; a clone shares the layout and the argument buffer it was given, so

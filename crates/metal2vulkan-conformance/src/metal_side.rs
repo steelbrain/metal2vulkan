@@ -2967,6 +2967,24 @@ impl Side for MetalSide {
         Ok(())
     }
 
+    fn nested_argument_encoder(&mut self, encoder: Handle, index: u32) -> Answer<Option<Handle>> {
+        let held = self.held_encoder(encoder)?;
+        // SAFETY: Metal answers nil for every index that names no nested argument buffer rather
+        // than raising, which the probe measured over a plain pointer, a pointer to a struct of
+        // constants, an inline struct of resources, a texture, two arrays and an index past the
+        // layout, so no index a case can name ends the process here.
+        let nested = unsafe { held.newArgumentEncoderForBufferAtIndex(index as usize) };
+        Ok(nested.map(|nested| {
+            keep(
+                &mut self.argument_encoders,
+                ArgumentEncoderAt {
+                    encoder: nested,
+                    target: None,
+                },
+            )
+        }))
+    }
+
     fn encode_argument(&mut self, encoder: Handle, write: &ArgumentWrite) -> Answer<()> {
         let target = self
             .argument_encoders
