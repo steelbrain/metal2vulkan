@@ -1302,7 +1302,7 @@ fn a_narrow_float_attribute_fetched_in_fixed_function_answers_metals_canonical_n
             false => *w,
         })
         .collect();
-    let mut ran = 0;
+    let mut ran: BTreeMap<VertexFormat, Vec<&str>> = BTreeMap::new();
     for stem in [
         "moltenvk-m3",
         "amd-780m-radv",
@@ -1376,11 +1376,19 @@ fn a_narrow_float_attribute_fetched_in_fixed_function_answers_metals_canonical_n
                 false => delivered.to_vec(),
             };
             assert_eq!(got, want, "{what}");
-            ran += 1;
+            ran.entry(format).or_default().push(stem);
         }
     }
-    assert!(
-        ran > 0,
-        "no profile fetched the attribute in fixed function"
-    );
+    // Each of the three formats was fetched in fixed function somewhere, so each answer above is
+    // a leg that ran and not a profile that pulled the attribute.
+    for format in [
+        VertexFormat::Half4,
+        VertexFormat::FloatRG11B10,
+        VertexFormat::Float4,
+    ] {
+        assert!(
+            ran.get(&format).is_some_and(|p| !p.is_empty()),
+            "no profile fetched {format:?} in fixed function: {ran:?}"
+        );
+    }
 }
