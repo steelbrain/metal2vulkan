@@ -673,6 +673,13 @@ impl Case for StencilResolves {
             // `DontCare` store is not Metal's announces that it took the near-equivalent.
             // Measured not to fire on MoltenVK, where the store is the device's own.
             crate::replay::notice_allowance(Degradation::DontCareStore.code()),
+            // A device whose own conversion of a float written to a normalized colour attachment
+            // is not Metal's converts it in the shader instead. Measured firing for both rows on
+            // llvmpipe and on the RTX 5080.
+            crate::replay::notice_allowance(Degradation::ShaderColorConversion.code()),
+            // The buffer each pass reads its resolved aspects back through is `Shared`
+            // ([`crate::replay::shared_memory_notice`], measured firing on the 5080).
+            crate::replay::shared_memory_notice(),
         ];
         if self.has_depth() {
             named.extend([
@@ -1233,8 +1240,8 @@ mod tests {
             // the pair case declares the three its separate textures and split resolve provoke
             // beside the one both cases share.
             let expected = match case.name() {
-                "resolve-stencil-under-depth-filters" => 4,
-                _ => 1,
+                "resolve-stencil-under-depth-filters" => 6,
+                _ => 3,
             };
             assert_eq!(case.allowances().len(), expected, "{}", case.name());
         }

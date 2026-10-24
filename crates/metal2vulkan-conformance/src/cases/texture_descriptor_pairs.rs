@@ -573,6 +573,39 @@ impl Case for DescriptorPairs {
         MetalSource::Run
     }
 
+    fn allowances(&self) -> Vec<crate::allowance::Allowance> {
+        // **No value is loosened**: every footprint and every getter of every row compares
+        // exactly with Metal's, and each allowance below sits at the notices site alone.
+        //
+        // `heap-texture-larger-than-metal`, for every row of the four: a heap texture the device
+        // lays out its own way needs more of the heap's bytes than Metal's does, and the runtime
+        // says so rather than reporting Metal's number for its own image. Measured firing for all
+        // four rows on llvmpipe and on the RTX 5080.
+        let mut named = vec![crate::replay::notice_allowance(
+            metal2vulkan_runtime::Degradation::HeapTextureLargerThanMetal.code(),
+        )];
+        if self.name == USAGE {
+            // The usage table names compressed formats, which a device with no Vulkan format for
+            // one reads through a decoded twin -- carried beside the blocks, or decoded per block.
+            // Measured firing for this row alone, on both venues.
+            named.extend([
+                crate::replay::notice_allowance(
+                    metal2vulkan_runtime::Degradation::CarriedDecodedTwin.code(),
+                ),
+                crate::replay::notice_allowance(
+                    metal2vulkan_runtime::Degradation::DecodedBlockTwin.code(),
+                ),
+            ]);
+        }
+        if self.name == STORAGE {
+            // The storage table names `Shared` among the modes it crosses, so this row alone
+            // makes a `Shared` allocation ([`crate::replay::shared_memory_notice`]). Measured
+            // firing for this row alone, on the 5080.
+            named.push(crate::replay::shared_memory_notice());
+        }
+        named
+    }
+
     fn inputs(&self) -> Result<Vec<Input>, String> {
         // The descriptors are the whole of what the case feeds, and the order it asks them in: a
         // table that gains, loses or re-points a row is a change to the case's inputs, so a
@@ -732,9 +765,20 @@ impl Case for HeapTextureGetters {
         // The notice is announced once per device per kind, so which case of a whole-set run
         // provokes it depends on what ran before; measured announced by this case on an Apple M3
         // Max under macOS 27.0.1, in the run this declaration was taken from.
-        vec![crate::replay::notice_allowance(
-            metal2vulkan_runtime::Degradation::HeapTextureLosslessLayout.code(),
-        )]
+        //
+        // Two more, both measured firing for this row on llvmpipe and on the RTX 5080 and both
+        // about the same layout rather than about a value: a heap texture the device lays out its
+        // own way needs more of the heap's bytes than Metal's does
+        // (`heap-texture-larger-than-metal`), and it is laid out untiled where Metal tiles it
+        // (`heap-texture-untiled-layout`).
+        [
+            metal2vulkan_runtime::Degradation::HeapTextureLosslessLayout,
+            metal2vulkan_runtime::Degradation::HeapTextureLargerThanMetal,
+            metal2vulkan_runtime::Degradation::HeapTextureUntiledLayout,
+        ]
+        .iter()
+        .map(|kind| crate::replay::notice_allowance(kind.code()))
+        .collect()
     }
 
     fn inputs(&self) -> Result<Vec<Input>, String> {

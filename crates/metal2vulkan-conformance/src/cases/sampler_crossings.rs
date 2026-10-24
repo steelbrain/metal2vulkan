@@ -116,6 +116,7 @@ use metal2vulkan::metal::{
     CompareFunction, PixelFormat, SamplerAddressMode, SamplerBorderColor, SamplerMinMagFilter,
     SamplerMipFilter, TextureType, TextureUsage,
 };
+use metal2vulkan_runtime::Degradation;
 
 /// The fixture whose slot kernels sample through the runtime sampler at `[[sampler(0)]]` beside a
 /// constexpr sampler of their own.
@@ -945,11 +946,33 @@ impl Case for SamplerCrossings {
     }
 
     fn allowances(&self) -> Vec<Allowance> {
-        // Every state here is one a device's own sampler holds: nearest or linear filters, the
-        // five address modes Vulkan has an enumerator for, a border colour, a level clamp and a
-        // comparison. Nothing is emulated and nothing is announced, so a notice from any row is a
-        // difference at the notices site and reads as divergent at once.
-        Vec::new()
+        // **Nothing is loosened**: every sample of every row compares exactly, and each allowance
+        // below sits at the notices site alone. Every state here is one a device's own sampler
+        // holds -- nearest or linear filters, the five address modes Vulkan has an enumerator for,
+        // a border colour, a level clamp and a comparison -- so nothing is emulated; what is
+        // declared is what a device announces about its own sampling and its own memory.
+        //
+        // The sets differ row by row and are stated row by row, because which rows announce what
+        // is a measurement rather than a rule:
+        //
+        // - the `Shared` buffer each row writes its samples into, for all eight rows (the RTX
+        //   5080);
+        // - `float-sample-filter`, where the device filters a float texture its own way, for the
+        //   address-mode triples and the three mip-filter rows (llvmpipe and the 5080);
+        // - `device-texel-denormals`, where the device's texel decode keeps a denormal Metal
+        //   flushes, for the three mip-filter rows alone (llvmpipe and the 5080).
+        let mut named = vec![crate::replay::shared_memory_notice()];
+        if matches!(self.family, Family::Axes | Family::MipFilters(_)) {
+            named.push(crate::replay::notice_allowance(
+                Degradation::FloatSampleFilter.code(),
+            ));
+        }
+        if matches!(self.family, Family::MipFilters(_)) {
+            named.push(crate::replay::notice_allowance(
+                Degradation::DeviceTexelDenormals.code(),
+            ));
+        }
+        named
     }
 
     fn inputs(&self) -> Result<Vec<Input>, String> {

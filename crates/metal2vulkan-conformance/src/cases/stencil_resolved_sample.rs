@@ -597,6 +597,13 @@ impl Case for ResolvedSample {
             // both into one, so a run that announced it would be a finding rather than a notice
             // this case justifies.
             crate::replay::notice_allowance(Degradation::ShaderResolve.code()),
+            // A device whose own conversion of a float written to a normalized colour attachment
+            // is not Metal's converts it in the shader instead. Measured firing on llvmpipe and
+            // on the RTX 5080.
+            crate::replay::notice_allowance(Degradation::ShaderColorConversion.code()),
+            // The buffer the pass reads its resolved aspects back through is `Shared`
+            // ([`crate::replay::shared_memory_notice`], measured firing on the 5080).
+            crate::replay::shared_memory_notice(),
         ]
     }
 

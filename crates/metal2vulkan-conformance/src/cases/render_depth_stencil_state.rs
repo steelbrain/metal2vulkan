@@ -56,7 +56,7 @@ use metal2vulkan::metal::state::{DepthStencilDescriptor, StencilDescriptor};
 use metal2vulkan::metal::{
     ColorWriteMask, CompareFunction, DepthClipMode, PixelFormat, PrimitiveType, StencilOperation,
 };
-use metal2vulkan_runtime::StoreAction;
+use metal2vulkan_runtime::{Degradation, StoreAction};
 
 /// The colour target's format: four ones or the clear, nothing in between.
 const FORMAT: PixelFormat = PixelFormat::RGBA32Float;
@@ -182,6 +182,25 @@ fn read_target(texture: Handle, into: Handle) -> RenderWork {
 }
 
 /// The shader reference both texts of `fixture` give, under `entries`.
+/// The notices every row of the family declares, each measured firing for all three rows.
+///
+/// None of them loosens a value: every one sits at the notices site, so a texel that differs
+/// still fails the case.
+fn pass_notices() -> Vec<Allowance> {
+    vec![
+        // The depth attachment nothing reads is stored `DontCare`, and a device whose `DontCare`
+        // store is not Metal's announces that it took the near-equivalent. Measured on llvmpipe
+        // and on the RTX 5080.
+        crate::replay::notice_allowance(Degradation::DontCareStore.code()),
+        // A device that clamps a depth bias outside the unit range where Metal does not says so.
+        // Measured on llvmpipe.
+        crate::replay::notice_allowance(Degradation::BiasedDepthPastUnitRange.code()),
+        // The buffer each pass reads its colour target back through is `Shared`
+        // ([`crate::replay::shared_memory_notice`], measured on the 5080).
+        crate::replay::shared_memory_notice(),
+    ]
+}
+
 fn shader_refs(fixture: &'static str, entries: &str) -> Result<Vec<ShaderRef>, String> {
     let held = Fixture::new(fixture);
     [RUNTIME_TEXT, METAL_TEXT]
@@ -513,12 +532,18 @@ impl Case for DepthBias {
     }
 
     fn allowances(&self) -> Vec<Allowance> {
-        // Nothing is loosened and no notice is declared. A texel is four ones or the pass's clear,
-        // both of which a `RGBA32Float` attachment stores exactly, and the fragment function does
-        // no arithmetic a device's float bounds could reach. A notice our side announced here
-        // would be undeclared and the case divergent, which is the honest reading: a declaration
-        // stands only on a venue measured announcing it.
-        Vec::new()
+        // **Nothing is loosened.** A texel is four ones or the pass's clear, both of which a
+        // `RGBA32Float` attachment stores exactly, and the fragment function does no arithmetic a
+        // device's float bounds could reach.
+        //
+        // Three kinds are declared over the notices site, each measured firing for all three rows
+        // of the family. The depth attachment nothing reads is stored `DontCare`, and a device
+        // whose `DontCare` store is not Metal's announces that it took the near-equivalent
+        // (`dont-care-store`, llvmpipe and the RTX 5080). A device that clamps a depth bias
+        // outside the unit range where Metal does not says so
+        // (`biased-depth-past-unit-range`, llvmpipe). And the buffer each pass reads its colour
+        // target back through is `Shared` ([`crate::replay::shared_memory_notice`], the 5080).
+        pass_notices()
     }
 
     fn shaders(&self) -> Result<Vec<ShaderRef>, String> {
@@ -690,8 +715,9 @@ impl Case for DepthClip {
     }
 
     fn allowances(&self) -> Vec<Allowance> {
-        // Nothing loosened and no notice declared, for the reason `render-state-depth-bias` states.
-        Vec::new()
+        // Nothing loosened, and the same three declarations, for the reason
+        // `render-state-depth-bias` states.
+        pass_notices()
     }
 
     fn shaders(&self) -> Result<Vec<ShaderRef>, String> {
@@ -942,8 +968,9 @@ impl Case for StencilReferences {
     }
 
     fn allowances(&self) -> Vec<Allowance> {
-        // Nothing loosened and no notice declared, for the reason `render-state-depth-bias` states.
-        Vec::new()
+        // Nothing loosened, and the same three declarations, for the reason
+        // `render-state-depth-bias` states.
+        pass_notices()
     }
 
     fn shaders(&self) -> Result<Vec<ShaderRef>, String> {
@@ -1025,6 +1052,8 @@ impl Case for StencilReferences {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::allowance::Loosening;
+    use crate::replay::NOTICES_SITE;
     use crate::transcript::Transcript;
     use std::collections::BTreeSet;
 
@@ -1485,7 +1514,14 @@ mod tests {
         for case in all() {
             assert_eq!(case.record_runs(), RUNS);
             assert!(matches!(case.metal_source(), MetalSource::Run));
-            assert!(case.allowances().is_empty());
+            // Every case declares the family's three notices and loosens no value, so each
+            // allowance sits at the notices site: a value tolerance added later fails here.
+            let allowances = case.allowances();
+            assert_eq!(allowances.len(), pass_notices().len(), "{}", case.name());
+            for allowance in &allowances {
+                assert_eq!(allowance.path, format!("case/{NOTICES_SITE}/*"));
+                assert_eq!(allowance.loosening, Loosening::Unchecked);
+            }
         }
         // The prefill pipeline writes no channel and the region pipeline writes every one, which
         // is what keeps the prefill's depth out of the colour target.

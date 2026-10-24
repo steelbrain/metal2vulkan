@@ -862,12 +862,30 @@ impl Case for SamplerFiltering {
         // sixteen samples of `sampler-cubic-filter` compares with Metal bit for bit, and the
         // notices site is the whole of the difference. The other families provoke no notice and
         // declare none, so a notice any of them starts announcing reads as divergent at once.
-        match self.family {
-            Family::Cubic => vec![notice_allowance(
+        //
+        // Three more are declared, and the sets differ row by row because which rows announce
+        // what is a measurement rather than a rule:
+        //
+        // - the `Shared` buffer every row writes its samples into
+        //   ([`crate::replay::shared_memory_notice`]), for all fifteen rows (the RTX 5080);
+        // - `float-sample-filter`, where the device filters a float texture its own way, for
+        //   `sampler-mip-linear` and `sampler-r-address-modes` (llvmpipe and the 5080);
+        // - `device-texel-denormals`, where the device's texel decode keeps a denormal Metal
+        //   flushes, for `sampler-mip-linear` and `sampler-reduction-modes` (llvmpipe and the
+        //   5080).
+        let mut named = vec![crate::replay::shared_memory_notice()];
+        if matches!(self.family, Family::Cubic) {
+            named.push(notice_allowance(
                 Degradation::BicubicFilterArithmetic.code(),
-            )],
-            _ => Vec::new(),
+            ));
         }
+        if matches!(self.name, "sampler-mip-linear" | "sampler-r-address-modes") {
+            named.push(notice_allowance(Degradation::FloatSampleFilter.code()));
+        }
+        if matches!(self.name, "sampler-mip-linear" | "sampler-reduction-modes") {
+            named.push(notice_allowance(Degradation::DeviceTexelDenormals.code()));
+        }
+        named
     }
 
     fn inputs(&self) -> Result<Vec<Input>, String> {

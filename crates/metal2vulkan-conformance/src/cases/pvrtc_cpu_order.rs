@@ -291,9 +291,17 @@ impl Case for PvrtcCpuOrder {
         // reads through a decoded twin, announced once per device; Metal announces nothing. Every
         // block still compares exactly: the only site loosened is the set of notices, and the
         // allowance fails the case if the notice did not fire.
-        vec![crate::replay::notice_allowance(
-            Degradation::CarriedDecodedTwin.code(),
-        )]
+        //
+        // Two more. A device with no Vulkan format for a PVRTC one decodes its blocks on the CPU
+        // to answer a host read of them (`cpu-block-decode`), which is a route to the same texels
+        // and not a texel of its own; the RTX 5080 announced it for all six rows. And the buffer
+        // each row reads its blocks back through is `Shared`
+        // ([`crate::replay::shared_memory_notice`]).
+        vec![
+            crate::replay::notice_allowance(Degradation::CarriedDecodedTwin.code()),
+            crate::replay::notice_allowance(Degradation::CpuBlockDecode.code()),
+            crate::replay::shared_memory_notice(),
+        ]
     }
 
     fn inputs(&self) -> Result<Vec<Input>, String> {

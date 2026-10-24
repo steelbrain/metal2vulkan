@@ -161,6 +161,21 @@ fn last_tile(level: u32) -> TileRect {
     TileRect::one([across - 1, down - 1])
 }
 
+/// Whether a program reaches a `Shared` buffer of its own: it reads tiles out to one
+/// ([`MappingStep::ReadRegion`], which the fills before it write into), or it makes one for an
+/// indirect update to read its regions from. A program that only maps, moves and fences allocates
+/// none, so a device's own memory model has nothing to announce for it.
+///
+/// It is a structural test of the program rather than a flag on the row, so a row that grows a
+/// read or an indirect buffer declares the notice without anybody remembering to say so.
+fn reaches_a_shared_buffer(program: &SparseMappingProgram) -> bool {
+    !program.buffers.is_empty()
+        || program
+            .steps
+            .iter()
+            .any(|step| matches!(step, MappingStep::ReadRegion { .. }))
+}
+
 /// One row of the family: a case name, and the program it runs.
 struct Row {
     /// The case's name: its recording's file name, and its row in the report.
@@ -659,11 +674,24 @@ impl Case for SparseMappings {
         // only declarations are the notices a row's own path announces, which the runtime must be
         // allowed to say; a notice a row does not declare reads as `UndeclaredNotice`, naming the
         // code and the case, which is the loud form.
-        EVERY_ROWS_NOTICES
+        //
+        // Two kinds are declared beyond a row's own. A device that keeps a sparse texture's
+        // residency less strictly than Metal says so (`non-strict-residency`), which llvmpipe
+        // announced for every row of the family. And the `Shared` buffer a row that reads texels
+        // back carries ([`crate::replay::shared_memory_notice`]), which the RTX 5080 announced for
+        // the two rows that read any -- `sparse-mapping-mapped-tiles-hold-their-texels` and
+        // `sparse-mapping-indirect-updates`. The rest answer mappings and numbers alone, so they
+        // allocate no such buffer and declare nothing for one.
+        let mut named: Vec<Allowance> = EVERY_ROWS_NOTICES
             .iter()
             .chain(self.row.notices)
+            .chain(std::iter::once(&Degradation::NonStrictResidency))
             .map(|code| notice_allowance(code.code()))
-            .collect()
+            .collect();
+        if reaches_a_shared_buffer(&(self.row.program)()) {
+            named.push(crate::replay::shared_memory_notice());
+        }
+        named
     }
 
     fn inputs(&self) -> Result<Vec<Input>, String> {
@@ -806,14 +834,22 @@ mod tests {
                 .inputs()
                 .unwrap_or_else(|why| panic!("{}: {why}", case.name()));
             assert!(!inputs.is_empty(), "{}", case.name());
-            // Only the indirect row declares anything, and only a notice: no value tolerance
-            // appears anywhere in this family.
+            // Every row declares the notices every row takes and the one a device's own sparse
+            // residency provokes; the indirect row adds its own, and the two rows that reach a
+            // `Shared` buffer add the one a device's own memory model provokes. No value
+            // tolerance appears anywhere in this family.
             let allowed = case.allowances();
             let expects = EVERY_ROWS_NOTICES.len()
+                + 1
                 + match case.name() == INDIRECT_UPDATES.case {
                     true => INDIRECT_UPDATES.notices.len(),
                     false => 0,
-                };
+                }
+                + usize::from(reaches_a_shared_buffer(&(EVERY_ROW
+                    .iter()
+                    .find(|row| row.case == case.name())
+                    .expect("a row of the family")
+                    .program)()));
             assert_eq!(allowed.len(), expects, "{}", case.name());
             for allowance in &allowed {
                 assert!(
