@@ -1,5 +1,5 @@
 //! Scenario `command_buffer_times`: a command buffer's `GPUStartTime`, `GPUEndTime`,
-//! `kernelStartTime` and `kernelEndTime`, in the host's time base, for a
+//! `kernelStartTime` and `kernelEndTime`, in the host's time base (DESIGN D308 item 8), for a
 //! command buffer with no work, one fill, and a fill on each side of a shared event's signal and
 //! wait. The records are facts, never the times: each of the four is 0 before the commit; once
 //! the command buffer completed, the kernel times lie in order between the host times around its

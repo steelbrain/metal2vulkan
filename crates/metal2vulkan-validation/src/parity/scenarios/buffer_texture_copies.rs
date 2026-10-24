@@ -5,14 +5,14 @@
 //!   texture of two slices and two levels, written from padded rows at an offset, one slice's
 //!   sub-region written again, and every level and slice read back into one buffer with padded
 //!   rows, its padding left as it was.
-//! - **Metal's rules**, from a probe of our own: offsets, row and image pitches, a compressed
+//! - **Metal's rules** (probe 3's cases, D305): offsets, row and image pitches, a compressed
 //!   region and a buffer exactly as long as the rows, each copy taken and its texels read back.
 //!   The scenario holds valid usage only, since its records are made on this Mac's M3 Max, where
-//!   no misuse runs. The copies plain Metal makes of offsets and pitches off
+//!   no misuse runs (DESIGN D449 item 6). The copies plain Metal makes of offsets and pitches off
 //!   the copy unit, of compressed regions off their blocks and of a combined depth/stencil
 //!   texture without a blit option, which the runtime makes too, are the lane tests'
-//!   (`runtime_lane::texture_blits`), and so are those of an image pitch off
-//!   Metal's rules (`runtime_lane::textures`); the copies Metal's validation
+//!   (`runtime_lane::texture_blits`, DESIGN D418), and so are those of an image pitch off
+//!   Metal's rules (`runtime_lane::textures`, DESIGN D449 item 6); the copies Metal's validation
 //!   stops and the runtime refuses (a pitch below a row at offset 0, a region past the texture,
 //!   a buffer too short) are the runtime's unit tests' (`tests::blit_plan`,
 //!   `tests::copy_plan`).

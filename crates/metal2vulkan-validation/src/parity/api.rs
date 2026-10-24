@@ -1,4 +1,4 @@
-//! The Metal API a scenario is written against: Metal's calls, shaped as
+//! The Metal API a scenario is written against (DESIGN D308 item 7): Metal's calls, shaped as
 //! the runtime's own vocabulary (`ResourceOptions`, `TextureDescriptor`, `Size`, `Origin`,
 //! `BlitOption`), which Metal's side maps onto `objc2-metal` and the runtime's side passes on.
 //!
