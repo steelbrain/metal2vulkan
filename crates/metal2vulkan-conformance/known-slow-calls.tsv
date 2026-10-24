@@ -158,6 +158,43 @@
 # instrument's own cost is bracketed per leg and checked against what this chip's recordings carry,
 # and a row the measurement cannot resolve above that instrument is held in neither direction.
 #
+# THE COUNTED FORM OF THE GAP ABOVE, which no gate holds. The per-pipeline translation this header
+# names is invisible to both halves: at 3.62x worst it is under the per-case margin, and a per-call
+# row cannot carry it. In counts it is legible. Measured on this M3 Max over all 1103 cases, 8 runs
+# of the whole selection at a one-minute load of 5.35, in the 539 cases that create a Metal pipeline
+# state and carry a cost record:
+#
+#   Metal pipeline states created                       1,560
+#   VkPipelines we made                                 2,634   = 1.69 each
+#   of those, made at a state's creation                1,259
+#     taken by a command                                  789
+#     taken by none                                       470   = 37% of them
+#
+# So 1.69 VkPipelines per Metal pipeline state, 0.30 of them per state made for a command that never
+# came. `variant_pipelines_made` is gated per case as an upper bound and `creation_pipelines_drawn`
+# from below, but the RATIO is gated nowhere: a change that makes one more pipeline per state while
+# the case grows a state passes both. That ratio is the per-pipeline translation expressed as a
+# count, it needs no timing window, and it is the gate this cluster still wants.
+#
+# The largest single share of the 470 is the compute prediction missing because the dispatch names
+# its own threadgroup size -- not a defect in the prediction, which a device test now pins as
+# serving a dispatchThreads: over the predicted threadgroup (runtime tests::uniform_bind_offsets).
+# The suite holds no dispatchThreadgroups: compute case, so the corpus cannot say how often an app
+# hits it.
+#
+# WHY 1.69 AND NOT THE 2.56 THIS HEADER ONCE IMPLIED, stated so nobody reads a fix as a measurement
+# artefact: integer-vertex-attributes reads 64 states, 64 predicted, 64 taken because the point-list
+# prediction for an unrasterized state was FIXED (`Predict a point list for an unrasterized render
+# state`, with `Census the mispredicted draws and bound the check's reach` beside it). Its earlier
+# 64/0/128 was that bug, reproduced over three passes and gated at 128 as the blessed ceiling, not a
+# loaded reading. The count fell because the waste went away.
+#
+# WHERE THE EXCESS SITS AFTER THE RE-RECORD, over 1,019 rankable rows at loads 3.79-8.61: Metal
+# 25.56 s against our 8.64 s, ratio 0.338, with render_pipeline 38.3% of the excess and `wait`
+# 28.2%. The two largest single rows are depth16-texel-reads at 160 ms and the extended-swizzles-*
+# family at 43-97 ms each, the latter making 71 VkPipelines for 6 compute states with its
+# dispatchThreads edge regions charged to `wait`. Both are open.
+#
 # So a row here needs a LOCALISED finding, not a pooled ratio: the first row below is 105x pooled
 # and 1.2x over the three cases that obviously make it, and 265x over the 16 that actually do.
 #
