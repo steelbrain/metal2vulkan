@@ -1,0 +1,3530 @@
+{
+  "format": 1,
+  "case": "texture-pairs-type-levels-slices",
+  "suite_version": 1,
+  "answers": [
+    {
+      "key": {
+        "chip": "apple-m3-max",
+        "os_version": "27.0.1",
+        "os_build": "26A434",
+        "metal_level": "27.0.1"
+      },
+      "provenance": "metal_run",
+      "device": "Apple M3 Max",
+      "runs": 3,
+      "outcomes": [
+        {
+          "runs": 3,
+          "transcript": {
+            "root": {
+              "name": "case",
+              "observed": {
+                "value": "absent"
+              },
+              "children": [
+                {
+                  "name": "inputs",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "descriptors",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "da387bf07a0c9f558f67ca2eb63f6fc4bcf16c49582dae641f07277233f803fa"
+                        }
+                      }
+                    },
+                    {
+                      "name": "asks",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "5ad9f1c7d777f325c170b05463244fe8a9226b75870e819241dd1883aba65872"
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "MTLPixelFormatRGBA8Unorm/Type1D/64x1x1/levels-1/samples-1/slices-1/usage-0x1/private",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "size-and-align",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "fields": {
+                                "align": {
+                                  "uint": 128
+                                },
+                                "size": {
+                                  "uint": 256
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "MTLPixelFormatRGBA8Unorm/Type1D/5000x1x1/levels-1/samples-1/slices-1/usage-0x1/private",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "size-and-align",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "fields": {
+                                "align": {
+                                  "uint": 128
+                                },
+                                "size": {
+                                  "uint": 32768
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "MTLPixelFormatRGBA8Unorm/Type1DArray/64x1x1/levels-1/samples-1/slices-1/usage-0x1/private",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "size-and-align",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "fields": {
+                                "align": {
+                                  "uint": 128
+                                },
+                                "size": {
+                                  "uint": 256
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "MTLPixelFormatRGBA8Unorm/Type1DArray/64x1x1/levels-1/samples-1/slices-3/usage-0x1/private",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "size-and-align",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "fields": {
+                                "align": {
+                                  "uint": 128
+                                },
+                                "size": {
+                                  "uint": 768
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "MTLPixelFormatRGBA8Unorm/TextureBuffer/64x1x1/levels-1/samples-1/slices-1/usage-0x1/private",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "size-and-align",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "fields": {
+                                "align": {
+                                  "uint": 16
+                                },
+                                "size": {
+                                  "uint": 256
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "MTLPixelFormatRGBA8Unorm/TextureBuffer/64x1x1/levels-2/samples-1/slices-1/usage-0x1/private",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "size-and-align",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "fields": {
+                                "align": {
+                                  "uint": 16
+                                },
+                                "size": {
+                                  "uint": 256
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "MTLPixelFormatRGBA8Unorm/TextureBuffer/64x1x1/levels-7/samples-1/slices-1/usage-0x1/private",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "size-and-align",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "fields": {
+                                "align": {
+                                  "uint": 16
+                                },
+                                "size": {
+                                  "uint": 256
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "MTLPixelFormatRGBA8Unorm/Type2D/64x64x1/levels-1/samples-1/slices-1/usage-0x1/private",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "size-and-align",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "fields": {
+                                "align": {
+                                  "uint": 128
+                                },
+                                "size": {
+                                  "uint": 16512
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "MTLPixelFormatRGBA8Unorm/Type2D/64x64x1/levels-2/samples-1/slices-1/usage-0x1/private",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "size-and-align",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "fields": {
+                                "align": {
+                                  "uint": 128
+                                },
+                                "size": {
+                                  "uint": 22528
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "MTLPixelFormatRGBA8Unorm/Type2D/64x64x1/levels-6/samples-1/slices-1/usage-0x1/private",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "size-and-align",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "fields": {
+                                "align": {
+                                  "uint": 128
+                                },
+                                "size": {
+                                  "uint": 22528
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "MTLPixelFormatRGBA8Unorm/Type2D/64x64x1/levels-7/samples-1/slices-1/usage-0x1/private",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "size-and-align",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "fields": {
+                                "align": {
+                                  "uint": 128
+                                },
+                                "size": {
+                                  "uint": 22528
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "MTLPixelFormatRGBA8Unorm/Type2DArray/64x64x1/levels-1/samples-1/slices-1/usage-0x1/private",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "size-and-align",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "fields": {
+                                "align": {
+                                  "uint": 16384
+                                },
+                                "size": {
+                                  "uint": 16512
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "MTLPixelFormatRGBA8Unorm/Type2DArray/64x64x1/levels-7/samples-1/slices-1/usage-0x1/private",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "size-and-align",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "fields": {
+                                "align": {
+                                  "uint": 16384
+                                },
+                                "size": {
+                                  "uint": 33152
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "MTLPixelFormatRGBA8Unorm/Type2DArray/64x64x1/levels-1/samples-1/slices-3/usage-0x1/private",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "size-and-align",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "fields": {
+                                "align": {
+                                  "uint": 16384
+                                },
+                                "size": {
+                                  "uint": 49536
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "MTLPixelFormatRGBA8Unorm/Type2DArray/64x64x1/levels-7/samples-1/slices-3/usage-0x1/private",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "size-and-align",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "fields": {
+                                "align": {
+                                  "uint": 16384
+                                },
+                                "size": {
+                                  "uint": 99456
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "MTLPixelFormatRGBA8Unorm/Type2D/37x5x1/levels-1/samples-1/slices-1/usage-0x1/private",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "size-and-align",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "fields": {
+                                "align": {
+                                  "uint": 128
+                                },
+                                "size": {
+                                  "uint": 2048
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "MTLPixelFormatRGBA8Unorm/Type2D/37x5x1/levels-3/samples-1/slices-1/usage-0x1/private",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "size-and-align",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "fields": {
+                                "align": {
+                                  "uint": 128
+                                },
+                                "size": {
+                                  "uint": 3072
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "MTLPixelFormatRGBA8Unorm/Type2DArray/37x5x1/levels-3/samples-1/slices-3/usage-0x1/private",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "size-and-align",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "fields": {
+                                "align": {
+                                  "uint": 128
+                                },
+                                "size": {
+                                  "uint": 9216
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "MTLPixelFormatRGBA8Unorm/Cube/8x8x1/levels-1/samples-1/slices-1/usage-0x1/private",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "size-and-align",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "fields": {
+                                "align": {
+                                  "uint": 128
+                                },
+                                "size": {
+                                  "uint": 1536
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "MTLPixelFormatRGBA8Unorm/Cube/8x8x1/levels-4/samples-1/slices-1/usage-0x1/private",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "size-and-align",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "fields": {
+                                "align": {
+                                  "uint": 128
+                                },
+                                "size": {
+                                  "uint": 3840
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "MTLPixelFormatRGBA8Unorm/Cube/64x64x1/levels-1/samples-1/slices-1/usage-0x1/private",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "size-and-align",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "fields": {
+                                "align": {
+                                  "uint": 16384
+                                },
+                                "size": {
+                                  "uint": 99072
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "MTLPixelFormatRGBA8Unorm/Cube/64x64x1/levels-7/samples-1/slices-1/usage-0x1/private",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "size-and-align",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "fields": {
+                                "align": {
+                                  "uint": 16384
+                                },
+                                "size": {
+                                  "uint": 198912
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "MTLPixelFormatRGBA8Unorm/CubeArray/64x64x1/levels-1/samples-1/slices-1/usage-0x1/private",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "size-and-align",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "fields": {
+                                "align": {
+                                  "uint": 16384
+                                },
+                                "size": {
+                                  "uint": 99072
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "MTLPixelFormatRGBA8Unorm/CubeArray/64x64x1/levels-7/samples-1/slices-1/usage-0x1/private",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "size-and-align",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "fields": {
+                                "align": {
+                                  "uint": 16384
+                                },
+                                "size": {
+                                  "uint": 198912
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "MTLPixelFormatRGBA8Unorm/CubeArray/8x8x1/levels-4/samples-1/slices-2/usage-0x1/private",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "size-and-align",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "fields": {
+                                "align": {
+                                  "uint": 128
+                                },
+                                "size": {
+                                  "uint": 7680
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "MTLPixelFormatRGBA8Unorm/CubeArray/64x64x1/levels-1/samples-1/slices-3/usage-0x1/private",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "size-and-align",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "fields": {
+                                "align": {
+                                  "uint": 16384
+                                },
+                                "size": {
+                                  "uint": 297216
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "MTLPixelFormatRGBA8Unorm/CubeArray/64x64x1/levels-7/samples-1/slices-3/usage-0x1/private",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "size-and-align",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "fields": {
+                                "align": {
+                                  "uint": 16384
+                                },
+                                "size": {
+                                  "uint": 596736
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "MTLPixelFormatRGBA8Unorm/Type3D/8x8x8/levels-1/samples-1/slices-1/usage-0x1/private",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "size-and-align",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "fields": {
+                                "align": {
+                                  "uint": 128
+                                },
+                                "size": {
+                                  "uint": 2048
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "MTLPixelFormatRGBA8Unorm/Type3D/8x8x8/levels-4/samples-1/slices-1/usage-0x1/private",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "size-and-align",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "fields": {
+                                "align": {
+                                  "uint": 128
+                                },
+                                "size": {
+                                  "uint": 5120
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "MTLPixelFormatRGBA8Unorm/Type3D/64x64x8/levels-1/samples-1/slices-1/usage-0x1/private",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "size-and-align",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "fields": {
+                                "align": {
+                                  "uint": 16384
+                                },
+                                "size": {
+                                  "uint": 132096
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "MTLPixelFormatRGBA8Unorm/Type3D/64x64x8/levels-7/samples-1/slices-1/usage-0x1/private",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "size-and-align",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "fields": {
+                                "align": {
+                                  "uint": 16384
+                                },
+                                "size": {
+                                  "uint": 265216
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "MTLPixelFormatRGBA8Unorm/Type3D/64x64x64/levels-1/samples-1/slices-1/usage-0x1/private",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "size-and-align",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "fields": {
+                                "align": {
+                                  "uint": 16384
+                                },
+                                "size": {
+                                  "uint": 1056768
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "MTLPixelFormatRGBA8Unorm/Type3D/64x64x64/levels-7/samples-1/slices-1/usage-0x1/private",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "size-and-align",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "fields": {
+                                "align": {
+                                  "uint": 16384
+                                },
+                                "size": {
+                                  "uint": 2121728
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "MTLPixelFormatRGBA8Unorm/Type3D/8x8x64/levels-1/samples-1/slices-1/usage-0x1/private",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "size-and-align",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "fields": {
+                                "align": {
+                                  "uint": 128
+                                },
+                                "size": {
+                                  "uint": 16384
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "MTLPixelFormatRGBA8Unorm/Type3D/8x8x64/levels-4/samples-1/slices-1/usage-0x1/private",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "size-and-align",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "fields": {
+                                "align": {
+                                  "uint": 128
+                                },
+                                "size": {
+                                  "uint": 65536
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "MTLPixelFormatRGBA8Unorm/Type3D/8x8x64/levels-5/samples-1/slices-1/usage-0x1/private",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "size-and-align",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "fields": {
+                                "align": {
+                                  "uint": 128
+                                },
+                                "size": {
+                                  "uint": 65536
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "MTLPixelFormatRGBA8Unorm/Type3D/8x8x64/levels-7/samples-1/slices-1/usage-0x1/private",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "size-and-align",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "fields": {
+                                "align": {
+                                  "uint": 128
+                                },
+                                "size": {
+                                  "uint": 65536
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "MTLPixelFormatRGBA8Unorm/Type3D/16x16x256/levels-1/samples-1/slices-1/usage-0x1/private",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "size-and-align",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "fields": {
+                                "align": {
+                                  "uint": 128
+                                },
+                                "size": {
+                                  "uint": 294912
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "MTLPixelFormatRGBA8Unorm/Type3D/16x16x256/levels-5/samples-1/slices-1/usage-0x1/private",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "size-and-align",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "fields": {
+                                "align": {
+                                  "uint": 128
+                                },
+                                "size": {
+                                  "uint": 589824
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "MTLPixelFormatRGBA8Unorm/Type3D/16x16x256/levels-9/samples-1/slices-1/usage-0x1/private",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "size-and-align",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "fields": {
+                                "align": {
+                                  "uint": 128
+                                },
+                                "size": {
+                                  "uint": 589824
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "MTLPixelFormatR8Unorm/Type1D/64x1x1/levels-1/samples-1/slices-1/usage-0x1/private",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "size-and-align",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "fields": {
+                                "align": {
+                                  "uint": 128
+                                },
+                                "size": {
+                                  "uint": 128
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "MTLPixelFormatR8Unorm/Type1D/5000x1x1/levels-1/samples-1/slices-1/usage-0x1/private",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "size-and-align",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "fields": {
+                                "align": {
+                                  "uint": 128
+                                },
+                                "size": {
+                                  "uint": 8192
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "MTLPixelFormatR8Unorm/Type1DArray/64x1x1/levels-1/samples-1/slices-1/usage-0x1/private",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "size-and-align",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "fields": {
+                                "align": {
+                                  "uint": 128
+                                },
+                                "size": {
+                                  "uint": 128
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "MTLPixelFormatR8Unorm/Type1DArray/64x1x1/levels-1/samples-1/slices-3/usage-0x1/private",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "size-and-align",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "fields": {
+                                "align": {
+                                  "uint": 128
+                                },
+                                "size": {
+                                  "uint": 384
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "MTLPixelFormatR8Unorm/TextureBuffer/64x1x1/levels-1/samples-1/slices-1/usage-0x1/private",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "size-and-align",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "fields": {
+                                "align": {
+                                  "uint": 16
+                                },
+                                "size": {
+                                  "uint": 64
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "MTLPixelFormatR8Unorm/TextureBuffer/64x1x1/levels-2/samples-1/slices-1/usage-0x1/private",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "size-and-align",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "fields": {
+                                "align": {
+                                  "uint": 16
+                                },
+                                "size": {
+                                  "uint": 64
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "MTLPixelFormatR8Unorm/TextureBuffer/64x1x1/levels-7/samples-1/slices-1/usage-0x1/private",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "size-and-align",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "fields": {
+                                "align": {
+                                  "uint": 16
+                                },
+                                "size": {
+                                  "uint": 64
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "MTLPixelFormatR8Unorm/Type2D/64x64x1/levels-1/samples-1/slices-1/usage-0x1/private",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "size-and-align",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "fields": {
+                                "align": {
+                                  "uint": 128
+                                },
+                                "size": {
+                                  "uint": 4224
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "MTLPixelFormatR8Unorm/Type2D/64x64x1/levels-2/samples-1/slices-1/usage-0x1/private",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "size-and-align",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "fields": {
+                                "align": {
+                                  "uint": 128
+                                },
+                                "size": {
+                                  "uint": 6272
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "MTLPixelFormatR8Unorm/Type2D/64x64x1/levels-6/samples-1/slices-1/usage-0x1/private",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "size-and-align",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "fields": {
+                                "align": {
+                                  "uint": 128
+                                },
+                                "size": {
+                                  "uint": 6272
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "MTLPixelFormatR8Unorm/Type2D/64x64x1/levels-7/samples-1/slices-1/usage-0x1/private",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "size-and-align",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "fields": {
+                                "align": {
+                                  "uint": 128
+                                },
+                                "size": {
+                                  "uint": 6272
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "MTLPixelFormatR8Unorm/Type2DArray/64x64x1/levels-1/samples-1/slices-1/usage-0x1/private",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "size-and-align",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "fields": {
+                                "align": {
+                                  "uint": 128
+                                },
+                                "size": {
+                                  "uint": 4224
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "MTLPixelFormatR8Unorm/Type2DArray/64x64x1/levels-7/samples-1/slices-1/usage-0x1/private",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "size-and-align",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "fields": {
+                                "align": {
+                                  "uint": 128
+                                },
+                                "size": {
+                                  "uint": 6272
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "MTLPixelFormatR8Unorm/Type2DArray/64x64x1/levels-1/samples-1/slices-3/usage-0x1/private",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "size-and-align",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "fields": {
+                                "align": {
+                                  "uint": 128
+                                },
+                                "size": {
+                                  "uint": 12672
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "MTLPixelFormatR8Unorm/Type2DArray/64x64x1/levels-7/samples-1/slices-3/usage-0x1/private",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "size-and-align",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "fields": {
+                                "align": {
+                                  "uint": 128
+                                },
+                                "size": {
+                                  "uint": 18816
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "MTLPixelFormatR8Unorm/Type2D/37x5x1/levels-1/samples-1/slices-1/usage-0x1/private",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "size-and-align",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "fields": {
+                                "align": {
+                                  "uint": 128
+                                },
+                                "size": {
+                                  "uint": 512
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "MTLPixelFormatR8Unorm/Type2D/37x5x1/levels-3/samples-1/slices-1/usage-0x1/private",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "size-and-align",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "fields": {
+                                "align": {
+                                  "uint": 128
+                                },
+                                "size": {
+                                  "uint": 1152
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "MTLPixelFormatR8Unorm/Type2DArray/37x5x1/levels-3/samples-1/slices-3/usage-0x1/private",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "size-and-align",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "fields": {
+                                "align": {
+                                  "uint": 128
+                                },
+                                "size": {
+                                  "uint": 3456
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "MTLPixelFormatR8Unorm/Cube/8x8x1/levels-1/samples-1/slices-1/usage-0x1/private",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "size-and-align",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "fields": {
+                                "align": {
+                                  "uint": 128
+                                },
+                                "size": {
+                                  "uint": 768
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "MTLPixelFormatR8Unorm/Cube/8x8x1/levels-4/samples-1/slices-1/usage-0x1/private",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "size-and-align",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "fields": {
+                                "align": {
+                                  "uint": 128
+                                },
+                                "size": {
+                                  "uint": 3072
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "MTLPixelFormatR8Unorm/Cube/64x64x1/levels-1/samples-1/slices-1/usage-0x1/private",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "size-and-align",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "fields": {
+                                "align": {
+                                  "uint": 128
+                                },
+                                "size": {
+                                  "uint": 25344
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "MTLPixelFormatR8Unorm/Cube/64x64x1/levels-7/samples-1/slices-1/usage-0x1/private",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "size-and-align",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "fields": {
+                                "align": {
+                                  "uint": 128
+                                },
+                                "size": {
+                                  "uint": 37632
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "MTLPixelFormatR8Unorm/CubeArray/64x64x1/levels-1/samples-1/slices-1/usage-0x1/private",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "size-and-align",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "fields": {
+                                "align": {
+                                  "uint": 128
+                                },
+                                "size": {
+                                  "uint": 25344
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "MTLPixelFormatR8Unorm/CubeArray/64x64x1/levels-7/samples-1/slices-1/usage-0x1/private",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "size-and-align",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "fields": {
+                                "align": {
+                                  "uint": 128
+                                },
+                                "size": {
+                                  "uint": 37632
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "MTLPixelFormatR8Unorm/CubeArray/8x8x1/levels-4/samples-1/slices-2/usage-0x1/private",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "size-and-align",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "fields": {
+                                "align": {
+                                  "uint": 128
+                                },
+                                "size": {
+                                  "uint": 6144
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "MTLPixelFormatR8Unorm/CubeArray/64x64x1/levels-1/samples-1/slices-3/usage-0x1/private",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "size-and-align",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "fields": {
+                                "align": {
+                                  "uint": 128
+                                },
+                                "size": {
+                                  "uint": 76032
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "MTLPixelFormatR8Unorm/CubeArray/64x64x1/levels-7/samples-1/slices-3/usage-0x1/private",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "size-and-align",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "fields": {
+                                "align": {
+                                  "uint": 128
+                                },
+                                "size": {
+                                  "uint": 112896
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "MTLPixelFormatR8Unorm/Type3D/8x8x8/levels-1/samples-1/slices-1/usage-0x1/private",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "size-and-align",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "fields": {
+                                "align": {
+                                  "uint": 128
+                                },
+                                "size": {
+                                  "uint": 1024
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "MTLPixelFormatR8Unorm/Type3D/8x8x8/levels-4/samples-1/slices-1/usage-0x1/private",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "size-and-align",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "fields": {
+                                "align": {
+                                  "uint": 128
+                                },
+                                "size": {
+                                  "uint": 4096
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "MTLPixelFormatR8Unorm/Type3D/64x64x8/levels-1/samples-1/slices-1/usage-0x1/private",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "size-and-align",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "fields": {
+                                "align": {
+                                  "uint": 128
+                                },
+                                "size": {
+                                  "uint": 33792
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "MTLPixelFormatR8Unorm/Type3D/64x64x8/levels-7/samples-1/slices-1/usage-0x1/private",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "size-and-align",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "fields": {
+                                "align": {
+                                  "uint": 128
+                                },
+                                "size": {
+                                  "uint": 50176
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "MTLPixelFormatR8Unorm/Type3D/64x64x64/levels-1/samples-1/slices-1/usage-0x1/private",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "size-and-align",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "fields": {
+                                "align": {
+                                  "uint": 128
+                                },
+                                "size": {
+                                  "uint": 270336
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "MTLPixelFormatR8Unorm/Type3D/64x64x64/levels-7/samples-1/slices-1/usage-0x1/private",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "size-and-align",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "fields": {
+                                "align": {
+                                  "uint": 128
+                                },
+                                "size": {
+                                  "uint": 401408
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "MTLPixelFormatR8Unorm/Type3D/8x8x64/levels-1/samples-1/slices-1/usage-0x1/private",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "size-and-align",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "fields": {
+                                "align": {
+                                  "uint": 128
+                                },
+                                "size": {
+                                  "uint": 8192
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "MTLPixelFormatR8Unorm/Type3D/8x8x64/levels-4/samples-1/slices-1/usage-0x1/private",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "size-and-align",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "fields": {
+                                "align": {
+                                  "uint": 128
+                                },
+                                "size": {
+                                  "uint": 57344
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "MTLPixelFormatR8Unorm/Type3D/8x8x64/levels-5/samples-1/slices-1/usage-0x1/private",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "size-and-align",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "fields": {
+                                "align": {
+                                  "uint": 128
+                                },
+                                "size": {
+                                  "uint": 57344
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "MTLPixelFormatR8Unorm/Type3D/8x8x64/levels-7/samples-1/slices-1/usage-0x1/private",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "size-and-align",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "fields": {
+                                "align": {
+                                  "uint": 128
+                                },
+                                "size": {
+                                  "uint": 57344
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "MTLPixelFormatR8Unorm/Type3D/16x16x256/levels-1/samples-1/slices-1/usage-0x1/private",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "size-and-align",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "fields": {
+                                "align": {
+                                  "uint": 128
+                                },
+                                "size": {
+                                  "uint": 98304
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "MTLPixelFormatR8Unorm/Type3D/16x16x256/levels-5/samples-1/slices-1/usage-0x1/private",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "size-and-align",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "fields": {
+                                "align": {
+                                  "uint": 128
+                                },
+                                "size": {
+                                  "uint": 360448
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "MTLPixelFormatR8Unorm/Type3D/16x16x256/levels-9/samples-1/slices-1/usage-0x1/private",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "size-and-align",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "fields": {
+                                "align": {
+                                  "uint": 128
+                                },
+                                "size": {
+                                  "uint": 360448
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "MTLPixelFormatRGBA16Float/Type1D/64x1x1/levels-1/samples-1/slices-1/usage-0x1/private",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "size-and-align",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "fields": {
+                                "align": {
+                                  "uint": 128
+                                },
+                                "size": {
+                                  "uint": 512
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "MTLPixelFormatRGBA16Float/Type1D/5000x1x1/levels-1/samples-1/slices-1/usage-0x1/private",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "size-and-align",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "fields": {
+                                "align": {
+                                  "uint": 128
+                                },
+                                "size": {
+                                  "uint": 65536
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "MTLPixelFormatRGBA16Float/Type1DArray/64x1x1/levels-1/samples-1/slices-1/usage-0x1/private",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "size-and-align",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "fields": {
+                                "align": {
+                                  "uint": 128
+                                },
+                                "size": {
+                                  "uint": 512
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "MTLPixelFormatRGBA16Float/Type1DArray/64x1x1/levels-1/samples-1/slices-3/usage-0x1/private",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "size-and-align",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "fields": {
+                                "align": {
+                                  "uint": 128
+                                },
+                                "size": {
+                                  "uint": 1536
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "MTLPixelFormatRGBA16Float/TextureBuffer/64x1x1/levels-1/samples-1/slices-1/usage-0x1/private",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "size-and-align",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "fields": {
+                                "align": {
+                                  "uint": 16
+                                },
+                                "size": {
+                                  "uint": 512
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "MTLPixelFormatRGBA16Float/TextureBuffer/64x1x1/levels-2/samples-1/slices-1/usage-0x1/private",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "size-and-align",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "fields": {
+                                "align": {
+                                  "uint": 16
+                                },
+                                "size": {
+                                  "uint": 512
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "MTLPixelFormatRGBA16Float/TextureBuffer/64x1x1/levels-7/samples-1/slices-1/usage-0x1/private",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "size-and-align",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "fields": {
+                                "align": {
+                                  "uint": 16
+                                },
+                                "size": {
+                                  "uint": 512
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "MTLPixelFormatRGBA16Float/Type2D/64x64x1/levels-1/samples-1/slices-1/usage-0x1/private",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "size-and-align",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "fields": {
+                                "align": {
+                                  "uint": 128
+                                },
+                                "size": {
+                                  "uint": 32896
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "MTLPixelFormatRGBA16Float/Type2D/64x64x1/levels-2/samples-1/slices-1/usage-0x1/private",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "size-and-align",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "fields": {
+                                "align": {
+                                  "uint": 128
+                                },
+                                "size": {
+                                  "uint": 44288
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "MTLPixelFormatRGBA16Float/Type2D/64x64x1/levels-6/samples-1/slices-1/usage-0x1/private",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "size-and-align",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "fields": {
+                                "align": {
+                                  "uint": 128
+                                },
+                                "size": {
+                                  "uint": 44288
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "MTLPixelFormatRGBA16Float/Type2D/64x64x1/levels-7/samples-1/slices-1/usage-0x1/private",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "size-and-align",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "fields": {
+                                "align": {
+                                  "uint": 128
+                                },
+                                "size": {
+                                  "uint": 44288
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "MTLPixelFormatRGBA16Float/Type2DArray/64x64x1/levels-1/samples-1/slices-1/usage-0x1/private",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "size-and-align",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "fields": {
+                                "align": {
+                                  "uint": 16384
+                                },
+                                "size": {
+                                  "uint": 32896
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "MTLPixelFormatRGBA16Float/Type2DArray/64x64x1/levels-7/samples-1/slices-1/usage-0x1/private",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "size-and-align",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "fields": {
+                                "align": {
+                                  "uint": 16384
+                                },
+                                "size": {
+                                  "uint": 49536
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "MTLPixelFormatRGBA16Float/Type2DArray/64x64x1/levels-1/samples-1/slices-3/usage-0x1/private",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "size-and-align",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "fields": {
+                                "align": {
+                                  "uint": 16384
+                                },
+                                "size": {
+                                  "uint": 98688
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "MTLPixelFormatRGBA16Float/Type2DArray/64x64x1/levels-7/samples-1/slices-3/usage-0x1/private",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "size-and-align",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "fields": {
+                                "align": {
+                                  "uint": 16384
+                                },
+                                "size": {
+                                  "uint": 148608
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "MTLPixelFormatRGBA16Float/Type2D/37x5x1/levels-1/samples-1/slices-1/usage-0x1/private",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "size-and-align",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "fields": {
+                                "align": {
+                                  "uint": 128
+                                },
+                                "size": {
+                                  "uint": 4096
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "MTLPixelFormatRGBA16Float/Type2D/37x5x1/levels-3/samples-1/slices-1/usage-0x1/private",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "size-and-align",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "fields": {
+                                "align": {
+                                  "uint": 128
+                                },
+                                "size": {
+                                  "uint": 5760
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "MTLPixelFormatRGBA16Float/Type2DArray/37x5x1/levels-3/samples-1/slices-3/usage-0x1/private",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "size-and-align",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "fields": {
+                                "align": {
+                                  "uint": 128
+                                },
+                                "size": {
+                                  "uint": 17280
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "MTLPixelFormatRGBA16Float/Cube/8x8x1/levels-1/samples-1/slices-1/usage-0x1/private",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "size-and-align",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "fields": {
+                                "align": {
+                                  "uint": 128
+                                },
+                                "size": {
+                                  "uint": 3072
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "MTLPixelFormatRGBA16Float/Cube/8x8x1/levels-4/samples-1/slices-1/usage-0x1/private",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "size-and-align",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "fields": {
+                                "align": {
+                                  "uint": 128
+                                },
+                                "size": {
+                                  "uint": 5376
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "MTLPixelFormatRGBA16Float/Cube/64x64x1/levels-1/samples-1/slices-1/usage-0x1/private",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "size-and-align",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "fields": {
+                                "align": {
+                                  "uint": 16384
+                                },
+                                "size": {
+                                  "uint": 197376
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "MTLPixelFormatRGBA16Float/Cube/64x64x1/levels-7/samples-1/slices-1/usage-0x1/private",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "size-and-align",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "fields": {
+                                "align": {
+                                  "uint": 16384
+                                },
+                                "size": {
+                                  "uint": 297216
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "MTLPixelFormatRGBA16Float/CubeArray/64x64x1/levels-1/samples-1/slices-1/usage-0x1/private",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "size-and-align",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "fields": {
+                                "align": {
+                                  "uint": 16384
+                                },
+                                "size": {
+                                  "uint": 197376
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "MTLPixelFormatRGBA16Float/CubeArray/64x64x1/levels-7/samples-1/slices-1/usage-0x1/private",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "size-and-align",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "fields": {
+                                "align": {
+                                  "uint": 16384
+                                },
+                                "size": {
+                                  "uint": 297216
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "MTLPixelFormatRGBA16Float/CubeArray/8x8x1/levels-4/samples-1/slices-2/usage-0x1/private",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "size-and-align",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "fields": {
+                                "align": {
+                                  "uint": 128
+                                },
+                                "size": {
+                                  "uint": 10752
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "MTLPixelFormatRGBA16Float/CubeArray/64x64x1/levels-1/samples-1/slices-3/usage-0x1/private",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "size-and-align",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "fields": {
+                                "align": {
+                                  "uint": 16384
+                                },
+                                "size": {
+                                  "uint": 592128
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "MTLPixelFormatRGBA16Float/CubeArray/64x64x1/levels-7/samples-1/slices-3/usage-0x1/private",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "size-and-align",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "fields": {
+                                "align": {
+                                  "uint": 16384
+                                },
+                                "size": {
+                                  "uint": 891648
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "MTLPixelFormatRGBA16Float/Type3D/8x8x8/levels-1/samples-1/slices-1/usage-0x1/private",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "size-and-align",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "fields": {
+                                "align": {
+                                  "uint": 128
+                                },
+                                "size": {
+                                  "uint": 4096
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "MTLPixelFormatRGBA16Float/Type3D/8x8x8/levels-4/samples-1/slices-1/usage-0x1/private",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "size-and-align",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "fields": {
+                                "align": {
+                                  "uint": 128
+                                },
+                                "size": {
+                                  "uint": 7168
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "MTLPixelFormatRGBA16Float/Type3D/64x64x8/levels-1/samples-1/slices-1/usage-0x1/private",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "size-and-align",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "fields": {
+                                "align": {
+                                  "uint": 16384
+                                },
+                                "size": {
+                                  "uint": 263168
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "MTLPixelFormatRGBA16Float/Type3D/64x64x8/levels-7/samples-1/slices-1/usage-0x1/private",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "size-and-align",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "fields": {
+                                "align": {
+                                  "uint": 16384
+                                },
+                                "size": {
+                                  "uint": 396288
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "MTLPixelFormatRGBA16Float/Type3D/64x64x64/levels-1/samples-1/slices-1/usage-0x1/private",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "size-and-align",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "fields": {
+                                "align": {
+                                  "uint": 16384
+                                },
+                                "size": {
+                                  "uint": 2105344
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "MTLPixelFormatRGBA16Float/Type3D/64x64x64/levels-7/samples-1/slices-1/usage-0x1/private",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "size-and-align",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "fields": {
+                                "align": {
+                                  "uint": 16384
+                                },
+                                "size": {
+                                  "uint": 3170304
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "MTLPixelFormatRGBA16Float/Type3D/8x8x64/levels-1/samples-1/slices-1/usage-0x1/private",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "size-and-align",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "fields": {
+                                "align": {
+                                  "uint": 128
+                                },
+                                "size": {
+                                  "uint": 32768
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "MTLPixelFormatRGBA16Float/Type3D/8x8x64/levels-4/samples-1/slices-1/usage-0x1/private",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "size-and-align",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "fields": {
+                                "align": {
+                                  "uint": 128
+                                },
+                                "size": {
+                                  "uint": 81920
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "MTLPixelFormatRGBA16Float/Type3D/8x8x64/levels-5/samples-1/slices-1/usage-0x1/private",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "size-and-align",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "fields": {
+                                "align": {
+                                  "uint": 128
+                                },
+                                "size": {
+                                  "uint": 81920
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "MTLPixelFormatRGBA16Float/Type3D/8x8x64/levels-7/samples-1/slices-1/usage-0x1/private",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "size-and-align",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "fields": {
+                                "align": {
+                                  "uint": 128
+                                },
+                                "size": {
+                                  "uint": 81920
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "MTLPixelFormatRGBA16Float/Type3D/16x16x256/levels-1/samples-1/slices-1/usage-0x1/private",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "size-and-align",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "fields": {
+                                "align": {
+                                  "uint": 128
+                                },
+                                "size": {
+                                  "uint": 557056
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "MTLPixelFormatRGBA16Float/Type3D/16x16x256/levels-5/samples-1/slices-1/usage-0x1/private",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "size-and-align",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "fields": {
+                                "align": {
+                                  "uint": 128
+                                },
+                                "size": {
+                                  "uint": 917504
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "MTLPixelFormatRGBA16Float/Type3D/16x16x256/levels-9/samples-1/slices-1/usage-0x1/private",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "size-and-align",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "fields": {
+                                "align": {
+                                  "uint": 128
+                                },
+                                "size": {
+                                  "uint": 917504
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "MTLPixelFormatRGBA8Unorm/Type2DMultisample/64x64x1/levels-1/samples-4/slices-1/usage-0x1/private",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "size-and-align",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "fields": {
+                                "align": {
+                                  "uint": 128
+                                },
+                                "size": {
+                                  "uint": 66048
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "MTLPixelFormatRGBA8Unorm/Type2DMultisampleArray/64x64x1/levels-1/samples-4/slices-1/usage-0x1/private",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "size-and-align",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "fields": {
+                                "align": {
+                                  "uint": 16384
+                                },
+                                "size": {
+                                  "uint": 66048
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "MTLPixelFormatRGBA8Unorm/Type2DMultisampleArray/64x64x1/levels-1/samples-4/slices-3/usage-0x1/private",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "size-and-align",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "fields": {
+                                "align": {
+                                  "uint": 16384
+                                },
+                                "size": {
+                                  "uint": 198144
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "notices",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "set",
+                      "observed": {
+                        "value": {
+                          "nothing": "announced_nothing"
+                        }
+                      }
+                    },
+                    {
+                      "name": "counts",
+                      "observed": {
+                        "value": {
+                          "fields": {}
+                        }
+                      }
+                    }
+                  ]
+                }
+              ]
+            }
+          }
+        }
+      ],
+      "validated": "ran"
+    }
+  ]
+}

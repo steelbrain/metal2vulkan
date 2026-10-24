@@ -653,15 +653,32 @@ fn placed_textures() -> Vec<(&'static str, SparseTextureSpec)> {
     ]
 }
 
-/// The heaps the case places into: the modes a heap-placed texture inherits, crossed one at a time
+/// The heaps the case places into: the heap modes a placed texture inherits, crossed one at a time
 /// so a difference names the mode that moved.
+///
+/// All three are **`Private` storage at Metal's own CPU cache mode**, and the hazard tracking mode
+/// is the one that varies. That is a limit of the suite's vocabulary rather than a choice:
+/// [`SparseTextureSpec`] is the only texture a case can place on a heap and it states `Private`
+/// storage and no cache mode, while Metal requires a heap-placed resource's modes to be the
+/// heap's — measured this round, a texture of the default cache mode on a write-combined heap
+/// fails `-[IOGPUMetalHeap newSubResourceWithLength:alignment:options:offset:]`'s assertion,
+/// *"The requested CPU cache mode (MTLCPUCacheModeDefaultCache) does not match the heap's mode
+/// (MTLCPUCacheModeWriteCombined)"*, and ends Metal's process. So a shared or write-combined heap
+/// is unreachable until that type states a storage and a cache mode, and a case that asked for
+/// one would be fatal rather than divergent.
+///
+/// What is left is still the crossing the case is for: the **hazard tracking mode** is the one
+/// Metal **resolves** rather than echoing, and reading it back off a texture whose descriptor
+/// never stated it is Metal's composition. [`crate::cases::resource_facts`] measured that
+/// resolution for a heap **buffer** — `Default` and `Untracked` both answering 1, `Tracked`
+/// answering 2, against 2 for a texture outside a heap — and this is the same question asked of
+/// the one resource kind that family never placed.
 fn heaps() -> Vec<HeapSpec> {
-    use metal2vulkan_runtime::{CpuCacheMode, HazardTrackingMode};
+    use metal2vulkan_runtime::HazardTrackingMode;
     vec![
         HeapSpec::automatic(HEAP_SIZE, Storage::Private),
         HeapSpec::automatic(HEAP_SIZE, Storage::Private).tracked(HazardTrackingMode::Tracked),
         HeapSpec::automatic(HEAP_SIZE, Storage::Private).tracked(HazardTrackingMode::Untracked),
-        HeapSpec::automatic(HEAP_SIZE, Storage::Shared).cached(CpuCacheMode::WriteCombined),
     ]
 }
 
@@ -672,6 +689,27 @@ impl Case for HeapTextureGetters {
 
     fn metal_source(&self) -> MetalSource {
         MetalSource::Run
+    }
+
+    fn allowances(&self) -> Vec<crate::allowance::Allowance> {
+        // `heap-texture-lossless-layout` is announced as each of these textures is made: Metal
+        // lays a heap texture it keeps losslessly compressed out in the heap's bytes in a way the
+        // device's image does not reproduce, so the runtime places the texture's own tiles
+        // otherwise and says so. Metal announces nothing, because the layout is Metal's own, so
+        // the notice is a difference and the declaration is what accounts for it.
+        //
+        // It loosens no value. Every `MTLResource` getter of every row compares exactly with
+        // Metal's, and the whole of what the declaration covers is the announcement: this case
+        // reads where a texture lives and what may be done to it, never a byte of its contents,
+        // so a layout of the heap's bytes is not something any site of it can observe. A case that
+        // reads a heap texture's texels is a case of its own and would have to compare them.
+        //
+        // The notice is announced once per device per kind, so which case of a whole-set run
+        // provokes it depends on what ran before; measured announced by this case on an Apple M3
+        // Max under macOS 27.0.1, in the run this declaration was taken from.
+        vec![crate::replay::notice_allowance(
+            metal2vulkan_runtime::Degradation::HeapTextureLosslessLayout.code(),
+        )]
     }
 
     fn inputs(&self) -> Result<Vec<Input>, String> {
@@ -914,6 +952,20 @@ mod tests {
             assert!(
                 spec.is_well_formed().is_none(),
                 "{} is a heap Metal's validation stops",
+                spec.site()
+            );
+            // Metal requires a heap-placed resource's storage and CPU cache modes to be the
+            // heap's, and the only texture a case can place states `Private` and Metal's default
+            // cache. A heap of any other pair ends Metal's process rather than refusing, measured
+            // this round, so no row may state one.
+            assert!(
+                matches!(spec.storage, Storage::Private),
+                "{} is not Private, and a placed texture of this vocabulary is",
+                spec.site()
+            );
+            assert!(
+                matches!(spec.cache, metal2vulkan_runtime::CpuCacheMode::DefaultCache),
+                "{} is not the default cache mode, and a placed texture of this vocabulary is",
                 spec.site()
             );
         }

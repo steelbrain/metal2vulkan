@@ -4731,11 +4731,24 @@ impl Texture {
     /// RenderTarget | PixelFormatView`, as Metal does; a swizzled view keeps only `ShaderRead`
     /// and `PixelFormatView` of its texture's.
     ///
-    /// Bits Metal's texture drops from its descriptor's (`TextureUsage::DROPPED`: 0x8) are not
-    /// reported: a texture made with 0x8 alone reports no usage, one of 0x9 `ShaderRead`, as
-    /// Metal's do.
+    /// Bits Metal's texture drops from its descriptor's are not reported: a texture made with 0x8
+    /// alone reports no usage, one of 0x9 `ShaderRead`, as Metal's do.
+    ///
+    /// `ShaderAtomic` is dropped the same way, and is not `TextureUsage::DROPPED`'s: that constant
+    /// is the bits the SDK's header declares no name for, and `MTLTextureUsageShaderAtomic` has a
+    /// name. Metal takes it on the descriptor, lets it decide the texture's layout -- a 64 by 64
+    /// `R32Uint` texture of `ShaderRead | ShaderAtomic` answers the uncompressed 16384 bytes where
+    /// `ShaderRead` alone answers 16512 -- and then reports the usage **without** it. Measured on
+    /// an Apple M3 Max under macOS 27.0.1 over every combination `R32Uint` accepts, which is the
+    /// one format Metal takes the bit on at all: 0x20 reports 0, 0x21 reports 0x1, 0x22 0x2, 0x23
+    /// 0x3, 0x25 0x5, 0x31 0x11 and 0x4021 0x4001. So the bit is kept in the record, where the
+    /// layout reads it, and taken off here, where Metal takes it off.
     pub fn usage(&self) -> TextureUsage {
-        self.0.record.usage.without_dropped()
+        self.0
+            .record
+            .usage
+            .without_dropped()
+            .difference(TextureUsage::SHADER_ATOMIC)
     }
 
     /// `swizzle`.
