@@ -731,6 +731,17 @@ driver's. Each is open work.
   cost and skips them, printing both. Nothing is wrong with the words the smaller grids leave; the
   cost is the dispatch.
 
+- **A dma-buf import on NVIDIA**: the driver enables `VK_EXT_external_memory_dma_buf` and refuses
+  to import a udmabuf of host pages, `vkAllocateMemory` answering `ERROR_OUT_OF_DEVICE_MEMORY` for
+  8 KiB with 15,291 MiB of the card free (615.71.09). It also **closes the descriptor it was
+  handed**, which the Vulkan specification gives it only on a successful import: `F_GETFD` on the
+  descriptor reads `EBADF` the instant the call returns. Closing it again aborted the process on
+  Rust's I/O safety check, so an import now hands the driver a clone and never closes a clone it
+  has handed over (`memory.rs`), which lets go of one descriptor per failed import. Giving a
+  well-behaved driver its descriptor back would need a measured driver fact; the pages' other route
+  (importing the pointer) is the one NVIDIA takes for writable pages and is unaffected. A device
+  that imports dma-bufs (RADV) is **unaudited** for the clone.
+
 - **Reflection after a compute descriptor reset on RADV**: `max_total_threads_per_threadgroup`
   answers 0 where Metal answers 96, `required_threads_per_threadgroup` `0x0x0` where Metal answers
   `8x6x2`, and `threadgroup_size_is_multiple_of_execution_width` false where Metal answers true

@@ -1378,7 +1378,20 @@ impl Memory {
     /// For a buffer, allocated with the device-address flag where the device enables
     /// `bufferDeviceAddress`; for `image`, its dedicated allocation (`size` its requirements').
     /// Refused when no type of `class` is among `allowed`, else with the failure of the last type
-    /// tried; the descriptor is Vulkan's once imported, and closed on failure.
+    /// tried.
+    ///
+    /// Each attempt hands the driver a **clone** of `fd`, never `fd` itself, and never closes a
+    /// clone it has handed over. Vulkan takes a descriptor's ownership only on a successful
+    /// import ("Importing memory from a file descriptor transfers ownership of the file descriptor
+    /// from the application to the Vulkan implementation. The application must not perform any
+    /// operations on the file descriptor after a successful import", `VkImportMemoryFdInfoKHR`),
+    /// so on failure it is the application's to close -- but NVIDIA's 615.71.09 closes it anyway
+    /// (measured: `F_GETFD` on it reads `EBADF` the instant `vkAllocateMemory` returns
+    /// `ERROR_OUT_OF_DEVICE_MEMORY`), and closing it again aborts the process on Rust's I/O safety
+    /// check. Whether the number is still ours cannot be asked without a race, since the kernel
+    /// may have given it to another thread's `open` by then, so a handed-over clone is let go of
+    /// instead: one descriptor per failed import, in place of a process that dies. `fd` itself is
+    /// closed here as it always was, once, on the way out.
     #[cfg(unix)]
     pub(super) fn import_dma_buf(
         &self,
@@ -1391,9 +1404,18 @@ impl Memory {
         use std::os::fd::{AsRawFd, IntoRawFd};
         let mut failure = ImportFailure::NoMemoryType;
         for type_index in candidates(&self.types, allowed, class, self.unified) {
+            // The descriptor the driver takes, which it owns once the import succeeds and may
+            // close even when it fails (the doc above): never `fd`, and never closed here.
+            let handed = match fd.try_clone() {
+                Ok(handed) => handed,
+                Err(_) => {
+                    failure = ImportFailure::Vulkan(vk::Result::ERROR_TOO_MANY_OBJECTS);
+                    break;
+                }
+            };
             let mut import = vk::ImportMemoryFdInfoKHR::default()
                 .handle_type(vk::ExternalMemoryHandleTypeFlags::DMA_BUF_EXT)
-                .fd(fd.as_raw_fd());
+                .fd(handed.as_raw_fd());
             let mut flags = vk::MemoryAllocateFlagsInfo::default()
                 .flags(vk::MemoryAllocateFlags::DEVICE_ADDRESS);
             let mut dedicated = vk::MemoryDedicatedAllocateInfo::default();
@@ -1411,11 +1433,11 @@ impl Memory {
             }
             // SAFETY: `info` and its chain live for the call; the type index is the device's and
             // allows the dma-buf (and the image, unbound and made for dma-bufs, whose size this
-            // is). A failed import leaves the descriptor open, the caller's.
+            // is). The descriptor it takes is the clone, whose fate is the driver's either way.
             match unsafe { crate::creation::allocate_memory(device, &info) } {
                 Ok(memory) => {
                     // A successful import owns the descriptor: Vulkan closes it with the memory.
-                    let _ = fd.into_raw_fd();
+                    let _ = handed.into_raw_fd();
                     if let Some(log) = &self.log {
                         let what = match image {
                             Some(_) => "imported a dma-buf for an image",
@@ -1425,7 +1447,12 @@ impl Memory {
                     }
                     return Ok((memory, type_index));
                 }
-                Err(error) => failure = ImportFailure::Vulkan(error),
+                Err(error) => {
+                    // Let go of it rather than close it: a driver that took it on a failure has
+                    // closed it, and the number may be another thread's by now (the doc above).
+                    let _ = handed.into_raw_fd();
+                    failure = ImportFailure::Vulkan(error);
+                }
             }
         }
         Err(failure)
