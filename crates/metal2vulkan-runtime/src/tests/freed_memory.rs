@@ -22,8 +22,8 @@
 
 use crate::freed_memory::Parking;
 use crate::{
-    BufferContents, BufferDescriptor, CommandBuffer, CommandBufferStatus, CommandQueue, Device,
-    DeviceKind, DeviceOptions, Error, HostMemory, KeepAlive, ResourceOptions, ShaderCacheOptions,
+    BufferContents, BufferDescriptor, CommandBuffer, CommandQueue, Device, DeviceKind,
+    DeviceOptions, Error, HostMemory, KeepAlive, ResourceOptions, ShaderCacheOptions,
 };
 use ash::vk;
 use std::alloc::Layout;
@@ -175,7 +175,11 @@ fn until(what: &str, done: impl Fn() -> bool) {
 
 /// Where the device parks freed memory, a host import released while a batch submitted before it
 /// runs keeps its memory, its deallocator waiting, until that batch completed; then both go, on a
-/// thread of the runtime's, and the wait was announced once.
+/// thread of the runtime's, and the wait was announced once. Where the fills completed before the
+/// release, which the parking's count says (`WorkCounts::freed_memory_parked`), its memory and
+/// its deallocator go inside the release, on the releasing thread, as Metal's do: the release
+/// reads the value the queue's waiter published, which comes before the turn that finishes the
+/// command buffer, so the command buffer's status says nothing about which path the release took.
 #[test]
 fn a_release_waits_for_the_batch_in_flight_where_the_device_parks_freed_memory() {
     let scratch = Scratch::new("parked");
@@ -192,33 +196,52 @@ fn a_release_waits_for_the_batch_in_flight_where_the_device_parks_freed_memory()
         .unwrap();
     let command_buffer = filling(&queue, &target);
     let before = device.work_counts();
-    let pending = command_buffer.status() != CommandBufferStatus::Completed;
+    let status = command_buffer.status();
     drop(buffer);
     let after = device.work_counts();
+    let parked = after.freed_memory_parked - before.freed_memory_parked;
+    let delayed = after.host_deallocators_delayed - before.host_deallocators_delayed;
+    let ran = runs.count.load(Ordering::SeqCst);
     eprintln!(
-        "FREED-MEMORY: at the release: parked {}, waiting {}, deallocators delayed {}, run {}",
-        after.freed_memory_parked - before.freed_memory_parked,
+        "FREED-MEMORY: at the release ({status:?}): parked {parked}, waiting {}, deallocators \
+         delayed {delayed}, run {ran}",
         after.freed_memory_waiting,
-        after.host_deallocators_delayed - before.host_deallocators_delayed,
-        runs.count.load(Ordering::SeqCst)
     );
-    let waited = pending && command_buffer.status() != CommandBufferStatus::Completed;
+    // Whether the release found work in flight is the parking's own answer, the one it acted on,
+    // and no command buffer's status: the queue's waiter publishes the value it saw the queue's
+    // timeline reach, which the release reads, before the completion turn that finishes the
+    // command buffers of that value (`command_buffer/completion.rs`), so a status short of
+    // `Completed` is no sign that the release waited, and the fills complete whenever the GPU
+    // and a loaded host let them.
+    let waited = parked == 1;
     match waited {
         true => {
-            assert_eq!(after.freed_memory_parked - before.freed_memory_parked, 1);
             assert_eq!(after.freed_memory_waiting, 1);
+            assert_eq!(delayed, 1, "the deallocator's wait is announced");
             assert_eq!(
-                after.host_deallocators_delayed - before.host_deallocators_delayed,
-                1,
-                "the deallocator's wait is announced"
-            );
-            assert_eq!(
-                runs.count.load(Ordering::SeqCst),
-                0,
+                ran, 0,
                 "the deallocator ran while the batch submitted before its release ran"
             );
         }
-        false => eprintln!("FREED-MEMORY: the fills completed before the release: none waited"),
+        false => {
+            eprintln!("FREED-MEMORY: the fills completed before the release: none waited");
+            assert_eq!(parked, 0, "a release parked one block, not {parked}");
+            assert_eq!(
+                after.freed_memory_waiting, 0,
+                "a block waits although the release freed its memory"
+            );
+            assert_eq!(
+                delayed, 0,
+                "a deallocator's wait is announced although the release freed its memory"
+            );
+            // As Metal's release runs it, on the releasing thread (the module docs).
+            assert_eq!(ran, 1, "the deallocator ran inside the release");
+            assert_eq!(
+                *runs.thread.lock().unwrap(),
+                Some(std::thread::current().id()),
+                "the deallocator ran on the releasing thread"
+            );
+        }
     }
     command_buffer.wait_until_completed_for(WAIT).unwrap();
     assert_eq!(command_buffer.error(), None);
