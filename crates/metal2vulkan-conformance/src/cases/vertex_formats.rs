@@ -166,7 +166,6 @@ use crate::render::{
 };
 use crate::transcript::{ByteLayout, Digest, Element, Gaps, Node, Observed, Region, Sites, Value};
 use metal2vulkan::metal::{PrimitiveType, VertexFormat, VertexStepFunction};
-use metal2vulkan_runtime::Degradation;
 
 /// The fixture both entry points live in, shared with `integer-vertex-attributes`: its two
 /// `vertex void` functions fetch attribute 0 as a `float4` and as a `half4` and write it to
@@ -360,9 +359,7 @@ impl Case for VertexFormats {
         // One notice is declared, and it is the venue's and not this sweep's: the buffer each draw
         // reads its fetched rows back through is `Shared`, which a device with no unified memory
         // keeps in system memory because that is the only memory both sides can reach.
-        vec![crate::replay::notice_allowance(
-            Degradation::SharedInSystemMemory.code(),
-        )]
+        vec![crate::replay::shared_memory_notice()]
     }
 
     fn shaders(&self) -> Result<Vec<ShaderRef>, String> {

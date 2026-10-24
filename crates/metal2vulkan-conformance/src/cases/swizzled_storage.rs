@@ -51,7 +51,6 @@ use metal2vulkan::metal::{PixelFormat, TextureSwizzle, TextureSwizzleChannels, T
 
 /// The fixture every kernel lives in.
 const FIXTURE: &str = "rrp_swizzled_storage";
-use metal2vulkan_runtime::Degradation;
 
 /// The texture's side: 2 by 2 texels, as the probe made it.
 pub const SIDE: u32 = 2;
@@ -428,21 +427,6 @@ impl SwizzledStorage {
     }
 }
 
-/// The degrade notices one of these passes may announce. A list rather than a device query,
-/// because a case never branches on the device: it runs and reads what came back, and a venue that
-/// announces a kind not here fails the case until the kind is added.
-///
-/// Declaring a kind states what our side announced at the notices site and loosens no value:
-/// every texel of every swizzle still compares exactly.
-const PASS_NOTICES: &[Degradation] = &[
-    // The buffer each dispatch writes the texels it read back into is `Shared`.
-    // A device with no unified memory keeps a `Shared` allocation in system memory because that is
-    // the only memory both sides can reach, so the notice belongs to the venue's memory model
-    // rather than to anything these cases do. A device whose driver is Metal announces nothing
-    // here.
-    Degradation::SharedInSystemMemory,
-];
-
 impl Case for SwizzledStorage {
     fn name(&self) -> &'static str {
         self.name
@@ -453,10 +437,10 @@ impl Case for SwizzledStorage {
     }
 
     fn allowances(&self) -> Vec<Allowance> {
-        PASS_NOTICES
-            .iter()
-            .map(|kind| crate::replay::notice_allowance(kind.code()))
-            .collect()
+        // One declaration and no tolerance: the buffer each dispatch reads its texels back through is `Shared`, which is
+        // what [`crate::replay::shared_memory_notice`] is for. It loosens the notices site alone,
+        // so every value this case reads still compares exactly.
+        vec![crate::replay::shared_memory_notice()]
     }
 
     fn shaders(&self) -> Result<Vec<ShaderRef>, String> {

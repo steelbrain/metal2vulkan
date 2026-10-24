@@ -342,14 +342,14 @@ pub(super) fn tessellation_notices() -> Vec<Allowance> {
         Degradation::TessellationFactorEdgeCases,
         Degradation::TessellationTriangleOrder,
         Degradation::EmulatedTessellationDraws,
-        // The factor, control-point and read-back buffers a tessellated draw carries are all
-        // `Shared`, and a device with no unified memory keeps a `Shared` allocation in system
-        // memory because that is the only memory both sides can reach. It belongs to the venue's
-        // memory model rather than to anything tessellation does.
-        Degradation::SharedInSystemMemory,
     ]
     .into_iter()
     .map(|notice| crate::replay::notice_allowance(notice.code()))
+    .chain([
+        // The factor, control-point and read-back buffers a tessellated draw carries are all
+        // `Shared` ([`crate::replay::shared_memory_notice`]).
+        crate::replay::shared_memory_notice(),
+    ])
     .collect()
 }
 

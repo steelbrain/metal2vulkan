@@ -845,7 +845,7 @@ impl Case for SequenceActions {
         // model rather than to a load or a store action.
         let mut allowances = vec![
             crate::replay::notice_allowance(Degradation::DontCareStore.code()),
-            crate::replay::notice_allowance(Degradation::SharedInSystemMemory.code()),
+            crate::replay::shared_memory_notice(),
         ];
         // `SeparateDepthStencil`: the aspect case's two attachments are a `Depth32Float` beside a
         // `Stencil8`, which the runtime renders through a scratch image of a combined format,

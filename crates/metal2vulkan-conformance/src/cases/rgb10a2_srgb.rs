@@ -745,7 +745,7 @@ impl Case for Rgb10A2Srgb {
         // Every question reads its answer back through a `Shared` buffer, and a device with no
         // unified memory keeps a `Shared` allocation in system memory because that is the only
         // memory both sides can reach: the venue's memory model rather than this format's answer.
-        let mut named = vec![notice_allowance(D::SharedInSystemMemory.code())];
+        let mut named = vec![crate::replay::shared_memory_notice()];
         match &self.question {
             Question::Stores {
                 lanes: Lanes::Float,

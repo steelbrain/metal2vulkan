@@ -248,10 +248,10 @@ impl Case for TopologyClassCase {
         let mut allowances: Vec<Allowance> = [
             Degradation::ShaderColorConversion,
             Degradation::DevicePointSize,
-            Degradation::SharedInSystemMemory,
         ]
         .iter()
         .map(|kind| crate::replay::notice_allowance(kind.code()))
+        .chain([crate::replay::shared_memory_notice()])
         .collect();
         if self.subject.vertex == PLAIN_VERTEX {
             allowances.push(Allowance::new(

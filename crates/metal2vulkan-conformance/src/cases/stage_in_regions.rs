@@ -510,13 +510,10 @@ impl Case for StageInRegions {
         // The second is the venue's own: the buffers this dispatch reads its arguments and writes
         // its answer through are `Shared`, which a device with no unified memory keeps in system
         // memory because that is the only memory both sides can reach.
-        [
-            Degradation::HostReadDispatchArguments,
-            Degradation::SharedInSystemMemory,
+        vec![
+            crate::replay::notice_allowance(Degradation::HostReadDispatchArguments.code()),
+            crate::replay::shared_memory_notice(),
         ]
-        .iter()
-        .map(|kind| crate::replay::notice_allowance(kind.code()))
-        .collect()
     }
 
     fn shaders(&self) -> Result<Vec<ShaderRef>, String> {

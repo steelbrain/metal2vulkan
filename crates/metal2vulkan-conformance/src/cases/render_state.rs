@@ -541,9 +541,7 @@ impl Case for Boxes {
         // One notice is declared, and it is the venue's and not this case's: the buffer the pass
         // reads its target back through is `Shared`, which a device with no unified memory keeps
         // in system memory because that is the only memory both sides can reach.
-        vec![crate::replay::notice_allowance(
-            Degradation::SharedInSystemMemory.code(),
-        )]
+        vec![crate::replay::shared_memory_notice()]
     }
 
     fn shaders(&self) -> Result<Vec<ShaderRef>, String> {
@@ -757,13 +755,10 @@ impl Case for Facing {
         //
         // The notice the venue's own memory model provokes for the `Shared` read-back buffer is
         // declared beside it.
-        [
-            Degradation::RenderPassSplit,
-            Degradation::SharedInSystemMemory,
+        vec![
+            crate::replay::notice_allowance(Degradation::RenderPassSplit.code()),
+            crate::replay::shared_memory_notice(),
         ]
-        .iter()
-        .map(|kind| crate::replay::notice_allowance(kind.code()))
-        .collect()
     }
 
     fn shaders(&self) -> Result<Vec<ShaderRef>, String> {
@@ -933,9 +928,7 @@ impl Case for UnreadSlots {
     fn allowances(&self) -> Vec<Allowance> {
         // Nothing loosened, for the reason `render-state-boxes` states, and the one notice the
         // venue's own memory model provokes for the `Shared` read-back buffer.
-        vec![crate::replay::notice_allowance(
-            Degradation::SharedInSystemMemory.code(),
-        )]
+        vec![crate::replay::shared_memory_notice()]
     }
 
     fn shaders(&self) -> Result<Vec<ShaderRef>, String> {

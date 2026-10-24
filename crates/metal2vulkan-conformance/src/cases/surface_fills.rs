@@ -463,10 +463,6 @@ impl Case for SurfaceFills {
             Degradation::ShadowedTextureView,
             Degradation::UnnamedShadowedTexture,
             Degradation::UnpackedFillColor,
-            // The buffer the case reads the filled surfaces back through is `Shared`, which a
-            // device with no unified memory keeps in system memory because that is the only
-            // memory both sides can reach: the venue's memory model, not a fill.
-            Degradation::SharedInSystemMemory,
         ]
         .into_iter()
         .map(|kind| {
@@ -476,6 +472,11 @@ impl Case for SurfaceFills {
                 Justification::notice(kind),
             )
         })
+        .chain([
+            // The buffer the case reads the filled surfaces back through is `Shared`
+            // ([`crate::replay::shared_memory_notice`]).
+            crate::replay::shared_memory_notice(),
+        ])
         .collect()
     }
 

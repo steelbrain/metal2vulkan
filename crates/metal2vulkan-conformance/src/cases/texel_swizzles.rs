@@ -48,7 +48,6 @@ use metal2vulkan::metal::{PixelFormat, TextureSwizzle, TextureSwizzleChannels, T
 
 /// The texels of each source texture buffer.
 pub const TEXELS: u32 = 4;
-use metal2vulkan_runtime::Degradation;
 
 /// The threads of each grid, one threadgroup: the indices from [`TEXELS`] on read past the source.
 pub const GRID: u32 = 8;
@@ -521,21 +520,6 @@ impl TexelSwizzles {
     }
 }
 
-/// The degrade notices one of these passes may announce. A list rather than a device query,
-/// because a case never branches on the device: it runs and reads what came back, and a venue that
-/// announces a kind not here fails the case until the kind is added.
-///
-/// Declaring a kind states what our side announced at the notices site and loosens no value:
-/// every lane of every channel still compares exactly.
-const PASS_NOTICES: &[Degradation] = &[
-    // The buffer each dispatch writes the swizzled texels it sampled into is `Shared`.
-    // A device with no unified memory keeps a `Shared` allocation in system memory because that is
-    // the only memory both sides can reach, so the notice belongs to the venue's memory model
-    // rather than to anything these cases do. A device whose driver is Metal announces nothing
-    // here.
-    Degradation::SharedInSystemMemory,
-];
-
 impl Case for TexelSwizzles {
     fn name(&self) -> &'static str {
         match self.sweep {
@@ -549,10 +533,10 @@ impl Case for TexelSwizzles {
     }
 
     fn allowances(&self) -> Vec<Allowance> {
-        PASS_NOTICES
-            .iter()
-            .map(|kind| crate::replay::notice_allowance(kind.code()))
-            .collect()
+        // One declaration and no tolerance: the buffer each dispatch writes its swizzled texels into is `Shared`, which is
+        // what [`crate::replay::shared_memory_notice`] is for. It loosens the notices site alone,
+        // so every value this case reads still compares exactly.
+        vec![crate::replay::shared_memory_notice()]
     }
 
     fn shaders(&self) -> Result<Vec<ShaderRef>, String> {
@@ -654,10 +638,10 @@ impl Case for ViewedTexelSwizzles {
     }
 
     fn allowances(&self) -> Vec<Allowance> {
-        PASS_NOTICES
-            .iter()
-            .map(|kind| crate::replay::notice_allowance(kind.code()))
-            .collect()
+        // One declaration and no tolerance: the buffer each dispatch writes its swizzled texels into is `Shared`, which is
+        // what [`crate::replay::shared_memory_notice`] is for. It loosens the notices site alone,
+        // so every value this case reads still compares exactly.
+        vec![crate::replay::shared_memory_notice()]
     }
 
     fn shaders(&self) -> Result<Vec<ShaderRef>, String> {

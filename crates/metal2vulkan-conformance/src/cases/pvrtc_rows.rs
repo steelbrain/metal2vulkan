@@ -561,13 +561,10 @@ impl Case for PvrtcRows {
         // The buffer each pass reads its blocks back through is `Shared`, which a device with no
         // unified memory keeps in system memory because that is the only memory both sides can
         // reach: the venue's memory model, not this family's subject.
-        [
-            Degradation::CarriedDecodedTwin,
-            Degradation::SharedInSystemMemory,
+        vec![
+            crate::replay::notice_allowance(Degradation::CarriedDecodedTwin.code()),
+            crate::replay::shared_memory_notice(),
         ]
-        .iter()
-        .map(|kind| crate::replay::notice_allowance(kind.code()))
-        .collect()
     }
 
     fn inputs(&self) -> Result<Vec<Input>, String> {

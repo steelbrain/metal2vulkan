@@ -291,11 +291,7 @@ impl Case for PassBytes {
         // keeps a `Shared` allocation in system memory because that is the only memory both sides
         // can reach. It is the venue's memory model rather than a column's answer, so it is
         // declared at the notices site alone and loosens no column.
-        allowances.push(Allowance::new(
-            format!("case/{NOTICES_SITE}/*"),
-            Loosening::Unchecked,
-            Justification::notice(Degradation::SharedInSystemMemory),
-        ));
+        allowances.push(crate::replay::shared_memory_notice());
         allowances
     }
 

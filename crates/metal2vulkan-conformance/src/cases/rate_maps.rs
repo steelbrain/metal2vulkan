@@ -169,10 +169,9 @@ impl Case for RateMapCase {
         // carries no allowance at all: a tolerance that never fires is one nobody is checking, and
         // a device that does announce something there should fail the case until somebody names
         // why.
-        // Either way the case declares the notice the venue's own memory model provokes: the
-        // buffer it reads its answer back through is `Shared`, which a device with no unified
-        // memory keeps in system memory because that is the only memory both sides can reach.
-        let shared = crate::replay::notice_allowance(Degradation::SharedInSystemMemory.code());
+        // Either way the case declares the notice its `Shared` read-back buffer provokes
+        // ([`crate::replay::shared_memory_notice`]), which the RTX 5080 announced for both rows.
+        let shared = crate::replay::shared_memory_notice();
         if self.identity {
             return vec![shared];
         }

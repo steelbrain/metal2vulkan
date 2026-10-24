@@ -228,13 +228,14 @@ impl Case for SrgbFetch {
             Degradation::FetchThroughScratch,
             Degradation::ShaderColorConversion,
             Degradation::DontCareStore,
-            // The buffer each pass reads its target back through is `Shared`, which a device with
-            // no unified memory keeps in system memory because that is the only memory both sides
-            // can reach: the venue's memory model, not this subject.
-            Degradation::SharedInSystemMemory,
         ]
         .iter()
         .map(|notice| crate::replay::notice_allowance(notice.code()))
+        .chain([
+            // The buffer each pass reads its target back through is `Shared`
+            // ([`crate::replay::shared_memory_notice`]).
+            crate::replay::shared_memory_notice(),
+        ])
         .collect()
     }
 

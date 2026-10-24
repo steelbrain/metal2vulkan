@@ -58,7 +58,6 @@ use crate::texture_query::{HeapTextureQuery as Q, Storage};
 use crate::transcript::{ByteLayout, Digest, Element, Gaps, Node, Observed, Region, Sites, Value};
 use metal2vulkan::metal::format::ycbcr_format;
 use metal2vulkan::metal::{PixelFormat, TextureType};
-use metal2vulkan_runtime::Degradation;
 
 /// The case names, as the report and the recordings spell them.
 pub const FORMAT_DESCRIPTORS: &str = "ycbcr-two-plane-format-descriptors";
@@ -346,22 +345,6 @@ impl TexelReads {
     }
 }
 
-/// The degrade notices one of these cases may announce. A list rather than a device query,
-/// because a case never branches on the device: it runs and reads what came back, and a venue that
-/// announces a kind not here fails the case until the kind is added.
-///
-/// Declaring a kind states what our side announced at the notices site and loosens no value:
-/// every read channel still compares exactly.
-const PASS_NOTICES: &[Degradation] = &[
-    // The buffer the texel-read case writes its reads into is `Shared`; the descriptor case runs
-    // no pass and announces nothing, which is why it declares nothing.
-    // A device with no unified memory keeps a `Shared` allocation in system memory because that is
-    // the only memory both sides can reach, so this notice belongs to the venue's memory model
-    // rather than to anything these cases do. A device whose driver is Metal announces nothing
-    // for it.
-    Degradation::SharedInSystemMemory,
-];
-
 impl Case for TexelReads {
     fn name(&self) -> &'static str {
         TEXEL_READS
@@ -372,10 +355,10 @@ impl Case for TexelReads {
     }
 
     fn allowances(&self) -> Vec<Allowance> {
-        PASS_NOTICES
-            .iter()
-            .map(|kind| crate::replay::notice_allowance(kind.code()))
-            .collect()
+        // One declaration and no tolerance: the buffer the texel-read case writes its reads into is `Shared`, which is
+        // what [`crate::replay::shared_memory_notice`] is for. It loosens the notices site alone,
+        // so every value this case reads still compares exactly.
+        vec![crate::replay::shared_memory_notice()]
     }
 
     fn shaders(&self) -> Result<Vec<ShaderRef>, String> {

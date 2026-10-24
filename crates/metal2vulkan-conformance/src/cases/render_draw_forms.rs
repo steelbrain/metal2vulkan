@@ -160,19 +160,18 @@ const PASS_NOTICES: &[Degradation] = &[
     // The vertex function writes `[[point_size]]`, which a device without `shaderPointSize`'s
     // guarantee takes as its own point size rather than Metal's.
     Degradation::DevicePointSize,
-    // The positions, the indices, the indirect arguments and the read-back are all `Shared`, and a
-    // device with no unified memory keeps a `Shared` allocation in system memory because that is
-    // the only memory both sides can reach. It belongs to the venue's memory model rather than to
-    // any draw form of this family.
-    Degradation::SharedInSystemMemory,
 ];
 
 /// The allowances every case keeps: one declaration per kind of [`PASS_NOTICES`].
 fn pass_notices() -> Vec<Allowance> {
-    PASS_NOTICES
+    let mut allowances: Vec<Allowance> = PASS_NOTICES
         .iter()
         .map(|kind| crate::replay::notice_allowance(kind.code()))
-        .collect()
+        .collect();
+    // The positions, the indices, the indirect arguments and the read-back are all `Shared`
+    // ([`crate::replay::shared_memory_notice`]).
+    allowances.push(crate::replay::shared_memory_notice());
+    allowances
 }
 
 fn bounds_pass_notice() -> Vec<Allowance> {
@@ -2103,7 +2102,9 @@ mod tests {
             );
             assert_eq!(
                 declared.len(),
-                PASS_NOTICES.len() + usize::from(!indirect),
+                // The family's own list, the notice a device's own memory model provokes, and the
+                // bounds-pass notice where the draw is an indexed indirect one.
+                PASS_NOTICES.len() + 1 + usize::from(!indirect),
                 "{} declares the wrong number of notices",
                 case.name()
             );

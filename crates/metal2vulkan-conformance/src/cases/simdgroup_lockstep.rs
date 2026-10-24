@@ -42,7 +42,6 @@ use crate::recording::ShaderRef;
 use crate::transcript::{
     ByteLayout, Digest, Element, Gaps, Negative, Observed, Region, Sites, Value,
 };
-use metal2vulkan_runtime::Degradation;
 
 /// The fixture both kernels live in.
 const FIXTURE: &str = "rtl_lockstep";
@@ -138,21 +137,6 @@ impl Lockstep {
     }
 }
 
-/// The degrade notices one of these cases may announce. A list rather than a device query,
-/// because a case never branches on the device: it runs and reads what came back, and a venue that
-/// announces a kind not here fails the case until the kind is added.
-///
-/// Declaring a kind states what our side announced at the notices site and loosens no value:
-/// every lane of every record still compares exactly.
-const PASS_NOTICES: &[Degradation] = &[
-    // The buffer each dispatch writes its per-lane record into is `Shared`.
-    // A device with no unified memory keeps a `Shared` allocation in system memory because that is
-    // the only memory both sides can reach, so this notice belongs to the venue's memory model
-    // rather than to anything these cases do. A device whose driver is Metal announces nothing
-    // for it.
-    Degradation::SharedInSystemMemory,
-];
-
 impl Case for Lockstep {
     fn name(&self) -> &'static str {
         self.row.case
@@ -163,10 +147,10 @@ impl Case for Lockstep {
     }
 
     fn allowances(&self) -> Vec<Allowance> {
-        PASS_NOTICES
-            .iter()
-            .map(|kind| crate::replay::notice_allowance(kind.code()))
-            .collect()
+        // One declaration and no tolerance: the buffer each dispatch writes its per-lane record into is `Shared`, which is
+        // what [`crate::replay::shared_memory_notice`] is for. It loosens the notices site alone,
+        // so every value this case reads still compares exactly.
+        vec![crate::replay::shared_memory_notice()]
     }
 
     fn shaders(&self) -> Result<Vec<ShaderRef>, String> {

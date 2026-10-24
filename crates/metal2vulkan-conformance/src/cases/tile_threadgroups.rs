@@ -108,10 +108,6 @@ pub const TILE_PASS_NOTICES: &[Degradation] = &[
     // on lavapipe. Nothing of these cases reads a quad's grouping -- the tile order is the answer,
     // and it compares exactly -- so the kind is declared and no value is loosened.
     Degradation::QuadsSplitByClipping,
-    // The record buffer each pass writes its tile order into is `Shared`, and a device with no
-    // unified memory keeps a `Shared` allocation in system memory because that is the only memory
-    // both sides can reach. It belongs to the venue's memory model rather than to a tile dispatch.
-    Degradation::SharedInSystemMemory,
 ];
 
 /// The allowances a case of this family keeps: one over its notices site per kind of
@@ -684,7 +680,16 @@ impl Case for TileThreadgroups {
     }
 
     fn allowances(&self) -> Vec<Allowance> {
-        tile_notice_allowances()
+        let mut allowances = tile_notice_allowances();
+        // The record buffer a tile-order or tile-grid pass writes its order into is `Shared`
+        // ([`crate::replay::shared_memory_notice`]), and the RTX 5080 was measured announcing it
+        // for each of those five rows. The thread-limit case answers getters and the two blur
+        // cases were measured announcing nothing of the kind on either venue, so neither declares
+        // it: a declaration no run justifies is one nobody is checking.
+        if matches!(self.shape, Shape::Order { .. } | Shape::Grid) {
+            allowances.push(crate::replay::shared_memory_notice());
+        }
+        allowances
     }
 
     fn shaders(&self) -> Result<Vec<ShaderRef>, String> {
@@ -1090,7 +1095,16 @@ mod tests {
             assert_eq!(case.metal_source(), MetalSource::Run);
             case.shaders().unwrap();
             let allowances = case.allowances();
-            assert_eq!(allowances.len(), TILE_PASS_NOTICES.len(), "{}", case.name());
+            // Every case declares the family's own list, and the five that read a record buffer
+            // back declare the notice a device's own memory model provokes besides. Nothing else
+            // is named and nothing is loosened, so a value tolerance added later fails here.
+            let reads_a_buffer = matches!(case.shape, Shape::Order { .. } | Shape::Grid);
+            assert_eq!(
+                allowances.len(),
+                TILE_PASS_NOTICES.len() + usize::from(reads_a_buffer),
+                "{}",
+                case.name()
+            );
             for allowance in &allowances {
                 assert_eq!(
                     allowance.path,
@@ -1098,10 +1112,13 @@ mod tests {
                     "{}: an allowance outside the notices site",
                     case.name()
                 );
+                assert_eq!(allowance.loosening, Loosening::Unchecked, "{allowance:?}");
                 match &allowance.justified_by {
                     Justification::Degradation(code) => assert!(
-                        TILE_PASS_NOTICES.iter().any(|kind| kind.code() == code),
-                        "{}: {code} is not a tile-pass notice",
+                        TILE_PASS_NOTICES.iter().any(|kind| kind.code() == code)
+                            || code == Degradation::SharedInSystemMemory.code(),
+                        "{}: {code} is neither a tile-pass notice nor the one a device's own \
+                         memory model provokes",
                         case.name()
                     ),
                     other => panic!("{}: an unexpected tolerance: {other:?}", case.name()),

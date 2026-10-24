@@ -178,11 +178,6 @@ const PASS_NOTICES: &[Degradation] = &[
     // The device's own compiler rewrote the stage's fast-math arithmetic as it made the pipeline,
     // which MoltenVK 1.4.2 on this M3 Max announces for this fixture's stages.
     Degradation::FastMathRewrites,
-    // The buffer each pass reads the stored tiles back through is `Shared`, and a device with no
-    // unified memory keeps a `Shared` allocation in system memory because that is the only memory
-    // both sides can reach. It belongs to the venue's memory model rather than to the tile store
-    // this family is about, and a device whose driver is Metal announces nothing for it.
-    Degradation::SharedInSystemMemory,
 ];
 
 /// The bytes of a `SIDE` by `SIDE` target of `texel` bytes a texel whose every channel holds
@@ -324,6 +319,9 @@ impl Case for SnormTileStore {
                 Justification::notice(*kind),
             ));
         }
+        // The buffer each pass reads the stored tiles back through is `Shared`
+        // ([`crate::replay::shared_memory_notice`]).
+        allowances.push(crate::replay::shared_memory_notice());
         allowances
     }
 
@@ -526,8 +524,10 @@ mod tests {
                 );
                 match &allowance.justified_by {
                     Justification::Degradation(code) => assert!(
-                        PASS_NOTICES.iter().any(|kind| kind.code() == code),
-                        "{}: {code} is not a tile-store notice",
+                        PASS_NOTICES.iter().any(|kind| kind.code() == code)
+                            || code == Degradation::SharedInSystemMemory.code(),
+                        "{}: {code} is neither a tile-store notice nor the one a device's own \
+                         memory model provokes",
                         case.name()
                     ),
                     other => panic!("{}: an unexpected tolerance: {other:?}", case.name()),

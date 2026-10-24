@@ -480,15 +480,14 @@ impl Case for PixelSamplers {
             Degradation::FloatSampleFilter,
             Degradation::DeviceTexelDenormals,
             Degradation::SrgbTexelDecode,
-            // The buffer each pass writes its sampled texels into is `Shared`, and a device
-            // with no unified memory keeps a `Shared` allocation in system memory because that is
-            // the only memory both sides can reach. The notice belongs to the venue's memory
-            // model rather than to any sampler of these cases, and a device whose driver is Metal
-            // announces nothing for it.
-            Degradation::SharedInSystemMemory,
         ]
         .iter()
         .map(|kind| notice_allowance(kind.code()))
+        .chain([
+            // The buffer each pass writes its sampled texels into is `Shared`
+            // ([`crate::replay::shared_memory_notice`]).
+            crate::replay::shared_memory_notice(),
+        ])
         .collect()
     }
 

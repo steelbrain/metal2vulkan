@@ -513,7 +513,7 @@ impl Case for RotatedTarget {
                 None => Degradation::ShaderColorConversion.code(),
                 Some(_) => Degradation::DeviceColorConversion.code(),
             }),
-            crate::replay::notice_allowance(Degradation::SharedInSystemMemory.code()),
+            crate::replay::shared_memory_notice(),
         ]
     }
 

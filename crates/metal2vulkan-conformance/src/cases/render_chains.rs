@@ -424,7 +424,7 @@ impl Case for RenderChain {
         //   the venue's memory model rather than to a chain's shape.
         let mut named = vec![
             crate::replay::notice_allowance(Degradation::ShaderColorConversion.code()),
-            crate::replay::notice_allowance(Degradation::SharedInSystemMemory.code()),
+            crate::replay::shared_memory_notice(),
         ];
         if self.subject.sample.half_output {
             named.push(crate::replay::notice_allowance(

@@ -110,7 +110,6 @@ use crate::transcript::{Digest, Node, Observed, Sites};
 use crate::visible_tables::{
     Binding, Entry, LinkedList, LinkedSpec, Maker, StageAsked, TableSpec, Writes,
 };
-use metal2vulkan_runtime::Degradation;
 
 /// The site the caller library's make sits at.
 const CALLER_LIBRARY: &str = "caller_library";
@@ -359,21 +358,6 @@ impl VisibleTablesCase {
     }
 }
 
-/// The degrade notices one of these cases may announce. A list rather than a device query,
-/// because a case never branches on the device: it runs and reads what came back, and a venue that
-/// announces a kind not here fails the case until the kind is added.
-///
-/// Declaring a kind states what our side announced at the notices site and loosens no value:
-/// every handle and every written entry still compares exactly.
-const PASS_NOTICES: &[Degradation] = &[
-    // The buffer each dispatch writes its table answers into is `Shared`.
-    // A device with no unified memory keeps a `Shared` allocation in system memory because that is
-    // the only memory both sides can reach, so this notice belongs to the venue's memory model
-    // rather than to anything these cases do. A device whose driver is Metal announces nothing
-    // for it.
-    Degradation::SharedInSystemMemory,
-];
-
 impl Case for VisibleTablesCase {
     fn name(&self) -> &'static str {
         self.name
@@ -384,10 +368,16 @@ impl Case for VisibleTablesCase {
     }
 
     fn allowances(&self) -> Vec<Allowance> {
-        PASS_NOTICES
-            .iter()
-            .map(|kind| crate::replay::notice_allowance(kind.code()))
-            .collect()
+        // One declaration and no tolerance, and only the compute cases make it: those dispatch the
+        // caller and read their answers back through a `Shared` buffer, which is what
+        // [`crate::replay::shared_memory_notice`] is for. A drawing-stage case makes pipelines and
+        // tables and reads nothing back, so it allocates no such buffer, announces nothing and
+        // declares nothing -- which is the falsification of the declaration rather than a
+        // restatement of it.
+        match self.spec.maker {
+            Maker::Compute => vec![crate::replay::shared_memory_notice()],
+            Maker::DrawingStage(_) | Maker::TileStage(_) => Vec::new(),
+        }
     }
 
     fn shaders(&self) -> Result<Vec<ShaderRef>, String> {

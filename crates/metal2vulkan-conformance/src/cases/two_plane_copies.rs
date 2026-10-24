@@ -430,8 +430,7 @@ impl Case for RowBlits {
         // Every case declares the notice the venue's own memory model provokes: the buffer it
         // reads the copied planes back through is `Shared`, which a device with no unified memory
         // keeps in system memory because that is the only memory both sides can reach.
-        let shared =
-            notice_allowance(metal2vulkan_runtime::Degradation::SharedInSystemMemory.code());
+        let shared = crate::replay::shared_memory_notice();
         if !self.announced {
             // Three of the blits place their texture in a placement heap, where this device keeps
             // the two-plane texture's texels in the heap's bytes and announces it. Metal announces
@@ -679,14 +678,11 @@ impl Case for PadFills {
         // notice is what justifies it; every digest still compares exactly. The sibling row blits
         // name this notice for the same reason, and the order notice besides, which a fill of
         // whole rows never meets.
-        [
-            metal2vulkan_runtime::Degradation::TwoPlaneBufferBlit,
+        vec![
+            notice_allowance(metal2vulkan_runtime::Degradation::TwoPlaneBufferBlit.code()),
             // The venue's own, for the `Shared` read-back buffer, as the row blits state.
-            metal2vulkan_runtime::Degradation::SharedInSystemMemory,
+            crate::replay::shared_memory_notice(),
         ]
-        .iter()
-        .map(|kind| notice_allowance(kind.code()))
-        .collect()
     }
 
     fn inputs(&self) -> Result<Vec<Input>, String> {

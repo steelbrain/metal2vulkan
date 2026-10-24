@@ -889,13 +889,10 @@ impl Case for TwoPlaneHeapFill {
         // The second is the venue's own: the buffer this case reads the filled planes back
         // through is `Shared`, which a device with no unified memory keeps in system memory
         // because that is the only memory both sides can reach.
-        [
-            metal2vulkan_runtime::Degradation::ShadowedTexture,
-            metal2vulkan_runtime::Degradation::SharedInSystemMemory,
+        vec![
+            notice_allowance(metal2vulkan_runtime::Degradation::ShadowedTexture.code()),
+            crate::replay::shared_memory_notice(),
         ]
-        .iter()
-        .map(|kind| notice_allowance(kind.code()))
-        .collect()
     }
 
     fn inputs(&self) -> Result<Vec<Input>, String> {

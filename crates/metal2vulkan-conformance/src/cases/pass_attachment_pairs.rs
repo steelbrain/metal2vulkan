@@ -699,9 +699,7 @@ impl Case for AttachmentPairs {
         // unified memory keeps a `Shared` allocation in system memory because that is the only
         // memory both sides can reach. That belongs to the venue's memory model rather than to
         // either crossing, so both declare it.
-        let mut allowances = vec![crate::replay::notice_allowance(
-            Degradation::SharedInSystemMemory.code(),
-        )];
+        let mut allowances = vec![crate::replay::shared_memory_notice()];
         if self.cross == Cross::Resolves {
             allowances.extend([
                 crate::replay::notice_allowance(Degradation::DontCareStore.code()),

@@ -341,13 +341,17 @@ pub fn all() -> Vec<MeshDraws> {
             rows: OBJECT_THREAD_ROWS[1],
         },
         MeshDraws {
-            name: "mesh-object-draws-past-limits",
+            name: PAST_LIMITS,
             object: Some("mesh_draws_object"),
             mesh: "mesh_draws_mesh",
             rows: OBJECT_PAST_ROWS,
         },
     ]
 }
+
+/// The one row whose object grid is past the device's limits, so its pass allocates no `Shared`
+/// buffer and announces nothing for one.
+const PAST_LIMITS: &str = "mesh-object-draws-past-limits";
 
 /// The fragment function every case's pipeline writes its attachments through.
 const FRAGMENT: &str = "mesh_draws_fragment";
@@ -370,18 +374,27 @@ pub const MESH_PASS_NOTICES: &[Degradation] = &[
     Degradation::FragmentsBeforeGeometry,
     Degradation::RenderPassSplit,
     Degradation::UnorderedDrawBytes,
-    // The buffers these passes read their payloads, draw arguments and read-back through are
-    // `Shared`, and a device with no unified memory keeps a `Shared` allocation in system memory
-    // because that is the only memory both sides can reach. It belongs to the venue's memory
-    // model, not to anything the mesh path does: a device whose driver is Metal announces nothing
-    // here, and a discrete card announces it for every pass of the three mesh families.
-    Degradation::SharedInSystemMemory,
 ];
 
 /// The allowances a mesh case keeps: one over its notices site per kind of
 /// [`MESH_PASS_NOTICES`], so a device that announced one may hold it in its set and a device that
 /// announced none compares the set exactly against Metal's empty one.
 pub fn mesh_notice_allowances() -> Vec<Allowance> {
+    let mut allowances = vec![
+        // These passes read their payloads, draw arguments and attachments back through `Shared`
+        // buffers ([`crate::replay::shared_memory_notice`]). Every row of the three mesh families
+        // but `mesh-object-draws-past-limits` was measured announcing it on the RTX 5080; that row
+        // stops before it allocates one, so it declares nothing
+        // ([`MeshDraws::allowances`]).
+        crate::replay::shared_memory_notice(),
+    ];
+    allowances.extend(plain_mesh_notice_allowances());
+    allowances
+}
+
+/// The same list without the notice a device's own memory model provokes, for the one case that
+/// never reaches a `Shared` buffer.
+fn plain_mesh_notice_allowances() -> Vec<Allowance> {
     MESH_PASS_NOTICES
         .iter()
         .map(|kind| {
@@ -613,7 +626,15 @@ impl Case for MeshDraws {
     }
 
     fn allowances(&self) -> Vec<Allowance> {
-        mesh_notice_allowances()
+        // Every row of this family but one declares the notice a device's own memory model
+        // provokes for the `Shared` buffers a mesh pass carries. `mesh-object-draws-past-limits`
+        // asks for an object grid past the device's limits, so the pass stops before it allocates
+        // one: the RTX 5080 announced the notice for every other row of the three mesh families
+        // and not for this one, and a declaration no run justifies is one nobody is checking.
+        match self.name == PAST_LIMITS {
+            true => plain_mesh_notice_allowances(),
+            false => mesh_notice_allowances(),
+        }
     }
 
     fn shaders(&self) -> Result<Vec<ShaderRef>, String> {

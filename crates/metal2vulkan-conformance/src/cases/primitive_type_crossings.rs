@@ -334,14 +334,11 @@ impl Case for RestartIndices {
         // unified memory keeps in system memory because that is the only memory both sides can
         // reach (`shared-in-system-memory`). The last two belong to the venue -- its point-size
         // guarantee and its memory model -- rather than to a primitive type or an index type.
-        [
-            Degradation::DeviceArithmetic,
-            Degradation::DevicePointSize,
-            Degradation::SharedInSystemMemory,
-        ]
-        .iter()
-        .map(|kind| crate::replay::notice_allowance(kind.code()))
-        .collect()
+        [Degradation::DeviceArithmetic, Degradation::DevicePointSize]
+            .iter()
+            .map(|kind| crate::replay::notice_allowance(kind.code()))
+            .chain([crate::replay::shared_memory_notice()])
+            .collect()
     }
 
     fn shaders(&self) -> Result<Vec<ShaderRef>, String> {

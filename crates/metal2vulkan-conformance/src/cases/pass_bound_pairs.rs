@@ -154,7 +154,7 @@ use crate::transcript::{
     Aspect, ByteLayout, Digest, Element, Gaps, Node, Observed, Region, Sites, Value,
 };
 use metal2vulkan::metal::{PixelFormat, PrimitiveType};
-use metal2vulkan_runtime::{Degradation, LoadAction, StoreAction};
+use metal2vulkan_runtime::{LoadAction, StoreAction};
 
 /// The owned fixture: the fullscreen triangle at buffer 0's depth, and the fragment that returns
 /// white.
@@ -480,9 +480,7 @@ impl Case for BoundReach {
         // and a device with no unified memory keeps a `Shared` allocation in system memory because
         // that is the only memory both sides can reach: the venue's memory model, not this
         // subject. A device whose driver is Metal announces nothing for it.
-        vec![crate::replay::notice_allowance(
-            Degradation::SharedInSystemMemory.code(),
-        )]
+        vec![crate::replay::shared_memory_notice()]
     }
 
     fn shaders(&self) -> Result<Vec<ShaderRef>, String> {

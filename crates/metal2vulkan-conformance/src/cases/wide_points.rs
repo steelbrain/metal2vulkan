@@ -222,10 +222,14 @@ impl Case for WidePoints {
         [
             Degradation::DevicePointSize,
             Degradation::ShaderColorConversion,
-            Degradation::SharedInSystemMemory,
         ]
         .into_iter()
         .map(|kind| crate::replay::notice_allowance(kind.code()))
+        .chain([
+            // The positions and the read-back are `Shared`
+            // ([`crate::replay::shared_memory_notice`]).
+            crate::replay::shared_memory_notice(),
+        ])
         .collect()
     }
 

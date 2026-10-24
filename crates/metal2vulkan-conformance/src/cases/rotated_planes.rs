@@ -338,7 +338,7 @@ impl Case for RotatedPlane {
         let mut allowances = vec![
             crate::replay::notice_allowance(Degradation::ShadowedTexture.code()),
             crate::replay::notice_allowance(Degradation::ShaderColorConversion.code()),
-            crate::replay::notice_allowance(Degradation::SharedInSystemMemory.code()),
+            crate::replay::shared_memory_notice(),
         ];
         if self.ask == Ask::Load && self.rotation == 4 {
             // The notice is announced wherever rotation 4 loads, whatever the frame, so its code
