@@ -1358,7 +1358,9 @@ pub struct TextureFacts {
     /// image (the runtime's driver facts), so that a denormal does. A sampled view of it reads the
     /// `R32_SFLOAT` image, and a view a comparison reads is of the twin
     /// ([`ImageViewDesc::twin`](crate::bind::ImageViewDesc)).
-    /// Only a `Depth32Float` texture has one.
+    /// Only a `Depth32Float` texture holds its texels there. A multisampled one does under
+    /// `MultisampleDepthTwinPolicy::Exact` and has no `D32_SFLOAT` twin beside it: Metal reads a
+    /// `depth2d_ms` and compares nothing, so no view of a twin is asked for.
     #[cfg_attr(feature = "serde", serde(default))]
     pub depth_twin: bool,
     /// `MTLTexture.swizzle`: the source of each channel the texture's reads and samples return,

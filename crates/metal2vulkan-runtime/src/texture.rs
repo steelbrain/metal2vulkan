@@ -199,6 +199,8 @@ pub(super) struct TextureState {
     depth_images: DepthImageFacts,
     /// `ImageFacts::linear_attachments`.
     linear_attachments: bool,
+    /// `ImageFacts::multisample_depth_twin`.
+    multisample_depth_twin: bool,
     /// How the runtime places an image in a memory block of its own.
     placement: ImagePlacement,
     /// The verdicts of `generate_mipmaps`' per-format checks (`mipmap.rs`).
@@ -249,15 +251,19 @@ pub(super) struct TextureState {
 
 impl TextureState {
     /// The texture state of a device enabling `description`, whose `bufferImageGranularity` is
-    /// `buffer_image_granularity`, and `linearColorAttachment` where `linear_attachments`.
+    /// `buffer_image_granularity`, `linearColorAttachment` where `linear_attachments`, and a
+    /// multisampled `Depth32Float` texture held in colour where `multisample_depth_twin`
+    /// (`MultisampleDepthTwinPolicy::Exact`).
     pub(super) fn new(
         description: &DeviceDescription,
         buffer_image_granularity: u64,
         linear_attachments: bool,
+        multisample_depth_twin: bool,
     ) -> TextureState {
         TextureState {
             formats: description.formats.clone(),
             linear_attachments,
+            multisample_depth_twin,
             storage_multisample: description.has(VkFeature::ShaderStorageImageMultisample),
             depth_images: DepthImageFacts::of(&description.driver_facts()),
             placement: ImagePlacement::new(
@@ -299,6 +305,7 @@ impl TextureState {
             storage_multisample: self.storage_multisample,
             depth_images: self.depth_images,
             linear_attachments: self.linear_attachments,
+            multisample_depth_twin: self.multisample_depth_twin,
         }
     }
 
@@ -2143,7 +2150,13 @@ impl Device {
         if let Some(twin) = twin {
             let twin = self.new_texture_image(twin, &layout, descriptor, hazard)?;
             image.twin = Some(Box::new(twin));
-            self.degrade_depth_twin(&layout, &facts);
+            self.degrade_depth_twin(&layout, &facts, true);
+        } else if image.plan.pixel_format == PixelFormat::Depth32Float
+            && image.plan.format == Format::R32_SFLOAT
+        {
+            // A multisampled `Depth32Float` texture held in colour, with no twin beside it
+            // (`MultisampleDepthTwinPolicy::Exact`).
+            self.degrade_depth_twin(&layout, &facts, false);
         }
         let image = match memoryless {
             true => {
@@ -3449,10 +3462,18 @@ impl Device {
 }
 
 impl Device {
-    /// Announce `depth-twin` for a texture of `layout` made with a depth twin on a device with
-    /// `facts`: why the texture has one (`plan_depth_twin` takes one only where the facts state a
-    /// loss).
-    pub(super) fn degrade_depth_twin(&self, layout: &TextureLayout, facts: &ImageFacts<'_>) {
+    /// Announce `depth-twin` for a texture of `layout` whose texels are held in an `R32_SFLOAT`
+    /// image on a device with `facts`: why the texture is
+    /// (`plan_depth_twin` and `holds_multisample_depth_in_colour` hold the texels there only
+    /// where the facts state a loss), and, where `twin`, that a comparison reads the `D32_SFLOAT`
+    /// twin beside it. A multisampled texture has no twin: Metal reads a `depth2d_ms` and
+    /// compares nothing.
+    pub(super) fn degrade_depth_twin(
+        &self,
+        layout: &TextureLayout,
+        facts: &ImageFacts<'_>,
+        twin: bool,
+    ) {
         let loss = facts.depth_loss().unwrap_or_default();
         self.degrade(Degradation::DepthTwin, || {
             let [width, height, depth] = layout.extent;
@@ -3460,10 +3481,11 @@ impl Device {
                 "{:?} {:?} texture of {width}x{height}x{depth}",
                 layout.pixel_format, layout.texture_type
             );
-            let why = format!(
-                "{loss}: its texels are held in an R32_SFLOAT image, and the comparisons the \
-                 device makes read a D32_SFLOAT twin"
-            );
+            let compared = match twin {
+                true => ", and the comparisons the device makes read a D32_SFLOAT twin",
+                false => ", which every read of it reads",
+            };
+            let why = format!("{loss}: its texels are held in an R32_SFLOAT image{compared}");
             (object, why)
         });
     }
@@ -4400,6 +4422,18 @@ impl Texture {
         Ok(self.image()?.raw.get())
     }
 
+    /// Whether the texture's texels are in a colour image: a `Depth32Float` texture held in
+    /// `R32_SFLOAT`, which keeps every `float` a copy writes where the device's depth images may
+    /// not (`image_plan::plan_depth_twin` for a single-sampled one, with the `D32_SFLOAT` twin
+    /// beside it; `image_plan::holds_multisample_depth_in_colour` for a multisampled one, with
+    /// no twin). `false` for every other texture.
+    pub(super) fn holds_depth_in_colour(&self) -> bool {
+        self.image().is_ok_and(|image| {
+            let plan = image.plan();
+            plan.pixel_format == PixelFormat::Depth32Float && plan.format == Format::R32_SFLOAT
+        })
+    }
+
     /// The `VkImage` of the texture's depth twin, or `None` for a texture without one.
     pub(super) fn twin_image(&self) -> Option<vk::Image> {
         Some(self.image().ok()?.twin.as_ref()?.raw.get())
@@ -4614,7 +4648,12 @@ impl Texture {
     pub(super) fn worked_out_facts(&self) -> TextureFacts {
         let record = self.0.record.bound();
         let mut facts = texture_facts(&record);
-        facts.depth_twin = self.twin_image().is_some();
+        // A `Depth32Float` texture whose texels are in an `R32_SFLOAT` image: a sampled view
+        // reads the colour image, and a compared one the depth twin a single-sampled one has
+        // beside it (`image_plan::plan_depth_twin`). A multisampled one has no twin and no
+        // comparison to serve: Metal reads a `depth2d_ms` and compares nothing
+        // (`MultisampleDepthTwinPolicy::Exact`).
+        facts.depth_twin = self.holds_depth_in_colour();
         facts.sparse = self.is_sparse();
         // A wrapped image made without `MUTABLE_FORMAT` takes no view in a storage binding's
         // other formats (a half-float texture's unsigned integer alias): its storage slots keep

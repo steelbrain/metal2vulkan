@@ -9,8 +9,9 @@
 use crate::device::{
     BatchOrderPolicy, CompletionPolicy, DecodedTexelsPolicy, DevicePolicy, FloatMathsPolicy,
     HalfBlendPolicy, HalfRoundingPolicy, HalfTexelBitsPolicy, HeapCompressionPolicy,
-    NanMinMaxPolicy, RenderLoweringPolicy, ResolvePolicy, RoundingOrderPolicy, SamplingPolicy,
-    TexelConversionPolicy, TileStorePolicy, Unorm8LinearFilterPolicy, YCbCrFilterPolicy,
+    MultisampleDepthTwinPolicy, NanMinMaxPolicy, RenderLoweringPolicy, ResolvePolicy,
+    RoundingOrderPolicy, SamplingPolicy, TexelConversionPolicy, TileStorePolicy,
+    Unorm8LinearFilterPolicy, YCbCrFilterPolicy,
 };
 use crate::pipeline::PrecisionNote;
 use std::collections::BTreeSet;
@@ -70,10 +71,12 @@ fn choices() -> Vec<Choice> {
         rounding_order: _,
         half_blend: _,
         half_texel_bits: _,
-        // The runtime's: the texels of a carried texture's decoded twin, a heap's compressed
+        // The runtime's: where a multisampled `Depth32Float` texture's texels are held, the
+        // texels of a carried texture's decoded twin, a heap's compressed
         // texture's image, when the host sees a command buffer complete, a loaded attachment's
         // tile store, a multisampled color attachment's resolve, how a batch begins after the
         // earlier ones of its queue, and where a render encoder's calls are lowered.
+        multisample_depth_twin: _,
         decoded_texels: _,
         heap_compression: _,
         completion: _,
@@ -93,6 +96,7 @@ fn choices() -> Vec<Choice> {
         choice!(p.rounding_order: RoundingOrderPolicy { Native, Exact }),
         choice!(p.half_blend: HalfBlendPolicy { Device, Exact }),
         choice!(p.half_texel_bits: HalfTexelBitsPolicy { Device, Exact }),
+        choice!(p.multisample_depth_twin: MultisampleDepthTwinPolicy { Device, Exact }),
         choice!(p.decoded_texels: DecodedTexelsPolicy { Compact, Exact }),
         choice!(p.heap_compression: HeapCompressionPolicy { Compressed, Uncompressed }),
         choice!(p.completion: CompletionPolicy { Grouped, Exact }),
@@ -504,6 +508,25 @@ fn the_runtime_s_render_lowering_choice_keys_no_profile() {
     for ((stem, w), (other, a)) in worker.iter().zip(&at_call) {
         assert_eq!(stem, other);
         assert_eq!(w.fingerprint(), a.fingerprint(), "{stem}");
+    }
+}
+
+/// The runtime's choice of where a multisampled `Depth32Float` texture's texels are held
+/// (`multisample_depth_twin`) moves no committed profile's fingerprint: no profile carries it, so
+/// no translation follows it.
+#[test]
+fn the_runtime_s_multisample_depth_twin_choice_keys_no_profile() {
+    use crate::spirv::testing::committed_profiles_with;
+    let device = committed_profiles_with(DevicePolicy::UNTRUSTED).expect("profiles");
+    let exact = committed_profiles_with(DevicePolicy {
+        multisample_depth_twin: MultisampleDepthTwinPolicy::Exact,
+        ..DevicePolicy::UNTRUSTED
+    })
+    .expect("profiles");
+    assert_eq!(device.len(), exact.len());
+    for ((stem, d), (other, e)) in device.iter().zip(&exact) {
+        assert_eq!(stem, other);
+        assert_eq!(d.fingerprint(), e.fingerprint(), "{stem}");
     }
 }
 

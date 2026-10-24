@@ -68,8 +68,8 @@ pub use metal::{MetalDeviceProperties, SimdSupport, StageSimd};
 pub use policy::{
     BatchOrderPolicy, CompletionPolicy, ContainmentPolicy, DecodedTexelsPolicy, DevicePolicy,
     FloatMathsPolicy, HalfBlendPolicy, HalfRoundingPolicy, HalfTexelBitsPolicy,
-    HeapCompressionPolicy, NanMinMaxPolicy, RenderLoweringPolicy, ResolvePolicy,
-    RoundingOrderPolicy, SamplingPolicy, TexelConversionPolicy, TileStorePolicy,
+    HeapCompressionPolicy, MultisampleDepthTwinPolicy, NanMinMaxPolicy, RenderLoweringPolicy,
+    ResolvePolicy, RoundingOrderPolicy, SamplingPolicy, TexelConversionPolicy, TileStorePolicy,
     Unorm8LinearFilterPolicy, YCbCrFilterPolicy,
 };
 pub(crate) use profile::whole_point_size;

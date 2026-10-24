@@ -64,6 +64,12 @@ pub struct DevicePolicy {
     /// texel (the default) or the texel's own bits, read through the texture's unsigned-integer
     /// alias so no device decode sees them.
     pub half_texel_bits: HalfTexelBitsPolicy,
+
+    /// Whether a multisampled `Depth32Float` texture the program only reads is held in a depth
+    /// image (the default) or, where the device's depth images may not keep its texels, in a
+    /// colour image, as a single-sampled one of it already is. The runtime's choice alone: no
+    /// emitted code changes.
+    pub multisample_depth_twin: MultisampleDepthTwinPolicy,
     /// Whether a texture whose format the device lacks, held in a carrier (an ASTC LDR texture,
     /// or an EAC 11-bit one), samples a decoded twin of compact codes (the default) or of Metal's
     /// values exactly. The runtime's choice alone: no emitted code changes.
@@ -106,7 +112,8 @@ impl DevicePolicy {
     /// native device maths, the device's own texel
     /// conversions, native half rounding, the device's NaN and minimum and maximum, the device's
     /// rounding order, the device's blend of a `half` output into a 16-bit float attachment, the device's decode of a
-    /// 16-bit float texel a read answers, compact codes in a carried texture's decoded twin, the driver's compressed image of a
+    /// 16-bit float texel a read answers, a multisampled `Depth32Float` texture's texels in a
+    /// depth image, compact codes in a carried texture's decoded twin, the driver's compressed image of a
     /// heap's texture Metal keeps compressed, command buffers ready together in one kernel
     /// submission, the device's load and store of a signed normalized or `RGB9E5Float` color
     /// attachment, the device's resolve of a multisampled color attachment, batches of one
@@ -126,6 +133,7 @@ impl DevicePolicy {
         rounding_order: RoundingOrderPolicy::Native,
         half_blend: HalfBlendPolicy::Device,
         half_texel_bits: HalfTexelBitsPolicy::Device,
+        multisample_depth_twin: MultisampleDepthTwinPolicy::Device,
         decoded_texels: DecodedTexelsPolicy::Compact,
         heap_compression: HeapCompressionPolicy::Compressed,
         completion: CompletionPolicy::Grouped,
@@ -162,6 +170,7 @@ impl DevicePolicy {
             rounding_order: RoundingOrderPolicy::Exact,
             half_blend: HalfBlendPolicy::Exact,
             half_texel_bits: HalfTexelBitsPolicy::Exact,
+            multisample_depth_twin: MultisampleDepthTwinPolicy::Exact,
             decoded_texels: DecodedTexelsPolicy::Exact,
             heap_compression: HeapCompressionPolicy::Uncompressed,
             completion: CompletionPolicy::Exact,
@@ -472,6 +481,38 @@ pub enum HalfTexelBitsPolicy {
     /// descriptor and a view at each such slot, the texture's image a mutable format, and the
     /// widening at each read. A slot the function also samples, gathers, compares, writes or
     /// updates atomically keeps the device's decode and its note, the declaration being one.
+    Exact,
+}
+
+/// Where the runtime holds the texels of a multisampled `Depth32Float` texture the program only
+/// reads (shader-read usage, no render target, not memoryless) on a device whose depth images may
+/// not keep them (`image_plan::ImageFacts::depth_loss`: without `VK_EXT_depth_range_unrestricted`
+/// enabled or a driver measured to keep a value outside `[0, 1]` there, or without a driver
+/// measured to keep a denormal). A single-sampled such texture is already held in an
+/// `R32_SFLOAT` image, which keeps every `float` a copy writes
+/// (`image_plan::plan_depth_twin`); a multisampled one was left out of that on the reading that
+/// it has no writer, and `BlitCommandEncoder::fill_texture` is one. Metal's fill stores the
+/// pattern's bytes as given, a denormal included, where RADV gives a denormal a GPU write puts
+/// into a `D32_SFLOAT` image back as a zero and keeps only a CPU store's, which a multisampled
+/// image takes none of (`sample-fills-d32-2`, `-d32-4`, `-d32s8-4` and
+/// `runtime_lane::sample_fills::multisample_fills_write_metal_s_samples`, both RADV chips, exact
+/// on MoltenVK, whose depth images keep denormals). Metal has no multisampled depth comparison
+/// (`depth2d_ms` reads alone), so such a texture needs no depth twin beside the colour image.
+/// The runtime's choice alone: no emitted code changes.
+#[non_exhaustive]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub enum MultisampleDepthTwinPolicy {
+    /// A depth image (the default): a write that may store a value the device's depth images do
+    /// not keep stores what they keep, announced `depth-denormals` or `restricted-depth-upload`
+    /// at the write.
+    #[default]
+    Device,
+    /// A colour image (`R32_SFLOAT`), which keeps every `float` the fills and the sample copies
+    /// write, where the device holds a multisampled image of it for the texture's uses; elsewhere
+    /// the depth image, announced as under [`MultisampleDepthTwinPolicy::Device`]. Costs the
+    /// texture its depth attachment usage, which such a texture does not ask for, and nothing
+    /// else: the image is of the same extent, samples and layers.
     Exact,
 }
 

@@ -3130,7 +3130,7 @@ impl Device {
                     .shared()
                     .textures
                     .facts(self.compile_device().profile());
-                self.degrade_depth_twin(&p.layout, &facts);
+                self.degrade_depth_twin(&p.layout, &facts, true);
             }
             image
         };

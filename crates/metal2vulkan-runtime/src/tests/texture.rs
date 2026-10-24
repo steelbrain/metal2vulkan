@@ -85,9 +85,15 @@ fn cpu_copies_read_a_tightly_packed_buffer() {
 #[test]
 fn the_granularity_is_a_whole_power_of_two() {
     let (_, desc, _) = committed().into_iter().next().unwrap();
-    assert_eq!(TextureState::new(&desc, 0, false).granularity(), 1);
-    assert_eq!(TextureState::new(&desc, 1024, false).granularity(), 1024);
-    assert_eq!(TextureState::new(&desc, 1000, false).granularity(), 1024);
+    assert_eq!(TextureState::new(&desc, 0, false, false).granularity(), 1);
+    assert_eq!(
+        TextureState::new(&desc, 1024, false, false).granularity(),
+        1024
+    );
+    assert_eq!(
+        TextureState::new(&desc, 1000, false, false).granularity(),
+        1024
+    );
 }
 
 #[test]

@@ -61,6 +61,19 @@ pub(super) fn facts<'a>(desc: &'a DeviceDescription, device: &'a Device) -> Imag
         storage_multisample: desc.has(VkFeature::ShaderStorageImageMultisample),
         depth_images: DepthImageFacts::of(&desc.driver_facts()),
         linear_attachments: false,
+        multisample_depth_twin: false,
+    }
+}
+
+/// [`facts`] with a multisampled `Depth32Float` texture held in colour
+/// (`MultisampleDepthTwinPolicy::Exact`).
+fn facts_holding_multisample_depth<'a>(
+    desc: &'a DeviceDescription,
+    device: &'a Device,
+) -> ImageFacts<'a> {
+    ImageFacts {
+        multisample_depth_twin: true,
+        ..facts(desc, device)
     }
 }
 
@@ -2211,4 +2224,108 @@ fn astc_carriers_hold_each_level_s_blocks() {
         }
     }
     assert!(carried > 0, "no committed device holds ASTC in a carrier");
+}
+
+/// A multisampled `Depth32Float` texture the program only reads is held in its depth image under
+/// the default, as before, and in a multisampled `R32_SFLOAT` image of its shape under
+/// `MultisampleDepthTwinPolicy::Exact` on every committed profile whose depth image its driver is
+/// not measured to keep every `float` in; in its depth image elsewhere. It takes no `D32_SFLOAT`
+/// twin beside it under either value: Metal reads a `depth2d_ms` and compares nothing, and no copy
+/// writes a multisampled depth image from a colour one. A render target, a memoryless texture, a
+/// single-sampled one (which has the twin of its own row) and another depth format are held as
+/// before under both values.
+#[test]
+fn the_switch_holds_a_multisampled_depth_texture_s_texels_in_colour() {
+    use PixelFormat as P;
+    let read = TextureUsage::SHADER_READ;
+    let mut held = Vec::new();
+    for (name, desc, device) in committed() {
+        let default = facts(&desc, &device);
+        let switched = facts_holding_multisample_depth(&desc, &device);
+        let exact = default.depth_loss().is_none();
+        for samples in [2, 4] {
+            let l = layout(TextureType::Type2DMultisample, P::Depth32Float, samples, 1);
+            // Under the default: the depth image, as `plan_image` plans it.
+            let Ok((plan, twin)) = plan_images(&l, read, false, &default) else {
+                continue;
+            };
+            assert!(twin.is_none(), "{name}: {samples} samples, default");
+            assert_eq!(
+                plan,
+                plan_image(&l, read, false, &default).unwrap(),
+                "{name}: {samples} samples, default"
+            );
+            assert_eq!(
+                (plan.pixel_format, plan.format),
+                (P::Depth32Float, Format::D32_SFLOAT),
+                "{name}: {samples} samples, default"
+            );
+            // Under the switch: the colour image where the device's depth images may lose the
+            // texels and it holds a multisampled `R32_SFLOAT` it samples and copies.
+            let (switched_plan, switched_twin) =
+                plan_images(&l, read, false, &switched).expect(&name);
+            assert!(switched_twin.is_none(), "{name}: {samples} samples, switch");
+            let colour = switched_plan.format == Format::R32_SFLOAT;
+            if !colour {
+                assert_eq!(
+                    switched_plan, plan,
+                    "{name}: {samples} samples: no colour image, so the plan is the default's"
+                );
+                continue;
+            }
+            assert!(
+                !exact,
+                "{name}: {samples} samples: a colour image without a loss"
+            );
+            assert_eq!(
+                (
+                    switched_plan.pixel_format,
+                    switched_plan.mapping.aspects,
+                    switched_plan.extent,
+                    switched_plan.levels,
+                    switched_plan.layers,
+                    switched_plan.samples
+                ),
+                (
+                    P::Depth32Float,
+                    ImageAspectFlags::COLOR,
+                    plan.extent,
+                    plan.levels,
+                    plan.layers,
+                    plan.samples
+                ),
+                "{name}: {samples} samples"
+            );
+            assert!(
+                switched_plan.usage.contains(ImageUsageFlags::SAMPLED),
+                "{name}: {samples} samples"
+            );
+            assert!(
+                !switched_plan
+                    .usage
+                    .contains(ImageUsageFlags::DEPTH_STENCIL_ATTACHMENT),
+                "{name}: {samples} samples: a read-only texture keeps no attachment usage"
+            );
+            held.push(format!("{name} {samples}"));
+        }
+        // A render target, a memoryless texture and another depth format are held as before.
+        for (usage, memoryless, pf) in [
+            (TextureUsage::RENDER_TARGET | read, false, P::Depth32Float),
+            (read, true, P::Depth32Float),
+            (read, false, P::Depth32FloatStencil8),
+        ] {
+            let l = layout(TextureType::Type2DMultisample, pf, 4, 1);
+            let before = plan_images(&l, usage, memoryless, &default);
+            let after = plan_images(&l, usage, memoryless, &switched);
+            assert_eq!(
+                before.ok(),
+                after.ok(),
+                "{name}: {pf:?} {usage:?} memoryless {memoryless}"
+            );
+        }
+    }
+    assert!(
+        !held.is_empty(),
+        "no committed profile holds a multisampled depth texture in colour under the switch"
+    );
 }
