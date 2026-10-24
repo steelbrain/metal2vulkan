@@ -694,16 +694,24 @@ impl Case for AttachmentPairs {
         // declared code is a notice. The resolves case stores an attachment `DontCare` in two of
         // its four cells, and a device whose `DontCare` store is not Metal's announces that it took
         // the near-equivalent; the loads case stores every attachment and declares nothing.
-        match self.cross {
-            Cross::Loads => Vec::new(),
-            Cross::Resolves => vec![
+        //
+        // Both cases read their attachments back through a `Shared` buffer, and a device with no
+        // unified memory keeps a `Shared` allocation in system memory because that is the only
+        // memory both sides can reach. That belongs to the venue's memory model rather than to
+        // either crossing, so both declare it.
+        let mut allowances = vec![crate::replay::notice_allowance(
+            Degradation::SharedInSystemMemory.code(),
+        )];
+        if self.cross == Cross::Resolves {
+            allowances.extend([
                 crate::replay::notice_allowance(Degradation::DontCareStore.code()),
                 // A device whose own `AVERAGE` resolve is not measured to be Metal's draws the
                 // colour resolve after the pass by Metal's rules instead. Every sample of every
                 // covered pixel carries one value here, so either path reaches the same texel.
                 crate::replay::notice_allowance(Degradation::ShaderResolve.code()),
-            ],
+            ]);
         }
+        allowances
     }
 
     fn shaders(&self) -> Result<Vec<ShaderRef>, String> {
@@ -914,6 +922,8 @@ impl Case for AttachmentPairs {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::allowance::Loosening;
+    use crate::replay::NOTICES_SITE;
     use crate::transcript::Transcript;
     use std::collections::BTreeSet;
 
@@ -1217,7 +1227,7 @@ mod tests {
         }
     }
 
-    /// **The family names its two cases apart**, and the loads case loosens nothing at all.
+    /// **The family names its two cases apart**, and neither case loosens a value.
     #[test]
     fn the_family_names_two_cases_apart() {
         let names: Vec<&str> = all().iter().map(|case| case.name()).collect();
@@ -1228,20 +1238,31 @@ mod tests {
             assert_eq!(case.record_runs(), RUNS);
             assert!(matches!(case.metal_source(), MetalSource::Run));
         }
-        // The loads case stores every attachment, so it has nothing to declare: a case that
-        // declared a notice it cannot provoke would be a case nobody can read.
-        assert!(AttachmentPairs {
-            cross: Cross::Loads
+        // Every allowance of either case is a declaration over the notices site: the loads case
+        // stores every attachment and declares only the notice a device with no unified memory
+        // announces for the read-back buffer, and the resolves case adds the two its `DontCare`
+        // store and its emulated resolve provoke.
+        for case in all() {
+            for allowance in case.allowances() {
+                assert_eq!(allowance.path, format!("case/{NOTICES_SITE}/*"));
+                assert_eq!(allowance.loosening, Loosening::Unchecked);
+            }
         }
-        .allowances()
-        .is_empty());
+        assert_eq!(
+            AttachmentPairs {
+                cross: Cross::Loads
+            }
+            .allowances()
+            .len(),
+            1
+        );
         assert_eq!(
             AttachmentPairs {
                 cross: Cross::Resolves
             }
             .allowances()
             .len(),
-            2
+            3
         );
         // Both fragment functions the family names are the fixture's, and the loads case names
         // both while the resolves case names one.

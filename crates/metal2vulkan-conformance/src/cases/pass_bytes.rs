@@ -266,7 +266,8 @@ impl Case for PassBytes {
         // device that announced the notice may differ in that column and holds that notice in its
         // set, and a device that announced none of them compares every column exactly and must
         // hold none.
-        self.columns()
+        let mut allowances: Vec<Allowance> = self
+            .columns()
             .iter()
             .flat_map(|column| {
                 let path = self.column_path(column);
@@ -285,7 +286,17 @@ impl Case for PassBytes {
                     ]
                 })
             })
-            .collect()
+            .collect();
+        // The pass's input and output buffers are `Shared`, and a device with no unified memory
+        // keeps a `Shared` allocation in system memory because that is the only memory both sides
+        // can reach. It is the venue's memory model rather than a column's answer, so it is
+        // declared at the notices site alone and loosens no column.
+        allowances.push(Allowance::new(
+            format!("case/{NOTICES_SITE}/*"),
+            Loosening::Unchecked,
+            Justification::notice(Degradation::SharedInSystemMemory),
+        ));
+        allowances
     }
 
     fn shaders(&self) -> Result<Vec<ShaderRef>, String> {

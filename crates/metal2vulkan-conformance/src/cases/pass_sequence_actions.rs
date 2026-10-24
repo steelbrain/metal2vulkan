@@ -838,18 +838,28 @@ impl Case for SequenceActions {
         // a device whose `DontCare` store is not Metal's own announces that it took the
         // near-equivalent. It fires on no venue whose driver stores `DONT_CARE` as Metal does
         // (MoltenVK on this M3 Max among them), which is why it is declared rather than relied on.
-        let mut allowances = vec![crate::replay::notice_allowance(
-            Degradation::DontCareStore.code(),
-        )];
+        //
+        // `SharedInSystemMemory`: both cases read their attachments back through a `Shared`
+        // buffer, and a device with no unified memory keeps a `Shared` allocation in system memory
+        // because that is the only memory both sides can reach. It belongs to the venue's memory
+        // model rather than to a load or a store action.
+        let mut allowances = vec![
+            crate::replay::notice_allowance(Degradation::DontCareStore.code()),
+            crate::replay::notice_allowance(Degradation::SharedInSystemMemory.code()),
+        ];
         // `SeparateDepthStencil`: the aspect case's two attachments are a `Depth32Float` beside a
         // `Stencil8`, which the runtime renders through a scratch image of a combined format,
         // copying each loaded aspect in and each stored one back. That route is the whole point of
         // the case -- it is where an aspect's own action can reach the wrong half -- and it is a
         // performance notice, not a value.
+        // `ShaderSideStencil`: the same scratch route makes the stencil reference and the stencil
+        // test the shader's work on a device whose own separate-aspect path is not Metal's, which
+        // is a statement about how the aspect was reached and not about the aspect's value.
         if self.cross == Cross::Aspects {
-            allowances.push(crate::replay::notice_allowance(
-                Degradation::SeparateDepthStencil.code(),
-            ));
+            allowances.extend([
+                crate::replay::notice_allowance(Degradation::SeparateDepthStencil.code()),
+                crate::replay::notice_allowance(Degradation::ShaderSideStencil.code()),
+            ]);
         }
         allowances
     }
