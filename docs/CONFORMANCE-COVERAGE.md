@@ -43,7 +43,7 @@ Its limits, measured rather than asserted:
 | committed recordings | 1099 |
 | distinct SDK items the Metal leg reaches, of any status | 797 |
 | of those, reached only where this cannot name the family | 7 |
-| ledger rows (a case whose gap is recorded) | 774 |
+| ledger rows (a case whose gap is recorded) | 803 |
 | declared crossings of the option space (pairs put to Metal at once) | 24 |
 | declared crossings that are no pair of it (a boolean or numeric field, or one type in two slots) | 30 |
 
@@ -2975,4 +2975,33 @@ A case whose difference from Metal is recorded rather than compared away. The le
 | `vertex-format-instance-step` | Metal converts a normalized vertex field as `c / (2^b - 1)`, correctly rounded, and this device's fixed-function vertex input is one ULP high: at the first diff… |
 | `vertex-format-instance-step` | Metal converts a normalized vertex field as `c / (2^b - 1)`, correctly rounded, and this device's fixed-function vertex input is one ULP high: at the first diff… |
 | `vertex-format-instance-step` | Metal's fixed-function vertex fetch of a narrow float canonicalizes a NaN: a `half` code and a `FloatRG11B10` field whose 5-bit exponent is all ones both reach … |
+| `compute-threadgroup-simd-scratch` | Metal's compute pipeline state answers `staticThreadgroupMemoryLength` 24576 -- the fixture's own 24 KiB `threadgroup` array -- and we answer 32768 on this venu… |
+| `host-page-writes-kernel-store-read-only` | Metal DROPS what a shader or the blit engine writes into memory whose backing is read-only, silently and with no error, and we land the write. Metal's rule is m… |
+| `host-page-writes-kernel-store-read-only` | Metal DROPS what a shader or the blit engine writes into memory whose backing is read-only, silently and with no error, and we land the write. Metal's rule is m… |
+| `host-page-writes-kernel-store-read-only` | Metal DROPS what a shader or the blit engine writes into memory whose backing is read-only, silently and with no error, and we land the write. Metal's rule is m… |
+| `host-page-writes-kernel-store-read-only` | Metal DROPS what a shader or the blit engine writes into memory whose backing is read-only, silently and with no error, and we land the write. Metal's rule is m… |
+| `host-page-writes-visibility-read-only` | Metal DROPS what a shader or the blit engine writes into memory whose backing is read-only, silently and with no error, and we land the write. Metal's rule is m… |
+| `host-page-writes-visibility-read-only` | Metal DROPS what a shader or the blit engine writes into memory whose backing is read-only, silently and with no error, and we land the write. Metal's rule is m… |
+| `host-page-writes-visibility-read-only` | Metal DROPS what a shader or the blit engine writes into memory whose backing is read-only, silently and with no error, and we land the write. Metal's rule is m… |
+| `host-page-writes-visibility-read-only` | Metal DROPS what a shader or the blit engine writes into memory whose backing is read-only, silently and with no error, and we land the write. Metal's rule is m… |
+| `norm-storage-fields-bgr10a2unorm` | Metal dispatches a kernel that writes a `BGR10A2Unorm` storage texture reached through its resource ID inside an argument buffer, and we refuse the bind state `… |
+| `norm-storage-fields-bgr10a2unorm` | Metal dispatches a kernel that writes a `BGR10A2Unorm` storage texture reached through its resource ID inside an argument buffer, and we refuse the bind state `… |
+| `pass-sequence-color-actions` | Metal's `MTLStoreActionDontCare` leaves the attachment holding the texels it held BEFORE the pass, and we leave what the pass rendered. Metal's answer is this c… |
+| `pass-sequence-color-actions` | Metal's `MTLStoreActionDontCare` leaves the attachment holding the texels it held BEFORE the pass, and we leave what the pass rendered. Metal's answer is this c… |
+| `pass-sequence-color-actions` | Metal's `MTLStoreActionDontCare` leaves the attachment holding the texels it held BEFORE the pass, and we leave what the pass rendered. Metal's answer is this c… |
+| `pass-sequence-color-actions` | Metal's `MTLStoreActionDontCare` leaves the attachment holding the texels it held BEFORE the pass, and we leave what the pass rendered. Metal's answer is this c… |
+| `pass-sequence-color-actions` | Metal's `MTLStoreActionDontCare` leaves the attachment holding the texels it held BEFORE the pass, and we leave what the pass rendered. Metal's answer is this c… |
+| `pass-sequence-color-actions` | Metal's `MTLStoreActionDontCare` leaves the attachment holding the texels it held BEFORE the pass, and we leave what the pass rendered. Metal's answer is this c… |
+| `pass-sequence-color-actions` | Metal's `MTLStoreActionDontCare` leaves the attachment holding the texels it held BEFORE the pass, and we leave what the pass rendered. Metal's answer is this c… |
+| `pass-sequence-color-actions` | Metal's `MTLStoreActionDontCare` leaves the attachment holding the texels it held BEFORE the pass, and we leave what the pass rendered. Metal's answer is this c… |
+| `pixel-samplers-rgba16f-nearest-border` | Metal's 800 sampled results of this case's `norm` source digest to one value and ours to another; the row holds both. `norm` is the case's own CONTROL: a NORMAL… |
+| `pixel-samplers-rgba16f-nearest-edge` | Metal's 800 sampled results of this case's `norm` source digest to one value and ours to another; the row holds both. `norm` is the case's own CONTROL: a NORMAL… |
+| `pixel-samplers-rgba16f-nearest-zero` | Metal's 800 sampled results of this case's `norm` source digest to one value and ours to another; the row holds both. `norm` is the case's own CONTROL: a NORMAL… |
+| `pixel-samplers-rgba8-nearest-border` | Metal's 800 sampled results of this case's `norm` source digest to one value and ours to another; the row holds both. `norm` is the case's own CONTROL: a NORMAL… |
+| `pixel-samplers-rgba8-nearest-edge` | Metal's 800 sampled results of this case's `norm` source digest to one value and ours to another; the row holds both. `norm` is the case's own CONTROL: a NORMAL… |
+| `pixel-samplers-rgba8-nearest-zero` | Metal's 800 sampled results of this case's `norm` source digest to one value and ours to another; the row holds both. `norm` is the case's own CONTROL: a NORMAL… |
+| `resolve-stencil-under-depth-filters` | Metal resolves a multisampled depth/stencil attachment with the stencil filter `MTLMultisampleStencilResolveFilterSample0` under the depth filter `Min` or `Max`… |
+| `resolve-stencil-under-depth-filters` | Metal resolves a multisampled depth/stencil attachment with the stencil filter `MTLMultisampleStencilResolveFilterSample0` under the depth filter `Min` or `Max`… |
+| `tile-simd-blur-columns` | Metal's tile render pipeline state answers `maxTotalThreadsPerThreadgroup` 1024 and ours answers 960 on this venue. The 960 is this device's own compiled limit … |
+| `tile-simd-blur-rows` | Metal's tile render pipeline state answers `maxTotalThreadsPerThreadgroup` 1024 and ours answers 960 on this venue. The 960 is this device's own compiled limit … |
 
