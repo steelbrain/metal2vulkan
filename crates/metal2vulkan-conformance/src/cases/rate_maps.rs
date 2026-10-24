@@ -169,19 +169,26 @@ impl Case for RateMapCase {
         // carries no allowance at all: a tolerance that never fires is one nobody is checking, and
         // a device that does announce something there should fail the case until somebody names
         // why.
+        // Either way the case declares the notice the venue's own memory model provokes: the
+        // buffer it reads its answer back through is `Shared`, which a device with no unified
+        // memory keeps in system memory because that is the only memory both sides can reach.
+        let shared = crate::replay::notice_allowance(Degradation::SharedInSystemMemory.code());
         if self.identity {
-            return Vec::new();
+            return vec![shared];
         }
         // A map that is not the identity announces the rate-map degradation when it is made, a
         // near-equivalent the runtime declares (`docs/API.md`'s degrade catalogue): a pass over
         // such a map is drawn region by region, on this crate's tile lines. Metal announces
         // nothing, so the notices set is the one field that may differ, and the allowance is held
         // to its evidence — the notice must actually have been announced on the run compared.
-        vec![Allowance::new(
-            format!("case/{NOTICES_SITE}/*"),
-            Loosening::Unchecked,
-            Justification::notice(Degradation::RasterizationRateMap),
-        )]
+        vec![
+            shared,
+            Allowance::new(
+                format!("case/{NOTICES_SITE}/*"),
+                Loosening::Unchecked,
+                Justification::notice(Degradation::RasterizationRateMap),
+            ),
+        ]
     }
 
     fn run(&self, side: &mut dyn Side, sites: &mut Sites) -> Result<(), Abort> {

@@ -558,9 +558,16 @@ impl Case for PvrtcRows {
         // announces nothing. Every block still compares exactly: the only site loosened is the set
         // of notices, which Metal holds empty, and the allowance fails the case if the notice did
         // not fire.
-        vec![crate::replay::notice_allowance(
-            Degradation::CarriedDecodedTwin.code(),
-        )]
+        // The buffer each pass reads its blocks back through is `Shared`, which a device with no
+        // unified memory keeps in system memory because that is the only memory both sides can
+        // reach: the venue's memory model, not this family's subject.
+        [
+            Degradation::CarriedDecodedTwin,
+            Degradation::SharedInSystemMemory,
+        ]
+        .iter()
+        .map(|kind| crate::replay::notice_allowance(kind.code()))
+        .collect()
     }
 
     fn inputs(&self) -> Result<Vec<Input>, String> {

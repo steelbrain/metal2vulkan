@@ -586,6 +586,10 @@ impl Case for HeapBlits {
         [
             metal2vulkan_runtime::Degradation::TwoPlaneTextureCopy,
             metal2vulkan_runtime::Degradation::ShadowedTexture,
+            // The buffer the case reads the blitted planes back through is `Shared`, which a
+            // device with no unified memory keeps in system memory because that is the only
+            // memory both sides can reach: the venue's memory model, not this blit.
+            metal2vulkan_runtime::Degradation::SharedInSystemMemory,
         ]
         .into_iter()
         .map(|kind| notice_allowance(kind.code()))

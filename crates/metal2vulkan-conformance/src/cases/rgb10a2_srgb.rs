@@ -742,18 +742,21 @@ impl Case for Rgb10A2Srgb {
     /// no other case here names one.
     fn allowances(&self) -> Vec<Allowance> {
         use metal2vulkan_runtime::Degradation as D;
+        // Every question reads its answer back through a `Shared` buffer, and a device with no
+        // unified memory keeps a `Shared` allocation in system memory because that is the only
+        // memory both sides can reach: the venue's memory model rather than this format's answer.
+        let mut named = vec![notice_allowance(D::SharedInSystemMemory.code())];
         match &self.question {
             Question::Stores {
                 lanes: Lanes::Float,
-            } => {
-                vec![notice_allowance(D::DontCareLoadTiles.code())]
-            }
-            Question::Stores { lanes: Lanes::Half } => vec![
+            } => named.push(notice_allowance(D::DontCareLoadTiles.code())),
+            Question::Stores { lanes: Lanes::Half } => named.extend([
                 notice_allowance(D::DontCareLoadTiles.code()),
                 notice_allowance(D::HalfOutputFastMathBlend.code()),
-            ],
-            _ => Vec::new(),
+            ]),
+            _ => {}
         }
+        named
     }
 
     fn inputs(&self) -> Result<Vec<Input>, String> {

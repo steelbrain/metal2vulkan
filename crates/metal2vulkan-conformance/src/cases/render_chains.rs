@@ -418,9 +418,14 @@ impl Case for RenderChain {
         //
         // Every value of every row compared **exactly** on both venues, which is the evidence that
         // these declarations loosen nothing: the whole difference they cover is the announcement.
-        let mut named = vec![crate::replay::notice_allowance(
-            Degradation::ShaderColorConversion.code(),
-        )];
+        // - `shared-in-system-memory`, for every row, because the buffer the chain reads its
+        //   target back through is `Shared`, which a device with no unified memory keeps in
+        //   system memory because that is the only memory both sides can reach. It belongs to
+        //   the venue's memory model rather than to a chain's shape.
+        let mut named = vec![
+            crate::replay::notice_allowance(Degradation::ShaderColorConversion.code()),
+            crate::replay::notice_allowance(Degradation::SharedInSystemMemory.code()),
+        ];
         if self.subject.sample.half_output {
             named.push(crate::replay::notice_allowance(
                 Degradation::HalfOutputFastMathBlend.code(),
@@ -806,7 +811,10 @@ mod tests {
             // The whole set, one declaration a code the row can announce: a code the row
             // announces and declares nowhere is a divergence, and a code it declares but cannot
             // announce is an allowance standing behind nothing, so the set is stated exactly.
-            let mut wanted = vec![Degradation::ShaderColorConversion.code().to_owned()];
+            let mut wanted = vec![
+                Degradation::ShaderColorConversion.code().to_owned(),
+                Degradation::SharedInSystemMemory.code().to_owned(),
+            ];
             if case.subject.sample.half_output {
                 wanted.push(Degradation::HalfOutputFastMathBlend.code().to_owned());
             }

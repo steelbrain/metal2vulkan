@@ -29,6 +29,7 @@
 //! The coordinates do reach outside the texture, which is what the address modes are here for and
 //! what Metal defines.
 
+use crate::allowance::Allowance;
 use crate::case::{
     made, Abort, Bindings, Case, Failure, Handle, Input, MetalSource, SamplerSpec, Side,
     TextureRole, TextureSpec,
@@ -37,6 +38,7 @@ use crate::fixture::{Fixture, METAL_TEXT, RUNTIME_TEXT};
 use crate::recording::ShaderRef;
 use crate::transcript::{ByteLayout, Digest, Element, Gaps, Node, Observed, Region, Sites, Value};
 use metal2vulkan::metal::{PixelFormat, SamplerAddressMode, SamplerMinMagFilter};
+use metal2vulkan_runtime::Degradation;
 
 /// The fixture that fills the texture.
 const FILL_FIXTURE: &str = "xr_two_planes";
@@ -370,6 +372,21 @@ impl TwoPlaneSamples {
     }
 }
 
+/// The degrade notices one of these cases may announce. A list rather than a device query,
+/// because a case never branches on the device: it runs and reads what came back, and a venue that
+/// announces a kind not here fails the case until the kind is added.
+///
+/// Declaring a kind states what our side announced at the notices site and loosens no value:
+/// every sampled channel still compares exactly.
+const PASS_NOTICES: &[Degradation] = &[
+    // The buffer each pass writes its samples into is `Shared`.
+    // A device with no unified memory keeps a `Shared` allocation in system memory because that is
+    // the only memory both sides can reach, so this notice belongs to the venue's memory model
+    // rather than to anything these cases do. A device whose driver is Metal announces nothing
+    // for it.
+    Degradation::SharedInSystemMemory,
+];
+
 impl Case for TwoPlaneSamples {
     fn name(&self) -> &'static str {
         self.name
@@ -377,6 +394,13 @@ impl Case for TwoPlaneSamples {
 
     fn metal_source(&self) -> MetalSource {
         MetalSource::Run
+    }
+
+    fn allowances(&self) -> Vec<Allowance> {
+        PASS_NOTICES
+            .iter()
+            .map(|kind| crate::replay::notice_allowance(kind.code()))
+            .collect()
     }
 
     fn shaders(&self) -> Result<Vec<ShaderRef>, String> {

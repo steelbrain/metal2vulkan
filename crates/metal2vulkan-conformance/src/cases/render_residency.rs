@@ -463,9 +463,17 @@ impl Case for RenderBarriers {
         // `metal2vulkan-degrade-render-pass-split` once, its notice reading "memory barriers
         // between its draws end 1 of its Vulkan render pass instances", while every texel of both
         // halves of the target and every other field of the transcript compared exactly.
-        vec![crate::replay::notice_allowance(
-            Degradation::RenderPassSplit.code(),
-        )]
+        //
+        // One more is declared, and it is the venue's rather than this case's: the buffer the
+        // pass reads its target back through is `Shared`, which a device with no unified memory
+        // keeps in system memory because that is the only memory both sides can reach.
+        [
+            Degradation::RenderPassSplit,
+            Degradation::SharedInSystemMemory,
+        ]
+        .iter()
+        .map(|kind| crate::replay::notice_allowance(kind.code()))
+        .collect()
     }
 
     fn shaders(&self) -> Result<Vec<ShaderRef>, String> {
@@ -587,8 +595,12 @@ impl Case for HeapResidency {
     }
 
     fn allowances(&self) -> Vec<Allowance> {
-        // Nothing loosened and no notice declared, for the reason the barrier case states.
-        Vec::new()
+        // Nothing loosened, for the reason the barrier case states, and no pass-split notice:
+        // this case encodes no barrier. What is declared is the one notice the venue's own memory
+        // model provokes for the `Shared` read-back buffer.
+        vec![crate::replay::notice_allowance(
+            Degradation::SharedInSystemMemory.code(),
+        )]
     }
 
     fn shaders(&self) -> Result<Vec<ShaderRef>, String> {
@@ -816,18 +828,21 @@ mod tests {
         for case in all() {
             assert_eq!(case.record_runs(), RUNS);
             assert!(matches!(case.metal_source(), MetalSource::Run));
-            // The barrier case declares the one notice measured on it and the heap case declares
-            // nothing: no value of either is loosened.
+            // Both cases declare the notice the venue's own memory model provokes for the
+            // `Shared` read-back buffer, and the barrier case declares the pass split besides. No
+            // value of either is loosened, so every declaration sits at the notices site.
             let declared = case.allowances();
-            if case.name() == "render-state-render-barriers" {
-                assert_eq!(declared.len(), 1, "the barrier case declares one notice");
-                assert_eq!(
-                    declared[0].justified_by,
-                    Justification::Degradation(Degradation::RenderPassSplit.code().to_owned()),
-                );
-                assert!(declared[0].path.starts_with("case/notices"));
-            } else {
-                assert!(declared.is_empty(), "{} declares nothing", case.name());
+            for allowance in &declared {
+                assert!(allowance.path.starts_with("case/notices"), "{allowance:?}");
+            }
+            let codes: Vec<&Justification> =
+                declared.iter().map(|held| &held.justified_by).collect();
+            let shared =
+                Justification::Degradation(Degradation::SharedInSystemMemory.code().to_owned());
+            let split = Justification::Degradation(Degradation::RenderPassSplit.code().to_owned());
+            match case.name() {
+                "render-state-render-barriers" => assert_eq!(codes, vec![&split, &shared]),
+                _ => assert_eq!(codes, vec![&shared], "{}", case.name()),
             }
         }
         // The barriers name the stage whose writes the next draw reads, on both sides of each.

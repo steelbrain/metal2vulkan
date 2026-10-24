@@ -507,9 +507,16 @@ impl Case for StageInRegions {
         // only site loosened is the set of notices, which Metal holds empty. The allowance fails
         // the case if the notice did not fire, so a row that stops reading the region on the host
         // has to drop this line rather than carry a stale excuse.
-        vec![crate::replay::notice_allowance(
-            Degradation::HostReadDispatchArguments.code(),
-        )]
+        // The second is the venue's own: the buffers this dispatch reads its arguments and writes
+        // its answer through are `Shared`, which a device with no unified memory keeps in system
+        // memory because that is the only memory both sides can reach.
+        [
+            Degradation::HostReadDispatchArguments,
+            Degradation::SharedInSystemMemory,
+        ]
+        .iter()
+        .map(|kind| crate::replay::notice_allowance(kind.code()))
+        .collect()
     }
 
     fn shaders(&self) -> Result<Vec<ShaderRef>, String> {

@@ -427,14 +427,20 @@ impl Case for RowBlits {
     }
 
     fn allowances(&self) -> Vec<Allowance> {
+        // Every case declares the notice the venue's own memory model provokes: the buffer it
+        // reads the copied planes back through is `Shared`, which a device with no unified memory
+        // keeps in system memory because that is the only memory both sides can reach.
+        let shared =
+            notice_allowance(metal2vulkan_runtime::Degradation::SharedInSystemMemory.code());
         if !self.announced {
             // Three of the blits place their texture in a placement heap, where this device keeps
             // the two-plane texture's texels in the heap's bytes and announces it. Metal announces
             // nothing, so the notices site differs and that notice is what justifies it. Every
             // word still compares exactly.
-            return vec![notice_allowance(
-                metal2vulkan_runtime::Degradation::ShadowedTexture.code(),
-            )];
+            return vec![
+                notice_allowance(metal2vulkan_runtime::Degradation::ShadowedTexture.code()),
+                shared,
+            ];
         }
         // Into the texture, where rows meet and Metal's own order varies from run to run, the
         // device says which row's bytes it kept. Metal announces nothing, so the notices site
@@ -442,6 +448,7 @@ impl Case for RowBlits {
         vec![
             notice_allowance(metal2vulkan_runtime::Degradation::TwoPlaneBufferBlit.code()),
             notice_allowance(metal2vulkan_runtime::Degradation::TwoPlaneBufferBlitOrder.code()),
+            shared,
         ]
     }
 
@@ -672,9 +679,14 @@ impl Case for PadFills {
         // notice is what justifies it; every digest still compares exactly. The sibling row blits
         // name this notice for the same reason, and the order notice besides, which a fill of
         // whole rows never meets.
-        vec![notice_allowance(
-            metal2vulkan_runtime::Degradation::TwoPlaneBufferBlit.code(),
-        )]
+        [
+            metal2vulkan_runtime::Degradation::TwoPlaneBufferBlit,
+            // The venue's own, for the `Shared` read-back buffer, as the row blits state.
+            metal2vulkan_runtime::Degradation::SharedInSystemMemory,
+        ]
+        .iter()
+        .map(|kind| notice_allowance(kind.code()))
+        .collect()
     }
 
     fn inputs(&self) -> Result<Vec<Input>, String> {

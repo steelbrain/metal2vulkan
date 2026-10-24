@@ -332,9 +332,13 @@ impl Case for RotatedPlane {
         // A device whose own conversion of a float written to the plane's normalized attachment
         // is not Metal's converts it in the shader and announces `shader-color-conversion`
         // (lavapipe). Declared for the family: every plane byte still compares exactly.
+        // The buffer every case reads its plane back through is `Shared`, which a device with no
+        // unified memory keeps in system memory because that is the only memory both sides can
+        // reach (`shared-in-system-memory`): the venue's memory model, not a rotation.
         let mut allowances = vec![
             crate::replay::notice_allowance(Degradation::ShadowedTexture.code()),
             crate::replay::notice_allowance(Degradation::ShaderColorConversion.code()),
+            crate::replay::notice_allowance(Degradation::SharedInSystemMemory.code()),
         ];
         if self.ask == Ask::Load && self.rotation == 4 {
             // The notice is announced wherever rotation 4 loads, whatever the frame, so its code

@@ -505,10 +505,16 @@ impl Case for RotatedTarget {
         // suite overruling that, so the twelve blended states stay divergent on lavapipe and are a
         // per-venue divergence to carry, not a tolerance to write. The two unblended states, whose
         // texels match bit for bit there, read announced.
-        vec![crate::replay::notice_allowance(match self.state.blend {
-            None => Degradation::ShaderColorConversion.code(),
-            Some(_) => Degradation::DeviceColorConversion.code(),
-        })]
+        // Beside it, the notice the venue's own memory model provokes: the buffer each case
+        // reads its target back through is `Shared`, which a device with no unified memory keeps
+        // in system memory because that is the only memory both sides can reach.
+        vec![
+            crate::replay::notice_allowance(match self.state.blend {
+                None => Degradation::ShaderColorConversion.code(),
+                Some(_) => Degradation::DeviceColorConversion.code(),
+            }),
+            crate::replay::notice_allowance(Degradation::SharedInSystemMemory.code()),
+        ]
     }
 
     fn shaders(&self) -> Result<Vec<ShaderRef>, String> {

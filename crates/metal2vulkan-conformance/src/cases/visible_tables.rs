@@ -102,6 +102,7 @@
 //! Every field is a number, a name, an enumerator or a bool. The family declares no tolerance and
 //! announces nothing: no float, no texture object and no sampler is touched.
 
+use crate::allowance::Allowance;
 use crate::case::{Abort, Case, Failure, Input, MetalSource, Side};
 use crate::fixture::{Fixture, METAL_TEXT, RUNTIME_TEXT};
 use crate::recording::ShaderRef;
@@ -109,6 +110,7 @@ use crate::transcript::{Digest, Node, Observed, Sites};
 use crate::visible_tables::{
     Binding, Entry, LinkedList, LinkedSpec, Maker, StageAsked, TableSpec, Writes,
 };
+use metal2vulkan_runtime::Degradation;
 
 /// The site the caller library's make sits at.
 const CALLER_LIBRARY: &str = "caller_library";
@@ -357,6 +359,21 @@ impl VisibleTablesCase {
     }
 }
 
+/// The degrade notices one of these cases may announce. A list rather than a device query,
+/// because a case never branches on the device: it runs and reads what came back, and a venue that
+/// announces a kind not here fails the case until the kind is added.
+///
+/// Declaring a kind states what our side announced at the notices site and loosens no value:
+/// every handle and every written entry still compares exactly.
+const PASS_NOTICES: &[Degradation] = &[
+    // The buffer each dispatch writes its table answers into is `Shared`.
+    // A device with no unified memory keeps a `Shared` allocation in system memory because that is
+    // the only memory both sides can reach, so this notice belongs to the venue's memory model
+    // rather than to anything these cases do. A device whose driver is Metal announces nothing
+    // for it.
+    Degradation::SharedInSystemMemory,
+];
+
 impl Case for VisibleTablesCase {
     fn name(&self) -> &'static str {
         self.name
@@ -364,6 +381,13 @@ impl Case for VisibleTablesCase {
 
     fn metal_source(&self) -> MetalSource {
         MetalSource::Run
+    }
+
+    fn allowances(&self) -> Vec<Allowance> {
+        PASS_NOTICES
+            .iter()
+            .map(|kind| crate::replay::notice_allowance(kind.code()))
+            .collect()
     }
 
     fn shaders(&self) -> Result<Vec<ShaderRef>, String> {

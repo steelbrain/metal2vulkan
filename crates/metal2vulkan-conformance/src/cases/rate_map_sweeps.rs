@@ -401,14 +401,21 @@ impl Case for RateMapSweep {
         // The allowance is held to its evidence by the suite itself — the notice must have been
         // announced on the run compared — and it is the only loosening this family declares. Every
         // derived answer compares exactly, which is the point of the sweep.
+        // Either way the case declares the notice the venue's own memory model provokes: the
+        // buffer it reads its answer back through is `Shared`, which a device with no unified
+        // memory keeps in system memory because that is the only memory both sides can reach.
+        let shared = crate::replay::notice_allowance(Degradation::SharedInSystemMemory.code());
         if self.walk.points().iter().all(|point| point.identity()) {
-            return Vec::new();
+            return vec![shared];
         }
-        vec![Allowance::new(
-            format!("case/{NOTICES_SITE}/*"),
-            Loosening::Unchecked,
-            Justification::notice(Degradation::RasterizationRateMap),
-        )]
+        vec![
+            shared,
+            Allowance::new(
+                format!("case/{NOTICES_SITE}/*"),
+                Loosening::Unchecked,
+                Justification::notice(Degradation::RasterizationRateMap),
+            ),
+        ]
     }
 
     fn run(&self, side: &mut dyn Side, sites: &mut Sites) -> Result<(), Abort> {
@@ -555,14 +562,21 @@ impl Case for RateMapParameterData {
                 .into_iter()
                 .all(|axis| axis.iter().all(|sample| *sample >= 1.0))
         });
+        // Either way the case declares the notice the venue's own memory model provokes: the
+        // buffer it reads its answer back through is `Shared`, which a device with no unified
+        // memory keeps in system memory because that is the only memory both sides can reach.
+        let shared = crate::replay::notice_allowance(Degradation::SharedInSystemMemory.code());
         if identity {
-            return Vec::new();
+            return vec![shared];
         }
-        vec![Allowance::new(
-            format!("case/{NOTICES_SITE}/*"),
-            Loosening::Unchecked,
-            Justification::notice(Degradation::RasterizationRateMap),
-        )]
+        vec![
+            shared,
+            Allowance::new(
+                format!("case/{NOTICES_SITE}/*"),
+                Loosening::Unchecked,
+                Justification::notice(Degradation::RasterizationRateMap),
+            ),
+        ]
     }
 
     fn run(&self, side: &mut dyn Side, sites: &mut Sites) -> Result<(), Abort> {

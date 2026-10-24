@@ -2623,23 +2623,47 @@ fn the_rate_map_cases_name_what_justifies_them() {
             inputs.iter().any(|input| input.name == "descriptor"),
             "{inputs:?}"
         );
-        // Every allowance names something that exists: the rate-map degradation, over the
+        // Every allowance names something that exists -- the rate-map degradation, or the notice
+        // a device with no unified memory announces for the `Shared` read-back buffer -- over the
         // notices site alone, so every answer of the map itself still compares exactly.
         for allowance in case.allowances() {
             match &allowance.justified_by {
                 Justification::Degradation(code) => {
-                    assert_eq!(code, Degradation::RasterizationRateMap.code());
+                    assert!(
+                        code == Degradation::RasterizationRateMap.code()
+                            || code == Degradation::SharedInSystemMemory.code(),
+                        "{code}"
+                    );
                     assert_eq!(allowance.path, "case/notices/*");
                 }
                 other => panic!("an unexpected tolerance: {other:?}"),
             }
         }
     }
-    // The map of the identity announces nothing and carries no allowance; the one that is not the
-    // identity announces its degradation when it is made. Neither rests on the validated oracle
-    // any more: the zero-screen-width refusal that did is closed.
-    assert!(cases[0].allowances().is_empty());
-    assert_eq!(cases[1].allowances().len(), 1);
+    // The map of the identity announces no rate-map degradation and declares none; the one that is
+    // not the identity announces it when the map is made. Both declare the venue's own
+    // system-memory notice. Neither rests on the validated oracle any more: the zero-screen-width
+    // refusal that did is closed.
+    let codes = |case: &crate::cases::rate_maps::RateMapCase| -> Vec<String> {
+        case.allowances()
+            .iter()
+            .filter_map(|allowance| match &allowance.justified_by {
+                Justification::Degradation(code) => Some(code.clone()),
+                _ => None,
+            })
+            .collect()
+    };
+    assert_eq!(
+        codes(&cases[0]),
+        vec![Degradation::SharedInSystemMemory.code().to_owned()]
+    );
+    assert_eq!(
+        codes(&cases[1]),
+        vec![
+            Degradation::SharedInSystemMemory.code().to_owned(),
+            Degradation::RasterizationRateMap.code().to_owned()
+        ]
+    );
     for case in &cases {
         assert!(
             !case.allowances().iter().any(|allowance| matches!(

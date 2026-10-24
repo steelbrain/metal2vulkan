@@ -108,6 +108,10 @@ pub const TILE_PASS_NOTICES: &[Degradation] = &[
     // on lavapipe. Nothing of these cases reads a quad's grouping -- the tile order is the answer,
     // and it compares exactly -- so the kind is declared and no value is loosened.
     Degradation::QuadsSplitByClipping,
+    // The record buffer each pass writes its tile order into is `Shared`, and a device with no
+    // unified memory keeps a `Shared` allocation in system memory because that is the only memory
+    // both sides can reach. It belongs to the venue's memory model rather than to a tile dispatch.
+    Degradation::SharedInSystemMemory,
 ];
 
 /// The allowances a case of this family keeps: one over its notices site per kind of

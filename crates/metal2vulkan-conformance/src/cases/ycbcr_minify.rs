@@ -49,6 +49,7 @@
 //! 23.7 MiB shared buffer, which is the largest input in the suite and well inside the project's
 //! 500 MiB ceiling.
 
+use crate::allowance::Allowance;
 use crate::case::{
     made, Abort, Bindings, Case, Failure, Input, MetalSource, PlaneTexture, SamplerSpec, Side,
 };
@@ -56,6 +57,7 @@ use crate::fixture::{Fixture, METAL_TEXT, RUNTIME_TEXT};
 use crate::recording::ShaderRef;
 use crate::transcript::{ByteLayout, Digest, Element, Gaps, Node, Observed, Region, Sites};
 use metal2vulkan::metal::{PixelFormat, SamplerAddressMode, SamplerMinMagFilter};
+use metal2vulkan_runtime::Degradation;
 
 /// The surface's extent in texels: 4K, the size the consumer's pass sampled.
 const W: u64 = 3840;
@@ -246,6 +248,21 @@ fn ends_layout() -> ByteLayout {
     layout
 }
 
+/// The degrade notices one of these cases may announce. A list rather than a device query,
+/// because a case never branches on the device: it runs and reads what came back, and a venue that
+/// announces a kind not here fails the case until the kind is added.
+///
+/// Declaring a kind states what our side announced at the notices site and loosens no value:
+/// every sample of every band still compares exactly.
+const PASS_NOTICES: &[Degradation] = &[
+    // The buffer each band writes its minified samples into is `Shared`.
+    // A device with no unified memory keeps a `Shared` allocation in system memory because that is
+    // the only memory both sides can reach, so this notice belongs to the venue's memory model
+    // rather than to anything these cases do. A device whose driver is Metal announces nothing
+    // for it.
+    Degradation::SharedInSystemMemory,
+];
+
 impl Case for MinifyBand {
     fn name(&self) -> &'static str {
         self.name
@@ -253,6 +270,13 @@ impl Case for MinifyBand {
 
     fn metal_source(&self) -> MetalSource {
         MetalSource::Run
+    }
+
+    fn allowances(&self) -> Vec<Allowance> {
+        PASS_NOTICES
+            .iter()
+            .map(|kind| crate::replay::notice_allowance(kind.code()))
+            .collect()
     }
 
     fn shaders(&self) -> Result<Vec<ShaderRef>, String> {

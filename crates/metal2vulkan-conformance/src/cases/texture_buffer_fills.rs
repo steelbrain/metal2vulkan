@@ -529,9 +529,16 @@ impl Case for ByteFills {
         // The fills whose last copy of the pattern is cut at the texel read the bytes past it and
         // write them as zeros, as Metal's do, and the device announces it once. Metal announces
         // nothing, so the notices site differs, and the notice is what justifies it.
-        vec![crate::replay::notice_allowance(
-            metal2vulkan_runtime::Degradation::TextureBufferFillLeftover.code(),
-        )]
+        [
+            metal2vulkan_runtime::Degradation::TextureBufferFillLeftover,
+            // The texture buffer these fills write into is backed by a `Shared` buffer, which a
+            // device with no unified memory keeps in system memory because that is the only
+            // memory both sides can reach: the venue's memory model, not a fill's leftover.
+            metal2vulkan_runtime::Degradation::SharedInSystemMemory,
+        ]
+        .iter()
+        .map(|kind| crate::replay::notice_allowance(kind.code()))
+        .collect()
     }
 
     fn run(&self, side: &mut dyn Side, sites: &mut Sites) -> Result<(), Abort> {
@@ -663,9 +670,16 @@ impl Case for LongFills {
         // The fills whose last copy of the pattern is cut at the texel read the bytes past it and
         // write them as zeros, as Metal's do, and the device announces it once. Metal announces
         // nothing, so the notices site differs, and the notice is what justifies it.
-        vec![crate::replay::notice_allowance(
-            metal2vulkan_runtime::Degradation::TextureBufferFillLeftover.code(),
-        )]
+        [
+            metal2vulkan_runtime::Degradation::TextureBufferFillLeftover,
+            // The texture buffer these fills write into is backed by a `Shared` buffer, which a
+            // device with no unified memory keeps in system memory because that is the only
+            // memory both sides can reach: the venue's memory model, not a fill's leftover.
+            metal2vulkan_runtime::Degradation::SharedInSystemMemory,
+        ]
+        .iter()
+        .map(|kind| crate::replay::notice_allowance(kind.code()))
+        .collect()
     }
 
     fn run(&self, side: &mut dyn Side, sites: &mut Sites) -> Result<(), Abort> {

@@ -532,14 +532,18 @@ impl Case for Boxes {
     }
 
     fn allowances(&self) -> Vec<Allowance> {
-        // Nothing is loosened and no notice is declared. A `RGBA32Float` texel is the `float4` a
-        // fragment function returned, so what each draw saw is an exact answer or it is a bug;
-        // there is no normalized conversion here and no arithmetic of the shader's -- `tob_solid`
-        // returns its binding and `tob_read` reads a texel at integer coordinates, neither of
-        // which can take a device's float bounds. A notice our side announces would therefore be
-        // undeclared and the case divergent, which is the honest reading: a declaration may only
-        // stand on a venue measured announcing it.
-        Vec::new()
+        // Nothing is loosened. A `RGBA32Float` texel is the `float4` a fragment function
+        // returned, so what each draw saw is an exact answer or it is a bug; there is no
+        // normalized conversion here and no arithmetic of the shader's -- `tob_solid` returns its
+        // binding and `tob_read` reads a texel at integer coordinates, neither of which can take a
+        // device's float bounds.
+        //
+        // One notice is declared, and it is the venue's and not this case's: the buffer the pass
+        // reads its target back through is `Shared`, which a device with no unified memory keeps
+        // in system memory because that is the only memory both sides can reach.
+        vec![crate::replay::notice_allowance(
+            Degradation::SharedInSystemMemory.code(),
+        )]
     }
 
     fn shaders(&self) -> Result<Vec<ShaderRef>, String> {
@@ -750,9 +754,16 @@ impl Case for Facing {
         // attachment in two instances, while every texel this case reads and every other field of
         // its transcript compared exactly. The declaration loosens no value -- it says the
         // announcement is this case's -- so the case still fails on any byte that moves.
-        vec![crate::replay::notice_allowance(
-            Degradation::RenderPassSplit.code(),
-        )]
+        //
+        // The notice the venue's own memory model provokes for the `Shared` read-back buffer is
+        // declared beside it.
+        [
+            Degradation::RenderPassSplit,
+            Degradation::SharedInSystemMemory,
+        ]
+        .iter()
+        .map(|kind| crate::replay::notice_allowance(kind.code()))
+        .collect()
     }
 
     fn shaders(&self) -> Result<Vec<ShaderRef>, String> {
@@ -920,8 +931,11 @@ impl Case for UnreadSlots {
     }
 
     fn allowances(&self) -> Vec<Allowance> {
-        // Nothing loosened and no notice declared, for the reason `render-state-boxes` states.
-        Vec::new()
+        // Nothing loosened, for the reason `render-state-boxes` states, and the one notice the
+        // venue's own memory model provokes for the `Shared` read-back buffer.
+        vec![crate::replay::notice_allowance(
+            Degradation::SharedInSystemMemory.code(),
+        )]
     }
 
     fn shaders(&self) -> Result<Vec<ShaderRef>, String> {
@@ -1379,18 +1393,22 @@ mod tests {
         for case in all() {
             assert_eq!(case.record_runs(), RUNS);
             assert!(matches!(case.metal_source(), MetalSource::Run));
-            // Exactly one case of the family declares anything, and what it declares is the one
-            // notice measured on it: no value of any case is loosened.
+            // Every case declares the notice the venue's own memory model provokes for the
+            // `Shared` read-back buffer, and exactly one -- the facing case -- declares the pass
+            // split besides. No value of any case is loosened, so every declaration sits at the
+            // notices site.
             let declared = case.allowances();
-            if case.name() == "render-state-facing" {
-                assert_eq!(declared.len(), 1, "the facing case declares one notice");
-                assert_eq!(
-                    declared[0].justified_by,
-                    Justification::Degradation(Degradation::RenderPassSplit.code().to_owned()),
-                );
-                assert!(declared[0].path.starts_with("case/notices"));
-            } else {
-                assert!(declared.is_empty(), "{} declares nothing", case.name());
+            for allowance in &declared {
+                assert!(allowance.path.starts_with("case/notices"), "{allowance:?}");
+            }
+            let codes: Vec<&Justification> =
+                declared.iter().map(|held| &held.justified_by).collect();
+            let shared =
+                Justification::Degradation(Degradation::SharedInSystemMemory.code().to_owned());
+            let split = Justification::Degradation(Degradation::RenderPassSplit.code().to_owned());
+            match case.name() {
+                "render-state-facing" => assert_eq!(codes, vec![&split, &shared]),
+                _ => assert_eq!(codes, vec![&shared], "{}", case.name()),
             }
         }
     }
