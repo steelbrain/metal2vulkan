@@ -1,0 +1,2282 @@
+{
+  "format": 1,
+  "case": "sampler-mip-filter-pairs-not-mipmapped",
+  "suite_version": 1,
+  "shaders": [
+    {
+      "fixture": "msf_runtime_samplers.ll",
+      "entry": "msf_slot2d_linear_edge",
+      "source_sha256": "fa455706aa522e16a8b72fb51387d32e70d5e0471b8db8e8465bc002a044ebbf"
+    },
+    {
+      "fixture": "msf_runtime_samplers.air.ll",
+      "entry": "msf_slot2d_linear_edge",
+      "source_sha256": "3943694c31235c3e0841c22e15fb2ecb8fe55eae0f5edb81c04efa7ce27efb4a"
+    }
+  ],
+  "answers": [
+    {
+      "key": {
+        "chip": "apple-m3-max",
+        "os_version": "27.0.1",
+        "os_build": "26A434",
+        "metal_level": "27.0.1"
+      },
+      "provenance": "metal_run",
+      "device": "Apple M3 Max",
+      "runs": 3,
+      "outcomes": [
+        {
+          "runs": 3,
+          "transcript": {
+            "root": {
+              "name": "case",
+              "observed": {
+                "value": "absent"
+              },
+              "children": [
+                {
+                  "name": "inputs",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "air",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "fa455706aa522e16a8b72fb51387d32e70d5e0471b8db8e8465bc002a044ebbf"
+                        }
+                      }
+                    },
+                    {
+                      "name": "air-typed",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "3943694c31235c3e0841c22e15fb2ecb8fe55eae0f5edb81c04efa7ce27efb4a"
+                        }
+                      }
+                    },
+                    {
+                      "name": "entry",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "2f78646512c0669e407907820fac20d642f217958111a404f3a66424f9ac00d6"
+                        }
+                      }
+                    },
+                    {
+                      "name": "buffer:coords",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "36b904503efdb2ef6226c420a33a837deb25cdba39df54ecf4998195f8db6ee0"
+                        }
+                      }
+                    },
+                    {
+                      "name": "buffer:out",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "847c7abf4f64e13f1641564318260d6b134fa1d065830bd260a7cc0012744c31"
+                        }
+                      }
+                    },
+                    {
+                      "name": "texture:level-0",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "994294717e9222764d03686b675546d724767d179b55b0a17aa99e024ac5b725"
+                        }
+                      }
+                    },
+                    {
+                      "name": "texture:level-1",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "e48536d2c030c11545bc2d81d3ba816b1bfe0918301b639a74e600e6b65c1d41"
+                        }
+                      }
+                    },
+                    {
+                      "name": "texture:level-2",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "f93e2aa7e20eb065bfeb9e780244f35e25c9764b907f1e5dc9e9fb14fd05e860"
+                        }
+                      }
+                    },
+                    {
+                      "name": "sampler:nearest-nearest-clamp-0",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "640e494dd31edb66b0748239aa90547d77e8ab37843b5bc8352a5f39e5296f06"
+                        }
+                      }
+                    },
+                    {
+                      "name": "sampler:nearest-nearest-clamp-0-25",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "7e6673ec34d5c01f9cc36b9d97f334310692bf220a30cdfa8e38d16a570d1674"
+                        }
+                      }
+                    },
+                    {
+                      "name": "sampler:nearest-nearest-clamp-1",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "f0a238252dfa38f0ab0137eb4ff1e53867542aad434b67f5f0386d34c8df53c7"
+                        }
+                      }
+                    },
+                    {
+                      "name": "sampler:nearest-nearest-clamp-1-5",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "56359dc1f588fc585bc7ead8f64f2b17395474ab35db8ece7f91de9465f7c4b4"
+                        }
+                      }
+                    },
+                    {
+                      "name": "sampler:nearest-nearest-clamp-2",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "33feb54b168711a9efd0cf9a59f090615f1d34d62e8b24fd4e381c0e664a1c85"
+                        }
+                      }
+                    },
+                    {
+                      "name": "sampler:linear-linear-clamp-0",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "c7af40fff57e04ab850c5f1f77e7233bfc1d5038e05b4178c5c31ebe61f0000c"
+                        }
+                      }
+                    },
+                    {
+                      "name": "sampler:linear-linear-clamp-0-25",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "c1f80cce2385ff3e0f52ffe59baa6b7981db8d49e1da96720c123cda9cc34aa6"
+                        }
+                      }
+                    },
+                    {
+                      "name": "sampler:linear-linear-clamp-1",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "2bad83adc0228e7c4077c5303493c71d12d70ec73da5ac553f3b7419418f5c81"
+                        }
+                      }
+                    },
+                    {
+                      "name": "sampler:linear-linear-clamp-1-5",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "ffbb8e0935450445db4f94429596dc0d4ff3e18767e64eeb1b86ed9671ce4acf"
+                        }
+                      }
+                    },
+                    {
+                      "name": "sampler:linear-linear-clamp-2",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "2b0f622cca15a64aa5334e1234593f55ed535aea8faa1e7f98b2fb2ac4a66951"
+                        }
+                      }
+                    },
+                    {
+                      "name": "sampler:linear-min-nearest-mag-clamp-0",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "0c3dfebf98a5f60965bcf6ccbb9909852ac21a22f9806f520bf230ebabd9c5d1"
+                        }
+                      }
+                    },
+                    {
+                      "name": "sampler:linear-min-nearest-mag-clamp-0-25",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "881b0eb7a3b83d65071653c9652a901e18a68f643f67433a4cfa202f9535f9d6"
+                        }
+                      }
+                    },
+                    {
+                      "name": "sampler:linear-min-nearest-mag-clamp-1",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "020c00d6953730408dba7b919690bdb9ae4c945db2ba833197f8e1bc60919469"
+                        }
+                      }
+                    },
+                    {
+                      "name": "sampler:linear-min-nearest-mag-clamp-1-5",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "7fe1dbadc8a5d751747aeff27e84ab72ac042103543df88c82f15e015a9f1489"
+                        }
+                      }
+                    },
+                    {
+                      "name": "sampler:linear-min-nearest-mag-clamp-2",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "77c6032058950e16163abf09b9390c7de36c9c53f0f099456156a8638c56ac14"
+                        }
+                      }
+                    },
+                    {
+                      "name": "sampler:nearest-min-linear-mag-clamp-0",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "0cba842fd03dbba8a1fe7d758718c9a0d444b24bccab3772f6c2482272a0aeb7"
+                        }
+                      }
+                    },
+                    {
+                      "name": "sampler:nearest-min-linear-mag-clamp-0-25",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "28d0b0519b150c4665c7fb060afab4ecc3c064cf4230d7e783b7703bb26a91fc"
+                        }
+                      }
+                    },
+                    {
+                      "name": "sampler:nearest-min-linear-mag-clamp-1",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "bda950b0a6759bc964d49ff11bc5f15cb010f4e607879bd48071bf8d529e32ba"
+                        }
+                      }
+                    },
+                    {
+                      "name": "sampler:nearest-min-linear-mag-clamp-1-5",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "d6fd2eeacbbc59ee7b6d6ddac323428376625935a2b9ca88b6fcd39413e07e19"
+                        }
+                      }
+                    },
+                    {
+                      "name": "sampler:nearest-min-linear-mag-clamp-2",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "b2009605057dfbb81421c9c4ea611e8445eee9da2bce078edb0a72f66f999b3b"
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "library",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "pipeline",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "texture",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "buffer/coords",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "nearest-nearest-clamp-0/sampler",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "nearest-nearest-clamp-0/buffer/out",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "nearest-nearest-clamp-0/dispatch",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "nearest-nearest-clamp-0/status",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": {
+                          "variant": {
+                            "name": "Completed",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "nearest-nearest-clamp-0/read-back",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "nearest-nearest-clamp-0",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "sampled",
+                      "observed": {
+                        "value": {
+                          "bytes": "AACAPwAAAAAAAAAAAACAPwAAgD8AAAAAAAAAAAAAgD8AAOA/AAAAAAAAAAAAAIA/AAAAQAAAAAAAAAAAAACAPwAAMEAAAAAAAAAAAAAAgD8AAEBAAAAAAAAAAAAAAIA/AABwQAAAAAAAAAAAAACAPwAAgEAAAAAAAAAAAAAAgD8AAIBAAAAAAAAAAAAAAIA/AACgQAAAAAAAAAAAAACAPwAAmEAAAAAAAAAAAAAAgD8AAMBAAAAAAAAAAAAAAIA/AAC4QAAAAAAAAAAAAACAPwAA4EAAAAAAAAAAAAAAgD8AANhAAAAAAAAAAAAAAIA/AAAAQQAAAAAAAAAAAACAPwAAAEEAAAAAAAAAAAAAgD8AABBBAAAAAAAAAAAAAIA/AAAMQQAAAAAAAAAAAACAPwAAIEEAAAAAAAAAAAAAgD8AABxBAAAAAAAAAAAAAIA/AAAwQQAAAAAAAAAAAACAPwAALEEAAAAAAAAAAAAAgD8AAEBBAAAAAAAAAAAAAIA/AABAQQAAAAAAAAAAAACAPwAAUEEAAAAAAAAAAAAAgD8AAExBAAAAAAAAAAAAAIA/AABgQQAAAAAAAAAAAACAPwAAXEEAAAAAAAAAAAAAgD8AAHBBAAAAAAAAAAAAAIA/AABsQQAAAAAAAAAAAACAPwAAgEEAAAAAAAAAAAAAgD8="
+                        },
+                        "shape": {
+                          "bytes": {
+                            "region": {
+                              "buffer": {
+                                "offset": 0,
+                                "length": 512
+                              }
+                            },
+                            "element": "f32",
+                            "row_offset": 0,
+                            "row_elements": 8,
+                            "row_pitch": 32,
+                            "rows": 16,
+                            "image_pitch": 512,
+                            "images": 1,
+                            "gaps": "ignored"
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "nearest-nearest-clamp-0-25/sampler",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "nearest-nearest-clamp-0-25/buffer/out",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "nearest-nearest-clamp-0-25/dispatch",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "nearest-nearest-clamp-0-25/status",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": {
+                          "variant": {
+                            "name": "Completed",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "nearest-nearest-clamp-0-25/read-back",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "nearest-nearest-clamp-0-25",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "sampled",
+                      "observed": {
+                        "value": {
+                          "bytes": "AACAPwAAAAAAAAAAAACAPwAAgD8AAAAAAAAAAAAAgD8AAOA/AAAAAAAAAAAAAIA/AAAAQAAAAAAAAAAAAACAPwAAMEAAAAAAAAAAAAAAgD8AAEBAAAAAAAAAAAAAAIA/AABwQAAAAAAAAAAAAACAPwAAgEAAAAAAAAAAAAAAgD8AAIBAAAAAAAAAAAAAAIA/AACgQAAAAAAAAAAAAACAPwAAmEAAAAAAAAAAAAAAgD8AAMBAAAAAAAAAAAAAAIA/AAC4QAAAAAAAAAAAAACAPwAA4EAAAAAAAAAAAAAAgD8AANhAAAAAAAAAAAAAAIA/AAAAQQAAAAAAAAAAAACAPwAAAEEAAAAAAAAAAAAAgD8AABBBAAAAAAAAAAAAAIA/AAAMQQAAAAAAAAAAAACAPwAAIEEAAAAAAAAAAAAAgD8AABxBAAAAAAAAAAAAAIA/AAAwQQAAAAAAAAAAAACAPwAALEEAAAAAAAAAAAAAgD8AAEBBAAAAAAAAAAAAAIA/AABAQQAAAAAAAAAAAACAPwAAUEEAAAAAAAAAAAAAgD8AAExBAAAAAAAAAAAAAIA/AABgQQAAAAAAAAAAAACAPwAAXEEAAAAAAAAAAAAAgD8AAHBBAAAAAAAAAAAAAIA/AABsQQAAAAAAAAAAAACAPwAAgEEAAAAAAAAAAAAAgD8="
+                        },
+                        "shape": {
+                          "bytes": {
+                            "region": {
+                              "buffer": {
+                                "offset": 0,
+                                "length": 512
+                              }
+                            },
+                            "element": "f32",
+                            "row_offset": 0,
+                            "row_elements": 8,
+                            "row_pitch": 32,
+                            "rows": 16,
+                            "image_pitch": 512,
+                            "images": 1,
+                            "gaps": "ignored"
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "nearest-nearest-clamp-1/sampler",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "nearest-nearest-clamp-1/buffer/out",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "nearest-nearest-clamp-1/dispatch",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "nearest-nearest-clamp-1/status",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": {
+                          "variant": {
+                            "name": "Completed",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "nearest-nearest-clamp-1/read-back",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "nearest-nearest-clamp-1",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "sampled",
+                      "observed": {
+                        "value": {
+                          "bytes": "AACAPwAAAAAAAAAAAACAPwAAgD8AAAAAAAAAAAAAgD8AAOA/AAAAAAAAAAAAAIA/AAAAQAAAAAAAAAAAAACAPwAAMEAAAAAAAAAAAAAAgD8AAEBAAAAAAAAAAAAAAIA/AABwQAAAAAAAAAAAAACAPwAAgEAAAAAAAAAAAAAAgD8AAIBAAAAAAAAAAAAAAIA/AACgQAAAAAAAAAAAAACAPwAAmEAAAAAAAAAAAAAAgD8AAMBAAAAAAAAAAAAAAIA/AAC4QAAAAAAAAAAAAACAPwAA4EAAAAAAAAAAAAAAgD8AANhAAAAAAAAAAAAAAIA/AAAAQQAAAAAAAAAAAACAPwAAAEEAAAAAAAAAAAAAgD8AABBBAAAAAAAAAAAAAIA/AAAMQQAAAAAAAAAAAACAPwAAIEEAAAAAAAAAAAAAgD8AABxBAAAAAAAAAAAAAIA/AAAwQQAAAAAAAAAAAACAPwAALEEAAAAAAAAAAAAAgD8AAEBBAAAAAAAAAAAAAIA/AABAQQAAAAAAAAAAAACAPwAAUEEAAAAAAAAAAAAAgD8AAExBAAAAAAAAAAAAAIA/AABgQQAAAAAAAAAAAACAPwAAXEEAAAAAAAAAAAAAgD8AAHBBAAAAAAAAAAAAAIA/AABsQQAAAAAAAAAAAACAPwAAgEEAAAAAAAAAAAAAgD8="
+                        },
+                        "shape": {
+                          "bytes": {
+                            "region": {
+                              "buffer": {
+                                "offset": 0,
+                                "length": 512
+                              }
+                            },
+                            "element": "f32",
+                            "row_offset": 0,
+                            "row_elements": 8,
+                            "row_pitch": 32,
+                            "rows": 16,
+                            "image_pitch": 512,
+                            "images": 1,
+                            "gaps": "ignored"
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "nearest-nearest-clamp-1-5/sampler",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "nearest-nearest-clamp-1-5/buffer/out",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "nearest-nearest-clamp-1-5/dispatch",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "nearest-nearest-clamp-1-5/status",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": {
+                          "variant": {
+                            "name": "Completed",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "nearest-nearest-clamp-1-5/read-back",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "nearest-nearest-clamp-1-5",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "sampled",
+                      "observed": {
+                        "value": {
+                          "bytes": "AACAPwAAAAAAAAAAAACAPwAAgD8AAAAAAAAAAAAAgD8AAOA/AAAAAAAAAAAAAIA/AAAAQAAAAAAAAAAAAACAPwAAMEAAAAAAAAAAAAAAgD8AAEBAAAAAAAAAAAAAAIA/AABwQAAAAAAAAAAAAACAPwAAgEAAAAAAAAAAAAAAgD8AAIBAAAAAAAAAAAAAAIA/AACgQAAAAAAAAAAAAACAPwAAmEAAAAAAAAAAAAAAgD8AAMBAAAAAAAAAAAAAAIA/AAC4QAAAAAAAAAAAAACAPwAA4EAAAAAAAAAAAAAAgD8AANhAAAAAAAAAAAAAAIA/AAAAQQAAAAAAAAAAAACAPwAAAEEAAAAAAAAAAAAAgD8AABBBAAAAAAAAAAAAAIA/AAAMQQAAAAAAAAAAAACAPwAAIEEAAAAAAAAAAAAAgD8AABxBAAAAAAAAAAAAAIA/AAAwQQAAAAAAAAAAAACAPwAALEEAAAAAAAAAAAAAgD8AAEBBAAAAAAAAAAAAAIA/AABAQQAAAAAAAAAAAACAPwAAUEEAAAAAAAAAAAAAgD8AAExBAAAAAAAAAAAAAIA/AABgQQAAAAAAAAAAAACAPwAAXEEAAAAAAAAAAAAAgD8AAHBBAAAAAAAAAAAAAIA/AABsQQAAAAAAAAAAAACAPwAAgEEAAAAAAAAAAAAAgD8="
+                        },
+                        "shape": {
+                          "bytes": {
+                            "region": {
+                              "buffer": {
+                                "offset": 0,
+                                "length": 512
+                              }
+                            },
+                            "element": "f32",
+                            "row_offset": 0,
+                            "row_elements": 8,
+                            "row_pitch": 32,
+                            "rows": 16,
+                            "image_pitch": 512,
+                            "images": 1,
+                            "gaps": "ignored"
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "nearest-nearest-clamp-2/sampler",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "nearest-nearest-clamp-2/buffer/out",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "nearest-nearest-clamp-2/dispatch",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "nearest-nearest-clamp-2/status",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": {
+                          "variant": {
+                            "name": "Completed",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "nearest-nearest-clamp-2/read-back",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "nearest-nearest-clamp-2",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "sampled",
+                      "observed": {
+                        "value": {
+                          "bytes": "AACAPwAAAAAAAAAAAACAPwAAgD8AAAAAAAAAAAAAgD8AAOA/AAAAAAAAAAAAAIA/AAAAQAAAAAAAAAAAAACAPwAAMEAAAAAAAAAAAAAAgD8AAEBAAAAAAAAAAAAAAIA/AABwQAAAAAAAAAAAAACAPwAAgEAAAAAAAAAAAAAAgD8AAIBAAAAAAAAAAAAAAIA/AACgQAAAAAAAAAAAAACAPwAAmEAAAAAAAAAAAAAAgD8AAMBAAAAAAAAAAAAAAIA/AAC4QAAAAAAAAAAAAACAPwAA4EAAAAAAAAAAAAAAgD8AANhAAAAAAAAAAAAAAIA/AAAAQQAAAAAAAAAAAACAPwAAAEEAAAAAAAAAAAAAgD8AABBBAAAAAAAAAAAAAIA/AAAMQQAAAAAAAAAAAACAPwAAIEEAAAAAAAAAAAAAgD8AABxBAAAAAAAAAAAAAIA/AAAwQQAAAAAAAAAAAACAPwAALEEAAAAAAAAAAAAAgD8AAEBBAAAAAAAAAAAAAIA/AABAQQAAAAAAAAAAAACAPwAAUEEAAAAAAAAAAAAAgD8AAExBAAAAAAAAAAAAAIA/AABgQQAAAAAAAAAAAACAPwAAXEEAAAAAAAAAAAAAgD8AAHBBAAAAAAAAAAAAAIA/AABsQQAAAAAAAAAAAACAPwAAgEEAAAAAAAAAAAAAgD8="
+                        },
+                        "shape": {
+                          "bytes": {
+                            "region": {
+                              "buffer": {
+                                "offset": 0,
+                                "length": 512
+                              }
+                            },
+                            "element": "f32",
+                            "row_offset": 0,
+                            "row_elements": 8,
+                            "row_pitch": 32,
+                            "rows": 16,
+                            "image_pitch": 512,
+                            "images": 1,
+                            "gaps": "ignored"
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "linear-linear-clamp-0/sampler",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "linear-linear-clamp-0/buffer/out",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "linear-linear-clamp-0/dispatch",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "linear-linear-clamp-0/status",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": {
+                          "variant": {
+                            "name": "Completed",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "linear-linear-clamp-0/read-back",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "linear-linear-clamp-0",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "sampled",
+                      "observed": {
+                        "value": {
+                          "bytes": "AACAPwAAAAAAAAAAAACAPwAAgD8AAAAAAAAAAAAAgD8AAOA/AAAAAAAAAAAAAIA/AADgPwAAAAAAAAAAAACAPwAAMEAAAAAAAAAAAAAAgD8AADBAAAAAAAAAAAAAAIA/AABwQAAAAAAAAAAAAACAPwAAcEAAAAAAAAAAAAAAgD8AAIBAAAAAAAAAAAAAAIA/AACAQAAAAAAAAAAAAACAPwAAmEAAAAAAAAAAAAAAgD8AAJhAAAAAAAAAAAAAAIA/AAC4QAAAAAAAAAAAAACAPwAAuEAAAAAAAAAAAAAAgD8AANhAAAAAAAAAAAAAAIA/AADYQAAAAAAAAAAAAACAPwAAAEEAAAAAAAAAAAAAgD8AAABBAAAAAAAAAAAAAIA/AAAMQQAAAAAAAAAAAACAPwAADEEAAAAAAAAAAAAAgD8AABxBAAAAAAAAAAAAAIA/AAAcQQAAAAAAAAAAAACAPwAALEEAAAAAAAAAAAAAgD8AACxBAAAAAAAAAAAAAIA/AABAQQAAAAAAAAAAAACAPwAAQEEAAAAAAAAAAAAAgD8AAExBAAAAAAAAAAAAAIA/AABMQQAAAAAAAAAAAACAPwAAXEEAAAAAAAAAAAAAgD8AAFxBAAAAAAAAAAAAAIA/AABsQQAAAAAAAAAAAACAPwAAbEEAAAAAAAAAAAAAgD8="
+                        },
+                        "shape": {
+                          "bytes": {
+                            "region": {
+                              "buffer": {
+                                "offset": 0,
+                                "length": 512
+                              }
+                            },
+                            "element": "f32",
+                            "row_offset": 0,
+                            "row_elements": 8,
+                            "row_pitch": 32,
+                            "rows": 16,
+                            "image_pitch": 512,
+                            "images": 1,
+                            "gaps": "ignored"
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "linear-linear-clamp-0-25/sampler",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "linear-linear-clamp-0-25/buffer/out",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "linear-linear-clamp-0-25/dispatch",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "linear-linear-clamp-0-25/status",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": {
+                          "variant": {
+                            "name": "Completed",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "linear-linear-clamp-0-25/read-back",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "linear-linear-clamp-0-25",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "sampled",
+                      "observed": {
+                        "value": {
+                          "bytes": "AACAPwAAAAAAAAAAAACAPwAAgD8AAAAAAAAAAAAAgD8AAOA/AAAAAAAAAAAAAIA/AADgPwAAAAAAAAAAAACAPwAAMEAAAAAAAAAAAAAAgD8AADBAAAAAAAAAAAAAAIA/AABwQAAAAAAAAAAAAACAPwAAcEAAAAAAAAAAAAAAgD8AAIBAAAAAAAAAAAAAAIA/AACAQAAAAAAAAAAAAACAPwAAmEAAAAAAAAAAAAAAgD8AAJhAAAAAAAAAAAAAAIA/AAC4QAAAAAAAAAAAAACAPwAAuEAAAAAAAAAAAAAAgD8AANhAAAAAAAAAAAAAAIA/AADYQAAAAAAAAAAAAACAPwAAAEEAAAAAAAAAAAAAgD8AAABBAAAAAAAAAAAAAIA/AAAMQQAAAAAAAAAAAACAPwAADEEAAAAAAAAAAAAAgD8AABxBAAAAAAAAAAAAAIA/AAAcQQAAAAAAAAAAAACAPwAALEEAAAAAAAAAAAAAgD8AACxBAAAAAAAAAAAAAIA/AABAQQAAAAAAAAAAAACAPwAAQEEAAAAAAAAAAAAAgD8AAExBAAAAAAAAAAAAAIA/AABMQQAAAAAAAAAAAACAPwAAXEEAAAAAAAAAAAAAgD8AAFxBAAAAAAAAAAAAAIA/AABsQQAAAAAAAAAAAACAPwAAbEEAAAAAAAAAAAAAgD8="
+                        },
+                        "shape": {
+                          "bytes": {
+                            "region": {
+                              "buffer": {
+                                "offset": 0,
+                                "length": 512
+                              }
+                            },
+                            "element": "f32",
+                            "row_offset": 0,
+                            "row_elements": 8,
+                            "row_pitch": 32,
+                            "rows": 16,
+                            "image_pitch": 512,
+                            "images": 1,
+                            "gaps": "ignored"
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "linear-linear-clamp-1/sampler",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "linear-linear-clamp-1/buffer/out",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "linear-linear-clamp-1/dispatch",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "linear-linear-clamp-1/status",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": {
+                          "variant": {
+                            "name": "Completed",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "linear-linear-clamp-1/read-back",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "linear-linear-clamp-1",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "sampled",
+                      "observed": {
+                        "value": {
+                          "bytes": "AACAPwAAAAAAAAAAAACAPwAAgD8AAAAAAAAAAAAAgD8AAOA/AAAAAAAAAAAAAIA/AADgPwAAAAAAAAAAAACAPwAAMEAAAAAAAAAAAAAAgD8AADBAAAAAAAAAAAAAAIA/AABwQAAAAAAAAAAAAACAPwAAcEAAAAAAAAAAAAAAgD8AAIBAAAAAAAAAAAAAAIA/AACAQAAAAAAAAAAAAACAPwAAmEAAAAAAAAAAAAAAgD8AAJhAAAAAAAAAAAAAAIA/AAC4QAAAAAAAAAAAAACAPwAAuEAAAAAAAAAAAAAAgD8AANhAAAAAAAAAAAAAAIA/AADYQAAAAAAAAAAAAACAPwAAAEEAAAAAAAAAAAAAgD8AAABBAAAAAAAAAAAAAIA/AAAMQQAAAAAAAAAAAACAPwAADEEAAAAAAAAAAAAAgD8AABxBAAAAAAAAAAAAAIA/AAAcQQAAAAAAAAAAAACAPwAALEEAAAAAAAAAAAAAgD8AACxBAAAAAAAAAAAAAIA/AABAQQAAAAAAAAAAAACAPwAAQEEAAAAAAAAAAAAAgD8AAExBAAAAAAAAAAAAAIA/AABMQQAAAAAAAAAAAACAPwAAXEEAAAAAAAAAAAAAgD8AAFxBAAAAAAAAAAAAAIA/AABsQQAAAAAAAAAAAACAPwAAbEEAAAAAAAAAAAAAgD8="
+                        },
+                        "shape": {
+                          "bytes": {
+                            "region": {
+                              "buffer": {
+                                "offset": 0,
+                                "length": 512
+                              }
+                            },
+                            "element": "f32",
+                            "row_offset": 0,
+                            "row_elements": 8,
+                            "row_pitch": 32,
+                            "rows": 16,
+                            "image_pitch": 512,
+                            "images": 1,
+                            "gaps": "ignored"
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "linear-linear-clamp-1-5/sampler",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "linear-linear-clamp-1-5/buffer/out",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "linear-linear-clamp-1-5/dispatch",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "linear-linear-clamp-1-5/status",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": {
+                          "variant": {
+                            "name": "Completed",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "linear-linear-clamp-1-5/read-back",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "linear-linear-clamp-1-5",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "sampled",
+                      "observed": {
+                        "value": {
+                          "bytes": "AACAPwAAAAAAAAAAAACAPwAAgD8AAAAAAAAAAAAAgD8AAOA/AAAAAAAAAAAAAIA/AADgPwAAAAAAAAAAAACAPwAAMEAAAAAAAAAAAAAAgD8AADBAAAAAAAAAAAAAAIA/AABwQAAAAAAAAAAAAACAPwAAcEAAAAAAAAAAAAAAgD8AAIBAAAAAAAAAAAAAAIA/AACAQAAAAAAAAAAAAACAPwAAmEAAAAAAAAAAAAAAgD8AAJhAAAAAAAAAAAAAAIA/AAC4QAAAAAAAAAAAAACAPwAAuEAAAAAAAAAAAAAAgD8AANhAAAAAAAAAAAAAAIA/AADYQAAAAAAAAAAAAACAPwAAAEEAAAAAAAAAAAAAgD8AAABBAAAAAAAAAAAAAIA/AAAMQQAAAAAAAAAAAACAPwAADEEAAAAAAAAAAAAAgD8AABxBAAAAAAAAAAAAAIA/AAAcQQAAAAAAAAAAAACAPwAALEEAAAAAAAAAAAAAgD8AACxBAAAAAAAAAAAAAIA/AABAQQAAAAAAAAAAAACAPwAAQEEAAAAAAAAAAAAAgD8AAExBAAAAAAAAAAAAAIA/AABMQQAAAAAAAAAAAACAPwAAXEEAAAAAAAAAAAAAgD8AAFxBAAAAAAAAAAAAAIA/AABsQQAAAAAAAAAAAACAPwAAbEEAAAAAAAAAAAAAgD8="
+                        },
+                        "shape": {
+                          "bytes": {
+                            "region": {
+                              "buffer": {
+                                "offset": 0,
+                                "length": 512
+                              }
+                            },
+                            "element": "f32",
+                            "row_offset": 0,
+                            "row_elements": 8,
+                            "row_pitch": 32,
+                            "rows": 16,
+                            "image_pitch": 512,
+                            "images": 1,
+                            "gaps": "ignored"
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "linear-linear-clamp-2/sampler",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "linear-linear-clamp-2/buffer/out",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "linear-linear-clamp-2/dispatch",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "linear-linear-clamp-2/status",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": {
+                          "variant": {
+                            "name": "Completed",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "linear-linear-clamp-2/read-back",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "linear-linear-clamp-2",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "sampled",
+                      "observed": {
+                        "value": {
+                          "bytes": "AACAPwAAAAAAAAAAAACAPwAAgD8AAAAAAAAAAAAAgD8AAOA/AAAAAAAAAAAAAIA/AADgPwAAAAAAAAAAAACAPwAAMEAAAAAAAAAAAAAAgD8AADBAAAAAAAAAAAAAAIA/AABwQAAAAAAAAAAAAACAPwAAcEAAAAAAAAAAAAAAgD8AAIBAAAAAAAAAAAAAAIA/AACAQAAAAAAAAAAAAACAPwAAmEAAAAAAAAAAAAAAgD8AAJhAAAAAAAAAAAAAAIA/AAC4QAAAAAAAAAAAAACAPwAAuEAAAAAAAAAAAAAAgD8AANhAAAAAAAAAAAAAAIA/AADYQAAAAAAAAAAAAACAPwAAAEEAAAAAAAAAAAAAgD8AAABBAAAAAAAAAAAAAIA/AAAMQQAAAAAAAAAAAACAPwAADEEAAAAAAAAAAAAAgD8AABxBAAAAAAAAAAAAAIA/AAAcQQAAAAAAAAAAAACAPwAALEEAAAAAAAAAAAAAgD8AACxBAAAAAAAAAAAAAIA/AABAQQAAAAAAAAAAAACAPwAAQEEAAAAAAAAAAAAAgD8AAExBAAAAAAAAAAAAAIA/AABMQQAAAAAAAAAAAACAPwAAXEEAAAAAAAAAAAAAgD8AAFxBAAAAAAAAAAAAAIA/AABsQQAAAAAAAAAAAACAPwAAbEEAAAAAAAAAAAAAgD8="
+                        },
+                        "shape": {
+                          "bytes": {
+                            "region": {
+                              "buffer": {
+                                "offset": 0,
+                                "length": 512
+                              }
+                            },
+                            "element": "f32",
+                            "row_offset": 0,
+                            "row_elements": 8,
+                            "row_pitch": 32,
+                            "rows": 16,
+                            "image_pitch": 512,
+                            "images": 1,
+                            "gaps": "ignored"
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "linear-min-nearest-mag-clamp-0/sampler",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "linear-min-nearest-mag-clamp-0/buffer/out",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "linear-min-nearest-mag-clamp-0/dispatch",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "linear-min-nearest-mag-clamp-0/status",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": {
+                          "variant": {
+                            "name": "Completed",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "linear-min-nearest-mag-clamp-0/read-back",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "linear-min-nearest-mag-clamp-0",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "sampled",
+                      "observed": {
+                        "value": {
+                          "bytes": "AACAPwAAAAAAAAAAAACAPwAAgD8AAAAAAAAAAAAAgD8AAOA/AAAAAAAAAAAAAIA/AAAAQAAAAAAAAAAAAACAPwAAMEAAAAAAAAAAAAAAgD8AAEBAAAAAAAAAAAAAAIA/AABwQAAAAAAAAAAAAACAPwAAgEAAAAAAAAAAAAAAgD8AAIBAAAAAAAAAAAAAAIA/AACgQAAAAAAAAAAAAACAPwAAmEAAAAAAAAAAAAAAgD8AAMBAAAAAAAAAAAAAAIA/AAC4QAAAAAAAAAAAAACAPwAA4EAAAAAAAAAAAAAAgD8AANhAAAAAAAAAAAAAAIA/AAAAQQAAAAAAAAAAAACAPwAAAEEAAAAAAAAAAAAAgD8AABBBAAAAAAAAAAAAAIA/AAAMQQAAAAAAAAAAAACAPwAAIEEAAAAAAAAAAAAAgD8AABxBAAAAAAAAAAAAAIA/AAAwQQAAAAAAAAAAAACAPwAALEEAAAAAAAAAAAAAgD8AAEBBAAAAAAAAAAAAAIA/AABAQQAAAAAAAAAAAACAPwAAUEEAAAAAAAAAAAAAgD8AAExBAAAAAAAAAAAAAIA/AABgQQAAAAAAAAAAAACAPwAAXEEAAAAAAAAAAAAAgD8AAHBBAAAAAAAAAAAAAIA/AABsQQAAAAAAAAAAAACAPwAAgEEAAAAAAAAAAAAAgD8="
+                        },
+                        "shape": {
+                          "bytes": {
+                            "region": {
+                              "buffer": {
+                                "offset": 0,
+                                "length": 512
+                              }
+                            },
+                            "element": "f32",
+                            "row_offset": 0,
+                            "row_elements": 8,
+                            "row_pitch": 32,
+                            "rows": 16,
+                            "image_pitch": 512,
+                            "images": 1,
+                            "gaps": "ignored"
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "linear-min-nearest-mag-clamp-0-25/sampler",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "linear-min-nearest-mag-clamp-0-25/buffer/out",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "linear-min-nearest-mag-clamp-0-25/dispatch",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "linear-min-nearest-mag-clamp-0-25/status",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": {
+                          "variant": {
+                            "name": "Completed",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "linear-min-nearest-mag-clamp-0-25/read-back",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "linear-min-nearest-mag-clamp-0-25",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "sampled",
+                      "observed": {
+                        "value": {
+                          "bytes": "AACAPwAAAAAAAAAAAACAPwAAgD8AAAAAAAAAAAAAgD8AAOA/AAAAAAAAAAAAAIA/AADgPwAAAAAAAAAAAACAPwAAMEAAAAAAAAAAAAAAgD8AADBAAAAAAAAAAAAAAIA/AABwQAAAAAAAAAAAAACAPwAAcEAAAAAAAAAAAAAAgD8AAIBAAAAAAAAAAAAAAIA/AACAQAAAAAAAAAAAAACAPwAAmEAAAAAAAAAAAAAAgD8AAJhAAAAAAAAAAAAAAIA/AAC4QAAAAAAAAAAAAACAPwAAuEAAAAAAAAAAAAAAgD8AANhAAAAAAAAAAAAAAIA/AADYQAAAAAAAAAAAAACAPwAAAEEAAAAAAAAAAAAAgD8AAABBAAAAAAAAAAAAAIA/AAAMQQAAAAAAAAAAAACAPwAADEEAAAAAAAAAAAAAgD8AABxBAAAAAAAAAAAAAIA/AAAcQQAAAAAAAAAAAACAPwAALEEAAAAAAAAAAAAAgD8AACxBAAAAAAAAAAAAAIA/AABAQQAAAAAAAAAAAACAPwAAQEEAAAAAAAAAAAAAgD8AAExBAAAAAAAAAAAAAIA/AABMQQAAAAAAAAAAAACAPwAAXEEAAAAAAAAAAAAAgD8AAFxBAAAAAAAAAAAAAIA/AABsQQAAAAAAAAAAAACAPwAAbEEAAAAAAAAAAAAAgD8="
+                        },
+                        "shape": {
+                          "bytes": {
+                            "region": {
+                              "buffer": {
+                                "offset": 0,
+                                "length": 512
+                              }
+                            },
+                            "element": "f32",
+                            "row_offset": 0,
+                            "row_elements": 8,
+                            "row_pitch": 32,
+                            "rows": 16,
+                            "image_pitch": 512,
+                            "images": 1,
+                            "gaps": "ignored"
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "linear-min-nearest-mag-clamp-1/sampler",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "linear-min-nearest-mag-clamp-1/buffer/out",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "linear-min-nearest-mag-clamp-1/dispatch",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "linear-min-nearest-mag-clamp-1/status",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": {
+                          "variant": {
+                            "name": "Completed",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "linear-min-nearest-mag-clamp-1/read-back",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "linear-min-nearest-mag-clamp-1",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "sampled",
+                      "observed": {
+                        "value": {
+                          "bytes": "AACAPwAAAAAAAAAAAACAPwAAgD8AAAAAAAAAAAAAgD8AAOA/AAAAAAAAAAAAAIA/AADgPwAAAAAAAAAAAACAPwAAMEAAAAAAAAAAAAAAgD8AADBAAAAAAAAAAAAAAIA/AABwQAAAAAAAAAAAAACAPwAAcEAAAAAAAAAAAAAAgD8AAIBAAAAAAAAAAAAAAIA/AACAQAAAAAAAAAAAAACAPwAAmEAAAAAAAAAAAAAAgD8AAJhAAAAAAAAAAAAAAIA/AAC4QAAAAAAAAAAAAACAPwAAuEAAAAAAAAAAAAAAgD8AANhAAAAAAAAAAAAAAIA/AADYQAAAAAAAAAAAAACAPwAAAEEAAAAAAAAAAAAAgD8AAABBAAAAAAAAAAAAAIA/AAAMQQAAAAAAAAAAAACAPwAADEEAAAAAAAAAAAAAgD8AABxBAAAAAAAAAAAAAIA/AAAcQQAAAAAAAAAAAACAPwAALEEAAAAAAAAAAAAAgD8AACxBAAAAAAAAAAAAAIA/AABAQQAAAAAAAAAAAACAPwAAQEEAAAAAAAAAAAAAgD8AAExBAAAAAAAAAAAAAIA/AABMQQAAAAAAAAAAAACAPwAAXEEAAAAAAAAAAAAAgD8AAFxBAAAAAAAAAAAAAIA/AABsQQAAAAAAAAAAAACAPwAAbEEAAAAAAAAAAAAAgD8="
+                        },
+                        "shape": {
+                          "bytes": {
+                            "region": {
+                              "buffer": {
+                                "offset": 0,
+                                "length": 512
+                              }
+                            },
+                            "element": "f32",
+                            "row_offset": 0,
+                            "row_elements": 8,
+                            "row_pitch": 32,
+                            "rows": 16,
+                            "image_pitch": 512,
+                            "images": 1,
+                            "gaps": "ignored"
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "linear-min-nearest-mag-clamp-1-5/sampler",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "linear-min-nearest-mag-clamp-1-5/buffer/out",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "linear-min-nearest-mag-clamp-1-5/dispatch",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "linear-min-nearest-mag-clamp-1-5/status",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": {
+                          "variant": {
+                            "name": "Completed",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "linear-min-nearest-mag-clamp-1-5/read-back",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "linear-min-nearest-mag-clamp-1-5",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "sampled",
+                      "observed": {
+                        "value": {
+                          "bytes": "AACAPwAAAAAAAAAAAACAPwAAgD8AAAAAAAAAAAAAgD8AAOA/AAAAAAAAAAAAAIA/AADgPwAAAAAAAAAAAACAPwAAMEAAAAAAAAAAAAAAgD8AADBAAAAAAAAAAAAAAIA/AABwQAAAAAAAAAAAAACAPwAAcEAAAAAAAAAAAAAAgD8AAIBAAAAAAAAAAAAAAIA/AACAQAAAAAAAAAAAAACAPwAAmEAAAAAAAAAAAAAAgD8AAJhAAAAAAAAAAAAAAIA/AAC4QAAAAAAAAAAAAACAPwAAuEAAAAAAAAAAAAAAgD8AANhAAAAAAAAAAAAAAIA/AADYQAAAAAAAAAAAAACAPwAAAEEAAAAAAAAAAAAAgD8AAABBAAAAAAAAAAAAAIA/AAAMQQAAAAAAAAAAAACAPwAADEEAAAAAAAAAAAAAgD8AABxBAAAAAAAAAAAAAIA/AAAcQQAAAAAAAAAAAACAPwAALEEAAAAAAAAAAAAAgD8AACxBAAAAAAAAAAAAAIA/AABAQQAAAAAAAAAAAACAPwAAQEEAAAAAAAAAAAAAgD8AAExBAAAAAAAAAAAAAIA/AABMQQAAAAAAAAAAAACAPwAAXEEAAAAAAAAAAAAAgD8AAFxBAAAAAAAAAAAAAIA/AABsQQAAAAAAAAAAAACAPwAAbEEAAAAAAAAAAAAAgD8="
+                        },
+                        "shape": {
+                          "bytes": {
+                            "region": {
+                              "buffer": {
+                                "offset": 0,
+                                "length": 512
+                              }
+                            },
+                            "element": "f32",
+                            "row_offset": 0,
+                            "row_elements": 8,
+                            "row_pitch": 32,
+                            "rows": 16,
+                            "image_pitch": 512,
+                            "images": 1,
+                            "gaps": "ignored"
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "linear-min-nearest-mag-clamp-2/sampler",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "linear-min-nearest-mag-clamp-2/buffer/out",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "linear-min-nearest-mag-clamp-2/dispatch",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "linear-min-nearest-mag-clamp-2/status",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": {
+                          "variant": {
+                            "name": "Completed",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "linear-min-nearest-mag-clamp-2/read-back",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "linear-min-nearest-mag-clamp-2",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "sampled",
+                      "observed": {
+                        "value": {
+                          "bytes": "AACAPwAAAAAAAAAAAACAPwAAgD8AAAAAAAAAAAAAgD8AAOA/AAAAAAAAAAAAAIA/AADgPwAAAAAAAAAAAACAPwAAMEAAAAAAAAAAAAAAgD8AADBAAAAAAAAAAAAAAIA/AABwQAAAAAAAAAAAAACAPwAAcEAAAAAAAAAAAAAAgD8AAIBAAAAAAAAAAAAAAIA/AACAQAAAAAAAAAAAAACAPwAAmEAAAAAAAAAAAAAAgD8AAJhAAAAAAAAAAAAAAIA/AAC4QAAAAAAAAAAAAACAPwAAuEAAAAAAAAAAAAAAgD8AANhAAAAAAAAAAAAAAIA/AADYQAAAAAAAAAAAAACAPwAAAEEAAAAAAAAAAAAAgD8AAABBAAAAAAAAAAAAAIA/AAAMQQAAAAAAAAAAAACAPwAADEEAAAAAAAAAAAAAgD8AABxBAAAAAAAAAAAAAIA/AAAcQQAAAAAAAAAAAACAPwAALEEAAAAAAAAAAAAAgD8AACxBAAAAAAAAAAAAAIA/AABAQQAAAAAAAAAAAACAPwAAQEEAAAAAAAAAAAAAgD8AAExBAAAAAAAAAAAAAIA/AABMQQAAAAAAAAAAAACAPwAAXEEAAAAAAAAAAAAAgD8AAFxBAAAAAAAAAAAAAIA/AABsQQAAAAAAAAAAAACAPwAAbEEAAAAAAAAAAAAAgD8="
+                        },
+                        "shape": {
+                          "bytes": {
+                            "region": {
+                              "buffer": {
+                                "offset": 0,
+                                "length": 512
+                              }
+                            },
+                            "element": "f32",
+                            "row_offset": 0,
+                            "row_elements": 8,
+                            "row_pitch": 32,
+                            "rows": 16,
+                            "image_pitch": 512,
+                            "images": 1,
+                            "gaps": "ignored"
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "nearest-min-linear-mag-clamp-0/sampler",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "nearest-min-linear-mag-clamp-0/buffer/out",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "nearest-min-linear-mag-clamp-0/dispatch",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "nearest-min-linear-mag-clamp-0/status",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": {
+                          "variant": {
+                            "name": "Completed",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "nearest-min-linear-mag-clamp-0/read-back",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "nearest-min-linear-mag-clamp-0",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "sampled",
+                      "observed": {
+                        "value": {
+                          "bytes": "AACAPwAAAAAAAAAAAACAPwAAgD8AAAAAAAAAAAAAgD8AAOA/AAAAAAAAAAAAAIA/AADgPwAAAAAAAAAAAACAPwAAMEAAAAAAAAAAAAAAgD8AADBAAAAAAAAAAAAAAIA/AABwQAAAAAAAAAAAAACAPwAAcEAAAAAAAAAAAAAAgD8AAIBAAAAAAAAAAAAAAIA/AACAQAAAAAAAAAAAAACAPwAAmEAAAAAAAAAAAAAAgD8AAJhAAAAAAAAAAAAAAIA/AAC4QAAAAAAAAAAAAACAPwAAuEAAAAAAAAAAAAAAgD8AANhAAAAAAAAAAAAAAIA/AADYQAAAAAAAAAAAAACAPwAAAEEAAAAAAAAAAAAAgD8AAABBAAAAAAAAAAAAAIA/AAAMQQAAAAAAAAAAAACAPwAADEEAAAAAAAAAAAAAgD8AABxBAAAAAAAAAAAAAIA/AAAcQQAAAAAAAAAAAACAPwAALEEAAAAAAAAAAAAAgD8AACxBAAAAAAAAAAAAAIA/AABAQQAAAAAAAAAAAACAPwAAQEEAAAAAAAAAAAAAgD8AAExBAAAAAAAAAAAAAIA/AABMQQAAAAAAAAAAAACAPwAAXEEAAAAAAAAAAAAAgD8AAFxBAAAAAAAAAAAAAIA/AABsQQAAAAAAAAAAAACAPwAAbEEAAAAAAAAAAAAAgD8="
+                        },
+                        "shape": {
+                          "bytes": {
+                            "region": {
+                              "buffer": {
+                                "offset": 0,
+                                "length": 512
+                              }
+                            },
+                            "element": "f32",
+                            "row_offset": 0,
+                            "row_elements": 8,
+                            "row_pitch": 32,
+                            "rows": 16,
+                            "image_pitch": 512,
+                            "images": 1,
+                            "gaps": "ignored"
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "nearest-min-linear-mag-clamp-0-25/sampler",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "nearest-min-linear-mag-clamp-0-25/buffer/out",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "nearest-min-linear-mag-clamp-0-25/dispatch",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "nearest-min-linear-mag-clamp-0-25/status",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": {
+                          "variant": {
+                            "name": "Completed",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "nearest-min-linear-mag-clamp-0-25/read-back",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "nearest-min-linear-mag-clamp-0-25",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "sampled",
+                      "observed": {
+                        "value": {
+                          "bytes": "AACAPwAAAAAAAAAAAACAPwAAgD8AAAAAAAAAAAAAgD8AAOA/AAAAAAAAAAAAAIA/AAAAQAAAAAAAAAAAAACAPwAAMEAAAAAAAAAAAAAAgD8AAEBAAAAAAAAAAAAAAIA/AABwQAAAAAAAAAAAAACAPwAAgEAAAAAAAAAAAAAAgD8AAIBAAAAAAAAAAAAAAIA/AACgQAAAAAAAAAAAAACAPwAAmEAAAAAAAAAAAAAAgD8AAMBAAAAAAAAAAAAAAIA/AAC4QAAAAAAAAAAAAACAPwAA4EAAAAAAAAAAAAAAgD8AANhAAAAAAAAAAAAAAIA/AAAAQQAAAAAAAAAAAACAPwAAAEEAAAAAAAAAAAAAgD8AABBBAAAAAAAAAAAAAIA/AAAMQQAAAAAAAAAAAACAPwAAIEEAAAAAAAAAAAAAgD8AABxBAAAAAAAAAAAAAIA/AAAwQQAAAAAAAAAAAACAPwAALEEAAAAAAAAAAAAAgD8AAEBBAAAAAAAAAAAAAIA/AABAQQAAAAAAAAAAAACAPwAAUEEAAAAAAAAAAAAAgD8AAExBAAAAAAAAAAAAAIA/AABgQQAAAAAAAAAAAACAPwAAXEEAAAAAAAAAAAAAgD8AAHBBAAAAAAAAAAAAAIA/AABsQQAAAAAAAAAAAACAPwAAgEEAAAAAAAAAAAAAgD8="
+                        },
+                        "shape": {
+                          "bytes": {
+                            "region": {
+                              "buffer": {
+                                "offset": 0,
+                                "length": 512
+                              }
+                            },
+                            "element": "f32",
+                            "row_offset": 0,
+                            "row_elements": 8,
+                            "row_pitch": 32,
+                            "rows": 16,
+                            "image_pitch": 512,
+                            "images": 1,
+                            "gaps": "ignored"
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "nearest-min-linear-mag-clamp-1/sampler",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "nearest-min-linear-mag-clamp-1/buffer/out",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "nearest-min-linear-mag-clamp-1/dispatch",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "nearest-min-linear-mag-clamp-1/status",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": {
+                          "variant": {
+                            "name": "Completed",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "nearest-min-linear-mag-clamp-1/read-back",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "nearest-min-linear-mag-clamp-1",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "sampled",
+                      "observed": {
+                        "value": {
+                          "bytes": "AACAPwAAAAAAAAAAAACAPwAAgD8AAAAAAAAAAAAAgD8AAOA/AAAAAAAAAAAAAIA/AAAAQAAAAAAAAAAAAACAPwAAMEAAAAAAAAAAAAAAgD8AAEBAAAAAAAAAAAAAAIA/AABwQAAAAAAAAAAAAACAPwAAgEAAAAAAAAAAAAAAgD8AAIBAAAAAAAAAAAAAAIA/AACgQAAAAAAAAAAAAACAPwAAmEAAAAAAAAAAAAAAgD8AAMBAAAAAAAAAAAAAAIA/AAC4QAAAAAAAAAAAAACAPwAA4EAAAAAAAAAAAAAAgD8AANhAAAAAAAAAAAAAAIA/AAAAQQAAAAAAAAAAAACAPwAAAEEAAAAAAAAAAAAAgD8AABBBAAAAAAAAAAAAAIA/AAAMQQAAAAAAAAAAAACAPwAAIEEAAAAAAAAAAAAAgD8AABxBAAAAAAAAAAAAAIA/AAAwQQAAAAAAAAAAAACAPwAALEEAAAAAAAAAAAAAgD8AAEBBAAAAAAAAAAAAAIA/AABAQQAAAAAAAAAAAACAPwAAUEEAAAAAAAAAAAAAgD8AAExBAAAAAAAAAAAAAIA/AABgQQAAAAAAAAAAAACAPwAAXEEAAAAAAAAAAAAAgD8AAHBBAAAAAAAAAAAAAIA/AABsQQAAAAAAAAAAAACAPwAAgEEAAAAAAAAAAAAAgD8="
+                        },
+                        "shape": {
+                          "bytes": {
+                            "region": {
+                              "buffer": {
+                                "offset": 0,
+                                "length": 512
+                              }
+                            },
+                            "element": "f32",
+                            "row_offset": 0,
+                            "row_elements": 8,
+                            "row_pitch": 32,
+                            "rows": 16,
+                            "image_pitch": 512,
+                            "images": 1,
+                            "gaps": "ignored"
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "nearest-min-linear-mag-clamp-1-5/sampler",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "nearest-min-linear-mag-clamp-1-5/buffer/out",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "nearest-min-linear-mag-clamp-1-5/dispatch",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "nearest-min-linear-mag-clamp-1-5/status",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": {
+                          "variant": {
+                            "name": "Completed",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "nearest-min-linear-mag-clamp-1-5/read-back",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "nearest-min-linear-mag-clamp-1-5",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "sampled",
+                      "observed": {
+                        "value": {
+                          "bytes": "AACAPwAAAAAAAAAAAACAPwAAgD8AAAAAAAAAAAAAgD8AAOA/AAAAAAAAAAAAAIA/AAAAQAAAAAAAAAAAAACAPwAAMEAAAAAAAAAAAAAAgD8AAEBAAAAAAAAAAAAAAIA/AABwQAAAAAAAAAAAAACAPwAAgEAAAAAAAAAAAAAAgD8AAIBAAAAAAAAAAAAAAIA/AACgQAAAAAAAAAAAAACAPwAAmEAAAAAAAAAAAAAAgD8AAMBAAAAAAAAAAAAAAIA/AAC4QAAAAAAAAAAAAACAPwAA4EAAAAAAAAAAAAAAgD8AANhAAAAAAAAAAAAAAIA/AAAAQQAAAAAAAAAAAACAPwAAAEEAAAAAAAAAAAAAgD8AABBBAAAAAAAAAAAAAIA/AAAMQQAAAAAAAAAAAACAPwAAIEEAAAAAAAAAAAAAgD8AABxBAAAAAAAAAAAAAIA/AAAwQQAAAAAAAAAAAACAPwAALEEAAAAAAAAAAAAAgD8AAEBBAAAAAAAAAAAAAIA/AABAQQAAAAAAAAAAAACAPwAAUEEAAAAAAAAAAAAAgD8AAExBAAAAAAAAAAAAAIA/AABgQQAAAAAAAAAAAACAPwAAXEEAAAAAAAAAAAAAgD8AAHBBAAAAAAAAAAAAAIA/AABsQQAAAAAAAAAAAACAPwAAgEEAAAAAAAAAAAAAgD8="
+                        },
+                        "shape": {
+                          "bytes": {
+                            "region": {
+                              "buffer": {
+                                "offset": 0,
+                                "length": 512
+                              }
+                            },
+                            "element": "f32",
+                            "row_offset": 0,
+                            "row_elements": 8,
+                            "row_pitch": 32,
+                            "rows": 16,
+                            "image_pitch": 512,
+                            "images": 1,
+                            "gaps": "ignored"
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "nearest-min-linear-mag-clamp-2/sampler",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "nearest-min-linear-mag-clamp-2/buffer/out",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "nearest-min-linear-mag-clamp-2/dispatch",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "nearest-min-linear-mag-clamp-2/status",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": {
+                          "variant": {
+                            "name": "Completed",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "nearest-min-linear-mag-clamp-2/read-back",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "nearest-min-linear-mag-clamp-2",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "sampled",
+                      "observed": {
+                        "value": {
+                          "bytes": "AACAPwAAAAAAAAAAAACAPwAAgD8AAAAAAAAAAAAAgD8AAOA/AAAAAAAAAAAAAIA/AAAAQAAAAAAAAAAAAACAPwAAMEAAAAAAAAAAAAAAgD8AAEBAAAAAAAAAAAAAAIA/AABwQAAAAAAAAAAAAACAPwAAgEAAAAAAAAAAAAAAgD8AAIBAAAAAAAAAAAAAAIA/AACgQAAAAAAAAAAAAACAPwAAmEAAAAAAAAAAAAAAgD8AAMBAAAAAAAAAAAAAAIA/AAC4QAAAAAAAAAAAAACAPwAA4EAAAAAAAAAAAAAAgD8AANhAAAAAAAAAAAAAAIA/AAAAQQAAAAAAAAAAAACAPwAAAEEAAAAAAAAAAAAAgD8AABBBAAAAAAAAAAAAAIA/AAAMQQAAAAAAAAAAAACAPwAAIEEAAAAAAAAAAAAAgD8AABxBAAAAAAAAAAAAAIA/AAAwQQAAAAAAAAAAAACAPwAALEEAAAAAAAAAAAAAgD8AAEBBAAAAAAAAAAAAAIA/AABAQQAAAAAAAAAAAACAPwAAUEEAAAAAAAAAAAAAgD8AAExBAAAAAAAAAAAAAIA/AABgQQAAAAAAAAAAAACAPwAAXEEAAAAAAAAAAAAAgD8AAHBBAAAAAAAAAAAAAIA/AABsQQAAAAAAAAAAAACAPwAAgEEAAAAAAAAAAAAAgD8="
+                        },
+                        "shape": {
+                          "bytes": {
+                            "region": {
+                              "buffer": {
+                                "offset": 0,
+                                "length": 512
+                              }
+                            },
+                            "element": "f32",
+                            "row_offset": 0,
+                            "row_elements": 8,
+                            "row_pitch": 32,
+                            "rows": 16,
+                            "image_pitch": 512,
+                            "images": 1,
+                            "gaps": "ignored"
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "notices",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "set",
+                      "observed": {
+                        "value": {
+                          "nothing": "announced_nothing"
+                        }
+                      }
+                    },
+                    {
+                      "name": "counts",
+                      "observed": {
+                        "value": {
+                          "fields": {}
+                        }
+                      }
+                    }
+                  ]
+                }
+              ]
+            }
+          }
+        }
+      ],
+      "validated": "ran"
+    }
+  ]
+}

@@ -1,0 +1,806 @@
+{
+  "format": 1,
+  "case": "sampler-axis-border-transparent-black",
+  "suite_version": 1,
+  "shaders": [
+    {
+      "fixture": "msf_runtime_samplers.ll",
+      "entry": "msf_slot3d_linear_repeat",
+      "source_sha256": "fa455706aa522e16a8b72fb51387d32e70d5e0471b8db8e8465bc002a044ebbf"
+    },
+    {
+      "fixture": "msf_runtime_samplers.air.ll",
+      "entry": "msf_slot3d_linear_repeat",
+      "source_sha256": "3943694c31235c3e0841c22e15fb2ecb8fe55eae0f5edb81c04efa7ce27efb4a"
+    }
+  ],
+  "answers": [
+    {
+      "key": {
+        "chip": "apple-m3-max",
+        "os_version": "27.0.1",
+        "os_build": "26A434",
+        "metal_level": "27.0.1"
+      },
+      "provenance": "metal_run",
+      "device": "Apple M3 Max",
+      "runs": 3,
+      "outcomes": [
+        {
+          "runs": 3,
+          "transcript": {
+            "root": {
+              "name": "case",
+              "observed": {
+                "value": "absent"
+              },
+              "children": [
+                {
+                  "name": "inputs",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "air",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "fa455706aa522e16a8b72fb51387d32e70d5e0471b8db8e8465bc002a044ebbf"
+                        }
+                      }
+                    },
+                    {
+                      "name": "air-typed",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "3943694c31235c3e0841c22e15fb2ecb8fe55eae0f5edb81c04efa7ce27efb4a"
+                        }
+                      }
+                    },
+                    {
+                      "name": "entry",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "cd7ac2460c9153892ee5c3c17257402b3856c8d361b80fb49cb839ebbad4030b"
+                        }
+                      }
+                    },
+                    {
+                      "name": "buffer:coords",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "2fa08ebebb13ea5bc11e43a9c46fa2697f832c1cf420adfc8d38241b1df9fcb4"
+                        }
+                      }
+                    },
+                    {
+                      "name": "buffer:out",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "8276f6b56533b065fcbb8483be12afc348beb327bee7cd63dcc8392998650e5c"
+                        }
+                      }
+                    },
+                    {
+                      "name": "texture:3d-rgba",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "6469790ec96a147067efe35ebf53a138f02e4da88cf74d244115d72d1b05ad26"
+                        }
+                      }
+                    },
+                    {
+                      "name": "sampler:border-s",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "ad59cbbf23ce19c5980ab5babcc92219485aef435872999628ce5584cb4dcc9d"
+                        }
+                      }
+                    },
+                    {
+                      "name": "sampler:border-t",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "064d61936d99a5d61f233bba1c27e84f769c321670994d7e8dca4a25ec67fd71"
+                        }
+                      }
+                    },
+                    {
+                      "name": "sampler:border-r",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "d2ed0e557c118ec24d481a88d453b704340e9b1194aab073ab4b12e61ad78cac"
+                        }
+                      }
+                    },
+                    {
+                      "name": "sampler:border-all",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "76ca82f659e4f0c1e9b75959c68bec44958742ad035a3d1d84b5fc226568d8ae"
+                        }
+                      }
+                    },
+                    {
+                      "name": "sampler:zero-s-border-r",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "cbfa1252b999501096298064e5d52b6dd6ce4541a857679c4331d89f8de9dd57"
+                        }
+                      }
+                    },
+                    {
+                      "name": "sampler:border-s-zero-t",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "f20dbfec6a8c2483518fdaf0fd99bca46506ef79dec6f941898f875078173b92"
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "library",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "pipeline",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "texture",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "buffer/coords",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "border-s/sampler",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "border-s/buffer/out",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "border-s/dispatch",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "border-s/status",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": {
+                          "variant": {
+                            "name": "Completed",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "border-s/read-back",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "border-s",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "sampled",
+                      "observed": {
+                        "value": {
+                          "bytes": "gYAAPoGAAD6BgAA+wcDAPoGAAD6BgAA+gYAAPsHAwD7BwMA9gYAAPoGAAD7BwMA+AAAAAAAAAAAAAAAAAAAAABQUVD6BgAA+gYAAPsHAwD4AAAAAAAAAAAAAAAAAAAAAOjo6PoGAAD6BgAA+wcDAPgAAAAAAAAAAAAAAAAAAAABaWto9gYAAPoGAAD7BwMA+AAAAAAAAAAAAAAAAAAAAAIGAAD7BwMA9gYAAPsHAwD6BgAA+gYAAPoGAAD7BwMA+wcDAPcHAwD2BgAA+wcDAPgAAAAAAAAAAAAAAAAAAAAAUFFQ+wcDAPYGAAD7BwMA+AAAAAAAAAAAAAAAAAAAAADo6Oj7BwMA9gYAAPsHAwD4AAAAAAAAAAAAAAAAAAAAAWlraPcHAwD2BgAA+wcDAPgAAAAAAAAAAAAAAAAAAAACBgAA+FBRUPoGAAD7BwMA+gYAAPsHAQD6BgAA+wcDAPsHAwD0UFFQ+gYAAPsHAwD4AAAAAAAAAAAAAAAAAAAAAFBRUPhQUVD6BgAA+wcDAPgAAAAAAAAAAAAAAAAAAAAA6Ojo+FBRUPoGAAD7BwMA+AAAAAAAAAAAAAAAAAAAAAFpa2j0UFFQ+gYAAPsHAwD4AAAAAAAAAAAAAAAAAAAAAgYAAPjo6Oj6BgAA+wcDAPoGAAD7BwEA+gYAAPsHAwD7BwMA9Ojo6PoGAAD7BwMA+AAAAAAAAAAAAAAAAAAAAABQUVD46Ojo+gYAAPsHAwD4AAAAAAAAAAAAAAAAAAAAAOjo6Pjo6Oj6BgAA+wcDAPgAAAAAAAAAAAAAAAAAAAABaWto9Ojo6PoGAAD7BwMA+AAAAAAAAAAAAAAAAAAAAAIGAAD5aWto9gYAAPsHAwD6BgAA+gYAAPoGAAD7BwMA+wcDAPVpa2j2BgAA+wcDAPgAAAAAAAAAAAAAAAAAAAAAUFFQ+WlraPYGAAD7BwMA+AAAAAAAAAAAAAAAAAAAAADo6Oj5aWto9gYAAPsHAwD4AAAAAAAAAAAAAAAAAAAAAWlraPVpa2j2BgAA+wcDAPgAAAAAAAAAAAAAAAAAAAACBgAA+gYAAPsHAwD3BwMA+gYAAPoGAAD6BgIA+wcDAPsHAwD2BgAA+wcDAPcHAwD4AAAAAAAAAAAAAAAAAAAAAFBRUPoGAAD7BwMA9wcDAPgAAAAAAAAAAAAAAAAAAAAA6Ojo+gYAAPsHAwD3BwMA+AAAAAAAAAAAAAAAAAAAAAFpa2j2BgAA+wcDAPcHAwD4AAAAAAAAAAAAAAAAAAAAAgYAAPsHAwD3BwMA9wcDAPoGAAD6BgAA+gYCAPsHAwD7BwMA9wcDAPcHAwD3BwMA+AAAAAAAAAAAAAAAAAAAAABQUVD7BwMA9wcDAPcHAwD4AAAAAAAAAAAAAAAAAAAAAOjo6PsHAwD3BwMA9wcDAPgAAAAAAAAAAAAAAAAAAAABaWto9wcDAPcHAwD3BwMA+AAAAAAAAAAAAAAAAAAAAAIGAAD4UFFQ+wcDAPcHAwD6BgAA+wcBAPoGAgD7BwMA+wcDAPRQUVD7BwMA9wcDAPgAAAAAAAAAAAAAAAAAAAAAUFFQ+FBRUPsHAwD3BwMA+AAAAAAAAAAAAAAAAAAAAADo6Oj4UFFQ+wcDAPcHAwD4AAAAAAAAAAAAAAAAAAAAAWlraPRQUVD7BwMA9wcDAPgAAAAAAAAAAAAAAAAAAAACBgAA+Ojo6PsHAwD3BwMA+gYAAPsHAQD6BgIA+wcDAPsHAwD06Ojo+wcDAPcHAwD4AAAAAAAAAAAAAAAAAAAAAFBRUPjo6Oj7BwMA9wcDAPgAAAAAAAAAAAAAAAAAAAAA6Ojo+Ojo6PsHAwD3BwMA+AAAAAAAAAAAAAAAAAAAAAFpa2j06Ojo+wcDAPcHAwD4AAAAAAAAAAAAAAAAAAAAAgYAAPlpa2j3BwMA9wcDAPoGAAD6BgAA+gYCAPsHAwD7BwMA9WlraPcHAwD3BwMA+AAAAAAAAAAAAAAAAAAAAABQUVD5aWto9wcDAPcHAwD4AAAAAAAAAAAAAAAAAAAAAOjo6Plpa2j3BwMA9wcDAPgAAAAAAAAAAAAAAAAAAAABaWto9WlraPcHAwD3BwMA+AAAAAAAAAAAAAAAAAAAAAIGAAD6BgAA+FBRUPsHAwD6BgAA+gYAAPoGAgD3BwMA+wcDAPYGAAD4UFFQ+wcDAPgAAAAAAAAAAAAAAAAAAAAAUFFQ+gYAAPhQUVD7BwMA+AAAAAAAAAAAAAAAAAAAAADo6Oj6BgAA+FBRUPsHAwD4AAAAAAAAAAAAAAAAAAAAAWlraPYGAAD4UFFQ+wcDAPgAAAAAAAAAAAAAAAAAAAACBgAA+wcDAPRQUVD7BwMA+gYAAPoGAAD6BgIA9wcDAPsHAwD3BwMA9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"
+                        },
+                        "shape": {
+                          "bytes": {
+                            "region": {
+                              "buffer": {
+                                "offset": 0,
+                                "length": 4000
+                              }
+                            },
+                            "element": "f32",
+                            "row_offset": 0,
+                            "row_elements": 8,
+                            "row_pitch": 32,
+                            "rows": 125,
+                            "image_pitch": 4000,
+                            "images": 1,
+                            "gaps": "ignored"
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "border-t/sampler",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "border-t/buffer/out",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "border-t/dispatch",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "border-t/status",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": {
+                          "variant": {
+                            "name": "Completed",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "border-t/read-back",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "border-t",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "sampled",
+                      "observed": {
+                        "value": {
+                          "bytes": "gYAAPoGAAD6BgAA+wcDAPoGAAD6BgAA+gYAAPsHAwD7BwMA9gYAAPoGAAD7BwMA+gYAAPoGAAD6BgAA+wcDAPhQUVD6BgAA+gYAAPsHAwD7BwEA+gYAAPoGAAD7BwMA+Ojo6PoGAAD6BgAA+wcDAPsHAQD6BgAA+gYAAPsHAwD5aWto9gYAAPoGAAD7BwMA+gYAAPoGAAD6BgAA+wcDAPoGAAD7BwMA9gYAAPsHAwD4AAAAAAAAAAAAAAAAAAAAAwcDAPcHAwD2BgAA+wcDAPgAAAAAAAAAAAAAAAAAAAAAUFFQ+wcDAPYGAAD7BwMA+AAAAAAAAAAAAAAAAAAAAADo6Oj7BwMA9gYAAPsHAwD4AAAAAAAAAAAAAAAAAAAAAWlraPcHAwD2BgAA+wcDAPgAAAAAAAAAAAAAAAAAAAACBgAA+FBRUPoGAAD7BwMA+AAAAAAAAAAAAAAAAAAAAAMHAwD0UFFQ+gYAAPsHAwD4AAAAAAAAAAAAAAAAAAAAAFBRUPhQUVD6BgAA+wcDAPgAAAAAAAAAAAAAAAAAAAAA6Ojo+FBRUPoGAAD7BwMA+AAAAAAAAAAAAAAAAAAAAAFpa2j0UFFQ+gYAAPsHAwD4AAAAAAAAAAAAAAAAAAAAAgYAAPjo6Oj6BgAA+wcDAPgAAAAAAAAAAAAAAAAAAAADBwMA9Ojo6PoGAAD7BwMA+AAAAAAAAAAAAAAAAAAAAABQUVD46Ojo+gYAAPsHAwD4AAAAAAAAAAAAAAAAAAAAAOjo6Pjo6Oj6BgAA+wcDAPgAAAAAAAAAAAAAAAAAAAABaWto9Ojo6PoGAAD7BwMA+AAAAAAAAAAAAAAAAAAAAAIGAAD5aWto9gYAAPsHAwD4AAAAAAAAAAAAAAAAAAAAAwcDAPVpa2j2BgAA+wcDAPgAAAAAAAAAAAAAAAAAAAAAUFFQ+WlraPYGAAD7BwMA+AAAAAAAAAAAAAAAAAAAAADo6Oj5aWto9gYAAPsHAwD4AAAAAAAAAAAAAAAAAAAAAWlraPVpa2j2BgAA+wcDAPgAAAAAAAAAAAAAAAAAAAACBgAA+gYAAPsHAwD3BwMA+gYAAPoGAAD6BgIA+wcDAPsHAwD2BgAA+wcDAPcHAwD6BgAA+gYAAPoGAgD7BwMA+FBRUPoGAAD7BwMA9wcDAPsHAQD6BgAA+gYCAPsHAwD46Ojo+gYAAPsHAwD3BwMA+wcBAPoGAAD6BgIA+wcDAPlpa2j2BgAA+wcDAPcHAwD6BgAA+gYAAPoGAgD7BwMA+gYAAPsHAwD3BwMA9wcDAPgAAAAAAAAAAAAAAAAAAAADBwMA9wcDAPcHAwD3BwMA+AAAAAAAAAAAAAAAAAAAAABQUVD7BwMA9wcDAPcHAwD4AAAAAAAAAAAAAAAAAAAAAOjo6PsHAwD3BwMA9wcDAPgAAAAAAAAAAAAAAAAAAAABaWto9wcDAPcHAwD3BwMA+AAAAAAAAAAAAAAAAAAAAAIGAAD4UFFQ+wcDAPcHAwD4AAAAAAAAAAAAAAAAAAAAAwcDAPRQUVD7BwMA9wcDAPgAAAAAAAAAAAAAAAAAAAAAUFFQ+FBRUPsHAwD3BwMA+AAAAAAAAAAAAAAAAAAAAADo6Oj4UFFQ+wcDAPcHAwD4AAAAAAAAAAAAAAAAAAAAAWlraPRQUVD7BwMA9wcDAPgAAAAAAAAAAAAAAAAAAAACBgAA+Ojo6PsHAwD3BwMA+AAAAAAAAAAAAAAAAAAAAAMHAwD06Ojo+wcDAPcHAwD4AAAAAAAAAAAAAAAAAAAAAFBRUPjo6Oj7BwMA9wcDAPgAAAAAAAAAAAAAAAAAAAAA6Ojo+Ojo6PsHAwD3BwMA+AAAAAAAAAAAAAAAAAAAAAFpa2j06Ojo+wcDAPcHAwD4AAAAAAAAAAAAAAAAAAAAAgYAAPlpa2j3BwMA9wcDAPgAAAAAAAAAAAAAAAAAAAADBwMA9WlraPcHAwD3BwMA+AAAAAAAAAAAAAAAAAAAAABQUVD5aWto9wcDAPcHAwD4AAAAAAAAAAAAAAAAAAAAAOjo6Plpa2j3BwMA9wcDAPgAAAAAAAAAAAAAAAAAAAABaWto9WlraPcHAwD3BwMA+AAAAAAAAAAAAAAAAAAAAAIGAAD6BgAA+FBRUPsHAwD6BgAA+gYAAPoGAgD3BwMA+wcDAPYGAAD4UFFQ+wcDAPoGAAD6BgAA+gYCAPcHAwD4UFFQ+gYAAPhQUVD7BwMA+wcBAPoGAAD6BgIA9wcDAPjo6Oj6BgAA+FBRUPsHAwD7BwEA+gYAAPoGAgD3BwMA+WlraPYGAAD4UFFQ+wcDAPoGAAD6BgAA+gYCAPcHAwD6BgAA+wcDAPRQUVD7BwMA+AAAAAAAAAAAAAAAAAAAAAMHAwD3BwMA9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"
+                        },
+                        "shape": {
+                          "bytes": {
+                            "region": {
+                              "buffer": {
+                                "offset": 0,
+                                "length": 4000
+                              }
+                            },
+                            "element": "f32",
+                            "row_offset": 0,
+                            "row_elements": 8,
+                            "row_pitch": 32,
+                            "rows": 125,
+                            "image_pitch": 4000,
+                            "images": 1,
+                            "gaps": "ignored"
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "border-r/sampler",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "border-r/buffer/out",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "border-r/dispatch",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "border-r/status",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": {
+                          "variant": {
+                            "name": "Completed",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "border-r/read-back",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "border-r",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "sampled",
+                      "observed": {
+                        "value": {
+                          "bytes": "gYAAPoGAAD6BgAA+wcDAPoGAAD6BgAA+gYAAPsHAwD7BwMA9gYAAPoGAAD7BwMA+gYAAPoGAAD6BgAA+wcDAPhQUVD6BgAA+gYAAPsHAwD7BwEA+gYAAPoGAAD7BwMA+Ojo6PoGAAD6BgAA+wcDAPsHAQD6BgAA+gYAAPsHAwD5aWto9gYAAPoGAAD7BwMA+gYAAPoGAAD6BgAA+wcDAPoGAAD7BwMA9gYAAPsHAwD6BgAA+gYCAPoGAAD7BwMA+wcDAPcHAwD2BgAA+wcDAPoGAAD6BgIA+gYAAPsHAwD4UFFQ+wcDAPYGAAD7BwMA+wcBAPoGAgD6BgAA+wcDAPjo6Oj7BwMA9gYAAPsHAwD7BwEA+gYCAPoGAAD7BwMA+WlraPcHAwD2BgAA+wcDAPoGAAD6BgIA+gYAAPsHAwD6BgAA+FBRUPoGAAD7BwMA+gYAAPoGAgD2BgAA+wcDAPsHAwD0UFFQ+gYAAPsHAwD6BgAA+gYCAPYGAAD7BwMA+FBRUPhQUVD6BgAA+wcDAPsHAQD6BgIA9gYAAPsHAwD46Ojo+FBRUPoGAAD7BwMA+wcBAPoGAgD2BgAA+wcDAPlpa2j0UFFQ+gYAAPsHAwD6BgAA+gYCAPYGAAD7BwMA+gYAAPjo6Oj6BgAA+wcDAPoGAAD6BgIA+gYAAPsHAwD7BwMA9Ojo6PoGAAD7BwMA+gYAAPoGAgD6BgAA+wcDAPhQUVD46Ojo+gYAAPsHAwD7BwEA+gYCAPoGAAD7BwMA+Ojo6Pjo6Oj6BgAA+wcDAPsHAQD6BgIA+gYAAPsHAwD5aWto9Ojo6PoGAAD7BwMA+gYAAPoGAgD6BgAA+wcDAPoGAAD5aWto9gYAAPsHAwD6BgAA+gYCAPYGAAD7BwMA+wcDAPVpa2j2BgAA+wcDAPoGAAD6BgIA9gYAAPsHAwD4UFFQ+WlraPYGAAD7BwMA+wcBAPoGAgD2BgAA+wcDAPjo6Oj5aWto9gYAAPsHAwD7BwEA+gYCAPYGAAD7BwMA+WlraPVpa2j2BgAA+wcDAPoGAAD6BgIA9gYAAPsHAwD6BgAA+gYAAPsHAwD3BwMA+AAAAAAAAAAAAAAAAAAAAAMHAwD2BgAA+wcDAPcHAwD4AAAAAAAAAAAAAAAAAAAAAFBRUPoGAAD7BwMA9wcDAPgAAAAAAAAAAAAAAAAAAAAA6Ojo+gYAAPsHAwD3BwMA+AAAAAAAAAAAAAAAAAAAAAFpa2j2BgAA+wcDAPcHAwD4AAAAAAAAAAAAAAAAAAAAAgYAAPsHAwD3BwMA9wcDAPgAAAAAAAAAAAAAAAAAAAADBwMA9wcDAPcHAwD3BwMA+AAAAAAAAAAAAAAAAAAAAABQUVD7BwMA9wcDAPcHAwD4AAAAAAAAAAAAAAAAAAAAAOjo6PsHAwD3BwMA9wcDAPgAAAAAAAAAAAAAAAAAAAABaWto9wcDAPcHAwD3BwMA+AAAAAAAAAAAAAAAAAAAAAIGAAD4UFFQ+wcDAPcHAwD4AAAAAAAAAAAAAAAAAAAAAwcDAPRQUVD7BwMA9wcDAPgAAAAAAAAAAAAAAAAAAAAAUFFQ+FBRUPsHAwD3BwMA+AAAAAAAAAAAAAAAAAAAAADo6Oj4UFFQ+wcDAPcHAwD4AAAAAAAAAAAAAAAAAAAAAWlraPRQUVD7BwMA9wcDAPgAAAAAAAAAAAAAAAAAAAACBgAA+Ojo6PsHAwD3BwMA+AAAAAAAAAAAAAAAAAAAAAMHAwD06Ojo+wcDAPcHAwD4AAAAAAAAAAAAAAAAAAAAAFBRUPjo6Oj7BwMA9wcDAPgAAAAAAAAAAAAAAAAAAAAA6Ojo+Ojo6PsHAwD3BwMA+AAAAAAAAAAAAAAAAAAAAAFpa2j06Ojo+wcDAPcHAwD4AAAAAAAAAAAAAAAAAAAAAgYAAPlpa2j3BwMA9wcDAPgAAAAAAAAAAAAAAAAAAAADBwMA9WlraPcHAwD3BwMA+AAAAAAAAAAAAAAAAAAAAABQUVD5aWto9wcDAPcHAwD4AAAAAAAAAAAAAAAAAAAAAOjo6Plpa2j3BwMA9wcDAPgAAAAAAAAAAAAAAAAAAAABaWto9WlraPcHAwD3BwMA+AAAAAAAAAAAAAAAAAAAAAIGAAD6BgAA+FBRUPsHAwD4AAAAAAAAAAAAAAAAAAAAAwcDAPYGAAD4UFFQ+wcDAPgAAAAAAAAAAAAAAAAAAAAAUFFQ+gYAAPhQUVD7BwMA+AAAAAAAAAAAAAAAAAAAAADo6Oj6BgAA+FBRUPsHAwD4AAAAAAAAAAAAAAAAAAAAAWlraPYGAAD4UFFQ+wcDAPgAAAAAAAAAAAAAAAAAAAACBgAA+wcDAPRQUVD7BwMA+AAAAAAAAAAAAAAAAAAAAAMHAwD3BwMA9FBRUPsHAwD4AAAAAAAAAAAAAAAAAAAAAFBRUPsHAwD0UFFQ+wcDAPgAAAAAAAAAAAAAAAAAAAAA6Ojo+wcDAPRQUVD7BwMA+AAAAAAAAAAAAAAAAAAAAAFpa2j3BwMA9FBRUPsHAwD4AAAAAAAAAAAAAAAAAAAAAgYAAPhQUVD4UFFQ+wcDAPgAAAAAAAAAAAAAAAAAAAADBwMA9FBRUPhQUVD7BwMA+AAAAAAAAAAAAAAAAAAAAABQUVD4UFFQ+FBRUPsHAwD4AAAAAAAAAAAAAAAAAAAAAOjo6PhQUVD4UFFQ+wcDAPgAAAAAAAAAAAAAAAAAAAABaWto9FBRUPhQUVD7BwMA+AAAAAAAAAAAAAAAAAAAAAIGAAD46Ojo+FBRUPsHAwD4AAAAAAAAAAAAAAAAAAAAAwcDAPTo6Oj4UFFQ+wcDAPgAAAAAAAAAAAAAAAAAAAAAUFFQ+Ojo6PhQUVD7BwMA+AAAAAAAAAAAAAAAAAAAAADo6Oj46Ojo+FBRUPsHAwD4AAAAAAAAAAAAAAAAAAAAAWlraPTo6Oj4UFFQ+wcDAPgAAAAAAAAAAAAAAAAAAAACBgAA+WlraPRQUVD7BwMA+AAAAAAAAAAAAAAAAAAAAAMHAwD1aWto9FBRUPsHAwD4AAAAAAAAAAAAAAAAAAAAAFBRUPlpa2j0UFFQ+wcDAPgAAAAAAAAAAAAAAAAAAAAA6Ojo+WlraPRQUVD7BwMA+AAAAAAAAAAAAAAAAAAAAAFpa2j1aWto9FBRUPsHAwD4AAAAAAAAAAAAAAAAAAAAAgYAAPoGAAD46Ojo+wcDAPgAAAAAAAAAAAAAAAAAAAADBwMA9gYAAPjo6Oj7BwMA+AAAAAAAAAAAAAAAAAAAAABQUVD6BgAA+Ojo6PsHAwD4AAAAAAAAAAAAAAAAAAAAAOjo6PoGAAD46Ojo+wcDAPgAAAAAAAAAAAAAAAAAAAABaWto9gYAAPjo6Oj7BwMA+AAAAAAAAAAAAAAAAAAAAAIGAAD7BwMA9Ojo6PsHAwD4AAAAAAAAAAAAAAAAAAAAAwcDAPcHAwD06Ojo+wcDAPgAAAAAAAAAAAAAAAAAAAAAUFFQ+wcDAPTo6Oj7BwMA+AAAAAAAAAAAAAAAAAAAAADo6Oj7BwMA9Ojo6PsHAwD4AAAAAAAAAAAAAAAAAAAAAWlraPcHAwD06Ojo+wcDAPgAAAAAAAAAAAAAAAAAAAACBgAA+FBRUPjo6Oj7BwMA+AAAAAAAAAAAAAAAAAAAAAMHAwD0UFFQ+Ojo6PsHAwD4AAAAAAAAAAAAAAAAAAAAAFBRUPhQUVD46Ojo+wcDAPgAAAAAAAAAAAAAAAAAAAAA6Ojo+FBRUPjo6Oj7BwMA+AAAAAAAAAAAAAAAAAAAAAFpa2j0UFFQ+Ojo6PsHAwD4AAAAAAAAAAAAAAAAAAAAAgYAAPjo6Oj46Ojo+wcDAPgAAAAAAAAAAAAAAAAAAAADBwMA9Ojo6Pjo6Oj7BwMA+AAAAAAAAAAAAAAAAAAAAABQUVD46Ojo+Ojo6PsHAwD4AAAAAAAAAAAAAAAAAAAAAOjo6Pjo6Oj46Ojo+wcDAPgAAAAAAAAAAAAAAAAAAAABaWto9Ojo6Pjo6Oj7BwMA+AAAAAAAAAAAAAAAAAAAAAIGAAD5aWto9Ojo6PsHAwD4AAAAAAAAAAAAAAAAAAAAAwcDAPVpa2j06Ojo+wcDAPgAAAAAAAAAAAAAAAAAAAAAUFFQ+WlraPTo6Oj7BwMA+AAAAAAAAAAAAAAAAAAAAADo6Oj5aWto9Ojo6PsHAwD4AAAAAAAAAAAAAAAAAAAAAWlraPVpa2j06Ojo+wcDAPgAAAAAAAAAAAAAAAAAAAACBgAA+gYAAPlpa2j3BwMA+AAAAAAAAAAAAAAAAAAAAAMHAwD2BgAA+WlraPcHAwD4AAAAAAAAAAAAAAAAAAAAAFBRUPoGAAD5aWto9wcDAPgAAAAAAAAAAAAAAAAAAAAA6Ojo+gYAAPlpa2j3BwMA+AAAAAAAAAAAAAAAAAAAAAFpa2j2BgAA+WlraPcHAwD4AAAAAAAAAAAAAAAAAAAAAgYAAPsHAwD1aWto9wcDAPgAAAAAAAAAAAAAAAAAAAADBwMA9wcDAPVpa2j3BwMA+AAAAAAAAAAAAAAAAAAAAABQUVD7BwMA9WlraPcHAwD4AAAAAAAAAAAAAAAAAAAAAOjo6PsHAwD1aWto9wcDAPgAAAAAAAAAAAAAAAAAAAABaWto9wcDAPVpa2j3BwMA+AAAAAAAAAAAAAAAAAAAAAIGAAD4UFFQ+WlraPcHAwD4AAAAAAAAAAAAAAAAAAAAAwcDAPRQUVD5aWto9wcDAPgAAAAAAAAAAAAAAAAAAAAAUFFQ+FBRUPlpa2j3BwMA+AAAAAAAAAAAAAAAAAAAAADo6Oj4UFFQ+WlraPcHAwD4AAAAAAAAAAAAAAAAAAAAAWlraPRQUVD5aWto9wcDAPgAAAAAAAAAAAAAAAAAAAACBgAA+Ojo6Plpa2j3BwMA+AAAAAAAAAAAAAAAAAAAAAMHAwD06Ojo+WlraPcHAwD4AAAAAAAAAAAAAAAAAAAAAFBRUPjo6Oj5aWto9wcDAPgAAAAAAAAAAAAAAAAAAAAA6Ojo+Ojo6Plpa2j3BwMA+AAAAAAAAAAAAAAAAAAAAAFpa2j06Ojo+WlraPcHAwD4AAAAAAAAAAAAAAAAAAAAAgYAAPlpa2j1aWto9wcDAPgAAAAAAAAAAAAAAAAAAAADBwMA9WlraPVpa2j3BwMA+AAAAAAAAAAAAAAAAAAAAABQUVD5aWto9WlraPcHAwD4AAAAAAAAAAAAAAAAAAAAAOjo6Plpa2j1aWto9wcDAPgAAAAAAAAAAAAAAAAAAAABaWto9WlraPVpa2j3BwMA+AAAAAAAAAAAAAAAAAAAAAA=="
+                        },
+                        "shape": {
+                          "bytes": {
+                            "region": {
+                              "buffer": {
+                                "offset": 0,
+                                "length": 4000
+                              }
+                            },
+                            "element": "f32",
+                            "row_offset": 0,
+                            "row_elements": 8,
+                            "row_pitch": 32,
+                            "rows": 125,
+                            "image_pitch": 4000,
+                            "images": 1,
+                            "gaps": "ignored"
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "border-all/sampler",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "border-all/buffer/out",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "border-all/dispatch",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "border-all/status",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": {
+                          "variant": {
+                            "name": "Completed",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "border-all/read-back",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "border-all",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "sampled",
+                      "observed": {
+                        "value": {
+                          "bytes": "gYAAPoGAAD6BgAA+wcDAPoGAAD6BgAA+gYAAPsHAwD7BwMA9gYAAPoGAAD7BwMA+AAAAAAAAAAAAAAAAAAAAABQUVD6BgAA+gYAAPsHAwD4AAAAAAAAAAAAAAAAAAAAAOjo6PoGAAD6BgAA+wcDAPgAAAAAAAAAAAAAAAAAAAABaWto9gYAAPoGAAD7BwMA+AAAAAAAAAAAAAAAAAAAAAIGAAD7BwMA9gYAAPsHAwD4AAAAAAAAAAAAAAAAAAAAAwcDAPcHAwD2BgAA+wcDAPgAAAAAAAAAAAAAAAAAAAAAUFFQ+wcDAPYGAAD7BwMA+AAAAAAAAAAAAAAAAAAAAADo6Oj7BwMA9gYAAPsHAwD4AAAAAAAAAAAAAAAAAAAAAWlraPcHAwD2BgAA+wcDAPgAAAAAAAAAAAAAAAAAAAACBgAA+FBRUPoGAAD7BwMA+AAAAAAAAAAAAAAAAAAAAAMHAwD0UFFQ+gYAAPsHAwD4AAAAAAAAAAAAAAAAAAAAAFBRUPhQUVD6BgAA+wcDAPgAAAAAAAAAAAAAAAAAAAAA6Ojo+FBRUPoGAAD7BwMA+AAAAAAAAAAAAAAAAAAAAAFpa2j0UFFQ+gYAAPsHAwD4AAAAAAAAAAAAAAAAAAAAAgYAAPjo6Oj6BgAA+wcDAPgAAAAAAAAAAAAAAAAAAAADBwMA9Ojo6PoGAAD7BwMA+AAAAAAAAAAAAAAAAAAAAABQUVD46Ojo+gYAAPsHAwD4AAAAAAAAAAAAAAAAAAAAAOjo6Pjo6Oj6BgAA+wcDAPgAAAAAAAAAAAAAAAAAAAABaWto9Ojo6PoGAAD7BwMA+AAAAAAAAAAAAAAAAAAAAAIGAAD5aWto9gYAAPsHAwD4AAAAAAAAAAAAAAAAAAAAAwcDAPVpa2j2BgAA+wcDAPgAAAAAAAAAAAAAAAAAAAAAUFFQ+WlraPYGAAD7BwMA+AAAAAAAAAAAAAAAAAAAAADo6Oj5aWto9gYAAPsHAwD4AAAAAAAAAAAAAAAAAAAAAWlraPVpa2j2BgAA+wcDAPgAAAAAAAAAAAAAAAAAAAACBgAA+gYAAPsHAwD3BwMA+AAAAAAAAAAAAAAAAAAAAAMHAwD2BgAA+wcDAPcHAwD4AAAAAAAAAAAAAAAAAAAAAFBRUPoGAAD7BwMA9wcDAPgAAAAAAAAAAAAAAAAAAAAA6Ojo+gYAAPsHAwD3BwMA+AAAAAAAAAAAAAAAAAAAAAFpa2j2BgAA+wcDAPcHAwD4AAAAAAAAAAAAAAAAAAAAAgYAAPsHAwD3BwMA9wcDAPgAAAAAAAAAAAAAAAAAAAADBwMA9wcDAPcHAwD3BwMA+AAAAAAAAAAAAAAAAAAAAABQUVD7BwMA9wcDAPcHAwD4AAAAAAAAAAAAAAAAAAAAAOjo6PsHAwD3BwMA9wcDAPgAAAAAAAAAAAAAAAAAAAABaWto9wcDAPcHAwD3BwMA+AAAAAAAAAAAAAAAAAAAAAIGAAD4UFFQ+wcDAPcHAwD4AAAAAAAAAAAAAAAAAAAAAwcDAPRQUVD7BwMA9wcDAPgAAAAAAAAAAAAAAAAAAAAAUFFQ+FBRUPsHAwD3BwMA+AAAAAAAAAAAAAAAAAAAAADo6Oj4UFFQ+wcDAPcHAwD4AAAAAAAAAAAAAAAAAAAAAWlraPRQUVD7BwMA9wcDAPgAAAAAAAAAAAAAAAAAAAACBgAA+Ojo6PsHAwD3BwMA+AAAAAAAAAAAAAAAAAAAAAMHAwD06Ojo+wcDAPcHAwD4AAAAAAAAAAAAAAAAAAAAAFBRUPjo6Oj7BwMA9wcDAPgAAAAAAAAAAAAAAAAAAAAA6Ojo+Ojo6PsHAwD3BwMA+AAAAAAAAAAAAAAAAAAAAAFpa2j06Ojo+wcDAPcHAwD4AAAAAAAAAAAAAAAAAAAAAgYAAPlpa2j3BwMA9wcDAPgAAAAAAAAAAAAAAAAAAAADBwMA9WlraPcHAwD3BwMA+AAAAAAAAAAAAAAAAAAAAABQUVD5aWto9wcDAPcHAwD4AAAAAAAAAAAAAAAAAAAAAOjo6Plpa2j3BwMA9wcDAPgAAAAAAAAAAAAAAAAAAAABaWto9WlraPcHAwD3BwMA+AAAAAAAAAAAAAAAAAAAAAIGAAD6BgAA+FBRUPsHAwD4AAAAAAAAAAAAAAAAAAAAAwcDAPYGAAD4UFFQ+wcDAPgAAAAAAAAAAAAAAAAAAAAAUFFQ+gYAAPhQUVD7BwMA+AAAAAAAAAAAAAAAAAAAAADo6Oj6BgAA+FBRUPsHAwD4AAAAAAAAAAAAAAAAAAAAAWlraPYGAAD4UFFQ+wcDAPgAAAAAAAAAAAAAAAAAAAACBgAA+wcDAPRQUVD7BwMA+AAAAAAAAAAAAAAAAAAAAAMHAwD3BwMA9FBRUPsHAwD4AAAAAAAAAAAAAAAAAAAAAFBRUPsHAwD0UFFQ+wcDAPgAAAAAAAAAAAAAAAAAAAAA6Ojo+wcDAPRQUVD7BwMA+AAAAAAAAAAAAAAAAAAAAAFpa2j3BwMA9FBRUPsHAwD4AAAAAAAAAAAAAAAAAAAAAgYAAPhQUVD4UFFQ+wcDAPgAAAAAAAAAAAAAAAAAAAADBwMA9FBRUPhQUVD7BwMA+AAAAAAAAAAAAAAAAAAAAABQUVD4UFFQ+FBRUPsHAwD4AAAAAAAAAAAAAAAAAAAAAOjo6PhQUVD4UFFQ+wcDAPgAAAAAAAAAAAAAAAAAAAABaWto9FBRUPhQUVD7BwMA+AAAAAAAAAAAAAAAAAAAAAIGAAD46Ojo+FBRUPsHAwD4AAAAAAAAAAAAAAAAAAAAAwcDAPTo6Oj4UFFQ+wcDAPgAAAAAAAAAAAAAAAAAAAAAUFFQ+Ojo6PhQUVD7BwMA+AAAAAAAAAAAAAAAAAAAAADo6Oj46Ojo+FBRUPsHAwD4AAAAAAAAAAAAAAAAAAAAAWlraPTo6Oj4UFFQ+wcDAPgAAAAAAAAAAAAAAAAAAAACBgAA+WlraPRQUVD7BwMA+AAAAAAAAAAAAAAAAAAAAAMHAwD1aWto9FBRUPsHAwD4AAAAAAAAAAAAAAAAAAAAAFBRUPlpa2j0UFFQ+wcDAPgAAAAAAAAAAAAAAAAAAAAA6Ojo+WlraPRQUVD7BwMA+AAAAAAAAAAAAAAAAAAAAAFpa2j1aWto9FBRUPsHAwD4AAAAAAAAAAAAAAAAAAAAAgYAAPoGAAD46Ojo+wcDAPgAAAAAAAAAAAAAAAAAAAADBwMA9gYAAPjo6Oj7BwMA+AAAAAAAAAAAAAAAAAAAAABQUVD6BgAA+Ojo6PsHAwD4AAAAAAAAAAAAAAAAAAAAAOjo6PoGAAD46Ojo+wcDAPgAAAAAAAAAAAAAAAAAAAABaWto9gYAAPjo6Oj7BwMA+AAAAAAAAAAAAAAAAAAAAAIGAAD7BwMA9Ojo6PsHAwD4AAAAAAAAAAAAAAAAAAAAAwcDAPcHAwD06Ojo+wcDAPgAAAAAAAAAAAAAAAAAAAAAUFFQ+wcDAPTo6Oj7BwMA+AAAAAAAAAAAAAAAAAAAAADo6Oj7BwMA9Ojo6PsHAwD4AAAAAAAAAAAAAAAAAAAAAWlraPcHAwD06Ojo+wcDAPgAAAAAAAAAAAAAAAAAAAACBgAA+FBRUPjo6Oj7BwMA+AAAAAAAAAAAAAAAAAAAAAMHAwD0UFFQ+Ojo6PsHAwD4AAAAAAAAAAAAAAAAAAAAAFBRUPhQUVD46Ojo+wcDAPgAAAAAAAAAAAAAAAAAAAAA6Ojo+FBRUPjo6Oj7BwMA+AAAAAAAAAAAAAAAAAAAAAFpa2j0UFFQ+Ojo6PsHAwD4AAAAAAAAAAAAAAAAAAAAAgYAAPjo6Oj46Ojo+wcDAPgAAAAAAAAAAAAAAAAAAAADBwMA9Ojo6Pjo6Oj7BwMA+AAAAAAAAAAAAAAAAAAAAABQUVD46Ojo+Ojo6PsHAwD4AAAAAAAAAAAAAAAAAAAAAOjo6Pjo6Oj46Ojo+wcDAPgAAAAAAAAAAAAAAAAAAAABaWto9Ojo6Pjo6Oj7BwMA+AAAAAAAAAAAAAAAAAAAAAIGAAD5aWto9Ojo6PsHAwD4AAAAAAAAAAAAAAAAAAAAAwcDAPVpa2j06Ojo+wcDAPgAAAAAAAAAAAAAAAAAAAAAUFFQ+WlraPTo6Oj7BwMA+AAAAAAAAAAAAAAAAAAAAADo6Oj5aWto9Ojo6PsHAwD4AAAAAAAAAAAAAAAAAAAAAWlraPVpa2j06Ojo+wcDAPgAAAAAAAAAAAAAAAAAAAACBgAA+gYAAPlpa2j3BwMA+AAAAAAAAAAAAAAAAAAAAAMHAwD2BgAA+WlraPcHAwD4AAAAAAAAAAAAAAAAAAAAAFBRUPoGAAD5aWto9wcDAPgAAAAAAAAAAAAAAAAAAAAA6Ojo+gYAAPlpa2j3BwMA+AAAAAAAAAAAAAAAAAAAAAFpa2j2BgAA+WlraPcHAwD4AAAAAAAAAAAAAAAAAAAAAgYAAPsHAwD1aWto9wcDAPgAAAAAAAAAAAAAAAAAAAADBwMA9wcDAPVpa2j3BwMA+AAAAAAAAAAAAAAAAAAAAABQUVD7BwMA9WlraPcHAwD4AAAAAAAAAAAAAAAAAAAAAOjo6PsHAwD1aWto9wcDAPgAAAAAAAAAAAAAAAAAAAABaWto9wcDAPVpa2j3BwMA+AAAAAAAAAAAAAAAAAAAAAIGAAD4UFFQ+WlraPcHAwD4AAAAAAAAAAAAAAAAAAAAAwcDAPRQUVD5aWto9wcDAPgAAAAAAAAAAAAAAAAAAAAAUFFQ+FBRUPlpa2j3BwMA+AAAAAAAAAAAAAAAAAAAAADo6Oj4UFFQ+WlraPcHAwD4AAAAAAAAAAAAAAAAAAAAAWlraPRQUVD5aWto9wcDAPgAAAAAAAAAAAAAAAAAAAACBgAA+Ojo6Plpa2j3BwMA+AAAAAAAAAAAAAAAAAAAAAMHAwD06Ojo+WlraPcHAwD4AAAAAAAAAAAAAAAAAAAAAFBRUPjo6Oj5aWto9wcDAPgAAAAAAAAAAAAAAAAAAAAA6Ojo+Ojo6Plpa2j3BwMA+AAAAAAAAAAAAAAAAAAAAAFpa2j06Ojo+WlraPcHAwD4AAAAAAAAAAAAAAAAAAAAAgYAAPlpa2j1aWto9wcDAPgAAAAAAAAAAAAAAAAAAAADBwMA9WlraPVpa2j3BwMA+AAAAAAAAAAAAAAAAAAAAABQUVD5aWto9WlraPcHAwD4AAAAAAAAAAAAAAAAAAAAAOjo6Plpa2j1aWto9wcDAPgAAAAAAAAAAAAAAAAAAAABaWto9WlraPVpa2j3BwMA+AAAAAAAAAAAAAAAAAAAAAA=="
+                        },
+                        "shape": {
+                          "bytes": {
+                            "region": {
+                              "buffer": {
+                                "offset": 0,
+                                "length": 4000
+                              }
+                            },
+                            "element": "f32",
+                            "row_offset": 0,
+                            "row_elements": 8,
+                            "row_pitch": 32,
+                            "rows": 125,
+                            "image_pitch": 4000,
+                            "images": 1,
+                            "gaps": "ignored"
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "zero-s-border-r/sampler",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "zero-s-border-r/buffer/out",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "zero-s-border-r/dispatch",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "zero-s-border-r/status",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": {
+                          "variant": {
+                            "name": "Completed",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "zero-s-border-r/read-back",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "zero-s-border-r",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "sampled",
+                      "observed": {
+                        "value": {
+                          "bytes": "gYAAPoGAAD6BgAA+wcDAPoGAAD6BgAA+gYAAPsHAwD7BwMA9gYAAPoGAAD7BwMA+AAAAAAAAAAAAAAAAAAAAABQUVD6BgAA+gYAAPsHAwD4AAAAAAAAAAAAAAAAAAAAAOjo6PoGAAD6BgAA+wcDAPgAAAAAAAAAAAAAAAAAAAABaWto9gYAAPoGAAD7BwMA+AAAAAAAAAAAAAAAAAAAAAIGAAD7BwMA9gYAAPsHAwD6BgAA+gYAAPoGAAD7BwMA+wcDAPcHAwD2BgAA+wcDAPgAAAAAAAAAAAAAAAAAAAAAUFFQ+wcDAPYGAAD7BwMA+AAAAAAAAAAAAAAAAAAAAADo6Oj7BwMA9gYAAPsHAwD4AAAAAAAAAAAAAAAAAAAAAWlraPcHAwD2BgAA+wcDAPgAAAAAAAAAAAAAAAAAAAACBgAA+FBRUPoGAAD7BwMA+gYAAPsHAQD6BgAA+wcDAPsHAwD0UFFQ+gYAAPsHAwD4AAAAAAAAAAAAAAAAAAAAAFBRUPhQUVD6BgAA+wcDAPgAAAAAAAAAAAAAAAAAAAAA6Ojo+FBRUPoGAAD7BwMA+AAAAAAAAAAAAAAAAAAAAAFpa2j0UFFQ+gYAAPsHAwD4AAAAAAAAAAAAAAAAAAAAAgYAAPjo6Oj6BgAA+wcDAPoGAAD7BwEA+gYAAPsHAwD7BwMA9Ojo6PoGAAD7BwMA+AAAAAAAAAAAAAAAAAAAAABQUVD46Ojo+gYAAPsHAwD4AAAAAAAAAAAAAAAAAAAAAOjo6Pjo6Oj6BgAA+wcDAPgAAAAAAAAAAAAAAAAAAAABaWto9Ojo6PoGAAD7BwMA+AAAAAAAAAAAAAAAAAAAAAIGAAD5aWto9gYAAPsHAwD6BgAA+gYAAPoGAAD7BwMA+wcDAPVpa2j2BgAA+wcDAPgAAAAAAAAAAAAAAAAAAAAAUFFQ+WlraPYGAAD7BwMA+AAAAAAAAAAAAAAAAAAAAADo6Oj5aWto9gYAAPsHAwD4AAAAAAAAAAAAAAAAAAAAAWlraPVpa2j2BgAA+wcDAPgAAAAAAAAAAAAAAAAAAAACBgAA+gYAAPsHAwD3BwMA+AAAAAAAAAAAAAAAAAAAAAMHAwD2BgAA+wcDAPcHAwD4AAAAAAAAAAAAAAAAAAAAAFBRUPoGAAD7BwMA9wcDAPgAAAAAAAAAAAAAAAAAAAAA6Ojo+gYAAPsHAwD3BwMA+AAAAAAAAAAAAAAAAAAAAAFpa2j2BgAA+wcDAPcHAwD4AAAAAAAAAAAAAAAAAAAAAgYAAPsHAwD3BwMA9wcDAPgAAAAAAAAAAAAAAAAAAAADBwMA9wcDAPcHAwD3BwMA+AAAAAAAAAAAAAAAAAAAAABQUVD7BwMA9wcDAPcHAwD4AAAAAAAAAAAAAAAAAAAAAOjo6PsHAwD3BwMA9wcDAPgAAAAAAAAAAAAAAAAAAAABaWto9wcDAPcHAwD3BwMA+AAAAAAAAAAAAAAAAAAAAAIGAAD4UFFQ+wcDAPcHAwD4AAAAAAAAAAAAAAAAAAAAAwcDAPRQUVD7BwMA9wcDAPgAAAAAAAAAAAAAAAAAAAAAUFFQ+FBRUPsHAwD3BwMA+AAAAAAAAAAAAAAAAAAAAADo6Oj4UFFQ+wcDAPcHAwD4AAAAAAAAAAAAAAAAAAAAAWlraPRQUVD7BwMA9wcDAPgAAAAAAAAAAAAAAAAAAAACBgAA+Ojo6PsHAwD3BwMA+AAAAAAAAAAAAAAAAAAAAAMHAwD06Ojo+wcDAPcHAwD4AAAAAAAAAAAAAAAAAAAAAFBRUPjo6Oj7BwMA9wcDAPgAAAAAAAAAAAAAAAAAAAAA6Ojo+Ojo6PsHAwD3BwMA+AAAAAAAAAAAAAAAAAAAAAFpa2j06Ojo+wcDAPcHAwD4AAAAAAAAAAAAAAAAAAAAAgYAAPlpa2j3BwMA9wcDAPgAAAAAAAAAAAAAAAAAAAADBwMA9WlraPcHAwD3BwMA+AAAAAAAAAAAAAAAAAAAAABQUVD5aWto9wcDAPcHAwD4AAAAAAAAAAAAAAAAAAAAAOjo6Plpa2j3BwMA9wcDAPgAAAAAAAAAAAAAAAAAAAABaWto9WlraPcHAwD3BwMA+AAAAAAAAAAAAAAAAAAAAAIGAAD6BgAA+FBRUPsHAwD4AAAAAAAAAAAAAAAAAAAAAwcDAPYGAAD4UFFQ+wcDAPgAAAAAAAAAAAAAAAAAAAAAUFFQ+gYAAPhQUVD7BwMA+AAAAAAAAAAAAAAAAAAAAADo6Oj6BgAA+FBRUPsHAwD4AAAAAAAAAAAAAAAAAAAAAWlraPYGAAD4UFFQ+wcDAPgAAAAAAAAAAAAAAAAAAAACBgAA+wcDAPRQUVD7BwMA+AAAAAAAAAAAAAAAAAAAAAMHAwD3BwMA9FBRUPsHAwD4AAAAAAAAAAAAAAAAAAAAAFBRUPsHAwD0UFFQ+wcDAPgAAAAAAAAAAAAAAAAAAAAA6Ojo+wcDAPRQUVD7BwMA+AAAAAAAAAAAAAAAAAAAAAFpa2j3BwMA9FBRUPsHAwD4AAAAAAAAAAAAAAAAAAAAAgYAAPhQUVD4UFFQ+wcDAPgAAAAAAAAAAAAAAAAAAAADBwMA9FBRUPhQUVD7BwMA+AAAAAAAAAAAAAAAAAAAAABQUVD4UFFQ+FBRUPsHAwD4AAAAAAAAAAAAAAAAAAAAAOjo6PhQUVD4UFFQ+wcDAPgAAAAAAAAAAAAAAAAAAAABaWto9FBRUPhQUVD7BwMA+AAAAAAAAAAAAAAAAAAAAAIGAAD46Ojo+FBRUPsHAwD4AAAAAAAAAAAAAAAAAAAAAwcDAPTo6Oj4UFFQ+wcDAPgAAAAAAAAAAAAAAAAAAAAAUFFQ+Ojo6PhQUVD7BwMA+AAAAAAAAAAAAAAAAAAAAADo6Oj46Ojo+FBRUPsHAwD4AAAAAAAAAAAAAAAAAAAAAWlraPTo6Oj4UFFQ+wcDAPgAAAAAAAAAAAAAAAAAAAACBgAA+WlraPRQUVD7BwMA+AAAAAAAAAAAAAAAAAAAAAMHAwD1aWto9FBRUPsHAwD4AAAAAAAAAAAAAAAAAAAAAFBRUPlpa2j0UFFQ+wcDAPgAAAAAAAAAAAAAAAAAAAAA6Ojo+WlraPRQUVD7BwMA+AAAAAAAAAAAAAAAAAAAAAFpa2j1aWto9FBRUPsHAwD4AAAAAAAAAAAAAAAAAAAAAgYAAPoGAAD46Ojo+wcDAPgAAAAAAAAAAAAAAAAAAAADBwMA9gYAAPjo6Oj7BwMA+AAAAAAAAAAAAAAAAAAAAABQUVD6BgAA+Ojo6PsHAwD4AAAAAAAAAAAAAAAAAAAAAOjo6PoGAAD46Ojo+wcDAPgAAAAAAAAAAAAAAAAAAAABaWto9gYAAPjo6Oj7BwMA+AAAAAAAAAAAAAAAAAAAAAIGAAD7BwMA9Ojo6PsHAwD4AAAAAAAAAAAAAAAAAAAAAwcDAPcHAwD06Ojo+wcDAPgAAAAAAAAAAAAAAAAAAAAAUFFQ+wcDAPTo6Oj7BwMA+AAAAAAAAAAAAAAAAAAAAADo6Oj7BwMA9Ojo6PsHAwD4AAAAAAAAAAAAAAAAAAAAAWlraPcHAwD06Ojo+wcDAPgAAAAAAAAAAAAAAAAAAAACBgAA+FBRUPjo6Oj7BwMA+AAAAAAAAAAAAAAAAAAAAAMHAwD0UFFQ+Ojo6PsHAwD4AAAAAAAAAAAAAAAAAAAAAFBRUPhQUVD46Ojo+wcDAPgAAAAAAAAAAAAAAAAAAAAA6Ojo+FBRUPjo6Oj7BwMA+AAAAAAAAAAAAAAAAAAAAAFpa2j0UFFQ+Ojo6PsHAwD4AAAAAAAAAAAAAAAAAAAAAgYAAPjo6Oj46Ojo+wcDAPgAAAAAAAAAAAAAAAAAAAADBwMA9Ojo6Pjo6Oj7BwMA+AAAAAAAAAAAAAAAAAAAAABQUVD46Ojo+Ojo6PsHAwD4AAAAAAAAAAAAAAAAAAAAAOjo6Pjo6Oj46Ojo+wcDAPgAAAAAAAAAAAAAAAAAAAABaWto9Ojo6Pjo6Oj7BwMA+AAAAAAAAAAAAAAAAAAAAAIGAAD5aWto9Ojo6PsHAwD4AAAAAAAAAAAAAAAAAAAAAwcDAPVpa2j06Ojo+wcDAPgAAAAAAAAAAAAAAAAAAAAAUFFQ+WlraPTo6Oj7BwMA+AAAAAAAAAAAAAAAAAAAAADo6Oj5aWto9Ojo6PsHAwD4AAAAAAAAAAAAAAAAAAAAAWlraPVpa2j06Ojo+wcDAPgAAAAAAAAAAAAAAAAAAAACBgAA+gYAAPlpa2j3BwMA+AAAAAAAAAAAAAAAAAAAAAMHAwD2BgAA+WlraPcHAwD4AAAAAAAAAAAAAAAAAAAAAFBRUPoGAAD5aWto9wcDAPgAAAAAAAAAAAAAAAAAAAAA6Ojo+gYAAPlpa2j3BwMA+AAAAAAAAAAAAAAAAAAAAAFpa2j2BgAA+WlraPcHAwD4AAAAAAAAAAAAAAAAAAAAAgYAAPsHAwD1aWto9wcDAPgAAAAAAAAAAAAAAAAAAAADBwMA9wcDAPVpa2j3BwMA+AAAAAAAAAAAAAAAAAAAAABQUVD7BwMA9WlraPcHAwD4AAAAAAAAAAAAAAAAAAAAAOjo6PsHAwD1aWto9wcDAPgAAAAAAAAAAAAAAAAAAAABaWto9wcDAPVpa2j3BwMA+AAAAAAAAAAAAAAAAAAAAAIGAAD4UFFQ+WlraPcHAwD4AAAAAAAAAAAAAAAAAAAAAwcDAPRQUVD5aWto9wcDAPgAAAAAAAAAAAAAAAAAAAAAUFFQ+FBRUPlpa2j3BwMA+AAAAAAAAAAAAAAAAAAAAADo6Oj4UFFQ+WlraPcHAwD4AAAAAAAAAAAAAAAAAAAAAWlraPRQUVD5aWto9wcDAPgAAAAAAAAAAAAAAAAAAAACBgAA+Ojo6Plpa2j3BwMA+AAAAAAAAAAAAAAAAAAAAAMHAwD06Ojo+WlraPcHAwD4AAAAAAAAAAAAAAAAAAAAAFBRUPjo6Oj5aWto9wcDAPgAAAAAAAAAAAAAAAAAAAAA6Ojo+Ojo6Plpa2j3BwMA+AAAAAAAAAAAAAAAAAAAAAFpa2j06Ojo+WlraPcHAwD4AAAAAAAAAAAAAAAAAAAAAgYAAPlpa2j1aWto9wcDAPgAAAAAAAAAAAAAAAAAAAADBwMA9WlraPVpa2j3BwMA+AAAAAAAAAAAAAAAAAAAAABQUVD5aWto9WlraPcHAwD4AAAAAAAAAAAAAAAAAAAAAOjo6Plpa2j1aWto9wcDAPgAAAAAAAAAAAAAAAAAAAABaWto9WlraPVpa2j3BwMA+AAAAAAAAAAAAAAAAAAAAAA=="
+                        },
+                        "shape": {
+                          "bytes": {
+                            "region": {
+                              "buffer": {
+                                "offset": 0,
+                                "length": 4000
+                              }
+                            },
+                            "element": "f32",
+                            "row_offset": 0,
+                            "row_elements": 8,
+                            "row_pitch": 32,
+                            "rows": 125,
+                            "image_pitch": 4000,
+                            "images": 1,
+                            "gaps": "ignored"
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "border-s-zero-t/sampler",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "border-s-zero-t/buffer/out",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "border-s-zero-t/dispatch",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "border-s-zero-t/status",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": {
+                          "variant": {
+                            "name": "Completed",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "border-s-zero-t/read-back",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "border-s-zero-t",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "sampled",
+                      "observed": {
+                        "value": {
+                          "bytes": "gYAAPoGAAD6BgAA+wcDAPoGAAD6BgAA+gYAAPsHAwD7BwMA9gYAAPoGAAD7BwMA+AAAAAAAAAAAAAAAAAAAAABQUVD6BgAA+gYAAPsHAwD4AAAAAAAAAAAAAAAAAAAAAOjo6PoGAAD6BgAA+wcDAPgAAAAAAAAAAAAAAAAAAAABaWto9gYAAPoGAAD7BwMA+AAAAAAAAAAAAAAAAAAAAAIGAAD7BwMA9gYAAPsHAwD4AAAAAAAAAAAAAAAAAAAAAwcDAPcHAwD2BgAA+wcDAPgAAAAAAAAAAAAAAAAAAAAAUFFQ+wcDAPYGAAD7BwMA+AAAAAAAAAAAAAAAAAAAAADo6Oj7BwMA9gYAAPsHAwD4AAAAAAAAAAAAAAAAAAAAAWlraPcHAwD2BgAA+wcDAPgAAAAAAAAAAAAAAAAAAAACBgAA+FBRUPoGAAD7BwMA+AAAAAAAAAAAAAAAAAAAAAMHAwD0UFFQ+gYAAPsHAwD4AAAAAAAAAAAAAAAAAAAAAFBRUPhQUVD6BgAA+wcDAPgAAAAAAAAAAAAAAAAAAAAA6Ojo+FBRUPoGAAD7BwMA+AAAAAAAAAAAAAAAAAAAAAFpa2j0UFFQ+gYAAPsHAwD4AAAAAAAAAAAAAAAAAAAAAgYAAPjo6Oj6BgAA+wcDAPgAAAAAAAAAAAAAAAAAAAADBwMA9Ojo6PoGAAD7BwMA+AAAAAAAAAAAAAAAAAAAAABQUVD46Ojo+gYAAPsHAwD4AAAAAAAAAAAAAAAAAAAAAOjo6Pjo6Oj6BgAA+wcDAPgAAAAAAAAAAAAAAAAAAAABaWto9Ojo6PoGAAD7BwMA+AAAAAAAAAAAAAAAAAAAAAIGAAD5aWto9gYAAPsHAwD4AAAAAAAAAAAAAAAAAAAAAwcDAPVpa2j2BgAA+wcDAPgAAAAAAAAAAAAAAAAAAAAAUFFQ+WlraPYGAAD7BwMA+AAAAAAAAAAAAAAAAAAAAADo6Oj5aWto9gYAAPsHAwD4AAAAAAAAAAAAAAAAAAAAAWlraPVpa2j2BgAA+wcDAPgAAAAAAAAAAAAAAAAAAAACBgAA+gYAAPsHAwD3BwMA+gYAAPoGAAD6BgAA+wcDAPsHAwD2BgAA+wcDAPcHAwD4AAAAAAAAAAAAAAAAAAAAAFBRUPoGAAD7BwMA9wcDAPgAAAAAAAAAAAAAAAAAAAAA6Ojo+gYAAPsHAwD3BwMA+AAAAAAAAAAAAAAAAAAAAAFpa2j2BgAA+wcDAPcHAwD4AAAAAAAAAAAAAAAAAAAAAgYAAPsHAwD3BwMA9wcDAPgAAAAAAAAAAAAAAAAAAAADBwMA9wcDAPcHAwD3BwMA+AAAAAAAAAAAAAAAAAAAAABQUVD7BwMA9wcDAPcHAwD4AAAAAAAAAAAAAAAAAAAAAOjo6PsHAwD3BwMA9wcDAPgAAAAAAAAAAAAAAAAAAAABaWto9wcDAPcHAwD3BwMA+AAAAAAAAAAAAAAAAAAAAAIGAAD4UFFQ+wcDAPcHAwD4AAAAAAAAAAAAAAAAAAAAAwcDAPRQUVD7BwMA9wcDAPgAAAAAAAAAAAAAAAAAAAAAUFFQ+FBRUPsHAwD3BwMA+AAAAAAAAAAAAAAAAAAAAADo6Oj4UFFQ+wcDAPcHAwD4AAAAAAAAAAAAAAAAAAAAAWlraPRQUVD7BwMA9wcDAPgAAAAAAAAAAAAAAAAAAAACBgAA+Ojo6PsHAwD3BwMA+AAAAAAAAAAAAAAAAAAAAAMHAwD06Ojo+wcDAPcHAwD4AAAAAAAAAAAAAAAAAAAAAFBRUPjo6Oj7BwMA9wcDAPgAAAAAAAAAAAAAAAAAAAAA6Ojo+Ojo6PsHAwD3BwMA+AAAAAAAAAAAAAAAAAAAAAFpa2j06Ojo+wcDAPcHAwD4AAAAAAAAAAAAAAAAAAAAAgYAAPlpa2j3BwMA9wcDAPgAAAAAAAAAAAAAAAAAAAADBwMA9WlraPcHAwD3BwMA+AAAAAAAAAAAAAAAAAAAAABQUVD5aWto9wcDAPcHAwD4AAAAAAAAAAAAAAAAAAAAAOjo6Plpa2j3BwMA9wcDAPgAAAAAAAAAAAAAAAAAAAABaWto9WlraPcHAwD3BwMA+AAAAAAAAAAAAAAAAAAAAAIGAAD6BgAA+FBRUPsHAwD6BgAA+gYAAPsHAQD7BwMA+wcDAPYGAAD4UFFQ+wcDAPgAAAAAAAAAAAAAAAAAAAAAUFFQ+gYAAPhQUVD7BwMA+AAAAAAAAAAAAAAAAAAAAADo6Oj6BgAA+FBRUPsHAwD4AAAAAAAAAAAAAAAAAAAAAWlraPYGAAD4UFFQ+wcDAPgAAAAAAAAAAAAAAAAAAAACBgAA+wcDAPRQUVD7BwMA+AAAAAAAAAAAAAAAAAAAAAMHAwD3BwMA9FBRUPsHAwD4AAAAAAAAAAAAAAAAAAAAAFBRUPsHAwD0UFFQ+wcDAPgAAAAAAAAAAAAAAAAAAAAA6Ojo+wcDAPRQUVD7BwMA+AAAAAAAAAAAAAAAAAAAAAFpa2j3BwMA9FBRUPsHAwD4AAAAAAAAAAAAAAAAAAAAAgYAAPhQUVD4UFFQ+wcDAPgAAAAAAAAAAAAAAAAAAAADBwMA9FBRUPhQUVD7BwMA+AAAAAAAAAAAAAAAAAAAAABQUVD4UFFQ+FBRUPsHAwD4AAAAAAAAAAAAAAAAAAAAAOjo6PhQUVD4UFFQ+wcDAPgAAAAAAAAAAAAAAAAAAAABaWto9FBRUPhQUVD7BwMA+AAAAAAAAAAAAAAAAAAAAAIGAAD46Ojo+FBRUPsHAwD4AAAAAAAAAAAAAAAAAAAAAwcDAPTo6Oj4UFFQ+wcDAPgAAAAAAAAAAAAAAAAAAAAAUFFQ+Ojo6PhQUVD7BwMA+AAAAAAAAAAAAAAAAAAAAADo6Oj46Ojo+FBRUPsHAwD4AAAAAAAAAAAAAAAAAAAAAWlraPTo6Oj4UFFQ+wcDAPgAAAAAAAAAAAAAAAAAAAACBgAA+WlraPRQUVD7BwMA+AAAAAAAAAAAAAAAAAAAAAMHAwD1aWto9FBRUPsHAwD4AAAAAAAAAAAAAAAAAAAAAFBRUPlpa2j0UFFQ+wcDAPgAAAAAAAAAAAAAAAAAAAAA6Ojo+WlraPRQUVD7BwMA+AAAAAAAAAAAAAAAAAAAAAFpa2j1aWto9FBRUPsHAwD4AAAAAAAAAAAAAAAAAAAAAgYAAPoGAAD46Ojo+wcDAPoGAAD6BgAA+wcBAPsHAwD7BwMA9gYAAPjo6Oj7BwMA+AAAAAAAAAAAAAAAAAAAAABQUVD6BgAA+Ojo6PsHAwD4AAAAAAAAAAAAAAAAAAAAAOjo6PoGAAD46Ojo+wcDAPgAAAAAAAAAAAAAAAAAAAABaWto9gYAAPjo6Oj7BwMA+AAAAAAAAAAAAAAAAAAAAAIGAAD7BwMA9Ojo6PsHAwD4AAAAAAAAAAAAAAAAAAAAAwcDAPcHAwD06Ojo+wcDAPgAAAAAAAAAAAAAAAAAAAAAUFFQ+wcDAPTo6Oj7BwMA+AAAAAAAAAAAAAAAAAAAAADo6Oj7BwMA9Ojo6PsHAwD4AAAAAAAAAAAAAAAAAAAAAWlraPcHAwD06Ojo+wcDAPgAAAAAAAAAAAAAAAAAAAACBgAA+FBRUPjo6Oj7BwMA+AAAAAAAAAAAAAAAAAAAAAMHAwD0UFFQ+Ojo6PsHAwD4AAAAAAAAAAAAAAAAAAAAAFBRUPhQUVD46Ojo+wcDAPgAAAAAAAAAAAAAAAAAAAAA6Ojo+FBRUPjo6Oj7BwMA+AAAAAAAAAAAAAAAAAAAAAFpa2j0UFFQ+Ojo6PsHAwD4AAAAAAAAAAAAAAAAAAAAAgYAAPjo6Oj46Ojo+wcDAPgAAAAAAAAAAAAAAAAAAAADBwMA9Ojo6Pjo6Oj7BwMA+AAAAAAAAAAAAAAAAAAAAABQUVD46Ojo+Ojo6PsHAwD4AAAAAAAAAAAAAAAAAAAAAOjo6Pjo6Oj46Ojo+wcDAPgAAAAAAAAAAAAAAAAAAAABaWto9Ojo6Pjo6Oj7BwMA+AAAAAAAAAAAAAAAAAAAAAIGAAD5aWto9Ojo6PsHAwD4AAAAAAAAAAAAAAAAAAAAAwcDAPVpa2j06Ojo+wcDAPgAAAAAAAAAAAAAAAAAAAAAUFFQ+WlraPTo6Oj7BwMA+AAAAAAAAAAAAAAAAAAAAADo6Oj5aWto9Ojo6PsHAwD4AAAAAAAAAAAAAAAAAAAAAWlraPVpa2j06Ojo+wcDAPgAAAAAAAAAAAAAAAAAAAACBgAA+gYAAPlpa2j3BwMA+gYAAPoGAAD6BgAA+wcDAPsHAwD2BgAA+WlraPcHAwD4AAAAAAAAAAAAAAAAAAAAAFBRUPoGAAD5aWto9wcDAPgAAAAAAAAAAAAAAAAAAAAA6Ojo+gYAAPlpa2j3BwMA+AAAAAAAAAAAAAAAAAAAAAFpa2j2BgAA+WlraPcHAwD4AAAAAAAAAAAAAAAAAAAAAgYAAPsHAwD1aWto9wcDAPgAAAAAAAAAAAAAAAAAAAADBwMA9wcDAPVpa2j3BwMA+AAAAAAAAAAAAAAAAAAAAABQUVD7BwMA9WlraPcHAwD4AAAAAAAAAAAAAAAAAAAAAOjo6PsHAwD1aWto9wcDAPgAAAAAAAAAAAAAAAAAAAABaWto9wcDAPVpa2j3BwMA+AAAAAAAAAAAAAAAAAAAAAIGAAD4UFFQ+WlraPcHAwD4AAAAAAAAAAAAAAAAAAAAAwcDAPRQUVD5aWto9wcDAPgAAAAAAAAAAAAAAAAAAAAAUFFQ+FBRUPlpa2j3BwMA+AAAAAAAAAAAAAAAAAAAAADo6Oj4UFFQ+WlraPcHAwD4AAAAAAAAAAAAAAAAAAAAAWlraPRQUVD5aWto9wcDAPgAAAAAAAAAAAAAAAAAAAACBgAA+Ojo6Plpa2j3BwMA+AAAAAAAAAAAAAAAAAAAAAMHAwD06Ojo+WlraPcHAwD4AAAAAAAAAAAAAAAAAAAAAFBRUPjo6Oj5aWto9wcDAPgAAAAAAAAAAAAAAAAAAAAA6Ojo+Ojo6Plpa2j3BwMA+AAAAAAAAAAAAAAAAAAAAAFpa2j06Ojo+WlraPcHAwD4AAAAAAAAAAAAAAAAAAAAAgYAAPlpa2j1aWto9wcDAPgAAAAAAAAAAAAAAAAAAAADBwMA9WlraPVpa2j3BwMA+AAAAAAAAAAAAAAAAAAAAABQUVD5aWto9WlraPcHAwD4AAAAAAAAAAAAAAAAAAAAAOjo6Plpa2j1aWto9wcDAPgAAAAAAAAAAAAAAAAAAAABaWto9WlraPVpa2j3BwMA+AAAAAAAAAAAAAAAAAAAAAA=="
+                        },
+                        "shape": {
+                          "bytes": {
+                            "region": {
+                              "buffer": {
+                                "offset": 0,
+                                "length": 4000
+                              }
+                            },
+                            "element": "f32",
+                            "row_offset": 0,
+                            "row_elements": 8,
+                            "row_pitch": 32,
+                            "rows": 125,
+                            "image_pitch": 4000,
+                            "images": 1,
+                            "gaps": "ignored"
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "notices",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "set",
+                      "observed": {
+                        "value": {
+                          "nothing": "announced_nothing"
+                        }
+                      }
+                    },
+                    {
+                      "name": "counts",
+                      "observed": {
+                        "value": {
+                          "fields": {}
+                        }
+                      }
+                    }
+                  ]
+                }
+              ]
+            }
+          }
+        }
+      ],
+      "validated": "ran"
+    }
+  ]
+}

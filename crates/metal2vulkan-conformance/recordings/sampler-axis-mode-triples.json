@@ -1,0 +1,1118 @@
+{
+  "format": 1,
+  "case": "sampler-axis-mode-triples",
+  "suite_version": 1,
+  "shaders": [
+    {
+      "fixture": "msf_runtime_samplers.ll",
+      "entry": "msf_slot3d_linear_repeat",
+      "source_sha256": "fa455706aa522e16a8b72fb51387d32e70d5e0471b8db8e8465bc002a044ebbf"
+    },
+    {
+      "fixture": "msf_runtime_samplers.air.ll",
+      "entry": "msf_slot3d_linear_repeat",
+      "source_sha256": "3943694c31235c3e0841c22e15fb2ecb8fe55eae0f5edb81c04efa7ce27efb4a"
+    }
+  ],
+  "answers": [
+    {
+      "key": {
+        "chip": "apple-m3-max",
+        "os_version": "27.0.1",
+        "os_build": "26A434",
+        "metal_level": "27.0.1"
+      },
+      "provenance": "metal_run",
+      "device": "Apple M3 Max",
+      "runs": 3,
+      "outcomes": [
+        {
+          "runs": 3,
+          "transcript": {
+            "root": {
+              "name": "case",
+              "observed": {
+                "value": "absent"
+              },
+              "children": [
+                {
+                  "name": "inputs",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "air",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "fa455706aa522e16a8b72fb51387d32e70d5e0471b8db8e8465bc002a044ebbf"
+                        }
+                      }
+                    },
+                    {
+                      "name": "air-typed",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "3943694c31235c3e0841c22e15fb2ecb8fe55eae0f5edb81c04efa7ce27efb4a"
+                        }
+                      }
+                    },
+                    {
+                      "name": "entry",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "cd7ac2460c9153892ee5c3c17257402b3856c8d361b80fb49cb839ebbad4030b"
+                        }
+                      }
+                    },
+                    {
+                      "name": "buffer:coords",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "2fa08ebebb13ea5bc11e43a9c46fa2697f832c1cf420adfc8d38241b1df9fcb4"
+                        }
+                      }
+                    },
+                    {
+                      "name": "buffer:out",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "8276f6b56533b065fcbb8483be12afc348beb327bee7cd63dcc8392998650e5c"
+                        }
+                      }
+                    },
+                    {
+                      "name": "texture:3d",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "04caa3941706988319409ae71d5f9dbc7d382a168fb8d035556f575573e9be6b"
+                        }
+                      }
+                    },
+                    {
+                      "name": "sampler:all-repeat",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "c98b8791601397e1309b10d33925d8658f3ae4d1323cccd904f38e098691bcd0"
+                        }
+                      }
+                    },
+                    {
+                      "name": "sampler:all-edge",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "640e494dd31edb66b0748239aa90547d77e8ab37843b5bc8352a5f39e5296f06"
+                        }
+                      }
+                    },
+                    {
+                      "name": "sampler:all-mirror-repeat",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "b4998feb5e9284126e1d22d5d163390e4173174863b1e80d50d6ac30d1a4d449"
+                        }
+                      }
+                    },
+                    {
+                      "name": "sampler:repeat-mirror-edge",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "c4569305efbe12991c7ca0a08fc42b8f94510433075286af17b7b01c0c0e3c84"
+                        }
+                      }
+                    },
+                    {
+                      "name": "sampler:mirror-edge-repeat",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "7c94939bff9ccae20df036b30b057f6b53ae34913c59ed37b6935cdbbcbe6463"
+                        }
+                      }
+                    },
+                    {
+                      "name": "sampler:edge-repeat-mirror",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "148a96c1cadf7c0d5c20625b0e8ac9010d1c72c09d20fdabd687dc323aede6c3"
+                        }
+                      }
+                    },
+                    {
+                      "name": "sampler:mirror-clamp-repeat-edge",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "3322b8894d87b4de85ef2bd7f0fe9ab739c5ce515ed034e97c59c07c6e3e0eb2"
+                        }
+                      }
+                    },
+                    {
+                      "name": "sampler:repeat-edge-mirror-clamp",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "f4daf492e5c19b2e915878766b89deafbbef672de8987a05ce8949cb7e38cfed"
+                        }
+                      }
+                    },
+                    {
+                      "name": "sampler:edge-mirror-clamp-repeat",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "f3f63307b5155ee5047a157b4ece8083925ffc4cd015e1c67fcbefe8eeac28ea"
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "library",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "pipeline",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "texture",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "buffer/coords",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "all-repeat/sampler",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "all-repeat/buffer/out",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "all-repeat/dispatch",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "all-repeat/status",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": {
+                          "variant": {
+                            "name": "Completed",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "all-repeat/read-back",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "all-repeat",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "sampled",
+                      "observed": {
+                        "value": {
+                          "bytes": "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"
+                        },
+                        "shape": {
+                          "bytes": {
+                            "region": {
+                              "buffer": {
+                                "offset": 0,
+                                "length": 4000
+                              }
+                            },
+                            "element": "f32",
+                            "row_offset": 0,
+                            "row_elements": 8,
+                            "row_pitch": 32,
+                            "rows": 125,
+                            "image_pitch": 4000,
+                            "images": 1,
+                            "gaps": "ignored"
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "all-edge/sampler",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "all-edge/buffer/out",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "all-edge/dispatch",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "all-edge/status",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": {
+                          "variant": {
+                            "name": "Completed",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "all-edge/read-back",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "all-edge",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "sampled",
+                      "observed": {
+                        "value": {
+                          "bytes": "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"
+                        },
+                        "shape": {
+                          "bytes": {
+                            "region": {
+                              "buffer": {
+                                "offset": 0,
+                                "length": 4000
+                              }
+                            },
+                            "element": "f32",
+                            "row_offset": 0,
+                            "row_elements": 8,
+                            "row_pitch": 32,
+                            "rows": 125,
+                            "image_pitch": 4000,
+                            "images": 1,
+                            "gaps": "ignored"
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "all-mirror-repeat/sampler",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "all-mirror-repeat/buffer/out",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "all-mirror-repeat/dispatch",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "all-mirror-repeat/status",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": {
+                          "variant": {
+                            "name": "Completed",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "all-mirror-repeat/read-back",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "all-mirror-repeat",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "sampled",
+                      "observed": {
+                        "value": {
+                          "bytes": "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"
+                        },
+                        "shape": {
+                          "bytes": {
+                            "region": {
+                              "buffer": {
+                                "offset": 0,
+                                "length": 4000
+                              }
+                            },
+                            "element": "f32",
+                            "row_offset": 0,
+                            "row_elements": 8,
+                            "row_pitch": 32,
+                            "rows": 125,
+                            "image_pitch": 4000,
+                            "images": 1,
+                            "gaps": "ignored"
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "repeat-mirror-edge/sampler",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "repeat-mirror-edge/buffer/out",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "repeat-mirror-edge/dispatch",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "repeat-mirror-edge/status",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": {
+                          "variant": {
+                            "name": "Completed",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "repeat-mirror-edge/read-back",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "repeat-mirror-edge",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "sampled",
+                      "observed": {
+                        "value": {
+                          "bytes": "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"
+                        },
+                        "shape": {
+                          "bytes": {
+                            "region": {
+                              "buffer": {
+                                "offset": 0,
+                                "length": 4000
+                              }
+                            },
+                            "element": "f32",
+                            "row_offset": 0,
+                            "row_elements": 8,
+                            "row_pitch": 32,
+                            "rows": 125,
+                            "image_pitch": 4000,
+                            "images": 1,
+                            "gaps": "ignored"
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "mirror-edge-repeat/sampler",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "mirror-edge-repeat/buffer/out",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "mirror-edge-repeat/dispatch",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "mirror-edge-repeat/status",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": {
+                          "variant": {
+                            "name": "Completed",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "mirror-edge-repeat/read-back",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "mirror-edge-repeat",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "sampled",
+                      "observed": {
+                        "value": {
+                          "bytes": "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"
+                        },
+                        "shape": {
+                          "bytes": {
+                            "region": {
+                              "buffer": {
+                                "offset": 0,
+                                "length": 4000
+                              }
+                            },
+                            "element": "f32",
+                            "row_offset": 0,
+                            "row_elements": 8,
+                            "row_pitch": 32,
+                            "rows": 125,
+                            "image_pitch": 4000,
+                            "images": 1,
+                            "gaps": "ignored"
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "edge-repeat-mirror/sampler",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "edge-repeat-mirror/buffer/out",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "edge-repeat-mirror/dispatch",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "edge-repeat-mirror/status",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": {
+                          "variant": {
+                            "name": "Completed",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "edge-repeat-mirror/read-back",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "edge-repeat-mirror",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "sampled",
+                      "observed": {
+                        "value": {
+                          "bytes": "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"
+                        },
+                        "shape": {
+                          "bytes": {
+                            "region": {
+                              "buffer": {
+                                "offset": 0,
+                                "length": 4000
+                              }
+                            },
+                            "element": "f32",
+                            "row_offset": 0,
+                            "row_elements": 8,
+                            "row_pitch": 32,
+                            "rows": 125,
+                            "image_pitch": 4000,
+                            "images": 1,
+                            "gaps": "ignored"
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "mirror-clamp-repeat-edge/sampler",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "mirror-clamp-repeat-edge/buffer/out",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "mirror-clamp-repeat-edge/dispatch",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "mirror-clamp-repeat-edge/status",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": {
+                          "variant": {
+                            "name": "Completed",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "mirror-clamp-repeat-edge/read-back",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "mirror-clamp-repeat-edge",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "sampled",
+                      "observed": {
+                        "value": {
+                          "bytes": "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"
+                        },
+                        "shape": {
+                          "bytes": {
+                            "region": {
+                              "buffer": {
+                                "offset": 0,
+                                "length": 4000
+                              }
+                            },
+                            "element": "f32",
+                            "row_offset": 0,
+                            "row_elements": 8,
+                            "row_pitch": 32,
+                            "rows": 125,
+                            "image_pitch": 4000,
+                            "images": 1,
+                            "gaps": "ignored"
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "repeat-edge-mirror-clamp/sampler",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "repeat-edge-mirror-clamp/buffer/out",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "repeat-edge-mirror-clamp/dispatch",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "repeat-edge-mirror-clamp/status",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": {
+                          "variant": {
+                            "name": "Completed",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "repeat-edge-mirror-clamp/read-back",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "repeat-edge-mirror-clamp",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "sampled",
+                      "observed": {
+                        "value": {
+                          "bytes": "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"
+                        },
+                        "shape": {
+                          "bytes": {
+                            "region": {
+                              "buffer": {
+                                "offset": 0,
+                                "length": 4000
+                              }
+                            },
+                            "element": "f32",
+                            "row_offset": 0,
+                            "row_elements": 8,
+                            "row_pitch": 32,
+                            "rows": 125,
+                            "image_pitch": 4000,
+                            "images": 1,
+                            "gaps": "ignored"
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "edge-mirror-clamp-repeat/sampler",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "edge-mirror-clamp-repeat/buffer/out",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "edge-mirror-clamp-repeat/dispatch",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "edge-mirror-clamp-repeat/status",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": {
+                          "variant": {
+                            "name": "Completed",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "edge-mirror-clamp-repeat/read-back",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "edge-mirror-clamp-repeat",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "sampled",
+                      "observed": {
+                        "value": {
+                          "bytes": "AACwQQAAAAAAAAAAAACAPwAAsEEAAAAAAAAAAAAAgD8AAKxBAAAAAAAAAAAAAIA/AADAQQAAAAAAAAAAAACAPwBoukEAAAAAAAAAAAAAgD8AAKhBAAAAAAAAAAAAAIA/ADC3QQAAAAAAAAAAAACAPwAAwEEAAAAAAAAAAAAAgD8AmK1BAAAAAAAAAAAAAIA/AACoQQAAAAAAAAAAAACAPwAAoEEAAAAAAAAAAAAAgD8AAPBBAAAAAAAAAAAAAIA/AACcQQAAAAAAAAAAAACAPwAAAEIAAAAAAAAAAAAAgD8AaKpBAAAAAAAAAAAAAIA/AADoQQAAAAAAAAAAAACAPwAwp0EAAAAAAAAAAAAAgD8AAABCAAAAAAAAAAAAAIA/AJidQQAAAAAAAAAAAACAPwAA6EEAAAAAAAAAAAAAgD8AoNlBAAAAAAAAAAAAAIA/AACwQQAAAAAAAAAAAACAPwCg1UEAAAAAAAAAAAAAgD8AAMBBAAAAAAAAAAAAAIA/AAjkQQAAAAAAAAAAAACAPwAAqEEAAAAAAAAAAAAAgD8A0OBBAAAAAAAAAAAAAIA/AADAQQAAAAAAAAAAAACAPwA410EAAAAAAAAAAAAAgD8AAKhBAAAAAAAAAAAAAIA/AMDMQQAAAAAAAAAAAACAPwAA8EEAAAAAAAAAAAAAgD8AwMhBAAAAAAAAAAAAAIA/AAAAQgAAAAAAAAAAAACAPwAo10EAAAAAAAAAAAAAgD8AAOhBAAAAAAAAAAAAAIA/APDTQQAAAAAAAAAAAACAPwAAAEIAAAAAAAAAAAAAgD8AWMpBAAAAAAAAAAAAAIA/AADoQQAAAAAAAAAAAACAPwBgpkEAAAAAAAAAAAAAgD8AAPBBAAAAAAAAAAAAAIA/AGCiQQAAAAAAAAAAAACAPwAAAEIAAAAAAAAAAAAAgD8AyLBBAAAAAAAAAAAAAIA/AADoQQAAAAAAAAAAAACAPwCQrUEAAAAAAAAAAAAAgD8AAABCAAAAAAAAAAAAAIA/APijQQAAAAAAAAAAAACAPwAA6EEAAAAAAAAAAAAAgD8AAGBBAAAAAAAAAAAAAIA/AACwQQAAAAAAAAAAAACAPwAAWEEAAAAAAAAAAAAAgD8AAMBBAAAAAAAAAAAAAIA/ANB0QQAAAAAAAAAAAACAPwAAqEEAAAAAAAAAAAAAgD8AYG5BAAAAAAAAAAAAAIA/AADAQQAAAAAAAAAAAACAPwAwW0EAAAAAAAAAAAAAgD8AAKhBAAAAAAAAAAAAAIA/AABAQQAAAAAAAAAAAACAPwAA8EEAAAAAAAAAAAAAgD8AADhBAAAAAAAAAAAAAIA/AAAAQgAAAAAAAAAAAACAPwDQVEEAAAAAAAAAAAAAgD8AAOhBAAAAAAAAAAAAAIA/AGBOQQAAAAAAAAAAAACAPwAAAEIAAAAAAAAAAAAAgD8AMDtBAAAAAAAAAAAAAIA/AADoQQAAAAAAAAAAAACAPwCgmUEAAAAAAAAAAAAAgD8AALBBAAAAAAAAAAAAAIA/AKCVQQAAAAAAAAAAAACAPwAAwEEAAAAAAAAAAAAAgD/AB6RBAAAAAAAAAAAAAIA/AACoQQAAAAAAAAAAAACAPwDQoEEAAAAAAAAAAAAAgD8AAMBBAAAAAAAAAAAAAIA/wDeXQQAAAAAAAAAAAACAPwAAqEEAAAAAAAAAAAAAgD8AwIxBAAAAAAAAAAAAAIA/AADwQQAAAAAAAAAAAACAPwDAiEEAAAAAAAAAAAAAgD8AAABCAAAAAAAAAAAAAIA/ACiXQQAAAAAAAAAAAACAPwAA6EEAAAAAAAAAAAAAgD8A8JNBAAAAAAAAAAAAAIA/AAAAQgAAAAAAAAAAAACAPwBYikEAAAAAAAAAAAAAgD8AAOhBAAAAAAAAAAAAAIA/AMBMQQAAAAAAAAAAAACAPwAA8EEAAAAAAAAAAAAAgD8AwERBAAAAAAAAAAAAAIA/AAAAQgAAAAAAAAAAAACAP4CPYUEAAAAAAAAAAAAAgD8AAOhBAAAAAAAAAAAAAIA/ACBbQQAAAAAAAAAAAACAPwAAAEIAAAAAAAAAAAAAgD+A70dBAAAAAAAAAAAAAIA/AADoQQAAAAAAAAAAAACAPwBAK0IAAAAAAAAAAAAAgD8AABhCAAAAAAAAAAAAAIA/AEApQgAAAAAAAAAAAACAPwAAIEIAAAAAAAAAAAAAgD8AdDBCAAAAAAAAAAAAAIA/AAAUQgAAAAAAAAAAAACAPwDYLkIAAAAAAAAAAAAAgD8AACBCAAAAAAAAAAAAAIA/AAwqQgAAAAAAAAAAAACAPwAAFEIAAAAAAAAAAAAAgD8AQCNCAAAAAAAAAAAAAIA/AAA4QgAAAAAAAAAAAACAPwBAIUIAAAAAAAAAAAAAgD8AAEBCAAAAAAAAAAAAAIA/4HMoQgAAAAAAAAAAAACAPwAANEIAAAAAAAAAAAAAgD8A2CZCAAAAAAAAAAAAAIA/AABAQgAAAAAAAAAAAACAP+ALIkIAAAAAAAAAAAAAgD8AADRCAAAAAAAAAAAAAIA/ABBAQgAAAAAAAAAAAACAPwAAGEIAAAAAAAAAAAAAgD/gDz5CAAAAAAAAAAAAAIA/AAAgQgAAAAAAAAAAAACAPwBERUIAAAAAAAAAAAAAgD8AABRCAAAAAAAAAAAAAIA/AKhDQgAAAAAAAAAAAACAPwAAIEIAAAAAAAAAAAAAgD8A3D5CAAAAAAAAAAAAAIA/AAAUQgAAAAAAAAAAAACAPwCgOUIAAAAAAAAAAAAAgD8AADhCAAAAAAAAAAAAAIA/AKA3QgAAAAAAAAAAAACAPwAAQEIAAAAAAAAAAAAAgD8A1D5CAAAAAAAAAAAAAIA/AAA0QgAAAAAAAAAAAACAPwA4PUIAAAAAAAAAAAAAgD8AAEBCAAAAAAAAAAAAAIA/AGw4QgAAAAAAAAAAAACAPwAANEIAAAAAAAAAAAAAgD8AcCZCAAAAAAAAAAAAAIA/AAA4QgAAAAAAAAAAAACAP+BvJEIAAAAAAAAAAAAAgD8AAEBCAAAAAAAAAAAAAIA/AKQrQgAAAAAAAAAAAACAPwAANEIAAAAAAAAAAAAAgD8ACCpCAAAAAAAAAAAAAIA/AABAQgAAAAAAAAAAAACAPwA8JUIAAAAAAAAAAAAAgD8AADRCAAAAAAAAAAAAAIA/AIARQgAAAAAAAAAAAACAPwAAGEIAAAAAAAAAAAAAgD8AgA9CAAAAAAAAAAAAAIA/AAAgQgAAAAAAAAAAAACAPwC0FkIAAAAAAAAAAAAAgD8AABRCAAAAAAAAAAAAAIA/ABgVQgAAAAAAAAAAAACAPwAAIEIAAAAAAAAAAAAAgD8ATBBCAAAAAAAAAAAAAIA/AAAUQgAAAAAAAAAAAACAPwCACUIAAAAAAAAAAAAAgD8AADhCAAAAAAAAAAAAAIA/AIAHQgAAAAAAAAAAAACAPwAAQEIAAAAAAAAAAAAAgD8AtA5CAAAAAAAAAAAAAIA/AAA0QgAAAAAAAAAAAACAPwAYDUIAAAAAAAAAAAAAgD8AAEBCAAAAAAAAAAAAAIA/AEwIQgAAAAAAAAAAAACAPwAANEIAAAAAAAAAAAAAgD8AUCZCAAAAAAAAAAAAAIA/AAAYQgAAAAAAAAAAAACAPwBQJEIAAAAAAAAAAAAAgD8AACBCAAAAAAAAAAAAAIA/AIQrQgAAAAAAAAAAAACAPwAAFEIAAAAAAAAAAAAAgD8A6ClCAAAAAAAAAAAAAIA/AAAgQgAAAAAAAAAAAACAPwAcJUIAAAAAAAAAAAAAgD8AABRCAAAAAAAAAAAAAIA/AOAfQgAAAAAAAAAAAACAPwAAOEIAAAAAAAAAAAAAgD8A4B1CAAAAAAAAAAAAAIA/AABAQgAAAAAAAAAAAACAPwAUJUIAAAAAAAAAAAAAgD8AADRCAAAAAAAAAAAAAIA/AHgjQgAAAAAAAAAAAACAPwAAQEIAAAAAAAAAAAAAgD8ArB5CAAAAAAAAAAAAAIA/AAA0QgAAAAAAAAAAAACAPwCwDEIAAAAAAAAAAAAAgD8AADhCAAAAAAAAAAAAAIA/ALAKQgAAAAAAAAAAAACAPwAAQEIAAAAAAAAAAAAAgD8A5BFCAAAAAAAAAAAAAIA/AAA0QgAAAAAAAAAAAACAPwBIEEIAAAAAAAAAAAAAgD8AAEBCAAAAAAAAAAAAAIA/AHwLQgAAAAAAAAAAAACAPwAANEIAAAAAAAAAAAAAgD8AgIlBAAAAAAAAAAAAAIA/AACwQQAAAAAAAAAAAACAPwCAhUEAAAAAAAAAAAAAgD8AAMBBAAAAAAAAAAAAAIA/AOiTQQAAAAAAAAAAAACAPwAAqEEAAAAAAAAAAAAAgD8AsJBBAAAAAAAAAAAAAIA/AADAQQAAAAAAAAAAAACAPwAYh0EAAAAAAAAAAAAAgD8AAKhBAAAAAAAAAAAAAIA/AABzQQAAAAAAAAAAAACAPwAA8EEAAAAAAAAAAAAAgD8AAGtBAAAAAAAAAAAAAIA/AAAAQgAAAAAAAAAAAACAP8Dng0EAAAAAAAAAAAAAgD8AAOhBAAAAAAAAAAAAAIA/ALCAQQAAAAAAAAAAAACAPwAAAEIAAAAAAAAAAAAAgD+AL25BAAAAAAAAAAAAAIA/AADoQQAAAAAAAAAAAACAPwAgs0EAAAAAAAAAAAAAgD8AALBBAAAAAAAAAAAAAIA/wB+vQQAAAAAAAAAAAACAPwAAwEEAAAAAAAAAAAAAgD8AiL1BAAAAAAAAAAAAAIA/AACoQQAAAAAAAAAAAACAPwBQukEAAAAAAAAAAAAAgD8AAMBBAAAAAAAAAAAAAIA/ALiwQQAAAAAAAAAAAACAPwAAqEEAAAAAAAAAAAAAgD8AQKZBAAAAAAAAAAAAAIA/AADwQQAAAAAAAAAAAACAPwBAokEAAAAAAAAAAAAAgD8AAABCAAAAAAAAAAAAAIA/AKiwQQAAAAAAAAAAAACAPwAA6EEAAAAAAAAAAAAAgD8AcK1BAAAAAAAAAAAAAIA/AAAAQgAAAAAAAAAAAACAPwDYo0EAAAAAAAAAAAAAgD8AAOhBAAAAAAAAAAAAAIA/AMB/QQAAAAAAAAAAAACAPwAA8EEAAAAAAAAAAAAAgD+Av3dBAAAAAAAAAAAAAIA/AAAAQgAAAAAAAAAAAACAPwBIikEAAAAAAAAAAAAAgD8AAOhBAAAAAAAAAAAAAIA/ABCHQQAAAAAAAAAAAACAPwAAAEIAAAAAAAAAAAAAgD8A8HpBAAAAAAAAAAAAAIA/AADoQQAAAAAAAAAAAACAPw=="
+                        },
+                        "shape": {
+                          "bytes": {
+                            "region": {
+                              "buffer": {
+                                "offset": 0,
+                                "length": 4000
+                              }
+                            },
+                            "element": "f32",
+                            "row_offset": 0,
+                            "row_elements": 8,
+                            "row_pitch": 32,
+                            "rows": 125,
+                            "image_pitch": 4000,
+                            "images": 1,
+                            "gaps": "ignored"
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "notices",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "set",
+                      "observed": {
+                        "value": {
+                          "nothing": "announced_nothing"
+                        }
+                      }
+                    },
+                    {
+                      "name": "counts",
+                      "observed": {
+                        "value": {
+                          "fields": {}
+                        }
+                      }
+                    }
+                  ]
+                }
+              ]
+            }
+          }
+        }
+      ],
+      "validated": "ran"
+    }
+  ]
+}
