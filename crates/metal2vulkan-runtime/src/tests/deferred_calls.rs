@@ -955,9 +955,11 @@ fn a_commit_after_an_end_in_flight_fails_a_skipping_predication_block_left_open(
 /// command buffers fail: with an out of memory injected into that work twice, under Worker (the
 /// slot's lowering held, so the commit's work waits for the end), `commit` returns; the command
 /// buffer completes with `CallRefused` of `commit` and the error kept, its completed handler runs
-/// and its wait returns; a command buffer committed after it on the same queue completes after
-/// it, its fill landed. Its second injected failure never ran: the commit ran again making nothing
-/// that may fail. Under `AtCall` the commit returns the error.
+/// and its wait returns; a command buffer committed behind it on the same queue, while the
+/// lowering is still held, so with its own commit waiting behind the refused one, completes after
+/// it, its fill landed, and both commits' own work ran once. Its second injected failure never
+/// ran: the commit ran again making nothing that may fail. Under `AtCall` the commit returns the
+/// error.
 #[test]
 fn a_commit_whose_own_work_fails_completes_with_the_refusal() {
     let scratch = Scratch::new("deferred-commit-fails");
@@ -989,20 +991,27 @@ fn a_commit_whose_own_work_fails_completes_with_the_refusal() {
             panic!("{} encoders' slots taken, not one", slots.len());
         };
         refused.fail_commit_work(2);
-        let committed = slot.while_held(|| {
-            encoder.end_encoding().unwrap();
-            refused.commit()
-        });
-        assert_eq!(committed, Ok(()));
         let filled = device.new_buffer(4, ResourceOptions::shared()).unwrap();
         let later = queue.command_buffer().unwrap();
-        let mut blit = later.blit_command_encoder().unwrap();
-        blit.fill_buffer(&filled, 0..4, 0x5a).unwrap();
-        blit.end_encoding().unwrap();
         let ran = Arc::clone(&order);
         let handler = Box::new(move |_: &CommandBuffer| ran.lock().unwrap().push("later"));
-        later.add_completed_handler(handler).unwrap();
-        later.commit().unwrap();
+        // Both commits are made while the lowering is held, so the later one waits behind the
+        // refused one, whose own work waits for the end, as every commit made while one waits
+        // does (`render/queued_commits.rs`). Made after the hold it is a race with the device's
+        // lowering thread: where that thread ran the refused commit and left the queue idle
+        // first, the later commit runs inside its own call, which is as right and counts one
+        // commit run, not two.
+        let (committed, after) = slot.while_held(|| {
+            encoder.end_encoding().unwrap();
+            let committed = refused.commit();
+            let mut blit = later.blit_command_encoder().unwrap();
+            blit.fill_buffer(&filled, 0..4, 0x5a).unwrap();
+            blit.end_encoding().unwrap();
+            later.add_completed_handler(handler).unwrap();
+            (committed, later.commit())
+        });
+        assert_eq!(committed, Ok(()));
+        assert_eq!(after, Ok(()));
         refused.wait_until_completed_for(WAIT).unwrap();
         later.wait_until_completed_for(WAIT).unwrap();
         let commit = EncoderCall {
