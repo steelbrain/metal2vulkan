@@ -1318,7 +1318,7 @@ const MASKED_START: u32 = 0xa5;
 /// | `Replace` | `0xfe` | `0x5a` | `0x5b` — the mask drops exactly one bit |
 /// | `Invert` | `0xff` | `0x5a` | `0x5a` |
 /// | `Invert` | `0x0f` | `0x5a` | `0xaa` |
-/// | `IncrementWrap` | `0xf0` | `0xa6` | `0xa5` — the mask keeps the nibble the step did not touch, which is what tells a mask applied **after** the operation from one applied to its operand |
+/// | `IncrementWrap` | `0xf0` | `0xa6` | `0xa5` — the mask keeps the nibble the step did not touch. It does **not** tell a mask applied after the operation from one applied to its operand: from `0xa5` both rules leave `0xa5`, which is the stored value itself, so this cell cannot tell a masked write from a draw that wrote nothing either. `CROSSINGS` carries the rows that can ([`MaskCrossings`]) |
 /// | `Zero` | `0x0f` | `0x00` | `0xa0` |
 const WRITE_MASKS: [(StencilOperation, u32); 8] = [
     (StencilOperation::Replace, 0xff),
