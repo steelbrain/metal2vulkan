@@ -1,0 +1,466 @@
+{
+  "format": 1,
+  "case": "resolve-stencil-sample0",
+  "suite_version": 1,
+  "shaders": [
+    {
+      "fixture": "rt6_resolves.ll",
+      "entry": "rt6_resolve_full+rt6_resolve_masked",
+      "source_sha256": "826f30ea88e648ce64e04e26abdfaa51c2c81fdd933f41e0a5b621eb7c9d18e9"
+    },
+    {
+      "fixture": "rt6_resolves.air.ll",
+      "entry": "rt6_resolve_full+rt6_resolve_masked",
+      "source_sha256": "deacd509ddf64f7fe146057f3097edfb6582b0033fd623a9d2ec49db7596aec9"
+    }
+  ],
+  "answers": [
+    {
+      "key": {
+        "chip": "apple-m3-max",
+        "os_version": "27.0.1",
+        "os_build": "26A434",
+        "metal_level": "27.0.1"
+      },
+      "provenance": "metal_run",
+      "device": "Apple M3 Max",
+      "runs": 8,
+      "outcomes": [
+        {
+          "runs": 8,
+          "transcript": {
+            "root": {
+              "name": "case",
+              "observed": {
+                "value": "absent"
+              },
+              "children": [
+                {
+                  "name": "inputs",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "air",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "826f30ea88e648ce64e04e26abdfaa51c2c81fdd933f41e0a5b621eb7c9d18e9"
+                        }
+                      }
+                    },
+                    {
+                      "name": "air-typed",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "deacd509ddf64f7fe146057f3097edfb6582b0033fd623a9d2ec49db7596aec9"
+                        }
+                      }
+                    },
+                    {
+                      "name": "render-pipeline",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "a8b17c02ef28278496362891c958124e54e8342060a635d71ee832eac9c316a3"
+                        }
+                      }
+                    },
+                    {
+                      "name": "target:color",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "146942f667d9caec61206d7538bea4c3503d5abf195835fd21f9e88967c83ac2"
+                        }
+                      }
+                    },
+                    {
+                      "name": "target:stencil",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "239e366617419eec7cedf1598ac4e6b05d037af0eb44d4c140ad22c3f0ac0e6a"
+                        }
+                      }
+                    },
+                    {
+                      "name": "target:stencil-resolve",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "e767e8bb8e327a92ee5dcde7a3bacc5edb0b3563494207392d61b0cd4067c7b7"
+                        }
+                      }
+                    },
+                    {
+                      "name": "clear:stencil",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "c31425b44a7ed682a3356bf6820141e1584a15c43b6d6793f552e5d4621586f7"
+                        }
+                      }
+                    },
+                    {
+                      "name": "filter:stencil",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "af5570f5a1810b7af78caf4bc70a660f0df51e42baf91d4de5b2328de0e83dfc"
+                        }
+                      }
+                    },
+                    {
+                      "name": "pass:MTLMultisampleStencilResolveFilterSample0/MTLStoreActionMultisampleResolve",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "14eef0e7eb8a92cd7b8e9aef6d2103c45ce8c32f30ac5aa2ec3b06c142ec75ba"
+                        }
+                      }
+                    },
+                    {
+                      "name": "pass:MTLMultisampleStencilResolveFilterSample0/MTLStoreActionStoreAndMultisampleResolve",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "c721d719b97635a60b14000ea10726eae6afbfcd0274a326d6c6faedf9c94526"
+                        }
+                      }
+                    },
+                    {
+                      "name": "patterns",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "b3a4cfd3ff52fff391ced909b9261033da6bf5d9db450dfe9f1b29e4253ab2cd"
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "library",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "render-pipeline",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "target:color",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "target:stencil",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "state",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "target:stencil-resolve:MTLMultisampleStencilResolveFilterSample0/MTLStoreActionMultisampleResolve",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "buffer:stencil-read:MTLMultisampleStencilResolveFilterSample0/MTLStoreActionMultisampleResolve",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "target:stencil-resolve:MTLMultisampleStencilResolveFilterSample0/MTLStoreActionStoreAndMultisampleResolve",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "buffer:stencil-read:MTLMultisampleStencilResolveFilterSample0/MTLStoreActionStoreAndMultisampleResolve",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "render",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": {
+                          "variant": {
+                            "name": "Completed",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "pieces",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "pass:MTLMultisampleStencilResolveFilterSample0/MTLStoreActionMultisampleResolve",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "read:stencil:MTLMultisampleStencilResolveFilterSample0/MTLStoreActionMultisampleResolve",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "pass:MTLMultisampleStencilResolveFilterSample0/MTLStoreActionStoreAndMultisampleResolve",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "read:stencil:MTLMultisampleStencilResolveFilterSample0/MTLStoreActionStoreAndMultisampleResolve",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "read-back/stencil/MTLMultisampleStencilResolveFilterSample0/MTLStoreActionMultisampleResolve",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "read-back/stencil/MTLMultisampleStencilResolveFilterSample0/MTLStoreActionStoreAndMultisampleResolve",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "resolved-stencil",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "MTLMultisampleStencilResolveFilterSample0/MTLStoreActionMultisampleResolve",
+                      "observed": {
+                        "value": {
+                          "bytes": "ERFERDMzQEAREUREMzNAQGZmd3dAQEBAZmZ3d0BAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQA=="
+                        },
+                        "shape": {
+                          "bytes": {
+                            "region": {
+                              "texture": {
+                                "level": 0,
+                                "slice": 0,
+                                "aspect": "stencil",
+                                "sample": 0,
+                                "origin": [
+                                  0,
+                                  0,
+                                  0
+                                ],
+                                "size": [
+                                  8,
+                                  8,
+                                  1
+                                ]
+                              }
+                            },
+                            "element": "u8",
+                            "row_offset": 0,
+                            "row_elements": 8,
+                            "row_pitch": 8,
+                            "rows": 8,
+                            "image_pitch": 64,
+                            "images": 1,
+                            "gaps": "compared"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "MTLMultisampleStencilResolveFilterSample0/MTLStoreActionStoreAndMultisampleResolve",
+                      "observed": {
+                        "value": {
+                          "bytes": "ERFERDMzQEAREUREMzNAQGZmd3dAQEBAZmZ3d0BAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQA=="
+                        },
+                        "shape": {
+                          "bytes": {
+                            "region": {
+                              "texture": {
+                                "level": 0,
+                                "slice": 0,
+                                "aspect": "stencil",
+                                "sample": 0,
+                                "origin": [
+                                  0,
+                                  0,
+                                  0
+                                ],
+                                "size": [
+                                  8,
+                                  8,
+                                  1
+                                ]
+                              }
+                            },
+                            "element": "u8",
+                            "row_offset": 0,
+                            "row_elements": 8,
+                            "row_pitch": 8,
+                            "rows": 8,
+                            "image_pitch": 64,
+                            "images": 1,
+                            "gaps": "compared"
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "notices",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "set",
+                      "observed": {
+                        "value": {
+                          "nothing": "announced_nothing"
+                        }
+                      }
+                    },
+                    {
+                      "name": "counts",
+                      "observed": {
+                        "value": {
+                          "fields": {}
+                        }
+                      }
+                    }
+                  ]
+                }
+              ]
+            }
+          }
+        }
+      ],
+      "validated": {
+        "stopped": {
+          "call": "render",
+          "message": "Set Render Pipeline State Validation\nredundant setRenderPipelineState.\nSet Depth Stencil State Validation\nredundant setDepthStencilState.\nSet Scissor Rect Validation\nredundant setScissorRect.\nSet Render Pipeline State Validation\nredundant setRenderPipelineState.\nSet Depth Stencil State Validation\nredundant setDepthStencilState.\nSet Scissor Rect Validation\nredundant setScissorRect.\nSet Render Pipeline State Validation\nredundant setRenderPipelineState.\nSet Depth Stencil State Validation\nredundant setDepthStencilState.\nSet Scissor Rect Validation\nredundant setScissorRect.\nSet Render Pipeline State Validation\nredundant setRenderPipelineState.\nSet Depth Stencil State Validation\nredundant setDepthStencilState.\nSet Stencil Reference Value Validation\nredundant setStencilReferenceValue.\nSet Render Pipeline State Validation\nredundant setRenderPipelineState.\nSet Depth Stencil State Validation\nredundant setDepthStencilState.\nSet Scissor Rect Validation\nredundant setScissorRect.\nSet Render Pipeline State Validation\nredundant setRenderPipelineState.\nSet Depth Stencil State Validation\nredundant setDepthStencilState.\nSet Scissor Rect Validation\nredundant setScissorRect.\nSet Render Pipeline State Validation\nredundant setRenderPipelineState.\nSet Depth Stencil State Validation\nredundant setDepthStencilState.\nSet Scissor Rect Validation\nredundant setScissorRect.\nSet Render Pipeline State Validation\nredundant setRenderPipelineState.\nSet Depth Stencil State Validation\nredundant setDepthStencilState.\nSet Render Pipeline State Validation\nredundant setRenderPipelineState.\nSet Depth Stencil State Validation\nredundant setDepthStencilState.\nSet Scissor Rect Validation\nredundant setScissorRect.\nSet Render Pipeline State Validation\nredundant setRenderPipelineState.\nSet Depth Stencil State Validation\nredundant setDepthStencilState.\nSet Scissor Rect Validation\nredundant setScissorRect.\nSet Render Pipeline State Validation\nredundant setRenderPipelineState.\nSet Depth Stencil State Validation\nredundant setDepthStencilState.\nSet Scissor Rect Validation\nredundant setScissorRect.\nSet Render Pipeline State Validation\nredundant setRenderPipelineState.\nSet Depth Stencil State Validation\nredundant setDepthStencilState.\nSet Render Pipeline State Validation\nredundant setRenderPipelineState.\nSet Depth Stencil State Validation\nredundant setDepthStencilState.\nSet Scissor Rect Validation\nredundant setScissorRect.\nSet Render Pipeline State Validation\nredundant setRenderPipelineState.\nSet Depth Stencil State Validation\nredundant setDepthStencilState.\nSet Scissor Rect Validation\nredundant setScissorRect.\nSet Render Pipeline State Validation\nredundant setRenderPipelineState.\nSet Depth Stencil State Validation\nredundant setDepthStencilState.\nSet Render Pipeline State Validation\nredundant setRenderPipelineState.\nSet Depth Stencil State Validation\nredundant setDepthStencilState.\nSet Render Pipeline State Validation\nredundant setRenderPipelineState.\nSet Depth Stencil State Validation\nredundant setDepthStencilState.\nSet Stencil Reference Value Validation\nredundant setStencilReferenceValue.\nSet Scissor Rect Validation\nredundant setScissorRect.\nSet Render Pipeline State Validation\nredundant setRenderPipelineState.\nSet Depth Stencil State Validation\nredundant setDepthStencilState.\nSet Stencil Reference Value Validation\nredundant setStencilReferenceValue.\nSet Scissor Rect Validation\nredundant setScissorRect.\nSet Render Pipeline State Validation\nredundant setRenderPipelineState.\nSet Depth Stencil State Validation\nredundant setDepthStencilState.\nSet Stencil Reference Value Validation\nredundant setStencilReferenceValue.\nSet Scissor Rect Validation\nredundant setScissorRect.\nSet Render Pipeline State Validation\nredundant setRenderPipelineState.\nSet Depth Stencil State Validation\nredundant setDepthStencilState.\nSet Scissor Rect Validation\nredundant setScissorRect.\nSet Render Pipeline State Validation\nredundant setRenderPipelineState.\nSet Depth Stencil State Validation\nredundant setDepthStencilState.\nSet Scissor Rect Validation\nredundant setScissorRect.\nSet Render Pipeline State Validation\nredundant setRenderPipelineState.\nSet Depth Stencil State Validation\nredundant setDepthStencilState.\nSet Scissor Rect Validation\nredundant setScissorRect.\nSet Render Pipeline State Validation\nredundant setRenderPipelineState.\nSet Depth Stencil State Validation\nredundant setDepthStencilState.\nSet Stencil Reference Value Validation\nredundant setStencilReferenceValue.\nSet Render Pipeline State Validation\nredundant setRenderPipelineState.\nSet Depth Stencil State Validation\nredundant setDepthStencilState.\nSet Scissor Rect Validation\nredundant setScissorRect.\nSet Render Pipeline State Validation\nredundant setRenderPipelineState.\nSet Depth Stencil State Validation\nredundant setDepthStencilState.\nSet Scissor Rect Validation\nredundant setScissorRect.\nSet Render Pipeline State Validation\nredundant setRenderPipelineState.\nSet Depth Stencil State Validation\nredundant setDepthStencilState.\nSet Scissor Rect Validation\nredundant setScissorRect.\nSet Render Pipeline State Validation\nredundant setRenderPipelineState.\nSet Depth Stencil State Validation\nredundant setDepthStencilState.\nSet Render Pipeline State Validation\nredundant setRenderPipelineState.\nSet Depth Stencil State Validation\nredundant setDepthStencilState.\nSet Scissor Rect Validation\nredundant setScissorRect.\nSet Render Pipeline State Validation\nredundant setRenderPipelineState.\nSet Depth Stencil State Validation\nredundant setDepthStencilState.\nSet Scissor Rect Validation\nredundant setScissorRect.\nSet Render Pipeline State Validation\nredundant setRenderPipelineState.\nSet Depth Stencil State Validation\nredundant setDepthStencilState.\nSet Scissor Rect Validation\nredundant setScissorRect.\nSet Render Pipeline State Validation\nredundant setRenderPipelineState.\nSet Depth Stencil State Validation\nredundant setDepthStencilState.\nSet Render Pipeline State Validation\nredundant setRenderPipelineState.\nSet Depth Stencil State Validation\nredundant setDepthStencilState.\nSet Scissor Rect Validation\nredundant setScissorRect.\nSet Render Pipeline State Validation\nredundant setRenderPipelineState.\nSet Depth Stencil State Validation\nredundant setDepthStencilState.\nSet Scissor Rect Validation\nredundant setScissorRect.\nSet Render Pipeline State Validation\nredundant setRenderPipelineState.\nSet Depth Stencil State Validation\nredundant setDepthStencilState.\nSet Render Pipeline State Validation\nredundant setRenderPipelineState.\nSet Depth Stencil State Validation\nredundant setDepthStencilState.\nSet Render Pipeline State Validation\nredundant setRenderPipelineState.\nSet Depth Stencil State Validation\nredundant setDepthStencilState.\nSet Stencil Reference Value Validation\nredundant setStencilReferenceValue.\nSet Scissor Rect Validation\nredundant setScissorRect.\nSet Render Pipeline State Validation\nredundant setRenderPipelineState.\nSet Depth Stencil State Validation\nredundant setDepthStencilState.\nSet Stencil Reference Value Validation\nredundant setStencilReferenceValue.\nSet Scissor Rect Validation\nredundant setScissorRect.\nSet Render Pipeline State Validation\nredundant setRenderPipelineState.\nSet Depth Stencil State Validation\nredundant setDepthStencilState.\nSet Stencil Reference Value Validation\nredundant setStencilReferenceValue.\nSet Scissor Rect Validation\nredundant setScissorRect."
+        }
+      }
+    }
+  ]
+}

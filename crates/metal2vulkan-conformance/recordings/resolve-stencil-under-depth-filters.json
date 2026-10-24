@@ -1,0 +1,864 @@
+{
+  "format": 1,
+  "case": "resolve-stencil-under-depth-filters",
+  "suite_version": 1,
+  "shaders": [
+    {
+      "fixture": "rt6_resolves.ll",
+      "entry": "rt6_resolve_full+rt6_resolve_masked",
+      "source_sha256": "826f30ea88e648ce64e04e26abdfaa51c2c81fdd933f41e0a5b621eb7c9d18e9"
+    },
+    {
+      "fixture": "rt6_resolves.air.ll",
+      "entry": "rt6_resolve_full+rt6_resolve_masked",
+      "source_sha256": "deacd509ddf64f7fe146057f3097edfb6582b0033fd623a9d2ec49db7596aec9"
+    }
+  ],
+  "answers": [
+    {
+      "key": {
+        "chip": "apple-m3-max",
+        "os_version": "27.0.1",
+        "os_build": "26A434",
+        "metal_level": "27.0.1"
+      },
+      "provenance": "metal_run",
+      "device": "Apple M3 Max",
+      "runs": 8,
+      "outcomes": [
+        {
+          "runs": 8,
+          "transcript": {
+            "root": {
+              "name": "case",
+              "observed": {
+                "value": "absent"
+              },
+              "children": [
+                {
+                  "name": "inputs",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "air",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "826f30ea88e648ce64e04e26abdfaa51c2c81fdd933f41e0a5b621eb7c9d18e9"
+                        }
+                      }
+                    },
+                    {
+                      "name": "air-typed",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "deacd509ddf64f7fe146057f3097edfb6582b0033fd623a9d2ec49db7596aec9"
+                        }
+                      }
+                    },
+                    {
+                      "name": "render-pipeline",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "2065b66041ac55ac7eee29b27f23e44f18e14a184d942b32877327b8ffc2b2d7"
+                        }
+                      }
+                    },
+                    {
+                      "name": "target:color",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "146942f667d9caec61206d7538bea4c3503d5abf195835fd21f9e88967c83ac2"
+                        }
+                      }
+                    },
+                    {
+                      "name": "target:stencil",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "239e366617419eec7cedf1598ac4e6b05d037af0eb44d4c140ad22c3f0ac0e6a"
+                        }
+                      }
+                    },
+                    {
+                      "name": "target:stencil-resolve",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "e767e8bb8e327a92ee5dcde7a3bacc5edb0b3563494207392d61b0cd4067c7b7"
+                        }
+                      }
+                    },
+                    {
+                      "name": "clear:stencil",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "c31425b44a7ed682a3356bf6820141e1584a15c43b6d6793f552e5d4621586f7"
+                        }
+                      }
+                    },
+                    {
+                      "name": "filter:stencil",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "af5570f5a1810b7af78caf4bc70a660f0df51e42baf91d4de5b2328de0e83dfc"
+                        }
+                      }
+                    },
+                    {
+                      "name": "target:depth",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "916229a00b47feb110cccd140d1290cd53e1f757536310223ad88f10093bce89"
+                        }
+                      }
+                    },
+                    {
+                      "name": "target:depth-resolve",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "33f7a52b1b7de5461505081087c512c4758f0762a164ae64dc642da9f116138c"
+                        }
+                      }
+                    },
+                    {
+                      "name": "clear:depth",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "6c3c396ed6b5c36dcae172271f462051b1266b851e92df3deea8ac65478fd712"
+                        }
+                      }
+                    },
+                    {
+                      "name": "pass:MTLMultisampleStencilResolveFilterSample0/MTLMultisampleDepthResolveFilterSample0",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "ca3489834c5bf7e16c5d1fe5508ef2df93616208d6c52a25ee1898d58acb227c"
+                        }
+                      }
+                    },
+                    {
+                      "name": "pass:MTLMultisampleStencilResolveFilterSample0/MTLMultisampleDepthResolveFilterMin",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "3b1ec23a37dcb12fe715ee5ab6c066e57d4faba603e6b251725b72f9b2d31f7c"
+                        }
+                      }
+                    },
+                    {
+                      "name": "pass:MTLMultisampleStencilResolveFilterSample0/MTLMultisampleDepthResolveFilterMax",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "10e542058cb28011a50f06ff161b7e4735c4e0aefe8f8a6e25457817793969f7"
+                        }
+                      }
+                    },
+                    {
+                      "name": "patterns",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "b3a4cfd3ff52fff391ced909b9261033da6bf5d9db450dfe9f1b29e4253ab2cd"
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "library",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "render-pipeline",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "target:color",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "target:stencil",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "target:depth",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "state",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "target:stencil-resolve:MTLMultisampleStencilResolveFilterSample0/MTLMultisampleDepthResolveFilterSample0",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "buffer:stencil-read:MTLMultisampleStencilResolveFilterSample0/MTLMultisampleDepthResolveFilterSample0",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "target:depth-resolve:MTLMultisampleStencilResolveFilterSample0/MTLMultisampleDepthResolveFilterSample0",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "buffer:depth-read:MTLMultisampleStencilResolveFilterSample0/MTLMultisampleDepthResolveFilterSample0",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "target:stencil-resolve:MTLMultisampleStencilResolveFilterSample0/MTLMultisampleDepthResolveFilterMin",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "buffer:stencil-read:MTLMultisampleStencilResolveFilterSample0/MTLMultisampleDepthResolveFilterMin",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "target:depth-resolve:MTLMultisampleStencilResolveFilterSample0/MTLMultisampleDepthResolveFilterMin",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "buffer:depth-read:MTLMultisampleStencilResolveFilterSample0/MTLMultisampleDepthResolveFilterMin",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "target:stencil-resolve:MTLMultisampleStencilResolveFilterSample0/MTLMultisampleDepthResolveFilterMax",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "buffer:stencil-read:MTLMultisampleStencilResolveFilterSample0/MTLMultisampleDepthResolveFilterMax",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "target:depth-resolve:MTLMultisampleStencilResolveFilterSample0/MTLMultisampleDepthResolveFilterMax",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "buffer:depth-read:MTLMultisampleStencilResolveFilterSample0/MTLMultisampleDepthResolveFilterMax",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "render",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": {
+                          "variant": {
+                            "name": "Completed",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "pieces",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "pass:MTLMultisampleStencilResolveFilterSample0/MTLMultisampleDepthResolveFilterSample0",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "read:stencil:MTLMultisampleStencilResolveFilterSample0/MTLMultisampleDepthResolveFilterSample0",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "read:depth:MTLMultisampleStencilResolveFilterSample0/MTLMultisampleDepthResolveFilterSample0",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "pass:MTLMultisampleStencilResolveFilterSample0/MTLMultisampleDepthResolveFilterMin",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "read:stencil:MTLMultisampleStencilResolveFilterSample0/MTLMultisampleDepthResolveFilterMin",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "read:depth:MTLMultisampleStencilResolveFilterSample0/MTLMultisampleDepthResolveFilterMin",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "pass:MTLMultisampleStencilResolveFilterSample0/MTLMultisampleDepthResolveFilterMax",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "read:stencil:MTLMultisampleStencilResolveFilterSample0/MTLMultisampleDepthResolveFilterMax",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "read:depth:MTLMultisampleStencilResolveFilterSample0/MTLMultisampleDepthResolveFilterMax",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "read-back/stencil/MTLMultisampleStencilResolveFilterSample0/MTLMultisampleDepthResolveFilterSample0",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "read-back/stencil/MTLMultisampleStencilResolveFilterSample0/MTLMultisampleDepthResolveFilterMin",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "read-back/stencil/MTLMultisampleStencilResolveFilterSample0/MTLMultisampleDepthResolveFilterMax",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "resolved-stencil",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "MTLMultisampleStencilResolveFilterSample0/MTLMultisampleDepthResolveFilterSample0",
+                      "observed": {
+                        "value": {
+                          "bytes": "ERFERDMzQEAREUREMzNAQGZmd3dAQEBAZmZ3d0BAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQA=="
+                        },
+                        "shape": {
+                          "bytes": {
+                            "region": {
+                              "texture": {
+                                "level": 0,
+                                "slice": 0,
+                                "aspect": "stencil",
+                                "sample": 0,
+                                "origin": [
+                                  0,
+                                  0,
+                                  0
+                                ],
+                                "size": [
+                                  8,
+                                  8,
+                                  1
+                                ]
+                              }
+                            },
+                            "element": "u8",
+                            "row_offset": 0,
+                            "row_elements": 8,
+                            "row_pitch": 8,
+                            "rows": 8,
+                            "image_pitch": 64,
+                            "images": 1,
+                            "gaps": "compared"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "MTLMultisampleStencilResolveFilterSample0/MTLMultisampleDepthResolveFilterMin",
+                      "observed": {
+                        "value": {
+                          "bytes": "ERFERDMzQEAREUREMzNAQGZmd3dAQEBAZmZ3d0BAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQA=="
+                        },
+                        "shape": {
+                          "bytes": {
+                            "region": {
+                              "texture": {
+                                "level": 0,
+                                "slice": 0,
+                                "aspect": "stencil",
+                                "sample": 0,
+                                "origin": [
+                                  0,
+                                  0,
+                                  0
+                                ],
+                                "size": [
+                                  8,
+                                  8,
+                                  1
+                                ]
+                              }
+                            },
+                            "element": "u8",
+                            "row_offset": 0,
+                            "row_elements": 8,
+                            "row_pitch": 8,
+                            "rows": 8,
+                            "image_pitch": 64,
+                            "images": 1,
+                            "gaps": "compared"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "MTLMultisampleStencilResolveFilterSample0/MTLMultisampleDepthResolveFilterMax",
+                      "observed": {
+                        "value": {
+                          "bytes": "ERFERDMzQEAREUREMzNAQGZmd3dAQEBAZmZ3d0BAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQA=="
+                        },
+                        "shape": {
+                          "bytes": {
+                            "region": {
+                              "texture": {
+                                "level": 0,
+                                "slice": 0,
+                                "aspect": "stencil",
+                                "sample": 0,
+                                "origin": [
+                                  0,
+                                  0,
+                                  0
+                                ],
+                                "size": [
+                                  8,
+                                  8,
+                                  1
+                                ]
+                              }
+                            },
+                            "element": "u8",
+                            "row_offset": 0,
+                            "row_elements": 8,
+                            "row_pitch": 8,
+                            "rows": 8,
+                            "image_pitch": 64,
+                            "images": 1,
+                            "gaps": "compared"
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "read-back/depth/MTLMultisampleStencilResolveFilterSample0/MTLMultisampleDepthResolveFilterSample0",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "read-back/depth/MTLMultisampleStencilResolveFilterSample0/MTLMultisampleDepthResolveFilterMin",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "read-back/depth/MTLMultisampleStencilResolveFilterSample0/MTLMultisampleDepthResolveFilterMax",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "resolved-depth",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "MTLMultisampleStencilResolveFilterSample0/MTLMultisampleDepthResolveFilterSample0",
+                      "observed": {
+                        "value": {
+                          "bytes": "AAAAPgAAAD4AAAA/AAAAPwAAwD4AAMA+AACAPwAAgD8AAAA+AAAAPgAAAD8AAAA/AADAPgAAwD4AAIA/AACAPwAAQD8AAEA/AACAPgAAgD4AAIA/AACAPwAAgD8AAIA/AABAPwAAQD8AAIA+AACAPgAAgD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPw=="
+                        },
+                        "shape": {
+                          "bytes": {
+                            "region": {
+                              "texture": {
+                                "level": 0,
+                                "slice": 0,
+                                "aspect": "depth",
+                                "sample": 0,
+                                "origin": [
+                                  0,
+                                  0,
+                                  0
+                                ],
+                                "size": [
+                                  8,
+                                  8,
+                                  1
+                                ]
+                              }
+                            },
+                            "element": "f32",
+                            "row_offset": 0,
+                            "row_elements": 8,
+                            "row_pitch": 32,
+                            "rows": 8,
+                            "image_pitch": 256,
+                            "images": 1,
+                            "gaps": "compared"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "MTLMultisampleStencilResolveFilterSample0/MTLMultisampleDepthResolveFilterMin",
+                      "observed": {
+                        "value": {
+                          "bytes": "AAAAPgAAAD4AAAA+AAAAPgAAAD4AAAA+AAAAPgAAAD4AAAA+AAAAPgAAAD4AAAA+AAAAPgAAAD4AAAA+AAAAPgAAQD8AAEA/AACAPgAAgD4AAIA/AACAPwAAgD8AAIA/AABAPwAAQD8AAIA+AACAPgAAgD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPw=="
+                        },
+                        "shape": {
+                          "bytes": {
+                            "region": {
+                              "texture": {
+                                "level": 0,
+                                "slice": 0,
+                                "aspect": "depth",
+                                "sample": 0,
+                                "origin": [
+                                  0,
+                                  0,
+                                  0
+                                ],
+                                "size": [
+                                  8,
+                                  8,
+                                  1
+                                ]
+                              }
+                            },
+                            "element": "f32",
+                            "row_offset": 0,
+                            "row_elements": 8,
+                            "row_pitch": 32,
+                            "rows": 8,
+                            "image_pitch": 256,
+                            "images": 1,
+                            "gaps": "compared"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "MTLMultisampleStencilResolveFilterSample0/MTLMultisampleDepthResolveFilterMax",
+                      "observed": {
+                        "value": {
+                          "bytes": "AAAAPwAAAD8AAAA/AAAAPwAAID8AACA/AACAPwAAgD8AAAA/AAAAPwAAAD8AAAA/AAAgPwAAID8AAIA/AACAPwAAgD8AAIA/AACAPgAAgD4AAIA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA+AACAPgAAgD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPw=="
+                        },
+                        "shape": {
+                          "bytes": {
+                            "region": {
+                              "texture": {
+                                "level": 0,
+                                "slice": 0,
+                                "aspect": "depth",
+                                "sample": 0,
+                                "origin": [
+                                  0,
+                                  0,
+                                  0
+                                ],
+                                "size": [
+                                  8,
+                                  8,
+                                  1
+                                ]
+                              }
+                            },
+                            "element": "f32",
+                            "row_offset": 0,
+                            "row_elements": 8,
+                            "row_pitch": 32,
+                            "rows": 8,
+                            "image_pitch": 256,
+                            "images": 1,
+                            "gaps": "compared"
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "notices",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "set",
+                      "observed": {
+                        "value": {
+                          "nothing": "announced_nothing"
+                        }
+                      }
+                    },
+                    {
+                      "name": "counts",
+                      "observed": {
+                        "value": {
+                          "fields": {}
+                        }
+                      }
+                    }
+                  ]
+                }
+              ]
+            }
+          }
+        }
+      ],
+      "validated": {
+        "stopped": {
+          "call": "render",
+          "message": "Set Render Pipeline State Validation\nredundant setRenderPipelineState.\nSet Depth Stencil State Validation\nredundant setDepthStencilState.\nSet Scissor Rect Validation\nredundant setScissorRect.\nSet Render Pipeline State Validation\nredundant setRenderPipelineState.\nSet Depth Stencil State Validation\nredundant setDepthStencilState.\nSet Scissor Rect Validation\nredundant setScissorRect.\nSet Render Pipeline State Validation\nredundant setRenderPipelineState.\nSet Depth Stencil State Validation\nredundant setDepthStencilState.\nSet Scissor Rect Validation\nredundant setScissorRect.\nSet Render Pipeline State Validation\nredundant setRenderPipelineState.\nSet Depth Stencil State Validation\nredundant setDepthStencilState.\nSet Stencil Reference Value Validation\nredundant setStencilReferenceValue.\nSet Render Pipeline State Validation\nredundant setRenderPipelineState.\nSet Depth Stencil State Validation\nredundant setDepthStencilState.\nSet Scissor Rect Validation\nredundant setScissorRect.\nSet Render Pipeline State Validation\nredundant setRenderPipelineState.\nSet Depth Stencil State Validation\nredundant setDepthStencilState.\nSet Scissor Rect Validation\nredundant setScissorRect.\nSet Render Pipeline State Validation\nredundant setRenderPipelineState.\nSet Depth Stencil State Validation\nredundant setDepthStencilState.\nSet Scissor Rect Validation\nredundant setScissorRect.\nSet Render Pipeline State Validation\nredundant setRenderPipelineState.\nSet Depth Stencil State Validation\nredundant setDepthStencilState.\nSet Render Pipeline State Validation\nredundant setRenderPipelineState.\nSet Depth Stencil State Validation\nredundant setDepthStencilState.\nSet Scissor Rect Validation\nredundant setScissorRect.\nSet Render Pipeline State Validation\nredundant setRenderPipelineState.\nSet Depth Stencil State Validation\nredundant setDepthStencilState.\nSet Scissor Rect Validation\nredundant setScissorRect.\nSet Render Pipeline State Validation\nredundant setRenderPipelineState.\nSet Depth Stencil State Validation\nredundant setDepthStencilState.\nSet Scissor Rect Validation\nredundant setScissorRect.\nSet Render Pipeline State Validation\nredundant setRenderPipelineState.\nSet Depth Stencil State Validation\nredundant setDepthStencilState.\nSet Render Pipeline State Validation\nredundant setRenderPipelineState.\nSet Depth Stencil State Validation\nredundant setDepthStencilState.\nSet Scissor Rect Validation\nredundant setScissorRect.\nSet Render Pipeline State Validation\nredundant setRenderPipelineState.\nSet Depth Stencil State Validation\nredundant setDepthStencilState.\nSet Scissor Rect Validation\nredundant setScissorRect.\nSet Render Pipeline State Validation\nredundant setRenderPipelineState.\nSet Depth Stencil State Validation\nredundant setDepthStencilState.\nSet Render Pipeline State Validation\nredundant setRenderPipelineState.\nSet Depth Stencil State Validation\nredundant setDepthStencilState.\nSet Render Pipeline State Validation\nredundant setRenderPipelineState.\nSet Depth Stencil State Validation\nredundant setDepthStencilState.\nSet Stencil Reference Value Validation\nredundant setStencilReferenceValue.\nSet Scissor Rect Validation\nredundant setScissorRect.\nSet Render Pipeline State Validation\nredundant setRenderPipelineState.\nSet Depth Stencil State Validation\nredundant setDepthStencilState.\nSet Stencil Reference Value Validation\nredundant setStencilReferenceValue.\nSet Scissor Rect Validation\nredundant setScissorRect.\nSet Render Pipeline State Validation\nredundant setRenderPipelineState.\nSet Depth Stencil State Validation\nredundant setDepthStencilState.\nSet Stencil Reference Value Validation\nredundant setStencilReferenceValue.\nSet Scissor Rect Validation\nredundant setScissorRect.\nSet Render Pipeline State Validation\nredundant setRenderPipelineState.\nSet Depth Stencil State Validation\nredundant setDepthStencilState.\nSet Scissor Rect Validation\nredundant setScissorRect.\nSet Render Pipeline State Validation\nredundant setRenderPipelineState.\nSet Depth Stencil State Validation\nredundant setDepthStencilState.\nSet Scissor Rect Validation\nredundant setScissorRect.\nSet Render Pipeline State Validation\nredundant setRenderPipelineState.\nSet Depth Stencil State Validation\nredundant setDepthStencilState.\nSet Scissor Rect Validation\nredundant setScissorRect.\nSet Render Pipeline State Validation\nredundant setRenderPipelineState.\nSet Depth Stencil State Validation\nredundant setDepthStencilState.\nSet Stencil Reference Value Validation\nredundant setStencilReferenceValue.\nSet Render Pipeline State Validation\nredundant setRenderPipelineState.\nSet Depth Stencil State Validation\nredundant setDepthStencilState.\nSet Scissor Rect Validation\nredundant setScissorRect.\nSet Render Pipeline State Validation\nredundant setRenderPipelineState.\nSet Depth Stencil State Validation\nredundant setDepthStencilState.\nSet Scissor Rect Validation\nredundant setScissorRect.\nSet Render Pipeline State Validation\nredundant setRenderPipelineState.\nSet Depth Stencil State Validation\nredundant setDepthStencilState.\nSet Scissor Rect Validation\nredundant setScissorRect.\nSet Render Pipeline State Validation\nredundant setRenderPipelineState.\nSet Depth Stencil State Validation\nredundant setDepthStencilState.\nSet Render Pipeline State Validation\nredundant setRenderPipelineState.\nSet Depth Stencil State Validation\nredundant setDepthStencilState.\nSet Scissor Rect Validation\nredundant setScissorRect.\nSet Render Pipeline State Validation\nredundant setRenderPipelineState.\nSet Depth Stencil State Validation\nredundant setDepthStencilState.\nSet Scissor Rect Validation\nredundant setScissorRect.\nSet Render Pipeline State Validation\nredundant setRenderPipelineState.\nSet Depth Stencil State Validation\nredundant setDepthStencilState.\nSet Scissor Rect Validation\nredundant setScissorRect.\nSet Render Pipeline State Validation\nredundant setRenderPipelineState.\nSet Depth Stencil State Validation\nredundant setDepthStencilState.\nSet Render Pipeline State Validation\nredundant setRenderPipelineState.\nSet Depth Stencil State Validation\nredundant setDepthStencilState.\nSet Scissor Rect Validation\nredundant setScissorRect.\nSet Render Pipeline State Validation\nredundant setRenderPipelineState.\nSet Depth Stencil State Validation\nredundant setDepthStencilState.\nSet Scissor Rect Validation\nredundant setScissorRect.\nSet Render Pipeline State Validation\nredundant setRenderPipelineState.\nSet Depth Stencil State Validation\nredundant setDepthStencilState.\nSet Render Pipeline State Validation\nredundant setRenderPipelineState.\nSet Depth Stencil State Validation\nredundant setDepthStencilState.\nSet Render Pipeline State Validation\nredundant setRenderPipelineState.\nSet Depth Stencil State Validation\nredundant setDepthStencilState.\nSet Stencil Reference Value Validation\nredundant setStencilReferenceValue.\nSet Scissor Rect Validation\nredundant setScissorRect.\nSet Render Pipeline State Validation\nredundant setRenderPipelineState.\nSet Depth Stencil State Validation\nredundant setDepthStencilState.\nSet Stencil Reference Value Validation\nredundant setStencilReferenceValue.\nSet Scissor Rect Validation\nredundant setScissorRect.\nSet Render Pipeline State Validation\nredundant setRenderPipelineState.\nSet Depth Stencil State Validation\nredundant setDepthStencilState.\nSet Stencil Reference Value Validation\nredundant setStencilReferenceValue.\nSet Scissor Rect Validation\nredundant setScissorRect.\nSet Render Pipeline State Validation\nredundant setRenderPipelineState.\nSet Depth Stencil State Validation\nredundant setDepthStencilState.\nSet Scissor Rect Validation\nredundant setScissorRect.\nSet Render Pipeline State Validation\nredundant setRenderPipelineState.\nSet Depth Stencil State Validation\nredundant setDepthStencilState.\nSet Scissor Rect Validation\nredundant setScissorRect.\nSet Render Pipeline State Validation\nredundant setRenderPipelineState.\nSet Depth Stencil State Validation\nredundant setDepthStencilState.\nSet Scissor Rect Validation\nredundant setScissorRect.\nSet Render Pipeline State Validation\nredundant setRenderPipelineState.\nSet Depth Stencil State Validation\nredundant setDepthStencilState.\nSet Stencil Reference Value Validation\nredundant setStencilReferenceValue.\nSet Render Pipeline State Validation\nredundant setRenderPipelineState.\nSet Depth Stencil State Validation\nredundant setDepthStencilState.\nSet Scissor Rect Validation\nredundant setScissorRect.\nSet Render Pipeline State Validation\nredundant setRenderPipelineState.\nSet Depth Stencil State Validation\nredundant setDepthStencilState.\nSet Scissor Rect Validation\nredundant setScissorRect.\nSet Render Pipeline State Validation\nredundant setRenderPipelineState.\nSet Depth Stencil State Validation\nredundant setDepthStencilState.\nSet Scissor Rect Validation\nredundant setScissorRect.\nSet Render Pipeline State Validation\nredundant setRenderPipelineState.\nSet Depth Stencil State Validation\nredundant setDepthStencilState.\nSet Render Pipeline State Validation\nredundant setRenderPipelineState.\nSet Depth Stencil State Validation\nredundant setDepthStencilState.\nSet Scissor Rect Validation\nredundant setScissorRect.\nSet Render Pipeline State Validation\nredundant setRenderPipelineState.\nSet Depth Stencil State Validation\nredundant setDepthStencilState.\nSet Scissor Rect Validation\nredundant setScissorRect.\nSet Render Pipeline State Validation\nredundant setRenderPipelineState.\nSet Depth Stencil State Validation\nredundant setDepthStencilState.\nSet Scissor Rect Validation\nredundant setScissorRect.\nSet Render Pipeline State Validation\nredundant setRenderPipelineState.\nSet Depth Stencil State Validation\nredundant setDepthStencilState.\nSet Render Pipeline State Validation\nredundant setRenderPipelineState.\nSet Depth Stencil State Validation\nredundant setDepthStencilState.\nSet Scissor Rect Validation\nredundant setScissorRect.\nSet Render Pipeline State Validation\nredundant setRenderPipelineState.\nSet Depth Stencil State Validation\nredundant setDepthStencilState.\nSet Scissor Rect Validation\nredundant setScissorRect.\nSet Render Pipeline State Validation\nredundant setRenderPipelineState.\nSet Depth Stencil State Validation\nredundant setDepthStencilState.\nSet Render Pipeline State Validation\nredundant setRenderPipelineState.\nSet Depth Stencil State Validation\nredundant setDepthStencilState.\nSet Render Pipeline State Validation\nredundant setRenderPipelineState.\nSet Depth Stencil State Validation\nredundant setDepthStencilState.\nSet Stencil Reference Value Validation\nredundant setStencilReferenceValue.\nSet Scissor Rect Validation\nredundant setScissorRect.\nSet Render Pipeline State Validation\nredundant setRenderPipelineState.\nSet Depth Stencil State Validation\nredundant setDepthStencilState.\nSet Stencil Reference Value Validation\nredundant setStencilReferenceValue.\nSet Scissor Rect Validation\nredundant setScissorRect.\nSet Render Pipeline State Validation\nredundant setRenderPipelineState.\nSet Depth Stencil State Validation\nredundant setDepthStencilState.\nSet Stencil Reference Value Validation\nredundant setStencilReferenceValue.\nSet Scissor Rect Validation\nredundant setScissorRect."
+        }
+      }
+    }
+  ]
+}
