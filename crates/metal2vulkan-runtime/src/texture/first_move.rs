@@ -41,10 +41,11 @@
 //!   takes such a move whatever its
 //!   commands name, so no command reads the image before its move; an internal submission, whose
 //!   commands are the runtime's own, takes it only where they name the image's key (a host call
-//!   on its texture, whose contract orders the program's GPU work on it). The work goes in
-//!   a command buffer of its own, first in the submission's `VkSubmitInfo`, waiting for what
-//!   the submission waits for: MoltenVK runs each `VkSubmitInfo` as a Metal command buffer of its
-//!   own, so it adds none (`command_buffer/submit.rs`).
+//!   on its texture, whose contract orders the program's GPU work on it). The work is recorded
+//!   first in the command buffer that leads the submission's `VkSubmitInfo` -- a batch's own, or
+//!   the one that holds the staged copies after it; an internal submission's one command buffer
+//!   -- waiting for what the submission waits for: MoltenVK runs each `VkSubmitInfo` as a Metal
+//!   command buffer of its own, so it adds none (`command_buffer/submit.rs`).
 //! - **Staged copies**. `replace_region` of a texture whose `VkImage` is its own for good (in
 //!   memory of its own, or a heap's own pages) and takes no host copies stages the bytes
 //!   ([`TexelCopy`], [`FirstMoves::register_texels`]): the next submission copies them in at
@@ -1367,13 +1368,14 @@ impl Taken<'_> {
     }
 
     /// Record the host calls' staged copies it took into `command_buffer`, each after every
-    /// write before it (the first work, which a command buffer submitted before it records; the
-    /// copy before), then the barrier that makes them visible to every command after and to the
-    /// host.
+    /// write before it (the first work, which [`record`](Self::record) records into this command
+    /// buffer before it or a submission before records; the copy before), then the barrier that
+    /// makes them visible to every command after and to the host.
     ///
     /// # Safety
     ///
-    /// As [`record`](Self::record)'s; every image's first move was submitted before.
+    /// As [`record`](Self::record)'s; every image's first move is recorded before it in
+    /// submission order -- earlier in this command buffer, or in a submission before.
     pub(crate) unsafe fn record_staged(&self, device: &Vk, command_buffer: vk::CommandBuffer) {
         let staged = self.held.iter().filter_map(|held| match held {
             Held::Texels(_, copy) => Some(copy),

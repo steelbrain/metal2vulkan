@@ -115,8 +115,10 @@
 //! of the batch, whether a use names the resource or not (a command may reach a texture through its
 //! resource ID, a buffer through its address), and the batch holds what it worked on until it
 //! completes. On a device of several `VkQueue`s every batch on another one waits for it until it
-//! completed. It is a command buffer of its own, first in the batch's work's `VkSubmitInfo` (in
-//! a batch with no work, its end's), so it waits for what the work waits for: Vulkan's
+//! completed. It is recorded first in the command buffer that leads the batch's work's
+//! `VkSubmitInfo` (in a batch with no work, its end's) -- its own, or, where the batch also has
+//! host calls' staged copies, the one that holds the copies after it -- so it waits for what the
+//! work waits for: Vulkan's
 //! submission order puts it before every command of the batch ("the order in which command
 //! buffers are specified in the pCommandBuffers member of VkSubmitInfo ... determines their
 //! submission order", the Vulkan specification, Submission Order), and its last barrier,
@@ -681,26 +683,47 @@ impl CommandBufferShared {
             work.extend(&state.recorded[start + offset].raws);
         }
         // The first work goes first in the batch's work, or in a batch with no work in its end
-        // (the module docs). Host calls' staged copies go at the batch's start, after it.
-        let lead = match first_work.has_first() {
-            true => Some(self.record_raw(&mut state, |_, buffer| {
-                // SAFETY: the command buffer is recording, outside a render pass; it is
-                // submitted first in the batch, before any later one, and every batch on
-                // another `VkQueue` waits for the batch (`FirstMoves::waits`).
-                unsafe { first_work.record(raw, buffer, shared.queue_flags_of(queue)) };
-                Ok(())
-            })?),
-            false => None,
+        // (the module docs). Host calls' staged copies go at the batch's start, after it, in the
+        // same command buffer: the two went in two command buffers of one `VkSubmitInfo`, which
+        // puts them in the same submission order one command buffer's recording order does ("the
+        // order in which command buffers are specified in the pCommandBuffers member of
+        // VkSubmitInfo ... determines their submission order", the Vulkan specification,
+        // Submission Order; inside one command buffer, the order they were recorded), and a
+        // command buffer boundary is no dependency of its own, so the copies' own leading barrier
+        // (`FirstMoves::record_staged`) covers the moves recorded before it either way. One
+        // command buffer where the batch has both (counted:
+        // `WorkCounts::command_buffers_begun_batch_work`).
+        let has_first = first_work.has_first();
+        let has_staged = first_work.has_staged();
+        let recorded = (has_first || has_staged)
+            .then(|| {
+                self.record_raw(&mut state, |_, buffer| {
+                    if has_first {
+                        // SAFETY: the command buffer is recording, outside a render pass; it is
+                        // submitted first in the batch, before any later one, and every batch on
+                        // another `VkQueue` waits for the batch (`FirstMoves::waits`).
+                        unsafe { first_work.record(raw, buffer, shared.queue_flags_of(queue)) };
+                    }
+                    if has_staged {
+                        // SAFETY: the command buffer is recording, outside a render pass; every
+                        // image's move is in this command buffer, before it, or a submission
+                        // before.
+                        unsafe { first_work.record_staged(raw, buffer) };
+                    }
+                    Ok(())
+                })
+            })
+            .transpose()?;
+        // Where it holds staged copies it goes at the batch's start, as they did, so the batch
+        // has work; the first work alone goes first in the work, or in the end where the batch
+        // has none (below).
+        let lead = match has_staged {
+            true => {
+                work.insert(0, recorded.expect("recorded where there are staged copies"));
+                None
+            }
+            false => recorded,
         };
-        if first_work.has_staged() {
-            let staged = self.record_raw(&mut state, |_, buffer| {
-                // SAFETY: the command buffer is recording, outside a render pass; every image's
-                // move is in the first work's command buffer, before it, or a submission before.
-                unsafe { first_work.record_staged(raw, buffer) };
-                Ok(())
-            })?;
-            work.insert(0, staged);
-        }
         let BatchWaits {
             semaphores: wait_semaphores,
             values: wait_values,
