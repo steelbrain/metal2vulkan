@@ -22,13 +22,21 @@
 //!   row's parent libraries that defines it (`library_module::indexed_symbol_definers`), or the
 //!   row's own module when it alone defines it (a linked function's reference back into the
 //!   row). The compile asks for each symbol a linked module references in turn;
-//! - a visible-function table's candidates: every function the authored cases link that the
-//!   attempt has not linked yet (Metal's `MTLLinkedFunctions`, the functions a pipeline can place
-//!   in a table). A call no linked function of its type answers asks again, and stays the input.
 //!
-//! Each kind of input is derived at most once per slot or symbol, and each table stop links at
-//! least one more authored function, so the attempt's compiles are bounded by the row's slots,
-//! references, and authored functions. A constant the set leaves undefined, and every other
+//! A visible-function table asks for nothing: a table entry holds a function handle and a handle
+//! exists only for a linked function, so a call no linked function answers is the empty switch,
+//! not a refusal. Its stop is structural instead, and runs after a compile that translated: where
+//! the compile's own output says the stage uses a table
+//! ([`uses_function_tables`], which holds for a table the entry takes and for one an argument buffer
+//! holds, and not for a table the set's constants removed), the attempt links every function the
+//! authored cases link that it has not linked yet (Metal's `MTLLinkedFunctions`, the functions a
+//! pipeline can place in a table) and compiles once more, so the census measures the switch over
+//! the candidates and not only the empty one. The stop is recorded either way, with an empty list
+//! of candidates where there was nothing to link, so the report counts both.
+//!
+//! Each kind of input is derived at most once per slot or symbol, and the table stop runs at most
+//! once, so the attempt's compiles are bounded by the row's slots, references, and one table
+//! stop. A constant the set leaves undefined, and every other
 //! input, stay what the compile says, with the reason the audit supplies none. An index the audit
 //! cannot read makes the attempt a transient `tooling` failure, never a recorded reason.
 
@@ -41,11 +49,11 @@ use crate::executor_contract::stage_inputs;
 use crate::specialization::AuthoredLinks;
 use metal2vulkan::device::DeviceProfile;
 use metal2vulkan::error::{Error, RuntimeInput};
-use metal2vulkan::library::FunctionConstantValues;
+use metal2vulkan::library::{CompiledFunction, FunctionConstantValues};
 use metal2vulkan::metal::format::storage_image_choice;
 use metal2vulkan::metal::PixelFormat;
+use metal2vulkan::pipeline::{BufferKind, SlotClass, SlotInterface, SlotRef};
 use metal2vulkan::pipeline::{EntryDescriptor, EntryRef, LinkedSource, LoweringInputs};
-use metal2vulkan::pipeline::{SlotClass, SlotRef};
 use metal2vulkan::Budget;
 use metal2vulkan_air::abi::{ImageblockKind, ParamRole};
 use serde::{Deserialize, Serialize};
@@ -74,6 +82,12 @@ pub enum Supplied {
         symbol: String,
         source: LinkSource,
     },
+    /// A visible-function table's candidates: each authored function (name, module) the attempt
+    /// linked at the table's stop. Empty where the stop found none to link, so the table kept its
+    /// null entries and the census measured the empty switch.
+    TableFunctions {
+        functions: Vec<(String, String)>,
+    },
 }
 
 /// Where a linked function's module came from.
@@ -97,6 +111,7 @@ impl Supplied {
             Supplied::TileAttachments { .. } => "TileAttachments",
             Supplied::StorageTextureFormat { .. } => "StorageTextureFormat",
             Supplied::LinkedFunction { .. } => "LinkedFunction",
+            Supplied::TableFunctions { .. } => "VisibleFunctionTable",
         }
     }
 }
@@ -253,6 +268,7 @@ fn replay_unvalidated<'a>(
     loop {
         let mut asked = None;
         let mut ray_tracing = false;
+        let mut uses_tables = false;
         let (attempt, pending) = translate_unvalidated(profile, deadline, |budget| {
             let unlinked = FunctionConstantValues::defaults();
             let result = d
@@ -261,11 +277,35 @@ fn replay_unvalidated<'a>(
             match &result.0 {
                 Err(Error::NeedsInput(input)) => asked = Some(input.clone()),
                 Err(error) => ray_tracing = is_ray_tracing(error),
-                Ok(_) => {}
+                Ok(function) => uses_tables = uses_function_tables(function),
             }
             result
         });
         let Some(input) = asked else {
+            // The table stop (see the module docs): a stage that read a table's words is
+            // compiled once more with the authored functions linked, so the census measures the
+            // switch over the candidates. It runs once, and only on a compile that translated.
+            if uses_tables && attempt.outcome == Outcome::Translated {
+                match d.table_stop() {
+                    Ok(true) => continue,
+                    Ok(false) => {}
+                    Err(Unsupplied::Why(why)) => {
+                        return (d.finish(attempt, Some(why), ray_tracing), pending)
+                    }
+                    Err(Unsupplied::Tooling(why)) => {
+                        let attempt = Attempt {
+                            outcome: Outcome::Failed {
+                                failure: FailureKind::Tooling,
+                            },
+                            detail: Some(bounded_detail(&format!(
+                                "the audit could not read the index: {why}"
+                            ))),
+                            ..attempt
+                        };
+                        return (d.finish(attempt, None, ray_tracing), None);
+                    }
+                }
+            }
             return (d.finish(attempt, None, ray_tracing), pending);
         };
         match d.derive(&input) {
@@ -285,6 +325,29 @@ fn replay_unvalidated<'a>(
             }
         }
     }
+}
+
+/// Whether the stage `function` compiled uses a visible-function table, read from the compile's
+/// own output rather than from the row's AIR, which the audit would have to decode again.
+///
+/// Both of the shapes a table comes in say so, each in the place that states it: a table the entry
+/// takes is a buffer slot the interface marks `VisibleFunctionTable` (devirtualization states the
+/// parameter as the read-only buffer of words it reads, and the slot keeps what it holds), and a
+/// table an argument buffer holds has no slot of its own but is reached by its resource id, which
+/// the table-word strategies count. A table whose every use the set's constants removed is
+/// neither, and is no stop.
+fn uses_function_tables(function: &CompiledFunction) -> bool {
+    /// The prefix the strategy names of a table read by its resource id share
+    /// (`metal2vulkan::lower::access::function_table`).
+    const TABLE_WORDS: &str = "access.function_table.";
+    let slot = function.slots().values().any(|slot| {
+        matches!(slot, SlotInterface::Buffer(buffer) if buffer.kind == BufferKind::VisibleFunctionTable)
+    });
+    slot || function
+        .strategies()
+        .entries
+        .keys()
+        .any(|name| name.starts_with(TABLE_WORDS))
 }
 
 /// Whether `error` refuses a ray-tracing construct: the ray-tracing family or its lowering, an
@@ -509,6 +572,50 @@ impl<'a> Derivation<'a> {
                 }
             ))),
         }
+    }
+
+    /// Link the candidates of a visible-function table, and say whether that asks for one more
+    /// compile. The stop is recorded either way ([`Supplied::TableFunctions`], whose list is empty
+    /// where there was nothing to link), so the audit's report counts every row whose table it
+    /// gave candidates and every row whose table kept its null entries.
+    ///
+    /// It runs once per attempt: the one compile it asks for links every authored function at
+    /// once, so a second run would have none left.
+    fn table_stop(&mut self) -> Result<bool, Unsupplied> {
+        // An attempt with no index links nothing at all (a test without one): there is no stop to
+        // take, and nothing about the row to record.
+        if self.linkage.is_none() {
+            return Ok(false);
+        }
+        if !self.derived.insert("TableFunctions".to_string()) {
+            return Ok(false);
+        }
+        let functions = self.table_candidates()?;
+        let linked = !functions.is_empty();
+        self.supplied.push(Supplied::TableFunctions { functions });
+        Ok(linked)
+    }
+
+    /// A table's candidates, linked: every function the authored cases link that is not linked
+    /// yet. Empty when none is left -- the cases link no function, or every one of them is
+    /// already linked -- and the table then keeps the entries it has, all null.
+    fn table_candidates(&mut self) -> Result<Vec<(String, String)>, Unsupplied> {
+        let linkage = self
+            .linkage
+            .ok_or("the attempt has no index to read authored functions from")?;
+        let remaining = linkage
+            .authored
+            .functions
+            .iter()
+            .filter(|(function, _)| !self.linked.iter().any(|(linked, _)| linked == *function))
+            .map(|(function, module)| (function.clone(), module.clone()))
+            .collect::<Vec<_>>();
+        for (function, module) in &remaining {
+            let bitcode = self.retained(linkage, module)?;
+            self.derived.insert(format!("LinkedFunction{function}"));
+            self.linked.push((function.clone(), Some(bitcode)));
+        }
+        Ok(remaining)
     }
 
     /// The bitcode of retained module `hash`, read from its indexed byte range on first need.
@@ -921,6 +1028,9 @@ mod tests {
                     symbol: "g".into(),
                     source: LinkSource::Row,
                 },
+                Supplied::TableFunctions {
+                    functions: vec![("a".into(), "ef".repeat(32)), ("b".into(), "ef".repeat(32))],
+                },
             ],
             unsupplied: Some("why".into()),
             ray_tracing: true,
@@ -1119,8 +1229,9 @@ mod tests {
     }
 
     /// A reference the authored cases link is linked from their module, which no parent library
-    /// of the row retains; a table call asks for nothing, because with no handle to hold its
-    /// entries are null and its switch is unreachable.
+    /// of the row retains; a table's stop gives it every authored function, and the compile it
+    /// asks for translates a bigger module -- the switch over the candidates -- than the same row
+    /// with nothing to link, whose table reads null entries.
     #[test]
     fn authored_functions_answer_references_and_tables() {
         let Some(caller) = bitcode(engine_dir().join("visible_table_caller.ll")) else {
@@ -1167,18 +1278,67 @@ mod tests {
             }),
             "{pointer:?}"
         );
+        // The table's stop links every authored function and the compile it asks for is the
+        // attempt's.
         let table = run("visible_table_dispatch", &authored);
         assert_eq!(table.attempt.outcome, Outcome::Translated, "{table:?}");
-        assert_eq!(table.supplied, Vec::new(), "{table:?}");
-        // Only a function of another type than the table's calls: still no input, and the call
-        // takes the entries' null words.
+        assert_eq!(
+            table.supplied,
+            vec![Supplied::TableFunctions {
+                functions: names
+                    .iter()
+                    .map(|name| (name.to_string(), module.clone()))
+                    .collect()
+            }],
+            "{table:?}"
+        );
+        // The same row with nothing to link: the stop is recorded with no candidate, so the
+        // report counts the row and the table keeps its null entries.
+        let nothing = AuthoredLinks::default();
+        let empty = run("visible_table_dispatch", &nothing);
+        assert_eq!(empty.attempt.outcome, Outcome::Translated, "{empty:?}");
+        assert_eq!(
+            empty.supplied,
+            vec![Supplied::TableFunctions {
+                functions: Vec::new()
+            }],
+            "{empty:?}"
+        );
+        assert_eq!(empty.unsupplied, None, "{empty:?}");
+        // The candidates' switch is in the module the stop's compile made: more SPIR-V words than
+        // the empty switch, and another module byte for byte. Without the stop the two compiles
+        // are the same one and both numbers match.
+        let words = |a: &SpecAttempt| a.attempt.words.expect("translated words");
+        let hash = |a: &SpecAttempt| {
+            a.attempt
+                .cost
+                .as_ref()
+                .and_then(|c| c.spirv_sha256.clone())
+                .expect("a translated module's hash")
+        };
+        assert!(
+            words(&table) > words(&empty),
+            "the switch over the candidates is bigger: {} against {}",
+            words(&table),
+            words(&empty)
+        );
+        assert_ne!(hash(&table), hash(&empty), "the module moved");
+        // Only a function of another type than the table's calls: the stop links it, and the
+        // module is the empty switch's again -- no candidate of the call's type.
         let half = AuthoredLinks {
             functions: BTreeMap::from([("table_half".to_string(), module.clone())]),
             conflicts: BTreeSet::new(),
         };
         let untyped = run("visible_table_dispatch", &half);
         assert_eq!(untyped.attempt.outcome, Outcome::Translated, "{untyped:?}");
-        assert_eq!(untyped.supplied, Vec::new(), "{untyped:?}");
+        assert_eq!(
+            untyped.supplied,
+            vec![Supplied::TableFunctions {
+                functions: vec![("table_half".to_string(), module.clone())]
+            }],
+            "{untyped:?}"
+        );
+        assert_eq!(words(&untyped), words(&empty), "no candidate of its type");
         // A name the cases link from two modules is linked by none of them.
         let conflicted = AuthoredLinks {
             functions: BTreeMap::new(),

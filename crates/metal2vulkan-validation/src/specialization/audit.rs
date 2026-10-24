@@ -37,8 +37,11 @@ use std::path::Path;
 /// entry reads (`DeviceProfile::vertex_entry_inputs`), not one over the numeric classes of the
 /// derived descriptor's formats. 5: an attempt worker runs `spirv-val` in its L3 stage, a fresh
 /// image of itself, so the attempt's peak is the larger of its translation's and its validation's,
-/// not their sum.
-pub const SPECIALIZATION_AUDIT_VERSION: u32 = 5;
+/// not their sum. 6: a visible-function table's stop is structural, taken after a compile that
+/// translated and used a table, where it was taken at the compile's `NeedsInput` before; a row
+/// whose table has candidates is translated with them, and every row whose table the stop reached
+/// records it, with no candidate where there was none to link.
+pub const SPECIALIZATION_AUDIT_VERSION: u32 = 6;
 
 const PRODUCT_FINGERPRINT: &str = env!("METAL2VULKAN_PRODUCT_FINGERPRINT");
 
