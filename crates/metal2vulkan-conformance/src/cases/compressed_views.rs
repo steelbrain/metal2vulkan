@@ -398,6 +398,22 @@ impl CompressedViews {
     }
 }
 
+/// The formats whose **view** a driver that is not Metal decodes its own way, which the runtime
+/// announces as `compressed-texel-decode`.
+///
+/// Measured on two drivers at once: the RTX 5080 Laptop (615.71.09) and llvmpipe (Mesa 26.2.4)
+/// both announced it for these four rows and for no other row of the family, and on both every
+/// texel of those rows compared exactly with Metal's -- the whole difference was the announcement
+/// (replay-nvidia.log, replay-llvmpipe.log). BC6H and BC7 take the same code from
+/// [`crate::cases::compressed_moves::carrier_allowances`], which is where this crate's own decode
+/// of those two sits.
+const VIEWED_DECODES: [PixelFormat; 4] = [
+    PixelFormat::BC4RUnorm,
+    PixelFormat::BC4RSnorm,
+    PixelFormat::BC5RGUnorm,
+    PixelFormat::BC5RGSnorm,
+];
+
 impl Case for CompressedViews {
     fn name(&self) -> &'static str {
         FORMATS[self.at].name
@@ -409,8 +425,29 @@ impl Case for CompressedViews {
 
     fn allowances(&self) -> Vec<Allowance> {
         // The same carrier and decode notices the first lane's cases name, for the same reason
-        // and from the same measurement: one mechanism, not two.
-        crate::cases::compressed_moves::carrier_allowances(self.format().format)
+        // and from the same measurement: one mechanism, not two. That list carries the venue's own
+        // memory notice, which every row of both families announces on a card without unified
+        // memory.
+        let mut named = crate::cases::compressed_moves::carrier_allowances(self.format().format);
+        // BC4 and BC5 are the rows where a **view** of the carrier is read by a driver whose own
+        // block decode is not Metal's, which the runtime announces as `compressed-texel-decode`.
+        // The first lane's list names that code for BC6H and BC7 alone, from a reading on this Mac
+        // where the BC1-to-BC5 numbers announce nothing; a view of BC4 or BC5 does, and on two
+        // drivers that are not Metal.
+        //
+        // Measured on the RTX 5080 Laptop (615.71.09) **and** on llvmpipe (Mesa 26.2.4): all four
+        // of `compressed-views-bc4-r-unorm`, `-bc4-r-snorm`, `-bc5-rg-unorm` and `-bc5-rg-snorm`
+        // announced it with the case declaring it nowhere, and on both drivers every texel of
+        // those rows compared **exactly** -- the whole difference was the announcement
+        // (replay-nvidia.log, replay-llvmpipe.log). It declares the notices site alone, so the
+        // texels stay strict.
+        let format = self.format().format;
+        if VIEWED_DECODES.iter().any(|kind| kind.as_raw() == format) {
+            named.push(crate::replay::notice_allowance(
+                metal2vulkan_runtime::Degradation::CompressedTexelDecode.code(),
+            ));
+        }
+        named
     }
 
     fn inputs(&self) -> Result<Vec<Input>, String> {

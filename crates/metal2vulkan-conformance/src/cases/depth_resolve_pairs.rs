@@ -488,9 +488,20 @@ impl Case for DepthFilters {
         // reaches Metal's answer through a draw after the pass rather than through the store, and
         // the runtime announces that. On MoltenVK the modes are the device's and nothing fires; on
         // a device that lacks them the notice is what says the exact path ran.
+        // Two more, both declarations at the notices site and neither touching a resolved depth.
+        // Our side may round the store into the normalized colour attachment in the shader
+        // (`shader-color-conversion`), and a device without unified memory holds the `Shared`
+        // buffer each row reads its answer back through in system memory
+        // (`crate::replay::shared_memory_notice`).
+        //
+        // Measured on the RTX 5080 Laptop (615.71.09), where both rows announced both with the
+        // case declaring neither, and on llvmpipe (Mesa 26.2.4), where `resolve-depth-filters-4`
+        // announced `shader-color-conversion` (replay-nvidia.log, replay-llvmpipe.log).
         vec![
             crate::replay::notice_allowance(Degradation::ShaderResolve.code()),
             crate::replay::notice_allowance(Degradation::DontCareStore.code()),
+            crate::replay::notice_allowance(Degradation::ShaderColorConversion.code()),
+            crate::replay::shared_memory_notice(),
         ]
     }
 
@@ -850,7 +861,9 @@ mod tests {
             assert_eq!(case.record_runs(), RUNS);
             assert!(matches!(case.metal_source(), MetalSource::Run));
             // The declared allowances loosen no value: each names a notice and nothing else.
-            assert_eq!(case.allowances().len(), 2);
+            // The resolve and the `DontCare` store, the shader's colour conversion, and the
+            // venue's memory model.
+            assert_eq!(case.allowances().len(), 4);
         }
     }
 

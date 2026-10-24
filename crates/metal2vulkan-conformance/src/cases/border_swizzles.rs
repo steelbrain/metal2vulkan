@@ -313,7 +313,19 @@ impl Case for BorderSwizzles {
         // the two the same thing. The bound is the ledger's number: a run that exceeds it is the
         // ledger's claim failing, which is what this allowance exists to catch. Under the exact
         // policy neither notice fires, no justification holds, and every word is compared exactly.
+        // Every row reads its answer back through a `Shared` buffer, so on a device without
+        // unified memory the runtime announces `shared-in-system-memory`
+        // (`crate::replay::shared_memory_notice` holds the whole reason). It declares the
+        // notices site alone, so every value of this family still compares against Metal's
+        // exactly.
+        //
+        // Measured on the RTX 5080 Laptop (615.71.09): it fired for
+        // all 8 rows of the family, and each was divergent on that field and
+        // nothing else (replay-nvidia.log). On MoltenVK, where
+        // the chip's GPU shares the CPU's memory, it cannot fire at all, which is why no
+        // recording of this suite declares it.
         let mut all = vec![
+            crate::replay::shared_memory_notice(),
             crate::replay::notice_allowance(Degradation::DeviceSampling.code()),
             crate::replay::notice_allowance(Degradation::DeviceTexelConversion.code()),
         ];

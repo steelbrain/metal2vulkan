@@ -345,6 +345,20 @@ fn block_writes_only() -> HeapSizeCase {
     }
 }
 
+/// The rows a driver that is not Metal answers a **larger** heap texture size or alignment for,
+/// which the runtime announces as `heap-texture-larger-than-metal`.
+///
+/// Measured on the RTX 5080 Laptop (615.71.09) and on llvmpipe (Mesa 26.2.4):
+/// `heap-sizes-x32-stencil8` announced it on both and `heap-sizes-block-writes-only` on the 5080,
+/// each with the case declaring it nowhere; the other five rows were exact on both
+/// (replay-nvidia.log, replay-llvmpipe.log).
+///
+/// The declaration is at the notices site alone, which matters here more than elsewhere: both rows
+/// also answer **sizes and alignments** that are not Metal's -- `X32_Stencil8` aligns at 1024
+/// where Metal aligns at 128 -- and those values stay compared exactly, so the rows stay divergent
+/// on them. That difference is the finding; the undeclared notice was only hiding it.
+const LARGER_THAN_METALS: [&str; 2] = [X32_STENCIL8, BLOCK_WRITES_ONLY];
+
 impl Case for HeapSizeCase {
     fn name(&self) -> &'static str {
         self.name
@@ -352,6 +366,19 @@ impl Case for HeapSizeCase {
 
     fn metal_source(&self) -> MetalSource {
         MetalSource::Run
+    }
+
+    fn allowances(&self) -> Vec<crate::allowance::Allowance> {
+        // The family reads no buffer back -- it asks the device for a heap texture's size and
+        // alignment -- so the notice a card without unified memory announces for a `Shared` buffer
+        // cannot reach it, and no row declares one. Measured: five of the seven rows were exact on
+        // both the 5080 and llvmpipe.
+        match LARGER_THAN_METALS.contains(&self.name) {
+            true => vec![crate::replay::notice_allowance(
+                metal2vulkan_runtime::Degradation::HeapTextureLargerThanMetal.code(),
+            )],
+            false => Vec::new(),
+        }
     }
 
     fn inputs(&self) -> Result<Vec<Input>, String> {

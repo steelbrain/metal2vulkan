@@ -126,6 +126,7 @@ use crate::transcript::{
     Aspect, ByteLayout, Digest, Element, Gaps, Node, Observed, Region, Sites, Value,
 };
 use metal2vulkan::metal::{BlendFactor, BlendOperation, ColorWriteMask, PixelFormat};
+use metal2vulkan_runtime::Degradation;
 
 /// The owned fixture written for this family: a fullscreen triangle, a fragment whose colour comes
 /// from a buffer, one that reports the coverage it was given beside that colour, one that reports
@@ -190,6 +191,13 @@ struct Row {
     /// `blendingEnabled` with RGB factors that read the **source alpha**, which is how a row sees
     /// what alpha-to-one fed the blend.
     blended: bool,
+    /// The degrade notices a driver that is not Metal announced **for this row**, beside the one
+    /// every row declares ([`crate::replay::shared_memory_notice`]).
+    ///
+    /// A measured set, row by row, and not a rule fitted to the rows: the six sets below are what
+    /// the RTX 5080 Laptop (615.71.09) and llvmpipe (Mesa 26.2.4) printed, and every one of them
+    /// is a declaration at the notices site that moves no coverage and no texel.
+    notices: &'static [Degradation],
 }
 
 impl Row {
@@ -205,29 +213,100 @@ impl Row {
             write_mask: ColorWriteMask::ALL,
             report: Report::Plain,
             blended: false,
+            notices: &[],
         }
     }
 }
 
+/// What a **four-sample** row with an alpha output and `alphaToCoverage` **on** announced: the
+/// coverage of a clipped edge split per sample (`clipped-coverage-split`), the device's own
+/// conversion into the attachment (`device-color-conversion`), the sample outputs written in a
+/// loop (`looped-sample-outputs`), the conversion rounded in the shader
+/// (`shader-color-conversion`) and the resolve done by a draw rather than the store
+/// (`shader-resolve`).
+///
+/// Measured on the RTX 5080 Laptop (615.71.09) for all eight such rows, each divergent on the
+/// notices site and nothing else (replay-nvidia.log).
+const A2C_ON_MULTISAMPLE: &[Degradation] = &[
+    Degradation::ClippedCoverageSplit,
+    Degradation::DeviceColorConversion,
+    Degradation::LoopedSampleOutputs,
+    Degradation::ShaderColorConversion,
+    Degradation::ShaderResolve,
+];
+
+/// The same, with `alphaToCoverage` **off**: no alpha reaches the device's conversion, so
+/// `device-color-conversion` does not fire. Measured on the 5080 for both such rows.
+const A2C_OFF_MULTISAMPLE: &[Degradation] = &[
+    Degradation::ClippedCoverageSplit,
+    Degradation::LoopedSampleOutputs,
+    Degradation::ShaderColorConversion,
+    Degradation::ShaderResolve,
+];
+
+/// A four-sample row whose fragment writes **no alpha**: nothing narrows the coverage, so neither
+/// the split nor the looped outputs fire, and what is left is the shader's conversion and the
+/// resolve. Measured on the 5080 and on llvmpipe for both such rows.
+const NO_ALPHA_MULTISAMPLE: &[Degradation] = &[
+    Degradation::ShaderColorConversion,
+    Degradation::ShaderResolve,
+];
+
+/// A single-sample row with an alpha the device converts: no resolve, no sample loop. Measured on
+/// the 5080 and on llvmpipe for `a2c-on-1-alpha-50`.
+const SINGLE_CONVERTED: &[Degradation] = &[
+    Degradation::DeviceColorConversion,
+    Degradation::ShaderColorConversion,
+];
+
+/// A single-sample row our side converts in the shader and the device does not. Measured on the
+/// 5080 and on llvmpipe for `a2c-off-1-alpha-50` and `a2one-on-1-mask-no-alpha`.
+const SINGLE_IN_THE_SHADER: &[Degradation] = &[Degradation::ShaderColorConversion];
+
+/// A single-sample **blended** row: the blend's factors read the source alpha, so what reaches the
+/// attachment is the device's own conversion and not one our side rounded. Measured on the 5080
+/// and on llvmpipe for both `a2one-*-1-blend-source-alpha` rows.
+const SINGLE_BLEND: &[Degradation] = &[Degradation::DeviceColorConversion];
+
 /// Every row, grouped by the question it answers. Each group's prose is in the module header.
 const ROWS: &[Row] = &[
     // The control: the same alpha with the field off, so every coverage below is the field's doing.
-    Row::sweep("a2c-off-4-alpha-50", false, 0.5),
+    Row {
+        notices: A2C_OFF_MULTISAMPLE,
+        ..Row::sweep("a2c-off-4-alpha-50", false, 0.5)
+    },
     // The sweep that gives `floor(alpha * samples)`.
-    Row::sweep("a2c-on-4-alpha-00", true, 0.0),
-    Row::sweep("a2c-on-4-alpha-25", true, 0.25),
-    Row::sweep("a2c-on-4-alpha-50", true, 0.5),
-    Row::sweep("a2c-on-4-alpha-75", true, 0.75),
-    Row::sweep("a2c-on-4-alpha-100", true, 1.0),
+    Row {
+        notices: A2C_ON_MULTISAMPLE,
+        ..Row::sweep("a2c-on-4-alpha-00", true, 0.0)
+    },
+    Row {
+        notices: A2C_ON_MULTISAMPLE,
+        ..Row::sweep("a2c-on-4-alpha-25", true, 0.25)
+    },
+    Row {
+        notices: A2C_ON_MULTISAMPLE,
+        ..Row::sweep("a2c-on-4-alpha-50", true, 0.5)
+    },
+    Row {
+        notices: A2C_ON_MULTISAMPLE,
+        ..Row::sweep("a2c-on-4-alpha-75", true, 0.75)
+    },
+    Row {
+        notices: A2C_ON_MULTISAMPLE,
+        ..Row::sweep("a2c-on-4-alpha-100", true, 1.0)
+    },
     // The sample-count cross: the cell that pins `floor` against round-to-nearest.
     Row {
         name: "a2c-on-1-alpha-50",
         samples: 1,
+        notices: SINGLE_CONVERTED,
         ..Row::sweep("a2c-on-1-alpha-50", true, 0.5)
     },
     Row {
         name: "a2c-off-1-alpha-50",
         samples: 1,
+        notices: SINGLE_IN_THE_SHADER,
         ..Row::sweep("a2c-off-1-alpha-50", false, 0.5)
     },
     // The write-mask cross: the coverage must not move, and only the stored alpha may.
@@ -236,33 +315,39 @@ const ROWS: &[Row] = &[
         write_mask: ColorWriteMask::RED
             .union(ColorWriteMask::GREEN)
             .union(ColorWriteMask::BLUE),
+        notices: A2C_ON_MULTISAMPLE,
         ..Row::sweep("a2c-on-4-alpha-50-mask-no-alpha", true, 0.5)
     },
     // The sample-mask cross, with its own control: the AND is only visible in the stored texel.
     Row {
         name: "a2c-off-4-alpha-50-shadermask-5",
         report: Report::Masked(0b0101),
+        notices: A2C_OFF_MULTISAMPLE,
         ..Row::sweep("a2c-off-4-alpha-50-shadermask-5", false, 0.5)
     },
     Row {
         name: "a2c-on-4-alpha-50-shadermask-5",
         report: Report::Masked(0b0101),
+        notices: A2C_ON_MULTISAMPLE,
         ..Row::sweep("a2c-on-4-alpha-50-shadermask-5", true, 0.5)
     },
     Row {
         name: "a2c-on-4-alpha-50-shadermask-a",
         report: Report::Masked(0b1010),
+        notices: A2C_ON_MULTISAMPLE,
         ..Row::sweep("a2c-on-4-alpha-50-shadermask-a", true, 0.5)
     },
     // The independent cell: no alpha component, so nothing for the field to read.
     Row {
         name: "a2c-on-4-no-alpha-output",
         report: Report::NoAlpha,
+        notices: NO_ALPHA_MULTISAMPLE,
         ..Row::sweep("a2c-on-4-no-alpha-output", true, 0.5)
     },
     Row {
         name: "a2c-off-4-no-alpha-output",
         report: Report::NoAlpha,
+        notices: NO_ALPHA_MULTISAMPLE,
         ..Row::sweep("a2c-off-4-no-alpha-output", false, 0.5)
     },
     // Alpha-to-one, and the blend that says what it fed.
@@ -270,6 +355,7 @@ const ROWS: &[Row] = &[
         name: "a2one-off-1-blend-source-alpha",
         samples: 1,
         blended: true,
+        notices: SINGLE_BLEND,
         ..Row::sweep("a2one-off-1-blend-source-alpha", false, 0.5)
     },
     Row {
@@ -277,6 +363,7 @@ const ROWS: &[Row] = &[
         samples: 1,
         alpha_to_one: true,
         blended: true,
+        notices: SINGLE_BLEND,
         ..Row::sweep("a2one-on-1-blend-source-alpha", false, 0.5)
     },
     Row {
@@ -286,6 +373,7 @@ const ROWS: &[Row] = &[
         write_mask: ColorWriteMask::RED
             .union(ColorWriteMask::GREEN)
             .union(ColorWriteMask::BLUE),
+        notices: SINGLE_IN_THE_SHADER,
         ..Row::sweep("a2one-on-1-mask-no-alpha", false, 0.5)
     },
 ];
@@ -440,10 +528,25 @@ impl Case for AlphaCoverageCase {
     }
 
     fn allowances(&self) -> Vec<Allowance> {
-        // Nothing is loosened. The coverage report is an integer, and the resolve of `k` covered
-        // samples against `4 - k` uncovered is compared exactly, which is this suite's ruling for
-        // the same shape in `super::sample_positions`.
-        Vec::new()
+        // **No value is loosened.** The coverage report is an integer, and the resolve of `k`
+        // covered samples against `4 - k` uncovered is compared exactly, which is this suite's
+        // ruling for the same shape in `super::sample_positions`. Every entry below is a notice
+        // declaration at `case/notices/*`, which moves no coverage and no texel.
+        //
+        // Two parts, and the split is the point. `shared-in-system-memory` belongs to the
+        // **venue**: every row reads its coverage and its resolve back through a `Shared` buffer,
+        // and a device without unified memory holds that buffer in host-cached system memory
+        // (`crate::replay::shared_memory_notice`). It fired for all 17 rows on the RTX 5080 Laptop
+        // (615.71.09) with the case declaring it nowhere. The rest is [`Row::notices`], which is
+        // the set measured **for that row** rather than for the family.
+        std::iter::once(crate::replay::shared_memory_notice())
+            .chain(
+                self.row
+                    .notices
+                    .iter()
+                    .map(|kind| crate::replay::notice_allowance(kind.code())),
+            )
+            .collect()
     }
 
     fn shaders(&self) -> Result<Vec<ShaderRef>, String> {
@@ -926,14 +1029,30 @@ mod tests {
     }
 
     /// Every row fingerprints its own inputs, so no recording can be read for another row, and no
-    /// row is loosened.
+    /// row loosens a **value**: every allowance it names is a notice declaration at
+    /// `case/notices/*`, which the comparison reads as the set of notices our side announced and
+    /// never as a tolerance on a coverage or a texel.
     #[test]
     fn every_row_fingerprints_apart_and_nothing_is_loosened() {
+        let notices = format!("case/{}/*", crate::replay::NOTICES_SITE);
         let mut seen: Vec<Vec<u8>> = Vec::new();
         for case in all() {
-            assert!(
-                case.allowances().is_empty(),
-                "{}: a loosened site",
+            for allowance in case.allowances() {
+                assert_eq!(allowance.path, notices, "{}: a loosened value", case.name());
+                assert!(
+                    matches!(
+                        allowance.justified_by,
+                        crate::allowance::Justification::Degradation(_)
+                    ),
+                    "{}: an allowance that is not a notice declaration",
+                    case.name()
+                );
+            }
+            // The venue's notice, and whatever the row itself was measured announcing.
+            assert_eq!(
+                case.allowances().len(),
+                1 + case.row.notices.len(),
+                "{}",
                 case.name()
             );
             case.shaders().unwrap();

@@ -585,14 +585,28 @@ impl Case for ChromaCopies {
         // -- three kinds, each announced once per device. Each is named here, so the difference is
         // justified only while that notice really fires; on a device that needs none of them, none
         // of the three fires and the report counts them as unused.
-        [
-            Degradation::CarriedDecodedTwin,
-            Degradation::CpuBlockDecode,
-            Degradation::StagedTextureCopy,
-        ]
-        .into_iter()
-        .map(|kind| notice_allowance(kind.code()))
-        .collect()
+        // Every row reads its answer back through a `Shared` buffer, so on a device without
+        // unified memory the runtime announces `shared-in-system-memory`
+        // (`crate::replay::shared_memory_notice` holds the whole reason). It declares the
+        // notices site alone, so every value of this family still compares against Metal's
+        // exactly.
+        //
+        // Measured on the RTX 5080 Laptop (615.71.09): it fired for
+        // both copy rows of the family, and each was divergent on that field and
+        // nothing else (replay-nvidia.log). On MoltenVK, where
+        // the chip's GPU shares the CPU's memory, it cannot fire at all, which is why no
+        // recording of this suite declares it.
+        std::iter::once(crate::replay::shared_memory_notice())
+            .chain(
+                [
+                    Degradation::CarriedDecodedTwin,
+                    Degradation::CpuBlockDecode,
+                    Degradation::StagedTextureCopy,
+                ]
+                .into_iter()
+                .map(|kind| notice_allowance(kind.code())),
+            )
+            .collect()
     }
 
     fn inputs(&self) -> Result<Vec<Input>, String> {
@@ -743,9 +757,23 @@ impl Case for ChromaTexels {
         // twin, which announces `cpu-block-decode` -- the same kind, for the same reason, that
         // this file's blit case names. It is a declaration and not a tolerance: every texel the
         // case reads still compares exactly.
-        [Degradation::CarriedDecodedTwin, Degradation::CpuBlockDecode]
-            .into_iter()
-            .map(|kind| notice_allowance(kind.code()))
+        // Every row reads its answer back through a `Shared` buffer, so on a device without
+        // unified memory the runtime announces `shared-in-system-memory`
+        // (`crate::replay::shared_memory_notice` holds the whole reason). It declares the
+        // notices site alone, so every value of this family still compares against Metal's
+        // exactly.
+        //
+        // Measured on the RTX 5080 Laptop (615.71.09): it fired for
+        // all 4 texel rows of the family, and each was divergent on that field and
+        // nothing else (replay-nvidia.log). On MoltenVK, where
+        // the chip's GPU shares the CPU's memory, it cannot fire at all, which is why no
+        // recording of this suite declares it.
+        std::iter::once(crate::replay::shared_memory_notice())
+            .chain(
+                [Degradation::CarriedDecodedTwin, Degradation::CpuBlockDecode]
+                    .into_iter()
+                    .map(|kind| notice_allowance(kind.code())),
+            )
             .collect()
     }
 

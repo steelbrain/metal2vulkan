@@ -86,9 +86,21 @@ const BUFFER: u64 = 4096;
 ///
 /// Nothing else is loosened. Every fact and every byte of both cases compares exactly.
 fn shadow_allowances() -> Vec<crate::allowance::Allowance> {
-    vec![crate::replay::notice_allowance(
-        metal2vulkan_runtime::Degradation::ShadowedTexture.code(),
-    )]
+    // Every row reads its answer back through a `Shared` buffer, so on a device without
+    // unified memory the runtime announces `shared-in-system-memory`
+    // (`crate::replay::shared_memory_notice` holds the whole reason). It declares the
+    // notices site alone, so every value of this family still compares against Metal's
+    // exactly.
+    //
+    // Measured on the RTX 5080 Laptop (615.71.09): it fired for
+    // all 3 rows of the family, and each was divergent on that field and
+    // nothing else (replay-nvidia.log). On MoltenVK, where
+    // the chip's GPU shares the CPU's memory, it cannot fire at all, which is why no
+    // recording of this suite declares it.
+    vec![
+        crate::replay::shared_memory_notice(),
+        crate::replay::notice_allowance(metal2vulkan_runtime::Degradation::ShadowedTexture.code()),
+    ]
 }
 
 /// Every case of the family.

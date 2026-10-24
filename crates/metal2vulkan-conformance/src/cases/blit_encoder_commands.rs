@@ -896,14 +896,20 @@ static FENCED_ENCODERS: Row = Row {
     notices: NOTICES,
 };
 
-/// The notices a case of this family declares, where the case announces none.
+/// The notices a case of this family declares, where the case provokes none of its own.
 ///
-/// **Empty, and it stays empty until a venue is measured announcing one.** Only one case here
-/// provokes a notice at all, and it has its own list ([`SPLIT_FILL`]). Declaring a code on the
-/// others from the shape of their path would be a declaration nothing checks: a venue that does
-/// announce something reads as `UndeclaredNotice`, naming the code and the case, which is the
-/// loud form and the one that makes the next real notice visible.
-const NOTICES: &[Degradation] = &[];
+/// **The venue's own, and nothing else.** Each of these rows reads its answer back through a
+/// `Shared` buffer, and on a device whose GPU does not share the CPU's memory such a buffer lies
+/// in host-cached system memory, which the runtime announces once per device
+/// (`crate::replay::shared_memory_notice` holds the whole reason). Measured on the RTX 5080 Laptop
+/// (615.71.09): all eight rows that carry this list announced it and were divergent on that field
+/// and nothing else (replay-nvidia.log).
+///
+/// Nothing of the rows' own joins it until a venue is measured announcing one. Declaring a code on
+/// a row from the shape of its path would be a declaration nothing checks: a venue that does
+/// announce something reads as `UndeclaredNotice`, naming the code and the case, which is the loud
+/// form and the one that makes the next real notice visible.
+const NOTICES: &[Degradation] = &[Degradation::SharedInSystemMemory];
 
 /// The notice [`synchronized_managed_buffer`] announces, **measured** rather than argued.
 ///
@@ -913,6 +919,10 @@ const NOTICES: &[Degradation] = &[];
 /// `case/notices` divergent with `metal2vulkan-degrade-split-buffer-fill` announced and nothing
 /// declared, and the declaration is that run's answer. It loosens the notices site alone; every
 /// byte of the buffer still compares exactly, which is the point of the case.
+/// It is the one row of the family that reads its answer back out of a **`Managed`** buffer
+/// rather than a `Shared` one, so [`NOTICES`]'s venue notice is not its: on the RTX 5080 Laptop
+/// (615.71.09) it was the only row of the family that did not announce
+/// `shared-in-system-memory`, and it compared justified there (replay-nvidia.log).
 const SPLIT_FILL: &[Degradation] = &[Degradation::SplitBufferFill];
 
 /// The case of `copyFromTexture:toTexture:`.
@@ -1051,10 +1061,12 @@ mod tests {
                 );
             }
         }
-        assert!(NOTICES.is_empty());
+        // Every row declares the venue's memory notice except the one that reads its answer back
+        // out of a `Managed` buffer, which declares its own measured notice instead.
+        assert_eq!(NOTICES, [Degradation::SharedInSystemMemory]);
         let declaring: Vec<&str> = EVERY_ROW
             .iter()
-            .filter(|row| !row.notices.is_empty())
+            .filter(|row| row.notices != NOTICES)
             .map(|row| row.case)
             .collect();
         assert_eq!(declaring, [SYNCHRONIZED_BUFFER.case]);

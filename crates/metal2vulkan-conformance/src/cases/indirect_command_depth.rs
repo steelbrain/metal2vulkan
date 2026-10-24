@@ -486,7 +486,20 @@ impl Case for PatchDraws {
     }
 
     fn allowances(&self) -> Vec<Allowance> {
-        tessellation_notices()
+        // Every row reads its answer back through a `Shared` buffer, so on a device without
+        // unified memory the runtime announces `shared-in-system-memory`
+        // (`crate::replay::shared_memory_notice` holds the whole reason). It declares the
+        // notices site alone, so every value of this family still compares against Metal's
+        // exactly.
+        //
+        // Measured on the RTX 5080 Laptop (615.71.09): it fired for
+        // all 6 rows of the family, and each was divergent on that field and
+        // nothing else (replay-nvidia.log). On MoltenVK, where
+        // the chip's GPU shares the CPU's memory, it cannot fire at all, which is why no
+        // recording of this suite declares it.
+        std::iter::once(crate::replay::shared_memory_notice())
+            .chain(tessellation_notices())
+            .collect()
     }
 
     fn shaders(&self) -> Result<Vec<ShaderRef>, String> {
@@ -830,7 +843,18 @@ impl Case for InheritedState {
     }
 
     fn allowances(&self) -> Vec<Allowance> {
-        Vec::new()
+        // Every row reads its answer back through a `Shared` buffer, so on a device without
+        // unified memory the runtime announces `shared-in-system-memory`
+        // (`crate::replay::shared_memory_notice` holds the whole reason). It declares the
+        // notices site alone, so every value of this family still compares against Metal's
+        // exactly.
+        //
+        // Measured on the RTX 5080 Laptop (615.71.09): it fired for
+        // all 6 rows of the family, and each was divergent on that field and
+        // nothing else (replay-nvidia.log). On MoltenVK, where
+        // the chip's GPU shares the CPU's memory, it cannot fire at all, which is why no
+        // recording of this suite declares it.
+        vec![crate::replay::shared_memory_notice()]
     }
 
     fn shaders(&self) -> Result<Vec<ShaderRef>, String> {
@@ -1196,7 +1220,18 @@ impl Case for ResetRanges {
     }
 
     fn allowances(&self) -> Vec<Allowance> {
-        Vec::new()
+        // Every row reads its answer back through a `Shared` buffer, so on a device without
+        // unified memory the runtime announces `shared-in-system-memory`
+        // (`crate::replay::shared_memory_notice` holds the whole reason). It declares the
+        // notices site alone, so every value of this family still compares against Metal's
+        // exactly.
+        //
+        // Measured on the RTX 5080 Laptop (615.71.09): it fired for
+        // all 6 rows of the family, and each was divergent on that field and
+        // nothing else (replay-nvidia.log). On MoltenVK, where
+        // the chip's GPU shares the CPU's memory, it cannot fire at all, which is why no
+        // recording of this suite declares it.
+        vec![crate::replay::shared_memory_notice()]
     }
 
     fn shaders(&self) -> Result<Vec<ShaderRef>, String> {
@@ -1526,9 +1561,23 @@ impl Case for PassStateCommands {
         // not Metal's, which is what `RENDER_DRAWN` measured on lavapipe and not on the M3 Max.
         // Named because a notice our run announces that no case names is a divergence; it loosens
         // no texel, and every texel of this row is still compared exactly.
-        vec![crate::replay::notice_allowance(
-            metal2vulkan_runtime::Degradation::ShaderColorConversion.code(),
-        )]
+        // Every row reads its answer back through a `Shared` buffer, so on a device without
+        // unified memory the runtime announces `shared-in-system-memory`
+        // (`crate::replay::shared_memory_notice` holds the whole reason). It declares the
+        // notices site alone, so every value of this family still compares against Metal's
+        // exactly.
+        //
+        // Measured on the RTX 5080 Laptop (615.71.09): it fired for
+        // all 6 rows of the family, and each was divergent on that field and
+        // nothing else (replay-nvidia.log). On MoltenVK, where
+        // the chip's GPU shares the CPU's memory, it cannot fire at all, which is why no
+        // recording of this suite declares it.
+        vec![
+            crate::replay::shared_memory_notice(),
+            crate::replay::notice_allowance(
+                metal2vulkan_runtime::Degradation::ShaderColorConversion.code(),
+            ),
+        ]
     }
 
     fn shaders(&self) -> Result<Vec<ShaderRef>, String> {
@@ -1783,7 +1832,18 @@ impl Case for ResidencyUsage {
     }
 
     fn allowances(&self) -> Vec<Allowance> {
-        Vec::new()
+        // Every row reads its answer back through a `Shared` buffer, so on a device without
+        // unified memory the runtime announces `shared-in-system-memory`
+        // (`crate::replay::shared_memory_notice` holds the whole reason). It declares the
+        // notices site alone, so every value of this family still compares against Metal's
+        // exactly.
+        //
+        // Measured on the RTX 5080 Laptop (615.71.09): it fired for
+        // all 6 rows of the family, and each was divergent on that field and
+        // nothing else (replay-nvidia.log). On MoltenVK, where
+        // the chip's GPU shares the CPU's memory, it cannot fire at all, which is why no
+        // recording of this suite declares it.
+        vec![crate::replay::shared_memory_notice()]
     }
 
     fn shaders(&self) -> Result<Vec<ShaderRef>, String> {
@@ -1967,7 +2027,18 @@ impl Case for BindLimits {
     }
 
     fn allowances(&self) -> Vec<Allowance> {
-        Vec::new()
+        // Every row reads its answer back through a `Shared` buffer, so on a device without
+        // unified memory the runtime announces `shared-in-system-memory`
+        // (`crate::replay::shared_memory_notice` holds the whole reason). It declares the
+        // notices site alone, so every value of this family still compares against Metal's
+        // exactly.
+        //
+        // Measured on the RTX 5080 Laptop (615.71.09): it fired for
+        // all 6 rows of the family, and each was divergent on that field and
+        // nothing else (replay-nvidia.log). On MoltenVK, where
+        // the chip's GPU shares the CPU's memory, it cannot fire at all, which is why no
+        // recording of this suite declares it.
+        vec![crate::replay::shared_memory_notice()]
     }
 
     fn shaders(&self) -> Result<Vec<ShaderRef>, String> {

@@ -437,7 +437,18 @@ impl Case for ComputeCommands {
     }
 
     fn allowances(&self) -> Vec<Allowance> {
-        Vec::new()
+        // Every row reads its answer back through a `Shared` buffer, so on a device without
+        // unified memory the runtime announces `shared-in-system-memory`
+        // (`crate::replay::shared_memory_notice` holds the whole reason). It declares the
+        // notices site alone, so every value of this family still compares against Metal's
+        // exactly.
+        //
+        // Measured on the RTX 5080 Laptop (615.71.09): it fired for
+        // the 5 rows of the family the card could run, and each was divergent on that field and
+        // nothing else (replay-nvidia.log). On MoltenVK, where
+        // the chip's GPU shares the CPU's memory, it cannot fire at all, which is why no
+        // recording of this suite declares it.
+        vec![crate::replay::shared_memory_notice()]
     }
 
     fn shaders(&self) -> Result<Vec<ShaderRef>, String> {
@@ -650,7 +661,18 @@ impl Case for StageInCommand {
     }
 
     fn allowances(&self) -> Vec<Allowance> {
-        Vec::new()
+        // Every row reads its answer back through a `Shared` buffer, so on a device without
+        // unified memory the runtime announces `shared-in-system-memory`
+        // (`crate::replay::shared_memory_notice` holds the whole reason). It declares the
+        // notices site alone, so every value of this family still compares against Metal's
+        // exactly.
+        //
+        // Measured on the RTX 5080 Laptop (615.71.09): it fired for
+        // the 5 rows of the family the card could run, and each was divergent on that field and
+        // nothing else (replay-nvidia.log). On MoltenVK, where
+        // the chip's GPU shares the CPU's memory, it cannot fire at all, which is why no
+        // recording of this suite declares it.
+        vec![crate::replay::shared_memory_notice()]
     }
 
     fn shaders(&self) -> Result<Vec<ShaderRef>, String> {
@@ -878,7 +900,18 @@ impl Case for RenderCommands {
     }
 
     fn allowances(&self) -> Vec<Allowance> {
-        Vec::new()
+        // Every row reads its answer back through a `Shared` buffer, so on a device without
+        // unified memory the runtime announces `shared-in-system-memory`
+        // (`crate::replay::shared_memory_notice` holds the whole reason). It declares the
+        // notices site alone, so every value of this family still compares against Metal's
+        // exactly.
+        //
+        // Measured on the RTX 5080 Laptop (615.71.09): it fired for
+        // the 5 rows of the family the card could run, and each was divergent on that field and
+        // nothing else (replay-nvidia.log). On MoltenVK, where
+        // the chip's GPU shares the CPU's memory, it cannot fire at all, which is why no
+        // recording of this suite declares it.
+        vec![crate::replay::shared_memory_notice()]
     }
 
     fn shaders(&self) -> Result<Vec<ShaderRef>, String> {
@@ -1174,15 +1207,25 @@ impl Case for DrawnCommands {
     }
 
     fn allowances(&self) -> Vec<Allowance> {
-        DRAWN_NOTICES
-            .iter()
-            .map(|kind| {
+        // Every row reads its answer back through a `Shared` buffer, so on a device without
+        // unified memory the runtime announces `shared-in-system-memory`
+        // (`crate::replay::shared_memory_notice` holds the whole reason). It declares the
+        // notices site alone, so every value of this family still compares against Metal's
+        // exactly.
+        //
+        // Measured on the RTX 5080 Laptop (615.71.09): it fired for
+        // the 5 rows of the family the card could run, and each was divergent on that field and
+        // nothing else (replay-nvidia.log). On MoltenVK, where
+        // the chip's GPU shares the CPU's memory, it cannot fire at all, which is why no
+        // recording of this suite declares it.
+        std::iter::once(crate::replay::shared_memory_notice())
+            .chain(DRAWN_NOTICES.iter().map(|kind| {
                 Allowance::new(
                     format!("case/{}/*", crate::replay::NOTICES_SITE),
                     Loosening::Unchecked,
                     Justification::notice(*kind),
                 )
-            })
+            }))
             .collect()
     }
 
@@ -1412,6 +1455,10 @@ impl Case for DescriptorProperties {
     }
 
     fn allowances(&self) -> Vec<Allowance> {
+        // Nothing: the case reads a descriptor's own properties back, never a buffer, so the
+        // notice a card without unified memory announces for a `Shared` buffer cannot reach it.
+        // Measured exact on the RTX 5080 Laptop (615.71.09) and on llvmpipe, which is why it
+        // declares nothing where the other five rows of the family declare the venue's notice.
         Vec::new()
     }
 

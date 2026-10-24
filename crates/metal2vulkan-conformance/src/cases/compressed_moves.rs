@@ -864,7 +864,19 @@ pub fn out_tight(
 /// mechanism no venue announces is a claim nothing stands behind, so it is gone, as the `formats`
 /// stream's `shadowed-texture` went.
 pub fn carrier_allowances(format: u32) -> Vec<Allowance> {
+    // Every row reads its answer back through a `Shared` buffer, so on a device without
+    // unified memory the runtime announces `shared-in-system-memory`
+    // (`crate::replay::shared_memory_notice` holds the whole reason). It declares the
+    // notices site alone, so every value of this family still compares against Metal's
+    // exactly.
+    //
+    // Measured on the RTX 5080 Laptop (615.71.09): it fired for
+    // all 14 rows of each of the two families that call this, and each was divergent on that
+    // field and nothing else (replay-nvidia.log). On MoltenVK, where
+    // the chip's GPU shares the CPU's memory, it cannot fire at all, which is why no
+    // recording of this suite declares it.
     let mut codes = vec![
+        Degradation::SharedInSystemMemory.code(),
         Degradation::CpuBlockDecode.code(),
         Degradation::DecodedBlockTwin.code(),
     ];

@@ -198,6 +198,11 @@ impl Case for DiscardHoist {
             // whole (`quads-split-by-clipping`) and groups a fragment simdgroup its own way
             // (`fragment-simdgroup-grouping`). Declarations only -- `discard-quad-sum-placement`
             // stays divergent on the sums it measures, which is the finding.
+            // And the notice a card without unified memory announces for the `Shared` buffer the
+            // case reads its sums back through, which is the venue's memory model and not this
+            // case's shape. Measured on the RTX 5080 Laptop (615.71.09), where it fired for this
+            // case with nothing declaring it (replay-nvidia.log).
+            .chain(std::iter::once(crate::replay::shared_memory_notice()))
             .chain(
                 [
                     Degradation::QuadsCountedBeforeDiscard,

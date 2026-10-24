@@ -103,6 +103,7 @@ use crate::transcript::{Aspect, ByteLayout, Element, Gaps, Node, Observed, Regio
 use metal2vulkan::metal::{
     BlendFactor as F, BlendOperation as O, ColorWriteMask as M, PixelFormat,
 };
+use metal2vulkan_runtime::Degradation;
 
 use super::extended_range_targets::{
     fixture, fixture_inputs, not_read, program, shader_refs, shape, FILLS, FILL_FLOAT, VERTEX,
@@ -485,6 +486,13 @@ impl BlendInteraction {
         }
     }
 
+    /// Whether our side may round the store into the attachment **in the shader**, which is the
+    /// shape `Degradation::ShaderColorConversion` is about: a normalized attachment is converted,
+    /// a float one is stored as it stands.
+    fn converts_in_the_shader(&self) -> bool {
+        !matches!(self.format(), PixelFormat::RGBA32Float)
+    }
+
     /// The bytes one texel of the case's format takes.
     fn texel(&self) -> u32 {
         match self.format() {
@@ -846,13 +854,39 @@ impl Case for BlendInteraction {
     }
 
     fn allowances(&self) -> Vec<Allowance> {
-        // Nothing is loosened, and nothing may be. Every number the float cases form is exact in an
+        // No value is loosened, and none may be. Every number the float cases form is exact in an
         // `f32` channel, and every number the 8-bit cases form is a code, so a texel that differs
         // is a difference in the blend and not in a rounding. The sRGB case's color channels are
         // Metal's own decode and encode, which are **compared** exactly even though they are not
         // modelled: a device whose sRGB blend is not Metal's is divergent, which is the honest
         // verdict rather than a tolerance that would hide the thing this cross exists to find.
-        Vec::new()
+        //
+        // What is declared is the notice set, and each entry is a declaration at the notices site
+        // that moves no texel.
+        //
+        // `device-color-conversion` and `shared-in-system-memory` are every row's: the first is
+        // the device's own conversion into the attachment where it is not Metal's, the second the
+        // venue's memory model for the `Shared` buffer every row reads its texels back through
+        // (`crate::replay::shared_memory_notice`).
+        //
+        // `shader-color-conversion` is only the rows whose attachment is **normalized**, which is
+        // where our side may round the conversion in the shader: the two 8-bit format rows. The
+        // mask row and the 32-bit float row store a float channel, so nothing is converted and the
+        // notice cannot fire for them.
+        //
+        // Measured on the RTX 5080 Laptop (615.71.09) and on llvmpipe (Mesa 26.2.4): all four rows
+        // announced the first two, and `blend-interaction-format-unorm8` and `-format-srgb8` the
+        // third, each with the case declaring none (replay-nvidia.log, replay-llvmpipe.log).
+        let mut named = vec![
+            crate::replay::notice_allowance(Degradation::DeviceColorConversion.code()),
+            crate::replay::shared_memory_notice(),
+        ];
+        if self.converts_in_the_shader() {
+            named.push(crate::replay::notice_allowance(
+                Degradation::ShaderColorConversion.code(),
+            ));
+        }
+        named
     }
 
     fn shaders(&self) -> Result<Vec<ShaderRef>, String> {
@@ -1406,16 +1440,38 @@ mod tests {
     }
 
     /// Each case states inputs that cover every row of its cross, names Metal as its source, and
-    /// loosens nothing.
+    /// loosens no value: every allowance it names is a notice declaration.
     #[test]
     fn every_case_states_its_rows_and_loosens_nothing() {
         let mut names = BTreeSet::new();
         for case in all() {
             assert!(names.insert(case.name()), "{} twice", case.name());
             assert_eq!(case.metal_source(), MetalSource::Run);
-            assert!(
-                case.allowances().is_empty(),
-                "{}: this family loosens nothing",
+            // **No value is loosened.** Every allowance the family names is a notice declaration
+            // at `case/notices/*`, which states what our side announced and never a tolerance on a
+            // texel.
+            for allowance in case.allowances() {
+                assert_eq!(
+                    allowance.path,
+                    format!("case/{}/*", crate::replay::NOTICES_SITE),
+                    "{}: a loosened value",
+                    case.name()
+                );
+                assert!(
+                    matches!(
+                        allowance.justified_by,
+                        crate::allowance::Justification::Degradation(_)
+                    ),
+                    "{}: an allowance that is not a notice declaration",
+                    case.name()
+                );
+            }
+            // The device's conversion and the venue's memory model for every row, and the
+            // shader's conversion for the two whose attachment is normalized.
+            assert_eq!(
+                case.allowances().len(),
+                2 + usize::from(case.converts_in_the_shader()),
+                "{}",
                 case.name()
             );
             case.shaders().unwrap();

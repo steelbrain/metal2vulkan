@@ -444,18 +444,43 @@ impl Case for HostPageWrite {
         // replay of this family declared neither and reported both drawing rows divergent at
         // three sites of `case/notices` with no byte of any read-back moving.
         //
-        // `private-resource-option` is deliberately absent even from the read-only rows. On macOS
-        // a no-copy buffer with bit 24 announces nothing: the runtime imports the pages through a
-        // read-only alias of them and `Device::no_copy_options` returns without announcing. Off
-        // macOS the GPU's writes reach the pages and that notice does fire, and its declaration
-        // goes in with the venue it was measured on rather than from the argument that the path
-        // is reachable there.
-        match self.row.shape {
-            Shape::Visibility => vec![crate::replay::notice_allowance(
+        // `private-resource-option` **has** its venue now, which is what the earlier reading of
+        // this comment was waiting for. On macOS a no-copy buffer with bit 24 announces nothing:
+        // the runtime imports the pages through a read-only alias of them and
+        // `Device::no_copy_options` returns without announcing. Off macOS the GPU's writes reach
+        // the pages and the notice fires, and it fired on two drivers at once -- the RTX 5080
+        // Laptop (615.71.09) and llvmpipe (Mesa 26.2.4) -- for
+        // `host-page-writes-visibility-read-only` and `host-page-writes-kernel-store-read-only`
+        // and for neither writable row (replay-nvidia.log, replay-llvmpipe.log). So it is declared
+        // from `Row::read_only`, which is the bit it is about.
+        //
+        // `shader-color-conversion` is the two **drawing** rows': they store into a normalized
+        // colour attachment, which our side may round in the shader. Announced by both on both
+        // drivers; neither kernel row stores a colour.
+        //
+        // `shared-in-system-memory` is every row's and belongs to the venue, not to this family:
+        // each row reads its pages back through a `Shared` buffer
+        // (`crate::replay::shared_memory_notice`). Announced by all four on the 5080.
+        //
+        // **None of these loosens a byte**, and that matters most here: the read-only rows' pages
+        // really do differ on both drivers (`case/bytes-the-cpu-reads-bytes`, 8 bytes, Metal 171
+        // against ours 16), which is this family's whole subject. Those bytes stay compared
+        // exactly and those rows stay divergent on them.
+        let mut named = vec![crate::replay::shared_memory_notice()];
+        if matches!(self.row.shape, Shape::Visibility) {
+            named.push(crate::replay::notice_allowance(
                 metal2vulkan_runtime::Degradation::FastMathRewrites.code(),
-            )],
-            Shape::KernelStore => Vec::new(),
+            ));
+            named.push(crate::replay::notice_allowance(
+                metal2vulkan_runtime::Degradation::ShaderColorConversion.code(),
+            ));
         }
+        if self.row.read_only {
+            named.push(crate::replay::notice_allowance(
+                metal2vulkan_runtime::Degradation::PrivateResourceOption.code(),
+            ));
+        }
+        named
     }
 
     fn shaders(&self) -> Result<Vec<ShaderRef>, String> {

@@ -28,6 +28,10 @@
 //! texture's decoded twin and announces `decoded-block-twin` once, which the case allows by naming
 //! that code. It does **not** allow `compressed-texel-decode`: the lane asserts no BC1 to BC5
 //! texture announces it, so a run that does is a divergence this case reports rather than excuses.
+//! That still holds for **this** family's rows -- neither an RTX 5080 Laptop nor llvmpipe
+//! announced it for any of the ten -- but it is a claim about a texture these cases read, not
+//! about BC4 and BC5 everywhere: a **view** of a BC4 or BC5 carrier announces it on both of those
+//! drivers, and `super::compressed_views` declares it for exactly those four rows.
 //!
 //! Nothing here can fault a GPU: one compute pass a round, one read-only texture, one buffer, one
 //! thread a texel inside the texture, no loop and no sampling.
@@ -298,8 +302,9 @@ impl Case for CompressedDecode {
         // notices site alone, so every value of this family still compares against Metal's
         // exactly.
         //
-        // Measured on the RTX 5080 Laptop (615.71.09): it fired for all 10 rows of the family and each
-        // was divergent on that field and nothing else (replay-nvidia.log). On MoltenVK, where
+        // Measured on the RTX 5080 Laptop (615.71.09): it fired for
+        // all 10 rows of the family, and each was divergent on that field and
+        // nothing else (replay-nvidia.log). On MoltenVK, where
         // the chip's GPU shares the CPU's memory, it cannot fire at all, which is why no
         // recording of this suite declares it.
         let mut all = vec![

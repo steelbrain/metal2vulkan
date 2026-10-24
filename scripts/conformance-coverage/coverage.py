@@ -462,10 +462,15 @@ def _is_declaration(path: str) -> bool:
 
 
 def _declarations(text: str) -> int:
-    """How many notice declarations `text` makes."""
-    return len(re.findall(r"\bnotice_allowance\s*\(", text)) + sum(
-        1 for path in _allowance_paths(text) if _is_declaration(path)
-    )
+    """How many notice declarations `text` makes.
+
+    `shared_memory_notice` is one of them: it is `notice_allowance` of the one code a venue's
+    memory model provokes, which every family that reads an answer back through a `Shared` buffer
+    has to declare, so a module that calls it has declared a notice.
+    """
+    return len(
+        re.findall(r"\b(?:notice_allowance|shared_memory_notice)\s*\(", text)
+    ) + sum(1 for path in _allowance_paths(text) if _is_declaration(path))
 
 
 def _tolerances(text: str) -> int:

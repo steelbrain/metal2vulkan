@@ -153,6 +153,7 @@ use crate::render::{
 };
 use crate::transcript::{Aspect, ByteLayout, Element, Gaps, Node, Observed, Region, Sites, Value};
 use metal2vulkan::metal::{BlendFactor as F, BlendOperation as O, ColorWriteMask, PixelFormat};
+use metal2vulkan_runtime::Degradation;
 
 use super::extended_range_targets::{
     fixture, fixture_inputs, not_read, program, shader_refs, shape, FILLS, FILL_FLOAT, VERTEX,
@@ -1076,11 +1077,30 @@ impl Case for BlendSweep {
     }
 
     fn allowances(&self) -> Vec<Allowance> {
-        // Nothing is loosened, and nothing may be. Every number this family forms is exact in the
+        // No value is loosened, and none may be. Every number this family forms is exact in the
         // target's `f32` channel (the module docs give the arithmetic), so a texel that differs is
         // a difference in the blend and not in a rounding, and a tolerance written here would hide
         // exactly the bug the sweep exists to find.
-        Vec::new()
+        //
+        // Two notice declarations, both at the notices site and neither touching a texel.
+        //
+        // `device-color-conversion` is the device's own conversion into the attachment where it is
+        // not Metal's. Its own definition says validation derives no tolerance and no explanation
+        // from it, so this is a declaration only: a row whose texels also differ stays divergent
+        // on those texels, which is the finding.
+        //
+        // `shared-in-system-memory` is the venue's memory model rather than anything of this
+        // family's: every row reads its texels back through a `Shared` buffer, and a device
+        // without unified memory holds that buffer in host-cached system memory
+        // (`crate::replay::shared_memory_notice`).
+        //
+        // Measured on the RTX 5080 Laptop (615.71.09): all 11 rows announced both with the case
+        // declaring neither, and on llvmpipe (Mesa 26.2.4) all 11 announced
+        // `device-color-conversion` (replay-nvidia.log, replay-llvmpipe.log).
+        vec![
+            crate::replay::notice_allowance(Degradation::DeviceColorConversion.code()),
+            crate::replay::shared_memory_notice(),
+        ]
     }
 
     fn shaders(&self) -> Result<Vec<ShaderRef>, String> {
@@ -1564,18 +1584,34 @@ mod tests {
     }
 
     /// Each case states inputs that cover every row of its sweep, names Metal as its source, and
-    /// loosens nothing.
+    /// loosens no value: its two allowances are notice declarations.
     #[test]
     fn every_case_states_its_rows_and_loosens_nothing() {
         let mut names = BTreeSet::new();
         for case in all() {
             assert!(names.insert(case.name()), "{} twice", case.name());
             assert_eq!(case.metal_source(), MetalSource::Run);
-            assert!(
-                case.allowances().is_empty(),
-                "{}: this family loosens nothing",
-                case.name()
-            );
+            // **No value is loosened.** Every allowance the family names is a notice declaration
+            // at `case/notices/*`, which states what our side announced and never a tolerance on a
+            // texel.
+            for allowance in case.allowances() {
+                assert_eq!(
+                    allowance.path,
+                    format!("case/{}/*", crate::replay::NOTICES_SITE),
+                    "{}: a loosened value",
+                    case.name()
+                );
+                assert!(
+                    matches!(
+                        allowance.justified_by,
+                        crate::allowance::Justification::Degradation(_)
+                    ),
+                    "{}: an allowance that is not a notice declaration",
+                    case.name()
+                );
+            }
+            // The device's own conversion into the attachment, and the venue's memory model.
+            assert_eq!(case.allowances().len(), 2, "{}", case.name());
             case.shaders().unwrap();
             let inputs = case.inputs().unwrap();
             let stated: BTreeSet<&str> = inputs.iter().map(|input| input.name.as_str()).collect();

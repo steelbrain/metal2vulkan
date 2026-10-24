@@ -540,17 +540,30 @@ impl Case for ArgumentEncoderCase {
     /// other's set undeclared. Only the two cases that dispatch declare them; the three that
     /// encode and read back never sample, so a declaration there would never fire.
     fn allowances(&self) -> Vec<Allowance> {
-        if !self.dispatches {
-            return Vec::new();
+        // Every row reads its answer back through a `Shared` buffer, so on a device without
+        // unified memory the runtime announces `shared-in-system-memory`
+        // (`crate::replay::shared_memory_notice` holds the whole reason). It declares the
+        // notices site alone, so every value of this family still compares against Metal's
+        // exactly.
+        //
+        // Measured on the RTX 5080 Laptop (615.71.09): it fired for
+        // all 5 rows of the family, and each was divergent on that field and
+        // nothing else (replay-nvidia.log). On MoltenVK, where
+        // the chip's GPU shares the CPU's memory, it cannot fire at all, which is why no
+        // recording of this suite declares it.
+        let mut named = vec![crate::replay::shared_memory_notice()];
+        if self.dispatches {
+            named.extend(
+                [
+                    Degradation::DeviceTexelDenormals,
+                    Degradation::FloatSampleFilter,
+                    Degradation::SrgbTexelDecode,
+                ]
+                .into_iter()
+                .map(|notice| crate::replay::notice_allowance(notice.code())),
+            );
         }
-        [
-            Degradation::DeviceTexelDenormals,
-            Degradation::FloatSampleFilter,
-            Degradation::SrgbTexelDecode,
-        ]
-        .into_iter()
-        .map(|notice| crate::replay::notice_allowance(notice.code()))
-        .collect()
+        named
     }
 
     fn run(&self, side: &mut dyn Side, sites: &mut Sites) -> Result<(), Abort> {

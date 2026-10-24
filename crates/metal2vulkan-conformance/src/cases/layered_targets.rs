@@ -89,7 +89,7 @@ use crate::transcript::{
 };
 use metal2vulkan::metal::state::DepthStencilDescriptor;
 use metal2vulkan::metal::{CompareFunction, PixelFormat, PrimitiveTopologyClass, PrimitiveType};
-use metal2vulkan_runtime::StoreAction;
+use metal2vulkan_runtime::{Degradation, StoreAction};
 
 /// The fixture every non-layered draw of this family comes from: the oracle's own fullscreen
 /// triangle and its per-sample fills.
@@ -884,12 +884,30 @@ impl Case for LayeredTargets {
     }
 
     fn allowances(&self) -> Vec<Allowance> {
-        // **Nothing here is loosened, the resolve case included.** Every texel Metal leaves is one
-        // we must leave, and this M3 Max's own run announces no notice at any cell: a
-        // `metal2vulkan-degrade-shader-resolve` allowance was declared first and **removed**,
-        // because it fired on no venue and an allowance no run exercises justifies nothing. A
-        // device that does announce one is a divergence to read, not one to excuse in advance.
-        Vec::new()
+        // **No value here is loosened, the resolve case included.** Every texel Metal leaves is
+        // one we must leave. What is declared is the notice set, which this M3 Max's own run holds
+        // empty and a driver that is not Metal does not.
+        //
+        // `shared-in-system-memory` is every row's and belongs to the venue, not to the case:
+        // every row reads its texels back through a `Shared` buffer, and a device without unified
+        // memory holds that buffer in host-cached system memory
+        // (`crate::replay::shared_memory_notice`). Measured on the RTX 5080 Laptop (615.71.09),
+        // where all five rows announced it with the case declaring it nowhere and each was
+        // divergent on that field and nothing else (replay-nvidia.log).
+        //
+        // `shader-resolve` is the resolve row's alone, and it is the one declaration this family
+        // **removed** once for firing on no venue. It has a venue now, and two: the RTX 5080 and
+        // llvmpipe (Mesa 26.2.4) both announced it for `layered-resolve-places` and for no other
+        // row, and on both every texel of that row compared exactly -- the whole difference was
+        // the announcement (replay-nvidia.log, replay-llvmpipe.log). A device whose resolve is the
+        // store's rather than a draw's announces nothing and the declaration simply does not fire.
+        let mut named = vec![crate::replay::shared_memory_notice()];
+        if matches!(self.cross, Cross::Resolves) {
+            named.push(crate::replay::notice_allowance(
+                Degradation::ShaderResolve.code(),
+            ));
+        }
+        named
     }
 
     fn shaders(&self) -> Result<Vec<ShaderRef>, String> {

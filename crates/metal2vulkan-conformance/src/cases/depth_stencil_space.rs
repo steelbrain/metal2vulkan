@@ -961,10 +961,30 @@ impl Case for DepthCompares {
     }
 
     fn allowances(&self) -> Vec<Allowance> {
-        // Nothing loosened and no notice declared: a texel is four ones or the pass's clear, both
-        // of which a `RGBA32Float` attachment stores exactly, and the fragment function does no
-        // arithmetic a device's float bounds could reach.
-        Vec::new()
+        // No value loosened: a texel is four ones or the pass's clear, both of which a
+        // `RGBA32Float` attachment stores exactly, and the fragment function does no arithmetic a
+        // device's float bounds could reach.
+        //
+        // Every row reads its answer back through a `Shared` buffer, so on a device without
+        // unified memory the runtime announces `shared-in-system-memory`
+        // (`crate::replay::shared_memory_notice` holds the whole reason). It declares the
+        // notices site alone, so every value of this family still compares against Metal's
+        // exactly.
+        //
+        // Measured on the RTX 5080 Laptop (615.71.09): it fired for
+        // all 8 rows of the family, and each was divergent on that field and
+        // nothing else (replay-nvidia.log). On MoltenVK, where
+        // the chip's GPU shares the CPU's memory, it cannot fire at all, which is why no
+        // recording of this suite declares it.
+        //
+        // `dont-care-store` with it: a pass whose depth attachment is `DontCare` on store is kept
+        // by our side where Metal may drop it. Announced by this row on the 5080 **and** on
+        // llvmpipe (Mesa 26.2.4) with the case declaring it nowhere; a declaration only, so the
+        // texels stay strict.
+        vec![
+            crate::replay::shared_memory_notice(),
+            crate::replay::notice_allowance(Degradation::DontCareStore.code()),
+        ]
     }
 
     fn shaders(&self) -> Result<Vec<ShaderRef>, String> {
@@ -1149,7 +1169,29 @@ impl Case for DepthCodes {
     }
 
     fn allowances(&self) -> Vec<Allowance> {
-        Vec::new()
+        // Every row reads its answer back through a `Shared` buffer, so on a device without
+        // unified memory the runtime announces `shared-in-system-memory`
+        // (`crate::replay::shared_memory_notice` holds the whole reason). It declares the
+        // notices site alone, so every value of this family still compares against Metal's
+        // exactly.
+        //
+        // Measured on the RTX 5080 Laptop (615.71.09): it fired for
+        // all 8 rows of the family, and each was divergent on that field and
+        // nothing else (replay-nvidia.log). On MoltenVK, where
+        // the chip's GPU shares the CPU's memory, it cannot fire at all, which is why no
+        // recording of this suite declares it.
+        //
+        // Two more, both declarations and neither touching a depth code: a `DontCare` depth store
+        // our side keeps where Metal may drop it (`dont-care-store`), and a normalized depth our
+        // side writes through the shader where the device's own store is not Metal's
+        // (`shader-unorm-depth`). Both announced by this row on the 5080 and on llvmpipe (Mesa
+        // 26.2.4) with the case declaring neither, and `shader-unorm-depth` by this row alone in
+        // the family.
+        vec![
+            crate::replay::shared_memory_notice(),
+            crate::replay::notice_allowance(Degradation::DontCareStore.code()),
+            crate::replay::notice_allowance(Degradation::ShaderUnormDepth.code()),
+        ]
     }
 
     fn shaders(&self) -> Result<Vec<ShaderRef>, String> {
@@ -1285,7 +1327,18 @@ impl Case for StencilCompares {
     }
 
     fn allowances(&self) -> Vec<Allowance> {
-        Vec::new()
+        // Every row reads its answer back through a `Shared` buffer, so on a device without
+        // unified memory the runtime announces `shared-in-system-memory`
+        // (`crate::replay::shared_memory_notice` holds the whole reason). It declares the
+        // notices site alone, so every value of this family still compares against Metal's
+        // exactly.
+        //
+        // Measured on the RTX 5080 Laptop (615.71.09): it fired for
+        // all 8 rows of the family, and each was divergent on that field and
+        // nothing else (replay-nvidia.log). On MoltenVK, where
+        // the chip's GPU shares the CPU's memory, it cannot fire at all, which is why no
+        // recording of this suite declares it.
+        vec![crate::replay::shared_memory_notice()]
     }
 
     fn shaders(&self) -> Result<Vec<ShaderRef>, String> {
@@ -1473,7 +1526,19 @@ impl Case for StencilOperations {
 
     fn allowances(&self) -> Vec<Allowance> {
         // Exact: every stencil byte Metal leaves is a byte we must leave.
-        Vec::new()
+        //
+        // Every row reads its answer back through a `Shared` buffer, so on a device without
+        // unified memory the runtime announces `shared-in-system-memory`
+        // (`crate::replay::shared_memory_notice` holds the whole reason). It declares the
+        // notices site alone, so every value of this family still compares against Metal's
+        // exactly.
+        //
+        // Measured on the RTX 5080 Laptop (615.71.09): it fired for
+        // all 8 rows of the family, and each was divergent on that field and
+        // nothing else (replay-nvidia.log). On MoltenVK, where
+        // the chip's GPU shares the CPU's memory, it cannot fire at all, which is why no
+        // recording of this suite declares it.
+        vec![crate::replay::shared_memory_notice()]
     }
 
     fn shaders(&self) -> Result<Vec<ShaderRef>, String> {
@@ -1610,7 +1675,18 @@ impl Case for Faces {
     }
 
     fn allowances(&self) -> Vec<Allowance> {
-        Vec::new()
+        // Every row reads its answer back through a `Shared` buffer, so on a device without
+        // unified memory the runtime announces `shared-in-system-memory`
+        // (`crate::replay::shared_memory_notice` holds the whole reason). It declares the
+        // notices site alone, so every value of this family still compares against Metal's
+        // exactly.
+        //
+        // Measured on the RTX 5080 Laptop (615.71.09): it fired for
+        // all 8 rows of the family, and each was divergent on that field and
+        // nothing else (replay-nvidia.log). On MoltenVK, where
+        // the chip's GPU shares the CPU's memory, it cannot fire at all, which is why no
+        // recording of this suite declares it.
+        vec![crate::replay::shared_memory_notice()]
     }
 
     fn shaders(&self) -> Result<Vec<ShaderRef>, String> {
@@ -1877,9 +1953,21 @@ impl Case for DepthSlot {
         // textures renders through a scratch image of the combined format, which the runtime
         // announces; it is a `Performance` degradation, so it buys the copies and not the answer,
         // and every texel and every stencil byte of this case still compares exactly.
-        vec![crate::replay::notice_allowance(
-            Degradation::SeparateDepthStencil.code(),
-        )]
+        // Every row reads its answer back through a `Shared` buffer, so on a device without
+        // unified memory the runtime announces `shared-in-system-memory`
+        // (`crate::replay::shared_memory_notice` holds the whole reason). It declares the
+        // notices site alone, so every value of this family still compares against Metal's
+        // exactly.
+        //
+        // Measured on the RTX 5080 Laptop (615.71.09): it fired for
+        // all 8 rows of the family, and each was divergent on that field and
+        // nothing else (replay-nvidia.log). On MoltenVK, where
+        // the chip's GPU shares the CPU's memory, it cannot fire at all, which is why no
+        // recording of this suite declares it.
+        vec![
+            crate::replay::shared_memory_notice(),
+            crate::replay::notice_allowance(Degradation::SeparateDepthStencil.code()),
+        ]
     }
 
     fn shaders(&self) -> Result<Vec<ShaderRef>, String> {
@@ -2166,7 +2254,19 @@ impl Case for MaskCrossings {
 
     fn allowances(&self) -> Vec<Allowance> {
         // Exact: every stencil byte Metal leaves is a byte we must leave.
-        Vec::new()
+        //
+        // Every row reads its answer back through a `Shared` buffer, so on a device without
+        // unified memory the runtime announces `shared-in-system-memory`
+        // (`crate::replay::shared_memory_notice` holds the whole reason). It declares the
+        // notices site alone, so every value of this family still compares against Metal's
+        // exactly.
+        //
+        // Measured on the RTX 5080 Laptop (615.71.09): it fired for
+        // all 8 rows of the family, and each was divergent on that field and
+        // nothing else (replay-nvidia.log). On MoltenVK, where
+        // the chip's GPU shares the CPU's memory, it cannot fire at all, which is why no
+        // recording of this suite declares it.
+        vec![crate::replay::shared_memory_notice()]
     }
 
     fn shaders(&self) -> Result<Vec<ShaderRef>, String> {
@@ -2292,8 +2392,21 @@ impl Case for FacesFacing {
     fn allowances(&self) -> Vec<Allowance> {
         // Exact: every stencil byte Metal leaves is a byte we must leave. Metal's cull mode and
         // front-facing winding are both encoder state the runtime carries into the pipeline it is
-        // about to draw with, so no pass of this case is split and nothing is announced.
-        Vec::new()
+        // about to draw with, so no pass of this case is split and nothing of the case's own is
+        // announced.
+        //
+        // Every row reads its answer back through a `Shared` buffer, so on a device without
+        // unified memory the runtime announces `shared-in-system-memory`
+        // (`crate::replay::shared_memory_notice` holds the whole reason). It declares the
+        // notices site alone, so every value of this family still compares against Metal's
+        // exactly.
+        //
+        // Measured on the RTX 5080 Laptop (615.71.09): it fired for
+        // all 8 rows of the family, and each was divergent on that field and
+        // nothing else (replay-nvidia.log). On MoltenVK, where
+        // the chip's GPU shares the CPU's memory, it cannot fire at all, which is why no
+        // recording of this suite declares it.
+        vec![crate::replay::shared_memory_notice()]
     }
 
     fn shaders(&self) -> Result<Vec<ShaderRef>, String> {
@@ -2786,15 +2899,41 @@ mod tests {
             assert_eq!(case.record_runs(), RUNS);
             assert!(matches!(case.metal_source(), MetalSource::Run));
             assert!(case.inputs().is_ok());
-            // Five of the six loosen nothing at all: a texel is white or the clear and a stencil
-            // byte is a stencil byte, both of which the attachments hold exactly. The sixth names
-            // one notice and no value tolerance, because the path it is the only case to take is
-            // announced.
+            // **No row loosens a value**: a texel is white or the clear and a stencil byte is a
+            // stencil byte, both of which the attachments hold exactly, so every allowance here is
+            // a notice declaration at `case/notices/*`.
             let allowed = case.allowances();
-            match case.name() == DepthSlot.name() {
-                true => assert_eq!(allowed.len(), 1, "{}", case.name()),
-                false => assert!(allowed.is_empty(), "{}", case.name()),
+            for allowance in &allowed {
+                assert_eq!(
+                    allowance.path,
+                    format!("case/{}/*", crate::replay::NOTICES_SITE),
+                    "{}: a loosened value",
+                    case.name()
+                );
             }
+            // Every row declares the venue's memory notice. Three declare more: the depth-slot row
+            // the separate depth and stencil attachments it is the only case to take, and the two
+            // depth rows what a driver that is not Metal announced for their `DontCare` store and
+            // their normalized depth.
+            let named: std::collections::BTreeSet<&str> = allowed
+                .iter()
+                .filter_map(|allowance| match &allowance.justified_by {
+                    crate::allowance::Justification::Degradation(code) => Some(code.as_str()),
+                    _ => None,
+                })
+                .collect();
+            assert!(
+                named.contains(Degradation::SharedInSystemMemory.code()),
+                "{}",
+                case.name()
+            );
+            let wanted: usize = match case.name() {
+                name if name == DepthSlot.name() => 2,
+                "depthstencil-depth-compares" => 2,
+                "depthstencil-depth-codes" => 3,
+                _ => 1,
+            };
+            assert_eq!(named.len(), wanted, "{}", case.name());
         }
         // The one notice the family names is a cost rather than a near-equivalent, which is what
         // makes loosening the notice site alone honest: a `Precision` degradation would owe a value

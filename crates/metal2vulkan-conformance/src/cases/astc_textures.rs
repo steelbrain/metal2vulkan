@@ -499,8 +499,20 @@ impl Case for AstcTextures {
         // profiles. An HDR texture has no decoded twin: a device either holds the ASTC HDR block
         // natively, in which case nothing of ours sits between the blocks and the texels and no
         // notice fires, or it refuses the texture and the site is the venue's own gap.
+        // Every row that runs reads its texels back through a `Shared` buffer, so on a device
+        // without unified memory the runtime announces `shared-in-system-memory`
+        // (`crate::replay::shared_memory_notice` holds the whole reason). It declares the notices
+        // site alone, so every texel still compares against Metal's exactly.
+        //
+        // Named on the LDR and sRGB rows, which is where it was **measured**: on the RTX 5080
+        // Laptop (615.71.09) all 28 of them announced it and were divergent on that field and
+        // nothing else (replay-nvidia.log). The 14 HDR rows read `lacks the device feature` on
+        // that card -- the venue holds no ASTC HDR block -- so no run has announced anything for
+        // them and they declare nothing: a declaration on a row no venue has run is a claim
+        // nobody has checked.
         let mut all = match self.decode().is_some() {
             true => vec![
+                crate::replay::shared_memory_notice(),
                 crate::replay::notice_allowance(Degradation::CarriedDecodedTwin.code()),
                 crate::replay::notice_allowance(Degradation::CpuBlockDecode.code()),
             ],
