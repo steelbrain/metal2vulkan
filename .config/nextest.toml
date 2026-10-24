@@ -54,3 +54,15 @@ threads-required = 'num-test-threads'
 platform = 'cfg(target_os = "macos")'
 filter = 'package(metal2vulkan-validation) & test(/^runtime_lane::queue_storms::four_queues_storm_as_metal_s_do$/)'
 threads-required = 'num-test-threads'
+
+# The object-grid lane runs alone. Its cases are Metal's own grids, millions of object
+# threadgroups each, and a device without Apple's watchdog runs them to the end: an RTX 5080
+# Laptop GPU (NVIDIA 615.71.09) takes 2.4 to 2.7 microseconds over each, so 4,587,520 of them is
+# 12.0 s with the GPU to itself. The test measures that cost and skips a case past half its wait,
+# but the measurement comes from the smaller cases before it, and a GPU shared with other lane
+# processes stretches the larger ones past the wait whatever the measurement said: that case took
+# 12.0 s alone, over 60 s beside one other GPU test, and the test failed at
+# `--test-threads 4` as well as at the default. Alone it passes in 50.7 s.
+[[profile.default.overrides]]
+filter = 'package(metal2vulkan-validation) & test(/^runtime_lane::mesh_draws::object_grids_run_as_metal_runs_them$/)'
+threads-required = 'num-test-threads'

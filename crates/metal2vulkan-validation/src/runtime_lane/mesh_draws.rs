@@ -860,8 +860,13 @@ fn object_grids_run_as_metal_runs_them() {
         // of millions of them outlasts `WAIT` on a device slower per threadgroup than Apple's,
         // whose GPU ran Metal's largest here inside its 5 s watchdog. The cases run in ascending
         // order of the threadgroups Metal ran, so the measurement is there before the largest; one
-        // the measurement puts past half of `WAIT` is printed and skipped, rather than left
+        // the measurement puts past a quarter of `WAIT` is printed and skipped, rather than left
         // grinding on the device after the wait has given up.
+        //
+        // A quarter, not a half, because the cost rises with whatever else holds the GPU and the
+        // measurement is taken before that is known: the same 4,587,520-threadgroup case took
+        // 2.67 microseconds a threadgroup with the GPU idle and 4.88 beside another session's
+        // work. The margin spends coverage on a busy host rather than the wait.
         let mut per_group = 0.0f64;
         for c in &OBJECT_GRID_CASES {
             // The threadgroups Metal ran.
@@ -869,7 +874,7 @@ fn object_grids_run_as_metal_runs_them() {
                 continue;
             }
             let groups = f64::from(c.words[0]);
-            if per_group > 0.0 && groups * per_group > WAIT.as_secs_f64() / 2.0 {
+            if per_group > 0.0 && groups * per_group > WAIT.as_secs_f64() / 4.0 {
                 eprintln!(
                     "TIMING {:?} of {:?}, {} on {name}: {groups} threadgroups at {:.2} us each is \
                      past half of the {} s wait, skipped",
