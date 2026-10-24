@@ -112,6 +112,29 @@ contract. A case that both diverges and refuses holds its refused sites in the `
 the differences, so neither row can go unchecked behind the other: a divergence never launders a
 refusal.
 
+## Replaying off the host that recorded
+
+A replay needs no Metal, so it runs on any Vulkan device — but two of its inputs are the recording
+host's, and one of them is not obvious.
+
+Nine cases cannot be compared anywhere else at all. A case's input fingerprint covers the **bitcode**
+`llvm-as` produced, not the `.ll` text, and the assembler's version is the host's: the same
+`fixtures/public/fragment_constant_color.ll` assembles to `1a4cc972040870f8` under Homebrew's LLVM
+23.1.4 and to `38d752a345c98db2` under 23.1.1. So `binary-archive-*` (six), `library-from-data` and
+the two `dynamic-library-*` cases read `unrecorded: the inputs this run fed are not the recording's:
+air differs`, which is the loud failure an unrecorded case is meant to be.
+
+**The consequence is sharper than nine skips, and it is the reason this section exists: a run off the
+recording host reports a ledger row whose case never compared as one that looks fixed.** Two rows did
+exactly that (`binary-archive-mesh-adder` at `case/program`, `binary-archive-sources` at
+`case/program/from-a-metallib/refused`). Neither is fixed. **Never retire a `known-gaps.tsv` row on
+the strength of a run made off the host that recorded the case**; the row's own verdict must be read
+where the case can compare.
+
+The other input is the venue, which is the point of replaying elsewhere and needs no warning: a
+notice a case does not declare is a real difference on that driver, and a row scoped to a venue holds
+only there.
+
 ## A site the venue honestly lacks
 
 A device's honest gap must never read as a refusal of ours. Where a typed error names capabilities
