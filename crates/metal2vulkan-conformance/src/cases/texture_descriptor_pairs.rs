@@ -603,6 +603,31 @@ impl Case for DescriptorPairs {
             // firing for this row alone, on the 5080.
             named.push(crate::replay::shared_memory_notice());
         }
+
+        // A table that asks for a texture of a memoryless TEXTURE BUFFER descriptor, which plain
+        // Metal makes: its texels are a buffer's bytes, and no Vulkan buffer takes memory lazily,
+        // so the runtime lies over a `Private` buffer of the row's bytes and says so. Metal
+        // announces nothing, because the memory is its own business, so the notice is a difference
+        // and this declaration is what accounts for it.
+        //
+        // It loosens no value. Every getter of the row compares exactly with Metal's -- the
+        // texture answers the descriptor's memoryless mode as Metal's does -- and the whole of
+        // what the declaration covers is the announcement. The cost is bytes nothing reaches: the
+        // runtime refuses every use of a memoryless texture, as Metal's validation stops every one
+        // but as a render pass's attachment, which no texture buffer is.
+        //
+        // Selected by the table's own descriptors and not by the case's name, so a table that
+        // gains such a row declares it and one that loses it stops declaring it.
+        let memoryless_texture_buffer = self.asks == Asks::FootprintAndGetters
+            && (self.queries.iter()).any(|query| {
+                query.texture_type == TextureType::TextureBuffer
+                    && query.storage == Storage::Memoryless
+            });
+        if memoryless_texture_buffer {
+            named.push(crate::replay::notice_allowance(
+                metal2vulkan_runtime::Degradation::MemorylessTextureBuffer.code(),
+            ));
+        }
         named
     }
 

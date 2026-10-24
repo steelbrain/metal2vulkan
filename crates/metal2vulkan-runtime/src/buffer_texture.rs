@@ -872,6 +872,15 @@ impl Device {
     /// `newTextureWithDescriptor:` of a texture buffer (`layout`, checked from `descriptor`): a
     /// texture buffer over a new buffer of the descriptor's options, as long as its texels;
     /// `newSharedTextureWithDescriptor:` of one where `home` is `Shared`.
+    ///
+    /// A `Memoryless` descriptor, of which plain Metal makes a texture (an Apple M3 Max under
+    /// macOS 27.0.1: a 64-texel `RGBA8Unorm` texture buffer of `ShaderRead` usage answers
+    /// `storageMode` 3, its other getters its descriptor's), lies over a `Private` buffer: no
+    /// Vulkan buffer takes memory lazily. The texture answers the descriptor's mode, and the
+    /// runtime refuses every use of it ([`Texture::check_not_memoryless`]), as Metal's validation
+    /// stops every use of a memoryless texture but as a render pass's attachment, which no
+    /// texture buffer is. Announced `memoryless-texture-buffer`: the bytes are memory Metal
+    /// spends none of.
     pub(super) fn new_texture_buffer(
         &self,
         descriptor: &TextureDescriptor,
@@ -880,7 +889,22 @@ impl Device {
         home: TexelsHome,
     ) -> Result<Texture, Error> {
         let row_bytes = texture_buffer_bytes(layout)?;
-        let buffer = self.new_buffer(row_bytes, descriptor.resource_options)?;
+        let options = descriptor.resource_options;
+        let bytes = match options.storage_mode()? {
+            StorageMode::Memoryless => {
+                self.degrade(Degradation::MemorylessTextureBuffer, || {
+                    let object = format!(
+                        "a memoryless {:?} texture buffer of {} texels",
+                        layout.pixel_format, layout.extent[0]
+                    );
+                    let why = format!("a Private buffer of its {row_bytes} bytes of texels");
+                    (object, why)
+                });
+                options.with_storage_mode(StorageMode::Private)
+            }
+            _ => options,
+        };
+        let buffer = self.new_buffer(row_bytes, bytes)?;
         texture_buffer_over(buffer, descriptor, layout, id_use, home)
     }
 }
@@ -922,6 +946,15 @@ pub(super) fn texture_buffer_over(
     };
     let mut texels = Texels::texture_buffer(buffer, placed, texel_bytes, descriptor)?;
     texels.home = home;
+    // A memoryless texture buffer lies over a `Private` buffer (`Device::new_texture_buffer`) and
+    // answers `Memoryless`, as Metal's does, with the CPU cache and hazard tracking modes the
+    // buffer resolved: Metal resolves a texture buffer's default tracking to tracked (an M3 Max
+    // answers `hazardTrackingMode` 2 for a memoryless one). Every other texture buffer takes its
+    // buffer's options whole, which `Buffer::new_texture` has already made the descriptor's.
+    if descriptor.resource_options.storage_mode()? == StorageMode::Memoryless {
+        let options = texels.options.with_storage_mode(StorageMode::Memoryless);
+        texels = texels.with_options(options);
+    }
     Ok(texels.texture(descriptor, layout, id_use))
 }
 

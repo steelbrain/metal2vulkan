@@ -117,6 +117,7 @@ metal2vulkan-degrade-linear-attachment-copies
 metal2vulkan-degrade-linked-sampler-numbering
 metal2vulkan-degrade-looped-sample-outputs
 metal2vulkan-degrade-memoryless-backed
+metal2vulkan-degrade-memoryless-texture-buffer
 metal2vulkan-degrade-metal-level-below-host
 metal2vulkan-degrade-metal-level-not-macos
 metal2vulkan-degrade-mipmap-tie-rounding

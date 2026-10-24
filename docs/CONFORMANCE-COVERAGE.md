@@ -43,7 +43,7 @@ Its limits, measured rather than asserted:
 | committed recordings | 1100 |
 | distinct SDK items the Metal leg reaches, of any status | 797 |
 | of those, reached only where this cannot name the family | 5 |
-| ledger rows (a case whose gap is recorded) | 288 |
+| ledger rows (a case whose gap is recorded) | 285 |
 | declared crossings of the option space (pairs put to Metal at once) | 24 |
 | declared crossings that are no pair of it (a boolean or numeric field, or one type in two slots) | 30 |
 
@@ -2260,7 +2260,6 @@ A case whose difference from Metal is recorded rather than compared away. The le
 | `format-footprints-padded-wide-channels` | The runtime holds no image of the ten padded 10- and 12-bit display formats, so `heapTextureSizeAndAlignWithDescriptor:` -- CPU arithmetic over a descriptor, wh… |
 | `format-footprints-two-plane-ten-bit` | The runtime holds no image of the four two-plane RGB10A8_2P formats, so `heapTextureSizeAndAlignWithDescriptor:` -- CPU arithmetic over a descriptor, which Meta… |
 | `format-footprints-packed-without-textures` | The runtime holds no image of R10Unorm_PACKED and RG10Unorm_PACKED, whose texture Metal itself refuses, so `heapTextureSizeAndAlignWithDescriptor:` -- CPU arith… |
-| `texture-pairs-storage-crossings` | Plain Metal makes a MTLStorageModeMemoryless TEXTURE BUFFER and the runtime refuses it `Invalid(StorageMode)` out of `new_buffer`, so the one texture type whose… |
 | `half-texel-nans-r16f` | Metal's `texture2d<half>` never widens, so a 16-bit float texel's NaN comes back as its own bits (verified: this case's own recording of plain Metal on an M3 Ma… |
 | `half-texel-nans-rg16f` | Metal's `texture2d<half>` never widens, so a 16-bit float texel's NaN comes back as its own bits (verified: this case's own recording of plain Metal on an M3 Ma… |
 | `half-texel-nans-rgba16f` | Metal's `texture2d<half>` never widens, so a 16-bit float texel's NaN comes back as its own bits (verified: this case's own recording of plain Metal on an M3 Ma… |
@@ -2271,8 +2270,6 @@ A case whose difference from Metal is recorded rather than compared away. The le
 | `primitive-type-restart-indices` | Metal rasterizes a line by the diamond-exit rule and this driver's Bresenham mode breaks one tie the other way. The line of vertices 0 and 1 runs exactly throug… |
 | `primitive-type-restart-indices` | Metal rasterizes a line by the diamond-exit rule and this driver's Bresenham mode breaks one tie the other way. The line of vertices 0 and 1 runs exactly throug… |
 | `primitive-type-restart-indices` | Metal rasterizes a line by the diamond-exit rule and this driver's Bresenham mode breaks one tie the other way. The line of vertices 0 and 1 runs exactly throug… |
-| `texture-pairs-storage-crossings` | Plain Metal makes a MTLStorageModeMemoryless TEXTURE BUFFER and the runtime refuses it `Invalid(StorageMode)` out of `new_buffer`, so the one texture type whose… |
-| `texture-pairs-storage-crossings` | Plain Metal makes a MTLStorageModeMemoryless TEXTURE BUFFER and the runtime refuses it `Invalid(StorageMode)` out of `new_buffer`, so the one texture type whose… |
 | `a2c-on-1-alpha-50` | Metal's alpha-to-coverage covers `floor(alpha * rasterSampleCount)` samples, so at ONE sample an alpha of 0.5 covers NO sample and the destination survives the … |
 | `a2c-on-1-alpha-50` | Metal's alpha-to-coverage covers `floor(alpha * rasterSampleCount)` samples, so at ONE sample an alpha of 0.5 covers NO sample and the destination survives the … |
 | `a2one-off-1-blend-source-alpha` | Metal's stored code and ours differ by one at this site, in a draw whose blend reads the source alpha with `alphaToOneEnabled` set and clear. The cause is estab… |

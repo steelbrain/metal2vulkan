@@ -574,6 +574,16 @@ degradations! {
             "a scratch image, a color's kept by its command queue for its passes of that shape \
              and a depth or stencil one's per pass: memory, and the bandwidth to write and read \
              it, that Metal does not spend on a memoryless texture";
+        /// A memoryless texture buffer (`newTextureWithDescriptor:` of a `TextureBuffer`
+        /// descriptor of `MTLStorageModeMemoryless`, which plain Metal makes), whose texels are a
+        /// buffer's bytes (`buffer_texture.rs`): the buffer is a `Private` one of the device's,
+        /// since no Vulkan buffer takes memory lazily. The texture answers the descriptor's
+        /// memoryless mode, as Metal's does, and the runtime refuses every use of it, as Metal's
+        /// validation stops every use of a memoryless texture but as a render pass's attachment,
+        /// which no texture buffer is (`Texture::check_not_memoryless`).
+        MemorylessTextureBuffer = "memoryless-texture-buffer", Performance,
+            "a Private buffer of the texture's row of texels: memory Metal spends none of on a \
+             memoryless texture. Nothing reaches those bytes";
         /// A color render target that a framebuffer fetch reads lacks the usage the fetch's form
         /// needs, so its pass renders into a scratch image that has it
         /// (`attachment_stand_in.rs`): `STORAGE` in the pixel interlock, or for its sample
