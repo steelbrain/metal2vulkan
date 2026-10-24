@@ -1,6 +1,7 @@
 //! A command buffer's batches (`command_buffer/batches.rs`): where event waits and signals, and
-//! binary semaphore waits and signals, split its encoders; and which drivers' batches may wait in
-//! a group (`command_buffer/group.rs`).
+//! binary semaphore waits and signals, split its encoders; which drivers' batches may wait in
+//! a group (`command_buffer/group.rs`); and which drivers' queue failures are relayed
+//! (`device/relay.rs`).
 
 use crate::command_buffer::batches::{Batch, Batches};
 use crate::command_buffer::merges_submissions;
@@ -295,4 +296,53 @@ fn only_drivers_measured_to_merge_their_submissions_group_their_batches() {
             .collect()
     ));
     assert!(!merges_submissions(&Default::default()));
+}
+
+/// Whether a device's queue failures are relayed to the command buffers that failed is the
+/// driver's **fact**, never its name (`device/mod.rs`, `device/relay.rs`): a driver that reports
+/// a command buffer's execution failure through the instance's messenger alone, and loses the
+/// whole device for it, takes the relay
+/// (`DriverFact::QueueFailuresReportedByMessenger`); every other driver takes none, and its
+/// batches take a fence only where their command buffer ends at one.
+///
+/// It is a **defect** fact, so a driver with a row takes it at every release and on every GPU
+/// (`DriverFact::assumed_where_unmeasured`): that is what makes the fact answer exactly as the
+/// driver's name did, and the check is that MoltenVK's profiles take it while every other
+/// committed profile -- RADV's, ANV's, NVIDIA's, lavapipe's and SwiftShader's -- does not,
+/// including at a release and on a GPU no lane measured.
+#[test]
+fn only_drivers_that_report_their_failures_by_messenger_relay_them() {
+    let dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../metal2vulkan-validation/profiles");
+    let mut moltenvk = 0;
+    let mut other = 0;
+    for entry in std::fs::read_dir(&dir).expect("validation/profiles is readable") {
+        let path = entry.expect("directory entry").path();
+        if path.extension().is_none_or(|x| x != "json") {
+            continue;
+        }
+        let text = std::fs::read_to_string(&path).expect("profile is readable");
+        let mut description =
+            DeviceDescription::from_khronos_json(&text, None).expect("profile parses");
+        let is_moltenvk = description.driver_id == Some(DriverId::MOLTENVK);
+        for release in [description.driver_version, 0x4242] {
+            description.driver_version = release;
+            let relays = (description.driver_facts())
+                .contains(&DriverFact::QueueFailuresReportedByMessenger);
+            assert_eq!(
+                relays,
+                is_moltenvk,
+                "{} relays {relays} at {release:#x}",
+                path.display()
+            );
+        }
+        match is_moltenvk {
+            true => moltenvk += 1,
+            false => other += 1,
+        }
+    }
+    assert!(
+        moltenvk > 0 && other > 1,
+        "{moltenvk} MoltenVK, {other} other"
+    );
 }

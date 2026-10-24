@@ -1605,11 +1605,18 @@ impl Device {
             .collect();
         exit_guard::register_device(identity);
         let in_process = properties.kind == DeviceKind::Cpu;
-        // A device on MoltenVK whose instance has the relay has its queues' failures relayed
-        // to the command buffers that failed (`relay.rs`), from its first batch on.
+        // A device whose driver reports a command buffer's execution failure through the
+        // instance's messenger alone, and whose instance has the relay, has its queues' failures
+        // relayed to the command buffers that failed (`relay.rs`), from its first batch on. The
+        // question is the driver's, and the fact answers it, never the driver's name: a defect
+        // fact, so a driver with a row takes it at every release and on every GPU.
         let lost = Arc::new(AtomicBool::new(false));
+        let relays = (properties.description.driver_facts())
+            .contains(&metal2vulkan::device::DriverFact::QueueFailuresReportedByMessenger);
+        // Read before the properties move into the device's shared state (below): still keyed on
+        // the driver's name, for the scheduler's wait alone.
         let moltenvk = properties.description.driver_id == Some(DriverId::MOLTENVK);
-        if let (Some(relay), true) = (instance.relay(), moltenvk) {
+        if let (Some(relay), true) = (instance.relay(), relays) {
             for slot in &queues {
                 let queue = slot.with(|queue| queue);
                 // SAFETY: the queue is the device's, live, and its word was put back just now.
@@ -1756,7 +1763,9 @@ impl Device {
         }
         // The scheduler's thread waits for the GPU itself where heads wait for signals to land,
         // but on MoltenVK, whose wait for any of several semaphores loses a signal that lands
-        // while it registers a later one (`command_buffer/completion.rs`).
+        // while it registers a later one (`command_buffer/completion.rs`). Still keyed on the
+        // driver's name: its home is a `RuntimeDriverDefect` beside
+        // `ReadsCommandBuffersAfterTheirSignal`, which this commit does not open.
         if !moltenvk {
             (shared.scheduler).wait_on_gpu(Functions::clone(&shared.functions), shared.nudge);
         }

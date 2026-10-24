@@ -1568,6 +1568,32 @@ pub enum DriverFact {
     /// PowerVR) take no row: the merge is in the common queue they share, but no identity of
     /// theirs was measured, so each takes the ungrouped exact path.
     SubmissionsWithoutSignalsMerge,
+    /// A defect fact (the module docs): the driver reports a command buffer's execution failure
+    /// only to the instance's debug-utils messengers, naming the `VkQueue` and not the
+    /// submission, and by default marks the whole `VkDevice` lost for it, where Metal fails the
+    /// command buffer it struck and runs the queue on. The runtime's workaround is the relay
+    /// (`device/relay.rs`): its instance asks the driver not to lose the device
+    /// (`MVK_CONFIG_RESUME_LOST_DEVICE`), each `VkQueue` keeps its submissions in flight in
+    /// submission order with a fence each, and a failure heard on a queue is given to the first
+    /// submission whose fence is unsignaled, so the command buffer whose batch it was finishes
+    /// with that error and the queue's other command buffers complete, as Metal's do.
+    ///
+    /// Measured on MoltenVK 1.4.1: `handleMTLCommandBufferError` in `MVKQueue.mm` reports
+    /// `"<result>: Lost|Resumed VkDevice after MTLCommandBuffer \"<label>\" execution failed
+    /// (code <n>): <description>"` before the handler that signals the submission's fence and
+    /// inline semaphores, and Metal runs one queue's completed handlers in order on one thread
+    /// (the probe's `handlers` and `handlers_fault`: 600 handlers, failures among them, none out
+    /// of order), which is what lets the first unsignaled fence name the failed submission.
+    /// Against Metal, which the probe measured on an M4 with macOS 27.0.1: a blit into a buffer
+    /// over read-only pages failed with `MTLCommandBufferErrorInternal`, as did the command
+    /// buffer committed after it while it ran, the later ones completing; an execution range past
+    /// its buffer failed with `PageFault`, the next command buffer completing.
+    ///
+    /// A defect fact, so MoltenVK takes it at every release and on every GPU
+    /// ([`DriverFact::assumed_where_unmeasured`]): the workaround, never the path a measurement
+    /// has not cleared. A driver without it relays nothing, and each of its batches takes a fence
+    /// only where its command buffer ends at one (`command_buffer/fences.rs`).
+    QueueFailuresReportedByMessenger,
     /// The driver answers a format's linear-tiling attachment features from memory it has not
     /// yet initialized, so they differ between instances of one process: MoltenVK 1.4.1 builds
     /// its format table in `MVKPhysicalDevice`'s member initializers, where
@@ -1740,6 +1766,7 @@ impl DriverFact {
                 | Self::PositionedDepthReadAtStandardPositions
                 | Self::TimestampPoolsAreCounterSampleBuffers
                 | Self::LinearTilingFeaturesUninitialized
+                | Self::QueueFailuresReportedByMessenger
         )
     }
 
@@ -2590,6 +2617,14 @@ pub(crate) const MEASURED: &[Measured<DriverFact>] = &[
         fact: DriverFact::TimestampPoolsAreCounterSampleBuffers,
         driver: DriverId::MOLTENVK,
         vendor: Some(APPLE_VENDOR_ID),
+        device: None,
+        first: moltenvk(1, 4, 1),
+        last: moltenvk(1, 4, 1),
+    },
+    Measured {
+        fact: DriverFact::QueueFailuresReportedByMessenger,
+        driver: DriverId::MOLTENVK,
+        vendor: None,
         device: None,
         first: moltenvk(1, 4, 1),
         last: moltenvk(1, 4, 1),
