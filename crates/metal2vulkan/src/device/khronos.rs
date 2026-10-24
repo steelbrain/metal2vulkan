@@ -1668,6 +1668,7 @@ pub(super) const FEATURE_MEMBERS: &[(&str, VkFeature)] = {
             F::PrimitiveTopologyPatchListRestart,
         ),
         ("provokingVertexLast", F::ProvokingVertexLast),
+        ("alphaToOne", F::AlphaToOne),
     ]
 };
 

@@ -87,7 +87,7 @@ feature	DirectCall	rare	variadic or byval calls the inliner cannot take
 feature	WideSwitchLiteral	rare	64-bit switch literals
 feature	Lowering	system	the catch-all of lowering families not landed: any shader can meet one
 feature	SamplerAddressMode	app	mirror-clamp-to-edge on a device without it
-feature	AlphaToOne	rare	alphaToOneEnabled
+feature	AlphaToOne	rare	alphaToOneEnabled on a device without alphaToOne
 feature	StageStoresAndAtomics	app	stores or atomics in vertex or fragment functions on a device without the feature
 feature	FunctionConstantArgument	rare	a function-constant-removed argument read
 feature	SamplerBicubicFilter	system	bicubic filtering forms Metal does not establish; macOS 26.6.2 makes a runtime sampler with MTLSamplerMinMagFilterCubic (the consumer's boots), whose mip-filtered form is refused

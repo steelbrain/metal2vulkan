@@ -150,6 +150,17 @@
 //!   has a `Location` and `Index` decoration of zero"), reads Metal's alpha;
 //!   over an `ARGB8Unorm` one, whose image's alpha is Metal's blue, it is
 //!   `NotImplemented(Format)`.
+//! - **Alpha to one** is `VkPipelineMultisampleStateCreateInfo::alphaToOneEnable`
+//!   (`GraphicsState::alpha_to_one`), the exact counterpart of Metal's `alphaToOneEnabled`: both
+//!   replace the fragment's alpha with one before the blend reads it and before the write mask
+//!   decides what is stored (measured on an Apple M3 Max: under source-alpha factors the stored
+//!   color is the source alone, and an attachment mask without alpha still keeps the one out of
+//!   memory while the blend reads it), and both leave alpha to coverage reading the alpha the
+//!   function wrote. Vulkan gates it behind the `alphaToOne` device feature
+//!   (`VUID-VkPipelineMultisampleStateCreateInfo-alphaToOneEnable-00785`), so the pipeline's
+//!   requirements name the feature (`GraphicsState::multisample_features`) and a device without
+//!   it is refused `Unsupported{AlphaToOne, Feature(AlphaToOne)}`: a device gap, never a refusal
+//!   of the field itself.
 //! - **Vertex amplification**: `maxVertexAmplificationCount` above 1 makes a pipeline whose draws
 //!   may be multiview, which needs `multiview`; its draws of more amplifications than the device's
 //!   `maxMultiviewViewCount` are draws of one amplification each. A count of 0 is an invalid
@@ -278,8 +289,12 @@ pub fn graphics_state(
     input_blends: &BTreeMap<u32, vk::ColorComponentFlags>,
     p: &DeviceProfile,
 ) -> Result<GraphicsState, Error> {
-    if r.alpha_to_one {
-        return Err(Unsupported::not_implemented(Feature::AlphaToOne).into());
+    if r.alpha_to_one && !p.fields().enabled.features.contains(&VkFeature::AlphaToOne) {
+        return Err(Unsupported::needs(
+            Feature::AlphaToOne,
+            Capability::Feature(VkFeature::AlphaToOne),
+        )
+        .into());
     }
     color_group(r, (vs, fs), tessellation.is_some(), p)?;
     let max_vertex_amplification_count = vertex_amplification(r, p)?;
@@ -631,7 +646,7 @@ pub fn graphics_state(
         stencil_format,
         rasterization_samples,
         alpha_to_coverage,
-        alpha_to_one: false,
+        alpha_to_one: r.alpha_to_one,
         rasterizer_discard: !r.rasterization_enabled,
         dynamic_states,
         // Ordered wherever the device can order the reads.

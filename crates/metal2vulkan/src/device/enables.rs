@@ -206,7 +206,7 @@ exposures! {
         ShaderUniformBufferArrayDynamicIndexing, ShaderSampledImageArrayDynamicIndexing,
         ShaderStorageBufferArrayDynamicIndexing, ShaderStorageImageArrayDynamicIndexing,
         MultiViewport, DepthBiasClamp, ShaderResourceResidency, OcclusionQueryPrecise,
-        FullDrawIndexUint32, ShaderTessellationAndGeometryPointSize,
+        FullDrawIndexUint32, ShaderTessellationAndGeometryPointSize, AlphaToOne,
     ];
     // `VkPhysicalDeviceVulkan11Features`.
     Core(v(1)) => [

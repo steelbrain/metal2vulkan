@@ -931,6 +931,7 @@ codec_enum! {
         AttachmentFeedbackLoopLayout, ExtendedDynamicState3ColorWriteMask,
         ShaderFmaFloat16,
         ProvokingVertexLast, LogicOp, DrawIndirectCount,
+        AlphaToOne,
     }
     VkExtension {
         ExtRobustness2, ExtImageRobustness, ExtShaderAtomicFloat, ExtShaderAtomicFloat2,

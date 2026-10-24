@@ -41,6 +41,11 @@ pub struct GraphicsState {
     /// four-component float first output at attachment 0 whose alpha it reads: without one Metal
     /// leaves the coverage as rasterized, and Vulkan requires that output.
     pub alpha_to_coverage: bool,
+    /// The descriptor's `alphaToOneEnabled`, as
+    /// `VkPipelineMultisampleStateCreateInfo::alphaToOneEnable`: both replace the fragment's
+    /// alpha with one before the blend reads it and before the write mask decides what is stored,
+    /// and neither changes the alpha [`alpha_to_coverage`](GraphicsState::alpha_to_coverage)
+    /// reads. The pipeline's requirements name `alphaToOne`.
     pub alpha_to_one: bool,
     /// `rasterizationEnabled = NO`: the pipeline has no fragment stage and discards primitives.
     pub rasterizer_discard: bool,
@@ -497,11 +502,16 @@ impl GraphicsState {
 
     /// The features the pipeline's multisample state needs: `sampleRateShading` for
     /// [`sample_shading`](GraphicsState::sample_shading)
-    /// (`VUID-VkPipelineMultisampleStateCreateInfo-sampleShadingEnable-00784`).
+    /// (`VUID-VkPipelineMultisampleStateCreateInfo-sampleShadingEnable-00784`), and `alphaToOne`
+    /// for [`alpha_to_one`](GraphicsState::alpha_to_one)
+    /// (`VUID-VkPipelineMultisampleStateCreateInfo-alphaToOneEnable-00785`).
     pub(crate) fn multisample_features(&self) -> BTreeSet<VkFeature> {
         let mut features = BTreeSet::new();
         if self.sample_shading {
             features.insert(VkFeature::SampleRateShading);
+        }
+        if self.alpha_to_one {
+            features.insert(VkFeature::AlphaToOne);
         }
         features
     }

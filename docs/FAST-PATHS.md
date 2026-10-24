@@ -632,16 +632,6 @@ driver's. Each is open work.
   loses the thread shape where Metal keeps it. Nothing announces it.
   `compute-descriptor-reset` holds it.
 
-- **`alphaToOneEnabled` is refused outright.** The link stage refuses every render pipeline whose
-  descriptor sets it (`Unsupported(AlphaToOne, NotImplemented)`,
-  `pipeline/link/graphics.rs`'s `graphics_state`), where Metal creates it and draws. Vulkan's
-  `alphaToOne` feature is the exact counterpart, `GraphicsState::alpha_to_one` already exists and
-  the runtime already wires it to `alpha_to_one_enable`, so the gap is the field being dropped
-  between the descriptor and the state. Measured on an Apple M3 Max, macOS 27.0.1: the field
-  replaces the fragment's alpha with 1 before a blend reads it and before it is stored, and an
-  attachment write mask that drops alpha stops the 1 being stored while the blend keeps reading
-  it. `a2one-on-1-blend-source-alpha` and `a2one-on-1-mask-no-alpha` hold Metal's answer.
-
 - **Blending into an integer-format attachment is not compared, because Metal ends the process.**
   `-[MTLRenderPipelineDescriptorInternal validateWithDevice:]` fails an assertion and the process
   ends on SIGABRT — `Blending is enabled for render target 0; however, the pixelformat

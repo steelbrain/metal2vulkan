@@ -336,6 +336,12 @@ pub enum VkFeature {
     /// operation on the codes of each normalized and integer color attachment. A render pipeline
     /// whose private `logicOperation` the device applies requires it (`GraphicsState::logic_op`).
     LogicOp,
+    // Appended.
+    /// `alphaToOne` (Vulkan 1.0): `VkPipelineMultisampleStateCreateInfo::alphaToOneEnable`, which
+    /// replaces the fragment's alpha with one before the blend reads it
+    /// (`VUID-VkPipelineMultisampleStateCreateInfo-alphaToOneEnable-00785`). A render pipeline
+    /// whose descriptor sets `alphaToOneEnabled` requires it (`GraphicsState::alpha_to_one`).
+    AlphaToOne,
 }
 
 /// A Vulkan device extension the new core can require.

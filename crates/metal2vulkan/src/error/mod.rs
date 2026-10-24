@@ -1236,7 +1236,9 @@ pub enum Feature {
     Lowering(LowerFamily),
     /// A sampler address mode the device lacks (`MirrorClampToEdge`).
     SamplerAddressMode,
-    /// `alphaToOneEnabled`: the device profile does not carry Vulkan's `alphaToOne` feature yet.
+    /// `alphaToOneEnabled` on a device without Vulkan's `alphaToOne` feature, the exact
+    /// counterpart (`VkPipelineMultisampleStateCreateInfo::alphaToOneEnable`). A device that has
+    /// the feature draws the pipeline.
     AlphaToOne,
     /// Buffer or image stores or atomics in a vertex or fragment function without the stage's
     /// store feature (`vertexPipelineStoresAndAtomics`, `fragmentStoresAndAtomics`).

@@ -1,7 +1,8 @@
 //! Render-pipeline link: vertex fetch projection, `VertexInputState`, and `GraphicsState`.
 
 use super::*;
-use crate::error::{Attachment, Location};
+use crate::device::requirements::VkFeature;
+use crate::error::{Attachment, Capability, Location};
 use crate::metal::{PixelFormat, VertexFormat, VertexStepFunction};
 use crate::pipeline::descriptor::{VertexAttributeDescriptor, VertexBufferLayoutDescriptor};
 use crate::pipeline::lower_inputs::VertexFetch;
@@ -1132,13 +1133,56 @@ fn graphics_state_maps_the_descriptor() {
             link(&[&va, &fa], &LinkInputs::Render(Box::new(odd)), &p),
             Err(Error::InvalidDescriptor(_))
         ));
+        // Alpha to one is carried into the state on a device with the feature, and the
+        // pipeline's multisample requirements name it. Each of these profiles has `alphaToOne`.
         let mut a2one = r.clone();
         a2one.alpha_to_one = true;
-        assert_eq!(
-            link(&[&va, &fa], &LinkInputs::Render(Box::new(a2one)), &p).unwrap_err(),
-            Error::Unsupported(Unsupported::not_implemented(Feature::AlphaToOne))
+        let g = link(&[&va, &fa], &LinkInputs::Render(Box::new(a2one)), &p)
+            .unwrap_or_else(|e| panic!("{stem}: {e}"))
+            .graphics
+            .expect("graphics");
+        assert!(g.alpha_to_one, "{stem}");
+        assert!(
+            g.multisample_features().contains(&VkFeature::AlphaToOne),
+            "{stem}"
         );
     }
+}
+
+/// `alphaToOneEnabled` is refused only where the device lacks Vulkan's `alphaToOne`, naming the
+/// feature; a device that has it draws the pipeline (`graphics_state_maps_the_descriptor`).
+#[test]
+fn alpha_to_one_is_refused_only_without_the_feature() {
+    use crate::pipeline::descriptor::ColorAttachmentDescriptor;
+    let mut r = RenderLinkInputs::new();
+    r.color_attachments[0] = Some(ColorAttachmentDescriptor::new(PixelFormat::RGBA8Unorm));
+    r.alpha_to_one = true;
+    let va = artifact(iface(Stage::Vertex, vec![], vec![]), None);
+    let fa = artifact(iface(Stage::Fragment, vec![], vec![]), None);
+    let inputs = LinkInputs::Render(Box::new(r));
+    // `swiftshader` lists `alphaToOne` as unsupported, and `vk12-floor` states no such member.
+    for stem in ["swiftshader", "vk12-floor"] {
+        let p = profile(stem);
+        assert!(
+            !p.fields().enabled.features.contains(&VkFeature::AlphaToOne),
+            "{stem} has the feature"
+        );
+        assert_eq!(
+            link(&[&va, &fa], &inputs, &p).unwrap_err(),
+            Error::Unsupported(Unsupported::needs(
+                Feature::AlphaToOne,
+                Capability::Feature(VkFeature::AlphaToOne)
+            )),
+            "{stem}"
+        );
+    }
+    // The same inputs on a device with the feature link, and carry it.
+    let p = profile("moltenvk-m3");
+    let g = link(&[&va, &fa], &inputs, &p)
+        .expect("moltenvk-m3 links")
+        .graphics
+        .expect("graphics");
+    assert!(g.alpha_to_one);
 }
 
 /// The graphics state states whether the vertex function writes memory, and a rate-mapped pass
