@@ -163,6 +163,7 @@ mod pipeline_wait_order;
 mod pixel_format_info;
 #[cfg(all(any(m2v_gpu, m2v_cpu_icd), target_os = "linux"))]
 mod pointer_residency;
+mod pool_room;
 mod private_properties;
 mod queue;
 mod range;

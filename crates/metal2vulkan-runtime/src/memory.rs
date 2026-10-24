@@ -307,8 +307,16 @@ pub(super) fn candidates(
 #[derive(Debug)]
 pub(super) struct Pool<T> {
     blocks: Vec<Option<PoolBlock<T>>>,
-    /// The largest alignment a pooled placement asked of it so far ([`Pool::has_room`]).
+    /// The largest alignment a pooled placement asked of it so far ([`Pool::room`]).
     align: u64,
+    /// The longest free range a pooled placement could take at [`Pool::align`], derived over the
+    /// blocks once and held until something that can move it changes ([`Pool::room`]); `None` to
+    /// derive again.
+    room: Option<u64>,
+    /// How many live block slots [`Pool::room`]'s derivations have walked, and how many free
+    /// ranges they have visited (`tests::pool_room`).
+    walked: u64,
+    visited: u64,
     /// The pooled blocks added and freed so far ([`Pool::turnover`]).
     made: u64,
     freed: u64,
@@ -322,6 +330,10 @@ struct PoolBlock<T> {
     /// When it emptied, while it is empty and kept ([`Pool::release`]); `None` for a block
     /// added with nothing placed in it, kept as long as it stays empty.
     emptied: Option<Instant>,
+    /// Its longest free range at its pool's [`Pool::align`], derived from its free ranges once
+    /// and held until its ranges or that alignment change ([`Pool::room`]); `None` to derive
+    /// again.
+    longest: Option<u64>,
 }
 
 impl<T> PoolBlock<T> {
@@ -336,6 +348,9 @@ impl<T> Default for Pool<T> {
         Pool {
             blocks: Vec::new(),
             align: 1,
+            room: None,
+            walked: 0,
+            visited: 0,
             made: 0,
             freed: 0,
         }
@@ -346,16 +361,34 @@ impl<T> Pool<T> {
     /// A place for `size` bytes aligned to `align` in a pooled block that has room: (block,
     /// offset).
     pub(super) fn place(&mut self, size: u64, align: u64) -> Option<(usize, u64)> {
-        self.align = self.align.max(align);
-        self.blocks
+        if align > self.align {
+            // Every block's longest free range was derived at the smaller alignment.
+            self.align = align;
+            self.forget_longest();
+        }
+        let placed = self
+            .blocks
             .iter_mut()
             .enumerate()
             .find_map(|(index, block)| {
                 let block = block.as_mut().filter(|block| !block.dedicated)?;
                 let offset = block.ranges.allocate(size, align)?;
                 block.emptied = None;
+                block.longest = None;
                 Some((index, offset))
-            })
+            });
+        if placed.is_some() {
+            self.room = None;
+        }
+        placed
+    }
+
+    /// Forget every longest free range held, which the pool's alignment growing can move.
+    fn forget_longest(&mut self) {
+        for block in self.blocks.iter_mut().flatten() {
+            block.longest = None;
+        }
+        self.room = None;
     }
 
     /// Add a block of `size` bytes holding `payload`, and place `used` bytes at its start when
@@ -371,8 +404,10 @@ impl<T> Pool<T> {
             dedicated,
             payload,
             emptied: None,
+            longest: None,
         });
         self.made += u64::from(!dedicated);
+        self.room = None;
         match self.blocks.iter().position(Option::is_none) {
             Some(index) => {
                 self.blocks[index] = block;
@@ -385,11 +420,63 @@ impl<T> Pool<T> {
         }
     }
 
-    /// Whether a pooled block has room for `size` bytes at the largest alignment asked of the
-    /// pool so far.
-    pub(super) fn has_room(&self, size: u64) -> bool {
+    /// Whether a pooled block has room for `size` bytes (above 0) at the largest alignment asked
+    /// of the pool so far: whether [`Pool::room`] is that long.
+    pub(super) fn has_room(&mut self, size: u64) -> bool {
+        self.room() >= size
+    }
+
+    /// The longest free range a pooled placement could take at [`Pool::align`]: the longest over
+    /// the pooled blocks, a dedicated block's free bytes counting for none.
+    ///
+    /// Every creation call the runtime makes asks whether its pools have room ([`keep_room`]),
+    /// where each answer is the same until a placement, a block or the alignment changes it, so
+    /// the pool holds the answer and derives it once: a creation that places nothing in a pool
+    /// walks none of its blocks, and one that places walks the blocks but derives the longest
+    /// free range of the one block whose ranges moved. Deriving per call instead walks every free
+    /// range of every block per creation, which grows with the pool's history; the count that
+    /// holds it to once is `tests::pool_room`.
+    fn room(&mut self) -> u64 {
+        if let Some(room) = self.room {
+            return room;
+        }
+        let align = self.align;
+        let (mut room, mut walked, mut visited) = (0, 0, 0);
+        for block in self.blocks.iter_mut().flatten() {
+            walked += 1;
+            if block.dedicated {
+                continue;
+            }
+            let longest = match block.longest {
+                Some(longest) => longest,
+                None => {
+                    visited += block.ranges.free_ranges();
+                    *block.longest.insert(block.ranges.longest(align))
+                }
+            };
+            room = room.max(longest);
+        }
+        self.walked += walked;
+        self.visited += visited;
+        self.room = Some(room);
+        room
+    }
+
+    /// How many live block slots the pool's derivations of [`Pool::room`] have walked, and how
+    /// many free ranges they have visited.
+    #[cfg(test)]
+    pub(super) fn room_work(&self) -> (u64, u64) {
+        (self.walked, self.visited)
+    }
+
+    /// [`Pool::room`] derived now, holding nothing: what the held answer must equal.
+    #[cfg(test)]
+    pub(super) fn room_derived_now(&self) -> u64 {
         (self.blocks.iter().flatten())
-            .any(|block| !block.dedicated && block.ranges.longest(self.align) >= size)
+            .filter(|block| !block.dedicated)
+            .map(|block| block.ranges.longest(self.align))
+            .max()
+            .unwrap_or(0)
     }
 
     /// Whether block `index` is a live pooled block, not a dedicated one.
@@ -424,6 +511,9 @@ impl<T> Pool<T> {
     ) -> Option<T> {
         let block = self.blocks.get_mut(index)?.as_mut()?;
         block.ranges.free(offset, size);
+        block.longest = None;
+        self.room = None;
+        let block = self.blocks[index].as_ref().expect("the block is live");
         if !block.ranges.is_empty() {
             return None;
         }
@@ -475,6 +565,7 @@ impl<T> Pool<T> {
     fn take(&mut self, index: usize) -> Option<T> {
         let block = self.blocks.get_mut(index)?.take()?;
         self.freed += u64::from(!block.dedicated);
+        self.room = None;
         Some(block.payload)
     }
 
@@ -485,6 +576,7 @@ impl<T> Pool<T> {
 
     /// Every block's payload, emptying the pool.
     pub(super) fn drain(&mut self) -> impl Iterator<Item = T> + '_ {
+        self.room = None;
         self.blocks.drain(..).flatten().map(|block| block.payload)
     }
 
@@ -1918,7 +2010,7 @@ pub(super) fn keep_room(memory: &Mutex<Memory>, device: &ash::Device, counts: &C
         };
         let room = memory.block_bytes / 2;
         let lacking: Vec<(Holds, u32)> = (kept.into_iter())
-            .filter(|&(holds, type_index)| !memory.pool_ref(holds, type_index).has_room(room))
+            .filter(|&(holds, type_index)| !memory.pool(holds, type_index).has_room(room))
             .collect();
         (lacking, memory.maker())
     };
@@ -1928,10 +2020,7 @@ pub(super) fn keep_room(memory: &Mutex<Memory>, device: &ash::Device, counts: &C
             continue;
         };
         let mut memory = lock(memory);
-        if memory
-            .pool_ref(pool.0, pool.1)
-            .has_room(maker.block_bytes / 2)
-        {
+        if memory.pool(pool.0, pool.1).has_room(maker.block_bytes / 2) {
             let what = "made a pooled block and freed it at once, its pool having room";
             memory.say_block(what, &block);
             drop(memory);
