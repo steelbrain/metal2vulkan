@@ -880,5 +880,181 @@
       ],
       "validated": "ran"
     }
+  ],
+  "times": [
+    {
+      "leg": "metal",
+      "venue": "native Metal",
+      "chip": "apple-m3-max",
+      "os_build": "26A434",
+      "rounds": 8,
+      "measured": "8 round(s) of the whole selection, in the case set's own order, each round on a fresh device, our shader cache carried over between the cases of a round; a figure is the median of the rounds' own medians; Metal's leg ran at a one-minute load average of 2.74 and ours at 3.46; the legs run one after the other, so the per-call margin is judged only when both are 26.0 or under and within 2.0x of each other",
+      "instrument": 275,
+      "times": {
+        "case": "texture-shared-handles",
+        "calls": 15,
+        "in_calls": 258291,
+        "on_cpu": 260625,
+        "blocked": 0,
+        "elsewhere": 2791,
+        "spend": 260957,
+        "spend_least": 229749,
+        "spend_most": 282170,
+        "per_call": [
+          {
+            "call": "shared_texture",
+            "least_calls": 1,
+            "most_calls": 1,
+            "wall": 100250,
+            "on_cpu": 100458,
+            "blocked": 0,
+            "wall_least": 84958,
+            "wall_most": 110250,
+            "wall_total": 100250,
+            "on_cpu_total": 100458,
+            "blocked_total": 0
+          },
+          {
+            "call": "shared_texture_handle",
+            "least_calls": 1,
+            "most_calls": 1,
+            "wall": 18792,
+            "on_cpu": 19042,
+            "blocked": 0,
+            "wall_least": 17667,
+            "wall_most": 21042,
+            "wall_total": 18792,
+            "on_cpu_total": 19042,
+            "blocked_total": 0
+          },
+          {
+            "call": "texture",
+            "least_calls": 1,
+            "most_calls": 1,
+            "wall": 30667,
+            "on_cpu": 30833,
+            "blocked": 0,
+            "wall_least": 28042,
+            "wall_most": 34208,
+            "wall_total": 30667,
+            "on_cpu_total": 30833,
+            "blocked_total": 0
+          },
+          {
+            "call": "texture_view",
+            "least_calls": 5,
+            "most_calls": 5,
+            "wall": 5416,
+            "on_cpu": 5583,
+            "blocked": 0,
+            "wall_least": 5000,
+            "wall_most": 5792,
+            "wall_total": 25500,
+            "on_cpu_total": 26249,
+            "blocked_total": 0
+          },
+          {
+            "call": "texture_view_facts",
+            "least_calls": 7,
+            "most_calls": 7,
+            "wall": 11292,
+            "on_cpu": 11417,
+            "blocked": 0,
+            "wall_least": 10541,
+            "wall_most": 12042,
+            "wall_total": 80541,
+            "on_cpu_total": 81624,
+            "blocked_total": 0
+          }
+        ]
+      }
+    },
+    {
+      "leg": "ours",
+      "venue": "Apple M3 Max",
+      "chip": "apple-m3-max",
+      "os_build": "26A434",
+      "rounds": 8,
+      "measured": "8 round(s) of the whole selection, in the case set's own order, each round on a fresh device, our shader cache carried over between the cases of a round; a figure is the median of the rounds' own medians; Metal's leg ran at a one-minute load average of 2.74 and ours at 3.46; the legs run one after the other, so the per-call margin is judged only when both are 26.0 or under and within 2.0x of each other",
+      "instrument": 269,
+      "times": {
+        "case": "texture-shared-handles",
+        "calls": 15,
+        "in_calls": 116834,
+        "on_cpu": 119207,
+        "blocked": 0,
+        "elsewhere": 250,
+        "spend": 116959,
+        "spend_least": 114624,
+        "spend_most": 125836,
+        "per_call": [
+          {
+            "call": "shared_texture",
+            "least_calls": 1,
+            "most_calls": 1,
+            "wall": 21333,
+            "on_cpu": 21583,
+            "blocked": 0,
+            "wall_least": 20667,
+            "wall_most": 24166,
+            "wall_total": 21333,
+            "on_cpu_total": 21583,
+            "blocked_total": 0
+          },
+          {
+            "call": "shared_texture_handle",
+            "least_calls": 1,
+            "most_calls": 1,
+            "wall": 8875,
+            "on_cpu": 9084,
+            "blocked": 0,
+            "wall_least": 8583,
+            "wall_most": 9458,
+            "wall_total": 8875,
+            "on_cpu_total": 9084,
+            "blocked_total": 0
+          },
+          {
+            "call": "texture",
+            "least_calls": 1,
+            "most_calls": 1,
+            "wall": 47917,
+            "on_cpu": 48083,
+            "blocked": 0,
+            "wall_least": 47167,
+            "wall_most": 57208,
+            "wall_total": 47917,
+            "on_cpu_total": 48083,
+            "blocked_total": 0
+          },
+          {
+            "call": "texture_view",
+            "least_calls": 5,
+            "most_calls": 5,
+            "wall": 7084,
+            "on_cpu": 7333,
+            "blocked": 0,
+            "wall_least": 6875,
+            "wall_most": 7541,
+            "wall_total": 37000,
+            "on_cpu_total": 37833,
+            "blocked_total": 0
+          },
+          {
+            "call": "texture_view_facts",
+            "least_calls": 7,
+            "most_calls": 7,
+            "wall": 209,
+            "on_cpu": 333,
+            "blocked": 0,
+            "wall_least": 208,
+            "wall_most": 209,
+            "wall_total": 1500,
+            "on_cpu_total": 2457,
+            "blocked_total": 0
+          }
+        ]
+      }
+    }
   ]
 }

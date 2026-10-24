@@ -342,5 +342,77 @@
       ],
       "validated": "ran"
     }
+  ],
+  "times": [
+    {
+      "leg": "metal",
+      "venue": "native Metal",
+      "chip": "apple-m3-max",
+      "os_build": "26A434",
+      "rounds": 8,
+      "measured": "8 round(s) of the whole selection, in the case set's own order, each round on a fresh device, our shader cache carried over between the cases of a round; a figure is the median of the rounds' own medians; Metal's leg ran at a one-minute load average of 2.74 and ours at 3.46; the legs run one after the other, so the per-call margin is judged only when both are 26.0 or under and within 2.0x of each other",
+      "instrument": 275,
+      "times": {
+        "case": "library-from-data",
+        "calls": 1,
+        "in_calls": 43796708,
+        "on_cpu": 1083458,
+        "blocked": 42688917,
+        "elsewhere": 1583,
+        "spend": 43798958,
+        "spend_least": 40841833,
+        "spend_most": 59263291,
+        "per_call": [
+          {
+            "call": "archives",
+            "least_calls": 1,
+            "most_calls": 1,
+            "wall": 43796708,
+            "on_cpu": 1083458,
+            "blocked": 42688917,
+            "wall_least": 40840500,
+            "wall_most": 59258791,
+            "wall_total": 43796708,
+            "on_cpu_total": 1083458,
+            "blocked_total": 42688917
+          }
+        ]
+      }
+    },
+    {
+      "leg": "ours",
+      "venue": "Apple M3 Max",
+      "chip": "apple-m3-max",
+      "os_build": "26A434",
+      "rounds": 8,
+      "measured": "8 round(s) of the whole selection, in the case set's own order, each round on a fresh device, our shader cache carried over between the cases of a round; a figure is the median of the rounds' own medians; Metal's leg ran at a one-minute load average of 2.74 and ours at 3.46; the legs run one after the other, so the per-call margin is judged only when both are 26.0 or under and within 2.0x of each other",
+      "instrument": 269,
+      "times": {
+        "case": "library-from-data",
+        "calls": 1,
+        "in_calls": 953208,
+        "on_cpu": 954125,
+        "blocked": 0,
+        "elsewhere": 3708,
+        "spend": 954833,
+        "spend_least": 867375,
+        "spend_most": 1169832,
+        "per_call": [
+          {
+            "call": "archives",
+            "least_calls": 1,
+            "most_calls": 1,
+            "wall": 953208,
+            "on_cpu": 954125,
+            "blocked": 0,
+            "wall_least": 866042,
+            "wall_most": 1160917,
+            "wall_total": 953208,
+            "on_cpu_total": 954125,
+            "blocked_total": 0
+          }
+        ]
+      }
+    }
   ]
 }

@@ -510,5 +510,77 @@
       ],
       "validated": "ran"
     }
+  ],
+  "times": [
+    {
+      "leg": "metal",
+      "venue": "native Metal",
+      "chip": "apple-m3-max",
+      "os_build": "26A434",
+      "rounds": 8,
+      "measured": "8 round(s) of the whole selection, in the case set's own order, each round on a fresh device, our shader cache carried over between the cases of a round; a figure is the median of the rounds' own medians; Metal's leg ran at a one-minute load average of 2.74 and ours at 3.46; the legs run one after the other, so the per-call margin is judged only when both are 26.0 or under and within 2.0x of each other",
+      "instrument": 275,
+      "times": {
+        "case": "binary-archive-fail-on-miss",
+        "calls": 1,
+        "in_calls": 49327916,
+        "on_cpu": 2434500,
+        "blocked": 47051416,
+        "elsewhere": 2833,
+        "spend": 49329916,
+        "spend_least": 47830959,
+        "spend_most": 51387791,
+        "per_call": [
+          {
+            "call": "archives",
+            "least_calls": 1,
+            "most_calls": 1,
+            "wall": 49327916,
+            "on_cpu": 2434500,
+            "blocked": 47051416,
+            "wall_least": 47828334,
+            "wall_most": 51384958,
+            "wall_total": 49327916,
+            "on_cpu_total": 2434500,
+            "blocked_total": 47051416
+          }
+        ]
+      }
+    },
+    {
+      "leg": "ours",
+      "venue": "Apple M3 Max",
+      "chip": "apple-m3-max",
+      "os_build": "26A434",
+      "rounds": 8,
+      "measured": "8 round(s) of the whole selection, in the case set's own order, each round on a fresh device, our shader cache carried over between the cases of a round; a figure is the median of the rounds' own medians; Metal's leg ran at a one-minute load average of 2.74 and ours at 3.46; the legs run one after the other, so the per-call margin is judged only when both are 26.0 or under and within 2.0x of each other",
+      "instrument": 269,
+      "times": {
+        "case": "binary-archive-fail-on-miss",
+        "calls": 1,
+        "in_calls": 16546209,
+        "on_cpu": 16090709,
+        "blocked": 455500,
+        "elsewhere": 508292,
+        "spend": 17054501,
+        "spend_least": 16196791,
+        "spend_most": 17812001,
+        "per_call": [
+          {
+            "call": "archives",
+            "least_calls": 1,
+            "most_calls": 1,
+            "wall": 16546209,
+            "on_cpu": 16090709,
+            "blocked": 455500,
+            "wall_least": 15698041,
+            "wall_most": 17297542,
+            "wall_total": 16546209,
+            "on_cpu_total": 16090709,
+            "blocked_total": 455500
+          }
+        ]
+      }
+    }
   ]
 }

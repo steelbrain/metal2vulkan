@@ -279,5 +279,80 @@
       ],
       "validated": "ran"
     }
+  ],
+  "times": [
+    {
+      "leg": "metal",
+      "venue": "native Metal",
+      "chip": "apple-m3-max",
+      "os_build": "26A434",
+      "rounds": 8,
+      "measured": "8 round(s) of the whole selection, in the case set's own order, each round on a fresh device, our shader cache carried over between the cases of a round; a figure is the median of the rounds' own medians; Metal's leg ran at a one-minute load average of 2.74 and ours at 3.46; the legs run one after the other, so the per-call margin is judged only when both are 26.0 or under and within 2.0x of each other",
+      "instrument": 275,
+      "times": {
+        "case": "sparse-mapping-slices-of-an-array",
+        "calls": 1,
+        "in_calls": 5047666,
+        "on_cpu": 268792,
+        "blocked": 4747708,
+        "elsewhere": 3778333,
+        "spend": 8875874,
+        "spend_least": 7867500,
+        "spend_most": 9910916,
+        "per_call": [
+          {
+            "call": "sparse_mapping",
+            "least_calls": 1,
+            "most_calls": 1,
+            "wall": 5047666,
+            "on_cpu": 268792,
+            "blocked": 4747708,
+            "wall_least": 4565458,
+            "wall_most": 5851709,
+            "wall_total": 5047666,
+            "on_cpu_total": 268792,
+            "blocked_total": 4747708
+          }
+        ]
+      }
+    },
+    {
+      "leg": "ours",
+      "venue": "Apple M3 Max",
+      "chip": "apple-m3-max",
+      "os_build": "26A434",
+      "rounds": 8,
+      "measured": "8 round(s) of the whole selection, in the case set's own order, each round on a fresh device, our shader cache carried over between the cases of a round; a figure is the median of the rounds' own medians; Metal's leg ran at a one-minute load average of 2.74 and ours at 3.46; the legs run one after the other, so the per-call margin is judged only when both are 26.0 or under and within 2.0x of each other",
+      "instrument": 269,
+      "times": {
+        "case": "sparse-mapping-slices-of-an-array",
+        "calls": 1,
+        "in_calls": 3049792,
+        "on_cpu": 182917,
+        "blocked": 2876792,
+        "elsewhere": 929583,
+        "spend": 3926667,
+        "spend_least": 3581459,
+        "spend_most": 4956041,
+        "degraded": [
+          "metal2vulkan-degrade-emulated-sparse-texture"
+        ],
+        "per_call": [
+          {
+            "call": "sparse_mapping",
+            "least_calls": 1,
+            "most_calls": 1,
+            "wall": 3049792,
+            "on_cpu": 182917,
+            "blocked": 2876792,
+            "wall_least": 2618292,
+            "wall_most": 3556166,
+            "wall_total": 3049792,
+            "on_cpu_total": 182917,
+            "blocked_total": 2876792
+          }
+        ]
+      }
+    }
   ]
 }

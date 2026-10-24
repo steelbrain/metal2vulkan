@@ -2112,5 +2112,77 @@
       ],
       "validated": "ran"
     }
+  ],
+  "times": [
+    {
+      "leg": "metal",
+      "venue": "native Metal",
+      "chip": "apple-m3-max",
+      "os_build": "26A434",
+      "rounds": 8,
+      "measured": "8 round(s) of the whole selection, in the case set's own order, each round on a fresh device, our shader cache carried over between the cases of a round; a figure is the median of the rounds' own medians; Metal's leg ran at a one-minute load average of 2.74 and ours at 3.46; the legs run one after the other, so the per-call margin is judged only when both are 26.0 or under and within 2.0x of each other",
+      "instrument": 275,
+      "times": {
+        "case": "pass-attachment-filters",
+        "calls": 6,
+        "in_calls": 799543,
+        "on_cpu": 800542,
+        "blocked": 0,
+        "elsewhere": 625,
+        "spend": 800708,
+        "spend_least": 782708,
+        "spend_most": 805292,
+        "per_call": [
+          {
+            "call": "pass_descriptor_facts",
+            "least_calls": 6,
+            "most_calls": 6,
+            "wall": 132667,
+            "on_cpu": 132792,
+            "blocked": 0,
+            "wall_least": 130000,
+            "wall_most": 134084,
+            "wall_total": 799543,
+            "on_cpu_total": 800542,
+            "blocked_total": 0
+          }
+        ]
+      }
+    },
+    {
+      "leg": "ours",
+      "venue": "Apple M3 Max",
+      "chip": "apple-m3-max",
+      "os_build": "26A434",
+      "rounds": 8,
+      "measured": "8 round(s) of the whole selection, in the case set's own order, each round on a fresh device, our shader cache carried over between the cases of a round; a figure is the median of the rounds' own medians; Metal's leg ran at a one-minute load average of 2.74 and ours at 3.46; the legs run one after the other, so the per-call margin is judged only when both are 26.0 or under and within 2.0x of each other",
+      "instrument": 269,
+      "times": {
+        "case": "pass-attachment-filters",
+        "calls": 6,
+        "in_calls": 4209,
+        "on_cpu": 5084,
+        "blocked": 0,
+        "elsewhere": 583,
+        "spend": 4667,
+        "spend_least": 4459,
+        "spend_most": 5584,
+        "per_call": [
+          {
+            "call": "pass_descriptor_facts",
+            "least_calls": 6,
+            "most_calls": 6,
+            "wall": 667,
+            "on_cpu": 792,
+            "blocked": 0,
+            "wall_least": 625,
+            "wall_most": 708,
+            "wall_total": 4209,
+            "on_cpu_total": 5084,
+            "blocked_total": 0
+          }
+        ]
+      }
+    }
   ]
 }

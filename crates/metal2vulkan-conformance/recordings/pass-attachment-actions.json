@@ -6192,5 +6192,77 @@
       ],
       "validated": "ran"
     }
+  ],
+  "times": [
+    {
+      "leg": "metal",
+      "venue": "native Metal",
+      "chip": "apple-m3-max",
+      "os_build": "26A434",
+      "rounds": 8,
+      "measured": "8 round(s) of the whole selection, in the case set's own order, each round on a fresh device, our shader cache carried over between the cases of a round; a figure is the median of the rounds' own medians; Metal's leg ran at a one-minute load average of 2.74 and ours at 3.46; the legs run one after the other, so the per-call margin is judged only when both are 26.0 or under and within 2.0x of each other",
+      "instrument": 275,
+      "times": {
+        "case": "pass-attachment-actions",
+        "calls": 18,
+        "in_calls": 2397086,
+        "on_cpu": 2399710,
+        "blocked": 0,
+        "elsewhere": 708,
+        "spend": 2397086,
+        "spend_least": 2341710,
+        "spend_most": 2464043,
+        "per_call": [
+          {
+            "call": "pass_descriptor_facts",
+            "least_calls": 18,
+            "most_calls": 18,
+            "wall": 132958,
+            "on_cpu": 133083,
+            "blocked": 0,
+            "wall_least": 129875,
+            "wall_most": 136459,
+            "wall_total": 2397086,
+            "on_cpu_total": 2399710,
+            "blocked_total": 0
+          }
+        ]
+      }
+    },
+    {
+      "leg": "ours",
+      "venue": "Apple M3 Max",
+      "chip": "apple-m3-max",
+      "os_build": "26A434",
+      "rounds": 8,
+      "measured": "8 round(s) of the whole selection, in the case set's own order, each round on a fresh device, our shader cache carried over between the cases of a round; a figure is the median of the rounds' own medians; Metal's leg ran at a one-minute load average of 2.74 and ours at 3.46; the legs run one after the other, so the per-call margin is judged only when both are 26.0 or under and within 2.0x of each other",
+      "instrument": 269,
+      "times": {
+        "case": "pass-attachment-actions",
+        "calls": 18,
+        "in_calls": 13500,
+        "on_cpu": 16001,
+        "blocked": 0,
+        "elsewhere": 625,
+        "spend": 14041,
+        "spend_least": 13418,
+        "spend_most": 16791,
+        "per_call": [
+          {
+            "call": "pass_descriptor_facts",
+            "least_calls": 18,
+            "most_calls": 18,
+            "wall": 667,
+            "on_cpu": 833,
+            "blocked": 0,
+            "wall_least": 666,
+            "wall_most": 792,
+            "wall_total": 13500,
+            "on_cpu_total": 16001,
+            "blocked_total": 0
+          }
+        ]
+      }
+    }
   ]
 }

@@ -294,5 +294,77 @@
       ],
       "validated": "ran"
     }
+  ],
+  "times": [
+    {
+      "leg": "metal",
+      "venue": "native Metal",
+      "chip": "apple-m3-max",
+      "os_build": "26A434",
+      "rounds": 8,
+      "measured": "8 round(s) of the whole selection, in the case set's own order, each round on a fresh device, our shader cache carried over between the cases of a round; a figure is the median of the rounds' own medians; Metal's leg ran at a one-minute load average of 2.74 and ours at 3.46; the legs run one after the other, so the per-call margin is judged only when both are 26.0 or under and within 2.0x of each other",
+      "instrument": 275,
+      "times": {
+        "case": "binary-archive-serializing",
+        "calls": 1,
+        "in_calls": 53070958,
+        "on_cpu": 1708333,
+        "blocked": 51375250,
+        "elsewhere": 263333,
+        "spend": 53342499,
+        "spend_least": 50340417,
+        "spend_most": 61033084,
+        "per_call": [
+          {
+            "call": "archives",
+            "least_calls": 1,
+            "most_calls": 1,
+            "wall": 53070958,
+            "on_cpu": 1708333,
+            "blocked": 51375250,
+            "wall_least": 50066917,
+            "wall_most": 60736959,
+            "wall_total": 53070958,
+            "on_cpu_total": 1708333,
+            "blocked_total": 51375250
+          }
+        ]
+      }
+    },
+    {
+      "leg": "ours",
+      "venue": "Apple M3 Max",
+      "chip": "apple-m3-max",
+      "os_build": "26A434",
+      "rounds": 8,
+      "measured": "8 round(s) of the whole selection, in the case set's own order, each round on a fresh device, our shader cache carried over between the cases of a round; a figure is the median of the rounds' own medians; Metal's leg ran at a one-minute load average of 2.74 and ours at 3.46; the legs run one after the other, so the per-call margin is judged only when both are 26.0 or under and within 2.0x of each other",
+      "instrument": 269,
+      "times": {
+        "case": "binary-archive-serializing",
+        "calls": 1,
+        "in_calls": 9310167,
+        "on_cpu": 4086792,
+        "blocked": 5345000,
+        "elsewhere": 13000,
+        "spend": 9323167,
+        "spend_least": 8701709,
+        "spend_most": 10864417,
+        "per_call": [
+          {
+            "call": "archives",
+            "least_calls": 1,
+            "most_calls": 1,
+            "wall": 9310167,
+            "on_cpu": 4086792,
+            "blocked": 5345000,
+            "wall_least": 8670792,
+            "wall_most": 10755375,
+            "wall_total": 9310167,
+            "on_cpu_total": 4086792,
+            "blocked_total": 5345000
+          }
+        ]
+      }
+    }
   ]
 }

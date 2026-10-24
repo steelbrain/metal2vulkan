@@ -3679,5 +3679,129 @@
       ],
       "validated": "ran"
     }
+  ],
+  "times": [
+    {
+      "leg": "metal",
+      "venue": "native Metal",
+      "chip": "apple-m3-max",
+      "os_build": "26A434",
+      "rounds": 8,
+      "measured": "8 round(s) of the whole selection, in the case set's own order, each round on a fresh device, our shader cache carried over between the cases of a round; a figure is the median of the rounds' own medians; Metal's leg ran at a one-minute load average of 2.74 and ours at 3.46; the legs run one after the other, so the per-call margin is judged only when both are 26.0 or under and within 2.0x of each other",
+      "instrument": 275,
+      "times": {
+        "case": "texture-view-parents",
+        "calls": 68,
+        "in_calls": 921377,
+        "on_cpu": 931495,
+        "blocked": 0,
+        "elsewhere": 4125,
+        "spend": 922752,
+        "spend_least": 874995,
+        "spend_most": 1091290,
+        "per_call": [
+          {
+            "call": "texture",
+            "least_calls": 13,
+            "most_calls": 13,
+            "wall": 31083,
+            "on_cpu": 31250,
+            "blocked": 0,
+            "wall_least": 29583,
+            "wall_most": 35833,
+            "wall_total": 397001,
+            "on_cpu_total": 399248,
+            "blocked_total": 0
+          },
+          {
+            "call": "texture_view",
+            "least_calls": 21,
+            "most_calls": 21,
+            "wall": 5625,
+            "on_cpu": 5792,
+            "blocked": 0,
+            "wall_least": 5416,
+            "wall_most": 7125,
+            "wall_total": 121000,
+            "on_cpu_total": 124084,
+            "blocked_total": 0
+          },
+          {
+            "call": "texture_view_facts",
+            "least_calls": 34,
+            "most_calls": 34,
+            "wall": 11459,
+            "on_cpu": 11625,
+            "blocked": 0,
+            "wall_least": 10875,
+            "wall_most": 14500,
+            "wall_total": 398291,
+            "on_cpu_total": 403415,
+            "blocked_total": 0
+          }
+        ]
+      }
+    },
+    {
+      "leg": "ours",
+      "venue": "Apple M3 Max",
+      "chip": "apple-m3-max",
+      "os_build": "26A434",
+      "rounds": 8,
+      "measured": "8 round(s) of the whole selection, in the case set's own order, each round on a fresh device, our shader cache carried over between the cases of a round; a figure is the median of the rounds' own medians; Metal's leg ran at a one-minute load average of 2.74 and ours at 3.46; the legs run one after the other, so the per-call margin is judged only when both are 26.0 or under and within 2.0x of each other",
+      "instrument": 269,
+      "times": {
+        "case": "texture-view-parents",
+        "calls": 68,
+        "in_calls": 960124,
+        "on_cpu": 972089,
+        "blocked": 0,
+        "elsewhere": 792,
+        "spend": 961124,
+        "spend_least": 912008,
+        "spend_most": 1056090,
+        "per_call": [
+          {
+            "call": "texture",
+            "least_calls": 13,
+            "most_calls": 13,
+            "wall": 59666,
+            "on_cpu": 59875,
+            "blocked": 0,
+            "wall_least": 57916,
+            "wall_most": 63375,
+            "wall_total": 785707,
+            "on_cpu_total": 788876,
+            "blocked_total": 0
+          },
+          {
+            "call": "texture_view",
+            "least_calls": 21,
+            "most_calls": 21,
+            "wall": 7584,
+            "on_cpu": 7792,
+            "blocked": 0,
+            "wall_least": 7208,
+            "wall_most": 7958,
+            "wall_total": 164666,
+            "on_cpu_total": 168544,
+            "blocked_total": 0
+          },
+          {
+            "call": "texture_view_facts",
+            "least_calls": 34,
+            "most_calls": 34,
+            "wall": 250,
+            "on_cpu": 375,
+            "blocked": 0,
+            "wall_least": 209,
+            "wall_most": 250,
+            "wall_total": 9626,
+            "on_cpu_total": 14623,
+            "blocked_total": 0
+          }
+        ]
+      }
+    }
   ]
 }

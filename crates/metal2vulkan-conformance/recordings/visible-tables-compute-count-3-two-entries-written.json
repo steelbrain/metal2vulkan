@@ -435,5 +435,103 @@
       ],
       "validated": "ran"
     }
+  ],
+  "times": [
+    {
+      "leg": "metal",
+      "venue": "native Metal",
+      "chip": "apple-m3-max",
+      "os_build": "26A434",
+      "rounds": 8,
+      "measured": "8 round(s) of the whole selection, in the case set's own order, each round on a fresh device, our shader cache carried over between the cases of a round; a figure is the median of the rounds' own medians; Metal's leg ran at a one-minute load average of 2.74 and ours at 3.46; the legs run one after the other, so the per-call margin is judged only when both are 26.0 or under and within 2.0x of each other",
+      "instrument": 275,
+      "times": {
+        "case": "visible-tables-compute-count-3-two-entries-written",
+        "calls": 3,
+        "in_calls": 50730875,
+        "on_cpu": 1783375,
+        "blocked": 48860167,
+        "elsewhere": 3191000,
+        "spend": 54117792,
+        "spend_least": 52601834,
+        "spend_most": 59288250,
+        "per_call": [
+          {
+            "call": "library",
+            "least_calls": 2,
+            "most_calls": 2,
+            "wall": 22696750,
+            "on_cpu": 628458,
+            "blocked": 22060208,
+            "wall_least": 21855250,
+            "wall_most": 22999334,
+            "wall_total": 46292000,
+            "on_cpu_total": 1310376,
+            "blocked_total": 45009958
+          },
+          {
+            "call": "visible_function_table",
+            "least_calls": 1,
+            "most_calls": 1,
+            "wall": 4225709,
+            "on_cpu": 499375,
+            "blocked": 3723834,
+            "wall_least": 4108750,
+            "wall_most": 4479125,
+            "wall_total": 4225709,
+            "on_cpu_total": 499375,
+            "blocked_total": 3723834
+          }
+        ]
+      }
+    },
+    {
+      "leg": "ours",
+      "venue": "Apple M3 Max",
+      "chip": "apple-m3-max",
+      "os_build": "26A434",
+      "rounds": 8,
+      "measured": "8 round(s) of the whole selection, in the case set's own order, each round on a fresh device, our shader cache carried over between the cases of a round; a figure is the median of the rounds' own medians; Metal's leg ran at a one-minute load average of 2.74 and ours at 3.46; the legs run one after the other, so the per-call margin is judged only when both are 26.0 or under and within 2.0x of each other",
+      "instrument": 269,
+      "times": {
+        "case": "visible-tables-compute-count-3-two-entries-written",
+        "calls": 3,
+        "in_calls": 2880917,
+        "on_cpu": 2100291,
+        "blocked": 781875,
+        "elsewhere": 322750,
+        "spend": 3208042,
+        "spend_least": 3090207,
+        "spend_most": 3714041,
+        "per_call": [
+          {
+            "call": "library",
+            "least_calls": 2,
+            "most_calls": 2,
+            "wall": 654000,
+            "on_cpu": 654375,
+            "blocked": 0,
+            "wall_least": 627291,
+            "wall_most": 751042,
+            "wall_total": 1550084,
+            "on_cpu_total": 1551542,
+            "blocked_total": 0
+          },
+          {
+            "call": "visible_function_table",
+            "least_calls": 1,
+            "most_calls": 1,
+            "wall": 1314459,
+            "on_cpu": 538792,
+            "blocked": 781875,
+            "wall_least": 1221833,
+            "wall_most": 1644750,
+            "wall_total": 1314459,
+            "on_cpu_total": 538792,
+            "blocked_total": 781875
+          }
+        ]
+      }
+    }
   ]
 }

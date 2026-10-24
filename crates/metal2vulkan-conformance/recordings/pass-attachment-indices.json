@@ -2792,5 +2792,77 @@
       ],
       "validated": "ran"
     }
+  ],
+  "times": [
+    {
+      "leg": "metal",
+      "venue": "native Metal",
+      "chip": "apple-m3-max",
+      "os_build": "26A434",
+      "rounds": 8,
+      "measured": "8 round(s) of the whole selection, in the case set's own order, each round on a fresh device, our shader cache carried over between the cases of a round; a figure is the median of the rounds' own medians; Metal's leg ran at a one-minute load average of 2.74 and ours at 3.46; the legs run one after the other, so the per-call margin is judged only when both are 26.0 or under and within 2.0x of each other",
+      "instrument": 275,
+      "times": {
+        "case": "pass-attachment-indices",
+        "calls": 8,
+        "in_calls": 1064083,
+        "on_cpu": 1065208,
+        "blocked": 0,
+        "elsewhere": 375,
+        "spend": 1064333,
+        "spend_least": 1042210,
+        "spend_most": 1070668,
+        "per_call": [
+          {
+            "call": "pass_descriptor_facts",
+            "least_calls": 8,
+            "most_calls": 8,
+            "wall": 132750,
+            "on_cpu": 132875,
+            "blocked": 0,
+            "wall_least": 129917,
+            "wall_most": 133292,
+            "wall_total": 1064083,
+            "on_cpu_total": 1065208,
+            "blocked_total": 0
+          }
+        ]
+      }
+    },
+    {
+      "leg": "ours",
+      "venue": "Apple M3 Max",
+      "chip": "apple-m3-max",
+      "os_build": "26A434",
+      "rounds": 8,
+      "measured": "8 round(s) of the whole selection, in the case set's own order, each round on a fresh device, our shader cache carried over between the cases of a round; a figure is the median of the rounds' own medians; Metal's leg ran at a one-minute load average of 2.74 and ours at 3.46; the legs run one after the other, so the per-call margin is judged only when both are 26.0 or under and within 2.0x of each other",
+      "instrument": 269,
+      "times": {
+        "case": "pass-attachment-indices",
+        "calls": 8,
+        "in_calls": 4960,
+        "on_cpu": 6292,
+        "blocked": 0,
+        "elsewhere": 583,
+        "spend": 5708,
+        "spend_least": 4750,
+        "spend_most": 6624,
+        "per_call": [
+          {
+            "call": "pass_descriptor_facts",
+            "least_calls": 8,
+            "most_calls": 8,
+            "wall": 584,
+            "on_cpu": 750,
+            "blocked": 0,
+            "wall_least": 583,
+            "wall_most": 750,
+            "wall_total": 4960,
+            "on_cpu_total": 6292,
+            "blocked_total": 0
+          }
+        ]
+      }
+    }
   ]
 }
