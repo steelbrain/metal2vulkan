@@ -495,11 +495,22 @@ impl Report {
             }
         }
         for row in self.cost_overruns() {
-            out.push_str(&format!("\n{} cost more than its bounds\n", row.case));
-            if let CostVerdict::Over { over } = &row.verdict {
-                for one in over {
-                    out.push_str(&format!("  {one}\n"));
+            match &row.verdict {
+                CostVerdict::Over { over } => {
+                    out.push_str(&format!("\n{} cost more than its bounds\n", row.case));
+                    for one in over {
+                        out.push_str(&format!("  {one}\n"));
+                    }
                 }
+                // The opposite finding, printed in its own words: this case stopped avoiding work
+                // it avoided every run of the measurement, which no upper bound can see.
+                CostVerdict::Under { under } => {
+                    out.push_str(&format!("\n{} saved less than its bounds\n", row.case));
+                    for one in under {
+                        out.push_str(&format!("  {one}\n"));
+                    }
+                }
+                CostVerdict::Within { .. } | CostVerdict::Unmeasured { .. } => {}
             }
         }
         out

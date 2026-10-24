@@ -483,6 +483,67 @@ fn first_draws_make_no_second_pipeline_where_views_are_read_at_their_residual() 
     );
 }
 
+/// Whether a compute state's creation-time prediction (`pipeline/dispatch_making.rs`) can serve a
+/// `dispatchThreads:`, the call Metal programs reach for. The prediction's region is a
+/// `dispatchThreadgroups:` of one threadgroup of Apple's guide's size; this dispatches
+/// `dispatchThreads:` over a grid of exactly that size, so the threads per threadgroup, the
+/// bindings and the specialization are the predicted ones and only the call differs. The counts
+/// say which: a prediction drawn, or a region handed to the pool and a second `VkPipeline` made.
+#[test]
+fn a_dispatch_threads_over_the_predicted_threadgroup_reads_what_the_prediction_serves() {
+    let scratch = Scratch::new("uniform-kernel-threads");
+    let device = device(&scratch.0);
+    let queue = device.new_command_queue().unwrap();
+    let function = library(&device)
+        .new_function_with_name("ubo_offsets_kernel")
+        .unwrap();
+    let before = idle(&device);
+    let state = device
+        .new_compute_pipeline_state_with_function(&function, &PipelineOptions::default())
+        .unwrap();
+    let created = idle(&device);
+    assert_eq!(
+        created.creation_pipelines_made - before.creation_pipelines_made,
+        1,
+        "the creation made its predicted region's pipeline"
+    );
+    let width = state.thread_execution_width();
+    let threads = Size::new(
+        u64::from(width),
+        u64::from(state.max_total_threads_per_threadgroup() / width),
+        1,
+    );
+    let data = constants();
+    let constants = device
+        .new_buffer_with_bytes(&data, ResourceOptions::shared())
+        .unwrap();
+    let output = device.new_buffer(16, ResourceOptions::shared()).unwrap();
+    let command_buffer = queue.command_buffer().unwrap();
+    let mut encoder = command_buffer.compute_command_encoder().unwrap();
+    encoder.set_compute_pipeline_state(&state).unwrap();
+    encoder.set_buffer(Some(&constants), 0, 0).unwrap();
+    encoder.set_buffer(Some(&output), 0, 1).unwrap();
+    // The grid is one whole threadgroup of the predicted size: no edge region.
+    encoder.dispatch_threads(threads, threads).unwrap();
+    encoder.end_encoding().unwrap();
+    command_buffer.commit().unwrap();
+    command_buffer
+        .wait_until_completed_for(WAIT)
+        .expect("the dispatch's command buffer waits for no making");
+    assert_eq!(command_buffer.error(), None);
+    let after = idle(&device);
+    assert_eq!(
+        (
+            after.creation_pipelines_drawn - created.creation_pipelines_drawn,
+            after.variant_pipelines_made - created.variant_pipelines_made,
+            after.dispatch_pipelines_pooled - created.dispatch_pipelines_pooled,
+        ),
+        (1, 0, 0),
+        "a `dispatchThreads:` over the predicted threadgroup takes the prediction, makes no \
+         second pipeline and hands nothing to the pool"
+    );
+}
+
 /// A compute state's creation makes the `VkPipeline` of its predicted region, a threadgroup of
 /// Apple's guide's size (`pipeline/dispatch_making.rs`), as Metal compiles at creation and its
 /// first dispatch compiles nothing. With the device's pool held, a dispatch of that size reading

@@ -236,8 +236,8 @@ Metal reads it with the rest of the case.
 
 **Counts are ours, never Metal's.** Metal has no counterpart for any of them and a host with no
 Metal can have no answer, so a count never enters the comparison with Metal and never produces a
-correctness verdict. The cost half has its own three verdicts — `within`, `over`, `unmeasured` — its
-own section of the report, and its own line of the command's exit status.
+correctness verdict. The cost half has its own four verdicts — `within`, `over`, `under`,
+`unmeasured` — its own section of the report, and its own line of the command's exit status.
 
 **It gates on counts, not times.** A count is deterministic, so it is assertable on any host under
 any load, and a regression reads "this case now does two allocations where it did none" rather than
@@ -253,6 +253,16 @@ queueing work cannot score as a win). The device API is the residual.
 
 A count the measurement never saw move is bounded at **zero**, so a case that starts doing something
 it did not do before is `over` rather than unnoticed.
+
+**A count of work the runtime avoided is gated from below too**, and it is the only count that is.
+Every other bound is a ceiling, which cannot see a saving go away: a change that makes a render or
+compute state's creation-time prediction miss *lowers* `creation_pipelines_drawn` and raises
+`variant_pipelines_made` into the room the ceiling leaves, so both readings pass. Such a count is
+named in `cost.rs`'s `SPARED` table with the measurement behind it, held to the bound from both
+sides, and a reading below it is `under` rather than `over`, because the two findings are opposite.
+A gated count's bound is every run's reading, so the floor and the ceiling are the same number; a
+count the measurement saw move, or that reads differently with the case alone, stays reported in
+both directions.
 
 Some counts are reported and never gated, because holding them would give a gate that fires at
 random on honest work. Each reason is written at its site in `cost.rs` with the runs behind it:
@@ -272,6 +282,9 @@ random on honest work. Each reason is written at its site in `cost.rs` with the 
 - one that moves when something has sat **past its quiet period**, which is a question about
   elapsed time;
 - `completed_waits`, which charges a case for waits belonging to whatever ran before it.
+
+A count in the `SPARED` table is gated from below only while it is gated at all: `racy` wins, so a
+reported count has no floor either.
 
 Totals stay gated where one exists, so nothing is lost: `command_buffers_deferred` holds the two
 replay counts between them, `encoder_command_buffers_begun` holds the primaries a completion thread

@@ -150,6 +150,49 @@ const FOUND: &str = "an object found already made rather than made, which depend
      case before it in the same process made. Its `_made` partner stays gated, and loses nothing: \
      finding one only lowers that count, and the gate is an upper bound";
 
+/// Counts of work the runtime **avoided**, where a reading below the measurement's is the
+/// regression and a reading above it is a win.
+///
+/// Every other count here is gated from above: a case that does more work than the measurement saw
+/// is [`CostVerdict::Over`]. A count of work avoided inverts that. `creation_pipelines_drawn`
+/// counts the predicted `VkPipeline`s a command actually took, so a change that makes the
+/// prediction miss **lowers** it and raises `variant_pipelines_made` — and an upper bound passes
+/// both, because one went down and the other has room. The per-case recordings say how much room:
+/// over the 1103 committed recordings, 508 of the 745 pipelines made at a state's creation were
+/// never taken by any command, and 83 cases hold a deterministic `creation_pipelines_drawn` above
+/// zero that nothing today holds them to.
+///
+/// A name here is gated from below at the bound's `most`, and only where the bound is gated at
+/// all: a count the measurement saw move between runs ([`CostBound::range`]), or that reads
+/// differently with the case alone ([`CostBound::composed`]), or that [`racy`] names, stays
+/// reported in both directions. For a gated count `most` is every run's reading, so the floor and
+/// the ceiling are the same number and the gate says a case kept avoiding exactly what it avoided.
+///
+/// **Each name is here on its own measurement**, as in every other table in this file, and never
+/// by analogy to another. `pipeline_layouts_shared`, `shader_modules_shared`, `draw_shapes_reused`
+/// and `variants_taken_back` all count work avoided too, and none of them is here: the
+/// measurements quoted under [`FOUND`] show each of them moving with what ran before the case, so
+/// a floor on one would fail the moment a case lands beside it.
+const SPARED: &[(&str, &str)] = &[(
+    "creation_pipelines_drawn",
+    "the predicted pipelines a command took, so a prediction that stops being taken lowers it \
+     while `variant_pipelines_made` rises into the room an upper bound leaves",
+)];
+
+/// Every count gated from below, with its reason ([`SPARED`]), so a test can hold the table in
+/// both directions.
+pub fn spared_table() -> impl Iterator<Item = (&'static str, &'static str)> {
+    SPARED.iter().copied()
+}
+
+/// Whether `count` measures work the runtime avoided, and why it is gated from below ([`SPARED`]).
+pub fn spared(count: &str) -> Option<&'static str> {
+    SPARED
+        .iter()
+        .find(|(name, _)| *name == count)
+        .map(|(_, why)| *why)
+}
+
 /// Why `completed_waits` is reported and never gated.
 ///
 /// It looked like the one deterministic breach — exactly one over its bound, in the same three
@@ -1226,6 +1269,33 @@ impl std::fmt::Display for Overrun {
     }
 }
 
+/// A gated count of work avoided that read below its bound ([`SPARED`]): this case stopped
+/// avoiding work it avoided every run of the measurement.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Underrun {
+    pub count: String,
+    pub region: Region,
+    /// The reading every run of the measurement saw, which is the floor as well as the ceiling.
+    pub bound: u64,
+    pub found: u64,
+    /// Why the count is gated from below ([`SPARED`]).
+    pub why: &'static str,
+}
+
+impl std::fmt::Display for Underrun {
+    fn fmt(&self, out: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            out,
+            "{} ({}) read {} where every run of the measurement saw {}: {}",
+            self.count,
+            self.region.word(),
+            self.found,
+            self.bound,
+            self.why
+        )
+    }
+}
+
 /// What the cost half says of one case on one venue. Never a correctness verdict, and never mixed
 /// with one: Metal has no counterpart for any of these counts.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -1237,6 +1307,11 @@ pub enum CostVerdict {
     },
     /// A gated count went over its bound: this case now does more work than the measurement saw.
     Over { over: Vec<Overrun> },
+    /// A gated count of work avoided ([`SPARED`]) read below its bound: this case stopped avoiding
+    /// work it avoided every run of the measurement. Held apart from [`CostVerdict::Over`] because
+    /// the two say opposite things about the same case, and a report that printed one word for both
+    /// would read as "more work" where the finding is "a saving gone".
+    Under { under: Vec<Underrun> },
     /// No bound stands for this run, and why. Counted, never a pass: "untimed" and "uncounted" are
     /// tracked the way "unrecorded" is.
     Unmeasured { why: String },
@@ -1248,6 +1323,7 @@ impl CostVerdict {
         match self {
             CostVerdict::Within { .. } => "within",
             CostVerdict::Over { .. } => "over",
+            CostVerdict::Under { .. } => "under",
             CostVerdict::Unmeasured { .. } => "unmeasured",
         }
     }
@@ -1255,7 +1331,7 @@ impl CostVerdict {
     /// Whether the run is within its bounds. An unmeasured run is not over them, so it does not
     /// fail the gate; it is counted as the gap it is.
     pub fn is_within(&self) -> bool {
-        !matches!(self, CostVerdict::Over { .. })
+        !matches!(self, CostVerdict::Over { .. } | CostVerdict::Under { .. })
     }
 }
 
@@ -1269,6 +1345,10 @@ impl std::fmt::Display for CostVerdict {
                     write!(out, "\n  {one}")?;
                 }
                 Ok(())
+            }
+            CostVerdict::Under { under } => {
+                let each: Vec<String> = under.iter().map(ToString::to_string).collect();
+                write!(out, "under: {}", each.join("; "))
             }
             CostVerdict::Unmeasured { why } => write!(out, "unmeasured: {why}"),
         }
@@ -1337,6 +1417,7 @@ pub fn judge(
         };
     }
     let mut over = Vec::new();
+    let mut under = Vec::new();
     for (count, found) in observed.iter() {
         let (bound, gated) = match record.bound(count) {
             Some(bound) => (bound.most, bound.gated()),
@@ -1354,12 +1435,33 @@ pub fn judge(
             });
         }
     }
-    if over.is_empty() {
-        CostVerdict::Within {
-            held: record.gated(),
+    // A count of work avoided is gated from below as well ([`SPARED`]), read from the record's own
+    // names rather than from the run's: a count the run never moved is absent from `observed`, and
+    // a saving that went to nothing is exactly the reading this gate is for. A count the
+    // measurement never saw is bounded at zero, and zero is no floor.
+    for bound in record.held() {
+        let Some(why) = spared(&bound.count) else {
+            continue;
+        };
+        let found = observed.get(&bound.count);
+        if bound.gated() && found < bound.most {
+            under.push(Underrun {
+                count: bound.count.clone(),
+                region: bound.region,
+                bound: bound.most,
+                found,
+                why,
+            });
         }
-    } else {
-        CostVerdict::Over { over }
+    }
+    match (over.is_empty(), under.is_empty()) {
+        (true, true) => CostVerdict::Within {
+            held: record.gated(),
+        },
+        // An overrun and an underrun together is still `Over`: more work done is the louder
+        // finding, and the underruns ride in the report's own listing of the case.
+        (false, _) => CostVerdict::Over { over },
+        (true, false) => CostVerdict::Under { under },
     }
 }
 

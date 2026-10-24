@@ -7004,6 +7004,131 @@ fn the_cost_coverage_set_is_held_in_both_directions() {
 /// fail it. [`crate::cost::judge`] therefore reads the refusal before it reads a count.
 ///
 /// The second half of this test is the one that matters: the same record with the refusal removed
+/// Every name in `cost::SPARED` is a count the runtime keeps and one the measurement can gate.
+///
+/// Held in both directions, as every table in `cost.rs` is: a name that is not a count of the
+/// runtime's would gate nothing for ever, and a name the reported tables already name would be
+/// claimed by two rules at once — `racy` wins, so such a row would be a floor that never applies
+/// while reading as though it did.
+#[test]
+fn every_spared_count_is_a_count_the_runtime_keeps_and_is_not_already_reported() {
+    let counts = crate::cost::Counts::of(&metal2vulkan_runtime::WorkCounts::default())
+        .expect("the runtime's counts read as counts");
+    let spared = ["creation_pipelines_drawn"];
+    for name in spared {
+        assert!(
+            crate::cost::spared(name).is_some(),
+            "{name} is not in the table this test holds"
+        );
+        assert!(
+            counts.iter().any(|(held, _)| held == name),
+            "{name} is not a count the runtime keeps"
+        );
+        assert!(
+            crate::cost::racy(name).is_none(),
+            "{name} is reported and never gated, so no floor on it can ever apply"
+        );
+    }
+    // The other direction: a name the code holds that this test does not know fails here, so the
+    // table cannot grow without the measurement a new row needs being written down beside it.
+    for (name, why) in crate::cost::spared_table() {
+        assert!(spared.contains(&name), "{name} is in SPARED and not here");
+        assert!(
+            why.len() > 40,
+            "{name}'s reason is {} characters, which is not a measurement",
+            why.len()
+        );
+    }
+}
+
+/// A count of work the runtime avoided is gated from BOTH sides (`cost::SPARED`).
+///
+/// Every other count is gated from above alone, which cannot see a saving go away: a change that
+/// makes a state's creation-time prediction miss lowers `creation_pipelines_drawn` and raises
+/// `variant_pipelines_made` into the room an upper bound leaves, so both readings pass. The
+/// recordings say how much room there is: 508 of the 745 pipelines made at a state's creation over
+/// the committed set were never taken by any command, and 83 cases hold a deterministic
+/// `creation_pipelines_drawn` above zero.
+///
+/// Four readings of one record, which is the falsification as well as the check: the measured
+/// reading is `within`, one prediction fewer taken is `under`, the count gone to nothing is
+/// `under`, and one more taken is `within`, because a saving that grew is a win and not a breach.
+#[test]
+fn a_count_of_work_avoided_is_gated_from_below_as_well() {
+    let record = crate::cost::CostRecord {
+        venue: "a venue".to_owned(),
+        runs: 8,
+        measured: "8 runs of the whole selection on a venue".to_owned(),
+        contrasted: None,
+        degraded: Vec::new(),
+        bounds: [
+            ("creation_pipelines_made".to_owned(), 4),
+            ("creation_pipelines_drawn".to_owned(), 4),
+            ("variant_pipelines_made".to_owned(), 4),
+        ]
+        .into_iter()
+        .collect(),
+        moving: Default::default(),
+        composed: Default::default(),
+        ceilings: Default::default(),
+        unmeasurable: None,
+    };
+    let judge = |made: u64, drawn: u64, variants: u64| {
+        let counts = crate::cost::Counts::read(&format!(
+            "WorkCounts {{\n    creation_pipelines_made: {made},\n    \
+             creation_pipelines_drawn: {drawn},\n    variant_pipelines_made: {variants},\n}}"
+        ))
+        .expect("the shape reads");
+        crate::cost::judge(
+            std::slice::from_ref(&record),
+            "a venue",
+            true,
+            &counts,
+            None,
+            &[],
+        )
+    };
+    assert_eq!(judge(4, 4, 4).word(), "within", "the measured reading");
+    // The regression this gate is for: the prediction stops being taken and the pipelines made at
+    // a draw rise into the room the upper bound leaves. Every count is at or under its bound, so
+    // the gate from above reads this as a pass.
+    let missed = judge(4, 3, 4);
+    assert_eq!(
+        missed.word(),
+        "under",
+        "one prediction fewer taken, with every count still under its bound"
+    );
+    assert!(!missed.is_within(), "an underrun fails the cost half");
+    let crate::cost::CostVerdict::Under { under } = &missed else {
+        panic!("a saving gone is `under`")
+    };
+    assert_eq!(under.len(), 1, "{under:?}");
+    assert_eq!(under[0].count, "creation_pipelines_drawn");
+    assert_eq!((under[0].bound, under[0].found), (4, 3));
+    assert!(
+        under[0]
+            .to_string()
+            .contains("read 3 where every run of the measurement saw 4"),
+        "{}",
+        under[0]
+    );
+    // The count gone to nothing is absent from the run's counts rather than present at zero, so
+    // the floor is read from the record's own names: an absent spared count is still a breach.
+    assert_eq!(
+        judge(4, 0, 4).word(),
+        "under",
+        "a saving that went to nothing, which the run reports by not reporting the count"
+    );
+    // And the other direction is a win, never a breach: a case that avoided more work than the
+    // measurement saw is within, because `most` is a ceiling for every count and a floor only for
+    // the spared ones.
+    assert_eq!(
+        judge(4, 4, 3).word(),
+        "within",
+        "fewer pipelines made at a draw is a win"
+    );
+}
+
 /// reads `Over`, so the early return is load-bearing rather than decorative.
 #[test]
 fn a_recorded_refusal_is_unmeasured_and_gates_no_count() {
