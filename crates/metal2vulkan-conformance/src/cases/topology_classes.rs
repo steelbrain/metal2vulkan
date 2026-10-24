@@ -287,7 +287,7 @@ impl Case for TopologyClassCase {
         // be read for another.
         for (name, class) in CLASSES {
             inputs.push(Input::bytes(
-                &format!("render-pipeline:{name}"),
+                format!("render-pipeline:{name}"),
                 &self.pipeline_spec(&colors, *class).words(),
             ));
         }
