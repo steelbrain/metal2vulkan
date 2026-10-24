@@ -29,9 +29,10 @@
 //! `PushField::StageInStride`, which the binder writes, as 0 for a buffer bound without one.
 //!
 //! **Formats** decode as a vertex format of the same raw value (`MTLAttributeFormat` and
-//! `MTLVertexFormat` list the same formats), and a format of the other numeric class than the
-//! attribute's type is refused: Metal's conversion of an integer vertex format into a float vertex
-//! attribute is measured, a stage-input attribute's is not.
+//! `MTLVertexFormat` list the same formats), and they meet the attribute's numeric class exactly
+//! as a pulled vertex attribute's do (`fetch::class_match`, `fetch::decode`): an unnormalized 8- or
+//! 16-bit integer format reaches a float attribute as each component's integer value, which Metal's
+//! stage-in fetch and its fixed-function vertex fetch answer the same bits for.
 
 use crate::air::abi::{AbiInt, ParamBinding, Slot};
 use crate::error::{DescriptorError, Error, Feature, RuntimeInput, Unsupported};
@@ -103,7 +104,16 @@ fn select(
     }
     .ok_or_else(|| Error::InvalidDescriptor(named(f.format.as_raw())))?;
     let encoding = fetch::encoding(format)?;
-    if encoding.is_float() != form.is_float() || form.is_bool() {
+    if form.is_bool() {
+        return Err(not_lowered());
+    }
+    // The class crossing a stage-input attribute takes is a pulled vertex attribute's
+    // (`fetch::class_match`): an unnormalized 8- or 16-bit integer format into a float attribute,
+    // which `fetch::decode` converts, and which Metal's stage-in fetch answers the same bits for as
+    // its fixed-function vertex fetch. The crossings that function refuses are a *vertex*
+    // descriptor's refusals, which a compute layout's are not measured to be, so they stay
+    // `NotImplemented` here rather than becoming an invalid descriptor.
+    if fetch::class_match(encoding, form.is_float(), attribute).is_err() {
         return Err(not_lowered());
     }
     let layout = f.buffer_index;

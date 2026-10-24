@@ -819,6 +819,156 @@ fn a_thread_past_the_region_reads_its_last_element() {
     }
 }
 
+/// The sixteen `MTLAttributeFormat` values that cross the numeric classes — the unnormalized 8-
+/// and 16-bit integer codings, which Metal converts into a float attribute — each with its
+/// component count, its component width in bits and its signedness.
+const CROSSINGS: [(AttributeFormat, usize, u32, bool); 16] = [
+    (AttributeFormat::UChar, 1, 8, false),
+    (AttributeFormat::UChar2, 2, 8, false),
+    (AttributeFormat::UChar3, 3, 8, false),
+    (AttributeFormat::UChar4, 4, 8, false),
+    (AttributeFormat::Char, 1, 8, true),
+    (AttributeFormat::Char2, 2, 8, true),
+    (AttributeFormat::Char3, 3, 8, true),
+    (AttributeFormat::Char4, 4, 8, true),
+    (AttributeFormat::UShort, 1, 16, false),
+    (AttributeFormat::UShort2, 2, 16, false),
+    (AttributeFormat::UShort3, 3, 16, false),
+    (AttributeFormat::UShort4, 4, 16, false),
+    (AttributeFormat::Short, 1, 16, true),
+    (AttributeFormat::Short2, 2, 16, true),
+    (AttributeFormat::Short3, 3, 16, true),
+    (AttributeFormat::Short4, 4, 16, true),
+];
+
+/// The values a crossing format of `bits` bits and signedness `signed` carries on its components:
+/// both ends of its range, zero and one, so a component read at the other signedness or the other
+/// width lands a value none of the others holds. Each is exact in `f32`.
+fn crossing_values(bits: u32, signed: bool) -> [i64; 4] {
+    match (bits, signed) {
+        (8, true) => [-128, -1, 0, 127],
+        (8, false) => [0, 1, 200, 255],
+        (_, true) => [-32768, -1, 0, 32767],
+        (_, false) => [0, 1, 40000, 65535],
+    }
+}
+
+/// Layout 1's element 0 holding `count` components of `bits` bits at byte `at` — the values
+/// [`crossing_values`] gives them — over [`layout1`]'s own element 0, so every other attribute
+/// of the element reads what the rest of this file expects of it.
+fn crossing_element(at: usize, count: usize, bits: u32, signed: bool) -> Vec<u8> {
+    let mut b = layout1();
+    let width = (bits / 8) as usize;
+    for (k, value) in crossing_values(bits, signed).iter().take(count).enumerate() {
+        let raw = (*value as u64).to_le_bytes();
+        b[at + k * width..][..width].copy_from_slice(&raw[..width]);
+    }
+    b
+}
+
+/// The twelve words the fetch kernel's one thread reports for a crossing format carried by
+/// attribute `declared`: each component's integer value as the attribute's own float class, the
+/// components the format lacks as `(0, 0, 0, 1)` on the `float4` and as zero on the `half2`, and
+/// every other attribute as [`expected_fetch`]'s element 0.
+fn expected_crossing(declared: u32, count: usize, bits: u32, signed: bool) -> [u32; 12] {
+    let mut out = expected_fetch(0, 0, 0);
+    let values = crossing_values(bits, signed);
+    let value = |lane: usize| {
+        if lane < count {
+            values[lane] as f32
+        } else {
+            f32::from(lane == 3)
+        }
+    };
+    if declared == 0 {
+        for (lane, slot) in out[..4].iter_mut().enumerate() {
+            *slot = value(lane).to_bits();
+        }
+    } else {
+        for (lane, slot) in out[9..11].iter_mut().enumerate() {
+            *slot = u32::from(crate::float16::f32_to_f16_bits(value(lane)));
+        }
+    }
+    out
+}
+
+/// An unnormalized 8- or 16-bit integer format on a float-class `[[stage_in]]` attribute reads
+/// each component's integer value, zero- or sign-extended by the format's signedness, as that
+/// attribute's own float class — the conversion a pulled vertex attribute of the same format gets
+/// (`fetch::class_match`'s `IntToFloat`), which Metal's stage-in fetch answers the same bits for as
+/// its fixed-function vertex fetch. All sixteen crossing formats make the pipeline, on the `float4`
+/// attribute and on the `half2` one, whose value is rounded to nearest even (65520 and above to
+/// infinity).
+#[test]
+fn integer_formats_cross_into_a_float_attribute_as_their_values() {
+    let Some(bc) = fixture() else { return };
+    let dispatch = Dispatch::Threads {
+        threads: [1, 1, 1],
+        threads_per_group: [1, 1, 1],
+    };
+    let mut ran = 0;
+    for (what, dev, _) in devices() {
+        let mut here = 0;
+        // Attribute 0 (`float4`) at byte 4 and attribute 3 (`half2`) at byte 16 of layout 1, each
+        // in turn carrying the crossing format while the other three stay in their own class, so
+        // nothing but the crossing is in question.
+        for (declared, at) in [(0u32, 4usize), (3, 16)] {
+            for (format, count, bits, signed) in CROSSINGS {
+                let held = |index: u32, own: AttributeFormat| {
+                    if index == declared {
+                        format
+                    } else {
+                        own
+                    }
+                };
+                let d = descriptor(
+                    &[
+                        (0, held(0, AttributeFormat::Float3), 4, 1),
+                        (1, AttributeFormat::UShort4, 0, 2),
+                        (2, AttributeFormat::Char, 5, 3),
+                        (3, held(3, AttributeFormat::Half2), 16, 1),
+                    ],
+                    &[
+                        (1, 24, StepFunction::ThreadPositionInGridX, 1),
+                        (2, 8, StepFunction::ThreadPositionInGridY, 1),
+                        (3, 999, StepFunction::Constant, 0),
+                    ],
+                    (IndexType::UInt16, 4),
+                );
+                let what = format!("{what} {format:?} on attribute {declared}");
+                let Some(pipe) = compiled(&what, pipeline(&dev, &bc, "stage_in_fetch", Some(&d)))
+                else {
+                    continue;
+                };
+                let (_, m) = typed_module_with(&bc, "stage_in_fetch", dev.profile(), &inputs(&d))
+                    .unwrap_or_else(|e| panic!("{what}: {e}"));
+                let alloc = |bytes| Alloc { bytes, offset: 0 };
+                let mut world = World::new(
+                    [
+                        (0, alloc(vec![0; 48])),
+                        (1, alloc(crossing_element(at, count, bits, signed))),
+                        (2, alloc(layout2())),
+                        (3, alloc(layout3())),
+                        (4, alloc(index_buffer(IndexType::UInt16))),
+                    ],
+                    StageInRegion::new([0; 3], [1, 1, 1]),
+                );
+                execute(&dev, &pipe, &m, &mut world, &dispatch)
+                    .unwrap_or_else(|e| panic!("{what}: {e}"));
+                assert_eq!(
+                    words(&world.buffers[&0].bytes),
+                    expected_crossing(declared, count, bits, signed),
+                    "{what}"
+                );
+                here += 1;
+            }
+        }
+        assert_eq!(here, 2 * CROSSINGS.len(), "{what}: made {here} pipelines");
+        ran += 1;
+    }
+    assert!(ran >= PROFILES.len(), "ran on {ran} devices");
+}
+
 /// The fetch kernel's buffers: its output, layouts 1 to 3, and a 16-bit index buffer.
 fn fetch_buffers() -> [(u32, Alloc); 5] {
     let alloc = |bytes| Alloc { bytes, offset: 0 };
