@@ -932,6 +932,7 @@ codec_enum! {
         ShaderFmaFloat16,
         ProvokingVertexLast, LogicOp, DrawIndirectCount,
         AlphaToOne,
+        BresenhamLines,
     }
     VkExtension {
         ExtRobustness2, ExtImageRobustness, ExtShaderAtomicFloat, ExtShaderAtomicFloat2,
@@ -957,6 +958,7 @@ codec_enum! {
         ExtAttachmentFeedbackLoopLayout, ExtExtendedDynamicState3,
         KhrFormatFeatureFlags2,
         ExtProvokingVertex, ExtPostDepthCoverage,
+        ExtLineRasterization,
     }
     SubgroupOp { Basic, Vote, Arithmetic, Ballot, Shuffle, ShuffleRelative, Clustered, Quad }
     FloatWidth { F16, F32, F64 }

@@ -342,6 +342,16 @@ pub enum VkFeature {
     /// (`VUID-VkPipelineMultisampleStateCreateInfo-alphaToOneEnable-00785`). A render pipeline
     /// whose descriptor sets `alphaToOneEnabled` requires it (`GraphicsState::alpha_to_one`).
     AlphaToOne,
+    // Appended.
+    /// `VK_EXT_line_rasterization`'s `bresenhamLines`: a pipeline whose rasterization state chains
+    /// `VkPipelineRasterizationLineStateCreateInfoEXT` with
+    /// `VK_LINE_RASTERIZATION_MODE_BRESENHAM_EXT`
+    /// (`VUID-VkPipelineRasterizationLineStateCreateInfoKHR-lineRasterizationMode-02768`), under
+    /// which a line covers the pixels whose diamond it exits, as Metal rasterizes a line. Without
+    /// it a line takes the device's own default mode, which on a device whose `strictLines` is set
+    /// covers every pixel the line's rectangle contains and so covers pixels Metal leaves
+    /// untouched (`pipeline/graphics.rs`).
+    BresenhamLines,
 }
 
 /// A Vulkan device extension the new core can require.
@@ -460,6 +470,10 @@ pub enum VkExtension {
     /// `VK_EXT_post_depth_coverage` (never promoted, no feature member): a fragment shader's
     /// `SampleMask` input read after the early depth and stencil tests (`PostDepthCoverage`).
     ExtPostDepthCoverage,
+    // Appended.
+    /// `VK_EXT_line_rasterization` (promoted to `VK_KHR_line_rasterization`, never core):
+    /// [`VkFeature::BresenhamLines`].
+    ExtLineRasterization,
 }
 
 /// One subgroup operation class (`VkSubgroupFeatureFlagBits`).

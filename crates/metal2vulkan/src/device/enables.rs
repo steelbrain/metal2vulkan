@@ -296,6 +296,7 @@ exposures! {
         PrimitiveTopologyListRestart, PrimitiveTopologyPatchListRestart,
     ];
     Extension(&[E::ExtProvokingVertex]) => [ProvokingVertexLast];
+    Extension(&[E::ExtLineRasterization]) => [BresenhamLines];
     Extension(&[E::KhrRayQuery]) => [RayQuery];
     Extension(&[E::ExtMeshShader]) => [TaskShader, MeshShader];
     Extension(&[E::KhrAccelerationStructure]) => [AccelerationStructure];
@@ -353,6 +354,7 @@ fn facts(ext: VkExtension) -> ExtensionFacts {
         | E::ExtSampleLocations
         | E::ExtPrimitiveTopologyListRestart
         | E::ExtProvokingVertex
+        | E::ExtLineRasterization
         | E::ExtAttachmentFeedbackLoopLayout
         | E::ExtExtendedDynamicState3
         | E::ExtPostDepthCoverage

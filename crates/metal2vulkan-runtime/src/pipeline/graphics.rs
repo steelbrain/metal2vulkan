@@ -121,6 +121,23 @@ pub(crate) fn keyed_assembly(
     (topology, primitive_restart)
 }
 
+/// Whether a pipeline of `topology` and `polygon_mode` rasterizes lines: a line topology, or a
+/// triangle topology whose fill mode draws each triangle's edges as lines
+/// (`MTLTriangleFillModeLines`). A pipeline whose topology is dynamic takes its class's own
+/// topology here ([`input_assembly`]), and Vulkan holds a dynamic topology to its class, so a line
+/// pipeline stays one.
+///
+/// [`input_assembly`]: metal2vulkan::metal::state::input_assembly
+fn rasterizes_lines(topology: vk::PrimitiveTopology, polygon_mode: vk::PolygonMode) -> bool {
+    matches!(
+        topology,
+        vk::PrimitiveTopology::LINE_LIST
+            | vk::PrimitiveTopology::LINE_STRIP
+            | vk::PrimitiveTopology::LINE_LIST_WITH_ADJACENCY
+            | vk::PrimitiveTopology::LINE_STRIP_WITH_ADJACENCY
+    ) || polygon_mode == vk::PolygonMode::LINE
+}
+
 /// The topology a graphics making's record is named by (`shader_cache/driver.rs`): a line
 /// topology names it as the triangle topology of its shape, so a state's line and triangle
 /// pipelines of an otherwise equal key share one record; every other topology names its own.
@@ -306,6 +323,12 @@ pub(crate) struct GraphicsContent {
     polygon_mode: vk::PolygonMode,
     /// The last vertex provokes ([`FixedState::provoking_last`]).
     provoking_last: bool,
+    /// The device rasterizes lines as Metal does on request ([`bresenham_lines`]): a pipeline
+    /// that rasterizes lines chains `VkPipelineRasterizationLineStateCreateInfoEXT` with
+    /// `VK_LINE_RASTERIZATION_MODE_BRESENHAM_EXT`.
+    ///
+    /// [`bresenham_lines`]: metal2vulkan::device::VkFeature::BresenhamLines
+    bresenham_lines: bool,
     cull_mode: vk::CullModeFlags,
     front_face: vk::FrontFace,
     depth_bias: bool,
@@ -671,6 +694,23 @@ impl GraphicsContent {
         if self.provoking_last {
             raster = raster.push_next(&mut provoking);
         }
+        // Metal covers the pixels whose diamond a line exits. Vulkan's default mode is the
+        // device's own: on a device whose `strictLines` is set it is the rectangle of the line's
+        // width, which covers both pixels either side of a pixel boundary the line runs along and
+        // takes the rectangle's own fill rule at the ends, so a line's first and last pixels and
+        // every boundary pixel differ from Metal's (measured on llvmpipe and on an RTX 5080,
+        // which both set it; MoltenVK does not, and its lines are Metal's own). Bresenham's mode
+        // is Metal's rule, and every device profile this tree holds offers it.
+        let mut line = vk::PipelineRasterizationLineStateCreateInfoEXT::default()
+            .line_rasterization_mode(vk::LineRasterizationModeEXT::BRESENHAM);
+        let multisample_allows_bresenham =
+            !self.alpha_to_coverage && !self.alpha_to_one && !self.sample_shading;
+        if self.bresenham_lines
+            && multisample_allows_bresenham
+            && rasterizes_lines(self.topology, self.polygon_mode)
+        {
+            raster = raster.push_next(&mut line);
+        }
         // The pass's sample positions on a grid of one pixel, each already on the sixteenths
         // every device with the extension takes exactly (`sample_positions.rs`).
         let mut sample_locations = vk::PipelineSampleLocationsStateCreateInfoEXT::default()
@@ -959,6 +999,13 @@ impl VariantObjects {
             depth_clamp: key.fixed.depth_clamp,
             polygon_mode: key.fixed.polygon_mode.into(),
             provoking_last: key.fixed.provoking_last,
+            bresenham_lines: self
+                .device
+                .compile_device()
+                .profile()
+                .enabled()
+                .features
+                .contains(&metal2vulkan::device::VkFeature::BresenhamLines),
             cull_mode: key.fixed.cull_mode.into(),
             front_face: key.fixed.front_face.into(),
             depth_bias: bias.enable,

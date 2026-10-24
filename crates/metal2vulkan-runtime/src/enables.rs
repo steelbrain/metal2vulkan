@@ -371,6 +371,8 @@ pub(super) enum Structure {
     ListRestart,
     /// `VkPhysicalDeviceProvokingVertexFeaturesEXT`.
     ProvokingVertex,
+    /// `VkPhysicalDeviceLineRasterizationFeaturesEXT`.
+    LineRasterization,
     RayQuery,
     Acceleration,
     /// `VkPhysicalDeviceMeshShaderFeaturesEXT`.
@@ -467,6 +469,7 @@ impl Structure {
             | Structure::DepthClampControl
             | Structure::ListRestart
             | Structure::ProvokingVertex
+            | Structure::LineRasterization
             | Structure::RayQuery
             | Structure::Acceleration
             | Structure::MeshShader
@@ -520,6 +523,7 @@ impl Structure {
             Structure::DepthClampControl => &[X::ExtDepthClampControl],
             Structure::ListRestart => &[X::ExtPrimitiveTopologyListRestart],
             Structure::ProvokingVertex => &[X::ExtProvokingVertex],
+            Structure::LineRasterization => &[X::ExtLineRasterization],
             Structure::RayQuery => &[X::KhrRayQuery],
             Structure::Acceleration => &[X::KhrAccelerationStructure],
             Structure::MeshShader => &[X::ExtMeshShader],
@@ -581,6 +585,7 @@ struct FeatureChain {
     depth_clamp_control: DepthClampControlFeatures,
     list_restart: vk::PhysicalDevicePrimitiveTopologyListRestartFeaturesEXT<'static>,
     provoking_vertex: vk::PhysicalDeviceProvokingVertexFeaturesEXT<'static>,
+    line_rasterization: vk::PhysicalDeviceLineRasterizationFeaturesEXT<'static>,
     ray_query: vk::PhysicalDeviceRayQueryFeaturesKHR<'static>,
     acceleration_structure: vk::PhysicalDeviceAccelerationStructureFeaturesKHR<'static>,
     mesh_shader: vk::PhysicalDeviceMeshShaderFeaturesEXT<'static>,
@@ -772,6 +777,7 @@ members! {
     ListRestart.list_restart.primitive_topology_list_restart => PrimitiveTopologyListRestart;
     ListRestart.list_restart.primitive_topology_patch_list_restart => PrimitiveTopologyPatchListRestart;
     ProvokingVertex.provoking_vertex.provoking_vertex_last => ProvokingVertexLast;
+    LineRasterization.line_rasterization.bresenham_lines => BresenhamLines;
     RayQuery.ray_query.ray_query => RayQuery;
     Acceleration.acceleration_structure.acceleration_structure => AccelerationStructure;
     MeshShader.mesh_shader.task_shader => TaskShader;
@@ -903,6 +909,7 @@ const EXTENSIONS: &[(VkExtension, &CStr)] = {
             c"VK_EXT_primitive_topology_list_restart",
         ),
         (X::ExtProvokingVertex, c"VK_EXT_provoking_vertex"),
+        (X::ExtLineRasterization, c"VK_EXT_line_rasterization"),
         (X::KhrRayQuery, c"VK_KHR_ray_query"),
         (
             X::KhrAccelerationStructure,
@@ -1096,6 +1103,7 @@ macro_rules! link_extensions {
             DepthClampControl => depth_clamp_control,
             ListRestart => list_restart,
             ProvokingVertex => provoking_vertex,
+            LineRasterization => line_rasterization,
             RayQuery => ray_query,
             Acceleration => acceleration_structure,
             MeshShader => mesh_shader,

@@ -1276,6 +1276,11 @@ fn feature_route(structure: &str) -> Option<Route> {
             Ext(&["VK_EXT_primitive_topology_list_restart"], None)
         }
         "VkPhysicalDeviceProvokingVertexFeaturesEXT" => Ext(&["VK_EXT_provoking_vertex"], None),
+        "VkPhysicalDeviceLineRasterizationFeaturesEXT"
+        | "VkPhysicalDeviceLineRasterizationFeaturesKHR" => Ext(
+            &["VK_EXT_line_rasterization", "VK_KHR_line_rasterization"],
+            None,
+        ),
         "VkPhysicalDeviceRayQueryFeaturesKHR" => Ext(&["VK_KHR_ray_query"], None),
         "VkPhysicalDeviceAccelerationStructureFeaturesKHR" => {
             Ext(&["VK_KHR_acceleration_structure"], None)
@@ -1668,6 +1673,7 @@ pub(super) const FEATURE_MEMBERS: &[(&str, VkFeature)] = {
             F::PrimitiveTopologyPatchListRestart,
         ),
         ("provokingVertexLast", F::ProvokingVertexLast),
+        ("bresenhamLines", F::BresenhamLines),
         ("alphaToOne", F::AlphaToOne),
     ]
 };
@@ -1735,6 +1741,7 @@ pub(crate) fn extension_from_name(name: &str) -> Option<VkExtension> {
         "VK_EXT_sample_locations" => E::ExtSampleLocations,
         "VK_EXT_primitive_topology_list_restart" => E::ExtPrimitiveTopologyListRestart,
         "VK_EXT_provoking_vertex" => E::ExtProvokingVertex,
+        "VK_EXT_line_rasterization" | "VK_KHR_line_rasterization" => E::ExtLineRasterization,
         "VK_KHR_synchronization2" => E::KhrSynchronization2,
         "VK_KHR_shader_untyped_pointers" => E::KhrShaderUntypedPointers,
         "VK_KHR_cooperative_matrix" => E::KhrCooperativeMatrix,
