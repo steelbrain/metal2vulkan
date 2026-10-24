@@ -501,6 +501,18 @@ fn the_spin_cap_holds_both_ends() {
     // A rate so low the clamp would bite is below anything that can run this kernel at all: one
     // load every half second. Stated so the floor is read rather than discovered.
     assert_eq!(cap_for(2.0), 1);
+    // The calibration cannot trip the budget while measuring, on a device of any speed. The cap
+    // grows sixteenfold and the growth stops at the FIRST cap whose run reaches
+    // `first_use::MEASURED`, so the cap before that one ran for less than MEASURED and the one
+    // that stops the growth runs for less than sixteen times it, whatever the rate. That bound,
+    // and not the device, is what keeps the measuring runs short: on the RADV 780M the longest was
+    // 161 ms.
+    const GROWTH: u32 = 16;
+    assert!(
+        super::first_use::MEASURED * GROWTH < HANG,
+        "the longest run the calibration can make is {:?}, past the {HANG:?} budget",
+        super::first_use::MEASURED * GROWTH
+    );
 }
 
 /// The spin kernel and the cap calibrated for the device it will run on.
