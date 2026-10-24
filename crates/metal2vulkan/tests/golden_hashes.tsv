@@ -4,25 +4,25 @@
 # A cell is the first 64 bits of SHA-256 over the final SPIR-V of its subject, or its
 # refusal class. A cell that changes under an unchanged fixture source and profile
 # fingerprint needs cache::SEMANTICS_VERSION above its value at the last bless.
-profile	amd-780m-hawkpoint-radv	fa019e2e3038514d
-profile	amd-780m-radv	fa019e2e3038514d
-profile	amd-rdna2-apu-radv	388bd5ceaa3bc0d6
-profile	amd-rdna3-radv	7e0bd6fb3bb1dcf8
-profile	gate-lavapipe	05c3f223d9aebb06
-profile	gate-lavapipe-x86_64	a2c03b62752c100c
-profile	intel-arl-anv	b82392601fb299e1
-profile	intel-irisxe-anv	683a4dc7edce5e7a
-profile	intel-irisxe-rplp-anv	6d9b59a4f66cd57c
-profile	intel-uhd770-rpls-anv	6d9b59a4f66cd57c
-profile	lavapipe	388c2f430cd80dd0
+profile	amd-780m-hawkpoint-radv	5ce247226a1f6864
+profile	amd-780m-radv	5ce247226a1f6864
+profile	amd-rdna2-apu-radv	3894c52a075e6c53
+profile	amd-rdna3-radv	c6648b536017af05
+profile	gate-lavapipe	95dee2d1f7724888
+profile	gate-lavapipe-x86_64	7b49dada7199682f
+profile	intel-arl-anv	b8b334112707ee95
+profile	intel-irisxe-anv	6fa3ceb394fe51c4
+profile	intel-irisxe-rplp-anv	750219848c937d8a
+profile	intel-uhd770-rpls-anv	750219848c937d8a
+profile	lavapipe	65c31430989c5031
 profile	lunarg-desktop-baseline-2023	b37d1d640379db97
-profile	moltenvk-m3	4fa134b07c5deebf
-profile	moltenvk-m4	4fa134b07c5deebf
-profile	nvidia-pascal-linux	c5371e2e52ec6361
-profile	nvidia-rtx50-linux	f19abac96ff517c0
-profile	nvidia-rtx5080-laptop	c33d5e3fa99b98b5
+profile	moltenvk-m3	20b6f907db9d246c
+profile	moltenvk-m4	20b6f907db9d246c
+profile	nvidia-pascal-linux	4124fb58b5838812
+profile	nvidia-rtx50-linux	0b7ddf6b040edaab
+profile	nvidia-rtx5080-laptop	1e3f570f0dda7284
 profile	roadmap-2022	12cdcb05db4ae1d0
-profile	swiftshader	bc00a9775e6882b9
+profile	swiftshader	3765f311c1602c61
 profile	vk12-floor	cb98a973eb06eedb
 fixture	source	subject	amd-780m-hawkpoint-radv	amd-780m-radv	amd-rdna2-apu-radv	amd-rdna3-radv	gate-lavapipe	gate-lavapipe-x86_64	intel-arl-anv	intel-irisxe-anv	intel-irisxe-rplp-anv	intel-uhd770-rpls-anv	lavapipe	lunarg-desktop-baseline-2023	moltenvk-m3	moltenvk-m4	nvidia-pascal-linux	nvidia-rtx50-linux	nvidia-rtx5080-laptop	roadmap-2022	swiftshader	vk12-floor
 engine/a1_bool_from_float.air.ll	67a41b1383f5ed2f	a1_bool_from_float	0a0ec028faad6a5c	0a0ec028faad6a5c	0a0ec028faad6a5c	0a0ec028faad6a5c	4dbd1a2c0f36ebaf	4dbd1a2c0f36ebaf	2ca5cfb8afb6bb50	2ca5cfb8afb6bb50	2ca5cfb8afb6bb50	2ca5cfb8afb6bb50	4dbd1a2c0f36ebaf	137b6837a6e233c4	42031b7194255d6f	42031b7194255d6f	137b6837a6e233c4	4dbd1a2c0f36ebaf	4dbd1a2c0f36ebaf	137b6837a6e233c4	137b6837a6e233c4	137b6837a6e233c4
