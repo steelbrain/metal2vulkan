@@ -43,7 +43,7 @@ Its limits, measured rather than asserted:
 | committed recordings | 1103 |
 | distinct SDK items the Metal leg reaches, of any status | 797 |
 | of those, reached only where this cannot name the family | 2 |
-| ledger rows (a case whose gap is recorded) | 291 |
+| ledger rows (a case whose gap is recorded) | 288 |
 | declared crossings of the option space (pairs put to Metal at once) | 24 |
 | declared crossings that are no pair of it (a boolean or numeric field, or one type in two slots) | 30 |
 
@@ -2212,15 +2212,12 @@ A case whose difference from Metal is recorded rather than compared away. The le
 | `attribute-stride-plural-buffers` | Metal's `MTLAttributeStrideStatic` on a `[[stage_in]]` layout of `MTLBufferLayoutStrideDynamic` is not "read at stride 0"; it fetches the element at the bind of… |
 | `attribute-stride-buffer-offset` | Metal's `MTLAttributeStrideStatic` on a `[[stage_in]]` layout of `MTLBufferLayoutStrideDynamic` is not "read at stride 0"; it fetches the element at the bind of… |
 | `attribute-stride-inline-bytes` | The runtime refuses a kernel's `[[stage_in]]` fetch of INLINE BYTES bound with `MTLAttributeStrideStatic`, where plain Metal answers. Measured on this M3 Max (m… |
-| `half-texel-nans-r16f` | Metal's `half` result of a 16-bit float texel hands back the texel's own NaN code, with its sign, its payload and its signalling bit kept, and ours answers the … |
-| `half-texel-nans-r16f` | Metal's `half` result of a 16-bit float texel hands back the texel's own NaN code, with its sign, its payload and its signalling bit kept, and ours answers the … |
-| `half-texel-nans-r16f` | Metal's `half` result of a 16-bit float texel hands back the texel's own NaN code, with its sign, its payload and its signalling bit kept, and ours answers the … |
-| `half-texel-nans-rg16f` | Metal's `half` result of a 16-bit float texel hands back the texel's own NaN code, with its sign, its payload and its signalling bit kept, and ours answers the … |
-| `half-texel-nans-rg16f` | Metal's `half` result of a 16-bit float texel hands back the texel's own NaN code, with its sign, its payload and its signalling bit kept, and ours answers the … |
-| `half-texel-nans-rg16f` | Metal's `half` result of a 16-bit float texel hands back the texel's own NaN code, with its sign, its payload and its signalling bit kept, and ours answers the … |
-| `half-texel-nans-rgba16f` | Metal's `half` result of a 16-bit float texel hands back the texel's own NaN code, with its sign, its payload and its signalling bit kept, and ours answers the … |
-| `half-texel-nans-rgba16f` | Metal's `half` result of a 16-bit float texel hands back the texel's own NaN code, with its sign, its payload and its signalling bit kept, and ours answers the … |
-| `half-texel-nans-rgba16f` | Metal's `half` result of a 16-bit float texel hands back the texel's own NaN code, with its sign, its payload and its signalling bit kept, and ours answers the … |
+| `half-texel-nans-r16f` | Metal's `texture2d<half>` never widens, so a 16-bit float texel's NaN comes back as its own code -- sign, payload and signalling bit kept -- and ours answers th… |
+| `half-texel-nans-r16f` | Metal's `texture2d<half>` never widens, so a 16-bit float texel's NaN comes back as its own code -- sign, payload and signalling bit kept -- and ours answers th… |
+| `half-texel-nans-rg16f` | Metal's `texture2d<half>` never widens, so a 16-bit float texel's NaN comes back as its own code -- sign, payload and signalling bit kept -- and ours answers th… |
+| `half-texel-nans-rg16f` | Metal's `texture2d<half>` never widens, so a 16-bit float texel's NaN comes back as its own code -- sign, payload and signalling bit kept -- and ours answers th… |
+| `half-texel-nans-rgba16f` | Metal's `texture2d<half>` never widens, so a 16-bit float texel's NaN comes back as its own code -- sign, payload and signalling bit kept -- and ours answers th… |
+| `half-texel-nans-rgba16f` | Metal's `texture2d<half>` never widens, so a 16-bit float texel's NaN comes back as its own code -- sign, payload and signalling bit kept -- and ours answers th… |
 | `half-output-blends-r16f` | Metal's stored blend result rounds the SOURCE product to the attachment's precision and carries the DESTINATION product into the sum unrounded -- `round(round(S… |
 | `half-output-blends-r16f` | A blend whose factor reads the blend colour, at the same product rounding as this family's other divergent sites and not yet fitted to a rule there. What is mea… |
 | `half-output-blends-rg16f` | Metal's stored blend result rounds the SOURCE product to the attachment's precision and carries the DESTINATION product into the sum unrounded -- `round(round(S… |
