@@ -277,16 +277,22 @@ pub fn vertex_fetch_projection_for(
 ) -> Result<VertexFetchProjection, Error> {
     let mut out = VertexFetchProjection::new();
     for (a, r) in resolve(desc, attributes, p, pulled_vertex_buffers, pull_every)?.0 {
-        out.attributes.insert(a, fetch_of(&r));
+        out.attributes.insert(a, fetch_of(&r)?);
     }
     Ok(out)
 }
 
-fn fetch_of(r: &Resolved<'_>) -> VertexFetch {
-    match r.fetch {
-        AttributeFetch::FixedFunction { .. } => VertexFetch::FixedFunction,
+/// The projection entry of a resolved attribute. A fixed-function entry carries whether the Metal
+/// format's components are floats narrower than 32 bits, which the function canonicalizes after
+/// the device's widening (`VertexFetch::FixedFunction`); the rest of the format is `VertexAttribute`
+/// state.
+fn fetch_of(r: &Resolved<'_>) -> Result<VertexFetch, Error> {
+    Ok(match r.fetch {
+        AttributeFetch::FixedFunction { .. } => VertexFetch::FixedFunction {
+            narrow_float: encoding(r.attr.format)?.widens_narrow_float(),
+        },
         _ => VertexFetch::pulled(r.attr, r.layout),
-    }
+    })
 }
 
 /// The vertex input state of vertex stage `vs` for descriptor `desc` under the
@@ -308,7 +314,11 @@ pub fn vertex_input_state(
     for (a, (_, fetch)) in &used {
         // The stage was compiled under another projection (a `Compiled` stage source whose
         // `LowerInputs` do not fit this descriptor).
-        if resolved.get(a).map(fetch_of) != Some(*fetch) {
+        let got = match resolved.get(a) {
+            Some(r) => Some(fetch_of(r)?),
+            None => None,
+        };
+        if got != Some(*fetch) {
             return Err(Error::InvalidDescriptor(DescriptorError::VertexAttribute {
                 attribute: *a,
             }));

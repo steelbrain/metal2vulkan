@@ -60,7 +60,7 @@ mod tests;
 /// unchanged version, and its bless records the version. Independent of the crate's version and of
 /// [`ARTIFACT_FORMAT_VERSION`]. The commit that bumps it says what changed; this comment keeps no
 /// history.
-pub const SEMANTICS_VERSION: u32 = 1825;
+pub const SEMANTICS_VERSION: u32 = 1826;
 
 /// The byte-layout version of encoded artifacts (`CompiledFunction::to_bytes` and the
 /// [`PipelineArtifact`] encodings). Every encoded artifact carries it, and a decode under another
@@ -70,7 +70,7 @@ pub const SEMANTICS_VERSION: u32 = 1825;
 /// re-typed in an encoded type, its `codec` body or its `envelope`. A variant removed while its tag
 /// stays unused needs no bump: an entry holding it fails to decode, which is a miss. The commit that
 /// bumps it says what changed; this comment keeps no history.
-pub const ARTIFACT_FORMAT_VERSION: u32 = 447;
+pub const ARTIFACT_FORMAT_VERSION: u32 = 448;
 
 /// The version of what this crate's runtime does with a compiled pipeline: instantiating a binding
 /// plan (`BindingPlan::instantiate_*`: descriptor ranges, push bytes, root, argument, and handle

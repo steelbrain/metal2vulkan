@@ -494,8 +494,11 @@ fn integer_formats_feed_float_attributes() {
                     scaled,
                     crate::device::requirements::FormatUsage::VertexBuffer,
                 );
+            let entry = VertexFetch::FixedFunction {
+                narrow_float: false,
+            };
             assert_eq!(
-                proj.attributes[&attr] == VertexFetch::FixedFunction,
+                proj.attributes[&attr] == entry,
                 fixed,
                 "{stem} {attr}: {:?}",
                 proj.attributes[&attr]
@@ -1249,4 +1252,135 @@ fn a_label_pipeline_reads_its_integer_attribute_as_float() {
     for stem in shipped {
         assert!(fixed.contains(&stem), "{stem} pulls it: {fixed:?}");
     }
+}
+
+/// A fixed-function vertex attribute of a narrow-float format read as `float` answers Metal's
+/// canonical NaN, and one of any other format keeps the bits the device's input delivered.
+///
+/// The owned `dsx_int_attributes` fixture's `int_attribute_to_float4` writes the one `float4`
+/// attribute it reads to `out[vid]`, so the module's answer is read bit for bit. The interpreter
+/// stands in for Vulkan's fixed-function vertex input: it holds the attribute's `Input` variable
+/// at the words the device's own widening of a narrow-float field would deliver
+/// (`VaryingKey::attribute(0)`), and the test reads what the shader stored.
+///
+/// Metal's answer, from `vertex-format-float4`'s recording of plain Metal on an M3 Max under
+/// macOS 27.0.1: a `half` code and a `FloatRG11B10` field whose 5-bit exponent is all ones both
+/// reach a `float` attribute as `0x7FC00000`, payload and sign dropped. A device's widening
+/// carries the field's bits up into the payload instead (`0x7FC02000` for the `half` codes
+/// `0x7E01` and `0xFE01`, `0x7FFE0000` for an all-ones `FloatRG11B10` field, measured on RADV).
+/// Every finite, zero, subnormal and infinite word passes through, and a `Float4` attribute keeps
+/// every word, NaNs included, as Metal's fetch of a 32-bit float does.
+#[test]
+fn a_narrow_float_attribute_fetched_in_fixed_function_answers_metals_canonical_nan() {
+    use crate::pipeline::sym::VaryingKey;
+    use crate::spirv::interp::run_with_inputs;
+    const CANONICAL: u32 = 0x7FC0_0000;
+    let bc = match llvm_assemble(&engine_dir().join("dsx_int_attributes.ll")) {
+        Ok(b) => b,
+        Err(AssembleError::Missing(why)) => {
+            eprintln!("SKIPPED: {why}");
+            return;
+        }
+        Err(AssembleError::Rejected(why)) => panic!("llvm-as rejected the fixture: {why}"),
+    };
+    // The words a device's fixed-function input delivers, and Metal's answer for each: three NaN
+    // payloads of either sign, an infinity, a subnormal, a zero and a finite value.
+    let delivered = [
+        0x7FC0_2000u32,
+        0xFFC0_2000,
+        0x7F80_2000,
+        0x7FFE_0000,
+        0x7F80_0000,
+        0x0000_0001,
+        0x8000_0000,
+        0x3F80_0000,
+    ];
+    let canonical: Vec<u32> = delivered
+        .iter()
+        .map(|w| match w & 0x7FFF_FFFF > 0x7F80_0000 {
+            true => CANONICAL,
+            false => *w,
+        })
+        .collect();
+    let mut ran = 0;
+    for stem in [
+        "moltenvk-m3",
+        "amd-780m-radv",
+        "nvidia-rtx5080-laptop",
+        "lavapipe",
+    ] {
+        let p = prof(stem);
+        if !p.fields().leaf.vertex_stores_and_atomics {
+            continue;
+        }
+        for (format, narrow) in [
+            (VertexFormat::Half4, true),
+            (VertexFormat::FloatRG11B10, true),
+            (VertexFormat::Float4, false),
+        ] {
+            let mut d = VertexDescriptor::new();
+            d.layouts
+                .insert(0, VertexBufferLayoutDescriptor::new(Some(16)));
+            d.attributes
+                .insert(0, VertexAttributeDescriptor::new(format, 0, 0));
+            let what = format!("{stem} {format:?}");
+            let proj =
+                vertex_fetch_projection(Some(&d), &BTreeMap::from([(0, IoNumeric::Float)]), &p)
+                    .unwrap_or_else(|e| panic!("{what}: {e}"));
+            // The projection's own entry says whether the format is a narrow float; a format the
+            // device's vertex input cannot fetch is pulled and is the pulled fetch's own test.
+            match proj.attributes[&0] {
+                VertexFetch::FixedFunction { narrow_float } => {
+                    assert_eq!(narrow_float, narrow, "{what}: {:?}", proj.attributes[&0])
+                }
+                VertexFetch::Pulled { .. } => continue,
+            }
+            let i = inputs(proj);
+            let a = compile_inputs_of(&bc, "int_attribute_to_float4", &p, &i)
+                .unwrap_or_else(|e| panic!("{what}: {e}"));
+            validate(&a, &p);
+            let (plan, m) = typed_module_with(&bc, "int_attribute_to_float4", &p, &i)
+                .unwrap_or_else(|e| panic!("{what}: {e}"));
+            // One vertex per set of four words the attribute delivers.
+            let vertices = (delivered.len() / 4) as u32;
+            let mut got = Vec::new();
+            for v in 0..vertices {
+                let lanes = &delivered[4 * v as usize..4 * v as usize + 4];
+                let res = Resources {
+                    buffers: vec![Buffer {
+                        slot: Some(buffer(0)),
+                        address: None,
+                        bytes: vec![0; 16],
+                    }],
+                    push: push_bytes(&plan),
+                    spec: Default::default(),
+                };
+                let attribute = lanes.iter().flat_map(|w| w.to_le_bytes()).collect();
+                let out = run_with_inputs(
+                    &m,
+                    &Config::default(),
+                    res,
+                    BTreeMap::from([(VaryingKey::attribute(0), attribute)]),
+                )
+                .unwrap_or_else(|e| panic!("{what}: {e}"));
+                got.extend(
+                    out.buffers[0]
+                        .as_chunks::<4>()
+                        .0
+                        .iter()
+                        .map(|c| u32::from_le_bytes([c[0], c[1], c[2], c[3]])),
+                );
+            }
+            let want: Vec<u32> = match narrow {
+                true => canonical.clone(),
+                false => delivered.to_vec(),
+            };
+            assert_eq!(got, want, "{what}");
+            ran += 1;
+        }
+    }
+    assert!(
+        ran > 0,
+        "no profile fetched the attribute in fixed function"
+    );
 }

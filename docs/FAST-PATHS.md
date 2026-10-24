@@ -306,17 +306,15 @@ driver's. Each is open work.
   unverified for those three here -- and the Metal half of the comparison stays this probe's, since
   Metal runs on neither.
 
-- **A `half` or `FloatRG11B10` vertex or stage-in attribute read as `float`, fetched by Vulkan's
-  fixed-function vertex input**: Metal's fetch canonicalizes a NaN to `0x7FC00000`, payload and
-  sign dropped, and the device's widening carries the field's bits up into the payload instead
-  (RADV, the Radeon 780M and the RX 7900 XTX, Mesa 26.2.4: `0x7FC02000` for the `half` codes
-  `0x7E01` and `0xFE01`, `0x7FFE0000` for an all-ones `FloatRG11B10` field; MoltenVK's fetch is
-  Metal's own and is exact). The shader's pulled fetch answers Metal's NaN, which is what
-  `vertex-format-constant-step` and `attribute-format-fetches` compare; nothing in the vertex
-  function's compile key says a fixed-function attribute's Metal format is a narrow float, so no
-  canonicalizing select is emitted after its `Input` load. Carrying the encoding in
-  `VertexFetch::FixedFunction` would reach it. Every finite, zero, subnormal and infinite code is
-  exact, and a `half`-declared attribute keeps the fetched bits, as Metal's does.
+- **A `half` or `FloatRG11B10` attribute read as `float`: the canonical NaN on the Linux
+  venues.** Both fetch paths answer Metal's `0x7FC00000` and are exact on the CPU interpreter and
+  on MoltenVK; neither is rerun on RADV, llvmpipe or the RTX 5080 since the fix, and
+  `known-gaps.tsv` still carries their rows. The pulled path's rows on llvmpipe and the RTX 5080
+  (`vertex-format-constant-step`, `attribute-format-fetches`) answer the un-canonicalized bits
+  although the canonicalization was already in the tree, which leaves three causes unseparated:
+  a run of an older tip, a cache keyed on a `SEMANTICS_VERSION` the fix did not move, and a
+  driver folding the `float` `OpSelect` the fix used. The last two are addressed (the version
+  moved, and the answer is computed on the integer bits alone), and the reruns decide.
 
 - **An extended-range format's sample through a constexpr clamp-to-zero sampler at a subnormal
   coordinate**: Metal's texture unit reads a subnormal normalized coordinate as the zero of its

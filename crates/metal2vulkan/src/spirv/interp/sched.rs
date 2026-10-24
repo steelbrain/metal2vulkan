@@ -20,7 +20,7 @@ use std::cmp::Ordering;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::ops::Range;
 
-use crate::pipeline::sym::SpecKey;
+use crate::pipeline::sym::{SpecKey, VaryingKey};
 use crate::spirv::ids::{BlockId, ConstId, FuncId, GlobalId, TypeId, Value, VarId};
 use crate::spirv::ir::{
     ExecMode, ExecModel, GlobalKind, Inst, InstNode, Scope, StorageClass, Terminator, TypedModule,
@@ -80,6 +80,9 @@ pub(super) struct Prog<'m> {
     /// run's constants alone, so every other invocation copies these bytes instead of encoding
     /// the constant again (a lookup table's initializer was a quarter of a dispatch's time).
     private_init: RefCell<Vec<Option<Vec<u8>>>>,
+    /// The bytes of each user interface input the run supplies ([`super::run_with_inputs`]), by
+    /// relocation key; every invocation reads the same bytes.
+    inputs: BTreeMap<VaryingKey, Vec<u8>>,
 }
 
 /// Where a frame keeps each function's values and variables, computed once per run: each value
@@ -106,6 +109,7 @@ impl<'m> Prog<'m> {
         res: &Resources,
         images: &[super::Image],
         spec: &'m BTreeMap<SpecKey, u64>,
+        inputs: BTreeMap<VaryingKey, Vec<u8>>,
     ) -> IResult<Prog<'m>> {
         let t = Tys { m, spec };
         let consts = t.constants(&res.spec)?;
@@ -264,6 +268,7 @@ impl<'m> Prog<'m> {
             buffer_arrays,
             layout,
             private_init: RefCell::new(vec![None; m.globals().len()]),
+            inputs,
         })
     }
 
@@ -787,6 +792,13 @@ fn new_lane(p: &Prog<'_>, grid: &Grid, wg: [u32; 3], li: u32) -> IResult<Lane> {
                 };
                 Region::new(MemoryKind::Private, bytes, true)
             }
+            // A user interface input the run supplies: the same bytes in every invocation, as
+            // fixed-function vertex input or the rasterizer would deliver them. One the run does
+            // not supply stays unmodelled, an error only if the module reads it.
+            (StorageClass::Input, GlobalKind::Io { key, .. }) => match p.inputs.get(key) {
+                Some(bytes) => Region::new(MemoryKind::Input, bytes.clone(), false),
+                None => continue,
+            },
             (StorageClass::Input, GlobalKind::BuiltIn { builtin, .. }) => {
                 use crate::spv::BuiltIn as B;
                 let words: Vec<u32> = match builtin {
@@ -1120,6 +1132,7 @@ pub(super) fn run(
     cfg: &Config,
     res: Resources,
     images: Vec<super::Image>,
+    inputs: BTreeMap<VaryingKey, Vec<u8>>,
 ) -> IResult<(Outcome, Vec<super::Image>)> {
     let model = m.entry().model;
     if !matches!(model, ExecModel::GLCompute | ExecModel::Vertex) {
@@ -1128,7 +1141,7 @@ pub(super) fn run(
     // Kept apart from `res`, whose buffers the run consumes: specialization-length arrays (the
     // threadgroup arena) are sized by these values for the whole run.
     let spec = res.spec.clone();
-    let p = Prog::new(m, &res, &images, &spec)?;
+    let p = Prog::new(m, &res, &images, &spec, inputs)?;
     // A vertex invocation shares no workgroup: each is a workgroup of one (see `super::run`).
     let local = match model {
         ExecModel::Vertex => [1, 1, 1],

@@ -135,14 +135,14 @@ impl CompiledFunction {
     pub fn attribute_fetches(&self) -> BTreeMap<u32, AttributeFetch> {
         let io = &self.0.interface.io;
         let fixed = io.inputs.iter().filter_map(|variable| match variable.role {
-            IoRole::Attribute { index } => Some((index, AttributeFetch::FixedFunction)),
+            IoRole::Attribute { index, .. } => Some((index, AttributeFetch::FixedFunction)),
             _ => None,
         });
         let pulled = io.pulled.iter().filter_map(|input| match input.fetch {
             VertexFetch::Pulled { buffer_index, .. } => {
                 Some((input.index, AttributeFetch::Pulled { buffer_index }))
             }
-            VertexFetch::FixedFunction => None,
+            VertexFetch::FixedFunction { .. } => None,
         });
         let stage_in = io.stage_in.iter().map(|input| {
             (

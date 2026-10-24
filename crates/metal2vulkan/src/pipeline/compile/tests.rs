@@ -666,7 +666,12 @@ fn the_inputs_encoding_is_the_earlier_derived_debug() {
     };
     let mut full = LoweringInputs::new();
     let mut projection = VertexFetchProjection::new();
-    projection.attributes.insert(2, VertexFetch::FixedFunction);
+    projection.attributes.insert(
+        2,
+        VertexFetch::FixedFunction {
+            narrow_float: false,
+        },
+    );
     full.vertex_fetch = Some(projection);
     full.storage_images.insert(
         slot(SlotClass::Texture, 1),

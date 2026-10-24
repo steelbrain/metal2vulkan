@@ -592,9 +592,17 @@ fn the_projection_of_the_fixture_is_fixed_function() {
     let v = vertex_under(&bc, &vertex_descriptor(), &p).expect("vertex");
     let attrs = v.interface.io.attributes();
     assert_eq!(attrs.len(), 4);
-    assert!(attrs
-        .values()
-        .all(|(_, f)| *f == VertexFetch::FixedFunction));
+    // Every attribute is fixed function; attribute 1's `Half2` is the one narrow-float format,
+    // whose widening a `float` parameter would canonicalize (this one reads it as `half2`).
+    for (a, (_, f)) in &attrs {
+        assert_eq!(
+            *f,
+            VertexFetch::FixedFunction {
+                narrow_float: *a == 1
+            },
+            "attribute {a}"
+        );
+    }
 }
 
 /// A fragment function's write to a half-float channel records the device's NaN encoding

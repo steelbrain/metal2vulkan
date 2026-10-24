@@ -141,7 +141,7 @@ impl Encoding {
     /// the `half` formats, and the 11- and 10-bit fields of `FloatRG11B10`, whose exponent field
     /// is all ones for a NaN. The 9:9:9:5 shared-exponent format decodes every code to a finite
     /// value, so none of its components is ever a NaN.
-    fn widens_narrow_float(self) -> bool {
+    pub fn widens_narrow_float(self) -> bool {
         matches!(self, Encoding::Half { .. } | Encoding::Rg11B10Float)
     }
 
@@ -799,20 +799,14 @@ pub fn decode(
     // A narrow float's widening to `float` answers Metal's canonical NaN, sign and payload
     // dropped (`nan::NanAnswer::CanonicalExact`, the widening class of Metal's NaN model), where
     // ours carries the 16-, 11- or 10-bit field's bits up into the payload by construction and a
-    // device whose own widening the module takes may carry them too. The select is Metal's answer
-    // on every device. A `half` parameter is not widened at all: it keeps the fetched bits, as
-    // Metal's does, and for a field of another width `narrow::round` answers the canonical `half`
-    // NaN. The test reads the bits, which no float mode lets a device fold.
+    // device whose own widening the module takes may carry them too. Answered on the bits alone
+    // (`nan::canonical_on_bits`), which leaves no float operation for a driver that assumes no
+    // NaNs to fold: the answer here is read bit for bit. A `half` parameter is not widened at
+    // all: it keeps the fetched bits, as Metal's does, and for a field of another width
+    // `narrow::round` answers the canonical `half` NaN.
     if encoding.widens_narrow_float() && form.float_fmt() == Some(FloatFmt::F32) {
         for c in &mut comps {
-            *c = nan::select(
-                fb,
-                f32_scalar(),
-                nan::NanAnswer::CanonicalExact,
-                nan::NanTest::Bits,
-                *c,
-                None,
-            )?;
+            *c = nan::canonical_on_bits(fb, f32_scalar(), *c)?;
         }
     }
     let scalar = Form { lanes: 1, ..form };

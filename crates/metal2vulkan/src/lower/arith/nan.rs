@@ -31,7 +31,10 @@
 //! The NaN test is `OpIsNan` where the entry declares `SignedZeroInfNanPreserve` for 32-bit
 //! floats, without which a device may assume that no operand is a NaN and fold the test; the
 //! module then tests the bits instead (`(bits & 0x7FFFFFFF) > 0x7F800000`), which no float mode
-//! reaches. The translation decorates no value `FPFastMathMode`.
+//! reaches. The translation decorates no value `FPFastMathMode`. The select itself is a `float`
+//! `OpSelect`, which such a device may still fold to its operand, since the condition holds
+//! exactly where the operand is a NaN; where the answer is read bit for bit the module answers on
+//! the bits alone instead ([`canonical_on_bits`]).
 
 use crate::air::intrinsics::{AirIntrinsic, NumKind, Precision};
 use crate::air::ir::{
@@ -448,6 +451,32 @@ pub fn select(
             fb.select(r_nan, nan, r)
         }
     }
+}
+
+/// `x`, 32-bit `float` lanes of form `f`, with Metal's canonical NaN `0x7FC00000` where a lane is
+/// a NaN, on the bits alone: the test, the select and the answer are integer operations, and the
+/// one float value is the result of an `OpBitcast`, which carries no float mode.
+///
+/// [`select`] with [`NanAnswer::CanonicalExact`] answers the same value through a `float`
+/// `OpSelect` whose condition holds exactly where its operand is a NaN: a compiler that assumes no
+/// operand is a NaN may fold that select to its operand, and the module declares no
+/// `SignedZeroInfNanPreserve` for it to rely on. This form leaves it nothing to fold, so a
+/// widening whose answer is read bit for bit (the vertex and stage-in fetches,
+/// `lower::stage_io::fetch`) uses it.
+pub fn canonical_on_bits(fb: &mut FunctionBuilder<'_>, f: Form, x: SValue) -> BResult<SValue> {
+    if f.float_fmt() != Some(FloatFmt::F32) {
+        return Err(BuildError::Type(TypeRule::FunctionSignature));
+    }
+    let u = u32_form(f);
+    let (ut, ft) = (ty(fb, u)?, ty(fb, f)?);
+    let bits = fb.convert(ConvOp::Bitcast, x, ut)?;
+    let magnitude = splat(fb, u, 0x7FFF_FFFF)?;
+    let infinity = splat(fb, u, 0x7F80_0000)?;
+    let m = fb.binary(BinOp::BitwiseAnd, bits, magnitude)?;
+    let is_nan = fb.binary(BinOp::UGreaterThan, m, infinity)?;
+    let canonical = splat(fb, u, CANONICAL)?;
+    let answered = fb.select(is_nan, canonical, bits)?;
+    fb.convert(ConvOp::Bitcast, answered, ft)
 }
 
 /// Whether lanes of `x` (form `f`) are NaNs, by `test`. The bits of a 64-bit container are read

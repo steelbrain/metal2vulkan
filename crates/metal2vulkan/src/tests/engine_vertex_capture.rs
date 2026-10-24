@@ -862,7 +862,7 @@ fn an_indexed_capture_pulls_every_attribute_at_its_vertex() {
         if plain
             .attributes
             .values()
-            .any(|f| *f == VertexFetch::FixedFunction)
+            .any(|f| matches!(f, VertexFetch::FixedFunction { .. }))
         {
             fixed_seen = true;
             let refusal = compile_with(

@@ -509,7 +509,9 @@ fn vertex_stage(p: &DeviceProfile, d: &VertexDescriptor, attrs: &[u32]) -> Stage
     let f4 = io_ty(IoNumeric::Float, 4);
     for (a, f) in &proj.attributes {
         match f {
-            VertexFetch::FixedFunction => vs.io.inputs.push(attr(*a, f4)),
+            VertexFetch::FixedFunction { narrow_float } => {
+                vs.io.inputs.push(super::attr_of(*a, f4, *narrow_float))
+            }
             _ => vs.io.pulled.push(PulledInput::new(*a, f4, *f)),
         }
     }
@@ -622,12 +624,22 @@ fn limits_pull_attributes_and_a_foreign_projection_is_refused() {
     p.fields.limits.max_vertex_input_attributes = 2;
     let proj = vertex::vertex_fetch_projection(Some(&d), &used, &p).expect("projection");
     assert!(matches!(proj.attributes[&4], VertexFetch::Pulled { .. }));
-    assert_eq!(proj.attributes[&1], VertexFetch::FixedFunction);
+    assert!(matches!(
+        proj.attributes[&1],
+        VertexFetch::FixedFunction {
+            narrow_float: false
+        }
+    ));
     let mut p = profile("moltenvk-m3");
     p.fields.limits.max_vertex_input_bindings = 1;
     let proj = vertex::vertex_fetch_projection(Some(&d), &used, &p).expect("projection");
     assert!(matches!(proj.attributes[&4], VertexFetch::Pulled { .. }));
-    assert_eq!(proj.attributes[&0], VertexFetch::FixedFunction);
+    assert!(matches!(
+        proj.attributes[&0],
+        VertexFetch::FixedFunction {
+            narrow_float: false
+        }
+    ));
     // Linking the pulled attribute lists it as pulled with its layout's step.
     let vs = vertex_stage(&p, &d, &[0, 4]);
     let va = artifact(vs, None);
@@ -711,9 +723,13 @@ fn the_format_class_must_match_the_declared_type() {
         let got = vertex::vertex_fetch_projection(Some(&d), &BTreeMap::from([(i, numeric)]), &p);
         match (want, got) {
             (Want::Fixed, Ok(proj)) => {
+                // `Half2` is the one narrow-float format of the list, whose widening a `float`
+                // attribute canonicalizes.
                 assert_eq!(
                     proj.attributes[&i],
-                    VertexFetch::FixedFunction,
+                    VertexFetch::FixedFunction {
+                        narrow_float: format == VertexFormat::Half2
+                    },
                     "{format:?}"
                 )
             }
@@ -785,8 +801,20 @@ fn unaligned_attributes_are_pulled() {
         }
         let proj = vertex::vertex_fetch_projection(Some(&d), &BTreeMap::from([(0, numeric)]), &p)
             .expect("projection");
+        // A `half` format and `FloatRG11B10` carry the narrow-float bit, whose widening the
+        // function canonicalizes; the others do not.
+        let fixed = VertexFetch::FixedFunction {
+            narrow_float: matches!(
+                format,
+                VertexFormat::Half
+                    | VertexFormat::Half2
+                    | VertexFormat::Half3
+                    | VertexFormat::Half4
+                    | VertexFormat::FloatRG11B10
+            ),
+        };
         assert_eq!(
-            proj.attributes[&0] == VertexFetch::FixedFunction,
+            proj.attributes[&0] == fixed,
             aligned && base,
             "{format:?} at {offset} stride {stride:?}: {:?}",
             proj.attributes[&0]
@@ -813,7 +841,9 @@ fn portability_stride_alignment_pulls_static_strides() {
             .expect("projection")
             .attributes[&0]
     };
-    let fixed = VertexFetch::FixedFunction;
+    let fixed = VertexFetch::FixedFunction {
+        narrow_float: false,
+    };
     let mvk = profile("moltenvk-m3");
     assert_eq!(
         mvk.fields()
@@ -854,7 +884,9 @@ fn the_portability_subset_can_pull_attributes_past_their_stride() {
             .expect("projection")
             .attributes[&0]
     };
-    let fixed = VertexFetch::FixedFunction;
+    let fixed = VertexFetch::FixedFunction {
+        narrow_float: false,
+    };
     let beyond = VkFeature::VertexAttributeAccessBeyondStride;
     let mvk = profile("moltenvk-m3");
     assert!(mvk.fields().enabled.features.contains(&beyond));
@@ -1011,7 +1043,7 @@ fn static_strides_under_dynamic_strides_cover_their_attributes() {
     let fixed = |proj: &crate::pipeline::lower_inputs::VertexFetchProjection| {
         proj.attributes
             .iter()
-            .filter(|(_, f)| **f == VertexFetch::FixedFunction)
+            .filter(|(_, f)| matches!(f, VertexFetch::FixedFunction { .. }))
             .map(|(a, _)| *a)
             .collect::<Vec<u32>>()
     };

@@ -549,8 +549,15 @@ impl StageIo {
     pub fn attributes(&self) -> BTreeMap<u32, (IoNumeric, VertexFetch)> {
         let mut out = BTreeMap::new();
         for v in &self.inputs {
-            if let IoRole::Attribute { index } = v.role {
-                out.insert(index, (v.ty.numeric, VertexFetch::FixedFunction));
+            if let IoRole::Attribute {
+                index,
+                narrow_float,
+            } = v.role
+            {
+                out.insert(
+                    index,
+                    (v.ty.numeric, VertexFetch::FixedFunction { narrow_float }),
+                );
             }
         }
         for p in &self.pulled {
@@ -719,8 +726,11 @@ pub struct IoVariable {
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum IoRole {
-    /// Vertex attribute `index`, fetched by fixed-function vertex input.
-    Attribute { index: u32 },
+    /// Vertex attribute `index`, fetched by fixed-function vertex input. `narrow_float` is the
+    /// `VertexFetch::FixedFunction` bit the function was compiled under: the Metal format's
+    /// components are floats narrower than 32 bits, whose widening the function canonicalizes
+    /// where it reads the attribute as `float`.
+    Attribute { index: u32, narrow_float: bool },
     /// A vertex output or fragment input matched by its AIR user key.
     Varying {
         user: AirUserKey,

@@ -13,7 +13,8 @@
 //! (the draw's first vertex and first instance) and `ViewIndex`
 //! (views `0..views`, a multiview draw's view mask of its first views; 1 without multiview) and
 //! writes its `Output` variables into memory of its own, which the run does not report. Interface
-//! inputs (`Location` variables) are unmodelled.
+//! inputs (`Location` variables) hold the bytes [`run_with_inputs`] supplies, and are unmodelled
+//! without it.
 //!
 //! **Traps.** Out-of-bounds accesses (offsets are computed without wrapping, so a wrapped or huge
 //! offset traps instead of aliasing), misaligned `Aligned` physical accesses, reads of
@@ -70,7 +71,7 @@ mod tests;
 use std::collections::BTreeMap;
 use std::fmt;
 
-use crate::pipeline::sym::{ResourceSlot, SpecKey};
+use crate::pipeline::sym::{ResourceSlot, SpecKey, VaryingKey};
 use crate::spirv::ids::{BlockId, TypeId};
 use crate::spirv::ir::{ExecModel, GlslOp, Scope, StorageClass, TypedModule};
 
@@ -420,7 +421,20 @@ pub struct Outcome {
 /// Run `m`'s compute entry point over `cfg.workgroups` with `res` (or its vertex entry point over
 /// `cfg.workgroups[0]` vertices of `cfg.workgroups[1]` instances; see the module docs).
 pub fn run(m: &TypedModule, cfg: &Config, res: Resources) -> IResult<Outcome> {
-    sched::run(m, cfg, res, Vec::new()).map(|(o, _)| o)
+    sched::run(m, cfg, res, Vec::new(), BTreeMap::new()).map(|(o, _)| o)
+}
+
+/// [`run`] with `inputs` held in the module's user interface input variables, by relocation key
+/// (`VaryingKey::attribute` for a vertex attribute Vulkan's fixed-function input fetches): each
+/// entry's bytes are the variable's value in every invocation, the little-endian encoding of its
+/// declared type. A variable the map omits stays unmodelled.
+pub fn run_with_inputs(
+    m: &TypedModule,
+    cfg: &Config,
+    res: Resources,
+    inputs: BTreeMap<VaryingKey, Vec<u8>>,
+) -> IResult<Outcome> {
+    sched::run(m, cfg, res, Vec::new(), inputs).map(|(o, _)| o)
 }
 
 /// [`run`] with `images` bound to the module's image bindings (each by its `slot`); returns the
@@ -431,5 +445,5 @@ pub fn run_with_images(
     res: Resources,
     images: Vec<Image>,
 ) -> IResult<(Outcome, Vec<Image>)> {
-    sched::run(m, cfg, res, images)
+    sched::run(m, cfg, res, images, BTreeMap::new())
 }

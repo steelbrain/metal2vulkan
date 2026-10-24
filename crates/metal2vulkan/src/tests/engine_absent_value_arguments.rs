@@ -158,7 +158,7 @@ fn attributes(a: &FunctionArtifact) -> Vec<u32> {
         .inputs
         .iter()
         .map(|x| match x.role {
-            IoRole::Attribute { index } => index,
+            IoRole::Attribute { index, .. } => index,
             ref r => panic!("vertex input role {r:?}"),
         })
         .chain(a.interface.io.pulled.iter().map(|x| x.index))

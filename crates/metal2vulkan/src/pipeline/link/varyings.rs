@@ -400,7 +400,7 @@ pub fn assign(stages: &[&FunctionArtifact], p: &DeviceProfile) -> Result<Locatio
             .inputs
             .iter()
             .filter_map(|x| match x.role {
-                IoRole::Attribute { index } => Some((index, &x.key)),
+                IoRole::Attribute { index, .. } => Some((index, &x.key)),
                 _ => None,
             })
             .collect();

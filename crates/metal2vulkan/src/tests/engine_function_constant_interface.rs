@@ -350,7 +350,7 @@ fn an_absent_input_feeding_only_an_absent_output_compiles() {
             .inputs
             .iter()
             .map(|x| match x.role {
-                IoRole::Attribute { index } => index,
+                IoRole::Attribute { index, .. } => index,
                 ref r => panic!("{stem}: vertex input role {r:?}"),
             })
             .collect();

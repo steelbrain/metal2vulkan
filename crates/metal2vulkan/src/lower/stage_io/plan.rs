@@ -433,6 +433,7 @@ pub fn param(cx: &mut SelectCx<'_>, b: &ParamBinding) -> Result<(), Error> {
     let mut at_loop_sample = false;
     let mut uniform = false;
     let mut quad_primitive = false;
+    let mut widened = false;
     let link = match (&b.role, stage) {
         // A merged draw's vertex reads its corner's command's draw values.
         (
@@ -461,13 +462,13 @@ pub fn param(cx: &mut SelectCx<'_>, b: &ParamBinding) -> Result<(), Error> {
             let AbiInt::Const(index) = location.index else {
                 return Err(not_lowered());
             };
-            let pulled = cx
+            let entry = cx
                 .inputs
                 .vertex_fetch
                 .as_ref()
                 .and_then(|p| p.attributes.get(&index))
-                .copied()
-                .filter(|f| matches!(f, VertexFetch::Pulled { .. }));
+                .copied();
+            let pulled = entry.filter(|f| matches!(f, VertexFetch::Pulled { .. }));
             let f = io_form(cx, ty)?;
             // The indexed capture form's and the de-indexed form's draws have no indices, so
             // fixed-function input would fetch at the stream position: their projection pulls
@@ -484,6 +485,16 @@ pub fn param(cx: &mut SelectCx<'_>, b: &ParamBinding) -> Result<(), Error> {
                 });
                 return Ok(());
             }
+            // The device's fixed-function input widens a narrow-float format with a widening of
+            // its own, which carries the field's bits up into the `float` payload; Metal's fetch
+            // answers its canonical NaN. A `float` parameter's load is canonicalized
+            // (`Source::WidenedAttribute`); a `half` one keeps the fetched code's own bits, as
+            // Metal's `half` attribute does, so it is loaded as it is.
+            let narrow_float = matches!(
+                entry,
+                Some(VertexFetch::FixedFunction { narrow_float: true })
+            );
+            widened = narrow_float && f.float_fmt() == Some(FloatFmt::F32);
             let key = VaryingKey::attribute(index);
             let sp = &mut cx.families.stage_io;
             let object = user(
@@ -497,7 +508,10 @@ pub fn param(cx: &mut SelectCx<'_>, b: &ParamBinding) -> Result<(), Error> {
                 &mut sp.interface.inputs,
                 IoVariable {
                     key,
-                    role: IoRole::Attribute { index },
+                    role: IoRole::Attribute {
+                        index,
+                        narrow_float,
+                    },
                     ty: io_type(f),
                 },
             );
@@ -831,7 +845,9 @@ pub fn param(cx: &mut SelectCx<'_>, b: &ParamBinding) -> Result<(), Error> {
     };
     cx.families.stage_io.params.push(PlannedParam {
         param: b.param,
-        source: if at_loop_sample {
+        source: if widened {
+            Source::WidenedAttribute(link)
+        } else if at_loop_sample {
             Source::AtLoopSample(link)
         } else if at_pixel {
             Source::PixelCenter(link)
@@ -3168,6 +3184,9 @@ const UNIFORM_WORDS: u64 = 64;
 /// The words a use of a [`Source::QuadPrimitive`] parameter adds to a load: the shift and its
 /// constant.
 const QUAD_PRIMITIVE_WORDS: u64 = 8;
+/// The words a use of a [`Source::WidenedAttribute`] parameter adds to a load: the NaN test on the
+/// bits, the select, and their constants.
+const CANONICAL_NAN_WORDS: u64 = 32;
 
 /// The per-stage interface limits and the size estimate.
 pub fn finish(cx: &mut SelectCx<'_>) -> Result<(), Error> {
@@ -3505,6 +3524,7 @@ fn param_words(cx: &SelectCx<'_>) -> u64 {
                 loaded.push((p.param, USE_WORDS + PIXEL_WORDS))
             }
             Source::Uniform(_) => loaded.push((p.param, USE_WORDS + UNIFORM_WORDS)),
+            Source::WidenedAttribute(_) => loaded.push((p.param, USE_WORDS + CANONICAL_NAN_WORDS)),
             Source::Pulled(r) => fetch_words = fetch_words.saturating_add(u64::from(r.words())),
         }
     }

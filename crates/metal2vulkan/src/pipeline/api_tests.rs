@@ -262,7 +262,7 @@ mod serde_round_trips {
     #[test]
     fn lower_inputs() {
         let mut attributes = BTreeMap::new();
-        attributes.insert(0, VertexFetch::FixedFunction);
+        attributes.insert(0, VertexFetch::FixedFunction { narrow_float: true });
         attributes.insert(
             1,
             VertexFetch::Pulled {

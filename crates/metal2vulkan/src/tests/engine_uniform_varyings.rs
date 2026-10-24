@@ -239,7 +239,7 @@ fn fixed_function(inputs: &LoweringInputs) -> bool {
         .vertex_fetch
         .as_ref()
         .and_then(|p| p.attributes.get(&0))
-        .is_none_or(|f| *f == VertexFetch::FixedFunction)
+        .is_none_or(|f| matches!(f, VertexFetch::FixedFunction { .. }))
 }
 
 /// The vertex function lists the varyings it writes alike at every vertex of a primitive (a

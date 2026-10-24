@@ -1917,7 +1917,12 @@ fn instanced_attributes(
     let stepped: BTreeSet<u32> = projection
         .attributes
         .iter()
-        .filter(|(_, f)| matches!(f, crate::pipeline::lower_inputs::VertexFetch::FixedFunction))
+        .filter(|(_, f)| {
+            matches!(
+                f,
+                crate::pipeline::lower_inputs::VertexFetch::FixedFunction { .. }
+            )
+        })
         .filter(|(a, _)| {
             desc.attributes
                 .get(a)

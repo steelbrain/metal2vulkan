@@ -1554,7 +1554,14 @@ impl VertexFetchProjection {
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum VertexFetch {
     /// Fixed-function vertex input; the Vulkan format is link-time state.
-    FixedFunction,
+    ///
+    /// `narrow_float`: the Metal format's components are floats narrower than 32 bits (a `half`
+    /// format, or `FloatRG11B10`), which the device's vertex input widens to a `float` attribute
+    /// with a widening of its own. Metal's fetch answers its canonical NaN there, so a function
+    /// that reads such an attribute as `float` canonicalizes the value it loads
+    /// (`lower::stage_io`); the attribute's own encoding is link-time state, and this bit is what
+    /// the compile key carries of it.
+    FixedFunction { narrow_float: bool },
     /// Fetched in the shader from a buffer, decoding this Metal format.
     ///
     /// Everything that changes the fetch code is here: the source buffer, the attribute's

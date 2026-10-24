@@ -1115,7 +1115,8 @@ codec_enum! {
     DescriptorView { Storage, UniformWords, UniformVec4 }
     PushLoc { Push { offset }, ArgumentTable { offset } }
     IoRole {
-        Attribute { index }, Varying { user, interpolation }, Color { attachment, index },
+        Attribute { index, narrow_float }, Varying { user, interpolation },
+        Color { attachment, index },
         ViewportIndex, RenderTargetArrayIndex, PrimitiveVarying { user }, WindowDepth,
         Barycentric { perspective }, SelectedLayer, SelectedViewport, PrimitiveId,
     }
@@ -1151,7 +1152,7 @@ codec_enum! {
     }
     DepthMode { Any, Greater, Less }
     VertexFetch {
-        FixedFunction,
+        FixedFunction { narrow_float },
         Pulled { format, buffer_index, offset, step_function, step_rate },
     }
     RuntimeFact {
