@@ -1,7 +1,11 @@
 //! A command buffer's batches (`command_buffer/batches.rs`): where event waits and signals, and
-//! binary semaphore waits and signals, split its encoders.
+//! binary semaphore waits and signals, split its encoders; and which drivers' batches may wait in
+//! a group (`command_buffer/group.rs`).
 
 use crate::command_buffer::batches::{Batch, Batches};
+use crate::command_buffer::merges_submissions;
+use metal2vulkan::device::{DeviceDescription, DriverFact};
+use metal2vulkan::vk::DriverId;
 
 fn batch(waits: &[(char, u64)], end: usize, signals: &[(char, u64)]) -> Batch<char, u8> {
     Batch {
@@ -237,4 +241,58 @@ fn signals_after_a_failing_encoder_are_dropped() {
             }
         ]
     );
+}
+
+/// Whether a driver's batches may wait in one kernel submission is the driver's **fact**, never
+/// its name (`command_buffer/group.rs`): a driver measured to merge a `vkQueueSubmit`'s
+/// `VkSubmitInfo`s that signal nothing into the next one's kernel submission
+/// (`DriverFact::SubmissionsWithoutSignalsMerge`) groups its batches; every other driver takes the
+/// ungrouped path, each batch its own call, which is exact alike.
+///
+/// The check over every committed profile: a profile groups only where its driver is one the fact
+/// is measured of, so a decision that read the driver's name -- the Mesa drivers no lane measured
+/// read alike there -- would answer otherwise for one of them. A `MEASURED` row written without a
+/// measurement would show here as a MoltenVK, NVIDIA or SwiftShader profile that groups.
+#[test]
+fn only_drivers_measured_to_merge_their_submissions_group_their_batches() {
+    let dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../metal2vulkan-validation/profiles");
+    let mut read = 0;
+    let mut grouped = 0;
+    for entry in std::fs::read_dir(&dir).expect("validation/profiles is readable") {
+        let path = entry.expect("directory entry").path();
+        if path.extension().is_none_or(|x| x != "json") {
+            continue;
+        }
+        let text = std::fs::read_to_string(&path).expect("profile is readable");
+        let description =
+            DeviceDescription::from_khronos_json(&text, None).expect("profile parses");
+        let merges = merges_submissions(&description.driver_facts());
+        if merges {
+            // Only a driver the fact is measured of: Mesa's RADV, ANV and llvmpipe.
+            assert!(
+                matches!(
+                    description.driver_id,
+                    Some(
+                        DriverId::MESA_RADV
+                            | DriverId::INTEL_OPEN_SOURCE_MESA
+                            | DriverId::MESA_LLVMPIPE
+                    )
+                ),
+                "{} groups its batches with no row of its driver",
+                path.display()
+            );
+            grouped += 1;
+        }
+        read += 1;
+    }
+    assert!(read > 1, "profiles read: {read}");
+    // The grouped form is reachable, and the fact alone chooses it.
+    assert!(grouped > 0, "profiles that group: {grouped}");
+    assert!(merges_submissions(
+        &[DriverFact::SubmissionsWithoutSignalsMerge]
+            .into_iter()
+            .collect()
+    ));
+    assert!(!merges_submissions(&Default::default()));
 }

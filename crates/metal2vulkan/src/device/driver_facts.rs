@@ -1543,6 +1543,31 @@ pub enum DriverFact {
     /// with a 1 made a second `VkPipeline` there (Metal's specialization and pipeline compile,
     /// 5.6 to 24.5 ms).
     ConstantOffsetUniformReadsPreloaded,
+    /// A cost fact (the module docs): the driver's queue is Mesa's common one, where each
+    /// `vkQueueSubmit`'s `VkSubmitInfo`s that signal nothing merge into the next one's kernel
+    /// submission, so batches that signal nothing but their queue's timeline may wait and go in
+    /// one call for the cost of one kernel submission (Mesa 26.2.4, `vulkan/runtime/vk_queue.c`,
+    /// `vk_queue_submits_merge`: "Don't merge if there are signals in between"; ANV chains the
+    /// merged command buffers into one batch buffer,
+    /// `anv_queue_submit_cmd_buffers_locked`). Each kernel submission costs CPU time for every
+    /// `VkDeviceMemory` of the device there: ANV on i915 lists each in every execbuffer
+    /// (`i915/anv_batch_chain.c`, `setup_execbuf_for_cmd_buffers`), RADV each in every CS. On a
+    /// driver without it each batch takes its own `vkQueueSubmit`, which is the exact path and
+    /// the one every batch took before grouping: a group changes when a batch's `vkQueueSubmit`
+    /// is made and nothing it submits (`command_buffer/group.rs` in the runtime).
+    ///
+    /// Counted where the merge pays, on Mesa 26.2.4's ANV on the Intel UHD 770: 24 kernel
+    /// submissions a frame grouped against 30 ungrouped, at 67 command buffers a frame committed
+    /// 1 ms apart behind 1.3 ms of GPU work each, the GPU as idle either way (0.62 ms a frame).
+    ///
+    /// Measured without it, so not listed: MoltenVK, whose queue is its own and merges nothing
+    /// -- it commits a Metal command buffer for each `VkSubmitInfo` of a call and one for a call
+    /// of none with a fence (`MVKQueue::submit`), about 65 us of a thread of Metal's on an Apple
+    /// M3 Max whether or not the info holds work -- and NVIDIA's proprietary driver, which has
+    /// no Mesa queue. The Mesa drivers no lane measures (Turnip, V3DV, PanVK, NVK, Honeykrisp,
+    /// PowerVR) take no row: the merge is in the common queue they share, but no identity of
+    /// theirs was measured, so each takes the ungrouped exact path.
+    SubmissionsWithoutSignalsMerge,
     /// The driver answers a format's linear-tiling attachment features from memory it has not
     /// yet initialized, so they differ between instances of one process: MoltenVK 1.4.1 builds
     /// its format table in `MVKPhysicalDevice`'s member initializers, where
@@ -2752,6 +2777,46 @@ pub(crate) const MEASURED: &[Measured<DriverFact>] = &[
         device: Some(NVIDIA_RTX_5080_LAPTOP),
         first: nvidia(615, 71, 9),
         last: nvidia(615, 71, 9),
+    },
+    Measured {
+        fact: DriverFact::SubmissionsWithoutSignalsMerge,
+        driver: DriverId::MESA_LLVMPIPE,
+        vendor: None,
+        device: None,
+        first: mesa(26, 2, 4),
+        last: mesa(26, 2, 4),
+    },
+    Measured {
+        fact: DriverFact::SubmissionsWithoutSignalsMerge,
+        driver: DriverId::MESA_RADV,
+        vendor: Some(AMD_VENDOR_ID),
+        device: Some(AMD_RADEON_780M),
+        first: mesa(26, 2, 4),
+        last: mesa(26, 2, 4),
+    },
+    Measured {
+        fact: DriverFact::SubmissionsWithoutSignalsMerge,
+        driver: DriverId::MESA_RADV,
+        vendor: Some(AMD_VENDOR_ID),
+        device: Some(AMD_RX_7900_XTX),
+        first: mesa(26, 2, 4),
+        last: mesa(26, 2, 4),
+    },
+    Measured {
+        fact: DriverFact::SubmissionsWithoutSignalsMerge,
+        driver: DriverId::INTEL_OPEN_SOURCE_MESA,
+        vendor: Some(INTEL_VENDOR_ID),
+        device: Some(INTEL_IRIS_XE_RPL_P),
+        first: mesa(26, 2, 4),
+        last: mesa(26, 2, 4),
+    },
+    Measured {
+        fact: DriverFact::SubmissionsWithoutSignalsMerge,
+        driver: DriverId::INTEL_OPEN_SOURCE_MESA,
+        vendor: Some(INTEL_VENDOR_ID),
+        device: Some(INTEL_UHD_770_RPL_S),
+        first: mesa(26, 2, 4),
+        last: mesa(26, 2, 4),
     },
     Measured {
         fact: DriverFact::SampledDepthKeepsHiZ,

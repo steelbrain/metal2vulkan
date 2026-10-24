@@ -1,12 +1,13 @@
 //! Batches that go to the driver in one kernel submission (`CompletionPolicy::Grouped`).
 //!
-//! On a driver whose queue is Mesa's common one, each `vkQueueSubmit`'s `VkSubmitInfo`s that
-//! signal nothing merge into the next one's kernel submission (Mesa 26.2.4,
-//! `vulkan/runtime/vk_queue.c`, `vk_queue_submits_merge`: "Don't merge if there are signals in
-//! between"), and ANV chains the merged command buffers into one batch buffer
-//! (`anv_queue_submit_cmd_buffers_locked`). Each kernel submission costs CPU time for every
-//! `VkDeviceMemory` of the device: ANV on i915 lists each in every execbuffer
-//! (`i915/anv_batch_chain.c`, `setup_execbuf_for_cmd_buffers`), RADV each in every CS.
+//! On a driver measured to merge each `vkQueueSubmit`'s `VkSubmitInfo`s that signal nothing into
+//! the next one's kernel submission ([`DriverFact::SubmissionsWithoutSignalsMerge`], whose
+//! documentation holds what was measured where), batches that signal nothing but their queue's
+//! timeline may wait and go in one call for the cost of one kernel submission. The question is
+//! the driver's, and the fact answers it, never the driver's name: a driver without the fact
+//! takes the ungrouped path, each batch its own `vkQueueSubmit`, which is what every batch took
+//! before grouping and is exact alike -- a group changes when a `vkQueueSubmit` is made and
+//! nothing it submits.
 //!
 //! - **What waits.** A batch the scheduler submits waits here, submitted by nothing yet, where it
 //!   signals nothing but its queue's timeline and its events' semaphores: no binary semaphore,
@@ -87,8 +88,8 @@ use crate::exit_guard::{self, Call};
 use crate::gpu_time;
 use crate::Device;
 use ash::vk;
-use metal2vulkan::device::CompletionPolicy;
-use metal2vulkan::vk::DriverId;
+use metal2vulkan::device::{CompletionPolicy, DriverFact};
+use std::collections::BTreeSet;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
@@ -104,11 +105,12 @@ const BATCH_INFOS: usize = 2;
 const MOST_INFOS: usize = GROUP_BATCHES * BATCH_INFOS + 1 + BATCH_INFOS;
 
 /// Whether `device`'s batches on `VkQueue` `queue` may wait in a group: its policy groups them,
-/// its driver merges a submission that signals nothing into the next (the module docs), and the
-/// queue's failures are not relayed (each relayed batch takes a fence, `device/relay.rs`).
+/// its driver is measured to merge a submission that signals nothing into the next (the module
+/// docs), and the queue's failures are not relayed (each relayed batch takes a fence,
+/// `device/relay.rs`).
 pub(crate) fn groups(device: &Device, queue: usize) -> bool {
     device.compile_device().policy().completion == CompletionPolicy::Grouped
-        && merges_submissions(device.properties().description.driver_id)
+        && merges_submissions(&device.properties().driver_facts)
         && device.shared().flights(queue).is_none()
 }
 
@@ -151,23 +153,12 @@ const IN_GROUP: u8 = 1;
 /// A command buffer's `group_hold` bit: a thread waits for its completion.
 const WAITED_FOR: u8 = 2;
 
-/// Whether the driver's queue is Mesa's common one with kernel submissions of their own: the
-/// drivers that merge a `VkSubmitInfo` that signals nothing into the next.
-fn merges_submissions(driver: Option<DriverId>) -> bool {
-    matches!(
-        driver,
-        Some(
-            DriverId::MESA_RADV
-                | DriverId::INTEL_OPEN_SOURCE_MESA
-                | DriverId::MESA_LLVMPIPE
-                | DriverId::MESA_TURNIP
-                | DriverId::MESA_V3DV
-                | DriverId::MESA_PANVK
-                | DriverId::MESA_NVK
-                | DriverId::MESA_HONEYKRISP
-                | DriverId::IMAGINATION_OPEN_SOURCE_MESA
-        )
-    )
+/// Whether the driver merges a `VkSubmitInfo` that signals nothing into the next one's kernel
+/// submission ([`DriverFact::SubmissionsWithoutSignalsMerge`]): the driver's facts alone answer
+/// it, and nothing of the driver's identity, so a test can hand it the facts of each committed
+/// profile (`tests::batches::only_drivers_measured_to_merge_their_submissions_group_their_batches`).
+pub(crate) fn merges_submissions(facts: &BTreeSet<DriverFact>) -> bool {
+    facts.contains(&DriverFact::SubmissionsWithoutSignalsMerge)
 }
 
 /// What sent a group held (`WorkCounts::group_ends_full` and kin).

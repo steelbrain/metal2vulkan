@@ -4,9 +4,10 @@
 //! [`BATCHES`] command buffers committed on one queue, each filling a buffer of its own with a
 //! value of its own, the first after a wait for an event the host has not raised, all wait behind
 //! that wait; once the host raises it the scheduler finds them ready together. Under the default
-//! `CompletionPolicy::Grouped`, on a driver whose queue merges a submission that signals nothing
-//! into the next one (Mesa's: ANV, RADV, lavapipe and kin), they go in `vkQueueSubmit` calls of up
-//! to four batches each, only the last of each signalling (`WorkCounts::grouped_submissions`,
+//! `CompletionPolicy::Grouped`, on a driver measured to merge a submission that signals nothing
+//! into the next one (`DriverFact::SubmissionsWithoutSignalsMerge`), they go in `vkQueueSubmit`
+//! calls of up to four batches each, only the last of each signalling
+//! (`WorkCounts::grouped_submissions`,
 //! `WorkCounts::batches_grouped`), announced once ([`GROUPED`]); under `CompletionPolicy::Exact`,
 //! and on every other driver, each alone, announcing nothing. Either way every command buffer
 //! completes without error, each buffer holds its own value, and the layer reports nothing. Each
@@ -43,8 +44,7 @@
 use super::degrade_notices::counts;
 use super::{loader, open_device, validated_device_with, Messages, ScratchCache, WAIT};
 use crate::gpu::TEST_DEVICE;
-use metal2vulkan::device::CompletionPolicy;
-use metal2vulkan::vk::DriverId;
+use metal2vulkan::device::{CompletionPolicy, DeviceDescription, DriverFact};
 use metal2vulkan_runtime::{
     Buffer, CommandBuffer, CommandBufferStatus, Degradation, DeviceOptions, EventRef,
     ResourceOptions, ShaderCacheOptions, WorkCounts,
@@ -79,23 +79,12 @@ fn group_ends(before: &WorkCounts, after: &WorkCounts) -> [u64; 7] {
     std::array::from_fn(|at| after[at] - before[at])
 }
 
-/// Whether the device's driver merges a submission that signals nothing into the next: its queue
-/// is Mesa's common one (the runtime's `group.rs`).
-fn merges(driver: Option<DriverId>) -> bool {
-    matches!(
-        driver,
-        Some(
-            DriverId::MESA_RADV
-                | DriverId::INTEL_OPEN_SOURCE_MESA
-                | DriverId::MESA_LLVMPIPE
-                | DriverId::MESA_TURNIP
-                | DriverId::MESA_V3DV
-                | DriverId::MESA_PANVK
-                | DriverId::MESA_NVK
-                | DriverId::MESA_HONEYKRISP
-                | DriverId::IMAGINATION_OPEN_SOURCE_MESA
-        )
-    )
+/// Whether the device's driver merges a submission that signals nothing into the next: the
+/// driver's fact answers it, never its name, and the runtime reads the same fact
+/// (`DriverFact::SubmissionsWithoutSignalsMerge`, the runtime's `group.rs`), so a device whose
+/// identity no lane measured takes the ungrouped path and this lane expects it.
+fn merges(description: &DeviceDescription) -> bool {
+    (description.driver_facts()).contains(&DriverFact::SubmissionsWithoutSignalsMerge)
 }
 
 /// Wait until the scheduler's thread has taken in every command buffer committed before the call:
@@ -132,7 +121,7 @@ fn run(completion: CompletionPolicy, checked: bool) -> (u64, u64, u64, usize, bo
             options.policy.completion = completion;
         })
         .unwrap();
-        let merging = merges(device.properties().description.driver_id);
+        let merging = merges(&device.properties().description);
         let queue = device.new_command_queue().unwrap();
         let event = device.new_shared_event().unwrap();
         let buffers: Vec<Buffer> = (0..BATCHES)
@@ -394,7 +383,7 @@ fn event_scenario(completion: CompletionPolicy, steps: &[Step], last: u64) -> Sc
             options.policy.completion = completion;
         })
         .unwrap();
-        let merging = merges(device.properties().description.driver_id);
+        let merging = merges(&device.properties().description);
         let queues = [
             device.new_command_queue().unwrap(),
             device.new_command_queue().unwrap(),
@@ -863,7 +852,7 @@ fn behind_running_work(completion: CompletionPolicy, stretch: usize, carried: Ca
             options.policy.completion = completion;
         })
         .unwrap();
-        let merging = merges(device.properties().description.driver_id);
+        let merging = merges(&device.properties().description);
         let queue = device.new_command_queue().unwrap();
         let large = device
             .new_buffer(RUNNING_FILL, ResourceOptions::private())

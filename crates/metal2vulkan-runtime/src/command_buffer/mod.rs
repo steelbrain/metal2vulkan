@@ -50,6 +50,11 @@ mod submit;
 
 pub(super) use completion::Completion;
 pub(super) use first_submission::{NotedTable, ReplayTable};
+/// Whether a driver's facts merge a submission that signals nothing into the next, for the test
+/// that holds every committed profile to the fact
+/// (`tests::batches::only_drivers_measured_to_merge_their_submissions_group_their_batches`).
+#[cfg(test)]
+pub(crate) use group::merges_submissions;
 pub(super) use group::{Group, GroupEnd, GROUP_BATCHES};
 use rebound_use::{ReboundUse, Unlogged};
 pub(super) use submit::{BatchLists, Submitting};
