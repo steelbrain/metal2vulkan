@@ -123,16 +123,29 @@
 //!
 //! ## What `compressionType` would add, and why no case here reaches it
 //!
-//! `MTLTextureDescriptor`'s `compressionType` halves the footprint — 8320 bytes against 16512 for
-//! a 64 by 64 `RGBA8Unorm` — and Metal's validation ends the process for every one of five
-//! crossings of it: with `ShaderWrite` usage, with any storage mode but `Private`, with
-//! `allowGPUOptimizedContents` off, with a depth format and with a block-compressed one, each
-//! naming the pair in its own words. It is exactly the interaction family this module is for.
+//! `MTLTextureDescriptor`'s `compressionType` is exactly the interaction family this module is
+//! for, and **no case can state it**: the runtime's `TextureDescriptor` declares no such field,
+//! so closing it is a new field on a published crate rather than a case. What a probe on this M3
+//! Max (macOS 27.0.1) measures of it, one shape per process because most of the crossings are
+//! fatal, is here so the family's own note holds the numbers:
 //!
-//! **No case can compare it**, because our own side has no such field: the runtime's
-//! `TextureDescriptor` declares no `compressionType`, so there is nothing for a case to state. The
-//! gap is the runtime's, it is recorded here and in the tree's open work, and closing it is a new
-//! field on a published crate rather than a case.
+//! - **`Lossy` halves the heap footprint of every colour format that takes it**, 64 by 64 at one
+//!   level: `RGBA8Unorm` 16512 bytes against 8320, `RGBA16Float` 32896 against 16512, `R8Unorm`
+//!   4224 against 2176. And the device texture's `allocatedSize` **is** that heap size under
+//!   `Lossy` (8320, 16512, 2176) where an optimized `Lossless` texture's is larger than it (32768
+//!   against 16512, 49152 against 32896). `MTLTexture.compressionType` answers the descriptor's
+//!   value back in every row.
+//! - **Seven shapes end plain Metal's process**, not only the validation layer's:
+//!   `-[MTLTextureDescriptorInternal validateWithDevice:]:1421` asserts in a plain run, with six
+//!   distinct messages — `Lossy` with `ShaderWrite` usage, with `PixelFormatView` usage, with
+//!   `Shared` storage and with `Memoryless` storage (one message, "the storageMode is not
+//!   MTLStorageModePrivate"), with `allowGPUOptimizedContents` off, with `Depth32Float` and with
+//!   `BC7_RGBAUnorm` ("does not support lossy compression"). `RenderTarget` usage is **not** among
+//!   them: it answers the halved footprint.
+//!
+//! So the property is no refusal signal and no free switch: six of its crossings are fatal, which
+//! is why a field for it owes `crate::texture_query::HeapTextureQuery::forbidden` a rule in the
+//! same change.
 //!
 //! # Why every case here is safe
 //!
