@@ -1,10 +1,17 @@
 //! Device tests of the runtime on the device the cfg selects. Each test fails on any validation
 //! message; a lane run with the layer's synchronization validation on
 //! (`METAL2VULKAN_LANE_VALIDATION=sync`, `LaneChecks`) fails a test on a missing barrier too.
+//!
+//! Each claim of what the validation layer reported is stated through
+//! [`layer_reported_nothing`](super::layer_reported_nothing), against what the device's instance
+//! enabled of the layers it asked for: so a device the loader could not give the layer to says in
+//! its test's output that the claim was not exercised there, rather than passing by reporting
+//! nothing at all.
 
 use super::{
-    bound_buffers, buffer_with, buffer_with_options, encode_case, pipeline_state, public_case,
-    read_buffer, run_case, validated_device, CaseResources, Messages, ScratchCache,
+    bound_buffers, buffer_with, buffer_with_options, encode_case, layer_reported_nothing,
+    pipeline_state, public_case, read_buffer, run_case, validated_device, CaseResources, Messages,
+    ScratchCache,
 };
 use crate::air_library::AirLibrary;
 use crate::gpu::{DeviceType, TEST_DEVICE};
@@ -157,10 +164,9 @@ fn a_runtime_device_makes_fills_and_reads_buffers() {
         empty.wait_until_completed_for(WAIT).unwrap();
         assert_eq!(empty.status(), CommandBufferStatus::Completed);
     }
-    let messages = messages.take();
-    assert!(
-        messages.is_empty(),
-        "the validation layer reported: {messages:#?}"
+    layer_reported_nothing(
+        &messages,
+        "no Vulkan object leaked, and every command was valid",
     );
 }
 
@@ -192,17 +198,18 @@ fn forty_devices_one_after_another_all_open_and_go() {
             1,
             "device {lifetime} was not destroyed when its drop returned"
         );
-        let messages = messages.take();
-        assert!(
-            messages.is_empty(),
-            "device {lifetime}: the validation layer reported: {messages:#?}"
+        layer_reported_nothing(
+            &messages,
+            &format!("device {lifetime} leaked no Vulkan object"),
         );
     }
 }
 
 /// Run `test` on a validated device of the lane, then fail on any validation message (a leaked
-/// object is reported when the device is destroyed, after `test` dropped everything). `test`
-/// may take the messages reported so far itself, to fail at the step that caused them.
+/// object is reported when the device is destroyed, after `test` dropped everything), and say what
+/// that holds: nothing where the device's instance could not enable the validation layer
+/// ([`layer_reported_nothing`]). `test` may take the messages reported so far itself, to fail at
+/// the step that caused them.
 fn on_device(test: impl FnOnce(&Device, &Messages)) {
     let cache = ScratchCache::new().unwrap();
     let messages = Messages::default();
@@ -210,10 +217,9 @@ fn on_device(test: impl FnOnce(&Device, &Messages)) {
         let device = validated_device(TEST_DEVICE, &messages, cache.path()).unwrap();
         test(&device, &messages);
     }
-    let messages = messages.take();
-    assert!(
-        messages.is_empty(),
-        "the validation layer reported: {messages:#?}"
+    layer_reported_nothing(
+        &messages,
+        "no Vulkan object leaked, and every command was valid",
     );
 }
 
@@ -760,10 +766,9 @@ fn serial_dispatches_read_what_earlier_dispatches_wrote() {
             command_buffer.commit().unwrap();
             command_buffer.wait_until_completed_for(WAIT).unwrap();
             assert_eq!(command_buffer.status(), CommandBufferStatus::Completed);
-            let reported = messages.take();
-            assert!(
-                reported.is_empty(),
-                "{dispatch_type:?} {hazard:?}: the validation layer reported: {reported:#?}"
+            layer_reported_nothing(
+                messages,
+                &format!("{dispatch_type:?} {hazard:?}: every command was valid"),
             );
             for (chain, (first, second)) in chains.iter().enumerate() {
                 let written = read_buffer(&first[&1], 0, output).unwrap();

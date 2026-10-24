@@ -19,9 +19,9 @@ use crate::air_library::AirLibrary;
 use crate::candidate::engine::{compute_case, ComputeCase};
 pub use crate::candidate::runtime_case::{
     argument_texture_usage, bound_buffers, buffer_with, buffer_with_options, commit_case,
-    compute_descriptor, encode_case, loader, open_device, open_devices, read_buffer, read_texture,
-    texture_descriptor, texture_usage, texture_with, CaseResources, Messages, ScratchCache,
-    VALIDATION_LAYER,
+    compute_descriptor, encode_case, layer_reported_nothing, loader, open_device, open_devices,
+    read_buffer, read_texture, texture_descriptor, texture_usage, texture_with, CaseResources,
+    EnabledLayers, LayerClaim, Messages, ScratchCache, LAYERS_DROPPED, VALIDATION_LAYER,
 };
 use crate::candidate::runtime_case::{
     encoded_tile, report_each_message, tile_descriptor, Committed,
@@ -911,6 +911,9 @@ pub(crate) fn made_lane_device(
     let mut options = validated_options(messages, cache);
     adjust(&mut options);
     LaneChecks::switched().apply(&mut options);
+    // The layers the device finally asks for, after `adjust`: what a layer-dependent claim of this
+    // list holds is what the instance enables of them (`layer_reported_nothing`).
+    messages.device_asked_layers(&options.layers);
     let level_named = options.metal_level.is_some();
     let device = open_device(device_type, options).map_err(|error| {
         format!(
@@ -955,31 +958,69 @@ const METAL_CACHE_KEPT: &str = "metal2vulkan-driver-pipeline-cache-kept";
 /// its [`creation_kinds`], one each, and its other messages exactly the informational ones the
 /// device sends as it is made, each once and in this order: `metal2vulkan-unmeasured-driver`
 /// exactly where its identity is not measured, as the runtime reads it
-/// (`unmeasured_driver_message`, the fact the device's own message reads); then
-/// [`METAL_CACHE_KEPT`] exactly where its driver keeps its internal pipeline cache and that cache
-/// is Metal's own ([`metal_cache_kept`], read from the driver apart from the runtime), an
-/// informational message naming the device and ending in its id name; and nothing else.
+/// (`unmeasured_driver_message`, the fact the device's own message reads); then [`LAYERS_DROPPED`]
+/// where the loader could not provide the instance layers the device asked for, which the device
+/// alone can say (the instance's answer, not the loader's listing: a layer the loader lists and
+/// cannot load answers the same); then [`METAL_CACHE_KEPT`] exactly where its driver keeps its
+/// internal pipeline cache and that cache is Metal's own ([`metal_cache_kept`], read from the
+/// driver apart from the runtime), an informational message naming the device and ending in its id
+/// name; and nothing else.
+///
+/// What the device said of its layers goes to `messages`, the lane's list, which this device
+/// reports nothing else to: a layer-dependent claim stated on that list afterwards holds only what
+/// the instance enabled ([`layer_reported_nothing`]).
 #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
 pub(crate) fn creation_heard_checked(
     device: &Device,
     level_named: bool,
     heard: &[DebugMessage],
+    messages: &Messages,
 ) -> Result<(), String> {
     let (notices, informed): (Vec<DebugMessage>, Vec<DebugMessage>) = heard
         .iter()
         .cloned()
         .partition(|message| message.degradation.is_some());
     creation_checked(device, level_named, &notices)?;
+    for message in &informed {
+        messages.heard_informational(&message.id_name, &message.text);
+    }
     let unmeasured = metal2vulkan_runtime::unmeasured_driver_message(device.properties());
+    let dropped = messages.layers_dropped_message();
     let cache_kept = metal_cache_kept(device);
     let mut expected: Vec<String> = Vec::new();
     let mut rest = &informed[..];
+    // Where the device was made without a layer it asked for, the loader said so first, at
+    // `vkCreateInstance`: one message of its own per layer it could not provide (`layer_claim`).
+    if dropped.is_some() {
+        while let Some((first, after)) = rest.split_first() {
+            if !crate::candidate::runtime_case::loader_layer_message(&first.id_name, &first.text) {
+                break;
+            }
+            expected.push(first.text.clone());
+            rest = after;
+        }
+    }
     if let Some(message) = &unmeasured {
         expected.push(message.text.clone());
         match rest.split_first() {
             Some((first, after))
                 if (first.severity, &first.id_name, &first.text)
                     == (message.severity, &message.id_name, &message.text) =>
+            {
+                rest = after;
+            }
+            _ => rest = &[],
+        }
+    }
+    if let Some(text) = &dropped {
+        let tag = format!("[{LAYERS_DROPPED}]");
+        expected.push(text.clone());
+        match rest.split_first() {
+            Some((first, after))
+                if first.severity == metal2vulkan_runtime::MessageSeverity::Info
+                    && first.id_name == LAYERS_DROPPED
+                    && first.text.contains(device.name())
+                    && first.text.ends_with(&tag) =>
             {
                 rest = after;
             }

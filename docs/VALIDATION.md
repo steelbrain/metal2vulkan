@@ -81,6 +81,16 @@ METAL2VULKAN_LANE_VALIDATION=sync RUSTFLAGS='--cfg m2v_cpu_icd' cargo nextest ru
   -p metal2vulkan-validation --all-features --no-fail-fast -E 'test(/^runtime_lane::/)'
 ```
 
+A lane device opens whether or not the loader can provide the layer it asks for: the runtime drops
+a layer the loader answers `VK_ERROR_LAYER_NOT_PRESENT` for and says so as the device is made. A
+claim of what the layer reported therefore states what it holds, against the layers the instance
+enabled and nothing else (`runtime_lane::layer_reported_nothing`): where the layer was dropped the
+claim is not exercised, and the test prints `LANE-LAYER-ABSENT <test>: ...` and a count per message
+list instead of passing on an empty list. A host whose layer manifest names its library by a bare
+filename (which the loader looks for on the system library search path) provides no layer at all,
+and a lane run there is evidence for everything but the layer's checks. The executor's own Vulkan
+context refuses to open without the layer instead (`candidate::platform::device`).
+
 **Seeded differential sequences** (`parity::sequences`): 64 seeded, race-free Metal programs of
 render passes, blits, dispatches, indirect commands, fences and events over buffers, heaps and
 textures, run on the runtime and compared with committed Metal results

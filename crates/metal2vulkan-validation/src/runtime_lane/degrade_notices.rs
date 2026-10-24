@@ -1865,7 +1865,7 @@ fn a_creation_s_notices_and_messages_reach_the_sink_on_the_asking_thread() {
             heard.lock().unwrap().drain(..).collect()
         };
         let created: Vec<DebugMessage> = take().into_iter().map(|(_, _, m)| m).collect();
-        creation_heard_checked(device, level_named, &created).unwrap();
+        creation_heard_checked(device, level_named, &created, &lane).unwrap();
         // Notes announced as each state is made.
         let cases: Vec<PublicCase> = NOTED.map(|name| public_case(name).unwrap()).into();
         let (asker, ()) = on_a_utility_thread(|| {

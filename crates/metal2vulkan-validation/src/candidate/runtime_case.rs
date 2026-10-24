@@ -85,11 +85,17 @@ use std::sync::{Arc, Mutex, OnceLock};
 mod commands;
 mod host_wait_gap;
 pub(crate) mod imageblock;
+mod layer_claim;
 mod raster_order_gap;
 mod render;
 mod sparse;
 mod tile;
 pub use commands::{encoded_execution, pipeline_states, CaseCommands, TemplateState};
+/// The lane's own check of the creation messages a device heard reads it too
+/// (`runtime_lane::creation_heard_checked`).
+#[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+pub(crate) use layer_claim::loader_layer_message;
+pub use layer_claim::{layer_reported_nothing, EnabledLayers, LayerClaim, LAYERS_DROPPED};
 pub use render::{
     commit_render, encoded_mesh, encoded_render, mesh_pipeline_state, render_pipeline_descriptor,
     render_pipeline_state, CommittedRender, EncodedRender, MeshInputs, RenderInputs,
@@ -227,6 +233,9 @@ struct Reported {
     unsupported_set_messages: usize,
     /// The thread that made the list: the test's.
     test: String,
+    /// What the devices reporting here enabled of the instance layers they asked for, and the
+    /// claims stated against it (`layer_claim`).
+    layers: layer_claim::LayerFacts,
     /// How many notices of each kind were taken so far (`Messages::take_notices`), less those
     /// put back (`Messages::restore_notices`): a device announces a kind once, so a later making
     /// or use of it announces nothing again.
@@ -244,6 +253,7 @@ impl Default for Reported {
             unsupported_sets: false,
             unsupported_set_messages: 0,
             taken: BTreeMap::new(),
+            layers: layer_claim::LayerFacts::default(),
             test: std::thread::current()
                 .name()
                 .unwrap_or("an unnamed thread")
@@ -254,6 +264,7 @@ impl Default for Reported {
 
 impl Drop for Reported {
     fn drop(&mut self) {
+        self.layers.report(&self.test);
         if self.layer_gaps != 0 {
             eprintln!(
                 "LAYER-GAP count {}: {} layer gap message(s) passed",
@@ -284,10 +295,55 @@ impl Messages {
     /// The most messages kept of each list.
     const MAX: usize = 64;
 
-    /// The failing messages reported so far, removed.
+    /// A device reporting here is about to be made asking for the instance layers `layers`: what
+    /// it enables of them is the instance's answer, which it announces as it is made
+    /// (`layer_claim`). Called once per device, before it opens; a later device's list replaces
+    /// an earlier one's.
+    pub fn device_asked_layers(&self, layers: &[std::ffi::CString]) {
+        let mut reported = self.0.lock().unwrap_or_else(|p| p.into_inner());
+        reported.layers.asked(layers);
+    }
+
+    /// Take the informational message `id_name`, text `text`, where it is one this list keeps
+    /// apart (the message a device sends as it is made without the layers it asked for); whether
+    /// it was taken. The sink's own path for such a message, and the way a test states one
+    /// without a device.
+    pub fn heard_informational(&self, id_name: &str, text: &str) -> bool {
+        let mut reported = self.0.lock().unwrap_or_else(|p| p.into_inner());
+        let test = reported.test.clone();
+        reported.layers.heard(&test, id_name, text)
+    }
+
+    /// What the instance of the devices reporting here enabled of the instance layers they asked
+    /// for: the layers asked for, less those it announced it was made without.
+    pub fn enabled_layers(&self) -> EnabledLayers {
+        let reported = self.0.lock().unwrap_or_else(|p| p.into_inner());
+        reported.layers.enabled()
+    }
+
+    /// The text of the message a device reporting here sent as it was made without the layers it
+    /// asked for, which the loader could not provide; `None` where none was.
+    pub fn layers_dropped_message(&self) -> Option<String> {
+        let reported = self.0.lock().unwrap_or_else(|p| p.into_inner());
+        reported.layers.dropped_message().map(str::to_owned)
+    }
+
+    /// State the layer-dependent claim `claim` against what the instance enabled
+    /// ([`layer_reported_nothing`], which reads this list's messages first).
+    pub(crate) fn state_layer_claim(&self, claim: &str) -> LayerClaim {
+        let mut reported = self.0.lock().unwrap_or_else(|p| p.into_inner());
+        let test = reported.test.clone();
+        reported.layers.claim(&test, claim)
+    }
+
+    /// The failing messages reported so far, removed, with the loader's own messages about a
+    /// layer it could not provide that no device of this list explained (`layer_claim`).
     pub fn take(&self) -> Vec<DebugMessage> {
         let mut reported = self.0.lock().unwrap_or_else(|p| p.into_inner());
-        reported.failing.split_off(0)
+        let mut unexplained = reported.layers.release();
+        let mut failing = reported.failing.split_off(0);
+        unexplained.append(&mut failing);
+        unexplained
     }
 
     /// The degrade notices delivered so far, removed.
@@ -390,6 +446,26 @@ impl Messages {
             // printed as it comes, never a failure.
             if message.id_name == "metal2vulkan-pipeline-creation" {
                 eprintln!("{}", message.text);
+                return;
+            }
+            // What the instance enabled of the layers the device asked for: informational, so it
+            // fails nothing, and kept rather than dropped with the rest, since a claim of what the
+            // validation layer reported holds nothing without it (`layer_claim`).
+            let test = reported.test.clone();
+            if reported
+                .layers
+                .heard(&test, &message.id_name, &message.text)
+            {
+                return;
+            }
+            // The loader's own message about an instance layer it cannot provide, reported through
+            // the messenger chained at creation before the call answers
+            // `VK_ERROR_LAYER_NOT_PRESENT`: held until the device says whether it was made
+            // without that layer, which passes it (`layer_claim`), and failing with the rest
+            // where nothing says so.
+            if layer_claim::loader_layer_message(&message.id_name, &message.text)
+                && reported.layers.hold(message)
+            {
                 return;
             }
             if !fails {
@@ -568,6 +644,9 @@ pub fn validated_options(messages: &Messages, cache: &Path) -> DeviceOptions {
     options.loader = loader();
     options.layers.push(VALIDATION_LAYER.to_owned());
     options.messages = Some(messages.sink());
+    // What a claim of what the validation layer reported stands on is what the instance enabled of
+    // this list, so the list is told what the device asks for (`layer_claim`).
+    messages.device_asked_layers(&options.layers);
     // The executor and the lanes read what each dispatch and draw ran.
     options.record_executions = true;
     options
