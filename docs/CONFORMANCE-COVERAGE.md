@@ -43,7 +43,7 @@ Its limits, measured rather than asserted:
 | committed recordings | 1100 |
 | distinct SDK items the Metal leg reaches, of any status | 797 |
 | of those, reached only where this cannot name the family | 5 |
-| ledger rows (a case whose gap is recorded) | 807 |
+| ledger rows (a case whose gap is recorded) | 805 |
 | declared crossings of the option space (pairs put to Metal at once) | 24 |
 | declared crossings that are no pair of it (a boolean or numeric field, or one type in two slots) | 30 |
 
@@ -2217,8 +2217,6 @@ A case whose difference from Metal is recorded rather than compared away. The le
 | `sparse-tails-wide-and-short` | Metal's `tailSizeInBytes` exceeds our sparse model's on extreme aspect ratios: a 2D texture whose shorter axis is a handful of texels while the longer is a thou… |
 | `sparse-tails-wide-and-short` | Metal's `tailSizeInBytes` exceeds our sparse model's on extreme aspect ratios: a 2D texture whose shorter axis is a handful of texels while the longer is a thou… |
 | `argb8-targets-destination-alpha` | Plain Metal on this M3 Max makes and runs a render pipeline whose ARGB8Unorm colour attachment blends with DestinationAlpha and OneMinusDestinationAlpha in the … |
-| `shared-event-handle-round-trip` | A Metal SHARED event answers NIL for `device`, and the runtime answers the device it was made on. Measured on this M3 Max (macOS 27.0.1, plain Metal, a one-off … |
-| `shared-event-handle-round-trip` | The same gap as `case/handle-round-trip/device`, read on the event `newSharedEventWithHandle:` answered: Metal's reopened shared event answers nil for `device` … |
 | `compute-descriptor-reset` | Metal's `MTLComputePipelineDescriptor.reset` is PARTIAL. Measured on this M3 Max (macOS 27.0.1, build 26A434), from `compute-descriptor-reset`'s own committed r… |
 | `compute-descriptor-reset` | Metal's `MTLComputePipelineDescriptor.reset` is PARTIAL. Measured on this M3 Max (macOS 27.0.1, build 26A434), from `compute-descriptor-reset`'s own committed r… |
 | `compute-descriptor-reset` | Metal's `MTLComputePipelineDescriptor.reset` is PARTIAL. Measured on this M3 Max (macOS 27.0.1, build 26A434), from `compute-descriptor-reset`'s own committed r… |

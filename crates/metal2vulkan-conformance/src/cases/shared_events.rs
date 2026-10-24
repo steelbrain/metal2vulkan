@@ -123,10 +123,13 @@ impl Case for RisingValue {
 /// **A Metal shared event answers nil for `device`**, where a plain `MTLEvent` answers the device
 /// it was made on. Measured on the oracle, and confirmed by a one-off Objective-C probe outside the
 /// suite: `[[dev newEvent] device]` is the device and `[[dev newSharedEvent] device]` is nil, as is
-/// the event reopened from the handle. The runtime answers the device for both, so the two device
-/// sites of this case are a divergence and `known-gaps.tsv` carries them as the open bug they are.
-/// Everything else of the pair compares exactly, which is what makes the row the whole of the
-/// difference rather than the first thing a reader notices.
+/// the event reopened from the handle. `MTLEvent`'s header declares the getter nonnull, so the
+/// asymmetry is Metal's behaviour rather than its documentation, and only a case that asks both
+/// events the same question finds it.
+///
+/// The runtime answered the device for both until this case said so; it now answers `None`
+/// ([`metal2vulkan_runtime::SharedEvent::device`]), which is what Metal answers, and these two
+/// sites compare exactly like the rest of the pair.
 ///
 /// # Why it is safe
 ///

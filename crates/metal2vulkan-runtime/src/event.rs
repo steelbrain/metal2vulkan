@@ -422,9 +422,21 @@ impl std::fmt::Debug for SharedEvent {
 }
 
 impl SharedEvent {
-    /// `device`.
-    pub fn device(&self) -> &Device {
-        &self.0.device
+    /// `device`, which a Metal **shared** event answers `nil` for, so this answers `None`.
+    ///
+    /// `MTLSharedEvent` inherits the getter from `MTLEvent`, whose header declares it nonnull, and
+    /// a plain `MTLEvent` does answer the device it was made on ([`Event::device`]). A shared one
+    /// does not: measured on an Apple M3 Max (macOS 27.0.1, plain Metal),
+    /// `[[dev newSharedEvent] device]` and the event `newSharedEventWithHandle:` answers are both
+    /// `nil`, while `[[dev newEvent] device]` is the device. The runtime answers what Metal
+    /// answers.
+    ///
+    /// The event still belongs to a device, and the runtime still holds it: a handle opened on
+    /// another device is refused ([`Device::new_shared_event_with_handle`]), and a signal or wait
+    /// encoded on another device's command buffer is refused as a foreign object, exactly as
+    /// Metal's are. What is not available is a getter for it, because Metal offers none.
+    pub fn device(&self) -> Option<&Device> {
+        None
     }
 
     /// `setLabel:`.

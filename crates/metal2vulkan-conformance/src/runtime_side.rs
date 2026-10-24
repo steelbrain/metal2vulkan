@@ -5074,7 +5074,9 @@ impl Side for RuntimeSide<'_> {
             .map_err(Failure::from_error)?;
         event.set_label(label);
         let read_label = event.label();
-        let device_is_the_cases = event.device().registry_id() == registry;
+        let device_is_the_cases = event
+            .device()
+            .is_some_and(|device| device.registry_id() == registry);
         let value_at_first = event.signaled_value();
         event.set_signaled_value(HANDLE_FIRST_VALUE);
         let value_after_the_host_set_it = event.signaled_value();
@@ -5085,7 +5087,9 @@ impl Side for RuntimeSide<'_> {
             .new_shared_event_with_handle(&handle)
             .map_err(Failure::from_error)?;
         let reopened_label = reopened.label();
-        let reopened_device_is_the_cases = reopened.device().registry_id() == registry;
+        let reopened_device_is_the_cases = reopened
+            .device()
+            .is_some_and(|device| device.registry_id() == registry);
         let reopened_value = reopened.signaled_value();
         reopened.set_signaled_value(HANDLE_SECOND_VALUE);
         let value_on_the_first_after_the_second_was_set = event.signaled_value();
