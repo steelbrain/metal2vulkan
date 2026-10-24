@@ -39,9 +39,9 @@
 //! of a `BC1_RGBA` image (`decoded-block-twin`) and cannot hold Metal's denormal depths
 //! (`depth-denormals`). Each is named on the row that announced it, not on the family.
 //!
-//! Every row names one more, and it belongs to the venue rather than to any row:
-//! [`SHARED_MEMORY_NOTICE`], the notice a device without unified memory announces for the `Shared`
-//! buffer each row reads its answer back through.
+//! Every row names one more, and it belongs to the venue rather than to any row: the declaration
+//! [`crate::replay::shared_memory_notice`] carries, the notice a device without unified memory
+//! announces for the `Shared` buffer each row reads its answer back through.
 //!
 //! The lane also carries a branch for a device that **cannot** write Metal's pattern and so reads
 //! zero, announcing `fresh-pattern-zeroed`. That branch is right for the lane, which must run
