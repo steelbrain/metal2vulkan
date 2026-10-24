@@ -1932,8 +1932,8 @@
       "chip": "apple-m3-max",
       "os_build": "26A434",
       "rounds": 8,
-      "measured": "8 round(s) of the whole selection, in the case set's own order, each round on a fresh device, our shader cache carried over between the cases of a round; a figure is the median of the rounds' own medians; Metal's leg ran at a one-minute load average of 4.95 and ours at 4.36; the legs run one after the other, so the per-call margin is judged only when both are 26.0 or under and within 2.0x of each other",
-      "instrument": 244,
+      "measured": "8 round(s) of the whole selection, in the case set's own order, each round on a fresh device, our shader cache carried over between the cases of a round; a figure is the median of the rounds' own medians; Metal's leg ran at a one-minute load average of 3.18 and ours at 2.63; the legs run one after the other, so the per-call margin is judged only when both are 26.0 or under and within 2.0x of each other",
+      "instrument": 236,
       "times": {
         "case": "two-plane-row-blits",
         "calls": 0,
@@ -1954,18 +1954,18 @@
       "chip": "apple-m3-max",
       "os_build": "26A434",
       "rounds": 8,
-      "measured": "8 round(s) of the whole selection, in the case set's own order, each round on a fresh device, our shader cache carried over between the cases of a round; a figure is the median of the rounds' own medians; Metal's leg ran at a one-minute load average of 4.95 and ours at 4.36; the legs run one after the other, so the per-call margin is judged only when both are 26.0 or under and within 2.0x of each other",
-      "instrument": 240,
+      "measured": "8 round(s) of the whole selection, in the case set's own order, each round on a fresh device, our shader cache carried over between the cases of a round; a figure is the median of the rounds' own medians; Metal's leg ran at a one-minute load average of 3.18 and ours at 2.63; the legs run one after the other, so the per-call margin is judged only when both are 26.0 or under and within 2.0x of each other",
+      "instrument": 233,
       "times": {
         "case": "two-plane-row-blits",
         "calls": 22,
-        "in_calls": 23722251,
-        "on_cpu": 2158750,
-        "blocked": 21250754,
-        "elsewhere": 7209875,
-        "spend": 30882545,
-        "spend_least": 28316459,
-        "spend_most": 33534336,
+        "in_calls": 24064332,
+        "on_cpu": 1887209,
+        "blocked": 21921039,
+        "elsewhere": 7392125,
+        "spend": 31567667,
+        "spend_least": 28892251,
+        "spend_most": 33396958,
         "degraded": [
           "metal2vulkan-degrade-shadowed-texture"
         ],
@@ -1974,14 +1974,14 @@
             "call": "work",
             "least_calls": 22,
             "most_calls": 22,
-            "wall": 1146584,
-            "on_cpu": 98667,
-            "blocked": 1041459,
-            "wall_least": 1097083,
-            "wall_most": 1248167,
-            "wall_total": 23722251,
-            "on_cpu_total": 2158750,
-            "blocked_total": 21250754
+            "wall": 1175750,
+            "on_cpu": 89333,
+            "blocked": 1084875,
+            "wall_least": 1093209,
+            "wall_most": 1232583,
+            "wall_total": 24064332,
+            "on_cpu_total": 1887209,
+            "blocked_total": 21921039
           }
         ]
       }
