@@ -369,6 +369,33 @@ impl PartialEq for ComputePipelineState {
 
 impl Eq for ComputePipelineState {}
 
+/// How many times a compute creation has answered `supportIndirectCommandBuffers`'s
+/// direct-argument check from the **made** descriptor's AIR rather than from the kernel its own
+/// compile produced ([`direct_arguments_from_air`]).
+///
+/// The check is a count and not a time. A made descriptor's kernel is a `Function` stage, so
+/// asking it decodes the kernel's AIR -- a second decode of what the compile that just finished
+/// already kept. Asking the compiled kernel decodes nothing
+/// (`ComputePipelineDescriptor::uses_direct_arguments`), and this counts the creations that had to
+/// fall back because a compile kept no answer: an ordinary creation must add none
+/// (`tests::direct_arguments_from_compiled`). A test reads it as a difference across the creation
+/// it makes, and nextest gives each test its own process, so no other test's creations are in it.
+#[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+static DIRECT_ARGUMENTS_FROM_AIR: std::sync::atomic::AtomicU64 =
+    std::sync::atomic::AtomicU64::new(0);
+
+/// Count one fall back to the made descriptor's AIR ([`DIRECT_ARGUMENTS_FROM_AIR`]).
+fn note_direct_arguments_from_air() {
+    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+    DIRECT_ARGUMENTS_FROM_AIR.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// [`DIRECT_ARGUMENTS_FROM_AIR`].
+#[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+pub(crate) fn direct_arguments_from_air() -> u64 {
+    DIRECT_ARGUMENTS_FROM_AIR.load(std::sync::atomic::Ordering::Relaxed)
+}
+
 /// What a compute state compiles: a compute descriptor's kernel, or a tile descriptor's tile
 /// function (a tile pipeline's state, `tile.rs`), with the descriptor's other fields.
 #[derive(Clone)]
@@ -662,11 +689,24 @@ impl ComputePipelineState {
         .map_err(|error| compile_error(device, error))?;
         // Metal answers nil with an `NSError` for a compute state that supports indirect command
         // buffers whose kernel uses a direct texture or sampler (`indirect_arguments.rs`).
-        if let (true, Kernel::Compute(descriptor)) = (indirect, &kernel) {
-            indirect_arguments::check_compute(
-                call,
-                descriptor.uses_direct_arguments(&options.budget()),
-            )?;
+        // Asked of the kernel the compile above produced, which answers from what that compile
+        // kept and decodes nothing; the made descriptor's kernel would decode its AIR again, for
+        // an answer the compile that just finished already holds. Where the compile kept none the
+        // made descriptor answers, as `kernel_reflection` falls back for a reflection.
+        if let (true, Kernel::Compute(made), Kernel::Compute(descriptor)) =
+            (indirect, &kernel, &compiled)
+        {
+            let budget = options.budget();
+            let uses = match descriptor.uses_direct_arguments(&budget) {
+                Err(metal2vulkan::error::Error::Unsupported(u))
+                    if u.feature == Feature::Reflection =>
+                {
+                    note_direct_arguments_from_air();
+                    made.uses_direct_arguments(&budget)
+                }
+                answer => answer,
+            };
+            indirect_arguments::check_compute(call, uses)?;
         }
         let stand_in = !key.storage_images.is_empty();
         let base = Variant::of(device, key, found)?;
