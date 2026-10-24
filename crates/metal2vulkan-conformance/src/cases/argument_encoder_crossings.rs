@@ -60,7 +60,7 @@
 //!   position of an argument whose type has no setter (a depth-stencil state, an acceleration
 //!   structure, an intersection function table);
 //! - **which eight-byte words the encoder wrote** — over a buffer pre-filled with
-//!   [`BLANK`](crate::argument_encoders::BLANK), so a word written as zero and a word not written
+//!   [`BLANK`], so a word written as zero and a word not written
 //!   read differently. That is every written argument's offset and stride with none of the host's
 //!   numbers in it.
 //!
