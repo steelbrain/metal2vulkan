@@ -14,7 +14,7 @@ Columns:
   - `none`: no public API path: malformed or non-Metal input, Apple-private calls, or a cap no valid program of ordinary size meets;
   - `?`: not assessed yet.
 
-Generated at `d9b866d0b`.
+Generated at `50a9a1862`.
 
 ## Totals
 
@@ -125,10 +125,10 @@ Generated at `d9b866d0b`.
 | `IntersectionFunctionTable` | A ray intersection through intersection functions | every device (no Vulkan mechanism); every device (not implemented) | 9: `crates/metal2vulkan/src/bind/acceleration.rs:177`, `crates/metal2vulkan/src/bind/acceleration.rs:183` (+7) | `rare`: ray tracing (out of scope by ruling) |
 | `IndependentBlending` | Color attachments whose write masks or blend states differ, as Metal sets them per attachment, on a device without `independentBlend`, where no... | devices without VkFeature::IndependentBlend | 2: `crates/metal2vulkan-runtime/src/render.rs:2201`, `crates/metal2vulkan/src/pipeline/link/graphics.rs:1005` | `rare`: per-attachment blending on a device without independentBlend |
 | `RasterSampleCount` | A `rasterSampleCount` outside the device's framebuffer sample counts for the pipeline's attachments (`framebuffer*SampleCounts`), and, for a color... | devices short of a Vulkan property the site names; devices without a capability the site computes | 2: `crates/metal2vulkan-runtime/src/families/limits.rs:1063`, `crates/metal2vulkan/src/pipeline/graphics.rs:563` | `app`: a sample count a device lacks for the attachments |
-| `TriangleFillLines` | The render encoder's `MTLTriangleFillModeLines` (`polygonMode` `LINE`) on a device without `fillModeNonSolid` | - | via a helper: 1: `crates/metal2vulkan/src/metal/state.rs:347` | `app`: wireframe on a device without fillModeNonSolid |
-| `DepthClipClamp` | The render encoder's `MTLDepthClipModeClamp` (`depthClampEnable`) on a device without `depthClamp` | - | via a helper: 1: `crates/metal2vulkan/src/metal/state.rs:363` | `app`: depth clamp on a device without depthClamp |
-| `DepthBiasClamp` | The render encoder's depth bias clamp, nonzero with a nonzero bias, on a device without `depthBiasClamp` | - | via a helper: 1: `crates/metal2vulkan/src/metal/state.rs:463` | `app`: depth bias clamp on a device without depthBiasClamp |
-| `ConstantAlphaBlendFactor` | `CONSTANT_ALPHA` or `ONE_MINUS_CONSTANT_ALPHA` (Metal's `BlendAlpha` factors) as a color blend factor on a portability-subset device without... | devices without VkFeature::ConstantAlphaColorBlendFactors | 1: `crates/metal2vulkan/src/metal/state.rs:165` | `app`: blend-alpha factors on a portability-subset device without them |
+| `TriangleFillLines` | The render encoder's `MTLTriangleFillModeLines` (`polygonMode` `LINE`) on a device without `fillModeNonSolid` | - | via a helper: 1: `crates/metal2vulkan/src/metal/state.rs:358` | `app`: wireframe on a device without fillModeNonSolid |
+| `DepthClipClamp` | The render encoder's `MTLDepthClipModeClamp` (`depthClampEnable`) on a device without `depthClamp` | - | via a helper: 1: `crates/metal2vulkan/src/metal/state.rs:374` | `app`: depth clamp on a device without depthClamp |
+| `DepthBiasClamp` | The render encoder's depth bias clamp, nonzero with a nonzero bias, on a device without `depthBiasClamp` | - | via a helper: 1: `crates/metal2vulkan/src/metal/state.rs:474` | `app`: depth bias clamp on a device without depthBiasClamp |
+| `ConstantAlphaBlendFactor` | `CONSTANT_ALPHA` or `ONE_MINUS_CONSTANT_ALPHA` (Metal's `BlendAlpha` factors) as a color blend factor on a portability-subset device without... | devices without VkFeature::ConstantAlphaColorBlendFactors | 1: `crates/metal2vulkan/src/metal/state.rs:176` | `app`: blend-alpha factors on a portability-subset device without them |
 | `SparseTexture` | A sparse texture (`MTLTexture.isSparse`) bound at `slot`, where a function observes the residency of its accesses (`sparse_color::resident()`) and... | - | via a helper: 2: `crates/metal2vulkan/src/bind/plan/slots.rs:583`, `crates/metal2vulkan/src/bind/plan/slots.rs:607` | `rare`: sparse residency reads |
 | `TextureSize` | A texture whose extent, array layers, or level count is past what the device takes for its format, type, and usage (`Capability::Limit` names the... | devices short of a device limit the site names | 1: `crates/metal2vulkan-runtime/src/image_plan.rs:1165` | `app`: a texture past a device's image limits |
 | `TextureSampleCount` | A texture sample count the device does not take for its format, type, and usage | devices short of a Vulkan property the site names; devices without VkFeature::MultisampleArrayImage; every device (no Vulkan mechanism) | 3: `crates/metal2vulkan-runtime/src/image_plan.rs:1213`, `crates/metal2vulkan-runtime/src/image_plan.rs:567` (+1) | `app`: a sample count a device lacks for the texture |
@@ -385,10 +385,10 @@ Each refusal's sites, with the function that builds it.
 - `feature::IntersectionFunctionTable`: `crates/metal2vulkan/src/bind/acceleration.rs:177 (geometry_table_offset)`; `crates/metal2vulkan/src/bind/acceleration.rs:183 (geometry_table_offset)`; `crates/metal2vulkan/src/bind/acceleration.rs:188 (geometry_table_offset)`; `crates/metal2vulkan/src/lower/raytracing/mod.rs:1222 (null_table)`; `crates/metal2vulkan/src/lower/raytracing/mod.rs:1251 (intersect)`; `crates/metal2vulkan/src/lower/raytracing/mod.rs:1272 (intersect)`; `crates/metal2vulkan/src/lower/raytracing/mod.rs:406 (table_of)`; `crates/metal2vulkan/src/lower/raytracing/mod.rs:422 (select_table)`; `crates/metal2vulkan/src/lower/select.rs:885 (route_air)`
 - `feature::IndependentBlending`: `crates/metal2vulkan-runtime/src/render.rs:2201 (check_pipeline)`; `crates/metal2vulkan/src/pipeline/link/graphics.rs:1005 (uniform_blend)`
 - `feature::RasterSampleCount`: `crates/metal2vulkan-runtime/src/families/limits.rs:1063 (sample_count)`; `crates/metal2vulkan/src/pipeline/graphics.rs:563 (sample_count_properties)`
-- `feature::TriangleFillLines`: `crates/metal2vulkan/src/metal/state.rs:347 (polygon_mode)`
-- `feature::DepthClipClamp`: `crates/metal2vulkan/src/metal/state.rs:363 (depth_clamp_enable)`
-- `feature::DepthBiasClamp`: `crates/metal2vulkan/src/metal/state.rs:463 (depth_bias)`
-- `feature::ConstantAlphaBlendFactor`: `crates/metal2vulkan/src/metal/state.rs:165 (check_constant_alpha)`
+- `feature::TriangleFillLines`: `crates/metal2vulkan/src/metal/state.rs:358 (polygon_mode)`
+- `feature::DepthClipClamp`: `crates/metal2vulkan/src/metal/state.rs:374 (depth_clamp_enable)`
+- `feature::DepthBiasClamp`: `crates/metal2vulkan/src/metal/state.rs:474 (depth_bias)`
+- `feature::ConstantAlphaBlendFactor`: `crates/metal2vulkan/src/metal/state.rs:176 (check_constant_alpha)`
 - `feature::SparseTexture`: `crates/metal2vulkan/src/bind/plan/slots.rs:583 (check_sparse_textures)`; `crates/metal2vulkan/src/bind/plan/slots.rs:607 (check_sparse_textures)`
 - `feature::TextureSize`: `crates/metal2vulkan-runtime/src/image_plan.rs:1165 (check_image_limits)`
 - `feature::TextureSampleCount`: `crates/metal2vulkan-runtime/src/image_plan.rs:1213 (check_image_limits)`; `crates/metal2vulkan-runtime/src/image_plan.rs:567 (plan_held)`; `crates/metal2vulkan-runtime/src/image_plan.rs:577 (plan_held)`
