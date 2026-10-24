@@ -425,8 +425,9 @@ pub struct ProgramLibrary<'a> {
     /// The list is what our side's container writer has to name, because `xcrun metallib` names
     /// the whole module's and a container that named fewer would answer a shorter `functionNames`
     /// than Metal's for a reason that is the case's own construction rather than a difference. A
-    /// case states them; `tests::archive_program_libraries_name_every_entry` holds the statement
-    /// to the fixture's own text.
+    /// case states them, and nothing holds the list to its shader's own text: an entry a case
+    /// leaves out is the author's mistake, and reaches the comparison as a shorter
+    /// `functionNames` than Metal's.
     pub entries: &'a [(&'static str, u8)],
 }
 

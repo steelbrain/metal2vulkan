@@ -819,28 +819,6 @@ pub fn indexed_symbol_definers(
     Ok((hashes, module))
 }
 
-/// How many retained modules the parent libraries `parent_library_sha256s` hold (each counted
-/// once), from the index alone.
-pub fn indexed_module_count(
-    index: &Path,
-    parent_library_sha256s: &[String],
-) -> Result<usize, String> {
-    let connection = open_index_read_only(index)?;
-    let mut statement = connection
-        .prepare("SELECT module_sha256 FROM library_module_memberships WHERE lib_sha256=?1")
-        .map_err(|error| format!("prepare library-module membership lookup: {error}"))?;
-    let mut modules = BTreeSet::new();
-    for library in parent_library_sha256s {
-        let rows = statement
-            .query_map([library], |row| row.get::<_, String>(0))
-            .map_err(|error| format!("query library {library}'s modules: {error}"))?;
-        for module in rows {
-            modules.insert(module.map_err(|error| format!("read library module: {error}"))?);
-        }
-    }
-    Ok(modules.len())
-}
-
 fn indexed_modules_for_symbol(
     connection: &Connection,
     libraries: &[String],
@@ -1650,10 +1628,6 @@ mod tests {
                         )
                         .unwrap();
                         assert_eq!(read, std::slice::from_ref(&module));
-                        assert_eq!(
-                            indexed_module_count(&index, std::slice::from_ref(&library)).unwrap(),
-                            1
-                        );
                     }
                 })
             })
