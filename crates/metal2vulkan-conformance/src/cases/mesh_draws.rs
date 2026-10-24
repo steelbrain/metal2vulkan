@@ -357,12 +357,9 @@ const FRAGMENT: &str = "mesh_draws_fragment";
 /// that may then differ.
 ///
 /// It is a list and not a device query, because a case never branches on the device: a case asks
-/// by running and reads what came back. The list holds exactly the kinds measured on the two
-/// venues of this round -- MoltenVK 1.4.2 on this M3 Max, which emulates mesh draws, and lavapipe
-/// (LLVM 21.1.8), which has `VK_EXT_mesh_shader` and announces its own compiler's rewrites and the
-/// notes its barrier path makes. A third venue that announces a kind not here fails the case until
-/// its kind is added, which is the model working: an announced difference nobody named is not an
-/// announced difference.
+/// by running and reads what came back. A venue that announces a kind not here fails the case
+/// until its kind is added, which is the model working: an announced difference nobody named is
+/// not an announced difference.
 pub const MESH_PASS_NOTICES: &[Degradation] = &[
     // The pass drew through the mesh-draw emulation, on a device without `VK_EXT_mesh_shader`.
     Degradation::EmulatedMeshDraws,
@@ -373,6 +370,12 @@ pub const MESH_PASS_NOTICES: &[Degradation] = &[
     Degradation::FragmentsBeforeGeometry,
     Degradation::RenderPassSplit,
     Degradation::UnorderedDrawBytes,
+    // The buffers these passes read their payloads, draw arguments and read-back through are
+    // `Shared`, and a device with no unified memory keeps a `Shared` allocation in system memory
+    // because that is the only memory both sides can reach. It belongs to the venue's memory
+    // model, not to anything the mesh path does: a device whose driver is Metal announces nothing
+    // here, and a discrete card announces it for every pass of the three mesh families.
+    Degradation::SharedInSystemMemory,
 ];
 
 /// The allowances a mesh case keeps: one over its notices site per kind of
