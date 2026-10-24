@@ -4143,6 +4143,7 @@ fn a_count_the_measurement_never_saw_is_bounded_at_zero() {
         moving: Default::default(),
         composed: Default::default(),
         ceilings: Default::default(),
+        unmeasurable: None,
     };
     let judge = |text: &str| {
         crate::cost::judge(
@@ -4195,6 +4196,7 @@ fn a_count_whose_readings_moved_is_reported_and_not_gated() {
             .unwrap_or_default(),
         composed: Default::default(),
         ceilings: Default::default(),
+        unmeasurable: None,
     };
     let found = crate::cost::Counts::read("WorkCounts {\n    render_passes_made: 9,\n}").unwrap();
     // Deterministic in the measurement: held, and 9 is over 2.
@@ -4248,6 +4250,7 @@ fn a_run_with_no_bound_that_stands_is_unmeasured_and_says_why() {
         moving: Default::default(),
         composed: Default::default(),
         ceilings: Default::default(),
+        unmeasurable: None,
     };
     let found = crate::cost::Counts::read("WorkCounts {\n    queue_submissions: 1,\n}").unwrap();
     let records = std::slice::from_ref(&record);
@@ -4332,6 +4335,7 @@ fn the_cost_record_rides_in_the_recording() {
         moving: Default::default(),
         composed: Default::default(),
         ceilings: Default::default(),
+        unmeasurable: None,
     }];
     let recording = Recording::new("a case", Vec::new(), vec![answer]).with_costs(costs.clone());
     let text = serde_json::to_string_pretty(&recording).expect("it writes");
@@ -4402,6 +4406,7 @@ fn re_recording_a_metal_answer_keeps_the_cost_record() {
         moving: Default::default(),
         composed: Default::default(),
         ceilings: Default::default(),
+        unmeasurable: None,
     }];
     let held = held.with_costs(costs.clone());
     // A fresh Metal recording of the same case, with different answers, which is what re-recording
@@ -4588,6 +4593,7 @@ fn a_count_that_says_which_thread_arrived_first_is_never_gated() {
         moving: Default::default(),
         composed: Default::default(),
         ceilings: Default::default(),
+        unmeasurable: None,
     };
     assert_eq!(record.gated(), 1, "only the total is gated");
     let judge = |text: &str| {
@@ -4711,6 +4717,7 @@ fn a_count_the_selection_decides_is_reported_and_not_gated() {
         moving: Default::default(),
         composed: Default::default(),
         ceilings: Default::default(),
+        unmeasurable: None,
     };
     // What the case does alone: two submissions where company needed one, and three command
     // buffers where company began four, because the work it batches with is not there. The two
@@ -4809,6 +4816,7 @@ fn a_count_only_one_shape_moved_is_reported_as_well() {
         moving: Default::default(),
         composed: Default::default(),
         ceilings: Default::default(),
+        unmeasurable: None,
     };
     let apart = crate::cost::CaseCost {
         case: "a case".to_owned(),
@@ -5625,6 +5633,7 @@ fn a_count_whose_ceiling_is_the_lone_run_is_gated_there() {
         moving: Default::default(),
         composed: Default::default(),
         ceilings: Default::default(),
+        unmeasurable: None,
     };
     let alone = |text: &str| crate::cost::CaseCost {
         case: "a case".to_owned(),
@@ -5756,6 +5765,7 @@ fn a_second_measurement_of_the_same_shape_changes_nothing() {
         ceilings: [("pipeline_layouts_made".to_owned(), 2)]
             .into_iter()
             .collect(),
+        unmeasurable: None,
     };
     // The whole set measured again, reading exactly what it read before. For the ceiling count
     // that is the *lower* number, which is the whole point: 1 in company against 2 alone.
@@ -5829,6 +5839,7 @@ fn a_ceiling_is_recorded_as_the_evidence_for_its_bound() {
         moving: Default::default(),
         composed: Default::default(),
         ceilings: Default::default(),
+        unmeasurable: None,
     };
     // A monotone count the lone run moved and the whole-set run never did at all: the case that
     // produced 389 vanishing bounds, because nothing wrote down where the bound came from.
@@ -5944,6 +5955,7 @@ fn the_diff_tool_reads_the_gate_and_not_the_noise() {
                 .iter()
                 .map(|(n, v)| ((*n).to_owned(), *v))
                 .collect(),
+            unmeasurable: None,
         }
     };
     let what = |moved: &[crate::cost::Drift]| -> Vec<(String, Drifted)> {
@@ -6483,11 +6495,14 @@ fn a_notice_one_case_provoked_does_not_excuse_the_nexts_difference() {
 /// selection it is given against the tree it runs in, and nothing in authoring a case produces a
 /// record, so a case is covered only where some later whole-set run happened to include it.
 ///
-/// A case the venue honestly cannot measure would be a third cause and **no evidence places any
-/// case in it**, which is itself a defect: [`crate::run::record_costs`] turns a stopped run into
-/// an `Err` whose reason it prints and drops, so a refusal leaves a recording byte-identical to
-/// one nobody measured. Until that reason is written down, the two cannot be told apart from the
-/// recordings, and a silent absence is exactly what the owner's rule forbids.
+/// A case the venue honestly cannot measure is a third cause, and **no case is in it**: none of
+/// the 398 is a recorded refusal. That used to be unknowable rather than known, because
+/// [`crate::run::record_costs`] turned a stopped run into an `Err` whose reason it printed and
+/// dropped, leaving a recording byte-identical to one nobody had measured. A refusal is now
+/// written down instead ([`crate::cost::CostRecord::unmeasurable`], read as `Unmeasured` before
+/// any count by [`a_recorded_refusal_is_unmeasured_and_gates_no_count`]) and tallied by the
+/// writing command, so from the next run on the two are distinguishable and countable. Every name
+/// below is a case no run has covered, which is why a whole-set measurement empties both lists.
 ///
 /// Held in **both** directions: a case carrying no record and not named here fails, and a name
 /// here whose case now carries one fails, so the bill shrinks as runs fill it rather than going
@@ -7001,4 +7016,58 @@ fn the_cost_coverage_set_is_held_in_both_directions() {
     assert!(said.contains("\"b\""), "{said}");
     // Empty on both sides is the state this work is for: every case covered, nothing named.
     assert!(cost_coverage_diff(&set(&[]), &set(&[])).is_none());
+}
+
+/// A recorded refusal reads as `Unmeasured` and gates no count.
+///
+/// The venue writes down that it cannot measure a case ([`crate::run`]'s refusal writer), and that
+/// record holds no bounds. An absent bound otherwise means **zero**, which is the gate's whole
+/// point, so a refusal record read naively would hold every count the case moves to nothing and
+/// fail it. [`crate::cost::judge`] therefore reads the refusal before it reads a count.
+///
+/// The second half of this test is the one that matters: the same record with the refusal removed
+/// reads `Over`, so the early return is load-bearing rather than decorative.
+#[test]
+fn a_recorded_refusal_is_unmeasured_and_gates_no_count() {
+    let refused = crate::cost::CostRecord {
+        venue: "a venue".to_owned(),
+        runs: 0,
+        measured: "no measurement: the run stopped before the case finished".to_owned(),
+        contrasted: None,
+        degraded: Vec::new(),
+        bounds: Default::default(),
+        moving: Default::default(),
+        composed: Default::default(),
+        ceilings: Default::default(),
+        unmeasurable: Some("the venue lacks the feature the case needs".to_owned()),
+    };
+    let counts = crate::cost::Counts::read("WorkCounts {\n    queue_submissions: 7,\n}")
+        .expect("the shape reads");
+    let judge = |record: &crate::cost::CostRecord| {
+        crate::cost::judge(
+            std::slice::from_ref(record),
+            "a venue",
+            true,
+            &counts,
+            None,
+            &[],
+        )
+    };
+    assert_eq!(judge(&refused).word(), "unmeasured");
+    // The reason survives into the verdict, so a reader of the gate learns why rather than that
+    // the case is simply uncovered.
+    let crate::cost::CostVerdict::Unmeasured { why } = judge(&refused) else {
+        panic!("a recorded refusal is unmeasured")
+    };
+    assert!(why.contains("lacks the feature the case needs"), "{why}");
+    // Without the refusal the identical record bounds all seven submissions at zero.
+    let bare = crate::cost::CostRecord {
+        unmeasurable: None,
+        ..refused.clone()
+    };
+    assert_eq!(
+        judge(&bare).word(),
+        "over",
+        "an empty record bounds every count at zero, which is what the refusal must not do"
+    );
 }

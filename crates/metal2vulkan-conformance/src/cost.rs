@@ -872,6 +872,20 @@ pub struct CostRecord {
     /// back.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub ceilings: BTreeMap<String, u64>,
+    /// Why the venue cannot measure this case at all, where it cannot.
+    ///
+    /// A run the venue stops -- it lacks a feature the case needs, or the case could not be
+    /// replayed -- did a part of the case, so its counts bound nothing. Before this, the writing
+    /// command printed that reason and dropped it, which left the recording byte-identical to one
+    /// nobody had measured: a refusal and an unmeasured gap read the same from the files, and a
+    /// silent absence is what the owner's rule forbids. Written here, a refusal is durable, and
+    /// the count of them is readable without a device.
+    ///
+    /// A record carrying this holds no bounds and gates nothing. [`judge`] reads it as
+    /// [`CostVerdict::Unmeasured`] **before** it reads any count, because an absent bound
+    /// otherwise means zero and would gate every count the case moves at nothing.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub unmeasurable: Option<String>,
 }
 
 impl CostRecord {
@@ -1301,6 +1315,14 @@ pub fn judge(
             },
         };
     };
+    // A refusal the venue wrote down: it cannot measure this case at all, so the record holds no
+    // bound. This has to precede every count, because an absent bound means zero and would gate
+    // each count the case moves at nothing.
+    if let Some(why) = &record.unmeasurable {
+        return CostVerdict::Unmeasured {
+            why: format!("the venue recorded that it cannot measure this case: {why}"),
+        };
+    }
     // A device that could not do the case exactly did less of it, and its lower counts are its
     // gap and not our saving. Comparing such a run with a measurement of a different gap would
     // read the gap as a win, so the two are not comparable at all.
@@ -1422,6 +1444,7 @@ impl CaseCost {
             moving,
             composed: BTreeMap::new(),
             ceilings: BTreeMap::new(),
+            unmeasurable: None,
         }
     }
 

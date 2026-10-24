@@ -535,6 +535,16 @@ fn cost(
             }
         }
     }
+    // The refusals are tallied and not only printed case by case. A case the venue could not
+    // measure used to leave a recording identical to one nobody had measured, so the two could not
+    // be counted apart; each now carries its reason, and this is the line that says how many.
+    let refused = measured.iter().filter(|one| one.stopped.is_some()).count();
+    println!(
+        "{} case(s): {} measured on {venue}, {refused} the venue could not measure, each written \
+         down with its reason rather than left absent",
+        measured.len(),
+        measured.len() - refused
+    );
     Ok(all)
 }
 

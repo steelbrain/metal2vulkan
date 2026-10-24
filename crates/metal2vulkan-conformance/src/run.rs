@@ -337,16 +337,58 @@ pub fn record_costs(
         .iter()
         .map(|cost| {
             let written = if let Some(why) = &cost.stopped {
-                Err(format!(
-                    "the run stopped before the case finished ({why}), so its counts are of a \
-                     part of the case"
-                ))
+                record_one_refusal(venue, cost, why)
             } else {
                 record_one_cost(venue, shape, cost, words)
             };
             (cost.case.clone(), written)
         })
         .collect()
+}
+
+/// Write down that the venue cannot measure this case, where it holds no measurement of it.
+///
+/// A stopped run -- the venue lacks a feature the case needs, or the case could not be replayed --
+/// bounds nothing, so there is no record to write. The reason used to be returned here as an `Err`,
+/// printed by the command and then dropped, which left the recording byte-identical to one nobody
+/// had measured: from the files a refusal and an unmeasured gap were the same thing, and the count
+/// of either could not be read without a device. It is written down instead.
+///
+/// **A refusal never overwrites a measurement.** Where the venue already holds bounds for the case,
+/// they stay and this says so: a run that stopped today says nothing about the run that measured
+/// it, and destroying real bounds to record a stop would lose the gate for the case.
+fn record_one_refusal(
+    venue: &str,
+    cost: &CaseCost,
+    why: &str,
+) -> Result<std::path::PathBuf, String> {
+    let mut recording = crate::recording::read(&cost.case)?;
+    if let Some(held) = recording.costs.iter().find(|held| held.venue == venue) {
+        if held.unmeasurable.is_none() {
+            return Err(format!(
+                "the run stopped before the case finished ({why}), so its counts are of a part of \
+                 the case; the {} bound(s) {venue} already holds are kept",
+                held.bounds.len()
+            ));
+        }
+    }
+    recording.costs.retain(|held| held.venue != venue);
+    recording.costs.push(crate::cost::CostRecord {
+        venue: venue.to_owned(),
+        runs: 0,
+        measured: format!("no measurement: the run stopped before the case finished ({why})"),
+        contrasted: None,
+        degraded: Vec::new(),
+        bounds: std::collections::BTreeMap::new(),
+        moving: std::collections::BTreeMap::new(),
+        composed: std::collections::BTreeMap::new(),
+        ceilings: std::collections::BTreeMap::new(),
+        unmeasurable: Some(why.to_owned()),
+    });
+    recording
+        .costs
+        .sort_by(|one, two| one.venue.cmp(&two.venue));
+    crate::recording::write(&recording)
 }
 
 /// Put one case's cost record in its recording, replacing the venue's own record and keeping every
