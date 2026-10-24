@@ -24,7 +24,10 @@
 //! interlock (RADV, ANV, NVIDIA, MoltenVK) the function computes Metal's blend itself, exactly,
 //! announcing none of the three, which is asserted; a format whose storage the device lacks there
 //! is refused by that capability, which is printed. Through input attachments (lavapipe) the device
-//! blends; what it announces and how many channels are Metal's is printed. Each draw prints a
+//! blends; what it announces and how many channels are Metal's is printed. A format the device
+//! renders through another (an emulation or a word view) has no storage form at all and is refused
+//! by name, printed too: NVIDIA renders no `R8Unorm_sRGB` or `RG8Unorm_sRGB` of its own, their
+//! Vulkan formats being sampled images there with no color-attachment bit. Each draw prints a
 //! `FETCH-BLEND8` line naming its function and format.
 //!
 //! Other blends, write masks and the blend color, into `BGRA8Unorm` through each fixture's
@@ -43,8 +46,9 @@ use crate::runtime_lane::degrade_notices::counts;
 use crate::runtime_lane::resolves::{lane_with, quiet, Lane};
 use crate::runtime_lane::WAIT;
 use crate::runtime_lane::{buffer_with, Messages};
+use metal2vulkan::device::FormatUsage;
 use metal2vulkan::error::Needs;
-use metal2vulkan::metal::format::WordAttachment;
+use metal2vulkan::metal::format::{vk_format, FormatEmulation, WordAttachment};
 use metal2vulkan::metal::{
     BlendFactor, BlendOperation, ColorWriteMask, PixelFormat, PrimitiveType, TextureUsage,
 };
@@ -56,6 +60,7 @@ use metal2vulkan_runtime::{
     RenderPassDescriptor, RenderPipelineState, ResourceOptions, Size, StoreAction, Texture,
     TextureDescriptor,
 };
+use std::collections::BTreeSet;
 
 /// The target's side, as the fixtures'.
 const SIDE: u64 = 64;
@@ -275,8 +280,10 @@ fn filled(lane: &Lane, pf: PixelFormat, bytes: &[u8], bpp: u64) -> Texture {
 }
 
 /// A pipeline of `fixture`'s `entry` blending color 0 of `pf` by `blended` (with color 1 of mask
-/// none), or `None` where the device lacks a capability the pipeline needs: the format's storage
-/// through the pixel interlock, or its rendering or blend through input attachments (printed).
+/// none), or `None` where the device cannot render the attachment as a fetch's storage form needs
+/// (printed): a capability it lacks -- the format's storage through the pixel interlock, or its
+/// rendering or blend through input attachments -- or a format it renders through another
+/// (`NotImplemented`, below).
 fn pipeline(
     lane: &Lane,
     (library, fixture): (&Library, &Fixture),
@@ -293,6 +300,16 @@ fn pipeline(
         )
     };
     let pf = blended.pixel_format;
+    // Whether the device holds the attachment in the Metal format's own Vulkan format. No storage
+    // form of a fetch is built over an emulated attachment (`lower/fragment/fetch.rs`'s
+    // `not_modelled`), so such a format's fetch is refused `NotImplemented`, by design and the
+    // same for every device that cannot render it: NVIDIA's `R8_SRGB` and `R8G8_SRGB` are sampled
+    // images with no color-attachment bit, so the one- and two-channel sRGB formats reach it there
+    // where the four-channel ones do not.
+    let usages = BTreeSet::from([FormatUsage::ColorAttachment]);
+    let profile = lane.device.compile_device().profile();
+    let held_directly = vk_format(pf, &usages, profile)
+        .is_ok_and(|mapping| mapping.emulation == FormatEmulation::Direct);
     let mut descriptor = RenderPipelineDescriptor::new(function(fixture.vertex));
     descriptor.fragment = Some(function(entry));
     let mut unwritten = ColorAttachmentDescriptor::new(PixelFormat::RGBA16Float);
@@ -306,9 +323,13 @@ fn pipeline(
         Ok(state) => Some(state),
         // A format whose storage, or blend, the device lacks is refused by that capability
         // (lavapipe renders and blends no `R8Unorm_sRGB` and `RG8Unorm_sRGB`, through input
-        // attachments).
-        Err(Error::Unsupported(u)) if u.needs != Needs::NotImplemented => {
-            println!("FETCH-BLEND8 {entry} {pf:?} | {device} | refused: {u}");
+        // attachments); one the device renders through another format, by name.
+        Err(Error::Unsupported(u)) if u.needs != Needs::NotImplemented || !held_directly => {
+            let held = match held_directly {
+                true => "the format's own image",
+                false => "rendered through another format",
+            };
+            println!("FETCH-BLEND8 {entry} {pf:?} | {device} | {held} | refused: {u}");
             None
         }
         Err(error) => panic!("{entry} into {pf:?} on {device}: {error}"),
