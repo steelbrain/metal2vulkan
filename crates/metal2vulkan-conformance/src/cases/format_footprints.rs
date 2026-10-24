@@ -130,7 +130,7 @@
 //! - the 35 above, in every texture type and in the size query;
 //! - `Type1D`, `Type1DArray` and `TextureBuffer` for the six ASTC footprints, where Metal's
 //!   validation stops the descriptor with "compressed pixel formats require texture type of
-//!   MTLTextureType2D[Array], MTLTextureType3D or MTLTextureTypeCube[Array]";
+//!   `MTLTextureType2D[Array]`, `MTLTextureType3D` or `MTLTextureTypeCube[Array]`";
 //! - the multisample types everywhere, which `heap_metal_sizes` records as a process-ending shape
 //!   for a format Metal describes no texture of;
 //! - `ShaderAtomic` usage, which Metal ends its own process on for any format but `R32Uint`.
