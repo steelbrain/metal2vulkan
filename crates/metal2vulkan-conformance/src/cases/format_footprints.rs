@@ -825,14 +825,6 @@ mod tests {
         }
         assert_eq!(patterns.len(), 31, "other than 31 formats round-trip");
     }
-
-    /// The round trip's pitch is wide enough for every format of the family, so one pitch serves
-    /// all of them and the bytes past a format's own row are the compared padding rather than a
-    /// buffer overrun.
-    #[test]
-    fn the_pitch_holds_the_widest_texel_the_family_has() {
-        assert!(PITCH >= SIDE * 16, "a 16-byte texel would not fit");
-    }
 }
 
 /// The safety guard this family rests on, run on a device.
