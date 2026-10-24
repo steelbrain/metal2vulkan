@@ -132,6 +132,22 @@ impl Case for EventOrder {
         MetalSource::Run
     }
 
+    fn allowances(&self) -> Vec<crate::allowance::Allowance> {
+        // The cross-queue row is the one row of the family that reads an answer back out of a
+        // `Shared` buffer, and on a device without unified memory the runtime announces
+        // `shared-in-system-memory` for it (`crate::replay::shared_memory_notice` holds the whole
+        // reason). It declares the notices site alone: the scratch words still compare exactly.
+        //
+        // Measured on the RTX 5080 Laptop (615.71.09): the notice fired for
+        // `event-cross-queue-wait` alone, which was divergent on that field and nothing else, and
+        // the other three rows were exact (replay-nvidia.log). So the other three name nothing:
+        // what they read back is a count our side holds, not a buffer the device wrote.
+        match self.shape {
+            Shape::CrossQueueWait => vec![crate::replay::shared_memory_notice()],
+            Shape::HighestSignal | Shape::Held | Shape::SignalBeforeWait => Vec::new(),
+        }
+    }
+
     fn inputs(&self) -> Result<Vec<Input>, String> {
         let mut inputs = vec![
             Input::bytes("scratch-bytes", &SCRATCH.to_le_bytes()),

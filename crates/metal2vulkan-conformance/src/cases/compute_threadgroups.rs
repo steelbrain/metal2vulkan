@@ -198,6 +198,17 @@ impl Case for SimdScratch {
         MetalSource::Run
     }
 
+    fn allowances(&self) -> Vec<crate::allowance::Allowance> {
+        // Every row reads its answer back through a `Shared` buffer, so on a device without
+        // unified memory the runtime announces `shared-in-system-memory`
+        // (`crate::replay::shared_memory_notice` holds the whole reason). It declares the notices
+        // site alone: every value of this family still compares against Metal's exactly.
+        //
+        // Measured on the RTX 5080 Laptop (615.71.09), where it fired for all this case
+        // and each row was divergent on that field and nothing else (replay-nvidia.log).
+        vec![crate::replay::shared_memory_notice()]
+    }
+
     fn shaders(&self) -> Result<Vec<ShaderRef>, String> {
         shaders_of()
     }
@@ -327,6 +338,17 @@ impl Case for PastMetalsLimit {
 
     fn metal_source(&self) -> MetalSource {
         MetalSource::carried_only(CARRIED_FROM, NEVER_RE_RECORD).measured_on(CARRIED_CHIP)
+    }
+
+    fn allowances(&self) -> Vec<crate::allowance::Allowance> {
+        // Every row reads its answer back through a `Shared` buffer, so on a device without
+        // unified memory the runtime announces `shared-in-system-memory`
+        // (`crate::replay::shared_memory_notice` holds the whole reason). It declares the notices
+        // site alone: every value of this family still compares against Metal's exactly.
+        //
+        // Measured on the RTX 5080 Laptop (615.71.09), where it fired for all this case
+        // and each row was divergent on that field and nothing else (replay-nvidia.log).
+        vec![crate::replay::shared_memory_notice()]
     }
 
     fn shaders(&self) -> Result<Vec<ShaderRef>, String> {
