@@ -158,6 +158,47 @@ def read_types(root: Path) -> dict[str, Type]:
     return out
 
 
+#: The settled-unreachable declaration, relative to the tree's root.
+UNREACHABLE = "scripts/conformance-coverage/unreachable_values.tsv"
+
+
+def read_unreachable(root: Path) -> dict[tuple[str, str], tuple[str, str]]:
+    """`(type, value)` to `(why, finding)` for every value NO case can put to Metal.
+
+    This axis's counterpart to the items axis's "`objc2-metal` binds no name for them": a value
+    behind an assertion that ends the process, or with no API that answers it, is not work, and
+    counting it as a gap puts 51 permanent rows on a work list. The share below is then taken over
+    what a case can reach, the way the items axis takes it.
+
+    The declaration is `unreachable_values.tsv`, beside this script rather than in the suite, for
+    one reason: a `#[cfg(test)]` item is deliberately invisible to this axis (a unit test naming a
+    value must not credit it), so a list in the suite's tests could not be read, and a list in its
+    product text would be a case naming the value.
+
+    The caller checks it rather than trusting it -- see `inventory`, which fails on a row whose
+    value some case did compare and on a row naming a value its type does not have.
+    """
+    path = root / UNREACHABLE
+    out: dict[tuple[str, str], tuple[str, str]] = {}
+    if not path.exists():
+        # A tree that declares none, which is every synthetic tree the self-test builds. Absence is
+        # "nothing is settled", never "everything is", so the share it feeds can only read LOW.
+        return out
+    for line in path.read_text().splitlines():
+        if not line.strip() or line.startswith("#"):
+            continue
+        fields = line.split("\t")
+        if len(fields) != 4:
+            raise SystemExit(f"{path.name}: {line!r} is not `type\tvalue\twhy\tfinding`")
+        metal, value, why, finding = fields
+        if (metal, value) in out:
+            raise SystemExit(f"{path.name}: {value} of {metal} is listed twice")
+        if not why.strip() or not finding.strip():
+            raise SystemExit(f"{path.name}: {value} of {metal} carries no reason or no finding")
+        out[(metal, value)] = (why, finding)
+    return out
+
+
 def read_table(root: Path, rust_names: dict[str, str]) -> dict[str, Type]:
     """The SDK's values for the Metal types this tree models by hand, from the generated table.
 
@@ -561,13 +602,34 @@ def inventory(root: Path, ran: set[str]) -> dict:
         held[metal] = Type(metal, rust, "by hand", [(name, name) for name in names])
     effect, shared, about = stated(root, held, ran)
     read_back, at_a_site = answered(root, types)
+    unreachable = read_unreachable(root)
+    for metal, value in unreachable:
+        if metal not in types:
+            raise SystemExit(
+                f"unreachable_values.tsv names {metal}, which has no generated value list here"
+            )
+        if value not in types[metal].names:
+            raise SystemExit(
+                f"unreachable_values.tsv names {value}, which is not a value of {metal} -- an "
+                "enumerator renamed in the SDK, or a typo"
+            )
     rows = []
     for metal, held in sorted(types.items()):
-        compared, only_shared, missing = [], [], []
+        compared, only_shared, missing, settled = [], [], [], []
         for name in held.names:
             key = (metal, name)
             if key in read_back or key in at_a_site or key in effect:
+                if key in unreachable:
+                    # The list claims no case can reach this value, and a case compared it. One of
+                    # the two is wrong and neither may stand: a wrong row here is how a share gets
+                    # inflated, which is the whole thing this column has to be trusted not to do.
+                    raise SystemExit(
+                        f"unreachable_values.tsv calls {name} of {metal} unreachable, but a case "
+                        "compared it -- delete the row, or correct what the case claims"
+                    )
                 compared.append(name)
+            elif key in unreachable:
+                settled.append(name)
             elif key in shared:
                 only_shared.append(name)
             else:
@@ -587,6 +649,9 @@ def inventory(root: Path, ran: set[str]) -> dict:
                 "in_effect": [n for n in held.names if (metal, n) in effect],
                 "shared": only_shared,
                 "missing": missing,
+                # Values no case can reach, settled by a measurement rather than unexercised. Kept
+                # out of `missing` so a work list is work.
+                "settled": settled,
                 "modules": sorted({m for n in held.names for m in effect.get((metal, n), ())}),
                 # Modules whose text is about this type and states no value of it by name. A
                 # sweep written over ordinals reads this way, and so does a module that only
@@ -614,4 +679,5 @@ def inventory(root: Path, ran: set[str]) -> dict:
         "answered": read_back,
         "at_a_site": at_a_site,
         "in_effect": effect,
+        "unreachable": unreachable,
     }

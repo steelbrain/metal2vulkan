@@ -579,6 +579,8 @@ def write_option_space(w, space) -> None:
     compared = sum(len(row["compared"]) for row in rows)
     shared = sum(len(row["shared"]) for row in rows)
     missing = sum(len(row["missing"]) for row in rows)
+    settled = sum(len(row["settled"]) for row in rows)
+    reachable = values - settled
 
     w("## By option space, which is depth rather than reach")
     w("")
@@ -680,12 +682,16 @@ def write_option_space(w, space) -> None:
     w("|---|---|")
     w(f"| Metal enums and option sets with a generated value list | {len(rows)} |")
     w(f"| their values | {values} |")
+    w(f"| of those, unreachable: no case can put them to Metal | {settled} |")
+    w(f"| so reachable by some case | {reachable} |")
     w(f"| values compared | {compared} |")
-    w(f"| share compared | {100.0 * compared / values:.0f}% |")
+    w(f"| share of the reachable compared | {100.0 * compared / reachable:.0f}% |")
     w(f"| values only the suite's shared sources name | {shared} |")
     w(f"| values no source names and no recording holds | {missing} |")
+    # "every REACHABLE value", because `MTLPixelFormat` has 266 compared and 35 that no case can
+    # put to Metal, and calling that "every value compared" would be false of the type.
     whole = sum(1 for row in rows if not row["missing"] and not row["shared"])
-    w(f"| types every value of which is compared | {whole} |")
+    w(f"| types every reachable value of which is compared | {whole} |")
     w(f"| types no value of which is compared | {sum(1 for r in rows if not r['compared'])} |")
     w("")
     largest = sorted(rows, key=lambda r: -len(r["values"]))[:4]
@@ -708,16 +714,36 @@ def write_option_space(w, space) -> None:
     w("")
     w(
         "| Metal type | values | compared | answered | at a site | in effect | shared only | "
-        "missing |"
+        "unreachable | missing |"
     )
-    w("|---|---|---|---|---|---|---|---|")
+    w("|---|---|---|---|---|---|---|---|---|")
     for row in sorted(rows, key=lambda r: (-len(r["missing"]), -len(r["shared"]), r["metal"])):
         w(
             f"| `{row['metal']}` | {len(row['values'])} | {len(row['compared'])} | "
             f"{len(row['answered'])} | {len(row['at_a_site'])} | {len(row['in_effect'])} | "
-            f"{len(row['shared'])} | {len(row['missing'])} |"
+            f"{len(row['shared'])} | {len(row['settled'])} | {len(row['missing'])} |"
         )
     w("")
+    if settled:
+        w("### The values no case can put to Metal")
+        w("")
+        w(
+            "Counted apart from the gap above, because a gap is work and these are not. Each is "
+            "declared in `scripts/conformance-coverage/unreachable_values.tsv` with the "
+            "measurement that settled it and the case module that holds the finding, and this "
+            "document is **not** written if a value listed there turns out to be one some case "
+            "compared, or one its type does not have. Nothing is listed for being obscure, out of "
+            "scope, or merely unbuilt: a Metal value this suite has simply not reached yet is "
+            "`missing`, which is the column to read as work."
+        )
+        w("")
+        by_reason: dict[tuple[str, str, str], list[str]] = defaultdict(list)
+        for (metal, value), (why, finding) in sorted(space["unreachable"].items()):
+            by_reason[(metal, why, finding)].append(value)
+        for (metal, why, finding), named in sorted(by_reason.items()):
+            w(f"- **`{metal}`**, {len(named)} of {len(next(r for r in rows if r['metal'] == metal)['values'])}: {why}.")
+            w(f"  Held by `{finding}`: " + ", ".join(f"`{value}`" for value in named))
+        w("")
     unreadable = [row for row in rows if row["named_no_value"]]
     if unreadable:
         w("### Types a case is about, whose values this axis cannot read")

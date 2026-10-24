@@ -96,6 +96,7 @@ def tree(
     generated: str = GENERATED,
     table: str = TABLE,
     by_hand: str = "",
+    unreachable: str = "",
 ) -> Path:
     """A repository-shaped tree of exactly these sources and recordings."""
     root = Path(tempfile.mkdtemp(prefix="option-space-selftest-"))
@@ -119,6 +120,10 @@ def tree(
     for module, text in cases.items():
         (suite / "src/cases" / f"{module}.rs").write_text(text)
     (suite / "src/side.rs").write_text(shared)
+    if unreachable:
+        declared = root / option_space.UNREACHABLE
+        declared.parent.mkdir(parents=True, exist_ok=True)
+        declared.write_text(unreachable)
     for data in recordings:
         (suite / "recordings" / f"{data['case']}.json").write_text(json.dumps(data))
     return root
@@ -607,6 +612,51 @@ class NamedWithNoValue(unittest.TestCase):
         root = tree({"blends": "for bits in 0..6 { side.go(MTLThing(bits)); }\n"})
         self.assertEqual(axis(root, set())["named_no_value"], [])
 
+
+
+class Unreachable(unittest.TestCase):
+    """A value no case can put to Metal is counted apart from the gap, and the list is falsifiable.
+
+    The column exists so that a work list is work. What makes it trustworthy is not the list but
+    the two refusals: it cannot claim a value some case compared, and it cannot name a value the
+    type does not have. Without those, one row would quietly raise the share this axis reports.
+    """
+
+    def test_a_declared_value_leaves_the_gap_and_joins_its_own_column(self):
+        row = axis(tree({}, unreachable="# type\tvalue\twhy\tfinding\nMTLThing\tMTLThingDelta\tthe process ends on it\tcases/m.rs\n"), set())
+        self.assertNotIn("MTLThingDelta", row["missing"])
+        self.assertEqual(["MTLThingDelta"], row["settled"])
+        self.assertNotIn("MTLThingDelta", row["compared"])
+
+    def test_declaring_a_value_a_case_compared_is_refused(self):
+        root = tree(
+            {"blends": "fn go() { let x = Thing::Beta; }"},
+            unreachable="MTLThing\tMTLThingBeta\tclaimed unreachable\tcases/blends.rs\n",
+        )
+        with self.assertRaises(SystemExit) as refused:
+            option_space.inventory(root, {"blends"})
+        self.assertIn("but a case compared it", str(refused.exception))
+
+    def test_declaring_a_value_the_type_does_not_have_is_refused(self):
+        root = tree({}, unreachable="MTLThing\tMTLThingNope\trenamed or mistyped\tcases/m.rs\n")
+        with self.assertRaises(SystemExit) as refused:
+            option_space.inventory(root, set())
+        self.assertIn("is not a value of MTLThing", str(refused.exception))
+
+    def test_a_row_without_a_reason_is_refused(self):
+        root = tree({}, unreachable="MTLThing\tMTLThingDelta\t\tcases/m.rs\n")
+        with self.assertRaises(SystemExit) as refused:
+            option_space.inventory(root, set())
+        self.assertIn("carries no reason", str(refused.exception))
+
+    def test_a_malformed_row_is_refused(self):
+        root = tree({}, unreachable="MTLThing\tMTLThingDelta\n")
+        with self.assertRaises(SystemExit) as refused:
+            option_space.inventory(root, set())
+        self.assertIn("is not `type", str(refused.exception))
+
+    def test_a_tree_declaring_none_settles_nothing(self):
+        self.assertEqual([], axis(tree({}), set())["settled"])
 
 if __name__ == "__main__":
     unittest.main()
