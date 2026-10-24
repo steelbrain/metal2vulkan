@@ -1887,8 +1887,8 @@ const DECLARED_BINDS: u32 = 2;
 ///
 /// Both are small on purpose. A binding past the slot array lands in the **same command's** record
 /// on plain Metal ("plain Metal keeps it for its private getters", `metal2vulkan_runtime`'s
-/// `IndirectCommandBuffer::set_buffer`), and the row **executes nothing**, so no over-long binding
-/// ever reaches a GPU — which is why the indices are 2 and 4 and not something that would reach
+/// `IndirectCommandBuffer::set_buffer`), and the row **executes nothing**, so no binding at or past
+/// the count ever reaches a GPU — which is why the indices are 2 and 4 and not something that would reach
 /// another command's record or another page.
 const OVER_INDICES: [u32; 2] = [DECLARED_BINDS, DECLARED_BINDS + 2];
 
@@ -1941,12 +1941,13 @@ fn bind_limit_commands(pipeline: Handle, params: Handle) -> Vec<EncodedCommand> 
 /// - command 1 binds the index **at** it;
 /// - command 2 binds one two **past** it.
 ///
-/// Our side raises `Invalid` (`Problem::IndexOutOfRange`) for both of the last two. Plain Metal
-/// takes them and keeps the binding for its own getters, which is the runtime's own measurement on
-/// an M3 Max, so the row's verdict is a **refusal of ours** and `known-gaps.tsv` holds it with that
-/// measurement beside it. It is listed there rather than written around because, by the owner's
-/// standing rule, what Metal allows we must allow; whether the right fix is to keep the binding in
-/// an overflow the way the runtime already does past slot 31 is the todo behind the row.
+/// Both of the last two are taken on both sides. Plain Metal takes them and keeps the binding for
+/// its own getters, measured on an M3 Max by this row's own recording, and our side used to raise
+/// `Invalid` (`Problem::IndexOutOfRange`) for each: by the owner's standing rule, what Metal allows
+/// we must allow, so the refusal went and the row compares an accepted binding. Ours takes the call
+/// and keeps the binding nowhere, because nothing on either side binds a slot at or past the count
+/// to a function and the runtime's own getter answers none there; what Metal keeps such a slot in
+/// for its private getters is not measured, and this row does not read one back.
 ///
 /// The row **makes the buffer and never executes it**. There is no pass, no dispatch and no
 /// read-back: what it compares is the encoding's own answers and the buffer's `size`, so a binding

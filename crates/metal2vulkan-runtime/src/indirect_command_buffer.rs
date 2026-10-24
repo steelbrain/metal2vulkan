@@ -1690,10 +1690,23 @@ impl IndirectCommandBuffer {
     /// past the buffer's address, and so did a fragment buffer's getter; one set at 2^32 + 16 in a
     /// buffer past 4 GiB read at 16, where a compute encoder's own buffer reads at the whole offset
     /// (with and without API validation; the consumer measured the getters so on an M3 Max), and so
-    /// did object and mesh buffers' getters and reads. Refused (`Invalid`): a slot at or past the
-    /// set's limit, a buffer of another device. On a buffer that inherits its buffers the record
-    /// keeps it and reads it back, and an execution binds the encoder's buffers alone, none where
-    /// the encoder's slot is unbound, as plain Metal's, where its validation stops the call.
+    /// did object and mesh buffers' getters and reads. Refused (`Invalid`): a buffer of another
+    /// device. On a buffer that inherits its buffers the record keeps it and reads it back, and an
+    /// execution binds the encoder's buffers alone, none where the encoder's slot is unbound, as
+    /// plain Metal's, where its validation stops the call.
+    ///
+    /// A slot at or past the set's limit (the descriptor's count of the stage) is **taken** and
+    /// kept nowhere. Plain Metal takes it: on an M3 Max under macOS 27.0.1 a buffer of
+    /// `maxKernelBufferBindCount` 2 took `setKernelBuffer:offset:atIndex:` at index 2 and at
+    /// index 4 with no error and its `size` still read 3 commands, where Metal's own API
+    /// validation stops the call ("index(2) must be < 2."). Nothing of either side binds such a
+    /// slot to a function: an execution binds the slots below the count alone (`bindings` in
+    /// `indirect_execute.rs`, `buffers` in `render/executions.rs`), as Metal's count-sized
+    /// argument table does, and [`read_buffer`](Self::read_buffer) answers none at or past the
+    /// count. So the binding is dropped rather than written: the record's own slots are held to
+    /// the descriptor's counts by the engine (`indirect_commands::descriptor`'s `validate_record`,
+    /// which an execution's records and the records the GPU writes both go through), and what
+    /// Metal keeps such a slot in for its private getters is unmeasured.
     fn set_buffer(&self, index: u32, call: &'static str, set: BufferSet<'_>) -> Result<(), Error> {
         let BufferSet {
             stage,
@@ -1703,16 +1716,15 @@ impl IndirectCommandBuffer {
             offset,
             attribute_stride,
         } = set;
-        if slot >= limit {
-            return Err(invalid(
-                call,
-                Problem::IndexOutOfRange { index: slot, limit },
-            ));
-        }
         if let Some(buffer) = buffer {
             if !buffer.device().same(self.device()) {
                 return Err(invalid(call, Problem::ForeignObject));
             }
+        }
+        // At or past the descriptor's count nothing binds the slot and no getter reads it, so
+        // the binding is kept nowhere; the call is still taken, as plain Metal takes it.
+        if slot >= limit {
+            return Ok(());
         }
         // Metal keeps the offset's low 32 bits: its getters answer them and the GPU reads
         // there, inside a buffer past 4 GiB too. A nil buffer keeps them too, as its address:
@@ -3443,9 +3455,13 @@ impl IndirectComputeCommand {
     /// buffer and keeps the offset's low 32 bits as the slot's address, as Metal's nil does: its
     /// getter answers them, and a function the command runs sees them as the buffer's address (an
     /// execution on the host binds no buffer there, its function seeing none, announced as
-    /// `indirect-nil-buffer-offset`). Refused (`Invalid`): an index at or past the descriptor's
-    /// `max_kernel_buffer_bind_count`, a buffer of another device. On a buffer that inherits its
-    /// buffers it is kept and read back, and executions bind the encoder's.
+    /// `indirect-nil-buffer-offset`). Taken at an index at or past the descriptor's
+    /// `max_kernel_buffer_bind_count` and kept nowhere, as plain Metal takes it (where its own
+    /// validation stops the call): no execution binds such a slot and no getter answers it.
+    /// Measured on an M3 Max under macOS 27.0.1: a buffer of `maxKernelBufferBindCount` 2 took
+    /// the call at index 2 and at index 4 with no error, and its `size` still read 3 commands.
+    /// Refused (`Invalid`): a buffer of another device. On a buffer that inherits its buffers it
+    /// is kept and read back, and executions bind the encoder's.
     pub fn set_kernel_buffer(
         &self,
         buffer: Option<&Buffer>,
@@ -4044,9 +4060,10 @@ impl IndirectRenderCommand {
     /// `setVertexBuffer:offset:atIndex:`: vertex buffer `index` at `buffer`'s address plus
     /// `offset`'s low 32 bits, as Metal keeps it, at the pipeline's own attribute stride; `None`
     /// sets a nil buffer at the offset's low 32 bits, as
-    /// [`IndirectComputeCommand::set_kernel_buffer`] does. Refused (`Invalid`): an index at or past
-    /// the descriptor's `max_vertex_buffer_bind_count`, a buffer of another device. On a buffer
-    /// that inherits its buffers it is kept and read back, and executions bind the encoder's.
+    /// [`IndirectComputeCommand::set_kernel_buffer`] does, an index at or past the descriptor's
+    /// `max_vertex_buffer_bind_count` taken and kept nowhere as that call's is. Refused
+    /// (`Invalid`): a buffer of another device. On a buffer that inherits its buffers it is kept
+    /// and read back, and executions bind the encoder's.
     pub fn set_vertex_buffer(
         &self,
         buffer: Option<&Buffer>,
@@ -4087,7 +4104,7 @@ impl IndirectRenderCommand {
     }
 
     /// `setFragmentBuffer:offset:atIndex:`: as [`set_vertex_buffer`](Self::set_vertex_buffer),
-    /// below the descriptor's `max_fragment_buffer_bind_count`.
+    /// against the descriptor's `max_fragment_buffer_bind_count`.
     pub fn set_fragment_buffer(
         &self,
         buffer: Option<&Buffer>,
@@ -4486,9 +4503,10 @@ impl IndirectRenderCommand {
 
     /// `setObjectBuffer:offset:atIndex:`: object buffer `index` at `buffer`'s address plus
     /// `offset`'s low 32 bits, as Metal keeps it; `None` sets a nil buffer at the
-    /// offset's low 32 bits, as [`IndirectComputeCommand::set_kernel_buffer`] does. Refused
-    /// (`Invalid`): an index at or past the descriptor's `max_object_buffer_bind_count`, a buffer
-    /// of another device, a command of a buffer of dispatches (`CommandKind`).
+    /// offset's low 32 bits, as [`IndirectComputeCommand::set_kernel_buffer`] does, an index at
+    /// or past the descriptor's `max_object_buffer_bind_count` taken and kept nowhere as that
+    /// call's is. Refused (`Invalid`): a buffer of another device, a command of a buffer of
+    /// dispatches (`CommandKind`).
     pub fn set_object_buffer(
         &self,
         buffer: Option<&Buffer>,
@@ -4505,8 +4523,8 @@ impl IndirectRenderCommand {
         )
     }
 
-    /// `setMeshBuffer:offset:atIndex:`: as [`set_object_buffer`](Self::set_object_buffer), below
-    /// the descriptor's `max_mesh_buffer_bind_count`.
+    /// `setMeshBuffer:offset:atIndex:`: as [`set_object_buffer`](Self::set_object_buffer),
+    /// against the descriptor's `max_mesh_buffer_bind_count`.
     pub fn set_mesh_buffer(
         &self,
         buffer: Option<&Buffer>,

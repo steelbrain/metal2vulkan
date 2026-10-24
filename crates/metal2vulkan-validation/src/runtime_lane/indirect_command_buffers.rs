@@ -911,7 +911,8 @@ fn dynamic_strides_read_back_as_set() {
 /// What Metal's validation stops at a setter, or ends the process for, is refused typed, and an
 /// imageblock side the record cannot hold is a gap. A dispatch of the kind a buffer's command types
 /// lack, which Metal's validation stops but plain Metal runs, is set, and so is a threadgroup
-/// length at or past the descriptor's count, which plain Metal keeps.
+/// length at or past the descriptor's count, which plain Metal keeps, and a buffer at or past the
+/// descriptor's count of its stage, which plain Metal takes.
 #[test]
 fn setters_refuse_what_metal_refuses() {
     on_device(|device| {
@@ -962,13 +963,13 @@ fn setters_refuse_what_metal_refuses() {
                 IndirectCommandBufferProblem::PipelineWithoutSupport
             )
         );
-        assert_eq!(
-            first.set_kernel_buffer(Some(&buffer), 0, 4).unwrap_err(),
-            invalid(
-                "set_kernel_buffer",
-                Problem::IndexOutOfRange { index: 4, limit: 4 }
-            )
-        );
+        // A buffer at or past the descriptor's count is taken and kept nowhere, as plain Metal
+        // takes it (an M3 Max: indices 2 and 4 on a count of 2, with no error), where Metal's own
+        // API validation stops the call: the getter answers none, and no execution binds it.
+        first.set_kernel_buffer(Some(&buffer), 0, 4).unwrap();
+        let read = command(&made, 0).kernel_buffers;
+        assert_eq!(read.len(), 4);
+        assert!(read.iter().all(Option::is_none), "{read:?}");
         // A threadgroup length at or past the count is kept, as plain Metal keeps it
         // (`threadgroup_lengths_are_kept_where_metal_keeps_them`).
         first.set_threadgroup_memory_length(16, 2).unwrap();
@@ -2286,19 +2287,15 @@ fn render_setters_refuse_what_metal_refuses() {
                 IndirectCommandBufferProblem::PipelineWithoutSupport
             )
         );
-        assert_eq!(
-            first.set_vertex_buffer(Some(&buffer), 0, 2).unwrap_err(),
-            invalid(
-                "set_vertex_buffer",
-                Problem::IndexOutOfRange { index: 2, limit: 2 }
-            )
-        );
-        assert_eq!(
-            first.set_fragment_buffer(Some(&buffer), 0, 1).unwrap_err(),
-            invalid(
-                "set_fragment_buffer",
-                Problem::IndexOutOfRange { index: 1, limit: 1 }
-            )
+        // A render command's buffer at or past the descriptor's count of its stage is taken and
+        // kept nowhere, as the compute command's is above.
+        first.set_vertex_buffer(Some(&buffer), 0, 2).unwrap();
+        first.set_fragment_buffer(Some(&buffer), 0, 1).unwrap();
+        let read = render_command(&made, 0);
+        assert!(read.vertex_buffers.iter().all(Option::is_none), "{read:?}");
+        assert!(
+            read.fragment_buffers.iter().all(Option::is_none),
+            "{read:?}"
         );
         // A buffer without dynamic strides drops a vertex buffer's stride and keeps the buffer
         // at its offset, as plain Metal's reads back and draws.
