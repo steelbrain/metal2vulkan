@@ -62,7 +62,7 @@ use crate::pipeline_options::{OptionOutcome, FRAGMENT_STAGE, KERNEL_STAGE, VERTE
 use crate::queue_slots::QueueSlots;
 use crate::render::{
     Dispatch, Plane, RenderPass, RenderPipelineSpec, RenderStep, RenderWork, StageFunction,
-    StepResource, TargetSpec,
+    StepResource, TargetSpec, VertexStride,
 };
 use crate::render_descriptors::{
     AttributeFacts as DescriptorAttributeFacts, ColorAway, ColorFacts, DescriptorSpec, LayoutFacts,
@@ -2020,10 +2020,14 @@ fn vertex_descriptor(layout: &crate::render::VertexLayout<'_>) -> Retained<MTLVe
                 .objectAtIndexedSubscript(buffer.index as usize)
         };
         held.setStepFunction(MTLVertexStepFunction(buffer.step.as_raw() as usize));
-        // SAFETY: the stride is the case's own record size and the rate is the step function's
-        // own, 0 for the constant step and 1 otherwise.
+        // SAFETY: the stride is the case's own record size, or Metal's own
+        // `MTLBufferLayoutStrideDynamic`, and the rate is the step function's own, 0 for the
+        // constant step and 1 otherwise.
         unsafe {
-            held.setStride(buffer.stride as usize);
+            held.setStride(match buffer.stride {
+                VertexStride::Bytes(stride) => stride as usize,
+                VertexStride::Dynamic => STRIDE_DYNAMIC,
+            });
             held.setStepRate(buffer.rate as usize);
         }
     }

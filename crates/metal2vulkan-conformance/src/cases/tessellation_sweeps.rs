@@ -147,7 +147,7 @@ use crate::fixture::{Fixture, METAL_TEXT, RUNTIME_TEXT};
 use crate::recording::ShaderRef;
 use crate::render::{
     RenderPass, RenderPipelineSpec, RenderStep, RenderWork, StageFunction, TessellationState,
-    VertexAttribute, VertexBufferLayout, VertexLayout,
+    VertexAttribute, VertexBufferLayout, VertexLayout, VertexStride,
 };
 use crate::transcript::{ByteLayout, Digest, Element, Gaps, Node, Observed, Region, Sites, Value};
 use metal2vulkan::metal::{
@@ -286,7 +286,7 @@ const DOMAIN_ATTRIBUTES: [VertexAttribute; 1] =
 /// Buffer 0's layout: one 16-byte `float4` a patch, under `MTLVertexStepFunctionPerPatch`.
 const DOMAIN_LAYOUTS: [VertexBufferLayout; 1] = [VertexBufferLayout {
     index: 0,
-    stride: 16,
+    stride: VertexStride::Bytes(16),
     step: VertexStepFunction::PerPatch,
     rate: 1,
 }];
@@ -1737,13 +1737,13 @@ const PATCH_ATTRIBUTES: [VertexAttribute; 2] = [
 const PATCH_LAYOUTS: [VertexBufferLayout; 2] = [
     VertexBufferLayout {
         index: 0,
-        stride: 4,
+        stride: VertexStride::Bytes(4),
         step: VertexStepFunction::PerPatchControlPoint,
         rate: 1,
     },
     VertexBufferLayout {
         index: 1,
-        stride: 4,
+        stride: VertexStride::Bytes(4),
         step: VertexStepFunction::PerPatch,
         rate: 1,
     },

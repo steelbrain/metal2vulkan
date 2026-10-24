@@ -694,13 +694,48 @@ impl VertexAttribute {
     }
 }
 
+/// What a vertex buffer layout's `stride` says: a number of bytes, or Metal's sentinel that moves
+/// the stride off the descriptor and onto whoever binds the buffer.
+///
+/// An enum and not a wider integer. `MTLBufferLayoutStrideDynamic` is `NSUIntegerMax`, so holding
+/// it in the field would mean widening `stride` to `u64` — and the field is in every render case's
+/// input fingerprint, so eight bytes where there were four moves the fingerprint of every one of
+/// them and reads every committed recording as stale. The sentinel is a different *request* rather
+/// than a larger number, so it gets its own variant, and [`VertexStride::words`] keeps the plain
+/// one's four bytes exactly as they were.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum VertexStride {
+    /// `stride` bytes between elements.
+    Bytes(u32),
+    /// `MTLBufferLayoutStrideDynamic`: the descriptor states no stride, and each draw reads the
+    /// buffer at the stride the command binding it gave
+    /// (`setVertexBuffer:offset:attributeStride:atIndex:`). A buffer bound without a stride is
+    /// read at 0, so every vertex fetches the same element.
+    Dynamic,
+}
+
+impl VertexStride {
+    /// The words a case's input fingerprint covers.
+    ///
+    /// [`VertexStride::Bytes`] is the four bytes the field always was, so every recording already
+    /// committed fingerprints to exactly the bytes it did before a dynamic stride could be
+    /// stated. [`VertexStride::Dynamic`] is its own word, because it is a different request to
+    /// Metal and a recording of one must never read as a recording of the other.
+    fn words(&self) -> Vec<u8> {
+        match self {
+            VertexStride::Bytes(stride) => stride.to_le_bytes().to_vec(),
+            VertexStride::Dynamic => b"MTLBufferLayoutStrideDynamic".to_vec(),
+        }
+    }
+}
+
 /// One entry of `MTLVertexDescriptor`'s `layouts`: `MTLVertexBufferLayoutDescriptor`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct VertexBufferLayout {
     /// Which vertex buffer the layout describes.
     pub index: u32,
-    /// `stride`, in bytes between elements.
-    pub stride: u32,
+    /// `stride`: the bytes between elements, or Metal's dynamic sentinel ([`VertexStride`]).
+    pub stride: VertexStride,
     /// `stepFunction`.
     pub step: VertexStepFunction,
     /// `stepRate`.
@@ -712,7 +747,7 @@ impl VertexBufferLayout {
     pub const fn per_vertex(index: u32, stride: u32) -> Self {
         Self {
             index,
-            stride,
+            stride: VertexStride::Bytes(stride),
             step: VertexStepFunction::PerVertex,
             rate: 1,
         }
@@ -723,16 +758,27 @@ impl VertexBufferLayout {
     pub const fn constant(index: u32, stride: u32) -> Self {
         Self {
             index,
-            stride,
+            stride: VertexStride::Bytes(stride),
             step: VertexStepFunction::Constant,
             rate: 0,
+        }
+    }
+
+    /// Buffer `index` under `MTLBufferLayoutStrideDynamic`, stepped once per vertex: the one
+    /// layout a command's `setVertexBuffer:offset:attributeStride:atIndex:` is for.
+    pub const fn dynamic_stride(index: u32) -> Self {
+        Self {
+            index,
+            stride: VertexStride::Dynamic,
+            step: VertexStepFunction::PerVertex,
+            rate: 1,
         }
     }
 
     /// The words a case's input fingerprint covers.
     fn words(&self) -> Vec<u8> {
         let mut bytes = self.index.to_le_bytes().to_vec();
-        bytes.extend(self.stride.to_le_bytes());
+        bytes.extend(self.stride.words());
         bytes.extend(self.step.as_raw().to_le_bytes());
         bytes.extend(self.rate.to_le_bytes());
         bytes

@@ -1,0 +1,621 @@
+{
+  "format": 1,
+  "case": "indirect-compute-commands-imageblock-extent",
+  "suite_version": 1,
+  "shaders": [
+    {
+      "fixture": "icb_imageblock_template.ll",
+      "entry": "icb_imageblock_template",
+      "source_sha256": "4c950235125ba9d4a0beb15d970c3f95ba11bce98d2f3e107a59a135142c1c9f"
+    },
+    {
+      "fixture": "icb_imageblock_template.air.ll",
+      "entry": "icb_imageblock_template",
+      "source_sha256": "f1a9f5e05aed40bebc1b63efa1e876a842a20c5e6c8086008e2facae37741366"
+    }
+  ],
+  "answers": [
+    {
+      "key": {
+        "chip": "apple-m3-max",
+        "os_version": "27.0.1",
+        "os_build": "26A434",
+        "metal_level": "27.0.1"
+      },
+      "provenance": "metal_run",
+      "device": "Apple M3 Max",
+      "runs": 3,
+      "outcomes": [
+        {
+          "runs": 3,
+          "transcript": {
+            "root": {
+              "name": "case",
+              "observed": {
+                "value": "absent"
+              },
+              "children": [
+                {
+                  "name": "inputs",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "air",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "4c950235125ba9d4a0beb15d970c3f95ba11bce98d2f3e107a59a135142c1c9f"
+                        }
+                      }
+                    },
+                    {
+                      "name": "air-typed",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "f1a9f5e05aed40bebc1b63efa1e876a842a20c5e6c8086008e2facae37741366"
+                        }
+                      }
+                    },
+                    {
+                      "name": "icb-descriptor",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "107f57577034e8c703e34ad8c3153a4521fe9f1c3ad5e2ab3a65f3c860b13e00"
+                        }
+                      }
+                    },
+                    {
+                      "name": "commands",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "56da225f4e32907d24fdbe9d09a2a1d01bd3e6f83b70e94569ad45ff3b90ddb8"
+                        }
+                      }
+                    },
+                    {
+                      "name": "buffer:out",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "f2eaacf85101341c5933f3b734b3d021b1da74f0513917b2d29613b3925f8dbb"
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "library",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "pipeline",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "buffer:out",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "command-buffer",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "encoded",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "command/0",
+                      "observed": {
+                        "value": "absent"
+                      },
+                      "children": [
+                        {
+                          "name": "0-setComputePipelineState",
+                          "observed": {
+                            "value": {
+                              "variant": {
+                                "name": "Ok",
+                                "payload": "absent"
+                              }
+                            }
+                          }
+                        },
+                        {
+                          "name": "1-setKernelBuffer",
+                          "observed": {
+                            "value": {
+                              "variant": {
+                                "name": "Ok",
+                                "payload": "absent"
+                              }
+                            }
+                          }
+                        },
+                        {
+                          "name": "2-setImageblockWidthHeight",
+                          "observed": {
+                            "value": {
+                              "variant": {
+                                "name": "Ok",
+                                "payload": "absent"
+                              }
+                            }
+                          }
+                        },
+                        {
+                          "name": "3-concurrentDispatchThreadgroups",
+                          "observed": {
+                            "value": {
+                              "variant": {
+                                "name": "Ok",
+                                "payload": "absent"
+                              }
+                            }
+                          }
+                        }
+                      ]
+                    },
+                    {
+                      "name": "command/1",
+                      "observed": {
+                        "value": "absent"
+                      },
+                      "children": [
+                        {
+                          "name": "0-setComputePipelineState",
+                          "observed": {
+                            "value": {
+                              "variant": {
+                                "name": "Ok",
+                                "payload": "absent"
+                              }
+                            }
+                          }
+                        },
+                        {
+                          "name": "1-setKernelBuffer",
+                          "observed": {
+                            "value": {
+                              "variant": {
+                                "name": "Ok",
+                                "payload": "absent"
+                              }
+                            }
+                          }
+                        },
+                        {
+                          "name": "2-setImageblockWidthHeight",
+                          "observed": {
+                            "value": {
+                              "variant": {
+                                "name": "Ok",
+                                "payload": "absent"
+                              }
+                            }
+                          }
+                        },
+                        {
+                          "name": "3-concurrentDispatchThreadgroups",
+                          "observed": {
+                            "value": {
+                              "variant": {
+                                "name": "Ok",
+                                "payload": "absent"
+                              }
+                            }
+                          }
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "name": "size",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": {
+                          "uint": 2
+                        }
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "render",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": {
+                          "variant": {
+                            "name": "Completed",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "program",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "calls",
+                      "observed": {
+                        "value": "absent"
+                      },
+                      "children": [
+                        {
+                          "name": "0-executeCommandsInBuffer",
+                          "observed": {
+                            "value": {
+                              "variant": {
+                                "name": "Ok",
+                                "payload": "absent"
+                              }
+                            }
+                          }
+                        }
+                      ]
+                    },
+                    {
+                      "name": "status",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "variant": {
+                                "name": "Completed",
+                                "payload": "absent"
+                              }
+                            }
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "command-buffer-error",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "None",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "out",
+                  "observed": {
+                    "value": {
+                      "bytes": "AQABAAIAAAACAAAAAAAAAAAAAQACAAAAAgAAAAEAAAABAQEAAgAAAAIAAAAAAQAAAAEBAAIAAAACAAAAAQEAAAEAAQAEAAAABAAAAAAAAAAAAAEABAAAAAQAAAABAAAAAQEBAAQAAAAEAAAAAAEAAAABAQAEAAAABAAAAAEBAAA="
+                    },
+                    "shape": {
+                      "bytes": {
+                        "region": {
+                          "buffer": {
+                            "offset": 0,
+                            "length": 128
+                          }
+                        },
+                        "element": "u32",
+                        "row_offset": 0,
+                        "row_elements": 32,
+                        "row_pitch": 128,
+                        "rows": 1,
+                        "image_pitch": 128,
+                        "images": 1,
+                        "gaps": "ignored"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "notices",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "set",
+                      "observed": {
+                        "value": {
+                          "nothing": "announced_nothing"
+                        }
+                      }
+                    },
+                    {
+                      "name": "counts",
+                      "observed": {
+                        "value": {
+                          "fields": {}
+                        }
+                      }
+                    }
+                  ]
+                }
+              ]
+            }
+          }
+        }
+      ],
+      "validated": "ran"
+    }
+  ],
+  "times": [
+    {
+      "leg": "metal",
+      "venue": "native Metal",
+      "chip": "apple-m3-max",
+      "os_build": "26A434",
+      "rounds": 8,
+      "measured": "8 round(s) of the whole selection, in the case set's own order, each round on a fresh device, our shader cache carried over between the cases of a round; a figure is the median of the rounds' own medians; Metal's leg ran at a one-minute load average of 15.48 and ours at 15.58; the legs run one after the other, so the per-call margin is judged only when both are 26.0 or under and within 2.0x of each other",
+      "instrument": 298,
+      "times": {
+        "case": "indirect-compute-commands-imageblock-extent",
+        "calls": 7,
+        "in_calls": 45590542,
+        "on_cpu": 1942500,
+        "blocked": 43650208,
+        "elsewhere": 6285334,
+        "spend": 55479667,
+        "spend_least": 50034789,
+        "spend_most": 369305374,
+        "per_call": [
+          {
+            "call": "buffer",
+            "least_calls": 1,
+            "most_calls": 1,
+            "wall": 44250,
+            "on_cpu": 44417,
+            "blocked": 0,
+            "wall_least": 38875,
+            "wall_most": 311166,
+            "wall_total": 44250,
+            "on_cpu_total": 44417,
+            "blocked_total": 0
+          },
+          {
+            "call": "compute_pipeline_for_commands",
+            "least_calls": 1,
+            "most_calls": 1,
+            "wall": 159000,
+            "on_cpu": 159375,
+            "blocked": 0,
+            "wall_least": 144416,
+            "wall_most": 3041667,
+            "wall_total": 159000,
+            "on_cpu_total": 159375,
+            "blocked_total": 0
+          },
+          {
+            "call": "indirect_command_buffer",
+            "least_calls": 1,
+            "most_calls": 1,
+            "wall": 115417,
+            "on_cpu": 115875,
+            "blocked": 0,
+            "wall_least": 111208,
+            "wall_most": 740625,
+            "wall_total": 115417,
+            "on_cpu_total": 115875,
+            "blocked_total": 0
+          },
+          {
+            "call": "indirect_commands_size",
+            "least_calls": 1,
+            "most_calls": 1,
+            "wall": 3084,
+            "on_cpu": 3250,
+            "blocked": 0,
+            "wall_least": 2959,
+            "wall_most": 12958,
+            "wall_total": 3084,
+            "on_cpu_total": 3250,
+            "blocked_total": 0
+          },
+          {
+            "call": "library",
+            "least_calls": 1,
+            "most_calls": 1,
+            "wall": 38380916,
+            "on_cpu": 1314459,
+            "blocked": 36871791,
+            "wall_least": 34430125,
+            "wall_most": 351896541,
+            "wall_total": 38380916,
+            "on_cpu_total": 1314459,
+            "blocked_total": 36871791
+          },
+          {
+            "call": "read_buffer",
+            "least_calls": 1,
+            "most_calls": 1,
+            "wall": 13042,
+            "on_cpu": 13375,
+            "blocked": 0,
+            "wall_least": 8666,
+            "wall_most": 14250,
+            "wall_total": 13042,
+            "on_cpu_total": 13375,
+            "blocked_total": 0
+          },
+          {
+            "call": "render",
+            "least_calls": 1,
+            "most_calls": 1,
+            "wall": 7008125,
+            "on_cpu": 208041,
+            "blocked": 6603917,
+            "wall_least": 6374583,
+            "wall_most": 10669458,
+            "wall_total": 7008125,
+            "on_cpu_total": 208041,
+            "blocked_total": 6603917
+          }
+        ]
+      }
+    },
+    {
+      "leg": "ours",
+      "venue": "Apple M3 Max",
+      "chip": "apple-m3-max",
+      "os_build": "26A434",
+      "rounds": 8,
+      "measured": "8 round(s) of the whole selection, in the case set's own order, each round on a fresh device, our shader cache carried over between the cases of a round; a figure is the median of the rounds' own medians; Metal's leg ran at a one-minute load average of 15.48 and ours at 15.58; the legs run one after the other, so the per-call margin is judged only when both are 26.0 or under and within 2.0x of each other",
+      "instrument": 284,
+      "times": {
+        "case": "indirect-compute-commands-imageblock-extent",
+        "calls": 7,
+        "in_calls": 15553000,
+        "on_cpu": 13635416,
+        "blocked": 1635333,
+        "elsewhere": 1590459,
+        "spend": 17220958,
+        "spend_least": 15097666,
+        "spend_most": 76307167,
+        "per_call": [
+          {
+            "call": "buffer",
+            "least_calls": 1,
+            "most_calls": 1,
+            "wall": 54833,
+            "on_cpu": 55416,
+            "blocked": 0,
+            "wall_least": 50334,
+            "wall_most": 628041,
+            "wall_total": 54833,
+            "on_cpu_total": 55416,
+            "blocked_total": 0
+          },
+          {
+            "call": "compute_pipeline_for_commands",
+            "least_calls": 1,
+            "most_calls": 1,
+            "wall": 10011792,
+            "on_cpu": 9964208,
+            "blocked": 0,
+            "wall_least": 8853166,
+            "wall_most": 38673375,
+            "wall_total": 10011792,
+            "on_cpu_total": 9964208,
+            "blocked_total": 0
+          },
+          {
+            "call": "indirect_command_buffer",
+            "least_calls": 1,
+            "most_calls": 1,
+            "wall": 78667,
+            "on_cpu": 79042,
+            "blocked": 0,
+            "wall_least": 75292,
+            "wall_most": 1163542,
+            "wall_total": 78667,
+            "on_cpu_total": 79042,
+            "blocked_total": 0
+          },
+          {
+            "call": "indirect_commands_size",
+            "least_calls": 1,
+            "most_calls": 1,
+            "wall": 791,
+            "on_cpu": 958,
+            "blocked": 0,
+            "wall_least": 708,
+            "wall_most": 875,
+            "wall_total": 791,
+            "on_cpu_total": 958,
+            "blocked_total": 0
+          },
+          {
+            "call": "library",
+            "least_calls": 1,
+            "most_calls": 1,
+            "wall": 975667,
+            "on_cpu": 977333,
+            "blocked": 0,
+            "wall_least": 922833,
+            "wall_most": 8404959,
+            "wall_total": 975667,
+            "on_cpu_total": 977333,
+            "blocked_total": 0
+          },
+          {
+            "call": "read_buffer",
+            "least_calls": 1,
+            "most_calls": 1,
+            "wall": 2416,
+            "on_cpu": 2583,
+            "blocked": 0,
+            "wall_least": 1875,
+            "wall_most": 254792,
+            "wall_total": 2416,
+            "on_cpu_total": 2583,
+            "blocked_total": 0
+          },
+          {
+            "call": "render",
+            "least_calls": 1,
+            "most_calls": 1,
+            "wall": 4182208,
+            "on_cpu": 2529334,
+            "blocked": 1635333,
+            "wall_least": 3811708,
+            "wall_most": 19148375,
+            "wall_total": 4182208,
+            "on_cpu_total": 2529334,
+            "blocked_total": 1635333
+          }
+        ]
+      }
+    }
+  ]
+}

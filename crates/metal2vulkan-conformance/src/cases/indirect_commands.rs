@@ -74,23 +74,23 @@
 //! [`Side::compute_pipeline_for_commands`]: crate::case::Side::compute_pipeline_for_commands
 //! [`RenderPipelineSpec::for_indirect_commands`]: crate::render::RenderPipelineSpec::for_indirect_commands
 //!
+//! Two calls of the surface are reached by rows of their own rather than by the three above.
+//! [`COMPUTE_IMAGEBLOCK`] sets each command's own imageblock extent, which its kernel reports
+//! back, so a command whose extent was dropped answers the other command's.
+//! [`RENDER_VERTEX_STRIDE`] binds one vertex buffer at two different attribute strides under a
+//! layout of `MTLBufferLayoutStrideDynamic`, and a side that dropped the per-command stride reads
+//! the buffer at 0 — the stride Metal reads a buffer bound without one at — so every vertex of
+//! both commands fetches the same element.
+//!
 //! # What is left, and why
 //!
-//! - **`setImageblockWidth:height:`** needs a kernel that declares an imageblock and a pipeline
-//!   state whose imageblock extent is set, which is a second pipeline shape no side of this suite
-//!   builds yet. The owned `icb_imageblock_template` fixture is there for it.
 //! - **`drawPatches:…` and `drawIndexedPatches:…`** need a tessellation pipeline, which no side
 //!   of this suite builds.
-//! - **`setVertexBuffer:offset:attributeStride:atIndex:`** needs a pipeline whose vertex
-//!   descriptor holds a layout of `MTLBufferLayoutStrideDynamic`, and
-//!   [`crate::render::VertexBufferLayout`]'s stride is a plain `u32` with no way to say that
-//!   sentinel. Widening it moves the input fingerprint of every render case in the suite, so it is
-//!   a packet of its own; the owned `icb_render_stride_template` fixture is there for it. The
-//!   compute half of the same call **is** here ([`COMPUTE_STAGE_IN`]), where the stage-input
-//!   vocabulary already says `None` for a dynamic stride.
 //! - **`setObjectThreadgroupMemoryLength:atIndex:`** is a mesh command's, and a buffer of mesh
 //!   draws executes in a pass of attachments rather than the attachment-less pass these rows use.
-//!   [`super::mesh_commands`] owns that shape.
+//!   [`super::mesh_commands`] owns that shape, and the object function it would set the length for
+//!   has to declare threadgroup memory at an index with no size of its own, which `mesh_draws`
+//!   does not: a row over the call needs a fixture before it needs a pass.
 //! - **`gpuResourceID`** is a device-local 64-bit value, so it must never enter a transcript. A
 //!   kernel that encodes commands through one is the shape that would observe it, and
 //!   [`super::mesh_commands`] names that gap already.
@@ -105,13 +105,14 @@ use crate::indirect_commands::{
 use crate::recording::ShaderRef;
 use crate::render::{
     ColorState, PassColor, Plane, ReadAt, RenderPass, RenderPipelineSpec, RenderStep, RenderWork,
-    StageFunction, TargetSpec,
+    StageFunction, TargetSpec, VertexAttribute, VertexBufferLayout, VertexLayout,
 };
 use crate::transcript::{
     Aspect, ByteLayout, Digest, Element, Gaps, Node, Observed, Region, Sites, Value,
 };
 use metal2vulkan::metal::{
     AttributeFormat, IndexType, IndirectCommandType, PixelFormat, PrimitiveType, StepFunction,
+    VertexFormat,
 };
 
 /// The owned fixture whose kernel writes `params[0] * (tid + 1) + params[1]` to `out[tid]`
@@ -536,6 +537,170 @@ impl Case for ComputeCommands {
         sites.push(Node::leaf(
             "out",
             Observed::bytes(read, buffer_layout(COMPUTE_WORDS * 4)),
+        ));
+        Ok(())
+    }
+}
+
+// --------------------------------------------------------------------------------------------
+// The row whose commands set their own imageblock extent
+
+/// The name of the row whose compute commands each set their own imageblock extent.
+pub const COMPUTE_IMAGEBLOCK: &str = "indirect-compute-commands-imageblock-extent";
+
+/// The owned fixture the row runs: the kernel whose explicit imageblock each thread stages a mark
+/// in, and which reports its neighbour's mark beside the imageblock's own extent.
+const IMAGEBLOCK_FIXTURE: &str = "icb_imageblock_template";
+
+/// The threadgroup every command dispatches: two by two threads, so four cells of the imageblock
+/// are written and each thread's right-hand neighbour is another thread of its own threadgroup.
+///
+/// The same for both commands on purpose. The imageblock's extent is the only thing that moves
+/// between them, so the words that differ are the extent and nothing else.
+const IMAGEBLOCK_THREADS: [u32; 3] = [2, 2, 1];
+
+/// The imageblock extents the row's commands set, one command each: the threadgroup's own extent,
+/// and one larger than it.
+///
+/// The larger one is what tells the call from a side that ignored it: the threadgroup still writes
+/// its four cells, so the mark every thread reads back is unchanged, and the only words that move
+/// are `get_width()` and `get_height()`. A command whose extent was dropped reports the other
+/// command's.
+const IMAGEBLOCK_EXTENTS: [[u32; 2]; 2] = [[2, 2], [4, 4]];
+
+/// Words one command's output segment holds: the kernel writes a `uint4` a thread, over the
+/// [`IMAGEBLOCK_THREADS`] grid of one threadgroup.
+const IMAGEBLOCK_SEGMENT_WORDS: u64 = (IMAGEBLOCK_THREADS[0] * IMAGEBLOCK_THREADS[1]) as u64 * 4;
+
+/// Bytes one command's output segment holds.
+const IMAGEBLOCK_SEGMENT_BYTES: u64 = IMAGEBLOCK_SEGMENT_WORDS * 4;
+
+/// Words the row's whole output buffer holds: one segment a command.
+const IMAGEBLOCK_WORDS: u64 = IMAGEBLOCK_SEGMENT_WORDS * IMAGEBLOCK_EXTENTS.len() as u64;
+
+/// The row's descriptor: dispatches of threadgroups, one kernel buffer, and nothing inherited.
+///
+/// No threadgroup-memory bind count: an explicit imageblock is not a threadgroup buffer bound at
+/// an index, it is the extent `setImageblockWidth:height:` sets, so the descriptor states none.
+fn imageblock_descriptor() -> IcbDescriptor {
+    IcbDescriptor {
+        command_types: IndirectCommandType::CONCURRENT_DISPATCH,
+        max_kernel_buffer_bind_count: 1,
+        ..IcbDescriptor::new()
+    }
+}
+
+/// The commands the row encodes: one an extent, each writing its own segment of `out`.
+fn imageblock_commands(pipeline: Handle, out: Handle) -> Vec<EncodedCommand> {
+    IMAGEBLOCK_EXTENTS
+        .into_iter()
+        .enumerate()
+        .map(|(at, [width, height])| {
+            EncodedCommand::Compute(vec![
+                ComputeCommandStep::Pipeline(pipeline),
+                ComputeCommandStep::KernelBuffer {
+                    buffer: out,
+                    offset: at as u64 * IMAGEBLOCK_SEGMENT_BYTES,
+                    index: 0,
+                },
+                ComputeCommandStep::ImageblockSize { width, height },
+                ComputeCommandStep::DispatchThreadgroups {
+                    groups: [1, 1, 1],
+                    threads: IMAGEBLOCK_THREADS,
+                },
+            ])
+        })
+        .collect()
+}
+
+/// The row whose compute commands each set their own imageblock extent.
+pub struct ImageblockCommands;
+
+impl Case for ImageblockCommands {
+    fn name(&self) -> &'static str {
+        COMPUTE_IMAGEBLOCK
+    }
+
+    fn metal_source(&self) -> MetalSource {
+        MetalSource::Run
+    }
+
+    fn allowances(&self) -> Vec<Allowance> {
+        // As every row of the family: the answer is read back through a `Shared` buffer, so a
+        // device without unified memory announces `shared-in-system-memory` and the declaration
+        // covers the notices site alone, leaving every value compared exactly.
+        vec![crate::replay::shared_memory_notice()]
+    }
+
+    fn shaders(&self) -> Result<Vec<ShaderRef>, String> {
+        shaders_of(IMAGEBLOCK_FIXTURE, IMAGEBLOCK_FIXTURE)
+    }
+
+    fn inputs(&self) -> Result<Vec<Input>, String> {
+        let mut inputs = fixture_inputs(IMAGEBLOCK_FIXTURE)?;
+        let commands = imageblock_commands(Handle(0), Handle(1));
+        inputs.extend(commands_inputs(&imageblock_descriptor(), &commands));
+        inputs.push(Input::bytes(
+            "buffer:out",
+            &vec![UNWRITTEN; IMAGEBLOCK_WORDS as usize * 4],
+        ));
+        Ok(inputs)
+    }
+
+    fn run(&self, side: &mut dyn Side, sites: &mut Sites) -> Result<(), Abort> {
+        let fixture = Fixture::new(IMAGEBLOCK_FIXTURE);
+        let loaded = fixture.loaded().map_err(|why| Abort {
+            at: "library".to_owned(),
+            failure: Failure::named("FixtureNotRead", why),
+        })?;
+        let library = made(sites, "library", side.library(&loaded.source()))?;
+        let pipeline = made(
+            sites,
+            "pipeline",
+            side.compute_pipeline_for_commands(library, IMAGEBLOCK_FIXTURE, None),
+        )?;
+        let unwritten = vec![UNWRITTEN; IMAGEBLOCK_WORDS as usize * 4];
+        let out = made(sites, "buffer:out", side.buffer(&unwritten))?;
+
+        let commands = imageblock_commands(pipeline, out);
+        let descriptor = imageblock_descriptor();
+        let encoded = made(
+            sites,
+            "command-buffer",
+            side.indirect_command_buffer(&descriptor, &commands),
+        )?;
+        sites.push(encoding_node(&commands, &encoded.refused));
+        if let Some((at, failure)) = first_refusal(&commands, &encoded.refused) {
+            return Err(Abort { at, failure });
+        }
+        call(
+            sites,
+            "size",
+            side.indirect_commands_size(encoded.commands),
+            |size| Value::Uint(*size),
+        )?;
+        let work = vec![RenderWork::ComputeCommands {
+            commands: encoded.commands,
+            first: 0,
+            count: commands.len() as u64,
+            used: vec![(out, true)],
+        }];
+        let outcome = call(sites, "render", side.render(&work), |outcome| {
+            outcome.status.clone()
+        })?;
+        sites.push(program_node(&work, &outcome));
+        if let Some((at, failure)) = first_refused_piece(&work, &outcome) {
+            return Err(Abort { at, failure });
+        }
+        let read = side
+            .read_buffer(out, 0, IMAGEBLOCK_WORDS as usize * 4)
+            .map_err(|failure| Abort {
+                at: "out".to_owned(),
+                failure,
+            })?;
+        sites.push(Node::leaf(
+            "out",
+            Observed::bytes(read, buffer_layout(IMAGEBLOCK_WORDS * 4)),
         ));
         Ok(())
     }
@@ -1008,6 +1173,256 @@ impl Case for RenderCommands {
         sites.push(Node::leaf(
             "out",
             Observed::bytes(read, buffer_layout(RENDER_WORDS * 4)),
+        ));
+        Ok(())
+    }
+}
+
+// --------------------------------------------------------------------------------------------
+// The render row whose commands bind a vertex buffer at a stride of their own
+
+/// The name of the row whose render commands bind one vertex buffer at two different attribute
+/// strides.
+pub const RENDER_VERTEX_STRIDE: &str = "indirect-render-commands-vertex-stride";
+
+/// The owned fixture the row runs: the rasterization-disabled vertex function that fetches one
+/// `[[stage_in]]` attribute and writes it with its vertex and instance ids.
+const STRIDE_FIXTURE: &str = "icb_render_stride_template";
+
+/// The Metal vertex buffer index the attribute's layout reads. 0 is the function's own `out`,
+/// which is a plain buffer argument and no layout of the descriptor, so the two cannot be
+/// confused.
+const STRIDE_BUFFER: u32 = 1;
+
+/// The attribute values the row's buffer holds, one word each with a filler word between them.
+///
+/// A filler a correct fetch never reads at [`WIDE_STRIDE`] and **always** reads at
+/// [`PACKED_STRIDE`], which is what makes the two commands' answers differ by the stride alone.
+const STRIDE_ATTRIBUTES: [u32; 8] = [
+    0xb0,
+    0x5555_5555,
+    0xb1,
+    0x5555_5555,
+    0xb2,
+    0x5555_5555,
+    0xb3,
+    0x5555_5555,
+];
+
+/// The stride the first command binds: two words an element, so each vertex fetches an attribute
+/// and no filler.
+const WIDE_STRIDE: u64 = 8;
+
+/// The stride the second command binds: one word an element, so every other vertex fetches a
+/// filler.
+///
+/// The same buffer at another stride is the whole row. A side that dropped the per-command stride
+/// reads the buffer at 0 — which is what Metal reads a buffer bound without one at — so every
+/// vertex of both commands would fetch `0xb0`, and both commands' answers would be wrong and
+/// identical.
+const PACKED_STRIDE: u64 = 4;
+
+/// Vertices each command draws, which is how many elements it fetches.
+const STRIDE_VERTICES: u32 = 4;
+
+/// Words one command's output segment holds: the function writes a `uint2` at `out[vid]`, and
+/// each command draws [`STRIDE_VERTICES`] vertices from vertex 0.
+const STRIDE_SEGMENT_WORDS: u64 = STRIDE_VERTICES as u64 * 2;
+
+/// Bytes one command's output segment holds.
+const STRIDE_SEGMENT_BYTES: u64 = STRIDE_SEGMENT_WORDS * 4;
+
+/// The strides the row's commands bind, one command each.
+const STRIDE_COMMANDS: [u64; 2] = [WIDE_STRIDE, PACKED_STRIDE];
+
+/// Words the row's whole output buffer holds: one segment a command.
+const STRIDE_WORDS: u64 = STRIDE_SEGMENT_WORDS * STRIDE_COMMANDS.len() as u64;
+
+/// The attribute buffer's bytes: [`STRIDE_ATTRIBUTES`] as 32-bit words.
+fn stride_attribute_bytes() -> Vec<u8> {
+    STRIDE_ATTRIBUTES
+        .iter()
+        .flat_map(|word| word.to_le_bytes())
+        .collect()
+}
+
+/// The row's vertex descriptor: one `UInt` attribute at offset 0 of buffer [`STRIDE_BUFFER`],
+/// whose layout's stride is `MTLBufferLayoutStrideDynamic` — the one layout a command's
+/// `setVertexBuffer:offset:attributeStride:atIndex:` is for.
+const STRIDE_ATTRIBUTE_LIST: [VertexAttribute; 1] = [VertexAttribute {
+    index: 0,
+    format: VertexFormat::UInt,
+    offset: 0,
+    buffer: STRIDE_BUFFER,
+}];
+const STRIDE_LAYOUTS: [VertexBufferLayout; 1] = [VertexBufferLayout::dynamic_stride(STRIDE_BUFFER)];
+
+/// The pipeline the row's commands hold: the rasterization-disabled vertex function with the
+/// dynamic-stride vertex descriptor, and `supportIndirectCommandBuffers` so a command may set it.
+fn stride_pipeline_spec() -> RenderPipelineSpec<'static> {
+    let mut spec = RenderPipelineSpec::of(StageFunction::named(STRIDE_FIXTURE), None, &[]);
+    spec.rasterization = false;
+    spec.support_indirect_command_buffers = true;
+    spec.vertex_layout = Some(VertexLayout::new(&STRIDE_ATTRIBUTE_LIST, &STRIDE_LAYOUTS));
+    spec
+}
+
+/// The row's descriptor: draws of primitives, two vertex buffers, and dynamic attribute strides,
+/// which is what lets a command bind a stride at all.
+fn stride_descriptor() -> IcbDescriptor {
+    IcbDescriptor {
+        command_types: IndirectCommandType::DRAW,
+        max_vertex_buffer_bind_count: 2,
+        support_dynamic_attribute_stride: true,
+        ..IcbDescriptor::new()
+    }
+}
+
+/// The commands the row encodes: one a stride, each writing its own segment of `out`.
+fn stride_commands(pipeline: Handle, out: Handle, attributes: Handle) -> Vec<EncodedCommand> {
+    STRIDE_COMMANDS
+        .into_iter()
+        .enumerate()
+        .map(|(at, stride)| {
+            EncodedCommand::Render(vec![
+                RenderCommandStep::Pipeline(pipeline),
+                RenderCommandStep::VertexBuffer {
+                    buffer: out,
+                    offset: at as u64 * STRIDE_SEGMENT_BYTES,
+                    index: 0,
+                },
+                RenderCommandStep::VertexBufferWithStride {
+                    buffer: attributes,
+                    offset: 0,
+                    stride,
+                    index: STRIDE_BUFFER,
+                },
+                RenderCommandStep::Draw {
+                    primitive: PrimitiveType::Point,
+                    first: 0,
+                    count: STRIDE_VERTICES,
+                    instances: 1,
+                    base_instance: 0,
+                },
+            ])
+        })
+        .collect()
+}
+
+/// The row whose render commands bind one vertex buffer at two different attribute strides.
+pub struct StrideCommands;
+
+impl Case for StrideCommands {
+    fn name(&self) -> &'static str {
+        RENDER_VERTEX_STRIDE
+    }
+
+    fn metal_source(&self) -> MetalSource {
+        MetalSource::Run
+    }
+
+    fn allowances(&self) -> Vec<Allowance> {
+        // As every row of the family: the answer is read back through a `Shared` buffer, so a
+        // device without unified memory announces `shared-in-system-memory` and the declaration
+        // covers the notices site alone, leaving every value compared exactly.
+        vec![crate::replay::shared_memory_notice()]
+    }
+
+    fn shaders(&self) -> Result<Vec<ShaderRef>, String> {
+        shaders_of(STRIDE_FIXTURE, STRIDE_FIXTURE)
+    }
+
+    fn inputs(&self) -> Result<Vec<Input>, String> {
+        let mut inputs = fixture_inputs(STRIDE_FIXTURE)?;
+        let commands = stride_commands(Handle(0), Handle(1), Handle(2));
+        inputs.extend(commands_inputs(&stride_descriptor(), &commands));
+        inputs.push(Input::bytes(
+            "render-pipeline",
+            &stride_pipeline_spec().words(),
+        ));
+        inputs.push(Input::bytes("buffer:attributes", &stride_attribute_bytes()));
+        inputs.push(Input::bytes(
+            "buffer:out",
+            &vec![UNWRITTEN; STRIDE_WORDS as usize * 4],
+        ));
+        inputs.push(Input::bytes("pass", b"no attachment, 1x1 extent"));
+        Ok(inputs)
+    }
+
+    fn run(&self, side: &mut dyn Side, sites: &mut Sites) -> Result<(), Abort> {
+        let fixture = Fixture::new(STRIDE_FIXTURE);
+        let loaded = fixture.loaded().map_err(|why| Abort {
+            at: "library".to_owned(),
+            failure: Failure::named("FixtureNotRead", why),
+        })?;
+        let library = made(sites, "library", side.library(&loaded.source()))?;
+        let pipeline = made(
+            sites,
+            "pipeline",
+            side.render_pipeline(library, &stride_pipeline_spec()),
+        )?;
+        let attributes = made(
+            sites,
+            "buffer:attributes",
+            side.buffer(&stride_attribute_bytes()),
+        )?;
+        let unwritten = vec![UNWRITTEN; STRIDE_WORDS as usize * 4];
+        let out = made(sites, "buffer:out", side.buffer(&unwritten))?;
+
+        let commands = stride_commands(pipeline, out, attributes);
+        let descriptor = stride_descriptor();
+        let encoded = made(
+            sites,
+            "command-buffer",
+            side.indirect_command_buffer(&descriptor, &commands),
+        )?;
+        sites.push(encoding_node(&commands, &encoded.refused));
+        if let Some((at, failure)) = first_refusal(&commands, &encoded.refused) {
+            return Err(Abort { at, failure });
+        }
+        call(
+            sites,
+            "size",
+            side.indirect_commands_size(encoded.commands),
+            |size| Value::Uint(*size),
+        )?;
+
+        // A pass of no attachment at its own extent, as the family's other render row takes: the
+        // function rasterizes nothing and writes through a buffer.
+        let steps = vec![
+            RenderStep::UseBuffer {
+                buffer: attributes,
+                write: false,
+                stages: STAGE_VERTEX,
+            },
+            RenderStep::UseBuffer {
+                buffer: out,
+                write: true,
+                stages: STAGE_VERTEX,
+            },
+            RenderStep::ExecuteCommands {
+                commands: encoded.commands,
+                first: 0,
+                count: commands.len() as u64,
+            },
+        ];
+        let work = vec![RenderWork::Pass(RenderPass::sized([1, 1]).drawing(steps))];
+        let outcome = call(sites, "render", side.render(&work), |outcome| {
+            outcome.status.clone()
+        })?;
+        sites.push(program_node(&work, &outcome));
+        if let Some((at, failure)) = first_refused_piece(&work, &outcome) {
+            return Err(Abort { at, failure });
+        }
+        let read = side
+            .read_buffer(out, 0, STRIDE_WORDS as usize * 4)
+            .map_err(|failure| Abort {
+                at: "out".to_owned(),
+                failure,
+            })?;
+        sites.push(Node::leaf(
+            "out",
+            Observed::bytes(read, buffer_layout(STRIDE_WORDS * 4)),
         ));
         Ok(())
     }
@@ -1524,8 +1939,10 @@ pub fn boxed() -> Vec<Box<dyn Case>> {
     for case in compute_rows() {
         cases.push(Box::new(case));
     }
+    cases.push(Box::new(ImageblockCommands));
     cases.push(Box::new(StageInCommand));
     cases.push(Box::new(RenderCommands));
+    cases.push(Box::new(StrideCommands));
     cases.push(Box::new(DrawnCommands));
     cases.push(Box::new(DescriptorProperties));
     cases

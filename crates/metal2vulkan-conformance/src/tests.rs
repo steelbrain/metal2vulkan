@@ -4898,7 +4898,7 @@ fn the_metal_side_mentions_every_pipeline_field() {
 fn the_runtime_side_forwards_every_field_of_a_pipeline_spec() {
     use crate::render::{
         ColorState, RenderPipelineSpec, StageFunction, VertexAttribute, VertexBufferLayout,
-        VertexLayout,
+        VertexLayout, VertexStride,
     };
     use metal2vulkan::metal::{ColorWriteMask, PixelFormat, VertexFormat, VertexStepFunction};
 
@@ -4917,7 +4917,7 @@ fn the_runtime_side_forwards_every_field_of_a_pipeline_spec() {
     }];
     let layouts = [VertexBufferLayout {
         index: 5,
-        stride: 16,
+        stride: VertexStride::Bytes(16),
         step: VertexStepFunction::PerInstance,
         rate: 2,
     }];

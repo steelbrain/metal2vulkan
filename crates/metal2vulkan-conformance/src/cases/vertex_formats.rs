@@ -162,7 +162,7 @@ use crate::fixture::{Fixture, METAL_TEXT, RUNTIME_TEXT};
 use crate::recording::ShaderRef;
 use crate::render::{
     RenderPass, RenderPipelineSpec, RenderStep, RenderWork, StageFunction, VertexAttribute,
-    VertexBufferLayout, VertexLayout,
+    VertexBufferLayout, VertexLayout, VertexStride,
 };
 use crate::transcript::{ByteLayout, Digest, Element, Gaps, Node, Observed, Region, Sites, Value};
 use metal2vulkan::metal::{PrimitiveType, VertexFormat, VertexStepFunction};
@@ -328,7 +328,7 @@ impl VertexFormats {
             VertexStepFunction::Constant => VertexBufferLayout::constant(1, stride()),
             VertexStepFunction::PerInstance => VertexBufferLayout {
                 index: 1,
-                stride: stride(),
+                stride: VertexStride::Bytes(stride()),
                 step: VertexStepFunction::PerInstance,
                 // The rate is not observable through this fixture, which has no `[[instance_id]]`:
                 // one instance fetches element `0 / rate` whatever the rate is. 1 is the plain

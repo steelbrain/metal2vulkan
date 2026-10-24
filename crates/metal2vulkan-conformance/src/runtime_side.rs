@@ -58,7 +58,7 @@ use crate::pipeline_options::{OptionOutcome, FRAGMENT_STAGE, KERNEL_STAGE, VERTE
 use crate::queue_slots::QueueSlots;
 use crate::render::{
     ColorState, LodClamp, RenderPass, RenderPipelineSpec, RenderStep, RenderWork, StageFunction,
-    StepResource, TargetSpec,
+    StepResource, TargetSpec, VertexStride,
 };
 use crate::render_descriptors::{
     AttributeFacts as DescriptorAttributeFacts, ColorFacts, DescriptorSpec, LayoutFacts,
@@ -1287,7 +1287,12 @@ fn vertex_descriptor(layout: &crate::render::VertexLayout<'_>) -> VertexDescript
         );
     }
     for buffer in layout.layouts {
-        let mut held = VertexBufferLayoutDescriptor::new(Some(buffer.stride));
+        // `None` is the runtime's spelling of `MTLBufferLayoutStrideDynamic`, which is the
+        // sentinel the suite's vocabulary states as its own variant.
+        let mut held = VertexBufferLayoutDescriptor::new(match buffer.stride {
+            VertexStride::Bytes(stride) => Some(stride),
+            VertexStride::Dynamic => None,
+        });
         held.step_function = buffer.step;
         held.step_rate = buffer.rate;
         descriptor.layouts.insert(buffer.index, held);
