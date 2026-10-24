@@ -631,3 +631,31 @@ driver's. Each is open work.
   `ComputePipelineDescriptor::new`, a fresh value that resets all nine, so a consumer that resets
   loses the thread shape where Metal keeps it. Nothing announces it.
   `compute-descriptor-reset` holds it.
+
+- **`alphaToOneEnabled` is refused outright.** The link stage refuses every render pipeline whose
+  descriptor sets it (`Unsupported(AlphaToOne, NotImplemented)`,
+  `pipeline/link/graphics.rs`'s `graphics_state`), where Metal creates it and draws. Vulkan's
+  `alphaToOne` feature is the exact counterpart, `GraphicsState::alpha_to_one` already exists and
+  the runtime already wires it to `alpha_to_one_enable`, so the gap is the field being dropped
+  between the descriptor and the state. Measured on an Apple M3 Max, macOS 27.0.1: the field
+  replaces the fragment's alpha with 1 before a blend reads it and before it is stored, and an
+  attachment write mask that drops alpha stops the 1 being stored while the blend keeps reading
+  it. `a2one-on-1-blend-source-alpha` and `a2one-on-1-mask-no-alpha` hold Metal's answer.
+
+- **Blending into an integer-format attachment is not compared, because Metal ends the process.**
+  `-[MTLRenderPipelineDescriptorInternal validateWithDevice:]` fails an assertion and the process
+  ends on SIGABRT — `Blending is enabled for render target 0; however, the pixelformat
+  MTLPixelFormatR32Uint for this render target is not blendable` — measured on an Apple M3 Max,
+  macOS 27.0.1 for `R32Uint`, `RGBA8Uint` and `RGBA8Sint`, with blending **off** on the same
+  format and blending **on** over `RGBA8Unorm` creating normally as the two controls. So Metal has
+  no answer here to be conformant with and no case may ask for one. What the translator does with
+  the neighbouring shape is compared: alpha-to-coverage over an integer attachment 0 is a typed
+  `InvalidDescriptor` (`reads_alpha_to_coverage`), which is Metal's own pipeline error.
+
+- **`rasterSampleCount` disagreeing with the attachment's sample count is not compared.** Plain
+  Metal creates the pipeline and draws something that looks undefined — a 1-sample pipeline into a
+  4-sample attachment left samples 1 to 3 at neither the clear nor the fragment — while Metal's
+  API validation layer ends the process at `setRenderPipelineState:` (`the texture sample count
+  (4) does not match the renderPipelineState colorSampleCount (1)`), both measured on an Apple M3
+  Max, macOS 27.0.1. A plain-Metal answer that looks undefined is not one to pin as a conformance
+  expectation, and a case of it would end a recording run.
