@@ -6514,7 +6514,7 @@ fn every_case_carries_a_cost_recording() {
     /// **Not one recording added after that measurement carries a record**, which is what makes this
     /// one cause and not a list of names: these cases postdate the only run that could have covered
     /// them. A whole-set `cost --write` fills every one.
-    const AFTER_THE_LAST_RUN: [&str; 324] = [
+    const AFTER_THE_LAST_RUN: [&str; 325] = [
         "a2c-off-1-alpha-50",
         "a2c-off-4-alpha-50",
         "a2c-off-4-alpha-50-shadermask-5",
@@ -6573,6 +6573,7 @@ fn every_case_carries_a_cost_recording() {
         "blend-sweep-enabled",
         "blend-sweep-operation-pairs",
         "blend-sweep-operations",
+        "blend-sweep-placeholders",
         "blend-sweep-second-source",
         "blend-sweep-source-alpha",
         "blend-sweep-source-rgb",
