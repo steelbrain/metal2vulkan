@@ -60,7 +60,7 @@
 //! compute state's is.
 
 use super::buffer::Buffer;
-use super::device::{device_error, lock};
+use super::device::device_error;
 use super::error::{internal, invalid, nil, Error, Problem};
 use super::function_table::VisibleFunctionTable;
 use super::indirect_command_buffer::IndirectCommandBuffer;
@@ -69,6 +69,7 @@ use super::pipeline::{ComputePipelineState, RenderPipelineState};
 use super::sampler::SamplerState;
 use super::texture::Texture;
 use super::{Device, StorageMode};
+use crate::derived::DerivedMap;
 use metal2vulkan::bind::{
     ArgumentBufferLayout, ArgumentDescriptor, ArgumentLayoutError, ArgumentPlace, ArgumentType,
     ARGUMENT_HANDLE_BYTES,
@@ -190,17 +191,12 @@ impl Function {
         index: u32,
     ) -> Result<ArgumentEncoder, Error> {
         const CALL: &str = "new_argument_encoder_with_buffer_index";
-        if let Some(layout) = lock(self.argument_layouts()).get(&index) {
-            return Ok(ArgumentEncoder::new(self.device(), layout.clone()));
-        }
-        let layout = self
-            .compile_function()
-            .argument_buffer_layout(index, self.constants(), &Budget::standard())
-            .map_err(|error| layout_error(CALL, error))?;
-        let layout = lock(self.argument_layouts())
-            .entry(index)
-            .or_insert_with(|| Arc::new(layout))
-            .clone();
+        let layout = DerivedMap::or_derive(self.argument_layouts(), index, || {
+            self.compile_function()
+                .argument_buffer_layout(index, self.constants(), &Budget::standard())
+                .map(Arc::new)
+                .map_err(|error| layout_error(CALL, error))
+        })?;
         Ok(ArgumentEncoder::new(self.device(), layout))
     }
 }

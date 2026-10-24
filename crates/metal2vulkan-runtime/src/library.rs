@@ -11,10 +11,11 @@
 //! compiled to a binary is what Metal takes in a stage's `binaryFunctions` and adds to a made
 //! pipeline state.
 
-use super::device::{device_error, lock};
+use super::device::device_error;
 use super::error::{invalid, Problem, RuntimeGap};
 use super::Device;
 use super::Error;
+use crate::derived::{Derived, DerivedMap};
 use crate::resource_ids::{function_name, FunctionHolds, LibraryHolds};
 use metal2vulkan::bind::ArgumentBufferLayout;
 use metal2vulkan::library::{FunctionConstantValues, LibraryType};
@@ -35,6 +36,17 @@ pub struct Library {
     /// What the library holds of the sampler IDs its functions' pipeline states numbered, shared
     /// with every live library of the same content (`resource_ids/numbered.rs`).
     holds: Arc<LibraryHolds>,
+    /// The reflections of the library's functions by name, derived when
+    /// [`reflection_for_function_with_name`](Library::reflection_for_function_with_name) first
+    /// asks for one.
+    ///
+    /// Deriving one for a function whose library is a module decodes that function's AIR
+    /// ([`metal2vulkan::library::Function::reflection`]), so the getter decoded the same bitcode
+    /// once per call, where `MTLLibrary` answers from the library it already compiled. Every
+    /// input is fixed when the library is made -- its bytes are immutable behind an `Arc` and the
+    /// standard budget never changes -- so the memo is sound, and it is the library's rather than
+    /// a function object's because the getter takes a name and makes no function object.
+    reflections: Arc<Mutex<DerivedMap<String, Option<FunctionReflection>>>>,
 }
 
 /// A Metal function of a library (`MTLFunction`), with the constant values it was made with.
@@ -49,7 +61,7 @@ pub struct Function {
     specialized: bool,
     /// The layouts of the argument buffers the function takes, by buffer index, decoded when an
     /// argument encoder first asks (`argument_encoder.rs`).
-    argument_layouts: Arc<Mutex<BTreeMap<u32, Arc<ArgumentBufferLayout>>>>,
+    argument_layouts: Arc<Mutex<DerivedMap<u32, Arc<ArgumentBufferLayout>>>>,
     /// The function's `MTLFunction` properties, computed when a getter first asks.
     ///
     /// All five property getters answer one field each of a **single** [`FunctionProperties`],
@@ -64,7 +76,15 @@ pub struct Function {
     /// bytes are immutable behind an `Arc`, and `constants` and `specialized` never change. Only
     /// a success is kept -- a refusal under the standard budget is deterministic, so recomputing
     /// one answers the same refusal -- which keeps the error path exactly as it was.
-    properties: Arc<Mutex<PropertiesMemo>>,
+    properties: Arc<Mutex<Derived<FunctionProperties>>>,
+    /// The function's `functionConstantsDictionary`, derived when the getter first asks.
+    ///
+    /// Deriving it for a function whose library is a module decodes the function's AIR
+    /// ([`metal2vulkan::library::Function::function_constants_dictionary`]) -- the sixth decode a
+    /// reflection call made, beside the five the property getters made -- where Metal answers
+    /// from the `MTLFunction` it already made. Sound for the same reasons as `properties`: every
+    /// input is fixed when the function is made.
+    constants_dictionary: Arc<Mutex<Derived<BTreeMap<String, FunctionConstant>>>>,
     /// The options the function was made with (`newFunctionWithDescriptor:`); none for the
     /// other forms.
     options: FunctionOptions,
@@ -72,18 +92,6 @@ pub struct Function {
     /// numbered, shared with every function object of the same function of its library
     /// (`resource_ids/numbered.rs`); held for its drop.
     _holds: Arc<FunctionHolds>,
-}
-
-/// A function's memoized `MTLFunction` properties, and how many times it has computed them.
-///
-/// The count is what the redundancy is checked by: reading all five property getters must compute
-/// the properties **once**, and before the memo it computed them once per getter
-/// (`tests::function_properties`). A count is deterministic on any host under any load, which a
-/// time is not, so the check is a count.
-#[derive(Debug, Default)]
-pub(super) struct PropertiesMemo {
-    held: Option<FunctionProperties>,
-    computed: u32,
 }
 
 /// `MTLFunctionDescriptor`: the function [`Library::new_function_with_descriptor`] makes.
@@ -149,6 +157,7 @@ impl Device {
             device: self.clone(),
             library,
             holds,
+            reflections: Arc::default(),
         }
     }
 }
@@ -278,6 +287,7 @@ impl Library {
             specialized,
             argument_layouts: Arc::default(),
             properties: Arc::default(),
+            constants_dictionary: Arc::default(),
             options: FunctionOptions::NONE,
             _holds: holds,
         })
@@ -295,9 +305,17 @@ impl Library {
         name: &str,
     ) -> Result<Option<FunctionReflection>, Error> {
         let function = self.library.function(name).map_err(device_error)?;
-        function
-            .reflection(&Budget::standard())
-            .map_err(device_error)
+        DerivedMap::or_derive(&self.reflections, name.to_string(), || {
+            function
+                .reflection(&Budget::standard())
+                .map_err(device_error)
+        })
+    }
+
+    /// How many of its functions' reflections the library has derived (`tests::derived_once`).
+    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+    pub(crate) fn reflections_derived(&self) -> u32 {
+        DerivedMap::derived(&self.reflections)
     }
 }
 
@@ -328,27 +346,36 @@ impl Function {
     /// constant values its
     /// [`specialized_properties`](metal2vulkan::library::Function::specialized_properties).
     fn properties(&self) -> Result<FunctionProperties, Error> {
-        if let Some(held) = lock(&self.properties).held.clone() {
-            return Ok(held);
-        }
-        let budget = Budget::standard();
-        let computed = if self.specialized {
-            self.function
-                .specialized_properties(&self.constants, &budget)
-                .map_err(device_error)?
-        } else {
-            self.function.properties(&budget).map_err(device_error)?
-        };
-        let mut memo = lock(&self.properties);
-        memo.computed += 1;
-        Ok(memo.held.get_or_insert(computed).clone())
+        Derived::or_derive(&self.properties, || {
+            let budget = Budget::standard();
+            if self.specialized {
+                self.function
+                    .specialized_properties(&self.constants, &budget)
+                    .map_err(device_error)
+            } else {
+                self.function.properties(&budget).map_err(device_error)
+            }
+        })
     }
 
-    /// How many times the function has computed its properties, for the check that reading all
-    /// five getters computes them once ([`PropertiesMemo`]).
+    /// How many times the function has derived its properties, for the check that reading all
+    /// five getters derives them once (`tests::derived_once`).
     #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
-    pub(crate) fn properties_computed(&self) -> u32 {
-        lock(&self.properties).computed
+    pub(crate) fn properties_derived(&self) -> u32 {
+        Derived::derived(&self.properties)
+    }
+
+    /// How many times the function has derived its `functionConstantsDictionary`
+    /// (`tests::derived_once`).
+    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+    pub(crate) fn constants_dictionary_derived(&self) -> u32 {
+        Derived::derived(&self.constants_dictionary)
+    }
+
+    /// How many argument-buffer layouts the function has derived (`tests::derived_once`).
+    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+    pub(crate) fn argument_layouts_derived(&self) -> u32 {
+        DerivedMap::derived(&self.argument_layouts)
     }
 
     /// `functionType`. A metallib function answers from its container tags; a bitcode wrapper's
@@ -394,9 +421,11 @@ impl Function {
         if self.specialized {
             return Ok(BTreeMap::new());
         }
-        self.function
-            .function_constants_dictionary()
-            .map_err(device_error)
+        Derived::or_derive(&self.constants_dictionary, || {
+            self.function
+                .function_constants_dictionary()
+                .map_err(device_error)
+        })
     }
 
     /// The compile layer's function.
@@ -409,8 +438,9 @@ impl Function {
         &self.constants
     }
 
-    /// The argument-buffer layouts decoded so far, by buffer index.
-    pub(super) fn argument_layouts(&self) -> &Mutex<BTreeMap<u32, Arc<ArgumentBufferLayout>>> {
+    /// The argument-buffer layouts the function holds, by buffer index: derived when an argument
+    /// encoder first asks for one (`argument_encoder.rs`).
+    pub(super) fn argument_layouts(&self) -> &Mutex<DerivedMap<u32, Arc<ArgumentBufferLayout>>> {
         &self.argument_layouts
     }
 

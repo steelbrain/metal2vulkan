@@ -53,6 +53,8 @@ mod degradation;
 mod depth_copy;
 mod depth_ranges;
 mod depth_stencil_resolve;
+#[cfg(any(m2v_gpu, m2v_cpu_icd))]
+mod derived_once;
 mod descriptor_arena;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod detach_lost;
@@ -86,8 +88,6 @@ mod freed_memory;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod fresh_pages;
 mod fresh_unwritten;
-#[cfg(any(m2v_gpu, m2v_cpu_icd))]
-mod function_properties;
 mod function_table;
 mod gate;
 mod gpu_pools;

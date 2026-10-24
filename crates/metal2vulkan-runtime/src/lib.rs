@@ -67,6 +67,7 @@ mod depth_stand_in;
 mod depth_stencil;
 mod depth_stencil_resolve;
 mod depth_stencil_scratch;
+mod derived;
 mod descriptor_arena;
 mod detach;
 mod device;
