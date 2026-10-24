@@ -2077,7 +2077,7 @@ const CROSSINGS: [Crossing; 12] = [
 /// other belongs passes every single-value sweep of both.
 ///
 /// The family beside this one sweeps each mask alone
-/// ([`StencilCompares`]'s [`READ_MASKS`], [`StencilOperations`]'s [`WRITE_MASKS`]), and that is
+/// ([`StencilCompares`]'s read-mask rows, [`StencilOperations`]'s write-mask rows), and that is
 /// what leaves the crossing open: a read-mask row whose every operation is `Keep` cannot see a
 /// write, and a write-mask row whose read mask is whole cannot see a comparison narrowed. Twelve
 /// rows here state both masks at once.
@@ -2087,7 +2087,7 @@ const CROSSINGS: [Crossing; 12] = [
 /// operand, and it cannot: from `0xa5` both rules leave `0xa5`, which is the stored value itself,
 /// so the row's cell is also indistinguishable from a draw that wrote nothing at all. The five
 /// rows here marked `operand_visible` are the ones whose two answers differ, held apart by
-/// [`tests::the_crossings_see_an_operand_masked_operation_and_the_old_table_cannot`] with no
+/// `tests::the_crossings_see_an_operand_masked_operation_and_the_old_table_cannot` with no
 /// device.
 pub struct MaskCrossings;
 
@@ -2203,8 +2203,7 @@ const WINDINGS: [Winding; 2] = [Winding::Clockwise, Winding::CounterClockwise];
 /// where the back face's did, and the cleared `0x40` where the primitive was culled. The three
 /// values are distinct, so no cell's answer is two readings at once.
 ///
-/// Nothing here assumes which winding Metal calls front for a triangle of
-/// [`CORNERS`]: the module's test reads that from one cell and holds the other eleven to it, and
+/// Nothing here assumes which winding Metal calls front for the module's own triangle: the module's test reads that from one cell and holds the other eleven to it, and
 /// both readings are falsifiable.
 pub struct FacesFacing;
 

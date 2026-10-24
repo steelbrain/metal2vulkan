@@ -52,7 +52,7 @@
 //!
 //! Read down the three columns: the three filters answer three **distinct seven-tuples**, and no
 //! two of them agree in more than four of the seven cells, which is what
-//! [`tests::the_three_filters_answer_three_distinct_tuples`] holds with no device. Read across,
+//! `tests::the_three_filters_answer_three_distinct_tuples` holds with no device. Read across,
 //! two rows are **indistinguishable by construction** and are named rather than left to be
 //! noticed: *every sample alike*, where the three filters must agree because there is one value to
 //! pick, and *nothing covered*, where they must agree on the clear. They are in the grid because
@@ -91,7 +91,7 @@
 //!   still uncompared. Metal takes it only where the depth and the stencil are **one**
 //!   attachment, and reading a `Depth32Float_Stencil8` texture back needs
 //!   `MTLBlitOptionDepthFromDepthStencil` or its stencil twin, which
-//!   [`RenderWork::ReadTexture`](crate::render::RenderWork::ReadTexture) has no field for: the
+//!   [`RenderWork::ReadTexture`] has no field for: the
 //!   suite's one texture read is a plain `copyFromTexture:toBuffer:`. So the value is reachable
 //!   only once that vocabulary grows an aspect, and this says so rather than skipping it quietly.
 //! - **A layered pass, a resolve slice or level past the first, and a memoryless resolve
