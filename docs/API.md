@@ -234,14 +234,18 @@ the device refuses (`HostMemory::with_dma_buf`), `VK_EXT_external_memory_dma_buf
 
 A texture over a no-copy buffer's host pages (imported by their pointer or as dma-bufs) is a shadow
 (`shadowed-texture`), as is one over a host-visible buffer of the runtime's own longer than 32 MiB
-where the device imports host pointers: that buffer lies in fresh anonymous pages imported by their
-pointer, zero as mapped, so that nothing writes its zeros (`WorkCounts::fresh_page_buffers_made`,
+where the device imports host pointers and the memory class's best type for the buffer takes such
+an import: that buffer lies in fresh anonymous pages imported by their pointer, zero as mapped, so
+that nothing writes its zeros (`WorkCounts::fresh_page_buffers_made`,
 `shadows_over_fresh_pages`). Such a shadow is an optimal image of the runtime's own memory, whose
 texels the encoders copy in from the pages before a use and back (merged back: only the bytes the
 commands changed) after a write. No image is bound to the pages: an image bound to imported memory
 starts in `VK_IMAGE_LAYOUT_UNDEFINED` (`VUID-VkImageCreateInfo-pNext-01443`), and its first move,
 like any layout transition, may read and write every byte bound to it, where Metal keeps every CPU
-write to bytes a command buffer does not write. `Texture::vk_image` gives `None` for such a texture.
+write to bytes a command buffer does not write. `Texture::vk_image` gives `None` for such a texture. A class whose best memory type takes no such
+import -- a discrete card's write-combined class, whose best type for the buffer is a device-local
+host-visible one -- is placed as ever and its bytes set to zero on the host; the buffer reads zero
+either way, which is all a program sees.
 A texture placed in a heap over dma-buf pages is an image over a dma-buf of its own pages, which its
 first submission acquires from `VK_QUEUE_FAMILY_FOREIGN_EXT`; a linear image over a buffer of the
 runtime's own memory starts `VK_IMAGE_LAYOUT_PREINITIALIZED`, and its move from there keeps its
