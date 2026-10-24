@@ -74,8 +74,11 @@ const FACTS: &str = "facts";
 /// multiplied by it would be off by three.
 const IMAGEBLOCK: [u32; 3] = [8, 4, 3];
 
-/// The fixture whose kernel takes a `threadgroup uint *`, so its
-/// `staticThreadgroupMemoryLength` is a number rather than zero. `function_bindings`' kernel.
+/// The fixture whose kernel takes a `threadgroup uint *`, which is the shape whose
+/// `staticThreadgroupMemoryLength` Metal answers **zero** for: that memory is the argument's, sized
+/// at the dispatch by `setThreadgroupMemoryLength:atIndex:`, and not an array the function declares.
+/// All 13 sites of the committed recordings answer 0, so what the case compares here is that zero.
+/// `function_bindings`' kernel.
 const THREADGROUP_FIXTURE: &str = "a27_ob1_threadgroup";
 const THREADGROUP_ENTRY: &str = "ob1_threadgroup";
 
