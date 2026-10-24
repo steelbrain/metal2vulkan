@@ -745,16 +745,31 @@ def struct_fields(text: str, name: str) -> dict[str, str]:
     return out
 
 
+#: The combinators a function of the leg is handed to as a value, as one alternation. Every one
+#: takes a callable and calls it, so a leg function named here is reached; a method that merely
+#: *holds* a value would not be an edge. The list is of what this leg writes, and a combinator it
+#: does not use yet costs nothing to have here.
+HIGHER_ORDER = (
+    "map|map_err|and_then|or_else|filter_map|flat_map|for_each|try_for_each|inspect"
+    "|unwrap_or_else|ok_or_else|map_or_else|map_while|take_while|skip_while|find_map"
+    "|is_some_and|is_none_or|sort_by_key|max_by_key|min_by_key|retain|partition|all|any"
+)
+
+
 def read_leg(api: Api, src: Path, files: list[str], enums: set[str]) -> Leg:
     """Every Metal call the leg's `files` make, typed."""
     leg = Leg()
     blank = {name: blanked((src / name).read_text()) for name in files}
     fields: dict[str, str] = {}
     answers: dict[str, str] = {}
+    #: Every function the leg declares, by name: what a bare path handed to a combinator has to be
+    #: one of before it is read as an edge ([`HIGHER_ORDER`]).
+    declared: set[str] = set()
     for name, text in blank.items():
         for struct in re.findall(r"\bstruct\s+([A-Za-z_][A-Za-z0-9_]*)", text):
             fields.update(struct_fields(text, struct))
         for fn in functions(text, name):
+            declared.add(fn.name)
             arrow = fn.signature.rfind("->")
             if arrow >= 0:
                 ty = metal_type(fn.signature[arrow + 2 :])
@@ -869,6 +884,36 @@ def read_leg(api: Api, src: Path, files: list[str], enums: set[str]) -> Leg:
                 qualifier = [part for part in match.group(1).split("::") if part]
                 if qualifier and qualifier[-1][:1].isupper() and qualifier[-1] != "Self":
                     continue
+                here = tuple(v for lo, hi, v in gates if lo <= at < hi)
+                leg.calls_function.setdefault(fn.name, set()).add(rust)
+                leg.function_gates.setdefault((fn.name, rust), set()).add(here)
+            # A function of the leg handed to a combinator as a **value**, which is an edge of the
+            # same graph and was in none of the loops above: each of them needs a `(` after the
+            # name, and `.map(layer_descriptor)` has none.
+            #
+            # It is not a cosmetic hole. `Side::rate_map` builds each layer's descriptor through
+            # `.map(layer_descriptor)`, so with the edge missing the two
+            # `MTLRasterizationRateLayerDescriptor` items that function reaches -- its class and
+            # `initWithSampleCount:horizontal:vertical:` -- were called by a leg the rate-map
+            # cases run and credited to no case module at all.
+            #
+            # The pattern is narrow on purpose: the receiver's method must be one of
+            # [`HIGHER_ORDER`] and the argument a bare path with no call of its own, and the name
+            # must be a function the leg declares. Reading any bare identifier that shares a name
+            # with a function would be worse than the hole -- measured over this leg, 187 such
+            # sites, nearly all of them a local named `handle`, `texture` or `buffer`.
+            for match in re.finditer(
+                r"\.\s*(?:" + HIGHER_ORDER + r")\s*\(\s*((?:[A-Za-z_][A-Za-z0-9_]*::)*)"
+                r"([A-Za-z_][A-Za-z0-9_]*)\s*\)",
+                text[fn.start : fn.end],
+            ):
+                rust = match.group(2)
+                if rust not in declared:
+                    continue
+                qualifier = [part for part in match.group(1).split("::") if part]
+                if qualifier and qualifier[-1][:1].isupper() and qualifier[-1] != "Self":
+                    continue
+                at = fn.start + match.start()
                 here = tuple(v for lo, hi, v in gates if lo <= at < hi)
                 leg.calls_function.setdefault(fn.name, set()).add(rust)
                 leg.function_gates.setdefault((fn.name, rust), set()).add(here)

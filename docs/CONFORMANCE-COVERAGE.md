@@ -34,15 +34,15 @@ Its limits, measured rather than asserted:
 | implemented Metal items | 957 |
 | of those, unreachable: `objc2-metal` binds no name for them | 3 |
 | so reachable by some case | 954 |
-| of the reachable, exercised by the suite's Metal leg | 785 |
-| of the reachable, not exercised | 169 |
+| of the reachable, exercised by the suite's Metal leg | 787 |
+| of the reachable, not exercised | 167 |
 | share of the reachable exercised | 82% |
-| of those exercised, no case reaching it loosens anything | 590 |
+| of those exercised, no case reaching it loosens anything | 592 |
 | of those exercised, a case reaching it loosens some site | 195 |
 | case modules | 147 |
 | committed recordings | 1100 |
 | distinct SDK items the Metal leg reaches, of any status | 797 |
-| of those, reached only where this cannot name the family | 7 |
+| of those, reached only where this cannot name the family | 5 |
 | ledger rows (a case whose gap is recorded) | 807 |
 | declared crossings of the option space (pairs put to Metal at once) | 24 |
 | declared crossings that are no pair of it (a boolean or numeric field, or one type in two slots) | 30 |
@@ -360,8 +360,8 @@ Every container with an implemented item, by how much of it the suite reaches. *
 | `MTLArgument` | 17 | 0 | 0 | 17 |  |
 | the header's free functions | 12 | 0 | 0 | 12 |  |
 | `MTLDevice` | 63 | 2 | 49 | 12 | `alpha_coverage_pairs`, `argument_encoder_crossings`, `argument_encoders`, `astc_textures`… |
-| `MTLRasterizationRateLayerDescriptor` | 9 | 0 | 0 | 9 |  |
 | `MTLIndirectRenderCommand` | 23 | 0 | 15 | 8 | `indirect_command_depth`, `indirect_commands`, `mesh_commands` |
+| `MTLRasterizationRateLayerDescriptor` | 9 | 0 | 2 | 7 | `rate_map_sweeps`, `rate_maps` |
 | `MTLComputePipelineState` | 15 | 0 | 9 | 6 | `compute_threadgroups`, `pipeline_facts`, `pipeline_handlers`, `visible_tables` |
 | `MTLComputeCommandEncoder` | 36 | 0 | 31 | 5 | `argument_encoders`, `astc_textures`, `attribute_formats`, `attribute_strides`… |
 | `MTLRenderPipelineState` | 15 | 0 | 11 | 4 | `pipeline_facts`, `pipeline_handlers`, `tile_threadgroups`, `visible_tables` |
@@ -462,8 +462,8 @@ A container is one Objective-C type; the SDK header it sits in is the family of 
 |---|---|---|---|
 | `MTLRenderCommandEncoder.h` | 119 | 69 | 50 |
 | `MTLArgument.h` | 77 | 59 | 18 |
-| `MTLRasterizationRate.h` | 36 | 20 | 16 |
 | `MTLDevice.h` | 73 | 59 | 14 |
+| `MTLRasterizationRate.h` | 36 | 22 | 14 |
 | `MTLIndirectCommandEncoder.h` | 35 | 26 | 9 |
 | `MTLRenderPipeline.h` | 114 | 105 | 9 |
 | `MTLComputePipeline.h` | 34 | 27 | 7 |
@@ -511,11 +511,10 @@ An implemented container no case's Metal leg touches. These are the families of 
 | `MTLDepthStencilState` | 3 | `MTLDepthStencil.h` |
 | `MTLFence` | 3 | `MTLFence.h` |
 | `MTLFunctionReflection` | 3 | `MTLLibrary.h` |
-| `MTLRasterizationRateLayerDescriptor` | 9 | `MTLRasterizationRate.h` |
 | `MTLRasterizationRateSampleArray` | 3 | `MTLRasterizationRate.h` |
 | `MTLSharedEventListener` | 2 | `MTLEvent.h` |
 
-8 containers, 52 implemented items.
+7 containers, 43 implemented items.
 
 ## The suite's shape
 
@@ -644,8 +643,8 @@ Each case module: the cases it holds, the `Side` methods it calls, and how many 
 | `primitive_type_crossings` | 1 | 1 | every field | 122 |
 | `pvrtc_cpu_order` | 6 | 6 | every field | 56 |
 | `pvrtc_rows` | 8 | 8 | every field | 56 |
-| `rate_map_sweeps` | 8 | 8 | every field | 28 |
-| `rate_maps` | 2 | 2 | every field | 21 |
+| `rate_map_sweeps` | 8 | 8 | every field | 30 |
+| `rate_maps` | 2 | 2 | every field | 23 |
 | `render_chains` | 3 | 3 | every field | 142 |
 | `render_depth_stencil_state` | 3 | 3 | every field | 142 |
 | `render_draw_forms` | 4 | 4 | every field | 129 |
@@ -1449,9 +1448,9 @@ One row per implemented item of the SDK, in the coverage map's order. *exercised
 
 | item | exercised | families | cases Metal ran |
 |---|---|---|---|
-| `MTLRasterizationRateLayerDescriptor` | no | — | — |
+| `MTLRasterizationRateLayerDescriptor` | yes | `rate_map_sweeps`, `rate_maps` | 10 |
 | `initWithSampleCount:` | no | — | — |
-| `initWithSampleCount:horizontal:vertical:` | no | — | — |
+| `initWithSampleCount:horizontal:vertical:` | yes | `rate_map_sweeps`, `rate_maps` | 10 |
 | `sampleCount` | no | — | — |
 | `maxSampleCount` | no | — | — |
 | `horizontalSampleStorage` | no | — | — |
@@ -2168,8 +2167,6 @@ An item the Metal leg calls that no case module was found to reach: a `Side` met
 | `MTLIndirectComputeCommand` `setImageblockWidth:height:` | implemented |
 | `MTLIndirectRenderCommand` `setObjectThreadgroupMemoryLength:atIndex:` | implemented |
 | `MTLIndirectRenderCommand` `setVertexBuffer:offset:attributeStride:atIndex:` | implemented |
-| `MTLRasterizationRateLayerDescriptor` `MTLRasterizationRateLayerDescriptor` | implemented |
-| `MTLRasterizationRateLayerDescriptor` `initWithSampleCount:horizontal:vertical:` | implemented |
 
 ## Called, not in the coverage map
 

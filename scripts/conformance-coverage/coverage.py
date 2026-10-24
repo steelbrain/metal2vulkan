@@ -1740,12 +1740,21 @@ def check_api() -> int:
 
 
 def selftest() -> int:
-    """Run the option-space axis over inputs whose answers are known."""
+    """Run the derivations over inputs whose answers are known.
+
+    Two modules: the option-space axis, and the Metal leg's call graph, which is what attributes a
+    call to a case module. Both are derivations over text, and both fail by quietly matching
+    nothing, so each builds its own little tree where the answer is known by construction.
+    """
     import unittest
 
+    import test_metal_leg
     import test_option_space
 
-    loaded = unittest.TestLoader().loadTestsFromModule(test_option_space)
+    loader = unittest.TestLoader()
+    loaded = unittest.TestSuite(
+        loader.loadTestsFromModule(module) for module in (test_option_space, test_metal_leg)
+    )
     found = unittest.TextTestRunner(verbosity=2).run(loaded)
     return 0 if found.wasSuccessful() else 1
 
