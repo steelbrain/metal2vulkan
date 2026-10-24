@@ -443,19 +443,35 @@ pub struct Program<'a> {
 impl Program<'_> {
     /// The words a case's input fingerprint covers: the attachment format and every step.
     pub fn words(&self) -> Vec<u8> {
-        let mut out = self.attachment.as_raw().to_le_bytes().to_vec();
-        for library in self.libraries {
-            for (name, code) in library.entries {
-                out.extend(name.as_bytes());
-                out.push(*code);
-            }
-        }
-        for (site, step) in self.steps {
-            out.extend(site.as_bytes());
-            out.extend(step.words());
-        }
-        out
+        let entries: Vec<&[(&str, u8)]> = self.libraries.iter().map(|it| it.entries).collect();
+        program_words(self.attachment, &entries, self.steps)
     }
+}
+
+/// The words a case's input fingerprint covers for a program of these libraries' entry points,
+/// this attachment and these steps: the program's **shape**, which holds no shader bytes.
+///
+/// A free function beside [`Program::words`] because a case states its input fingerprint before it
+/// has assembled anything, and nothing of a program's shape lives in a [`ShaderSource`]. A
+/// [`Program`] cannot be built without one, so a case that needed this through [`Program::words`]
+/// would have to run `llvm-as` to state a fingerprint the assembler has no part in.
+pub fn program_words(
+    attachment: metal2vulkan::metal::PixelFormat,
+    entries: &[&[(&str, u8)]],
+    steps: &[(&'static str, Step)],
+) -> Vec<u8> {
+    let mut out = attachment.as_raw().to_le_bytes().to_vec();
+    for library in entries {
+        for (name, code) in *library {
+            out.extend(name.as_bytes());
+            out.push(*code);
+        }
+    }
+    for (site, step) in steps {
+        out.extend(site.as_bytes());
+        out.extend(step.words());
+    }
+    out
 }
 
 /// What one step observed.

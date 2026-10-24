@@ -748,6 +748,31 @@ impl BinaryArchiveCase {
         }
     }
 
+    /// Every shader the case's program names, in library order: the directory it lies in under
+    /// the public fixtures, the fixture itself, and the entry point the program runs.
+    ///
+    /// One statement for both [`Case::shaders`] and [`Case::inputs`], neither of which assembles
+    /// anything: a case's inputs are the committed texts it names.
+    fn named(&self) -> Vec<(&'static str, &'static str, &'static str)> {
+        let mut named = vec![
+            ("", COMPUTE_FIXTURE, HELD),
+            ("reflection/", RENDER_FIXTURE, VERTEX),
+        ];
+        if let Some((fixture, entry)) = self.third() {
+            named.push(("reflection/", fixture, entry));
+        }
+        named
+    }
+
+    /// The committed text of the fixture `fixture` of `directory`, in the dialect `extension`
+    /// names.
+    fn text(directory: &str, fixture: &'static str, extension: &str) -> Result<String, String> {
+        match directory.is_empty() {
+            true => Fixture::new(fixture).text(extension),
+            false => reflection_text(fixture, extension),
+        }
+    }
+
     /// Every shader the case's program names, in library order.
     fn held(&self) -> Result<Vec<Held>, String> {
         let compute = Fixture::new(COMPUTE_FIXTURE);
@@ -785,46 +810,42 @@ impl Case for BinaryArchiveCase {
 
     fn shaders(&self) -> Result<Vec<ShaderRef>, String> {
         let mut shaders = Vec::new();
-        let mut named = |directory: &str, fixture: &str, entry: &str| -> Result<(), String> {
+        for (directory, fixture, entry) in self.named() {
             for extension in [RUNTIME_TEXT, METAL_TEXT] {
-                let text = if directory.is_empty() {
-                    Fixture::new(COMPUTE_FIXTURE).text(extension)?
-                } else {
-                    reflection_text(fixture, extension)?
-                };
+                let text = Self::text(directory, fixture, extension)?;
                 shaders.push(ShaderRef {
                     fixture: format!("{directory}{fixture}{extension}"),
                     entry: entry.to_owned(),
                     source_sha256: crate::sha256_hex(text.as_bytes()),
                 });
             }
-            Ok(())
-        };
-        named("", COMPUTE_FIXTURE, HELD)?;
-        named("reflection/", RENDER_FIXTURE, VERTEX)?;
-        if let Some((fixture, entry)) = self.third() {
-            named("reflection/", fixture, entry)?;
         }
         Ok(shaders)
     }
 
     fn inputs(&self) -> Result<Vec<Input>, String> {
-        let held = self.held()?;
+        let named = self.named();
         let mut inputs = Vec::new();
-        for (at, shader) in held.iter().enumerate() {
-            inputs.push(Input {
-                name: format!("air-{at}"),
-                digest: Digest::sha256(&shader.bitcode),
-            });
-            inputs.push(Input {
-                name: format!("air-typed-{at}"),
-                digest: Digest::sha256(shader.air_text.as_bytes()),
-            });
+        // Each library's two committed texts, which are what the case states. Never the bitcode
+        // `llvm-as` assembles from the `.ll`: that moves with the host's LLVM release, and a
+        // fingerprint it was in could only ever match on the host that recorded the case.
+        for (at, (directory, fixture, _)) in named.iter().enumerate() {
+            for (name, extension) in [("air", RUNTIME_TEXT), ("air-typed", METAL_TEXT)] {
+                inputs.push(Input {
+                    name: format!("{name}-{at}"),
+                    digest: Digest::sha256(Self::text(directory, fixture, extension)?.as_bytes()),
+                });
+            }
         }
         // The program is the case's whole question: a step that moves is a different question, and
         // a recording of one is no answer for another.
-        let libraries = self.libraries(&held);
-        inputs.push(Input::bytes("program", &self.program(&libraries).words()));
+        let entries: Vec<&[(&str, u8)]> = (0..named.len())
+            .map(|at| entries_for(at, self.third))
+            .collect();
+        inputs.push(Input::bytes(
+            "program",
+            &crate::archives::program_words(ATTACHMENT, &entries, self.steps),
+        ));
         Ok(inputs)
     }
 

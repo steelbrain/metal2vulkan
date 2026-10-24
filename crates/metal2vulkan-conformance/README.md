@@ -114,26 +114,37 @@ refusal.
 
 ## Replaying off the host that recorded
 
-A replay needs no Metal, so it runs on any Vulkan device — but two of its inputs are the recording
-host's, and one of them is not obvious.
+A replay needs no Metal, so it runs on any Vulkan device. One of its inputs is the venue's, which is
+the point of replaying elsewhere; none of them is the recording host's any more, and the one that
+was is worth saying how it was fixed.
 
-Nine cases cannot be compared anywhere else at all. A case's input fingerprint covers the **bitcode**
-`llvm-as` produced, not the `.ll` text, and the assembler's version is the host's: the same
-`fixtures/public/fragment_constant_color.ll` assembles to `1a4cc972040870f8` under Homebrew's LLVM
-23.1.4 and to `38d752a345c98db2` under 23.1.1. So `binary-archive-*` (six), `library-from-data` and
-the two `dynamic-library-*` cases read `unrecorded: the inputs this run fed are not the recording's:
-air differs`, which is the loud failure an unrecorded case is meant to be.
+**A case's input fingerprint covers the committed fixture's `.ll` and `.air.ll` text, never the
+bitcode `llvm-as` assembles from the `.ll`.** That output is a function of the text *and the
+assembler's release*: the same `fixtures/public/fragment_constant_color.ll` assembles to
+`1a4cc972040870f8` under Homebrew's LLVM 23.1.4 and to `38d752a345c98db2` under 23.1.1. Nine cases
+once fingerprinted it — `binary-archive-*` (six), `library-from-data` and the two
+`dynamic-library-*` — and read `unrecorded: the inputs this run fed are not the recording's: air
+differs` on every host but the Mac that recorded them. A fingerprint exists to say the run fed the
+recording's inputs, and the committed text is the input a case states; the assembler has no part in
+it, which is why no case needs `llvm-as` to state its fingerprint at all.
+`tests::every_air_input_is_a_committed_fixture_texts_digest` holds that over the whole case set, and
+`tests::every_cases_inputs_are_the_ones_its_recording_was_taken_from` checks every committed
+recording against it with no tool and no device.
 
-**The consequence is sharper than nine skips, and it is the reason this section exists: a run off the
-recording host reports a ledger row whose case never compared as one that looks fixed.** Two rows did
-exactly that (`binary-archive-mesh-adder` at `case/program`, `binary-archive-sources` at
-`case/program/from-a-metallib/refused`). Neither is fixed. **Never retire a `known-gaps.tsv` row on
-the strength of a run made off the host that recorded the case**; the row's own verdict must be read
-where the case can compare.
+**The consequence was sharper than nine skips, and it is the reason this section exists: a run off
+the recording host reported a ledger row whose case never compared as one that looks fixed.** Two
+rows did exactly that (`binary-archive-mesh-adder` at `case/program`, `binary-archive-sources` at
+`case/program/from-a-metallib/refused`). Neither was fixed.
 
-The other input is the venue, which is the point of replaying elsewhere and needs no warning: a
-notice a case does not declare is a real difference on that driver, and a row scoped to a venue holds
-only there.
+So the rule stands, and is now mechanical as well: **a `known-gaps.tsv` row is never retired on the
+strength of a run whose case did not compare** — a run made off the recording host retires nothing
+unless the fingerprint covers the difference between the two hosts. An `Unrecorded` case holds no
+verdict, so `replay` reads no row of it in either direction: it reports the case as one the ledger
+cannot carry, and says nothing about the rows. The row's own verdict is read where the case
+compares.
+
+The venue is the other input, and it needs no warning: a notice a case does not declare is a real
+difference on that driver, and a row scoped to a venue holds only there.
 
 ## A site the venue honestly lacks
 

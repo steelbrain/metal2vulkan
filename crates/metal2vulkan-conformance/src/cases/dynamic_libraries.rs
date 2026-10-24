@@ -76,7 +76,7 @@ use crate::archives::{
     Bytes, DynamicSource, LibraryAt, Program, ProgramLibrary, ScratchFile, Source, Step,
 };
 use crate::case::{Abort, Case, Failure, Input, MetalSource, ShaderSource, Side};
-use crate::fixture::{Fixture, METAL_TEXT};
+use crate::fixture::{Fixture, METAL_TEXT, RUNTIME_TEXT};
 use crate::recording::ShaderRef;
 use crate::transcript::{Digest, Node, Observed, Sites};
 use metal2vulkan::metal::PixelFormat;
@@ -334,27 +334,22 @@ impl Case for DynamicLibraryCase {
 
     fn inputs(&self) -> Result<Vec<Input>, String> {
         let fixture = Fixture::new(FIXTURE);
-        let bitcode = fixture.bitcode()?;
-        let air_text = fixture.text(METAL_TEXT)?;
-        let source = ShaderSource {
-            bitcode: &bitcode,
-            air_text: &air_text,
-            entry: KERNEL,
-        };
-        let libraries = [ProgramLibrary {
-            source,
-            entries: ENTRIES,
-        }];
+        // The fixture's two committed texts, which are what the case states. Never the bitcode
+        // `llvm-as` assembles from the `.ll`: that moves with the host's LLVM release, and a
+        // fingerprint it was in could only ever match on the host that recorded the case.
         Ok(vec![
             Input {
                 name: "air".to_owned(),
-                digest: Digest::sha256(&bitcode),
+                digest: Digest::sha256(fixture.text(RUNTIME_TEXT)?.as_bytes()),
             },
             Input {
                 name: "air-typed".to_owned(),
-                digest: Digest::sha256(air_text.as_bytes()),
+                digest: Digest::sha256(fixture.text(METAL_TEXT)?.as_bytes()),
             },
-            Input::bytes("program", &self.program(&libraries).words()),
+            Input::bytes(
+                "program",
+                &crate::archives::program_words(ATTACHMENT, &[ENTRIES], self.steps),
+            ),
         ])
     }
 

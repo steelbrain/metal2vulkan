@@ -347,7 +347,7 @@ pub fn against(rows: &[Replayed], ledger: &[KnownGap]) -> Vec<Expectation> {
     // rest as fixed and a run on one venue does not read another venue's rows as fixed.
     for gap in ledger {
         for (row, gaps) in &held {
-            if row.case != gap.case || !gap.covers_venue(&row.venue) {
+            if row.case != gap.case || !gap.covers_venue(&row.venue) || !compared(row) {
                 continue;
             }
             let still = gaps.iter().any(|(case, expects, site, answer)| {
@@ -362,6 +362,21 @@ pub fn against(rows: &[Replayed], ledger: &[KnownGap]) -> Vec<Expectation> {
         }
     }
     found
+}
+
+/// Whether `row` compared against Metal at all, which is what the second direction needs before
+/// it may read a ledger row as fixed.
+///
+/// [`Verdict::Unrecorded`] is the one verdict that says nothing was compared: no Metal answer
+/// stands for the run, so the run holds no opinion about the case's rows in either direction. It
+/// already fails the run outright ([`Expectation::NotLedgerable`]) — what this stops is the run
+/// *also* saying every row of that case looks fixed, which is a claim about a comparison that did
+/// not happen and is the step at which a live row nearly got retired. Two cases of this suite read
+/// `Unrecorded` on every host but the one that recorded them, and the two ledger rows they carry
+/// were reported as looking fixed on an x86-64 llvmpipe run; the fingerprint those cases state is
+/// host-independent now, and this holds the reading whatever makes a case unrecorded next.
+fn compared(row: &Replayed) -> bool {
+    !matches!(row.verdict, Verdict::Unrecorded { .. })
 }
 
 /// Every gap one replayed row held, as the keys a ledger row is written in.
