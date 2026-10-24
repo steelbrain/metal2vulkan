@@ -221,12 +221,39 @@ pub(super) fn first_mipmap_in_tail(extent: [u64; 3], levels: u64, tile: [u64; 3]
         .unwrap_or(chain)
 }
 
+/// The least power of two at least `blocks`, and at least 1: how Metal pads each axis of a tail
+/// level ([`tail_size_in_bytes`]).
+fn padded(blocks: u64) -> u64 {
+    match blocks {
+        0 | 1 => 1,
+        _ => 1u64 << (u64::BITS - (blocks - 1).leading_zeros()),
+    }
+}
+
 /// Metal's `tailSizeInBytes` of a sparse texture of `texture_type` and `pf` at `samples`
 /// samples whose level 0 is `extent`, of `levels` levels, with its tail from `first` in pages of
-/// `page` bytes, over its chain ([`chain_levels`]): per slice, the bytes of the tail's levels in
-/// whole blocks, rounded up to whole pages; for a 3D texture, for each depth slice `d` of the first
-/// tail level, the bytes of slice `d` of each tail level that has one, rounded up to whole pages,
-/// summed; 0 without a tail (measured).
+/// `page` bytes, over its chain ([`chain_levels`]).
+///
+/// Per slice: the bytes of the tail's levels summed, then rounded up to whole pages. For a 3D
+/// texture, for each depth slice `d` of the first tail level, the bytes of slice `d` of each tail
+/// level that has one, rounded up to whole pages, summed. 0 without a tail.
+///
+/// **A tail level's bytes are not its blocks' bytes.** Each axis is padded to a power of two
+/// blocks ([`padded`]), and the level counts at least one tile row of blocks however small it is.
+/// Both were measured, and both are needed: fitted against the 153 rows the sparse-tail cases
+/// recorded on an Apple M3 Max (macOS 27.0.1), the plain product of the blocks is wrong on 13 of
+/// them and the padded product alone on 5, each short by exactly one page, while the two together
+/// reproduce every row. The shapes that need them are the extreme aspect ratios -- a 2D texture
+/// whose shorter axis is a handful of texels and whose longer is a thousand or more -- which is
+/// where a mip chain's tail holds many levels only a few texels wide.
+///
+/// The floor's **form** is not settled by those rows: one tile row of blocks fits, and so does one
+/// tile column, and so does any constant from 128 to 512 bytes. A texture whose tile is not square
+/// and whose tail levels land between the two would separate them, and the suite records none; a
+/// row of a format whose block is larger than one texel would say whether the padding counts
+/// blocks or texels, and the family describes no such format (its own docs say why). Until a case
+/// measures either, this is one tile row of blocks because that is the granule the rest of the
+/// model is stated in.
 pub(super) fn tail_size_in_bytes(
     texture_type: TextureType,
     pf: PixelFormat,
@@ -243,9 +270,13 @@ pub(super) fn tail_size_in_bytes(
     let Some((bytes, [block_width, block_height])) = tile_block(pf) else {
         return 0;
     };
+    let [tile_width, ..] = tile_texels(pf, samples, page);
+    let unit = bytes * samples.max(1);
+    let tile_row = tile_width.div_ceil(block_width) * unit;
     let slice_bytes = |level: u64| {
         let [width, height, _] = level_extent(extent, level);
-        width.div_ceil(block_width) * height.div_ceil(block_height) * bytes * samples.max(1)
+        let blocks = padded(width.div_ceil(block_width)) * padded(height.div_ceil(block_height));
+        (blocks * unit).max(tile_row)
     };
     let pages = |sum: u64| sum.div_ceil(page) * page;
     if texture_type != TextureType::Type3D {

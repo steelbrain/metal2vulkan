@@ -14,9 +14,9 @@ The suite reaches Metal through `objc2-metal`, whose Rust name for a binding is 
 
 Its limits, measured rather than asserted:
 
-- **1502 of 1671 call sites** in the Metal leg resolve to an item of the SDK. 53 of those resolve because only one type in `objc2-metal` binds the name at all, so no typing was needed.
+- **1502 of 1673 call sites** in the Metal leg resolve to an item of the SDK. 53 of those resolve because only one type in `objc2-metal` binds the name at all, so no typing was needed.
 - **2 call sites send a selector `objc2-metal` binds on no Metal type at all**, so they are an item of no Metal container and there is no count for them to cost: `alloc`, `class`, which are `NSObject`'s.
-- **128 call sites resolve to no item although some Metal type binds the selector**: an instance send whose receiver this could not type, or a message to a class that does not bind the name sent to it. Each sent its selector to exactly one receiver, so each exercised one item; which one is what the typing could not say. **Every one of their selectors is bound by at least one item some other call site credits**, so none of these sites proves an item is missing from the count. That is not a proof that the count is complete: such a site may have sent its selector to a type other than the credited one, and this cannot tell. To rule it out, spell the receiver's type at the call site — a `let` with a type, rather than a pattern binding or an inferred one — and this re-derives with the item credited to the case that calls it.
+- **130 call sites resolve to no item although some Metal type binds the selector**: an instance send whose receiver this could not type, or a message to a class that does not bind the name sent to it. Each sent its selector to exactly one receiver, so each exercised one item; which one is what the typing could not say. **Every one of their selectors is bound by at least one item some other call site credits**, so none of these sites proves an item is missing from the count. That is not a proof that the count is complete: such a site may have sent its selector to a type other than the credited one, and this cannot tell. To rule it out, spell the receiver's type at the call site — a `let` with a type, rather than a pattern binding or an inferred one — and this re-derives with the item credited to the case that calls it.
 - **0 call sites typed to a receiver that does not bind the selector sent to it.** The generator fails rather than writing this document if any does, which is what keeps the typing from quietly counting the wrong item.
 - **96 of the map's implemented rows are a container's own**: the `class`, `protocol` and `category` rows, whose name is the container's and not a selector's. No call site can resolve to one, because `objc2-metal` binds no selector by that name, so these are credited by the suite **messaging** the type instead — a call whose receiver is the container or a subtype of it — under the same gate and the same family attribution as the selector it sends.
 - **12 are the header's free functions**, which no container declares. `objc2-metal` binds these as Rust functions, so the receiver typing never sees one; the leg calls such a function by its own C name and the walk reads it as an edge of the call graph.
@@ -43,7 +43,7 @@ Its limits, measured rather than asserted:
 | committed recordings | 1100 |
 | distinct SDK items the Metal leg reaches, of any status | 797 |
 | of those, reached only where this cannot name the family | 5 |
-| ledger rows (a case whose gap is recorded) | 285 |
+| ledger rows (a case whose gap is recorded) | 272 |
 | declared crossings of the option space (pairs put to Metal at once) | 24 |
 | declared crossings that are no pair of it (a boolean or numeric field, or one type in two slots) | 30 |
 
@@ -539,7 +539,7 @@ An implemented container no case's Metal leg touches. These are the families of 
 | `Side` methods the Metal leg reaches an SDK item through | 118 |
 | SDK items a case's Metal leg reaches, median | 60 |
 | the same, least and most | 0 and 202 |
-| Metal call sites in the leg | 1671 |
+| Metal call sites in the leg | 1673 |
 | distinct selectors the leg sends | 634 |
 | of those, resolved to an item of the coverage map | 630 |
 | oracles the recordings name | `apple-m3-max` ×1100 |
@@ -2203,19 +2203,6 @@ A case whose difference from Metal is recorded rather than compared away. The le
 | `discard-quad-sum-placement` | Metal counts the quads the discard drops whole in a simdgroup sum that sits ahead of the discard for a measured reason -- the discard's condition reads the sum … |
 | `discard-quad-sum-placement` | Metal counts the quads the discard drops whole in a simdgroup sum that sits ahead of the discard for a measured reason -- the discard's condition reads the sum … |
 | `discard-quad-sum-placement` | Metal counts the quads the discard drops whole in a simdgroup sum that sits ahead of the discard for a measured reason -- the discard's condition reads the sum … |
-| `sparse-tails-wide-and-short` | Metal's `tailSizeInBytes` exceeds our sparse model's on extreme aspect ratios: a 2D texture whose shorter axis is a handful of texels while the longer is a thou… |
-| `sparse-tails-wide-and-short` | Metal's `tailSizeInBytes` exceeds our sparse model's on extreme aspect ratios: a 2D texture whose shorter axis is a handful of texels while the longer is a thou… |
-| `sparse-tails-wide-and-short` | Metal's `tailSizeInBytes` exceeds our sparse model's on extreme aspect ratios: a 2D texture whose shorter axis is a handful of texels while the longer is a thou… |
-| `sparse-tails-wide-and-short` | Metal's `tailSizeInBytes` exceeds our sparse model's on extreme aspect ratios: a 2D texture whose shorter axis is a handful of texels while the longer is a thou… |
-| `sparse-tails-wide-and-short` | Metal's `tailSizeInBytes` exceeds our sparse model's on extreme aspect ratios: a 2D texture whose shorter axis is a handful of texels while the longer is a thou… |
-| `sparse-tails-wide-and-short` | Metal's `tailSizeInBytes` exceeds our sparse model's on extreme aspect ratios: a 2D texture whose shorter axis is a handful of texels while the longer is a thou… |
-| `sparse-tails-wide-and-short` | Metal's `tailSizeInBytes` exceeds our sparse model's on extreme aspect ratios: a 2D texture whose shorter axis is a handful of texels while the longer is a thou… |
-| `sparse-tails-wide-and-short` | Metal's `tailSizeInBytes` exceeds our sparse model's on extreme aspect ratios: a 2D texture whose shorter axis is a handful of texels while the longer is a thou… |
-| `sparse-tails-wide-and-short` | Metal's `tailSizeInBytes` exceeds our sparse model's on extreme aspect ratios: a 2D texture whose shorter axis is a handful of texels while the longer is a thou… |
-| `sparse-tails-wide-and-short` | Metal's `tailSizeInBytes` exceeds our sparse model's on extreme aspect ratios: a 2D texture whose shorter axis is a handful of texels while the longer is a thou… |
-| `sparse-tails-wide-and-short` | Metal's `tailSizeInBytes` exceeds our sparse model's on extreme aspect ratios: a 2D texture whose shorter axis is a handful of texels while the longer is a thou… |
-| `sparse-tails-wide-and-short` | Metal's `tailSizeInBytes` exceeds our sparse model's on extreme aspect ratios: a 2D texture whose shorter axis is a handful of texels while the longer is a thou… |
-| `sparse-tails-wide-and-short` | Metal's `tailSizeInBytes` exceeds our sparse model's on extreme aspect ratios: a 2D texture whose shorter axis is a handful of texels while the longer is a thou… |
 | `argb8-targets-destination-alpha` | Plain Metal on this M3 Max makes and runs a render pipeline whose ARGB8Unorm colour attachment blends with DestinationAlpha and OneMinusDestinationAlpha in the … |
 | `compute-descriptor-reset` | Metal's `MTLComputePipelineDescriptor.reset` is PARTIAL. Measured on this M3 Max (macOS 27.0.1, build 26A434), from `compute-descriptor-reset`'s own committed r… |
 | `compute-descriptor-reset` | Metal's `MTLComputePipelineDescriptor.reset` is PARTIAL. Measured on this M3 Max (macOS 27.0.1, build 26A434), from `compute-descriptor-reset`'s own committed r… |

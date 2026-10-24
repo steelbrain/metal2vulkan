@@ -235,15 +235,16 @@ fn tails_by_texture_type() -> SparseHeapCase {
     }
 }
 
-/// Wide, short textures, whose recorded Metal answer **our model gets wrong**.
+/// Wide, short textures, whose recorded Metal answer is what **found two rules the model was
+/// missing**.
 ///
 /// These are the shapes where `firstMipmapInTail` is level 0 — one axis is already at most half a
-/// tile — so the whole mip chain is tail, and the chain is long because the other axis is wide. Our
-/// `sparse::tail_size_in_bytes` sums the tail's levels in whole blocks and rounds the sum up to
-/// whole pages once; Metal answers **more**, and by a different amount per format, so it is not one
-/// extra page bolted on. Measured on this M3 Max at 27.0.1:
+/// tile — so the whole mip chain is tail, and the chain is long because the other axis is wide,
+/// which is where a tail holds many levels only a few texels wide. The model summed each tail
+/// level's blocks and rounded the sum up to whole pages once; Metal answered more, by a different
+/// number of pages per format, on 13 of this case's rows. Measured on this M3 Max at 27.0.1:
 ///
-/// | texture | Metal | ours |
+/// | texture | Metal | the old model |
 /// |---|---|---|
 /// | `R32Float` 1000x3, 4 levels | 32768 | 16384 |
 /// | `RGBA32Float` 1000x3, 1 level | 65536 | 49152 |
@@ -251,10 +252,17 @@ fn tails_by_texture_type() -> SparseHeapCase {
 /// | `BGR10_XR` 1000x3, 4 levels | 32768 | 16384 |
 /// | `BGRA10_XR` 1000x3, 4 levels | 49152 | 32768 |
 ///
-/// The case is **kept divergent on purpose** and kept apart from the shapes the model gets right,
-/// so the regression net around it stays green while this one row says, by name and in the matrix,
-/// that the model is wrong here. Metal is the oracle, so the model is what has to move: this is a
-/// product bug in the runtime, not a tolerance to widen. Nothing here loosens the field.
+/// What the 13 rows established, fitted against every tail this family recorded, is that a tail
+/// level's bytes are **not** its blocks' bytes: each axis is padded to a power of two blocks, and
+/// a level counts at least one tile row however small it is. Both are needed — the plain product
+/// is wrong on all 13 and the padded product alone on 5, each short by exactly one page — and the
+/// two together reproduce every recorded row. `sparse::tail_size_in_bytes` now does that, and
+/// `metal2vulkan-runtime`'s `tests::sparse::every_recorded_mip_tail_is_metals` holds it to this
+/// family's recordings.
+///
+/// The case stays apart from the shapes the model always got right, because that is what made the
+/// difference readable: a family that mixed them would have reported 13 differences among 100
+/// agreements. Nothing here loosens the field — Metal is the oracle and the model is what moved.
 fn tails_wide_and_short() -> SparseHeapCase {
     let mut textures = Vec::new();
     for format in [

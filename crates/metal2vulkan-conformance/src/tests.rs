@@ -3054,45 +3054,22 @@ fn the_known_gaps_ledger_parses_and_names_real_cases() {
         );
     }
 
-    // The divergence rows this round left open over every venue: Metal's `tailSizeInBytes` on
-    // extreme aspect ratios, where our model is short by whole 16384-byte pages. Scoped `*`
-    // because the answer is CPU arithmetic over a descriptor, the same model on every device, and
-    // it was verified identical on both venues.
-    let tails: Vec<&crate::known_gaps::KnownGap> = ledger
-        .iter()
-        .filter(|known| known.case == crate::cases::sparse_heaps::TAILS_WIDE)
-        .collect();
-    assert_eq!(tails.len(), 13, "{ledger:?}");
-    for known in tails {
-        assert_eq!(known.expects, crate::known_gaps::Expects::Divergent);
-        assert_eq!(known.venue, crate::known_gaps::EVERY_VENUE, "{known:?}");
-        assert!(known.site.ends_with("/tail_size_in_bytes"), "{known:?}");
-        // Each row carries its own two numbers, and the shared description carries the one thing
-        // the thirteen of them establish together: the difference is whole pages, not a rounding.
-        // Each side's first decimal number: the answer prints "Metal 32768 (0x8000), ours 16384
-        // (0x4000)", so a naive digit scan would take the hex as the second value.
-        let first_number = |text: &str| -> u64 {
-            text.split_whitespace()
-                .find_map(|word| word.trim_end_matches(',').parse::<u64>().ok())
-                .unwrap_or_else(|| panic!("no number in {text:?}"))
-        };
-        let (metal, ours) = known
-            .answer
-            .split_once(", ours ")
-            .map(|(metal, ours)| (first_number(metal), first_number(ours)))
-            .unwrap_or_else(|| panic!("{known:?}"));
-        assert!(metal > ours, "{known:?}");
-        assert_eq!((metal - ours) % 16384, 0, "{known:?}");
+    // Two gaps this round closed, and the ledger holds rows in both directions, so a stale row
+    // for either would fail the run it is selected in. The tail gap was thirteen rows over every
+    // venue -- Metal's `tailSizeInBytes` on extreme aspect ratios, where the model was short by
+    // whole 16384-byte pages -- and the rule it was missing is now measured and held by
+    // `metal2vulkan-runtime`'s `tests::sparse::every_recorded_mip_tail_is_metals`. The shared
+    // event's two rows closed with `SharedEvent::device` answering nothing, as Metal's does.
+    for closed in [
+        crate::cases::sparse_heaps::TAILS_WIDE,
+        crate::cases::rate_maps::ZERO_SCREEN_WIDTH,
+        crate::cases::shared_events::HANDLE_ROUND_TRIP,
+    ] {
+        assert!(
+            !ledger.iter().any(|known| known.case == closed),
+            "{closed}'s gap is closed; its rows must be gone"
+        );
     }
-
-    // The zero-screen-width refusal is closed, so no row may name that case: the ledger holds
-    // rows in both directions and a stale row would fail the run it is selected in.
-    assert!(
-        !ledger
-            .iter()
-            .any(|known| known.case == crate::cases::rate_maps::ZERO_SCREEN_WIDTH),
-        "the zero-screen-width gap is closed; its row must be gone"
-    );
 }
 
 /// A malformed ledger is refused rather than read loosely: a row must carry all six fields, must

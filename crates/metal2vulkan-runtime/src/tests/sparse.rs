@@ -297,6 +297,116 @@ fn mip_tails_are_metal_s_rule() {
     }
 }
 
+/// **Every tail the sparse-tail cases recorded on Metal**, in 16-KiB pages: each shape that
+/// answers a tail of its own, with the `firstMipmapInTail` and the `tailSizeInBytes` Metal gave
+/// it.
+///
+/// The rows come from the committed recordings of `sparse-tails-by-shape`,
+/// `sparse-tails-by-texture-type` and `sparse-tails-wide-and-short` (an Apple M3 Max, macOS
+/// 27.0.1), one per texture type, format and shape that has a non-zero tail, so the table is the
+/// oracle's own answers rather than a restatement of the rule.
+///
+/// **The thirteen marked rows are what the model used to get wrong**, every one of them short by
+/// whole pages: they are the extreme aspect ratios, where a tail holds many levels a few texels
+/// wide, and they are the rows that need a level's axes padded to powers of two and a level
+/// floored at one tile row. The rest are unchanged by both and are here as the guard: a padding or
+/// a floor more eager than Metal's moves one of them and fails here.
+#[test]
+fn every_recorded_mip_tail_is_metals() {
+    use metal2vulkan::metal::PixelFormat as P;
+    use metal2vulkan::metal::TextureType as T;
+    let cases: &[(T, P, u64, [u64; 3], u64, u64, u64)] = &[
+        (T::Cube, P::R32Float, 1, [256, 256, 1], 4, 3, 16384),
+        (T::Cube, P::R32Float, 1, [256, 256, 1], 9, 3, 16384),
+        (T::Cube, P::RGBA8Unorm, 1, [256, 256, 1], 4, 3, 16384),
+        (T::Cube, P::RGBA8Unorm, 1, [256, 256, 1], 9, 3, 16384),
+        (T::CubeArray, P::R32Float, 1, [256, 256, 1], 4, 3, 16384),
+        (T::CubeArray, P::R32Float, 1, [256, 256, 1], 9, 3, 16384),
+        (T::CubeArray, P::RGBA8Unorm, 1, [256, 256, 1], 4, 3, 16384),
+        (T::CubeArray, P::RGBA8Unorm, 1, [256, 256, 1], 9, 3, 16384),
+        (T::Type2D, P::BGR10XR, 1, [1, 1, 1], 1, 0, 16384),
+        (T::Type2D, P::BGR10XR, 1, [3, 1000, 1], 1, 0, 16384),
+        (T::Type2D, P::BGR10XR, 1, [3, 1000, 1], 4, 0, 32768), // padded, or floored
+        (T::Type2D, P::BGR10XR, 1, [100, 37, 1], 4, 1, 16384),
+        (T::Type2D, P::BGR10XR, 1, [512, 2, 1], 1, 0, 16384),
+        (T::Type2D, P::BGR10XR, 1, [512, 2, 1], 4, 0, 16384),
+        (T::Type2D, P::BGR10XR, 1, [1000, 1, 1], 1, 0, 16384),
+        (T::Type2D, P::BGR10XR, 1, [1000, 1, 1], 4, 0, 16384),
+        (T::Type2D, P::BGR10XR, 1, [1000, 3, 1], 1, 0, 16384),
+        (T::Type2D, P::BGR10XR, 1, [1000, 3, 1], 4, 0, 32768), // padded, or floored
+        (T::Type2D, P::BGR10XR, 1, [2048, 4, 1], 1, 0, 32768),
+        (T::Type2D, P::BGR10XR, 1, [2048, 4, 1], 4, 0, 49152),
+        (T::Type2D, P::BGRA10XR, 1, [1, 1, 1], 1, 0, 16384),
+        (T::Type2D, P::BGRA10XR, 1, [3, 1000, 1], 1, 0, 32768),
+        (T::Type2D, P::BGRA10XR, 1, [3, 1000, 1], 4, 0, 49152), // padded, or floored
+        (T::Type2D, P::BGRA10XR, 1, [100, 37, 1], 4, 2, 16384),
+        (T::Type2D, P::BGRA10XR, 1, [512, 2, 1], 1, 0, 16384),
+        (T::Type2D, P::BGRA10XR, 1, [512, 2, 1], 4, 0, 16384),
+        (T::Type2D, P::BGRA10XR, 1, [1000, 1, 1], 1, 0, 16384),
+        (T::Type2D, P::BGRA10XR, 1, [1000, 1, 1], 4, 0, 32768), // padded, or floored
+        (T::Type2D, P::BGRA10XR, 1, [1000, 3, 1], 1, 0, 32768),
+        (T::Type2D, P::BGRA10XR, 1, [1000, 3, 1], 4, 0, 49152), // padded, or floored
+        (T::Type2D, P::BGRA10XR, 1, [2048, 4, 1], 1, 0, 65536),
+        (T::Type2D, P::BGRA10XR, 1, [2048, 4, 1], 4, 0, 98304),
+        (T::Type2D, P::R32Float, 1, [1, 1, 1], 1, 0, 16384),
+        (T::Type2D, P::R32Float, 1, [3, 1000, 1], 1, 0, 16384),
+        (T::Type2D, P::R32Float, 1, [3, 1000, 1], 4, 0, 32768), // padded, or floored
+        (T::Type2D, P::R32Float, 1, [100, 37, 1], 4, 1, 16384),
+        (T::Type2D, P::R32Float, 1, [512, 2, 1], 1, 0, 16384),
+        (T::Type2D, P::R32Float, 1, [512, 2, 1], 4, 0, 16384),
+        (T::Type2D, P::R32Float, 1, [1000, 1, 1], 1, 0, 16384),
+        (T::Type2D, P::R32Float, 1, [1000, 1, 1], 4, 0, 16384),
+        (T::Type2D, P::R32Float, 1, [1000, 3, 1], 1, 0, 16384),
+        (T::Type2D, P::R32Float, 1, [1000, 3, 1], 4, 0, 32768), // padded, or floored
+        (T::Type2D, P::R32Float, 1, [2048, 4, 1], 1, 0, 32768),
+        (T::Type2D, P::R32Float, 1, [2048, 4, 1], 4, 0, 49152),
+        (T::Type2D, P::R8Unorm, 1, [1, 1, 1], 1, 0, 16384),
+        (T::Type2D, P::R8Unorm, 1, [3, 1000, 1], 1, 0, 16384),
+        (T::Type2D, P::R8Unorm, 1, [3, 1000, 1], 4, 0, 16384),
+        (T::Type2D, P::R8Unorm, 1, [100, 37, 1], 1, 0, 16384),
+        (T::Type2D, P::R8Unorm, 1, [100, 37, 1], 4, 0, 16384),
+        (T::Type2D, P::R8Unorm, 1, [512, 2, 1], 1, 0, 16384),
+        (T::Type2D, P::R8Unorm, 1, [512, 2, 1], 4, 0, 16384),
+        (T::Type2D, P::R8Unorm, 1, [1000, 1, 1], 1, 0, 16384),
+        (T::Type2D, P::R8Unorm, 1, [1000, 1, 1], 4, 0, 16384),
+        (T::Type2D, P::R8Unorm, 1, [1000, 3, 1], 1, 0, 16384),
+        (T::Type2D, P::R8Unorm, 1, [1000, 3, 1], 4, 0, 16384),
+        (T::Type2D, P::R8Unorm, 1, [2048, 4, 1], 1, 0, 16384),
+        (T::Type2D, P::R8Unorm, 1, [2048, 4, 1], 4, 0, 16384),
+        (T::Type2D, P::RGBA32Float, 1, [1, 1, 1], 1, 0, 16384),
+        (T::Type2D, P::RGBA32Float, 1, [3, 1000, 1], 1, 0, 65536), // padded, or floored
+        (T::Type2D, P::RGBA32Float, 1, [3, 1000, 1], 4, 0, 98304), // padded, or floored
+        (T::Type2D, P::RGBA32Float, 1, [100, 37, 1], 4, 2, 16384),
+        (T::Type2D, P::RGBA32Float, 1, [512, 2, 1], 1, 0, 16384),
+        (T::Type2D, P::RGBA32Float, 1, [512, 2, 1], 4, 0, 32768),
+        (T::Type2D, P::RGBA32Float, 1, [1000, 1, 1], 1, 0, 16384),
+        (T::Type2D, P::RGBA32Float, 1, [1000, 1, 1], 4, 0, 49152), // padded, or floored
+        (T::Type2D, P::RGBA32Float, 1, [1000, 3, 1], 1, 0, 65536), // padded, or floored
+        (T::Type2D, P::RGBA32Float, 1, [1000, 3, 1], 4, 0, 98304), // padded, or floored
+        (T::Type2D, P::RGBA32Float, 1, [2048, 4, 1], 1, 0, 131072),
+        (T::Type2D, P::RGBA32Float, 1, [2048, 4, 1], 4, 0, 196608), // padded, or floored
+        (T::Type2D, P::RGBA8Unorm, 1, [256, 256, 1], 4, 3, 16384),
+        (T::Type2DArray, P::R32Float, 1, [256, 256, 1], 4, 3, 16384),
+        (T::Type2DArray, P::R32Float, 1, [256, 256, 1], 9, 3, 16384),
+        (T::Type2DArray, P::RGBA8Unorm, 1, [256, 256, 1], 4, 3, 16384),
+        (T::Type2DArray, P::RGBA8Unorm, 1, [256, 256, 1], 9, 3, 16384),
+        (T::Type3D, P::R32Float, 1, [256, 256, 64], 4, 3, 131072),
+        (T::Type3D, P::R32Float, 1, [256, 256, 64], 9, 3, 131072),
+        (T::Type3D, P::RGBA8Unorm, 1, [256, 256, 64], 4, 3, 131072),
+        (T::Type3D, P::RGBA8Unorm, 1, [256, 256, 64], 9, 3, 131072),
+    ];
+    for &(texture_type, pf, samples, extent, levels, first, tail) in cases {
+        let tile = tile_texels(pf, samples, K16);
+        let what = format!("{texture_type:?} {pf:?} {extent:?} {levels} levels, {samples} samples");
+        assert_eq!(first_mipmap_in_tail(extent, levels, tile), first, "{what}");
+        assert_eq!(
+            tail_size_in_bytes(texture_type, pf, samples, extent, levels, first, K16),
+            tail,
+            "{what}"
+        );
+    }
+}
+
 /// The conversions an M4 answered (64x64 tiles): outward covers, inward
 /// takes the tiles inside with a size that wraps when none is.
 #[test]
