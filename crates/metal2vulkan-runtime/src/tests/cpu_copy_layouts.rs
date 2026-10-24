@@ -272,3 +272,78 @@ fn two_plane_cpu_copies_wait_for_no_submission_where_a_textures_do() {
         );
     }
 }
+/// A block-compressed texture's `replaceRegion` waits for no submission on any device: the copy
+/// is staged for the device's next submission (`texture/first_move.rs`) where the image takes no
+/// host copies, and runs on the host where it does. Its `getBytes` waits for none either, but
+/// only where the device copies such an image's blocks on the host: a driver that copies a
+/// host-transfer image out of its memory as the memory is bound takes block formats off that
+/// path (`RuntimeDriverDefect::HostTransferImagesCopiedAtBind`, MoltenVK), and there the read
+/// goes through a staging buffer by a submission it waits for -- one a call, which is what the
+/// suite's `compressed-moves` cases spend their blocked time on.
+///
+/// The levels here are small and few, so the staged copies stay under the bound past which a
+/// `replaceRegion` makes a submission of its own (`first_move.rs`, `STAGED_BYTES` and
+/// `STAGED_COPIES`).
+#[test]
+fn block_cpu_copies_stage_their_writes_and_read_where_the_device_copies_on_the_host() {
+    let scratch = Scratch::new("block-cpu-copies");
+    let device = device(&scratch.0);
+    let format = PixelFormat::BC1RGBA;
+    let mut descriptor = TextureDescriptor::texture_2d(format, 13, 7, true);
+    descriptor.usage = TextureUsage::SHADER_READ;
+    descriptor.resource_options = ResourceOptions::shared();
+    let Ok(texture) = device.new_texture(&descriptor) else {
+        eprintln!("{}: no `BC1_RGBA` texture", device.name());
+        return;
+    };
+    let levels = texture.mipmap_level_count();
+    let mut written = [0; 3];
+    let mut read = [0; 3];
+    for level in 0..levels {
+        let (width, height) = ((13u64 >> level).max(1), (7u64 >> level).max(1));
+        let (blocks, lines) = (width.div_ceil(4), height.div_ceil(4));
+        // Rows two blocks past their blocks, as `compressed_moves`' `put` step pads them.
+        let row = 8 * (blocks + 2);
+        let bytes: Vec<u8> = (0..row * lines).map(|i| (i % 251) as u8).collect();
+        let region = Region::new_2d(0, 0, width, height);
+        let put = paths(&device, || {
+            (texture.replace_region(region, level, 0, &bytes, row, 0)).unwrap()
+        });
+        let mut back = vec![UNTOUCHED; bytes.len()];
+        let get = paths(&device, || {
+            (texture.get_bytes(&mut back, row, 0, region, level, 0)).unwrap()
+        });
+        // Each row's blocks, the padding past them left as the caller's bytes held it.
+        let mut wanted = vec![UNTOUCHED; bytes.len()];
+        for line in 0..lines {
+            let (at, blocks) = ((line * row) as usize, (8 * blocks) as usize);
+            wanted[at..at + blocks].copy_from_slice(&bytes[at..at + blocks]);
+        }
+        assert_eq!(back, wanted, "level {level} read back");
+        for (counted, one) in [(&mut written, put), (&mut read, get)] {
+            for (total, count) in counted.iter_mut().zip(one) {
+                *total += count;
+            }
+        }
+    }
+    let [host, staged, waited] = written;
+    let [read_host, read_staged, read_waited] = read;
+    eprintln!(
+        "{}: {levels} levels' writes took {host} copies on the host, {staged} on the staging \
+         queue and {waited} internal submissions, their reads {read_host}, {read_staged} and \
+         {read_waited}",
+        device.name()
+    );
+    assert_eq!(
+        waited, 0,
+        "a block-compressed texture's `replaceRegion` waited for an internal submission"
+    );
+    // Where the device reads such an image's blocks on the host, so does `getBytes`.
+    if read_host > 0 {
+        assert_eq!(
+            [read_host, read_waited],
+            [levels, 0],
+            "a block-compressed texture's `getBytes` waited for an internal submission"
+        );
+    }
+}
