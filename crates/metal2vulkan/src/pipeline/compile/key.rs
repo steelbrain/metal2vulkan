@@ -24,8 +24,8 @@ use crate::cache::{Hash256, PipelineKey, SEMANTICS_VERSION};
 use crate::library::{FunctionCompileKey, FunctionConstantValues};
 use crate::lower::select::LowerInputs;
 use crate::pipeline::descriptor::{
-    LinkedList, PrivateRenderState, RenderPipelineDescriptor, StageInputDescriptor, StageSource,
-    TessellationDescriptor,
+    LinkedList, MeshPipelineDescriptor, PrivateRenderState, RenderPipelineDescriptor,
+    StageInputDescriptor, StageSource, TessellationDescriptor,
 };
 
 /// What a compile key records of one linked function: the list it is in, its name, its AIR hash,
@@ -536,6 +536,58 @@ pub fn pipeline_key(
         h.bytes(s.digest());
     }
     h.bytes(fields.as_bytes());
+    PipelineKey::new(h.finish())
+}
+
+/// The key of mesh render pipeline descriptor `d` for the profile of fingerprint `profile`
+/// (`Device::mesh_descriptor_key`): each stage by `stage`'s kind and digest, then every other
+/// field of `d`, as [`render_descriptor_key`] writes a render descriptor's, and each named here
+/// so that a field added to the descriptor does not compile until the key reads it.
+pub(crate) fn mesh_descriptor_key(
+    profile: &Hash256,
+    d: &MeshPipelineDescriptor,
+    stage: impl Fn(&StageSource) -> (u64, Hash256),
+) -> PipelineKey {
+    let MeshPipelineDescriptor {
+        object,
+        mesh,
+        fragment,
+        color_attachments,
+        depth_format,
+        stencil_format,
+        raster_sample_count,
+        rasterization_enabled,
+        alpha_to_coverage,
+        alpha_to_one,
+        support_indirect_command_buffers,
+        texture_write_rounding_mode,
+    } = d;
+    let mut h = KeyHasher::new(b"metal2vulkan/mesh-descriptor-key/v1");
+    h.bytes(profile);
+    for source in [object.as_ref(), Some(mesh), fragment.as_ref()] {
+        match source {
+            Some(source) => {
+                let (kind, digest) = stage(source);
+                h.u64(kind).bytes(&digest);
+            }
+            // As `render_descriptor_key` writes a descriptor without a fragment stage: a stage a
+            // descriptor does not have is told apart from every stage it could have.
+            None => {
+                h.u64(u64::MAX);
+            }
+        }
+    }
+    let fields = [
+        format!("{color_attachments:?}"),
+        format!("{depth_format:?} {stencil_format:?}"),
+        format!("{raster_sample_count} {alpha_to_coverage} {alpha_to_one}"),
+        format!("{rasterization_enabled} {support_indirect_command_buffers}"),
+        format!("{texture_write_rounding_mode:?}"),
+    ];
+    h.u64(fields.len() as u64);
+    for field in &fields {
+        h.bytes(field.as_bytes());
+    }
     PipelineKey::new(h.finish())
 }
 

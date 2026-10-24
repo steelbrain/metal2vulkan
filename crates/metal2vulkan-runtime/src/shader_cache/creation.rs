@@ -57,6 +57,13 @@ pub(crate) struct CreationMemo {
     linked: Mutex<Lru<PipelineKey, LinkedUseAnswers>>,
     pipelines: Mutex<Lru<(PipelineKey, VariantKey), PipelineKey>>,
     reflections: Mutex<Lru<PipelineKey, RenderPipelineReflection>>,
+    /// How many reflections the device has worked out, for the check that every state of one
+    /// descriptor shares one ([`ShaderCache::reflections_derived`]). Working one out decodes the
+    /// descriptor's stages' AIR, and a count of that is deterministic where a time is not; it is
+    /// of this device and its cache directory, so a test that reads it gives the device a
+    /// directory of its own.
+    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+    derived: std::sync::atomic::AtomicU64,
 }
 
 impl CreationMemo {
@@ -66,6 +73,8 @@ impl CreationMemo {
             linked: Mutex::new(Lru::counted(ENTRIES)),
             pipelines: Mutex::new(Lru::counted(ENTRIES)),
             reflections: Mutex::new(Lru::counted(ENTRIES)),
+            #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+            derived: std::sync::atomic::AtomicU64::new(0),
         }
     }
 }
@@ -159,7 +168,21 @@ impl ShaderCache {
         if let Some(reflection) = self.kept_render_reflection(compile, key) {
             return Ok(reflection);
         }
-        Ok(self.keep_render_reflection(compile, key, work()?))
+        let made = work()?;
+        #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+        self.creation
+            .derived
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        Ok(self.keep_render_reflection(compile, key, made))
+    }
+
+    /// How many reflections the device has worked out through
+    /// [`render_reflection`](Self::render_reflection) ([`CreationMemo::derived`]).
+    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+    pub(crate) fn reflections_derived(&self) -> u64 {
+        self.creation
+            .derived
+            .load(std::sync::atomic::Ordering::Relaxed)
     }
 
     /// The reflection of the render descriptor of `key` on `compile` the memo keeps, else the

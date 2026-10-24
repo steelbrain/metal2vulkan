@@ -641,7 +641,10 @@ impl Device {
     /// `None` when it does not, as Metal leaves `reflection` nil. The reflection is
     /// `MeshPipelineDescriptor::reflection`'s (its object, mesh and fragment bindings) of the
     /// descriptor the state was made from, with the dynamic libraries its creation loaded, under
-    /// the creation's budget; what it refuses refuses the call (`Unsupported`, `Compile`).
+    /// the creation's budget; what it refuses refuses the call (`Unsupported`, `Compile`). It
+    /// comes from the shader cache under the descriptor's key
+    /// (`Device::mesh_descriptor_key`), so every state of one descriptor shares one answer rather
+    /// than decoding the three stages' AIR again.
     pub fn new_mesh_render_pipeline_state_with_reflection(
         &self,
         descriptor: &MeshPipelineDescriptor,
@@ -649,8 +652,18 @@ impl Device {
     ) -> Result<(RenderPipelineState, Option<RenderPipelineReflection>), Error> {
         let state = GraphicsState::create_mesh(self, descriptor, options)?;
         let reflection = match (options.options.reflects(), state.descriptor()) {
+            // Through the shader cache under the descriptor's key, as a drawing pipeline's
+            // reflection goes: it decodes the object, mesh and fragment functions' AIR, and
+            // Metal answers every state of one descriptor from the library it compiled once.
             (true, StateDescriptor::Mesh(loaded)) => {
-                Some(loaded.reflection(&options.budget()).map_err(device_error)?)
+                let compile = self.compile_device();
+                let cache = &self.shared().shader_cache;
+                let key = compile.mesh_descriptor_key(loaded);
+                Some(
+                    cache
+                        .render_reflection(compile, &key, || loaded.reflection(&options.budget()))
+                        .map_err(device_error)?,
+                )
             }
             (true, StateDescriptor::Vertex(_)) => {
                 return Err(internal("a mesh state made of a render descriptor"))
@@ -1740,9 +1753,10 @@ impl GraphicsState {
 
     /// The pipeline's reflection ([`RenderPipelineState::compiled_reflection`]) of the descriptor
     /// it draws as (with the dynamic libraries its creation loaded), as its creation's
-    /// out-parameter answers it: a drawing pipeline's the shader cache's for the descriptor's key,
-    /// worked out under `budget` and kept where it holds none; a mesh pipeline's worked out under
-    /// `budget`.
+    /// out-parameter answers it: the shader cache's for the descriptor's key, worked out under
+    /// `budget` and kept where it holds none, for a mesh pipeline as for a drawing one -- so every
+    /// state of one descriptor, and every read of one state's, share the one answer, where Metal
+    /// answers each from the library it compiled once.
     pub(crate) fn reflection(
         &self,
         budget: &metal2vulkan::Budget,
@@ -1757,7 +1771,12 @@ impl GraphicsState {
                     .map_err(device_error)
             }
             StateDescriptor::Mesh(descriptor) => {
-                descriptor.reflection(budget).map_err(device_error)
+                let device = &self.0.device;
+                let compile = device.compile_device();
+                let key = compile.mesh_descriptor_key(descriptor);
+                let cache = &device.shared().shader_cache;
+                (cache.render_reflection(compile, &key, || descriptor.reflection(budget)))
+                    .map_err(device_error)
             }
         }
     }

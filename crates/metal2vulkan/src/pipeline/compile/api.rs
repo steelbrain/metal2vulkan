@@ -36,7 +36,9 @@ use crate::pipeline::artifact::{
     ComputePipeline, ComputePipelineMetalInfo, PrecisionNote, RenderPipeline, RuntimeDependency,
     StageModule,
 };
-use crate::pipeline::compile::key::{function_key, pipeline_key, render_descriptor_key};
+use crate::pipeline::compile::key::{
+    function_key, mesh_descriptor_key, pipeline_key, render_descriptor_key,
+};
 use crate::pipeline::compile::{
     color_group, compile_stage, compile_stage_from, dynamic_order, guarded, linked_keys,
     primitive_id_carried_on, reads_primitive_id_varying, stage_inputs, FragmentPass, InputsFrom,
@@ -145,6 +147,31 @@ impl Device {
             StageSource::Compiled(c) => (1, *c.key().digest()),
         };
         render_descriptor_key(&self.profile_fingerprint(), d, stage)
+    }
+
+    /// The key of mesh render pipeline descriptor `d` on this device, without decoding, as
+    /// [`Device::render_descriptor_key`] keys a render descriptor: a digest of every field of `d`,
+    /// each `Function` stage by its [`Device::function_compile_key`] under the default lowering
+    /// inputs, each `Compiled` stage by its key, with this device's profile fingerprint and
+    /// [`SEMANTICS_VERSION`](crate::cache::SEMANTICS_VERSION).
+    ///
+    /// The descriptor's [`reflection`](MeshPipelineDescriptor::reflection) and
+    /// [`slot_writes`](MeshPipelineDescriptor::slot_writes) are a function of this key, so a
+    /// consumer may keep either under it and ask for it once however many states it makes of the
+    /// descriptor. Both read the three stages alone, so the key is wider than they need; it is
+    /// every field so that it means this descriptor on this device, as the render form does. The
+    /// crate keeps no cache.
+    pub fn mesh_descriptor_key(&self, d: &MeshPipelineDescriptor) -> crate::cache::PipelineKey {
+        let stage = |s: &StageSource| match s {
+            StageSource::Function(f) => (
+                0,
+                *self
+                    .function_compile_key(f, &LoweringInputs::default())
+                    .digest(),
+            ),
+            StageSource::Compiled(c) => (1, *c.key().digest()),
+        };
+        mesh_descriptor_key(&self.profile_fingerprint(), d, stage)
     }
 
     /// Compile `f` under `inp` for this device. The result is keyed by

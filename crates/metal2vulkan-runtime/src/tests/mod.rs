@@ -132,6 +132,8 @@ mod managed;
 mod memo;
 mod memory;
 mod memory_reads;
+#[cfg(any(m2v_gpu, m2v_cpu_icd))]
+mod mesh_reflection_derived;
 mod metal_level;
 mod mipmap;
 mod mipmap_plan;
