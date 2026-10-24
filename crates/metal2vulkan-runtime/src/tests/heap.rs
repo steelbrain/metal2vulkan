@@ -689,6 +689,70 @@ fn every_image_alignment_measured_fits_a_heap_s_base() {
     assert!((BLOCK_BYTES / 2).is_multiple_of(HEAP_BASE_ALIGNMENT));
 }
 
+/// A placement offset is held to Metal's own alignment, not this device's answer, for a texture
+/// whose image lies in memory of its own, and to the answer's for one whose image binds to the
+/// heap's memory there (`texture/heap.rs`'s `placement_align`). A Navi31 4-sample `Depth32Float`
+/// texture answers 128 KiB where Metal answers 128 bytes, and a heap over host pages holds such a
+/// texture's samples in Metal's tiles with its image in memory of its own: offset 327680, which
+/// Metal makes the texture at, was refused nil while the answer's alignment held it.
+#[test]
+fn a_placement_offset_is_held_to_metals_alignment_where_the_image_lies_apart() {
+    use crate::heap::SizeAndAlign;
+    use crate::texture::heap::{placement_align, AliasRoute};
+    let metal = SizeAndAlign {
+        size: 64 << 10,
+        align: 128,
+    };
+    let answered = 128 << 10;
+    let own = [
+        AliasRoute::Tiled,
+        AliasRoute::Lossless,
+        AliasRoute::MemoryShadow,
+        AliasRoute::Planes,
+        AliasRoute::Unaliased,
+    ];
+    let bound = [
+        AliasRoute::Direct,
+        AliasRoute::HostTransfer,
+        AliasRoute::Linear,
+        AliasRoute::Hidden,
+        AliasRoute::Compressed,
+        AliasRoute::Shadow,
+        AliasRoute::Apart,
+    ];
+    for route in own {
+        assert!(route.in_own_memory(), "{route:?}");
+        assert_eq!(
+            placement_align(route, answered, Some(metal)),
+            metal.align,
+            "{route:?}"
+        );
+        // 327680 is a multiple of Metal's 128 and not of the answered 128 KiB.
+        assert!(!327680u64.is_multiple_of(answered));
+        assert!(327680u64.is_multiple_of(placement_align(route, answered, Some(metal))));
+        // Metal's answer unknown: the device's own stands.
+        assert_eq!(
+            placement_align(route, answered, None),
+            answered,
+            "{route:?}"
+        );
+    }
+    for route in bound {
+        assert!(!route.in_own_memory(), "{route:?}");
+        assert_eq!(
+            placement_align(route, answered, Some(metal)),
+            answered,
+            "{route:?}"
+        );
+    }
+    // Never coarser than the answer, whatever Metal answers.
+    let coarse = SizeAndAlign {
+        size: 16 << 10,
+        align: 16 << 10,
+    };
+    assert_eq!(placement_align(AliasRoute::Tiled, 128, Some(coarse)), 128);
+}
+
 /// A heap's depth or stencil texture held as a shadow of the heap's bytes keeps each aspect in
 /// planes of its own, from the texture's first byte: the depth's levels in order, then the
 /// stencil's, each level one region of all its layers' texels tightly packed (`Depth16Unorm` 2

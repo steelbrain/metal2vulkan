@@ -118,7 +118,11 @@
 //!   is a multiple of the alignment with the texture's bytes inside the heap, overlapping other
 //!   resources or not (Metal: an offset not a multiple of the alignment is stopped by validation
 //!   and answers nil without it, and so does one past the heap's end:
-//!   the runtime answers `Nil`). The texture's storage and CPU cache modes are the heap's (another
+//!   the runtime answers `Nil`). The alignment an offset is held to is Metal's own, not this
+//!   device's answer, for a texture whose image lies in memory of its own (`HeapPlan::placement`):
+//!   no image binds to the heap's memory there, so the heap's bytes hold the texture's layout
+//!   alone, and every offset Metal makes the texture at makes it here. An automatic heap still
+//!   places by the answer, which its `usedSize` follows. The texture's storage and CPU cache modes are the heap's (another
 //!   is `Invalid`, as Metal ends the process), and its hazard tracking is the heap's buffer's, so
 //!   Metal's tracking at the granularity of the heap orders a buffer's write before an
 //!   overlapping texture's read. A new texture holds what its bytes held: the image is moved to
@@ -476,7 +480,7 @@ impl HeapShadow {
 
 /// How a heap texture's image shows writes through the heap's other resources over its bytes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum AliasRoute {
+pub(crate) enum AliasRoute {
     /// As an image bound to memory: on a driver whose compressed images hide no write through
     /// an alias, a depth or stencil image, a depth twin, or a linear image for the heap's memory.
     Direct,
@@ -537,6 +541,22 @@ enum AliasRoute {
     Lossless,
 }
 
+impl AliasRoute {
+    /// Whether the image lies in memory of its own, so that no image of the texture binds to the
+    /// heap's memory at its offset: the heap's bytes hold the texture's own layout there, which
+    /// the encoders move to and from the image, or nothing of it (`Unaliased`).
+    pub(crate) fn in_own_memory(self) -> bool {
+        matches!(
+            self,
+            AliasRoute::MemoryShadow
+                | AliasRoute::Unaliased
+                | AliasRoute::Planes
+                | AliasRoute::Lossless
+                | AliasRoute::Tiled
+        )
+    }
+}
+
 /// Whose image of a heap texture an image is.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Mine {
@@ -592,9 +612,38 @@ struct HeapPlan {
     /// multiple of its own alignment, inside the texture's size.
     twin: Option<(HeapImage, u64)>,
     size_and_align: SizeAndAlign,
+    /// Metal's own answer for the descriptor where the runtime knows it
+    /// (`heap_tiled::metal_heap_layout`, `Device::metal_heap_answer`), whatever this device
+    /// answers: what a placement offset is held to where the image lies in memory of its own
+    /// ([`HeapPlan::placement`]).
+    metal_answer: Option<SizeAndAlign>,
     /// Metal's layout of the texture's bytes as the runtime holds it (`heap_tiled.rs`): over host
     /// pages, tiled or announced untiled.
     metal_layout: HeapLayout,
+}
+
+impl HeapPlan {
+    /// The size and alignment a placement offset is held to ([`heap_offset`]):
+    /// [`placement_align`] with the answer's size.
+    fn placement(&self) -> SizeAndAlign {
+        let SizeAndAlign { size, align } = self.size_and_align;
+        SizeAndAlign {
+            size,
+            align: placement_align(self.image.route, align, self.metal_answer),
+        }
+    }
+}
+
+/// The alignment a placement offset is held to for a texture of `route` the device answers
+/// `align`, where Metal answers `metal` ([`heap_offset`]): `align`, but Metal's for a texture
+/// whose image lies in memory of its own ([`AliasRoute::in_own_memory`]). No image binds to the
+/// heap's memory at such an offset: the heap's bytes hold the texture's layout there alone, so
+/// every offset Metal makes the texture at makes it here, and refusing one would refuse a texture
+/// Metal makes. `align` is the larger of the image's and Metal's, so this never asks for more
+/// than the answer, and never for less than Metal.
+pub(crate) fn placement_align(route: AliasRoute, align: u64, metal: Option<SizeAndAlign>) -> u64 {
+    let metal = metal.filter(|_| route.in_own_memory());
+    metal.map_or(align, |metal| metal.align.min(align))
 }
 
 /// The memory types a heap's buffer and the images in it take, worked out once
@@ -1160,8 +1209,9 @@ pub(crate) fn check_heap_base(align: u64) -> Result<(), Error> {
 pub(crate) const HEAP_TEXTURE_REFUSED: &str = "metal2vulkan-heap-texture-refused";
 
 /// What a heap texture's making planned before it was refused: the size and alignment it places
-/// the texture by, and its image's route, tiling and memory requirements (`None` for a texture
-/// buffer, which has no image).
+/// the texture by ([`HeapPlan::placement`], Metal's alignment where the image lies in memory of
+/// its own), and its image's route, tiling and memory requirements (`None` for a texture buffer,
+/// which has no image).
 #[derive(Clone, Copy)]
 struct Planned {
     size_and_align: SizeAndAlign,
@@ -1173,7 +1223,7 @@ impl Planned {
     fn of(p: &HeapPlan) -> Planned {
         let image = &p.image;
         Planned {
-            size_and_align: p.size_and_align,
+            size_and_align: p.placement(),
             image: Some((image.route, image.tiling, image.requirements)),
         }
     }
@@ -1260,22 +1310,27 @@ fn refused_text(
     )
 }
 
-/// Where a resource of `size` bytes at a multiple of `align` lies in `heap` for `call`: at
-/// `offset` of a placement heap, refused off the alignment or past the heap's end (`Nil`, as plain
-/// Metal answers nil, its validation stopping it), or at the lowest offset with room of an
-/// automatic heap when `None`, then taken (`OutOfMemory(Heap)` without room).
+/// Where a resource of `size` bytes lies in `heap` for `call`: at `offset` of a placement heap,
+/// refused off the alignment `place` answers or past the heap's end (`Nil`, as plain Metal answers
+/// nil, its validation stopping it), or at the lowest offset with room of an automatic heap when
+/// `None`, a multiple of the `taken` alignment (the answer's, which the heap's `usedSize`
+/// follows), then taken (`OutOfMemory(Heap)` without room). The two differ only for a texture
+/// whose image lies in memory of its own, which binds no image at the offset
+/// ([`HeapPlan::placement`]).
 fn heap_offset(
     heap: &Heap,
     call: &'static str,
-    SizeAndAlign { size, align }: SizeAndAlign,
+    taken: SizeAndAlign,
+    place: SizeAndAlign,
     offset: Option<u64>,
 ) -> Result<u64, Error> {
+    let SizeAndAlign { size, align } = taken;
     let Some(offset) = offset else {
         return heap
             .allocate(size, align)
             .ok_or(Error::OutOfMemory(MemoryKind::Heap));
     };
-    if !offset.is_multiple_of(align) {
+    if !offset.is_multiple_of(place.align) {
         return Err(nil(call, Problem::Heap(HeapProblem::Offset { offset })));
     }
     if offset.checked_add(size).is_none_or(|end| end > heap.size()) {
@@ -1719,6 +1774,7 @@ impl Device {
             image,
             twin: twin.zip(twin_offset),
             size_and_align,
+            metal_answer,
             metal_layout,
         })
     }
@@ -2122,7 +2178,7 @@ impl Device {
                 descriptor.usage,
                 layout.texture_type,
             )?;
-            let offset = heap_offset(heap, call, size_and_align, offset)?;
+            let offset = heap_offset(heap, call, size_and_align, size_and_align, offset)?;
             // The buffer's drop gives an automatic heap's range back.
             let buffer = heap.placed_buffer(&bytes, offset, size_and_align.size, options);
             let id_use = IdUse::Program(descriptor.placement);
@@ -2142,7 +2198,7 @@ impl Device {
         if bytes.caller_memory() == Some(CallerMemory::HostPages) {
             let p = self.host_heap_plan(call, p, descriptor, &bytes)?;
             *planned = Some(Planned::of(&p));
-            let offset = heap_offset(heap, call, p.size_and_align, offset)?;
+            let offset = heap_offset(heap, call, p.size_and_align, p.placement(), offset)?;
             let place = HeapPlace::new(heap, offset, p.size_and_align.size, false);
             return self.heap_texture_at((call, heap), &bytes, p, place, options, descriptor);
         }
@@ -2150,19 +2206,12 @@ impl Device {
         let images = std::iter::once(&p.image).chain(p.twin.as_ref().map(|(twin, _)| twin));
         for image in images {
             // A shadowed or unaliased image lies in memory of its own.
-            let own_memory = matches!(
-                image.route,
-                AliasRoute::MemoryShadow
-                    | AliasRoute::Unaliased
-                    | AliasRoute::Planes
-                    | AliasRoute::Lossless
-                    | AliasRoute::Tiled
-            );
+            let own_memory = image.route.in_own_memory();
             if !own_memory && image.requirements.memory_type_bits & (1 << type_index) == 0 {
                 return Err(image.memory_refusal());
             }
         }
-        let offset = heap_offset(heap, call, p.size_and_align, offset)?;
+        let offset = heap_offset(heap, call, p.size_and_align, p.placement(), offset)?;
         // A placement heap's texture answers aliasable from the start, as Metal's does.
         let aliasable = heap.heap_type() == HeapType::Placement;
         let place = HeapPlace::new(heap, offset, p.size_and_align.size, aliasable);

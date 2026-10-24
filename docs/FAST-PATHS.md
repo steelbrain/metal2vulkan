@@ -702,11 +702,6 @@ driver's. Each is open work.
   neither pixel is required; both choices conform and there is no Vulkan control over the tie, so
   this is the driver's and not ours. RADV and ANV unrun.
 
-- **A heap texture at an offset below the device's own alignment on Navi31**: `new_texture_at_offset`
-  answers nil at offset 327680, two and a half times the 128 KiB a Navi31 depth image wants
-  (`texture/heap.rs`, whose `HEAP_BASE_ALIGNMENT` of 256 KiB no longer refuses the alignment itself).
-  One of eight `heap_layouts` tests; the other seven pass.
-
 - **Reflection after a compute descriptor reset on RADV**: `max_total_threads_per_threadgroup`
   answers 0 where Metal answers 96, `required_threads_per_threadgroup` `0x0x0` where Metal answers
   `8x6x2`, and `threadgroup_size_is_multiple_of_execution_width` false where Metal answers true

@@ -3274,7 +3274,11 @@ each item named states the rule in full.
 **Heaps and memory**
 
 - **A heap's size and alignment answers are the device's own**
-  (`Device::heap_texture_size_and_align`): the requirement of the image the runtime makes.
+  (`Device::heap_texture_size_and_align`): the requirement of the image the runtime makes. A
+  placement heap's `newTextureWithDescriptor:offset:` is held to Metal's own alignment, not that
+  answer, for a texture whose image lies in memory of its own (a shadow of the heap's bytes, a
+  multisample texture's samples in Metal's tiles): no image binds to the heap's memory there, so
+  every offset Metal makes the texture at makes it here.
 - **A heap's texture answers the size that placed it** (`Texture::allocated_size`, Metal's
   `allocatedSize`): the size query's answer for its descriptor, a view's its texture's, as Metal
   answers; `None` for a texture outside a heap, whose Metal answer the runtime does not model.
