@@ -131,6 +131,7 @@ pub mod pipeline_option_reflection;
 pub mod pipeline_options;
 pub mod pixel_downscales;
 pub mod pixel_samplers;
+pub mod primitive_type_crossings;
 pub mod pvrtc_cpu_order;
 pub mod pvrtc_rows;
 pub mod rate_map_sweeps;
@@ -164,6 +165,7 @@ pub mod stencil_resolve_pairs;
 pub mod stencil_resolved_sample;
 pub mod surface_fills;
 pub mod swizzled_storage;
+pub mod tessellation_crossings;
 pub mod tessellation_sweeps;
 pub mod texel_swizzles;
 pub mod texture_accesses;
@@ -317,6 +319,7 @@ pub fn all() -> Vec<Box<dyn Case>> {
         cases.push(Box::new(case));
     }
     cases.extend(tessellation_sweeps::boxed());
+    cases.extend(tessellation_crossings::boxed());
     for case in attribute_formats::all() {
         cases.push(Box::new(case));
     }
@@ -524,6 +527,7 @@ pub fn all() -> Vec<Box<dyn Case>> {
     cases.extend(draw_state_changes::boxed());
     cases.extend(render_state::all());
     cases.extend(render_draw_forms::all());
+    cases.extend(primitive_type_crossings::boxed());
     cases.extend(render_depth_stencil_state::all());
     cases.extend(depth_stencil_space::all());
     cases.extend(depth_resolve_pairs::all());

@@ -85,10 +85,10 @@ use metal2vulkan_runtime::Degradation;
 
 /// The target's format: four `uint`s a texel, which is the `uint4` the fragment function returns,
 /// stored as it is. The whole expectation is integer arithmetic.
-const FORMAT: PixelFormat = PixelFormat::RGBA32Uint;
+pub(super) const FORMAT: PixelFormat = PixelFormat::RGBA32Uint;
 
 /// Bytes one texel of [`FORMAT`] takes.
-const TEXEL: u32 = 16;
+pub(super) const TEXEL: u32 = 16;
 
 /// Every target here is this many pixels wide, which is also how many vertices a row of the points
 /// case's position grid holds.
@@ -368,7 +368,7 @@ fn frames_buffer(rows: &[Row], size: [u32; 2]) -> Vec<u8> {
 }
 
 /// The positions buffer: `xy` as a case lays it out, two `float`s a vertex.
-fn positions_buffer(positions: &[[f32; 2]]) -> Vec<u8> {
+pub(super) fn positions_buffer(positions: &[[f32; 2]]) -> Vec<u8> {
     positions
         .iter()
         .flat_map(|at| {
@@ -439,18 +439,18 @@ fn arguments_buffer(rows: &[Row]) -> Vec<u8> {
 // The shape every case shares
 
 /// The target a case draws into: a private render target of [`FORMAT`], render-target usage alone.
-fn target_spec(size: [u32; 2]) -> TargetSpec {
+pub(super) fn target_spec(size: [u32; 2]) -> TargetSpec {
     TargetSpec::plain(FORMAT, size)
 }
 
 /// Bytes the whole of a `size` level 0 takes.
-fn plane(size: [u32; 2]) -> u32 {
+pub(super) fn plane(size: [u32; 2]) -> u32 {
     TEXEL * size[0] * size[1]
 }
 
 /// The layout a target's level 0 is read under: one row of the layout a row of texels, one element
 /// a channel, and the bytes between the rows compared.
-fn layout(size: [u32; 2]) -> ByteLayout {
+pub(super) fn layout(size: [u32; 2]) -> ByteLayout {
     let row_pitch = TEXEL * size[0];
     ByteLayout {
         region: Region::Texture {
@@ -473,7 +473,7 @@ fn layout(size: [u32; 2]) -> ByteLayout {
 }
 
 /// The shader reference both texts of the one fixture give.
-fn shader_refs() -> Result<Vec<ShaderRef>, String> {
+pub(super) fn shader_refs() -> Result<Vec<ShaderRef>, String> {
     let fixture = Fixture::new(FIXTURE);
     [RUNTIME_TEXT, METAL_TEXT]
         .into_iter()
@@ -488,7 +488,7 @@ fn shader_refs() -> Result<Vec<ShaderRef>, String> {
 }
 
 /// The two inputs the fixture's own texts are.
-fn fixture_inputs() -> Result<Vec<Input>, String> {
+pub(super) fn fixture_inputs() -> Result<Vec<Input>, String> {
     let fixture = Fixture::new(FIXTURE);
     Ok(vec![
         Input {
@@ -503,7 +503,7 @@ fn fixture_inputs() -> Result<Vec<Input>, String> {
 }
 
 /// The library of the module's one fixture.
-fn library(side: &mut dyn Side, sites: &mut Sites) -> Result<Handle, Abort> {
+pub(super) fn library(side: &mut dyn Side, sites: &mut Sites) -> Result<Handle, Abort> {
     let loaded = Fixture::new(FIXTURE).loaded().map_err(|why| Abort {
         at: "library".to_owned(),
         failure: Failure::named("FixtureNotRead", why),
@@ -512,7 +512,7 @@ fn library(side: &mut dyn Side, sites: &mut Sites) -> Result<Handle, Abort> {
 }
 
 /// The one pipeline every case makes.
-fn pipeline(colors: &[Option<ColorState>]) -> RenderPipelineSpec<'_> {
+pub(super) fn pipeline(colors: &[Option<ColorState>]) -> RenderPipelineSpec<'_> {
     RenderPipelineSpec::new(VERTEX, FRAGMENT, colors)
 }
 

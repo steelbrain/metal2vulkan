@@ -183,7 +183,7 @@ const REGION_WORDS: u32 = MARK_WORDS + 3 * MARK_WORDS;
 
 /// The byte every mark region starts from, which is a multiple of 4 as a vertex buffer binding's
 /// offset must be.
-const REGION_BYTES: u32 = REGION_WORDS * 4;
+pub(super) const REGION_BYTES: u32 = REGION_WORDS * 4;
 
 // ---- Factors ----------------------------------------------------------------------------------
 
@@ -216,7 +216,7 @@ fn half_bits(value: f32) -> u16 {
 }
 
 /// One patch's `MTLQuadTessellationFactorsHalf`: four edge factors and two inside ones, 12 bytes.
-fn quad_factors(edges: [f32; 4], inside: [f32; 2]) -> Vec<u8> {
+pub(super) fn quad_factors(edges: [f32; 4], inside: [f32; 2]) -> Vec<u8> {
     let mut bytes = Vec::with_capacity(12);
     for factor in edges.iter().chain(inside.iter()) {
         bytes.extend(half_bits(*factor).to_le_bytes());
@@ -234,7 +234,7 @@ fn triangle_factors(edges: [f32; 3], inside: f32) -> Vec<u8> {
 }
 
 /// The per-patch `float4` a domain fixture reads as its two grid scales: `(scale, scale, 0, 0)`.
-fn grid_record(scale: f32) -> Vec<u8> {
+pub(super) fn grid_record(scale: f32) -> Vec<u8> {
     let mut bytes = Vec::with_capacity(16);
     for value in [scale, scale, 0.0, 0.0] {
         bytes.extend(value.to_le_bytes());
@@ -246,13 +246,13 @@ fn grid_record(scale: f32) -> Vec<u8> {
 
 /// Which domain fixture a case draws, which is the `MTLPatchType` its function declares.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Domain {
+pub(super) enum Domain {
     Quad,
     Triangle,
 }
 
 impl Domain {
-    fn fixture(self) -> Fixture {
+    pub(super) fn fixture(self) -> Fixture {
         match self {
             Domain::Quad => QUAD,
             Domain::Triangle => TRIANGLE,
@@ -270,7 +270,7 @@ impl Domain {
 
     /// One patch's factor record: the same numbers on every edge and inside, so a sweep over the
     /// partition modes states one factor list and the two domains read as much of it as they have.
-    fn factors(self, edges: [f32; 4], inside: [f32; 2]) -> Vec<u8> {
+    pub(super) fn factors(self, edges: [f32; 4], inside: [f32; 2]) -> Vec<u8> {
         match self {
             Domain::Quad => quad_factors(edges, inside),
             Domain::Triangle => triangle_factors([edges[0], edges[1], edges[2]], inside[0]),
@@ -294,7 +294,10 @@ const DOMAIN_LAYOUTS: [VertexBufferLayout; 1] = [VertexBufferLayout {
 /// The pipeline one domain site makes: the fixture's `vertex void` function, rasterization
 /// disabled, the per-patch attribute fetched under the per-patch step, and `state`'s tessellation
 /// fields.
-fn domain_pipeline<'a>(entry: &'a str, state: TessellationState) -> RenderPipelineSpec<'a> {
+pub(super) fn domain_pipeline<'a>(
+    entry: &'a str,
+    state: TessellationState,
+) -> RenderPipelineSpec<'a> {
     RenderPipelineSpec::tessellating(
         StageFunction::named(entry),
         VertexLayout::new(&DOMAIN_ATTRIBUTES, &DOMAIN_LAYOUTS),
@@ -333,7 +336,7 @@ fn marks_layout(offset: u64) -> ByteLayout {
 /// `tessellation-factor-instance` is **not** here: only a per-instance factor step provokes it, and
 /// only [`FactorSteps`] sets one, so naming it everywhere else would be a declaration no case could
 /// ever reach.
-fn tessellation_notices() -> Vec<Allowance> {
+pub(super) fn tessellation_notices() -> Vec<Allowance> {
     [
         Degradation::TessellationWinding,
         Degradation::TessellationFactorEdgeCases,
@@ -702,7 +705,7 @@ impl Case for EdgeFactors {
 
 /// The grid scale the two sweeps below state: 16 cells on an axis, which tells the levels 1, 2, 4,
 /// 8, 9 and 16 apart and keeps each leg's compared region to seventeen rows of the mark grid.
-const MEDIUM_GRID: f32 = 16.0;
+pub(super) const MEDIUM_GRID: f32 = 16.0;
 
 /// Grid rows a medium leg can reach: `j = rint(v · 16)` for `v` in `[0, 1]`, so `j` is in `0..=16`.
 const MEDIUM_ROWS: u32 = 17;
@@ -713,11 +716,11 @@ const MEDIUM_WORDS: u32 = MEDIUM_ROWS * AXIS;
 
 /// The ceiling both medium sweeps state, so a level of 16 is the maximum and a factor above it is
 /// clamped.
-const MEDIUM_MAX: u32 = 16;
+pub(super) const MEDIUM_MAX: u32 = 16;
 
 /// `half`'s bit pattern for 4.0, the finite factor the non-finite sweep puts where the value it is
 /// asking about does not go, and the one the scale sweep scales.
-const FINITE: u16 = 0x4400;
+pub(super) const FINITE: u16 = 0x4400;
 
 /// The `half` bit patterns Metal's own factor rules single out, each neither a finite positive
 /// number nor the one the sweep's control states.
@@ -774,7 +777,7 @@ impl Placement {
 /// One patch's `MTLQuadTessellationFactorsHalf` from the `half` bit patterns themselves, which is
 /// how a case states a factor [`half_bits`] refuses: a NaN, a negative number, an infinity or a
 /// subnormal.
-fn raw_quad_factors(edges: [u16; 4], inside: [u16; 2]) -> Vec<u8> {
+pub(super) fn raw_quad_factors(edges: [u16; 4], inside: [u16; 2]) -> Vec<u8> {
     let mut bytes = Vec::with_capacity(12);
     for bits in edges.iter().chain(inside.iter()) {
         bytes.extend(bits.to_le_bytes());
@@ -957,9 +960,19 @@ impl Case for NonFiniteFactors {
 
 // ---- The factor step functions -----------------------------------------------------------------
 
-/// Every `MTLTessellationFactorStepFunction`, in the SDK table's own declaration order.
+/// Every `MTLTessellationFactorStepFunction`, named one by one in the SDK table's own declaration
+/// order: the sweep's own text states the values it varies, and `tests::the_four_steps_are_every
+/// _factor_step_function` holds the list against the generated one.
+const STEP_FUNCTIONS: [Step; 4] = [
+    Step::Constant,
+    Step::PerPatch,
+    Step::PerInstance,
+    Step::PerPatchAndPerInstance,
+];
+
+/// [`STEP_FUNCTIONS`] as a list.
 fn steps() -> Vec<Step> {
-    Step::ALL.to_vec()
+    STEP_FUNCTIONS.to_vec()
 }
 
 /// The grid scale the step sweep states: nine cells on an axis, which is enough to tell factors 1,
@@ -977,7 +990,7 @@ const COARSE_WORDS: u32 = 8 * AXIS + 9;
 const STEP_FACTORS: [f32; 4] = [1.0, 2.0, 4.0, 8.0];
 
 /// Bytes one quad factor record takes, which is the stride Metal reads a per-patch step at.
-const QUAD_FACTOR_BYTES: u32 = 12;
+pub(super) const QUAD_FACTOR_BYTES: u32 = 12;
 
 /// The instance stride the step sweep binds: two records, so instance 1 reaches record 2 and the
 /// per-patch step inside it reaches record 3.
@@ -1598,7 +1611,7 @@ impl Case for FactorScales {
 
 /// The layout a medium mark region is compared under: [`MEDIUM_ROWS`] whole rows of the mark grid,
 /// one row of `AXIS` words a grid row, so a diff names the cell.
-fn medium_layout(offset: u64) -> ByteLayout {
+pub(super) fn medium_layout(offset: u64) -> ByteLayout {
     ByteLayout {
         region: Region::Buffer {
             offset,
@@ -1616,7 +1629,7 @@ fn medium_layout(offset: u64) -> ByteLayout {
 }
 
 /// The rows a medium grid can reach of the region at `base`.
-fn read_medium_marks(
+pub(super) fn read_medium_marks(
     side: &mut dyn Side,
     sites: &mut Sites,
     site: &str,
@@ -2070,13 +2083,13 @@ fn read_coarse_marks(
 
 /// `bytes` as little-endian words, the trailing bytes of a length that is not a multiple of four
 /// left out.
-fn to_words(bytes: &[u8]) -> Vec<u32> {
+pub(super) fn to_words(bytes: &[u8]) -> Vec<u32> {
     let (words, _) = bytes.as_chunks::<4>();
     words.iter().copied().map(u32::from_le_bytes).collect()
 }
 
 /// The two texts of `fixture` a case fingerprints.
-fn air_inputs(fixture: Fixture) -> Result<Vec<Input>, String> {
+pub(super) fn air_inputs(fixture: Fixture) -> Result<Vec<Input>, String> {
     Ok(vec![
         Input {
             name: "air".to_owned(),
@@ -2090,7 +2103,7 @@ fn air_inputs(fixture: Fixture) -> Result<Vec<Input>, String> {
 }
 
 /// The shader references of `fixture`, both dialects.
-fn shaders_of(fixture: Fixture) -> Result<Vec<ShaderRef>, String> {
+pub(super) fn shaders_of(fixture: Fixture) -> Result<Vec<ShaderRef>, String> {
     let mut shaders = Vec::new();
     for extension in [RUNTIME_TEXT, METAL_TEXT] {
         shaders.push(ShaderRef {
@@ -2103,7 +2116,7 @@ fn shaders_of(fixture: Fixture) -> Result<Vec<ShaderRef>, String> {
 }
 
 /// `fixture` in both dialects, or the abort a case stops at where it cannot be read.
-fn load(fixture: Fixture) -> Result<crate::fixture::Loaded, Abort> {
+pub(super) fn load(fixture: Fixture) -> Result<crate::fixture::Loaded, Abort> {
     fixture.loaded().map_err(|why| Abort {
         at: "library".to_owned(),
         failure: Failure::named("FixtureNotRead", why),
@@ -2113,6 +2126,13 @@ fn load(fixture: Fixture) -> Result<crate::fixture::Loaded, Abort> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The four step functions the sweep names are every `MTLTessellationFactorStepFunction`
+    /// there is, so a value the SDK grows is a failure here rather than a leg quietly missing.
+    #[test]
+    fn the_four_steps_are_every_factor_step_function() {
+        assert_eq!(STEP_FUNCTIONS.to_vec(), Step::ALL.to_vec());
+    }
 
     /// The bytes the recording of `case` holds at the leaf `path` (node names from the root,
     /// `/`-separated, the reserved `case` root left out), or `None` where it holds no such leaf.
