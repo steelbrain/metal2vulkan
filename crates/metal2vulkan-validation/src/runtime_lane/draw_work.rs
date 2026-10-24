@@ -434,6 +434,12 @@ fn a_pass_that_draws_as_the_one_before_makes_no_render_pass() {
 /// sampler's LOD clamps pick of a two-level texture, red then green (`set_fragment_sampler_state`,
 /// `set_fragment_sampler_states` with clamps and without, the same state again). A slot a call
 /// changed that the read left as it was would draw a column elsewhere, or in the other color.
+///
+/// The corners lie 16 bytes apart, and the vertex function reads the slot through a uniform view:
+/// on a device whose view base alignment (`BindState::view_base_alignment_of`: NVIDIA's 64) does
+/// not divide 16, the second column's bind leaves the slots that tell the view base apart
+/// (`StageTable::at_bind_views`), which every buffer's shape reads, so that one draw reads its
+/// vertex table whole instead of in part. The mask stays empty from then on, so no later draw does.
 #[test]
 fn a_draw_reading_its_tables_in_part_brings_in_each_setters_slot() {
     on_device(|device, _| {
@@ -441,6 +447,10 @@ fn a_draw_reading_its_tables_in_part_brings_in_each_setters_slot() {
         let corners: Vec<u8> = (0..SIDE).flat_map(column).collect();
         let corners = buffer_with(device, &corners).unwrap();
         let at = |c: u64| c * 16;
+        let limits = device.compile_device().profile().limits();
+        let alignment = u64::from(BindState::view_base_alignment_of(limits));
+        let leaves_the_views = alignment != 0 && !at(1).is_multiple_of(alignment);
+        eprintln!("view base alignment {alignment}: leaves the views {leaves_the_views}");
         // Two levels: red, then green.
         let mut levels = TextureDescriptor::texture_2d(
             PixelFormat::RGBA8Unorm,
@@ -527,11 +537,12 @@ fn a_draw_reading_its_tables_in_part_brings_in_each_setters_slot() {
             assert_eq!(pixel, want, "pixel {i}: {pixels:?}");
         }
         // Every later draw reads the vertex table in part; those that changed a fragment slot, the
-        // fragment table too.
+        // fragment table too. The draw that leaves the slots telling the view base apart reads its
+        // vertex table whole.
         let fragment_reads = 6;
         assert_eq!(
             grew(&before, &after, |c| c.stage_tables_read_in_part),
-            (SIDE - 1) + fragment_reads
+            (SIDE - 1) + fragment_reads - u64::from(leaves_the_views)
         );
     });
 }
