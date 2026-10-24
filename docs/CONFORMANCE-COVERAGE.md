@@ -43,7 +43,7 @@ Its limits, measured rather than asserted:
 | committed recordings | 1100 |
 | distinct SDK items the Metal leg reaches, of any status | 797 |
 | of those, reached only where this cannot name the family | 7 |
-| ledger rows (a case whose gap is recorded) | 803 |
+| ledger rows (a case whose gap is recorded) | 813 |
 | declared crossings of the option space (pairs put to Metal at once) | 24 |
 | declared crossings that are no pair of it (a boolean or numeric field, or one type in two slots) | 30 |
 
@@ -2245,13 +2245,22 @@ A case whose difference from Metal is recorded rather than compared away. The le
 | `half-texel-nans-rgba16f` | Metal's `half` result of a 16-bit float texel hands back the texel's own NaN code, with its sign, its payload and its signalling bit kept, and ours answers the … |
 | `half-texel-nans-rgba16f` | Metal's `half` result of a 16-bit float texel hands back the texel's own NaN code, with its sign, its payload and its signalling bit kept, and ours answers the … |
 | `half-output-blends-r16f` | Metal's stored blend result rounds the SOURCE product to the attachment's precision and carries the DESTINATION product into the sum unrounded -- `round(round(S… |
+| `half-output-blends-r16f` | A blend whose factor reads the blend colour, at the same product rounding as this family's other divergent sites and not yet fitted to a rule there. What is mea… |
 | `half-output-blends-rg16f` | Metal's stored blend result rounds the SOURCE product to the attachment's precision and carries the DESTINATION product into the sum unrounded -- `round(round(S… |
 | `half-output-blends-rg16f` | Metal's stored blend result rounds the SOURCE product to the attachment's precision and carries the DESTINATION product into the sum unrounded -- `round(round(S… |
+| `half-output-blends-rg16f` | A blend whose factor reads the blend colour, at the same product rounding as this family's other divergent sites and not yet fitted to a rule there. What is mea… |
+| `half-output-blends-rg16f` | A blend whose factor reads the blend colour, at the same product rounding as this family's other divergent sites and not yet fitted to a rule there. What is mea… |
 | `half-output-blends-rgba16f` | Metal's stored blend result rounds the SOURCE product to the attachment's precision and carries the DESTINATION product into the sum unrounded -- `round(round(S… |
 | `half-output-blends-rgba16f` | Metal's stored blend result rounds the SOURCE product to the attachment's precision and carries the DESTINATION product into the sum unrounded -- `round(round(S… |
+| `half-output-blends-rgba16f` | A blend whose factor reads the blend colour, at the same product rounding as this family's other divergent sites and not yet fitted to a rule there. What is mea… |
+| `half-output-blends-rgba16f` | A blend whose factor reads the blend colour, at the same product rounding as this family's other divergent sites and not yet fitted to a rule there. What is mea… |
 | `half-output-blends-rg32f` | Metal's stored blend result rounds the SOURCE product to the attachment's precision and carries the DESTINATION product into the sum unrounded -- `round(round(S… |
+| `half-output-blends-rg32f` | A blend whose factor reads the blend colour, at the same product rounding as this family's other divergent sites and not yet fitted to a rule there. What is mea… |
+| `half-output-blends-rg32f` | A blend whose factor reads the blend colour, at the same product rounding as this family's other divergent sites and not yet fitted to a rule there. What is mea… |
 | `half-output-blends-rgba32f` | Metal's stored blend result rounds the SOURCE product to the attachment's precision and carries the DESTINATION product into the sum unrounded -- `round(round(S… |
 | `half-output-blends-rgba32f` | Metal's stored blend result rounds the SOURCE product to the attachment's precision and carries the DESTINATION product into the sum unrounded -- `round(round(S… |
+| `half-output-blends-rgba32f` | A blend whose factor reads the blend colour, at the same product rounding as this family's other divergent sites and not yet fitted to a rule there. What is mea… |
+| `half-output-blends-rgba32f` | A blend whose factor reads the blend colour, at the same product rounding as this family's other divergent sites and not yet fitted to a rule there. What is mea… |
 | `format-footprints-astc-4x2-and-8x4` | The runtime holds no image of ASTC's 4x2 and 8x4 footprints, so `heapTextureSizeAndAlignWithDescriptor:` -- CPU arithmetic over a descriptor, which Metal answer… |
 | `format-footprints-plain-stragglers` | The runtime holds no image of BGRA4Unorm and ARGB8Unorm_sRGB, so `heapTextureSizeAndAlignWithDescriptor:` -- CPU arithmetic over a descriptor, which Metal answe… |
 | `format-footprints-one-plane-ycbcr` | The runtime holds no image of Apple's nine one-plane YCbCr formats, so `heapTextureSizeAndAlignWithDescriptor:` -- CPU arithmetic over a descriptor, which Metal… |
@@ -2862,6 +2871,7 @@ A case whose difference from Metal is recorded rather than compared away. The le
 | `half-output-blends-r32f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are this run's. The cause is established and is not half precision: Meta… |
 | `half-output-blends-r32f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are this run's. The cause is established and is not half precision: Meta… |
 | `half-output-blends-r32f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are this run's. The cause is established and is not half precision: Meta… |
+| `half-output-blends-r32f` | A blend whose factor reads the blend colour, at the same product rounding as this family's other divergent sites and not yet fitted to a rule there. What is mea… |
 | `half-output-blends-rg16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are this run's. The cause is established and is not half precision: Meta… |
 | `half-output-blends-rg16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are this run's. The cause is established and is not half precision: Meta… |
 | `half-output-blends-rg16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are this run's. The cause is established and is not half precision: Meta… |
