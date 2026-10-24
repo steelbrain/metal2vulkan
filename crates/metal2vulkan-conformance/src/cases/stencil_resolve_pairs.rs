@@ -1165,7 +1165,7 @@ mod tests {
             }
         }
         assert!((0.0..1.0).contains(&FLAT_DEPTH));
-        assert!(CLEAR_STENCIL <= 0xff);
+        const { assert!(CLEAR_STENCIL <= 0xff) };
     }
 
     /// **Every pass of every case stays inside its attachments and states each draw's settings**,

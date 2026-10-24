@@ -659,10 +659,9 @@ mod tests {
     #[test]
     fn the_reach_rounds_up_to_a_whole_tile_and_clips_to_the_attachment() {
         assert_eq!(TILE, 32);
-        assert!(
-            SIDE % TILE != 0,
-            "a tile divides the attachment, so no cell can tell the rounding from the clipping"
-        );
+        // A tile must not divide the attachment, or no cell could tell the rounding from the
+        // clipping. Const-evaluated, so a side that moved either number fails to compile here.
+        const { assert!(!SIDE.is_multiple_of(TILE)) };
         // Rounded up to a whole tile, per axis, and clipped to the attachment.
         assert_eq!(reach([32, 32], true), [32, 32]);
         assert_eq!(reach([33, 33], true), [SIDE, SIDE]);

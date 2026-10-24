@@ -1154,7 +1154,7 @@ mod tests {
             DRAWN.height < u64::from(SIDE),
             "the draw covers the whole target, so no plane holds what a load action left"
         );
-        assert!(DRAWN.width > 0 && DRAWN.height > 0);
+        const { assert!(DRAWN.width > 0 && DRAWN.height > 0) };
         for case in all() {
             let built = AttachmentPairs {
                 cross: match case.name() {
