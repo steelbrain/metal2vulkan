@@ -204,10 +204,21 @@ impl Case for IntAttributes {
     }
 
     fn allowances(&self) -> Vec<Allowance> {
-        // None: Metal's conversion of an integer format to a float attribute is exact, and both
-        // step functions must answer the same values on any device. A row that differs is a bug in
-        // the fetch, not a tolerance.
-        Vec::new()
+        // No value: Metal's conversion of an integer format to a float attribute is exact, and
+        // both step functions must answer the same values on any device. A row that differs is a
+        // bug in the fetch, not a tolerance.
+        //
+        // Every row reads its answer back through a `Shared` buffer, so on a device without
+        // unified memory the runtime announces `shared-in-system-memory`
+        // (`crate::replay::shared_memory_notice` holds the whole reason). It declares the
+        // notices site alone, so every value of this family still compares against Metal's
+        // exactly.
+        //
+        // Measured on the RTX 5080 Laptop (615.71.09): it fired for this case and each
+        // was divergent on that field and nothing else (replay-nvidia.log). On MoltenVK, where
+        // the chip's GPU shares the CPU's memory, it cannot fire at all, which is why no
+        // recording of this suite declares it.
+        vec![crate::replay::shared_memory_notice()]
     }
 
     fn shaders(&self) -> Result<Vec<ShaderRef>, String> {

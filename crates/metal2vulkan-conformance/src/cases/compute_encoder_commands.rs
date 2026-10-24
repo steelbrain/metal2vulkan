@@ -300,10 +300,21 @@ impl Case for ComputeEncoderCommands {
     }
 
     fn allowances(&self) -> Vec<Allowance> {
-        // Nothing here is loosened. Every byte of every slot compares exactly, and no venue has
-        // been measured announcing a notice for one of these cases; a venue that does reads as
+        // No value is loosened. Every byte of every slot compares exactly, and no venue has been
+        // measured announcing a notice of this family's own; a venue that does reads as
         // `UndeclaredNotice`, naming the code and the case, which is the loud form.
-        Vec::new()
+        //
+        // Every row reads its answer back through a `Shared` buffer, so on a device without
+        // unified memory the runtime announces `shared-in-system-memory`
+        // (`crate::replay::shared_memory_notice` holds the whole reason). It declares the
+        // notices site alone, so every value of this family still compares against Metal's
+        // exactly.
+        //
+        // Measured on the RTX 5080 Laptop (615.71.09): it fired for all 8 rows of the family and each
+        // was divergent on that field and nothing else (replay-nvidia.log). On MoltenVK, where
+        // the chip's GPU shares the CPU's memory, it cannot fire at all, which is why no
+        // recording of this suite declares it.
+        vec![crate::replay::shared_memory_notice()]
     }
 
     fn shaders(&self) -> Result<Vec<ShaderRef>, String> {
@@ -974,7 +985,9 @@ mod tests {
         assert_eq!(rows, named);
     }
 
-    /// Every case states its inputs and loosens nothing.
+    /// Every case states its inputs and loosens no value: its one declaration is the notice a
+    /// device without unified memory announces for the `Shared` buffer the case reads back
+    /// through, at the notices site.
     #[test]
     fn every_case_states_its_inputs_and_loosens_nothing() {
         for case in all() {
@@ -982,7 +995,26 @@ mod tests {
                 .inputs()
                 .unwrap_or_else(|why| panic!("{}: {why}", case.name()));
             assert!(!inputs.is_empty(), "{}", case.name());
-            assert!(case.allowances().is_empty(), "{}", case.name());
+            // The venue's own memory notice and nothing else: no value of the family is loosened,
+            // and the one declaration is a notice declaration at `case/notices/*`.
+            let allowances = case.allowances();
+            assert_eq!(allowances.len(), 1, "{}", case.name());
+            assert_eq!(
+                allowances[0].justified_by,
+                crate::allowance::Justification::Degradation(
+                    metal2vulkan_runtime::Degradation::SharedInSystemMemory
+                        .code()
+                        .to_owned()
+                ),
+                "{}",
+                case.name()
+            );
+            assert_eq!(
+                allowances[0].path,
+                format!("case/{}/*", crate::replay::NOTICES_SITE),
+                "{}",
+                case.name()
+            );
         }
     }
 

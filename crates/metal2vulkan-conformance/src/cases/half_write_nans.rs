@@ -225,12 +225,23 @@ impl Case for HalfWriteNans {
         // bits they are handed, so a run of them needs no tolerance at all — and this round's runs
         // on both venues confirmed it, which is why they name none. A device that does encode its
         // own way there shows the word it stored beside Metal's rather than passing quietly.
+        // Every row reads its answer back through a `Shared` buffer, so on a device without
+        // unified memory the runtime announces `shared-in-system-memory`
+        // (`crate::replay::shared_memory_notice` holds the whole reason). It declares the
+        // notices site alone, so every value of this family still compares against Metal's
+        // exactly.
+        //
+        // Measured on the RTX 5080 Laptop (615.71.09): it fired for all 7 rows of the family and each
+        // was divergent on that field and nothing else (replay-nvidia.log). On MoltenVK, where
+        // the chip's GPU shares the CPU's memory, it cannot fire at all, which is why no
+        // recording of this suite declares it.
+        let mut named = vec![crate::replay::shared_memory_notice()];
         if self.packed {
-            return vec![crate::replay::notice_allowance(
+            named.push(crate::replay::notice_allowance(
                 Degradation::DeviceNanEncoding.code(),
-            )];
+            ));
         }
-        Vec::new()
+        named
     }
 
     fn shaders(&self) -> Result<Vec<ShaderRef>, String> {

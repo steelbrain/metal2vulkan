@@ -317,7 +317,17 @@ impl Case for ComputeRenderChain {
         // value compared **exactly** -- the whole difference was the announcement, which is what
         // makes declaring it a declaration and not a tolerance. Metal announces nothing, so a
         // notice of ours has to be declared or the comparison cannot be made at all.
-        let mut named = Vec::new();
+        // Every row reads its answer back through a `Shared` buffer, so on a device without
+        // unified memory the runtime announces `shared-in-system-memory`
+        // (`crate::replay::shared_memory_notice` holds the whole reason). It declares the
+        // notices site alone, so every value of this family still compares against Metal's
+        // exactly.
+        //
+        // Measured on the RTX 5080 Laptop (615.71.09): it fired for all 3 rows of the family and each
+        // was divergent on that field and nothing else (replay-nvidia.log). On MoltenVK, where
+        // the chip's GPU shares the CPU's memory, it cannot fire at all, which is why no
+        // recording of this suite declares it.
+        let mut named = vec![crate::replay::shared_memory_notice()];
         if self.subject.divides_a_float() {
             named.push(crate::replay::notice_allowance(
                 Degradation::DeviceArithmetic.code(),

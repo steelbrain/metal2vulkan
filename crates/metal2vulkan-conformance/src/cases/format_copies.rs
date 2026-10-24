@@ -308,13 +308,24 @@ impl Case for FormatCopies {
         // Only a pair that touches `Depth32Float` names it. A `Depth16Unorm` or `Stencil8` pair
         // holds no 32-bit float depth for a device to flush, so the notice cannot fire there and
         // naming it would be a tolerance nothing can justify.
+        // Every row reads its answer back through a `Shared` buffer, so on a device without
+        // unified memory the runtime announces `shared-in-system-memory`
+        // (`crate::replay::shared_memory_notice` holds the whole reason). It declares the
+        // notices site alone, so every value of this family still compares against Metal's
+        // exactly.
+        //
+        // Measured on the RTX 5080 Laptop (615.71.09): it fired for all 16 rows of the family and each
+        // was divergent on that field and nothing else (replay-nvidia.log). On MoltenVK, where
+        // the chip's GPU shares the CPU's memory, it cannot fire at all, which is why no
+        // recording of this suite declares it.
+        let mut named = vec![crate::replay::shared_memory_notice()];
         let pair = self.pair();
-        if pair.from != PixelFormat::Depth32Float && pair.to != PixelFormat::Depth32Float {
-            return Vec::new();
+        if pair.from == PixelFormat::Depth32Float || pair.to == PixelFormat::Depth32Float {
+            named.push(crate::replay::notice_allowance(
+                Degradation::DepthDenormals.code(),
+            ));
         }
-        vec![crate::replay::notice_allowance(
-            Degradation::DepthDenormals.code(),
-        )]
+        named
     }
 
     fn inputs(&self) -> Result<Vec<Input>, String> {

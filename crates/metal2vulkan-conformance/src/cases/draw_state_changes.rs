@@ -255,9 +255,20 @@ impl Case for DrawStateChanges {
         //
         // Measured: it fires on lavapipe and not on MoltenVK on this M3 Max, and on lavapipe every
         // texel of this case compared **exactly** -- the whole difference was the announcement.
-        vec![crate::replay::notice_allowance(
-            Degradation::DeviceArithmetic.code(),
-        )]
+        // Every row reads its answer back through a `Shared` buffer, so on a device without
+        // unified memory the runtime announces `shared-in-system-memory`
+        // (`crate::replay::shared_memory_notice` holds the whole reason). It declares the
+        // notices site alone, so every value of this family still compares against Metal's
+        // exactly.
+        //
+        // Measured on the RTX 5080 Laptop (615.71.09): it fired for this case and each
+        // was divergent on that field and nothing else (replay-nvidia.log). On MoltenVK, where
+        // the chip's GPU shares the CPU's memory, it cannot fire at all, which is why no
+        // recording of this suite declares it.
+        vec![
+            crate::replay::shared_memory_notice(),
+            crate::replay::notice_allowance(Degradation::DeviceArithmetic.code()),
+        ]
     }
 
     fn shaders(&self) -> Result<Vec<ShaderRef>, String> {
