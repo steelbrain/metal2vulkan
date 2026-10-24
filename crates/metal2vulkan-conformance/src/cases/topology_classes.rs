@@ -509,11 +509,21 @@ mod tests {
                     assert_ne!(a, b, "{}: two classes fingerprint alike", case.name());
                 }
             }
-            // The two cases differ from each other too, by their vertex function.
+            // Only the notices site may be loosened, and only for the case whose function has
+            // arithmetic to rewrite: the point-size function computes nothing and declares nothing,
+            // which is what says the notice is the arithmetic's and not the topology class's.
+            for allowance in case.allowances() {
+                assert_eq!(
+                    allowance.path,
+                    format!("case/{NOTICES_SITE}/*"),
+                    "{}: an allowance outside the notices site",
+                    case.name()
+                );
+            }
             assert_eq!(
-                case.allowances().len(),
-                0,
-                "{}: a loosened site",
+                case.allowances().is_empty(),
+                writes_point_size(&case.subject),
+                "{}: the point-size case declares a notice, or the plain one declares none",
                 case.name()
             );
             case.shaders().unwrap();
