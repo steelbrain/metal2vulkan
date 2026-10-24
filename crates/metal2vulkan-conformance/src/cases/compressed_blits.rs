@@ -619,7 +619,18 @@ impl Case for CompressedBlits {
         // the copy is not a thing Metal has to do. Measured announced by all four rows on Apple
         // M3 Max in the whole-set run this declaration was taken from; the earlier reading recorded
         // the same code on lavapipe.
+        // Every row reads its answer back through a `Shared` buffer, so on a device without
+        // unified memory the runtime announces `shared-in-system-memory`
+        // (`crate::replay::shared_memory_notice` holds the whole reason). It declares the
+        // notices site alone, so every value of this family still compares against Metal's
+        // exactly.
+        //
+        // Measured on the RTX 5080 Laptop (615.71.09): it fired for all 4 rows of the family and each
+        // was divergent on that field and nothing else (replay-nvidia.log). On MoltenVK, where
+        // the chip's GPU shares the CPU's memory, it cannot fire at all, which is why no
+        // recording of this suite declares it.
         vec![
+            crate::replay::shared_memory_notice(),
             crate::replay::notice_allowance(Degradation::StagedTextureCopy.code()),
             crate::replay::notice_allowance(Degradation::ShadowedTexture.code()),
         ]
@@ -694,6 +705,9 @@ mod tests {
     fn every_case_declares_exactly_the_two_notices_it_announces() {
         use crate::allowance::Justification;
         let wanted = vec![
+            // The venue's own: a card without unified memory holds the `Shared` buffer each row
+            // reads its answer back through in system memory.
+            Degradation::SharedInSystemMemory.code().to_owned(),
             Degradation::StagedTextureCopy.code().to_owned(),
             Degradation::ShadowedTexture.code().to_owned(),
         ];

@@ -200,11 +200,24 @@ impl Case for ColorWriteMaskCase {
         // by the one notice a draw that stores a converted channel may announce, because which
         // device rounds the conversion in the shader is the device's answer and not the case's and
         // it moves no texel here.
-        vec![Allowance::new(
-            format!("case/{NOTICES_SITE}/*"),
-            Loosening::Unchecked,
-            Justification::notice(Degradation::ShaderColorConversion),
-        )]
+        // Every row reads its answer back through a `Shared` buffer, so on a device without
+        // unified memory the runtime announces `shared-in-system-memory`
+        // (`crate::replay::shared_memory_notice` holds the whole reason). It declares the
+        // notices site alone, so every value of this family still compares against Metal's
+        // exactly.
+        //
+        // Measured on the RTX 5080 Laptop (615.71.09): it fired for all 5 rows of the family and each
+        // was divergent on that field and nothing else (replay-nvidia.log). On MoltenVK, where
+        // the chip's GPU shares the CPU's memory, it cannot fire at all, which is why no
+        // recording of this suite declares it.
+        vec![
+            crate::replay::shared_memory_notice(),
+            Allowance::new(
+                format!("case/{NOTICES_SITE}/*"),
+                Loosening::Unchecked,
+                Justification::notice(Degradation::ShaderColorConversion),
+            ),
+        ]
     }
 
     fn shaders(&self) -> Result<Vec<ShaderRef>, String> {
@@ -472,10 +485,13 @@ mod tests {
                     case.name()
                 );
                 match &allowance.justified_by {
-                    Justification::Degradation(code) => assert_eq!(
-                        code,
-                        Degradation::ShaderColorConversion.code(),
-                        "{}: an unexpected notice",
+                    // The venue's own memory notice, which every row of the family declares
+                    // because every row reads its answer back through a `Shared` buffer, and the
+                    // one notice a converted channel may carry.
+                    Justification::Degradation(code) => assert!(
+                        code == Degradation::SharedInSystemMemory.code()
+                            || code == Degradation::ShaderColorConversion.code(),
+                        "{}: an unexpected notice {code}",
                         case.name()
                     ),
                     other => panic!("{}: an unexpected tolerance: {other:?}", case.name()),

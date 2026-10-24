@@ -343,13 +343,23 @@ impl Case for BlitIndirectCommands {
         //
         // The allowance fails the case if the notice did not fire, so a call that stops replaying
         // on the host has to drop this line rather than carry a stale excuse.
+        // Every row reads its answer back through a `Shared` buffer, so on a device without
+        // unified memory the runtime announces `shared-in-system-memory`
+        // (`crate::replay::shared_memory_notice` holds the whole reason). It declares the
+        // notices site alone, so every value of this family still compares against Metal's
+        // exactly.
+        //
+        // Measured on the RTX 5080 Laptop (615.71.09): it fired for all 3 rows of the family and each
+        // was divergent on that field and nothing else (replay-nvidia.log). On MoltenVK, where
+        // the chip's GPU shares the CPU's memory, it cannot fire at all, which is why no
+        // recording of this suite declares it.
+        let mut named = vec![crate::replay::shared_memory_notice()];
         if self.call.replays_on_the_host() {
-            vec![crate::replay::notice_allowance(
+            named.push(crate::replay::notice_allowance(
                 Degradation::HostReplayedIndirectCommands.code(),
-            )]
-        } else {
-            Vec::new()
+            ));
         }
+        named
     }
 
     fn shaders(&self) -> Result<Vec<ShaderRef>, String> {

@@ -106,9 +106,22 @@ impl Case for CommandBufferFactsCase {
         // `UncalibratedGpuTimes`: it places them without calibrated timestamps where the device
         // offers none. The orderings this case compares do not depend on either, which is why the
         // case can take the notice and still compare every value exactly.
-        GPU_TIME_NOTICES
-            .iter()
-            .map(|code| notice_allowance(code.code()))
+        // Every row reads its answer back through a `Shared` buffer, so on a device without
+        // unified memory the runtime announces `shared-in-system-memory`
+        // (`crate::replay::shared_memory_notice` holds the whole reason). It declares the
+        // notices site alone, so every value of this family still compares against Metal's
+        // exactly.
+        //
+        // Measured on the RTX 5080 Laptop (615.71.09): it fired for this case and each
+        // was divergent on that field and nothing else (replay-nvidia.log). On MoltenVK, where
+        // the chip's GPU shares the CPU's memory, it cannot fire at all, which is why no
+        // recording of this suite declares it.
+        std::iter::once(crate::replay::shared_memory_notice())
+            .chain(
+                GPU_TIME_NOTICES
+                    .iter()
+                    .map(|code| notice_allowance(code.code())),
+            )
             .collect()
     }
 
@@ -129,9 +142,9 @@ mod tests {
     use super::*;
 
     /// The case states its inputs, names itself once, and declares the two notices the runtime can
-    /// announce over the GPU times and nothing else.
+    /// announce over the GPU times, the venue's own memory notice, and nothing else.
     ///
-    /// A third notice slipping in would be a value the case took for a reason nobody wrote down,
+    /// A fourth notice slipping in would be a value the case took for a reason nobody wrote down,
     /// which is what this count is for.
     #[test]
     fn the_case_states_its_inputs_and_only_the_gpu_time_notices() {
@@ -141,7 +154,9 @@ mod tests {
         assert_eq!(case.name(), COMMAND_BUFFER_FACTS);
         assert!(!case.inputs().expect("the inputs").is_empty());
         let allowed = case.allowances();
-        assert_eq!(allowed.len(), GPU_TIME_NOTICES.len());
+        // The two GPU-time notices, and the one a card without unified memory announces for the
+        // `Shared` buffer the case reads its answer back through.
+        assert_eq!(allowed.len(), GPU_TIME_NOTICES.len() + 1);
         // And the case records more than one run, because two of its booleans read a clock.
         assert!(case.record_runs() > 1);
     }

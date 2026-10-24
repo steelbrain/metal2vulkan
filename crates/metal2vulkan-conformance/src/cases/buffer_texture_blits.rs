@@ -524,9 +524,22 @@ impl Case for Blits {
         // declares only the first code. Measured on Apple M3 Max: `buffer-texture-blits-overlapping`
         // announced `overlapping-texel-copy` and declared it nowhere, while `to-and-from` compared
         // justified in the same run.
-        let mut named = vec![crate::replay::notice_allowance(
-            metal2vulkan_runtime::Degradation::ShadowedTexture.code(),
-        )];
+        // Every row reads its answer back through a `Shared` buffer, so on a device without
+        // unified memory the runtime announces `shared-in-system-memory`
+        // (`crate::replay::shared_memory_notice` holds the whole reason). It declares the
+        // notices site alone, so every value of this family still compares against Metal's
+        // exactly.
+        //
+        // Measured on the RTX 5080 Laptop (615.71.09): it fired for both rows of the family and each
+        // was divergent on that field and nothing else (replay-nvidia.log). On MoltenVK, where
+        // the chip's GPU shares the CPU's memory, it cannot fire at all, which is why no
+        // recording of this suite declares it.
+        let mut named = vec![
+            crate::replay::shared_memory_notice(),
+            crate::replay::notice_allowance(
+                metal2vulkan_runtime::Degradation::ShadowedTexture.code(),
+            ),
+        ];
         if self.rows.iter().any(Row::copies_shared_bytes) {
             named.push(crate::replay::notice_allowance(
                 metal2vulkan_runtime::Degradation::OverlappingTexelCopy.code(),
@@ -732,7 +745,13 @@ mod tests {
                     }
                 })
                 .collect();
-            let mut wanted = vec![Degradation::ShadowedTexture.code().to_owned()];
+            // The venue's own notice leads the set: both cases declare it, because both read
+            // their answer back through a `Shared` buffer and a card without unified memory holds
+            // that buffer in system memory.
+            let mut wanted = vec![
+                Degradation::SharedInSystemMemory.code().to_owned(),
+                Degradation::ShadowedTexture.code().to_owned(),
+            ];
             if case.rows.iter().any(Row::copies_shared_bytes) {
                 wanted.push(Degradation::OverlappingTexelCopy.code().to_owned());
             }
@@ -742,8 +761,9 @@ mod tests {
         let sets: Vec<usize> = table().iter().map(|case| case.allowances().len()).collect();
         assert_eq!(
             sets,
-            vec![1, 2],
-            "one case declares one code and the other two"
+            vec![2, 3],
+            "one case declares the venue's notice and the shadow image, the other those two and \
+             the overlapping copy"
         );
     }
 
