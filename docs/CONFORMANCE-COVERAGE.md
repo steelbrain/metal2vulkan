@@ -43,7 +43,7 @@ Its limits, measured rather than asserted:
 | committed recordings | 1100 |
 | distinct SDK items the Metal leg reaches, of any status | 797 |
 | of those, reached only where this cannot name the family | 5 |
-| ledger rows (a case whose gap is recorded) | 805 |
+| ledger rows (a case whose gap is recorded) | 767 |
 | declared crossings of the option space (pairs put to Metal at once) | 24 |
 | declared crossings that are no pair of it (a boolean or numeric field, or one type in two slots) | 30 |
 
@@ -2280,12 +2280,6 @@ A case whose difference from Metal is recorded rather than compared away. The le
 | `texture-pairs-plain-contents` | Plain Metal answers `heapTextureSizeAndAlignWithDescriptor:` for a MTLStorageModeMemoryless descriptor and the runtime refuses it `Invalid(StorageMode)`, so eve… |
 | `texture-pairs-storage-crossings` | Plain Metal answers `heapTextureSizeAndAlignWithDescriptor:` for a MTLStorageModeMemoryless descriptor and the runtime refuses it `Invalid(StorageMode)`, so eve… |
 | `texture-pairs-storage-crossings` | Plain Metal answers `heapTextureSizeAndAlignWithDescriptor:` for a MTLStorageModeMemoryless descriptor and the runtime refuses it `Invalid(StorageMode)`, so eve… |
-| `vertex-format-float4` | Metal's fixed-function vertex fetch of a narrow float canonicalizes a NaN: a `half` code and a `FloatRG11B10` field whose 5-bit exponent is all ones both reach … |
-| `vertex-format-float4` | Metal's fixed-function vertex fetch of a narrow float canonicalizes a NaN: a `half` code and a `FloatRG11B10` field whose 5-bit exponent is all ones both reach … |
-| `vertex-format-float4` | Metal's fixed-function vertex fetch of a narrow float canonicalizes a NaN: a `half` code and a `FloatRG11B10` field whose 5-bit exponent is all ones both reach … |
-| `vertex-format-float4` | Metal's fixed-function vertex fetch of a narrow float canonicalizes a NaN: a `half` code and a `FloatRG11B10` field whose 5-bit exponent is all ones both reach … |
-| `vertex-format-float4` | Metal's fixed-function vertex fetch of a narrow float canonicalizes a NaN: a `half` code and a `FloatRG11B10` field whose 5-bit exponent is all ones both reach … |
-| `vertex-format-instance-step` | Metal's fixed-function vertex fetch of a narrow float canonicalizes a NaN: a `half` code and a `FloatRG11B10` field whose 5-bit exponent is all ones both reach … |
 | `half-texel-nans-r16f` | Metal's `texture2d<half>` never widens, so a 16-bit float texel's NaN comes back as its own bits (verified: this case's own recording of plain Metal on an M3 Ma… |
 | `half-texel-nans-rg16f` | Metal's `texture2d<half>` never widens, so a 16-bit float texel's NaN comes back as its own bits (verified: this case's own recording of plain Metal on an M3 Ma… |
 | `half-texel-nans-rgba16f` | Metal's `texture2d<half>` never widens, so a 16-bit float texel's NaN comes back as its own bits (verified: this case's own recording of plain Metal on an M3 Ma… |
@@ -2808,16 +2802,6 @@ A case whose difference from Metal is recorded rather than compared away. The le
 | `argb8-targets-subtract-one-minus-alpha` | Metal's stored 8-bit blend code and ours differ at this site over the case's 8,192 texels, and the row's count and bound are this run's. The two formats of the … |
 | `argb8-targets-subtract-one-minus-alpha` | Metal's stored 8-bit blend code and ours differ at this site over the case's 8,192 texels, and the row's count and bound are this run's. The two formats of the … |
 | `argb8-targets-subtract-one-minus-alpha` | Metal's stored 8-bit blend code and ours differ at this site over the case's 8,192 texels, and the row's count and bound are this run's. The two formats of the … |
-| `attribute-format-fetches` | Metal's fetch of a narrow float into a `float` parameter answers the canonical positive quiet NaN 0x7FC00000, payload and sign dropped (verified: this case's ow… |
-| `attribute-format-fetches` | Metal's fetch of a narrow float into a `float` parameter answers the canonical positive quiet NaN 0x7FC00000, payload and sign dropped (verified: this case's ow… |
-| `attribute-format-fetches` | Metal's fetch of a narrow float into a `float` parameter answers the canonical positive quiet NaN 0x7FC00000, payload and sign dropped (verified: this case's ow… |
-| `attribute-format-fetches` | Metal's fetch of a narrow float into a `float` parameter answers the canonical positive quiet NaN 0x7FC00000, payload and sign dropped (verified: this case's ow… |
-| `attribute-format-fetches` | Metal's fetch of a narrow float into a `float` parameter answers the canonical positive quiet NaN 0x7FC00000, payload and sign dropped (verified: this case's ow… |
-| `attribute-format-fetches` | Metal's fetch of a narrow float into a `float` parameter answers the canonical positive quiet NaN 0x7FC00000, payload and sign dropped (verified: this case's ow… |
-| `attribute-format-fetches` | Metal's fetch of a narrow float into a `float` parameter answers the canonical positive quiet NaN 0x7FC00000, payload and sign dropped (verified: this case's ow… |
-| `attribute-format-fetches` | Metal's fetch of a narrow float into a `float` parameter answers the canonical positive quiet NaN 0x7FC00000, payload and sign dropped (verified: this case's ow… |
-| `attribute-format-fetches` | Metal's fetch of a narrow float into a `float` parameter answers the canonical positive quiet NaN 0x7FC00000, payload and sign dropped (verified: this case's ow… |
-| `attribute-format-fetches` | Metal's fetch of a narrow float into a `float` parameter answers the canonical positive quiet NaN 0x7FC00000, payload and sign dropped (verified: this case's ow… |
 | `blend-interaction-format-srgb8` | Metal's stored sRGB code and ours differ at this site, and the row's count and bound are this run's. The cause is established and is not half precision: Metal's… |
 | `blend-interaction-format-srgb8` | Metal's stored sRGB code and ours differ at this site, and the row's count and bound are this run's. The cause is established and is not half precision: Metal's… |
 | `blend-interaction-format-srgb8` | Metal's stored sRGB code and ours differ at this site, and the row's count and bound are this run's. The cause is established and is not half precision: Metal's… |
@@ -2940,40 +2924,18 @@ A case whose difference from Metal is recorded rather than compared away. The le
 | `half-texel-nans-rgba16f` | Metal's `half` result of a 16-bit float texel hands back the texel's own NaN code, with its sign, its payload and its signalling bit kept (verified: this case's… |
 | `half-texel-nans-rgba16f` | Metal's `half` result of a 16-bit float texel hands back the texel's own NaN code, with its sign, its payload and its signalling bit kept (verified: this case's… |
 | `sampler-mip-linear` | Metal's `lodMinClamp` of `FLT_MAX` holds a linear-mip sample at the LAST level: lane 0 answers 2001, the level-2 value, which is the row this case's own recorde… |
-| `vertex-format-constant-step` | Metal's fetch of a narrow float into a `float` parameter answers the canonical positive quiet NaN 0x7FC00000, payload and sign dropped (verified: this case's ow… |
-| `vertex-format-constant-step` | Metal's fetch of a narrow float into a `float` parameter answers the canonical positive quiet NaN 0x7FC00000, payload and sign dropped (verified: this case's ow… |
-| `vertex-format-constant-step` | Metal's fetch of a narrow float into a `float` parameter answers the canonical positive quiet NaN 0x7FC00000, payload and sign dropped (verified: this case's ow… |
-| `vertex-format-constant-step` | Metal's fetch of a narrow float into a `float` parameter answers the canonical positive quiet NaN 0x7FC00000, payload and sign dropped (verified: this case's ow… |
-| `vertex-format-constant-step` | Metal's fetch of a narrow float into a `float` parameter answers the canonical positive quiet NaN 0x7FC00000, payload and sign dropped (verified: this case's ow… |
-| `vertex-format-constant-step` | Metal's fetch of a narrow float into a `float` parameter answers the canonical positive quiet NaN 0x7FC00000, payload and sign dropped (verified: this case's ow… |
-| `vertex-format-constant-step` | Metal's fetch of a narrow float into a `float` parameter answers the canonical positive quiet NaN 0x7FC00000, payload and sign dropped (verified: this case's ow… |
-| `vertex-format-constant-step` | Metal's fetch of a narrow float into a `float` parameter answers the canonical positive quiet NaN 0x7FC00000, payload and sign dropped (verified: this case's ow… |
-| `vertex-format-constant-step` | Metal's fetch of a narrow float into a `float` parameter answers the canonical positive quiet NaN 0x7FC00000, payload and sign dropped (verified: this case's ow… |
-| `vertex-format-constant-step` | Metal's fetch of a narrow float into a `float` parameter answers the canonical positive quiet NaN 0x7FC00000, payload and sign dropped (verified: this case's ow… |
-| `vertex-format-float4` | Metal's fixed-function vertex fetch of a narrow float canonicalizes a NaN: a `half` code and a `FloatRG11B10` field whose 5-bit exponent is all ones both reach … |
 | `vertex-format-float4` | This is NOT a rounding difference and it is not the narrow-float NaN gap of the sibling rows in the same case. Metal's `float4` fetch of an `MTLVertexFormatFloa… |
-| `vertex-format-float4` | Metal's fixed-function vertex fetch of a narrow float canonicalizes a NaN: a `half` code and a `FloatRG11B10` field whose 5-bit exponent is all ones both reach … |
-| `vertex-format-float4` | Metal's fixed-function vertex fetch of a narrow float canonicalizes a NaN: a `half` code and a `FloatRG11B10` field whose 5-bit exponent is all ones both reach … |
-| `vertex-format-float4` | Metal's fixed-function vertex fetch of a narrow float canonicalizes a NaN: a `half` code and a `FloatRG11B10` field whose 5-bit exponent is all ones both reach … |
-| `vertex-format-float4` | Metal's fixed-function vertex fetch of a narrow float canonicalizes a NaN: a `half` code and a `FloatRG11B10` field whose 5-bit exponent is all ones both reach … |
 | `vertex-format-float4` | Metal converts a normalized vertex field as `c / (2^b - 1)`, correctly rounded, and this device's fixed-function vertex input is one ULP high: at the first diff… |
 | `vertex-format-float4` | Metal converts a normalized vertex field as `c / (2^b - 1)`, correctly rounded, and this device's fixed-function vertex input is one ULP high: at the first diff… |
 | `vertex-format-float4` | Metal converts a normalized vertex field as `c / (2^b - 1)`, correctly rounded, and this device's fixed-function vertex input is one ULP high: at the first diff… |
 | `vertex-format-float4` | Metal converts a normalized vertex field as `c / (2^b - 1)`, correctly rounded, and this device's fixed-function vertex input is one ULP high: at the first diff… |
 | `vertex-format-float4` | Metal converts a normalized vertex field as `c / (2^b - 1)`, correctly rounded, and this device's fixed-function vertex input is one ULP high: at the first diff… |
-| `vertex-format-float4` | Metal's fixed-function vertex fetch of a narrow float canonicalizes a NaN: a `half` code and a `FloatRG11B10` field whose 5-bit exponent is all ones both reach … |
-| `vertex-format-float4` | Metal's fixed-function vertex fetch of a narrow float canonicalizes a NaN: a `half` code and a `FloatRG11B10` field whose 5-bit exponent is all ones both reach … |
-| `vertex-format-float4` | Metal's fixed-function vertex fetch of a narrow float canonicalizes a NaN: a `half` code and a `FloatRG11B10` field whose 5-bit exponent is all ones both reach … |
-| `vertex-format-float4` | Metal's fixed-function vertex fetch of a narrow float canonicalizes a NaN: a `half` code and a `FloatRG11B10` field whose 5-bit exponent is all ones both reach … |
-| `vertex-format-float4` | Metal's fixed-function vertex fetch of a narrow float canonicalizes a NaN: a `half` code and a `FloatRG11B10` field whose 5-bit exponent is all ones both reach … |
 | `vertex-format-half4` | This is NOT a rounding difference and it is not the narrow-float NaN gap of the sibling rows in the same case. Metal's `float4` fetch of an `MTLVertexFormatFloa… |
 | `vertex-format-instance-step` | This is NOT a rounding difference and it is not the narrow-float NaN gap of the sibling rows in the same case. Metal's `float4` fetch of an `MTLVertexFormatFloa… |
-| `vertex-format-instance-step` | Metal's fixed-function vertex fetch of a narrow float canonicalizes a NaN: a `half` code and a `FloatRG11B10` field whose 5-bit exponent is all ones both reach … |
 | `vertex-format-instance-step` | Metal converts a normalized vertex field as `c / (2^b - 1)`, correctly rounded, and this device's fixed-function vertex input is one ULP high: at the first diff… |
 | `vertex-format-instance-step` | Metal converts a normalized vertex field as `c / (2^b - 1)`, correctly rounded, and this device's fixed-function vertex input is one ULP high: at the first diff… |
 | `vertex-format-instance-step` | Metal converts a normalized vertex field as `c / (2^b - 1)`, correctly rounded, and this device's fixed-function vertex input is one ULP high: at the first diff… |
 | `vertex-format-instance-step` | Metal converts a normalized vertex field as `c / (2^b - 1)`, correctly rounded, and this device's fixed-function vertex input is one ULP high: at the first diff… |
-| `vertex-format-instance-step` | Metal's fixed-function vertex fetch of a narrow float canonicalizes a NaN: a `half` code and a `FloatRG11B10` field whose 5-bit exponent is all ones both reach … |
 | `compute-threadgroup-simd-scratch` | Metal's compute pipeline state answers `staticThreadgroupMemoryLength` 24576 -- the fixture's own 24 KiB `threadgroup` array -- and we answer 32768 on this venu… |
 | `host-page-writes-kernel-store-read-only` | Metal DROPS what a shader or the blit engine writes into memory whose backing is read-only, silently and with no error, and we land the write. Metal's rule is m… |
 | `host-page-writes-kernel-store-read-only` | Metal DROPS what a shader or the blit engine writes into memory whose backing is read-only, silently and with no error, and we land the write. Metal's rule is m… |

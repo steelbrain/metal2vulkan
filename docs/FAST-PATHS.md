@@ -292,16 +292,6 @@ driver's. Each is open work.
   `sparseResidencyImage2D` (the three `SparseNeed` checks), and the Metal half stays
   `probes/sparse_unmapped_blit.m`'s.
 
-- **A `half` or `FloatRG11B10` attribute read as `float`: the canonical NaN on the Linux
-  venues.** Both fetch paths answer Metal's `0x7FC00000` and are exact on the CPU interpreter and
-  on MoltenVK; neither is rerun on RADV, llvmpipe or the RTX 5080 since the fix, and
-  `known-gaps.tsv` still carries their rows. The pulled path's rows on llvmpipe and the RTX 5080
-  (`vertex-format-constant-step`, `attribute-format-fetches`) answer the un-canonicalized bits
-  although the canonicalization was already in the tree, which leaves three causes unseparated:
-  a run of an older tip, a cache keyed on a `SEMANTICS_VERSION` the fix did not move, and a
-  driver folding the `float` `OpSelect` the fix used. The last two are addressed (the version
-  moved, and the answer is computed on the integer bits alone), and the reruns decide.
-
 - **An extended-range format's sample through a constexpr clamp-to-zero sampler at a subnormal
   coordinate**: Metal's texture unit reads a subnormal normalized coordinate as the zero of its
   sign before the address mode decides, so a border axis reads texel 0 just outside the level.
