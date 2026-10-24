@@ -11,7 +11,8 @@ one call of a selector is enough, so a selector that takes an enum counts as exe
 value reached it. The **option space** axis (`option_space.py`) is depth: of each Metal enum's and
 option set's values, which ones the suite actually compared, and — because a type whose values are
 all compared says nothing about the pairs of them — how many pairs of the option space a case puts
-to Metal at once, from the declarations in `crossings.tsv`.
+to Metal at once, from the declarations in `crossings.tsv`, and, counted apart, how much
+interaction it holds that is no pair of that space, from `other_crossings.tsv`.
 
 Nothing here is a maintained list. Every number is derived, at the moment this runs, from four
 things already in the tree:
@@ -479,6 +480,43 @@ def known_gaps() -> list[tuple[str, str]]:
 # The join
 
 
+def metal_items(
+    index: dict[tuple[str, str], dict[str, str]],
+    by_item: dict[tuple[str, str], dict[str, set[str]]],
+    api: metal_leg.Api,
+) -> dict[tuple[str, str], option_space.Item]:
+    """Every Metal item a crossing may name as a field axis, from the sources already read.
+
+    The key is the items axis's own -- `(container, item name)` of `scripts/metal-coverage`'s map
+    -- so a field axis names an item this document already has a row for rather than a word a
+    row's author chose. Each carries the case modules whose Metal leg reaches it, and the Metal
+    type its call answers, which is what tells a boolean or numeric field from an enum-valued one.
+
+    The answered type is `objc2-metal`'s, keyed by the selector it binds for the item: a property
+    is bound under its own name, and an Objective-C `BOOL` property under `isName` as well, so
+    both spellings are looked for and a property bound under neither answers nothing here. That is
+    sound in the one direction this is used: an item whose answered type is unknown is **not**
+    refused as an enum under another name, so the check can read short of the truth and never over
+    it.
+    """
+    answered: dict[tuple[str, str], str] = {}
+    for (metal, rust), one in api.answers.items():
+        selector = api.selector.get((metal, rust), rust)
+        for spelling in (selector, rust):
+            answered.setdefault((metal, spelling), one)
+            if spelling.startswith("is") and len(spelling) > 2:
+                tail = spelling[2].lower() + spelling[3:]
+                answered.setdefault((metal, tail), one)
+    out: dict[tuple[str, str], option_space.Item] = {}
+    for key, row in index.items():
+        if not key[0] or key[1] == key[0]:
+            # A free function's empty container, and a container's own row, which names the type
+            # and not a field of it.
+            continue
+        out[key] = option_space.Item(set(by_item.get(key, {})), answered.get(key, ""))
+    return out
+
+
 def inventory():
     """Everything the document states, derived."""
     api = metal_leg.Api.read(API)
@@ -550,6 +588,10 @@ def inventory():
         # The second axis. A case whose answer Metal never ran puts no value to Metal, which is
         # the same gate the items axis applies to a call; the axis reads the values a module states
         # and the crossings a case declares, so it is handed the cases and joins them itself.
+        #
+        # `metal_items` is what a crossing over a Metal **field** is checked against: the items
+        # axis's own join of item to the modules reaching it, and what each call answers. One
+        # vocabulary, so a field axis names a call this document already reports as exercised.
         "option_space": option_space.inventory(
             ROOT,
             {
@@ -557,6 +599,7 @@ def inventory():
                 for module, family in families.items()
                 for case in family["ran"]
             },
+            metal_items(index, by_item, api),
         ),
     }
 
@@ -581,19 +624,36 @@ def names_line(names: list[str]) -> str:
 
 
 def write_crossings(w, space) -> None:
-    """The third axis: the pairs of Metal types a case crosses, declared and checked."""
+    """The third axis: the crossings a case declares, in two counts that are never added.
+
+    *The pairs of the option space* is `crossings.tsv`: every axis a Metal enum, so the number is
+    comparable with the per-value columns above. *The crossings that are not pairs* is
+    `other_crossings.tsv`: a Metal enum crossed with a boolean or numeric Metal field, or one type
+    crossed with itself in two slots. Both are declarations and both are floors; they measure
+    different things and one headline of the two would measure neither.
+    """
     rows = space["rows"]
     held = space["crossings"]
+    other = space["other_crossings"]
     pairs = sorted({pair for row in held for pair in row["pairs"]})
     crossed = sorted({axis for row in held for axis in row["axes"]})
-    # The work list: a type the suite has real per-value depth in and crosses with nothing. One
-    # compared value is not depth, so the floor is two.
+    # An enum a row of the second file names is crossed too, so the work list below is read
+    # against both. A field axis is no Metal enum and names none.
+    crossed_at_all = set(crossed) | {
+        axis for row in other for axis in row["axes"] if "." not in axis
+    }
+    slots = sorted({axis for row in other for axis in row["slots"]})
+    fields = sorted({f"{ty}.{name}" for row in other for ty, name in row["fields"]})
+    with_slots = sum(1 for row in other if row["slots"])
+    with_fields = sum(1 for row in other if row["fields"])
+    # The work list: a type the suite has real per-value depth in and crosses with nothing, in
+    # either file. One compared value is not depth, so the floor is two.
     thin = sorted(
-        (row for row in rows if len(row["compared"]) >= 2 and row["metal"] not in crossed),
+        (row for row in rows if len(row["compared"]) >= 2 and row["metal"] not in crossed_at_all),
         key=lambda r: (-len(r["compared"]), r["metal"]),
     )
 
-    w("### By crossing, which is depth in the pairs")
+    w("### By crossing, which is depth in the combinations")
     w("")
     w(
         "Every column above is per value, and the pairs are where most of the behaviour an "
@@ -630,14 +690,18 @@ def write_crossings(w, space) -> None:
         "declaration and not by discovery."
     )
     w(
-        "- **An axis that is not a Metal enum or option set.** A crossing of a type with a number — "
-        "a stencil mask, a per-sample depth, a draw count — or with a grouping that is not a Metal "
-        "type, such as a pixel format's class, is real depth this count does not hold. The option "
-        "space is what it measures, as the columns above do."
+        "- **An axis that is not a Metal enum or option set.** A crossing of a type with a boolean "
+        "or numeric Metal field — `alphaToCoverageEnabled`, a LOD clamp, an extent, a reset range "
+        "— and a type crossed with **itself in two slots**, which the two stencil faces are, are "
+        "real depth and are no pair of this option space. They are **not** uncounted: they are "
+        "declared in `other_crossings.tsv` and counted in their own table below, apart from these "
+        "numbers and never added into them."
     )
     w(
-        "- **A type crossed with itself in two slots**, which the two stencil faces are: an axis "
-        "may not be named twice, so such a cross is outside the count."
+        "- **An axis that is no Metal item at all.** A pixel format's class, the shape of a "
+        "shader's output, whether a fragment writes its own sample mask: neither file can name "
+        "one, because neither has anything to check such an axis against. That depth is in the "
+        "suite and in no count here."
     )
     w(
         "- **A module that takes its value list from the suite's shared vocabulary** states none of "
@@ -658,10 +722,13 @@ def write_crossings(w, space) -> None:
     w("")
     w("| | |")
     w("|---|---|")
-    w(f"| crossings declared | {len(held)} |")
+    w(f"| pairs of the option space declared | {len(held)} |")
     w(f"| distinct pairs of Metal types crossed | {len(pairs)} |")
-    w(f"| types in at least one crossing | {len(crossed)} |")
-    w(f"| types with two or more values compared and in no crossing | {len(thin)} |")
+    w(f"| types in at least one such pair | {len(crossed)} |")
+    w(
+        "| types with two or more values compared and in no crossing of **either** table | "
+        f"{len(thin)} |"
+    )
     w("")
     if not held:
         w(
@@ -677,19 +744,106 @@ def write_crossings(w, space) -> None:
         cell = "its cases" if row["cell"] == option_space.FAMILY else f"`{row['cell']}`"
         w(f"| `{row['module']}` | {cell} | {axes} | {row['why']} |")
     w("")
+    write_other_crossings(w, other, slots, fields, with_slots, with_fields)
     w("#### Types with per-value depth and no crossing")
     w("")
     w(
         "The work list of this axis, and the shape of the answer to *is the depth sufficient?*: "
         "each of these is a type the suite compared two or more values of and crossed with "
-        "nothing. The number is the values compared. A row is a question and not a verdict — the "
-        "type may be crossed by a family that declared no row, and a type whose values cannot "
-        "interact with anything has nothing to answer — but a type deep on the per-value axis and "
-        "absent here is where a cell of a pair is least likely to have been looked at."
+        "nothing in **either** table. The number is the values compared. A row is a question and "
+        "not a verdict — the type may be crossed by a family that declared no row, and a type "
+        "whose values cannot interact with anything has nothing to answer — but a type deep on "
+        "the per-value axis and absent here is where a cell of a pair is least likely to have "
+        "been looked at."
     )
     w("")
     for row in thin:
         w(f"- **`{row['metal']}`**, {len(row['compared'])} of {len(row['values'])} compared")
+    w("")
+
+
+def write_other_crossings(w, other, slots, fields, with_slots, with_fields) -> None:
+    """The crossings that are not pairs of the option space, counted apart from the pairs."""
+    w("#### Crossings that are not pairs of the option space")
+    w("")
+    w(
+        "The table above counts pairs of two Metal **enums**, because that is what the per-value "
+        "columns measure the depth of. A crossing of an enum with a Metal field that is a "
+        "**boolean** or a **number**, and a crossing of one type with **itself in two or more "
+        "slots**, is depth of the same kind and is no pair of that space. These are declared in "
+        "`scripts/conformance-coverage/other_crossings.tsv`, in rows of the same four fields, and "
+        "counted here. **The two counts are never added together**: one says how much of the "
+        "option space's own grid a case puts to Metal, the other how much interaction the suite "
+        "holds that the option space cannot express, and a sum of them would say neither."
+    )
+    w("")
+    w(
+        "An axis there is a Metal enum with a generated value list, which **may** be named more "
+        "than once — that repetition is the type-in-two-slots crossing and the count of names is "
+        "the count of slots — or one Metal item of one Metal type, spelled as the items axis keys "
+        "it (`MTLRenderPipelineDescriptor.alphaToCoverageEnabled`, "
+        "`MTLArgumentEncoder.setArgumentBuffer:offset:`)."
+    )
+    w("")
+    w(
+        "**This document is not written** if such a row names a module no case of which ran Metal, "
+        "a cell that is not one of that module's recorded cases, fewer than two axes, nothing that "
+        "the cross decides, or an **enum** axis of which the module's own text states fewer than "
+        "two values by name. Three refusals are this table's own:"
+    )
+    w("")
+    w(
+        "- **a row every axis of which is a Metal enum named once.** That is a pair of the option "
+        "space: it belongs in the table above, under the check that the module states two values "
+        "of each axis, and a row parked here would be the same claim under a weaker rule;"
+    )
+    w(
+        "- **a field axis `objc2-metal` binds no such item for, or one this module's Metal leg "
+        "reaches no call of.** The second is the items axis's own join, so a field axis names a "
+        "call this document already reports as exercised rather than a word a row's author chose;"
+    )
+    w(
+        "- **a field axis whose call answers a Metal type with a generated value list.** Such a "
+        "field is an enum under another name — `MTLTextureDescriptor.storageMode` is one — and "
+        "naming it as a field would dodge the two-values check the enum spelling carries."
+    )
+    w("")
+    w(
+        "What **cannot** be checked for a field axis, and is therefore what only a reader can "
+        "check: that the module put **two values** of the field to Metal. A boolean's two values "
+        "and a number's range are nowhere in the text this reads and in no recording's "
+        "transcript, so a field axis carries the field being Metal's and this module's leg setting "
+        "it, and nothing about variation. An enum axis carries the two-values check here exactly as "
+        "it does above, which is why a row's enum axes are the stronger half of it. The last "
+        "column, as above, is for a reader against the case."
+    )
+    w("")
+    w("| | |")
+    w("|---|---|")
+    w(f"| crossings declared that are not pairs of the option space | {len(other)} |")
+    w(f"| of those, naming a type in two or more slots | {with_slots} |")
+    w(f"| of those, naming a Metal field that is a boolean or a number | {with_fields} |")
+    w(f"| distinct Metal fields crossed | {len(fields)} |")
+    w(f"| distinct Metal types crossed with themselves | {len(slots)} |")
+    w("")
+    w(
+        "The two *of those* rows are not a partition and do not sum to the first: a row may name "
+        "both, as the sampler row crossing its two filter slots with a LOD clamp does."
+    )
+    w("")
+    if not other:
+        w(
+            "None are declared, so how much interaction the suite holds outside the option "
+            "space's own pairs is measured at nothing."
+        )
+        w("")
+        return
+    w("| case module | cell | crossed | what only the cross decides |")
+    w("|---|---|---|---|")
+    for row in sorted(other, key=lambda r: (r["module"], r["cell"], r["axes"])):
+        axes = " x ".join(f"`{axis}`" for axis in row["axes"])
+        cell = "its cases" if row["cell"] == option_space.FAMILY else f"`{row['cell']}`"
+        w(f"| `{row['module']}` | {cell} | {axes} | {row['why']} |")
     w("")
 
 
@@ -785,8 +939,10 @@ def write_option_space(w, space) -> None:
     w(
         "- **Combinations.** Every column here is per value. A type whose values are all compared "
         "says nothing about the pairs and triples of them, which is where most of the behaviour "
-        "an implementation can get wrong lives. *By crossing* below counts the pairs a case states "
-        "together, which is the measure of that and is a floor by every crossing nobody declared."
+        "an implementation can get wrong lives. *By crossing* below counts what a case states "
+        "together, in two numbers kept apart: the pairs of this option space, and the crossings "
+        "that are no pair of it — an enum with a boolean or numeric field, a type with itself in "
+        "two slots. Each is a floor by every crossing nobody declared."
     )
     w(
         "- **Metal's API validation is excluded.** Its complaints name enumerators, and the suite "
@@ -1011,9 +1167,10 @@ def write(data) -> str:
     w(
         "Both are **per value**, which is the limit the suite's own blind spot sits in: a side can "
         "be right about every value of two types alone and wrong about a cell of the two together. "
-        "*By crossing* inside the option-space axis counts the pairs a case puts to Metal at "
-        "once, from a declaration the generator checks. It is the only number here about "
-        "interactions, and it is a floor by every crossing nobody declared."
+        "*By crossing* inside the option-space axis counts what a case puts to Metal at once, "
+        "from declarations the generator checks: the pairs of the option space, and — counted "
+        "apart and never added in — the crossings that are no pair of it. They are the only "
+        "numbers here about interactions, and each is a floor by every crossing nobody declared."
     )
     w("")
 
@@ -1170,6 +1327,10 @@ def write(data) -> str:
     w(
         "| declared crossings of the option space (pairs put to Metal at once) | "
         f"{len(space['crossings'])} |"
+    )
+    w(
+        "| declared crossings that are no pair of it (a boolean or numeric field, or one type in "
+        f"two slots) | {len(space['other_crossings'])} |"
     )
     w("")
     w(

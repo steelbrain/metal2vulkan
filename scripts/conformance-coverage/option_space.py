@@ -64,6 +64,43 @@ property of the case's reasoning, not of its text, so the row states it in words
 the count is of crossings declared, never of crossings proved. The document says so where it
 prints the number.
 
+# The crossings that are not pairs of the option space
+
+A crossing of a Metal enum with a **boolean** field (`alphaToCoverageEnabled`), with a **number**
+(an extent, a level count, an offset, a sample count), or of one type with **itself in two slots**
+(the two stencil faces, a sampler's three address modes, two members of an argument buffer) is real
+depth and is not a pair of the option space. `crossings.tsv` refuses every one of those, which left
+the shape of them stated as a limit and measured at nothing: a reader could not tell whether one
+such crossing or forty fell outside the count.
+
+`other_crossings.tsv` is where they are declared, counted **apart** from the pairs and never added
+into one number -- the same separation `unreachable_values.tsv` keeps between a measured
+impossibility and a gap. Its rows take the same four fields, and the axes are of two kinds:
+
+- a Metal enum or option set with a generated value list, which **may** be named more than once:
+  that repetition is the type-in-two-slots crossing, and the count of slots is the count of names;
+- `MTLType.item`, one Metal item of one Metal type, spelled as the items axis keys it --
+  `MTLRenderPipelineDescriptor.alphaToCoverageEnabled`,
+  `MTLArgumentEncoder.setArgumentBuffer:offset:`.
+
+What this second file refuses, beyond the shape checks the first one makes:
+
+- a row every axis of which is a Metal enum named once, which is a pair of the option space and
+  belongs in `crossings.tsv` under its checks, not here under weaker ones;
+- an `MTLType.item` axis `objc2-metal` binds no such item for, and one **this module's Metal leg
+  does not reach** -- the same join the items axis makes, so a field axis names a call the suite
+  is already measured to make;
+- an `MTLType.item` axis whose call **answers a Metal type with a generated value list**. Such a
+  field is an enum under another name, and declaring it here would dodge the pairs file's check
+  that the module states two of its values. `MTLTextureDescriptor.storageMode` is one.
+
+What it cannot check, and what no reading of the sources could: that the module puts **two values**
+of a boolean or numeric field to Metal. The enum axes carry that check here as they do in the pairs
+file -- the module's own text must state two values by name -- and a field axis carries only that
+the field is Metal's and that this module's Metal leg sets it. So a field axis is a weaker
+declaration than an enum axis, which is why the two counts stay apart and why the document says
+which part only a reader can check.
+
 # Why a value stated as a raw ordinal is not resolved, and must not be
 
 Both numerators read **names**. A case may instead hand the Metal leg an enum's ordinal as a
@@ -219,8 +256,13 @@ def read_unreachable(root: Path) -> dict[tuple[str, str], tuple[str, str]]:
     return out
 
 
-#: The declared crossings, relative to the tree's root.
+#: The declared crossings of the option space -- every axis a Metal enum -- relative to the
+#: tree's root.
 CROSSINGS = "scripts/conformance-coverage/crossings.tsv"
+
+#: The declared crossings that are **not** pairs of the option space: one axis a boolean or
+#: numeric Metal field, or one type in two slots. Counted apart from the pairs, never added in.
+OTHER = "scripts/conformance-coverage/other_crossings.tsv"
 
 #: What a row's `cell` field says where the cross is read **across** the family's cases -- one case
 #: a cell of it, or one axis fixed per case and the others swept inside each -- rather than inside
@@ -228,21 +270,41 @@ CROSSINGS = "scripts/conformance-coverage/crossings.tsv"
 FAMILY = "family"
 
 
-def read_crossings(root: Path) -> list[tuple[str, str, tuple[str, ...], str]]:
-    """Every declared crossing as `(module, cell, axes, what only the cross decides)`.
+class Item:
+    """One Metal item a field axis may name: who reaches it, and what its call answers.
+
+    Built by `coverage.py` from the two sources it already reads -- `objc2_metal.tsv` for what
+    `objc2-metal` binds and what each call answers, and the items axis's own join for which case
+    modules' Metal legs reach the item. A field axis is checked against this and nothing else, so
+    it names a call the suite is already measured to make rather than a word a row's author chose.
+    """
+
+    def __init__(self, modules: set[str], answers: str):
+        #: The case modules whose Metal leg reaches this item, as the items axis joins them.
+        self.modules = frozenset(modules)
+        #: The Metal type the call answers, or `""`. A type with a generated value list here means
+        #: the field is an enum under another name and belongs in `crossings.tsv`.
+        self.answers = answers
+
+
+def _read_rows(
+    path: Path, repeats: bool
+) -> list[tuple[str, str, tuple[str, ...], str]]:
+    """Every row of a crossings file as `(module, cell, axes, what only the cross decides)`.
 
     The shape of the row and nothing about the suite: the caller checks it against the sources, the
     way `read_unreachable`'s caller checks that list. Refused here is only what the row itself gets
-    wrong -- a field missing, a crossing of one axis, an axis named twice, a row declared twice, or
-    a row that says nothing about what the cross decides.
+    wrong -- a field missing, a crossing of one axis, a row declared twice, or a row that says
+    nothing about what the cross decides.
 
     A crossing of **one axis** is a sweep, which the per-value columns above already count, so a row
-    with fewer than two axes is a mistake and not a smaller claim. An axis named twice is the same
-    mistake spelled differently: a type crossed with itself in two slots -- the two stencil faces --
-    is a real interaction and this file cannot say it, which the document states as a limit rather
-    than taking `A+A` to mean it.
+    with fewer than two axes is a mistake and not a smaller claim, in either file.
+
+    `repeats` is the one difference between the two files. An axis named twice in `crossings.tsv`
+    is a type crossed with itself in two slots, which is not a pair of the option space and is
+    refused there; in `other_crossings.tsv` that repetition **is** the claim, and the count of
+    names is the count of slots.
     """
-    path = root / CROSSINGS
     out: list[tuple[str, str, tuple[str, ...], str]] = []
     if not path.exists():
         # A tree that declares none, which is every synthetic tree the self-test builds unless it
@@ -264,10 +326,11 @@ def read_crossings(root: Path) -> list[tuple[str, str, tuple[str, ...], str]]:
                 f"{path.name}: {module} {cell} crosses {axes!r}, which is one axis -- a sweep of "
                 "one type is what the per-value columns already count"
             )
-        if len(set(held)) != len(held):
+        if not repeats and len(set(held)) != len(held):
             raise SystemExit(
                 f"{path.name}: {module} {cell} names an axis twice in {axes!r}; a type crossed "
-                "with itself in two slots is outside this count"
+                f"with itself in two slots is no pair of the option space and is declared in "
+                f"{Path(OTHER).name}"
             )
         if not why:
             raise SystemExit(
@@ -281,13 +344,103 @@ def read_crossings(root: Path) -> list[tuple[str, str, tuple[str, ...], str]]:
     return out
 
 
+def read_crossings(root: Path) -> list[tuple[str, str, tuple[str, ...], str]]:
+    """Every declared pair of the option space, by its row's shape alone.
+
+    Every axis is a Metal enum, each named once: `crossings`, below, is what checks that against
+    the generated value lists and the module's own text.
+    """
+    return _read_rows(root / CROSSINGS, repeats=False)
+
+
+def read_other_crossings(root: Path) -> list[tuple[str, str, tuple[str, ...], str]]:
+    """Every declared crossing that is not a pair of the option space, by its row's shape alone.
+
+    An axis may repeat here, which is the type-in-two-slots crossing; `other_crossings`, below, is
+    what checks the axes against the Metal items and the generated value lists.
+    """
+    return _read_rows(root / OTHER, repeats=True)
+
+
+def _holds_the_cell(
+    modules_ran: dict[str, set[str]], where: str, module: str, cell: str
+) -> set[str]:
+    """The module's recorded cases, with the row's cell checked to be one of them.
+
+    Refused: a module no case of which ran Metal, a cell that is not one of **that** module's
+    recorded cases -- which is what catches a row left behind by a renamed or deleted case -- and
+    `family` where the module has fewer than two recorded cases, since a cross read across the
+    family's cases needs at least two of them.
+    """
+    held = modules_ran.get(module)
+    if not held:
+        raise SystemExit(
+            f"{where} declares {module} {cell}, and no case of {module} has a recording "
+            "of an answer Metal ran -- a module that ran no Metal put no pair to it"
+        )
+    if cell == FAMILY:
+        if len(held) < 2:
+            raise SystemExit(
+                f"{where} says {module}'s cross is read across its own cases, and it "
+                f"has {len(held)} recorded case -- a cross across cases needs at least two"
+            )
+    elif cell not in held:
+        raise SystemExit(
+            f"{where} declares the cell {cell} of {module}, which is not a case of "
+            f"{module} with a recording of an answer Metal ran -- a renamed or deleted case, "
+            "or the wrong module"
+        )
+    return held
+
+
+def _varies_the_axis(
+    types: dict[str, Type],
+    effect: dict[tuple[str, str], set[str]],
+    where: str,
+    module: str,
+    cell: str,
+    axis: str,
+) -> None:
+    """That `module`'s own text states two values of the Metal enum `axis` by name.
+
+    The one check that bears on the claim, and it is the same check in both files. A module that
+    states one value of an axis, or none, cannot vary it, so nothing in the text tells the claimed
+    cross from a sweep of the other axis at a fixed cell -- a single-value falsification would
+    satisfy the row. It is a check of what the text can state, never of what the case's expected
+    answer needs.
+    """
+    stated = [value for value in types[axis].names if module in effect.get((axis, value), ())]
+    if len(stated) < 2:
+        raise SystemExit(
+            f"{where} says {module} {cell} crosses {axis}, and {module}'s own text "
+            f"states {len(stated)} of its values by name -- a module that cannot vary an "
+            "axis cannot cross it, so one value would falsify the row"
+        )
+
+
+def _pairs(axes: tuple[str, ...]) -> list[tuple[str, str]]:
+    """Each unordered pair of a row's axes, so a three-axis grid holds three.
+
+    A pair is sorted, so two rows crossing the same two types in either order are one pair and not
+    two, and a type crossed with itself contributes none: `(A, A)` is no pair of two types.
+    """
+    return sorted(
+        {
+            tuple(sorted((one, other)))
+            for i, one in enumerate(axes)
+            for other in axes[i + 1 :]
+            if one != other
+        }
+    )
+
+
 def crossings(
     root: Path,
     types: dict[str, Type],
     effect: dict[tuple[str, str], set[str]],
     ran_cases: dict[str, str],
 ) -> list[dict]:
-    """The declared crossings, each checked against the sources it names.
+    """The declared pairs of the option space, each checked against the sources it names.
 
     `ran_cases` is every case whose committed recording holds an answer Metal **ran**, to the
     module that declares its name -- the same join the items axis makes, and the same gate: a case
@@ -297,72 +450,136 @@ def crossings(
     optimistic:
 
     - a module no case of which ran Metal, or a cell that is not one of **that** module's recorded
-      cases. This is what catches a row left behind by a renamed or deleted case;
-    - `family` where the module has fewer than two recorded cases, since a cross read across the
-      family's cases needs at least two of them;
+      cases, and `family` where the module has fewer than two recorded cases
+      (`_holds_the_cell`);
     - an axis with no generated value list, which is a typo or a Metal type outside this axis;
-    - an axis of which the module's own text states fewer than **two** values by name. A module
-      that states one value of an axis, or none, cannot vary it, so nothing in the text tells the
-      claimed cross from a sweep of the other axis at a fixed cell -- a single-value falsification
-      would satisfy the row. This is the one check that bears on the claim, and it is a check of
-      what the text can state, never of what the case's expected answer needs.
+    - an axis of which the module's own text states fewer than **two** values by name
+      (`_varies_the_axis`).
 
     What is **not** refused, because no reading of the text can see it: whether the expected answer
     is a function of both axes. A row's last field says that in words, for a reader to check against
     the case.
     """
+    where = Path(CROSSINGS).name
     modules_ran: dict[str, set[str]] = {}
     for case, module in ran_cases.items():
         modules_ran.setdefault(module, set()).add(case)
     out: list[dict] = []
     for module, cell, axes, why in read_crossings(root):
-        held = modules_ran.get(module)
-        if not held:
-            raise SystemExit(
-                f"crossings.tsv declares {module} {cell}, and no case of {module} has a recording "
-                "of an answer Metal ran -- a module that ran no Metal put no pair to it"
-            )
-        if cell == FAMILY:
-            if len(held) < 2:
-                raise SystemExit(
-                    f"crossings.tsv says {module}'s cross is read across its own cases, and it "
-                    f"has {len(held)} recorded case -- a cross across cases needs at least two"
-                )
-        elif cell not in held:
-            raise SystemExit(
-                f"crossings.tsv declares the cell {cell} of {module}, which is not a case of "
-                f"{module} with a recording of an answer Metal ran -- a renamed or deleted case, "
-                "or the wrong module"
-            )
+        _holds_the_cell(modules_ran, where, module, cell)
         for axis in axes:
             if axis not in types:
                 raise SystemExit(
-                    f"crossings.tsv crosses {axis}, which has no generated value list here"
+                    f"{where} crosses {axis}, which has no generated value list here"
                 )
-            stated = [
-                value for value in types[axis].names if module in effect.get((axis, value), ())
-            ]
-            if len(stated) < 2:
-                raise SystemExit(
-                    f"crossings.tsv says {module} {cell} crosses {axis}, and {module}'s own text "
-                    f"states {len(stated)} of its values by name -- a module that cannot vary an "
-                    "axis cannot cross it, so one value would falsify the row"
-                )
+            _varies_the_axis(types, effect, where, module, cell, axis)
         out.append(
             {
                 "module": module,
                 "cell": cell,
                 "axes": list(axes),
                 "why": why,
-                # Each unordered pair of the row's axes, so a three-axis grid holds three. A
-                # pair is sorted, so two rows crossing the same two types in either order are one
-                # pair and not two.
-                "pairs": sorted(
-                    {
-                        tuple(sorted((one, other)))
-                        for i, one in enumerate(axes)
-                        for other in axes[i + 1 :]
-                    }
+                "pairs": _pairs(axes),
+            }
+        )
+    return out
+
+
+def other_crossings(
+    root: Path,
+    types: dict[str, Type],
+    effect: dict[tuple[str, str], set[str]],
+    ran_cases: dict[str, str],
+    items: dict[tuple[str, str], Item],
+) -> list[dict]:
+    """The declared crossings that are not pairs of the option space, each checked the same way.
+
+    These are counted apart from the pairs and never added into them: a crossing of a type with a
+    boolean or numeric field, or of a type with itself in two or more slots, is real depth and is
+    **not** a pair of the option space, which is what the columns above and `crossings.tsv` measure.
+
+    `items` is every Metal item a field axis may name, keyed as the items axis keys it, holding the
+    case modules whose Metal leg reaches it and the Metal type its call answers.
+
+    What is refused here that `crossings` does not refuse:
+
+    - a row every axis of which is a Metal enum named **once**. That is a pair of the option space:
+      it belongs in `crossings.tsv`, under the check that the module states two values of each
+      axis, and a row parked here would be the same claim under a weaker rule;
+    - a field axis naming an item `objc2-metal` binds nothing for, and one **this module's Metal
+      leg does not reach**. The second is the items axis's own join, so a field axis names a call
+      the suite is measured to make rather than a word chosen here;
+    - a field axis whose call answers a Metal type with a generated value list. Such a field is an
+      enum under another name, and naming it as a field would dodge the two-values check that the
+      enum spelling carries.
+
+    Everything `crossings` refuses is refused here too, by the same helpers: the cell must be one
+    of the module's recorded cases, and an enum axis -- repeated or not -- must be one the module's
+    own text states two values of.
+
+    What **cannot** be checked, for a field axis, is that the module put two values of the field to
+    Metal. A boolean's two values and a number's range are nowhere in the text this reads, and
+    nothing in a recording names them, so that part of a field row is what only a reader can check.
+    The document says so where it prints the count.
+    """
+    where = Path(OTHER).name
+    modules_ran: dict[str, set[str]] = {}
+    for case, module in ran_cases.items():
+        modules_ran.setdefault(module, set()).add(case)
+    out: list[dict] = []
+    for module, cell, axes, why in read_other_crossings(root):
+        if len(set(axes)) == len(axes) and all(axis in types for axis in axes):
+            raise SystemExit(
+                f"{where} declares {module} {cell} over {'+'.join(axes)}, every axis of which is "
+                f"a Metal enum named once -- that is a pair of the option space and is declared "
+                f"in {Path(CROSSINGS).name}, under its own checks"
+            )
+        _holds_the_cell(modules_ran, where, module, cell)
+        fields: list[tuple[str, str]] = []
+        for axis in axes:
+            if axis in types:
+                _varies_the_axis(types, effect, where, module, cell, axis)
+                continue
+            if "." not in axis:
+                raise SystemExit(
+                    f"{where} crosses {axis}, which is neither a Metal type with a generated "
+                    "value list nor a `MTLType.item` naming one Metal item"
+                )
+            metal, name = axis.split(".", 1)
+            held = items.get((metal, name))
+            if held is None:
+                raise SystemExit(
+                    f"{where} crosses {axis}, and `objc2-metal` binds no {name} on {metal} -- a "
+                    "typo, a renamed selector, or the wrong Metal type"
+                )
+            if held.answers in types:
+                raise SystemExit(
+                    f"{where} crosses the field {axis}, whose call answers {held.answers}, which "
+                    f"has a generated value list -- cross {held.answers} itself, so the module is "
+                    "held to stating two of its values"
+                )
+            if module not in held.modules:
+                raise SystemExit(
+                    f"{where} says {module} crosses {axis}, and {module}'s Metal leg reaches no "
+                    f"call of it -- the items axis attributes {name} to "
+                    f"{', '.join(sorted(held.modules)) or 'no module'}"
+                )
+            fields.append((metal, name))
+        out.append(
+            {
+                "module": module,
+                "cell": cell,
+                "axes": list(axes),
+                "why": why,
+                # The pairs of **distinct** Metal enums this row holds, which is how a row that
+                # crosses an enum with a field still reports the enums it names: a field axis is
+                # no Metal type and is in no pair, so a row naming one enum and one field holds
+                # none. These are reported and never counted into the option space's own pairs.
+                "pairs": _pairs(tuple(axis for axis in axes if axis in types)),
+                # The Metal fields the row names, and how many slots of one enum it crosses.
+                "fields": fields,
+                "slots": sorted(
+                    {axis for axis in axes if axis in types and axes.count(axis) > 1}
                 ),
             }
         )
@@ -753,13 +970,21 @@ def by_hand(root: Path, types: dict[str, Type]) -> list[tuple[str, str, list[str
     return [(metal, rust, names) for metal, (rust, names) in sorted(out.items())]
 
 
-def inventory(root: Path, ran_cases: dict[str, str]) -> dict:
+def inventory(
+    root: Path,
+    ran_cases: dict[str, str],
+    items: dict[tuple[str, str], Item] | None = None,
+) -> dict:
     """The axis, derived: every type with its three sets of values, and the declared crossings.
 
     `ran_cases` is every case whose committed recording holds an answer Metal **ran**, to the case
     module that declares its name. The module-level gate the per-value columns apply is that same
     fact read coarsely -- a module with at least one such case -- so there is one input and not two
     that could disagree.
+
+    `items` is every Metal item a field axis of `other_crossings.tsv` may name. A tree that passes
+    none declares no field axis that can be checked, so any it declares is refused rather than
+    taken on trust.
     """
     ran = set(ran_cases.values())
     types = read_types(root)
@@ -860,4 +1085,9 @@ def inventory(root: Path, ran_cases: dict[str, str]) -> dict:
         # The pairs axis. Checked against the sources each row names, and a floor by every crossing
         # the suite holds and nobody declared.
         "crossings": crossings(root, types, effect, ran_cases),
+        # The crossings that are no pair of the option space: an axis that is a boolean or numeric
+        # Metal field, or one type in two slots. A separate count, never added into the one above.
+        "other_crossings": other_crossings(
+            root, types, effect, ran_cases, items or {}
+        ),
     }

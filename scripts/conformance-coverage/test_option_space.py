@@ -98,6 +98,7 @@ def tree(
     by_hand: str = "",
     unreachable: str = "",
     crossings: str = "",
+    other: str = "",
 ) -> Path:
     """A repository-shaped tree of exactly these sources and recordings."""
     root = Path(tempfile.mkdtemp(prefix="option-space-selftest-"))
@@ -129,6 +130,10 @@ def tree(
         crossed = root / option_space.CROSSINGS
         crossed.parent.mkdir(parents=True, exist_ok=True)
         crossed.write_text(crossings)
+    if other:
+        held = root / option_space.OTHER
+        held.parent.mkdir(parents=True, exist_ok=True)
+        held.write_text(other)
     for data in recordings:
         (suite / "recordings" / f"{data['case']}.json").write_text(json.dumps(data))
     return root
@@ -823,6 +828,218 @@ class Crossings(unittest.TestCase):
         with self.assertRaises(SystemExit) as refused:
             option_space.inventory(root, {"blends-case": "blends"})
         self.assertIn("is declared twice", str(refused.exception))
+
+
+#: The Metal items a field axis of the synthetic trees may name, as `coverage.py` hands them over:
+#: two fields of one type that answer no Metal type, one field whose call answers `MTLThing` --
+#: which is an enum under another name -- and a field of a type the `blends` module never touches.
+def items(reached: str = "blends") -> dict[tuple[str, str], option_space.Item]:
+    return {
+        ("MTLWidget", "spun"): option_space.Item({reached}, ""),
+        ("MTLWidget", "setSpread:atIndex:"): option_space.Item({reached}, ""),
+        ("MTLWidget", "thing"): option_space.Item({reached}, "MTLThing"),
+        ("MTLGadget", "whirred"): option_space.Item({"others"}, ""),
+    }
+
+
+class OtherCrossings(unittest.TestCase):
+    """A declared crossing that is no pair of the option space, and what that second file refuses.
+
+    It holds what `crossings.tsv` cannot say -- a Metal enum crossed with a boolean or numeric
+    field, and a type crossed with itself in two slots -- so its rows are the weaker declaration
+    of the two, and its worth is again what it refuses. Three refusals are its own: a row that is
+    really a pair of the option space, a field axis that is not a Metal item this module's leg
+    reaches, and a field axis whose call answers a Metal type with a value list, which is an enum
+    under another name.
+    """
+
+    #: Two values of each type, which is what a cross naming either of them needs.
+    PAIR = "fn go() { let a = [Thing::Beta, Thing::Gamma]; let s = Spread::LEFT | Spread::RIGHT; }"
+
+    def declared(
+        self,
+        text: str = "",
+        cell: str = "blends-case",
+        axes: str = "MTLThing+MTLWidget.spun",
+        reached: str = "blends",
+        ran: dict[str, str] | None = None,
+    ):
+        """The other crossings of a tree whose `blends` module states `text` and declares one row."""
+        root = tree(
+            {"blends": text or self.PAIR},
+            other=f"# module\tcell\taxes\twhat only the cross decides\n"
+            f"blends\t{cell}\t{axes}\tonly the two together say which\n",
+        )
+        held = option_space.inventory(
+            root, ran or {"blends-case": "blends"}, items(reached)
+        )
+        return held["other_crossings"]
+
+    def test_an_enum_crossed_with_a_field_is_counted_apart_from_the_pairs(self):
+        held = self.declared()
+        self.assertEqual(len(held), 1)
+        self.assertEqual(held[0]["axes"], ["MTLThing", "MTLWidget.spun"])
+        self.assertEqual(held[0]["fields"], [("MTLWidget", "spun")])
+        self.assertEqual(held[0]["slots"], [])
+        # No pair of two Metal enums, so it adds nothing to the option space's own count.
+        self.assertEqual(held[0]["pairs"], [])
+
+    def test_the_pairs_count_does_not_hold_these_rows(self):
+        root = tree(
+            {"blends": self.PAIR},
+            other="blends\tblends-case\tMTLThing+MTLWidget.spun\tonly the two together\n",
+        )
+        held = option_space.inventory(root, {"blends-case": "blends"}, items())
+        self.assertEqual(held["crossings"], [])
+        self.assertEqual(len(held["other_crossings"]), 1)
+
+    def test_a_type_crossed_with_itself_names_its_slots(self):
+        held = self.declared(axes="MTLThing+MTLThing")
+        self.assertEqual(held[0]["slots"], ["MTLThing"])
+        self.assertEqual(held[0]["fields"], [])
+        # `(A, A)` is no pair of two types, so the pair count stays empty here too.
+        self.assertEqual(held[0]["pairs"], [])
+
+    def test_three_slots_of_one_type_are_one_row(self):
+        held = self.declared(axes="MTLThing+MTLThing+MTLThing")
+        self.assertEqual(held[0]["axes"], ["MTLThing"] * 3)
+        self.assertEqual(held[0]["slots"], ["MTLThing"])
+
+    def test_two_fields_and_no_enum_at_all_is_a_row(self):
+        held = self.declared(axes="MTLWidget.spun+MTLWidget.setSpread:atIndex:")
+        self.assertEqual(
+            held[0]["fields"], [("MTLWidget", "spun"), ("MTLWidget", "setSpread:atIndex:")]
+        )
+
+    def test_a_row_of_distinct_enums_also_holds_its_pair(self):
+        # A row that crosses two enums **and** a field is no pair-only row, and the two enums it
+        # names are still a pair of the option space: the shape is reported rather than dropped.
+        held = self.declared(axes="MTLThing+MTLSpread+MTLWidget.spun")
+        self.assertEqual(held[0]["pairs"], [("MTLSpread", "MTLThing")])
+
+    def test_a_tree_declaring_none_holds_none(self):
+        root = tree({"blends": self.PAIR})
+        held = option_space.inventory(root, {"blends-case": "blends"}, items())
+        self.assertEqual(held["other_crossings"], [])
+
+    def test_a_row_that_is_really_a_pair_of_the_option_space_is_refused(self):
+        # The refusal that keeps the two counts from overlapping, and keeps a pair from being
+        # declared here to dodge the pairs file's two-values check.
+        with self.assertRaises(SystemExit) as refused:
+            self.declared(axes="MTLThing+MTLSpread")
+        self.assertIn("that is a pair of the option space", str(refused.exception))
+
+    def test_a_field_objc2_metal_binds_nothing_for_is_refused(self):
+        with self.assertRaises(SystemExit) as refused:
+            self.declared(axes="MTLThing+MTLWidget.spunn")
+        self.assertIn("binds no spunn on MTLWidget", str(refused.exception))
+
+    def test_a_field_of_a_type_outside_the_api_is_refused(self):
+        with self.assertRaises(SystemExit) as refused:
+            self.declared(axes="MTLThing+MTLNotAType.spun")
+        self.assertIn("binds no spun on MTLNotAType", str(refused.exception))
+
+    def test_a_field_whose_call_answers_an_enum_is_refused(self):
+        # An enum under another name: declaring it as a field would carry none of the two-values
+        # check that the enum's own spelling carries.
+        with self.assertRaises(SystemExit) as refused:
+            self.declared(axes="MTLSpread+MTLWidget.thing")
+        self.assertIn("whose call answers MTLThing", str(refused.exception))
+
+    def test_a_field_this_modules_metal_leg_does_not_reach_is_refused(self):
+        with self.assertRaises(SystemExit) as refused:
+            self.declared(axes="MTLThing+MTLGadget.whirred")
+        self.assertIn("reaches no call of it", str(refused.exception))
+
+    def test_a_field_no_module_reaches_is_refused_by_name(self):
+        with self.assertRaises(SystemExit) as refused:
+            self.declared(reached="others")
+        self.assertIn("attributes spun to others", str(refused.exception))
+
+    def test_an_axis_that_is_no_metal_item_is_refused(self):
+        # The one kind of axis neither file can hold: a grouping that is no Metal item, so there is
+        # nothing to check it against.
+        with self.assertRaises(SystemExit) as refused:
+            self.declared(axes="MTLThing+the fragment's own sample mask")
+        self.assertIn("neither a Metal type with a generated value list", str(refused.exception))
+
+    def test_an_enum_axis_the_module_states_one_value_of_is_refused(self):
+        # The pairs file's own check, applied here to the enum half of a row: a field axis carries
+        # no such check, and an enum axis must not lose it by sharing a row with one.
+        with self.assertRaises(SystemExit) as refused:
+            self.declared(text="fn go() { let a = [Thing::Beta]; }")
+        self.assertIn("states 1 of its values by name", str(refused.exception))
+
+    def test_a_slot_crossing_of_an_axis_with_one_value_stated_is_refused(self):
+        with self.assertRaises(SystemExit) as refused:
+            self.declared(text="fn go() { let a = [Thing::Beta]; }", axes="MTLThing+MTLThing")
+        self.assertIn("states 1 of its values by name", str(refused.exception))
+
+    def test_a_cell_that_is_not_a_case_of_the_module_is_refused(self):
+        with self.assertRaises(SystemExit) as refused:
+            self.declared(cell="blends-renamed")
+        self.assertIn("which is not a case of blends", str(refused.exception))
+
+    def test_a_module_that_ran_no_metal_is_refused(self):
+        with self.assertRaises(SystemExit) as refused:
+            self.declared(ran={"others-case": "others"})
+        self.assertIn("no case of blends has a recording", str(refused.exception))
+
+    def test_a_family_of_one_recorded_case_is_refused(self):
+        with self.assertRaises(SystemExit) as refused:
+            self.declared(cell="family")
+        self.assertIn("a cross across cases needs at least two", str(refused.exception))
+
+    def test_the_cells_may_be_the_familys_own_cases(self):
+        held = self.declared(
+            cell="family", ran={"blends-one": "blends", "blends-two": "blends"}
+        )
+        self.assertEqual(held[0]["cell"], option_space.FAMILY)
+
+    def test_a_row_of_one_axis_is_refused(self):
+        with self.assertRaises(SystemExit) as refused:
+            self.declared(axes="MTLWidget.spun")
+        self.assertIn("which is one axis", str(refused.exception))
+
+    def test_a_row_saying_nothing_about_the_cross_is_refused(self):
+        root = tree(
+            {"blends": self.PAIR},
+            other="blends\tblends-case\tMTLThing+MTLWidget.spun\t \n",
+        )
+        with self.assertRaises(SystemExit) as refused:
+            option_space.inventory(root, {"blends-case": "blends"}, items())
+        self.assertIn("says nothing about what only the cross decides", str(refused.exception))
+
+    def test_a_malformed_row_is_refused(self):
+        root = tree(
+            {"blends": self.PAIR}, other="blends\tblends-case\tMTLThing+MTLWidget.spun\n"
+        )
+        with self.assertRaises(SystemExit) as refused:
+            option_space.inventory(root, {"blends-case": "blends"}, items())
+        self.assertIn("is not `module", str(refused.exception))
+
+    def test_a_row_declared_twice_is_refused(self):
+        root = tree(
+            {"blends": self.PAIR},
+            other=(
+                "blends\tblends-case\tMTLThing+MTLWidget.spun\tonly the two together\n"
+                "blends\tblends-case\tMTLThing+MTLWidget.spun\tthe same claim again\n"
+            ),
+        )
+        with self.assertRaises(SystemExit) as refused:
+            option_space.inventory(root, {"blends-case": "blends"}, items())
+        self.assertIn("is declared twice", str(refused.exception))
+
+    def test_a_tree_handed_no_items_can_declare_no_field_axis(self):
+        # The default: a tree that passes no items has nothing to check a field against, so a
+        # field axis is refused rather than taken on trust.
+        root = tree(
+            {"blends": self.PAIR},
+            other="blends\tblends-case\tMTLThing+MTLWidget.spun\tonly the two together\n",
+        )
+        with self.assertRaises(SystemExit) as refused:
+            option_space.inventory(root, {"blends-case": "blends"})
+        self.assertIn("binds no spun on MTLWidget", str(refused.exception))
 
 
 if __name__ == "__main__":

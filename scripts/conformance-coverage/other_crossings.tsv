@@ -1,0 +1,53 @@
+# A crossing that is **not** a pair of the option space, and so cannot be declared in
+# crossings.tsv: one axis a Metal field that is a boolean or a number, or one Metal type crossed
+# with **itself** in two or more slots. The answer is still a function of the axes together and of
+# no one of them alone, which is what makes it a crossing; what it is not is a pair of two Metal
+# enums, which is what the per-value columns of docs/CONFORMANCE-COVERAGE.md and crossings.tsv
+# count. These rows are counted APART from the pairs and are never added into them.
+#
+# A row is ONE claim about ONE set of axes, at the cell where its falsification is read: a case of
+# the module, or `family` where the cross takes more than one of its cases.
+#
+# An axis is one of two things:
+#
+#   MTLFoo             a Metal enum or option set with a generated value list, which MAY be named
+#                      more than once -- that repetition is the type-in-two-slots crossing, and
+#                      the count of names is the count of slots;
+#   MTLFoo.item        one Metal item of one Metal type, spelled as the items axis keys it:
+#                      MTLRenderPipelineDescriptor.alphaToCoverageEnabled,
+#                      MTLArgumentEncoder.setArgumentBuffer:offset:.
+#
+# The generator FAILS on a row whose module ran no Metal, whose cell is not one of that module's
+# recorded cases, which crosses fewer than two axes, which says nothing about what the cross
+# decides, or whose module states fewer than TWO values of an ENUM axis by name. And on three of
+# its own: a row every axis of which is a Metal enum named once (that is a pair, and belongs in
+# crossings.tsv under its own checks); a field axis naming an item objc2-metal binds nothing for,
+# or one this module's Metal leg reaches no call of; and a field axis whose call answers a Metal
+# type with a generated value list, which is an enum under another name and must be crossed as
+# that enum.
+#
+# What the generator CANNOT check for a field axis is that the module put TWO values of the field
+# to Metal. A boolean's two values and a number's range are nowhere in the text this reads and in
+# no recording, so a field axis carries only that the field is Metal's and that this module's
+# Metal leg sets it. That, and whether the expected answer needs both axes, is what the last field
+# is for and what a reader checks against the case.
+#
+# A crossing with an axis that is no Metal item at all -- a pixel format's class, the shape of a
+# shader's output, whether a fragment writes a sample mask -- can be declared in neither file, and
+# the document states that limit.
+# module	cell	axes	what only the cross decides
+alpha_coverage_pairs	family	MTLRenderPipelineDescriptor.alphaToCoverageEnabled+MTLRenderPipelineDescriptor.rasterSampleCount	whether the coverage an alpha gives is `floor(alpha * rasterSampleCount)` or a round to nearest. At four samples an alpha of 0.5 covers two under either rule; the one-sample row is where they part, and it covers **none**, so the destination survives untouched where rounding would have stored the fragment. Neither sample count alone says which rule it is
+alpha_coverage_pairs	a2c-on-4-alpha-50-mask-no-alpha	MTLRenderPipelineDescriptor.alphaToCoverageEnabled+MTLColorWriteMask	whether the alpha the coverage is read from is the fragment's own or what survives the attachment's write mask. A mask that drops alpha leaves the coverage exactly as the same alpha gives with the mask absent and moves only the stored alpha: the mask's own sweep reads a stored channel and never a coverage, and the alpha sweep never meets a mask
+alpha_coverage_pairs	a2one-on-1-blend-source-alpha	MTLRenderPipelineDescriptor.alphaToOneEnabled+MTLBlendFactor	whether alpha-to-one replaces the alpha before or after the blend reads it. Under RGB factors of `SourceAlpha` and `OneMinusSourceAlpha` the field on stores the source alone and off stores it blended at 0.5, so the blend read 1 and not 0.5 -- where the field alone moves only the stored alpha and the blend alone gives the 0.5 answer at any setting
+argument_encoder_crossings	argument-encoder-cross-offsets	MTLArgumentEncoder.setArgumentBuffer:offset:+MTLArgumentEncoder.setArgumentBuffer:startOffset:arrayElement:	whether the two offsets compose or the second replaces the first. Over the 48-byte layout `(0, element 1)` writes word 6 and `(8, no element)` word 1, and `(8, element 1)` writes word 7 -- the cell neither call alone reaches. `constantDataAtIndex:` answers the constant's offset inside the arguments and so the same number at every cell, which is why the written mask is the site that reads it
+argument_encoder_crossings	argument-encoder-cross-type-mixtures	MTLArgumentDescriptor.constantBlockAlignment+MTLDataType	whether `constantBlockAlignment` aligns the constant's offset inside the arguments or the encoder's own alignment. A single `MTLDataTypeUInt` at a block alignment of 64 is 4 bytes aligned to 4 -- the field changes nothing, because offset 0 is aligned to anything -- and a texture in front of it moves that constant to offset 64 and the encoder to 72 bytes while its alignment stays 8. So the field is indistinguishable alone and load-bearing one argument later
+argument_encoder_crossings	argument-encoder-cross-type-sizes	MTLDataType+MTLDataType	whether a member's offset is a running sum of the members before it or a packing Metal may order. `char, char, float4, float4` is **48** bytes and `float4, char, float4, char` -- the same multiset -- is **64**, so a sweep of one type at a time sees two encoder lengths and only the permutation sees the layout
+indirect_command_depth	indirect-compute-commands-reset-and-ranges	MTLIndirectCommandBuffer.resetWithRange:+MTLComputeCommandEncoder.executeCommandsInBuffer:withRange:	which commands of a buffer wrote anything, which the two ranges decide together: a command is blank where the reset covers it and runs where the execution does. A side that reset the executed range, or executed the reset one, is right about each range's own bounds and writes another command's segment
+indirect_command_depth	indirect-render-commands-inherited-state	MTLIndirectCommandBufferDescriptor.inheritBuffers+MTLIndirectRenderCommand.setVertexBuffer:offset:atIndex:	which binding an executed command draws from when the parent encoder and the command have each bound one. With the field off the command's own binding is the only one there is, and with the command setting none the parent's is: each alone names a segment of the output, and only the pair says which of the two wins where both exist
+indirect_command_depth	indirect-render-commands-under-the-pass-state	MTLRenderCommandEncoder.setScissorRect:+MTLIndirectRenderCommand.drawPrimitives:vertexStart:vertexCount:instanceCount:baseInstance:	which pixels an indirect draw covers, which the parent encoder's scissor and the command's own vertex range decide together -- a render command may not set a scissor of its own, so a side that dropped the pass's state at the execution rasterizes each half of the draw in full while being right about the scissor alone and about the draw alone
+sampler_crossings	family	MTLSamplerMinMagFilter+MTLSamplerMinMagFilter+MTLSamplerDescriptor.lodMinClamp	which of the two filters reads the level `lodMinClamp` raised the requested one to. The two `(min, mag)` pairs whose filters agree answer the same under every rule, so only an unequal pair at a clamp above the sampled level parts Metal's rule from Vulkan's -- the magnifying filter at a level of zero or less, the minifying one above it -- and from a `NotMipmapped` sampler's, which ignores the clamp outright
+sampler_crossings	sampler-axis-border-opaque-black	MTLSamplerAddressMode+MTLSamplerAddressMode+MTLSamplerAddressMode	whether a border colour is substituted per **axis** or for the sample. On a lane whose `s` is inside the texture and whose `t` is a period out, a sampler whose `s` mode is `ClampToBorderColor` and whose `t` mode repeats reads either the border or the wrapped texel, and no sampler whose border-reading axis is itself the out-of-range one can part the two readings
+sampler_crossings	sampler-axis-mode-triples	MTLSamplerAddressMode+MTLSamplerAddressMode+MTLSamplerAddressMode	whether each axis's own mode decides that axis's wrap. Three **unequal** modes over a grid of one inside coordinate and four outside are what tell it from a decision taken on the coordinate as a whole, or from one axis's mode applied to all three: every sampler whose axes agree, and every sweep that moves one axis with the others repeating, reads the right texel under all three rules
+texture_descriptor_pairs	texture-pairs-plain-contents	MTLTextureDescriptor.allowGPUOptimizedContents+MTLTextureUsage	whether lossless compression is a **conjunction** of the flag with the usage or either one's doing. The flag off answers the uncompressed footprint at a usage that would have compressed, and at `ShaderRead | PixelFormatView` it moves nothing because the usage already barred it: so neither the flag's own sweep nor the usage's says which of the two switches moved the number
+texture_descriptor_pairs	texture-pairs-type-levels-slices	MTLTextureType+MTLTextureDescriptor.mipmapLevelCount+MTLTextureDescriptor.arrayLength	how many bytes a mip chain takes and how many levels Metal allows, both of which are the **type's** to decide. An 8 by 8 by 64 3D texture takes seven levels and its footprint saturates at four; a 2D array of one slice is 16512 bytes aligned to 16384 where the plain 2D of that extent is 16512 aligned to 128, and at seven levels they part to 33152 against 22528; a cube is six of the array's chain. A sweep over types at one level count, beside a sweep over level counts of one type, answers none of it
+texture_descriptor_pairs	texture-pairs-usage-crossings	MTLTextureUsage+MTLTextureDescriptor.height	whether a usage bit that bars lossless compression bars it at every extent. 16 by 16 answers 1152 bytes against 1024 and 16 by 15 answers 1024 against 1024, so one texel of height decides whether the usage moves the footprint at all -- and a usage sweep at one extent reads as the bit always moving it
