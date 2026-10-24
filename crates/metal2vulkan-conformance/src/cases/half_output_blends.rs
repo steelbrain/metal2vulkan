@@ -7,7 +7,8 @@
 //! into a 16-bit float format Metal blends the `half` the function returns with each factor (`1 - x`
 //! included), each product and the sum rounded to `half`, nearest even, and `Min` and `Max` read no
 //! factor; into a 32-bit float format it is a multiply-add in `float` — but the numbers behind it
-//! were printed to a terminal and are gone.
+//! were printed to a terminal and are gone, and the blend colour's `1 - x` is the part of it this
+//! family has since measured and found not to hold on this OS (below).
 //!
 //! **So the recorded answer here is the blended attachment's stored codes, compared exactly**, and
 //! the fitted rule becomes a cross-check over Metal's own measurement instead of the thing the
@@ -17,54 +18,90 @@
 //!
 //! One case per attachment format, with each blend a site of its own, so a format a venue honestly
 //! lacks as a blendable render target is that venue's gap
-//! ([`crate::verdict::Verdict::LacksFeature`]) at one row rather than seventeen.
+//! ([`crate::verdict::Verdict::LacksFeature`]) at one row rather than twenty-one.
 //!
 //! **What each case runs.** A 16 by 16 target of the format, of shared storage because the
-//! destination codes are arbitrary and reach a texture only through `replaceRegion:`. Seventeen
+//! destination codes are arbitrary and reach a texture only through `replaceRegion:`. Twenty-one
 //! render pipelines over the owned fixture `rt6_samples` — its full-screen triangle and its
 //! `rt6_fill_rgba16float`, which returns the `half4` of buffer 0 at the pixel — one per blend, and
-//! seventeen passes under a `Load` load action, each into its own target and each blitted out, all
-//! in one command buffer.
+//! twenty-one passes under a `Load` load action, each into its own target and each blitted out,
+//! all in one command buffer. Each pass sets the blend colour once before its draw.
 //!
 //! The `one-zero` site is also the **source** read back: a source factor of one and a destination
 //! factor of zero writes the `half4` the function returned through the attachment's own conversion
 //! and nothing else, so the case does not need a separate unblended draw to know what the device
 //! computed for the source — which is the property the lane's own extra draw was there for.
 //!
-//! **The five blends of the lane's twenty-two that are not here** are the ones whose factors read
-//! the blend color (`BlendColor`, `OneMinusBlendColor`, `BlendAlpha`, `OneMinusBlendAlpha`). The
-//! reason used to be that `setBlendColorRed:green:blue:alpha:` had no step in the render
-//! vocabulary; **that is no longer true** -- [`crate::render::RenderStep::BlendColor`] is one, and
-//! [`super::blend_sweeps`] and [`super::rotated_targets`] both set it -- so nothing is in the way
-//! and these five are simply **not ported**. They are the blends behind the lane's finding that
-//! Metal reads the blend color's `half` **before** its one minus (`h(1 - h(c))`), which this
-//! family's `half` outputs would compare and which [`super::blend_sweeps`] does not reach: that
-//! sweep blends `float` outputs into a 32-bit float target, where there is no `half` rounding to
-//! find. The module docs of `runtime_lane::half_output_blends` keep the finding until somebody
-//! ports the five rows.
+//! **The lane's twenty-two blends, less its `off` row, are all here.** The one it has and this
+//! family does not is blending disabled, and the `one-zero` site stands for it for the reason
+//! above. The four whose factors read the **blend colour** (`BlendColor`, `OneMinusBlendColor`,
+//! `BlendAlpha`, `OneMinusBlendAlpha`) are `bc-1mbc`, `1mbc-zero`, `ba-1mba` and `bc-1msa`, and
+//! every pass sets the lane's own blend colour, `(0.3, 0.6, 0.9, 0.45)`, not one channel of which
+//! is exact in `half`.
+//!
+//! # The finding those four rows were ported for, now measured
+//!
+//! They are the rows behind the lane's claim that Metal reads the blend colour's `half`
+//! **before** its one minus (`h(1 - h(c))`), a rule the lane fitted from one lane of one format
+//! and whose numbers went to a terminal. **On this chip and this OS it is the other way round.**
+//!
+//! Measured over all 1,792 words of `1mbc-zero` in the three 16-bit float formats, on an Apple M3
+//! Max under macOS 27.0.1 (26A434): **252 words can tell the two rules apart, and every one of
+//! them stores `h(1 - c)`** — the complement taken in the `float` the colour arrived as and
+//! rounded once. Not one stores `h(1 - h(c))`, and no word fits neither rule.
+//! `tests::metals_recorded_codes_round_the_blend_colour_before_its_one_minus` holds that against
+//! the committed recordings, and `1mbc-zero` is the site that can answer it at all: its
+//! destination factor is `Zero`, so the stored code is one rounding of the factor times the source
+//! and the factor is the only thing in the answer.
+//!
+//! **All 252 of them are `RGBA16Float`'s blue channel**, whose blend colour is 0.9. At 0.3, 0.6 and
+//! 0.45 the two rules give the same factor at every source value of the sweep, so the one- and
+//! two-channel formats cannot reach the question — which is why the lane's fit rested on the blue
+//! lane, and why these rows need the four-channel format rather than asking one question six
+//! times. A float target cannot reach it either: at `f32` the complement of the colour is the same
+//! number both ways round, which is the structural reason the lane's finding never showed in
+//! `blend_sweeps`.
+//!
+//! The lane's header dates its fit to macOS 26.7. The live M3 is the oracle, so the 27.0.1 answer
+//! recorded here is what this family states, and nothing in it asserts the older rule.
+//!
+//! **Our side agrees with Metal about the blend colour.** `bc-1mbc` and `1mbc-zero` are
+//! code-identical to Metal in all six formats, which is what says the two divergent blend-colour
+//! rows below are the family's product-rounding gap and not a disagreement about `1 - c`.
 //!
 //! **Where our side differs from Metal, measured over every word.** On this round's MoltenVK
-//! (Apple M3 Max, API 1.2) `half-output-blends-r32f` is `announced` -- every code of all seventeen
-//! blends identical to Metal's -- and the other five are `divergent`. Measured with a temporary
-//! tolerance wide enough to pass, then read off the per-site counts and the tolerance dropped, so
-//! these are counts over every byte of the site rather than the first mismatch:
+//! (Apple M3 Max, API 1.2) all six cases are `divergent`, at eighteen sites between them. Read off
+//! the per-site counts of a replay rather than off a first mismatch, so these are counts over
+//! every word of the site:
 //!
 //! | case | site | differing words of the site | largest raw-code distance |
 //! |---|---|---|---|
 //! | `r16f` | `sc-dc` | 21 of 256 | 1 |
+//! | `r16f` | `bc-1msa` | 96 of 256 | 256 |
 //! | `rg16f` | `sc-dc` | 40 of 512 | 1 |
 //! | `rg16f` | `sas-1msa` | 47 of 512 | 80 |
+//! | `rg16f` | `ba-1mba` | 187 of 512 | 22 |
+//! | `rg16f` | `bc-1msa` | 195 of 512 | 256 |
 //! | `rgba16f` | `sc-dc` | 90 of 1024 | 1 |
 //! | `rgba16f` | `da-1mda` | 256 of 1024 | 432 |
+//! | `rgba16f` | `ba-1mba` | 363 of 1024 | 816 |
+//! | `rgba16f` | `bc-1msa` | 405 of 1024 | 1024 |
+//! | `r32f` | `bc-1msa` | 67 of 256 | 32 |
 //! | `rg32f` | `sc-dc` | 41 of 512 | 1 |
+//! | `rg32f` | `ba-1mba` | 177 of 512 | 60 |
+//! | `rg32f` | `bc-1msa` | 135 of 512 | 128 |
 //! | `rgba32f` | `sc-dc` | 77 of 1024 | 1 |
 //! | `rgba32f` | `da-1mda` | 146 of 1024 | 97 |
+//! | `rgba32f` | `ba-1mba` | 368 of 1024 | 165 |
+//! | `rgba32f` | `bc-1msa` | 297 of 1024 | 192 |
 //!
-//! Three of the seventeen blends move at all, and the other fourteen -- including every one whose
-//! factor is `One`, `Zero`, a source factor, `Min` or `Max` -- are code-identical in every format.
-//! `sc-dc` is one code at its worst. The two large distances are colour channels whose result sits
-//! near zero, where a raw-code distance is many steps of a small value; the alpha channel of
-//! `da-1mda` does not move at all, in either format.
+//! `r32f` was the one case with no differing word before the blend-colour rows were ported, and
+//! `bc-1msa` is what moved it: a single-channel 32-bit float target now differs too, so no format
+//! of this family is free of the gap. Thirteen of the twenty-one blends still move at no word in
+//! any format — including every one whose factor is `One`, `Zero`, a source factor, `Min` or
+//! `Max`, and both blend-colour rows whose answer turns on the factor alone. `sc-dc` is one code
+//! at its worst. The large distances are colour channels whose result sits near zero, where a
+//! raw-code distance is many steps of a small value.
 //!
 //! **What the difference is**, read off those eight sites rather than off the notice: Metal rounds
 //! the **source** product to the attachment's precision and carries the **destination** product
@@ -77,14 +114,21 @@
 //! formats differ too and why `sc-dc`, whose source product `S * S` is exact in the attachment,
 //! still moves by a single code. Metal's rule is its compiler's fast-math fold of the blend into
 //! the fragment function; ours is the device's fixed-function blend, which the pipeline leaves the
-//! blend to. `half-output-blends-r32f` is where the two rules agree at every word, which is why it
-//! is the one of the six that is exact. The alpha channel of `da-1mda`, whose source factor and
+//! blend to. The alpha channel of `da-1mda`, whose source factor and
 //! destination value are both the destination alpha, follows neither rule on either side and is
 //! identical on both, so nothing here asserts a rule for it.
 //!
-//! That stays `divergent` rather than being loosened: `half-output-fast-math-blend`'s own
-//! definition says validation derives no tolerance from it. `known-gaps.tsv` carries the eight
-//! rows.
+//! **The four blend-colour sites are not modelled by that rule**, and no rule is asserted for
+//! them: `bc-1msa` does not fit it at the first word of `r16f` (Metal stores 0.60498046875 where
+//! the rule gives 0.6044921875), so the eight sites `MEASURED` names stay the eight the rule was
+//! measured over. What the exact `bc-1mbc` and `1mbc-zero` sites do say is that the blend colour
+//! itself is not the disagreement — both sides compute the same factor from it — so the four
+//! divergent blend-colour sites are the product rounding at a row the rule has not been fitted to.
+//! Fitting it there is open work.
+//!
+//! Every one of the eighteen stays `divergent` rather than being loosened:
+//! `half-output-fast-math-blend`'s own definition says validation derives no tolerance from it.
+//! `known-gaps.tsv` carries all eighteen rows.
 //!
 //! Nothing here can fault a GPU: single-sampled 16 by 16 targets, one full-screen triangle a pass,
 //! no loop, and every fetch inside its buffer.
@@ -93,8 +137,8 @@ use crate::allowance::Allowance;
 use crate::case::{call, made, Abort, Case, Input, MetalSource, Side};
 use crate::recording::ShaderRef;
 use crate::render::{
-    Blend, ColorState, PassColor, Plane, ReadAt, RenderPass, RenderPipelineSpec, RenderStep,
-    RenderWork, TargetSpec,
+    Blend, BlendColorChannels, ColorState, PassColor, Plane, ReadAt, RenderPass,
+    RenderPipelineSpec, RenderStep, RenderWork, TargetSpec,
 };
 use crate::transcript::{Aspect, ByteLayout, Element, Gaps, Node, Observed, Region, Sites, Value};
 use metal2vulkan::metal::{BlendFactor as F, BlendOperation as O, PixelFormat};
@@ -194,13 +238,32 @@ impl Rng {
     }
 }
 
+/// The blend colour every pass sets, which is the lane's own
+/// (`runtime_lane::half_output_blends::BLEND_COLOR`): `(0.3, 0.6, 0.9, 0.45)`.
+///
+/// Restated from the lane rather than chosen here, because the finding these rows carry is the
+/// lane's and a different colour would be a different measurement. **Not one of the four channels
+/// is exact in `half`**, which is the whole point: a blend colour the attachment holds exactly
+/// could not tell a factor that rounds the colour before its one minus from one that does not.
+///
+/// Every pass sets it, not only the four rows whose factors read it, as the lane's every draw did.
+/// Once a pass and never twice: Metal's own API validation layer stops a pass that sets the blend
+/// colour and then sets it again ([`super::blend_sweeps`] records that), and a second call here
+/// would cost all six cases their validated leg.
+const BLEND_COLOR: [f32; 4] = [0.3, 0.6, 0.9, 0.45];
+
 /// A blend the case sweeps: the word its site is named by, and the six fields.
 struct Sweep {
     name: &'static str,
     blend: Blend,
 }
 
-/// The seventeen blends of the lane's twenty-two whose factors read no blend color.
+/// The twenty-one blends of the lane's twenty-two that a pipeline of this family states.
+///
+/// The one the lane has and this family does not is its `off` row, blending disabled, and
+/// [`Sweep::name`]'s `one-zero` is what stands for it: a source factor of one and a destination
+/// factor of zero stores the `half` the function returned through the attachment's own conversion
+/// and nothing else, which is what an unblended draw would say.
 fn blends() -> Vec<Sweep> {
     let added = |name, source, destination| Sweep {
         name,
@@ -236,10 +299,18 @@ fn blends() -> Vec<Sweep> {
             O::ReverseSubtract,
         ),
         under("one-one-sub", F::One, F::One, O::Subtract),
+        // The four whose factors read the blend colour. They are the rows that reach the lane's
+        // finding about `1 - c`: `1mbc-zero` isolates the factor (its destination term is zero, so
+        // the stored code is one rounding of the factor times the source) and the other three put
+        // the same colour through a sum, an alpha channel and a mixed pair.
+        added("bc-1mbc", F::BlendColor, F::OneMinusBlendColor),
+        added("1mbc-zero", F::OneMinusBlendColor, F::Zero),
+        added("ba-1mba", F::BlendAlpha, F::OneMinusBlendAlpha),
+        added("bc-1msa", F::BlendColor, F::OneMinusSourceAlpha),
     ]
 }
 
-/// The case: one attachment format, blended seventeen ways.
+/// The case: one attachment format, blended twenty-one ways.
 pub struct HalfOutputBlends {
     name: &'static str,
     format: PixelFormat,
@@ -434,6 +505,9 @@ impl Case for HalfOutputBlends {
             Input::bytes("buffer:shape", &shape(WIDTH, 1)),
             // The destination the blends read, which is half of what every answer depends on.
             Input::bytes("texture:destination", &self.destination_bytes()),
+            // The blend colour four of the blends read, by its bits: a colour that moved by one
+            // `f32` step is a change to the case's inputs.
+            Input::bytes("blend-color", &BlendColorChannels::new(BLEND_COLOR).words()),
         ]);
         // Each blend's own six fields, keyed by its name, so a case whose blend table moved is
         // unrecorded rather than compared against the old table's codes.
@@ -501,6 +575,7 @@ impl Case for HalfOutputBlends {
                         offset: 0,
                         index: 1,
                     },
+                    RenderStep::BlendColor(BlendColorChannels::new(BLEND_COLOR)),
                     RenderStep::triangle(),
                 ]),
             ));
@@ -600,17 +675,18 @@ mod tests {
 
     /// The blends name distinct sites and distinct six-field states: a table with two names for one
     /// blend, or one name for two, would record two answers to one question.
+    ///
+    /// And each of `MTLBlendFactor`'s four blend-colour factors is in some row, so a row that lost
+    /// its factor fails here rather than leaving the lane's finding unreachable again.
     #[test]
     fn the_blends_are_distinct_by_name_and_by_state() {
         let sweeps = blends();
-        assert_eq!(sweeps.len(), 17);
+        assert_eq!(sweeps.len(), 21);
         let named: BTreeSet<&str> = sweeps.iter().map(|sweep| sweep.name).collect();
         assert_eq!(named.len(), sweeps.len());
         let states: BTreeSet<Vec<u8>> = sweeps.iter().map(|sweep| sweep.blend.words()).collect();
         assert_eq!(states.len(), sweeps.len());
-        // No blend here reads the blend color. That is now a property of the table rather than of
-        // the vocabulary -- `RenderStep::BlendColor` exists -- and it is what the module docs name
-        // as the five rows nobody has ported.
+        let mut colour_factors: BTreeSet<&str> = BTreeSet::new();
         for sweep in &sweeps {
             for factor in [
                 sweep.blend.source_rgb,
@@ -618,19 +694,52 @@ mod tests {
                 sweep.blend.source_alpha,
                 sweep.blend.destination_alpha,
             ] {
-                assert!(
-                    !matches!(
-                        factor,
-                        F::BlendColor
-                            | F::OneMinusBlendColor
-                            | F::BlendAlpha
-                            | F::OneMinusBlendAlpha
-                    ),
-                    "{} reads the blend color",
-                    sweep.name
-                );
+                if matches!(
+                    factor,
+                    F::BlendColor | F::OneMinusBlendColor | F::BlendAlpha | F::OneMinusBlendAlpha
+                ) {
+                    colour_factors.insert(factor.name());
+                }
             }
         }
+        assert_eq!(
+            colour_factors,
+            BTreeSet::from([
+                "MTLBlendFactorBlendAlpha",
+                "MTLBlendFactorBlendColor",
+                "MTLBlendFactorOneMinusBlendAlpha",
+                "MTLBlendFactorOneMinusBlendColor",
+            ]),
+            "the blend-colour rows do not hold all four of the field's blend-colour factors"
+        );
+        // Not one channel of the blend colour is exact in `half`, which is what lets a factor that
+        // rounds the colour before its one minus be told from one that does not. A colour the
+        // attachment held exactly would make this family's own finding unreachable.
+        for channel in BLEND_COLOR {
+            let rounded = half_value(nearest_half(channel));
+            assert_ne!(
+                f64::from(channel),
+                f64::from(rounded),
+                "{channel} of the blend colour is exact in half"
+            );
+        }
+    }
+
+    /// The code of the `half` nearest `value`, nearest even, for a value this family's own
+    /// `half_code` would refuse because it is not exact.
+    ///
+    /// Only the blend colour needs it: every other number here is exact in the format it is stored
+    /// in, which is why `half_code` asserts rather than rounds.
+    fn nearest_half(value: f32) -> u16 {
+        let grid = rounded(exact(value), 10, -14);
+        let size = value_of(grid).abs();
+        let sign = u16::from(value.is_sign_negative()) << 15;
+        if size == 0.0 {
+            return sign;
+        }
+        let exponent = size.log2().floor() as i32;
+        let mantissa = ((size / 2f64.powi(exponent) - 1.0) * 1024.0).round() as u16;
+        sign | (((exponent + 15) as u16) << 10) | mantissa
     }
 
     /// The cases name distinct rows and distinct formats.
@@ -809,6 +918,135 @@ mod tests {
         ("half-output-blends-rgba32f", "sc-dc"),
         ("half-output-blends-rgba32f", "da-1mda"),
     ];
+
+    /// **Whether Metal rounds the blend colour to the attachment's precision before taking
+    /// `1 - c`. On this chip and this OS it does not**, held against Metal's own recorded codes at
+    /// every word where the two candidate rules disagree.
+    ///
+    /// This is what the four blend-colour rows were ported for. The lane fitted `h(1 - h(c))` from
+    /// one lane of one format and printed the numbers to a terminal, and this is the first
+    /// committed measurement of it: over all 1,792 words of `1mbc-zero` in the three 16-bit float
+    /// formats, on an Apple M3 Max under macOS 27.0.1 (26A434), **252 words can tell the two rules
+    /// apart and every one of them stores the complement-first value** -- `h(1 - c)`, the
+    /// complement taken in the `float` the colour arrived as and rounded once. None stores
+    /// `h(1 - h(c))`, and no word fits neither rule.
+    ///
+    /// So the lane's rule is not this OS's. The lane's own header dates its fit to macOS 26.7, and
+    /// the live M3 is the oracle, so what stands is the 27.0.1 answer recorded here; nothing in
+    /// this family asserts the older one.
+    ///
+    /// **`1mbc-zero` is the site that can answer it and the reason it was ported.** Its
+    /// destination factor is `Zero`, so the destination term is exactly zero whatever the sum's
+    /// rounding does, and the stored code is one rounding of the factor times the source: the
+    /// factor is the only thing in the answer. Every other blend-colour row puts the colour
+    /// through a sum as well, so a difference there could be either.
+    ///
+    /// **All 252 separating words are `RGBA16Float`'s blue channel**, whose blend colour is 0.9.
+    /// At 0.3, 0.6 and 0.45 the two rules give the same factor at every source value of the sweep,
+    /// so the one-channel and two-channel formats cannot answer the question at all. That is why
+    /// the lane's fit rested on the blue lane, and it is why the ported rows need the
+    /// four-channel format rather than being the same question six times.
+    ///
+    #[test]
+    fn metals_recorded_codes_round_the_blend_colour_before_its_one_minus() {
+        use metal2vulkan_runtime::MetalLevel;
+        let mut separating = 0usize;
+        let mut compared = 0usize;
+        let mut fits_before = 0usize;
+        let mut fits_after = 0usize;
+        let mut neither = 0usize;
+        let mut breakdown: std::collections::BTreeMap<(&str, u32), usize> =
+            std::collections::BTreeMap::new();
+        for case in all().into_iter().filter(|case| !case.wide) {
+            let Ok(recording) = crate::recording::read(case.name()) else {
+                continue;
+            };
+            let answer = recording
+                .answer(MetalLevel::NEWEST)
+                .unwrap_or_else(|why| panic!("{}: {why}", case.name));
+            let taken = answer
+                .deterministic()
+                .unwrap_or_else(|| panic!("{}: one outcome", case.name));
+            let blended = taken
+                .root
+                .child("blended")
+                .unwrap_or_else(|| panic!("{}: no blended site", case.name));
+            let node = blended
+                .child("1mbc-zero")
+                .unwrap_or_else(|| panic!("{}: no 1mbc-zero site", case.name));
+            let Value::Bytes(bytes) = &node.observed.value else {
+                panic!(
+                    "{}: 1mbc-zero holds {}",
+                    case.name,
+                    node.observed.value.kind()
+                );
+            };
+            assert_eq!(bytes.len(), case.level_bytes(), "{}", case.name);
+            let layout = case.layout();
+            let round = |grid: i128| rounded(grid, 10, -14);
+            let one = exact(1.0);
+            for pixel in 0..PIXELS {
+                for channel in 0..case.channels {
+                    let colour = exact(BLEND_COLOR[channel as usize]);
+                    let value = exact(source((pixel + STRIDE * channel as usize) % SOURCES));
+                    // The colour rounded to the attachment first, then its complement rounded:
+                    // the lane's fitted rule.
+                    let before = round(one - round(colour));
+                    // The complement taken in the `float` the colour arrived as, rounded once.
+                    let after = round(one - colour);
+                    let want = value_of(round(product(before, value)));
+                    let other = value_of(round(product(after, value)));
+                    let at = layout.at(0, pixel as u32, channel);
+                    let got = f64::from(half_value(u16::from_le_bytes(
+                        bytes[at..at + 2].try_into().unwrap(),
+                    )));
+                    if want != other {
+                        separating += 1;
+                        if got == want {
+                            fits_before += 1;
+                        } else if got == other {
+                            fits_after += 1;
+                        } else {
+                            neither += 1;
+                        }
+                        breakdown
+                            .entry((case.name, channel))
+                            .and_modify(|held| *held += 1)
+                            .or_insert(1usize);
+                    } else if got != want {
+                        neither += 1;
+                    }
+                    compared += 1;
+                }
+            }
+        }
+        if compared == 0 {
+            return;
+        }
+        // The words of the three 16-bit float formats' `1mbc-zero` sites: 256 pixels times one,
+        // two and four channels.
+        assert_eq!(compared, PIXELS * (1 + 2 + 4));
+        // Every word of the three 16-bit float formats' `1mbc-zero` sites: 256 pixels times one,
+        // two and four channels.
+        assert_eq!(compared, PIXELS * (1 + 2 + 4));
+        // The measurement, and it is not close. Of the words where the two rules give different
+        // factors, every single one stores what taking the complement first gives and not one
+        // stores what rounding the blend colour first gives; no word fits neither rule.
+        assert_eq!(
+            (separating, fits_after, fits_before, neither),
+            (252, 252, 0, 0),
+            "Metal's choice between the two blend-colour rules"
+        );
+        // And all of them are one channel of one format: `RGBA16Float`'s blue, whose blend colour
+        // is 0.9. The other three channels never separate the rules at this source sweep, which is
+        // why the lane's own fit rested on that one lane and why this family needs the four-channel
+        // format to ask the question at all.
+        assert_eq!(
+            breakdown,
+            std::collections::BTreeMap::from([(("half-output-blends-rgba16f", 2), 252)]),
+            "the separating words are not the blue lane's alone"
+        );
+    }
 
     /// Metal's own rounding in a blend of a `half` colour output, held against its recorded codes
     /// at every word of every site of this family that differs from ours.

@@ -37,6 +37,19 @@
 //! and keeps a term whose factor is `Zero` in the 16-bit float formats' sum, as Metal does there
 //! (`+0` where the other term is `-0`, a product of a destination of zero), but
 //! drops it in the 32-bit float formats', as Metal's extended-range model does.
+//!
+//! **The blend color's one minus is no longer this rule on a current OS, and that reading is
+//! macOS 26.7's.** The conformance suite's `half_output_blends` family has since ported the four
+//! blend-color blends and measured it against committed recordings of plain Metal on an M3 Max
+//! under **macOS 27.0.1 (26A434)**: over all 1,792 words of `1mbc-zero` in the three 16-bit float
+//! formats, 252 words give the two candidate factors different values and **every one of them
+//! stores `h(1 - c)`** -- the complement taken in the `float` the color arrived as and rounded
+//! once -- while none stores `h(1 - h(c))`. All 252 are `RGBA16Float`'s blue lane, the very lane
+//! this fit came from; at 0.3, 0.6 and 0.45 the two rules agree at every source value, so no
+//! one- or two-channel format can tell them apart. The live M3 is the oracle, so a reader wanting
+//! the blend color's rule should take the 27.0.1 answer from
+//! `metal2vulkan_conformance::cases::half_output_blends` and read the sentence above as this
+//! lane's 26.7 measurement. The rest of the fit is untouched by that.
 
 use super::degrade_notices::counts;
 use super::{validated_device_with, Messages, ScratchCache, WAIT};

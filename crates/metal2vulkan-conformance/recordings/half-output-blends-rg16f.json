@@ -122,6 +122,16 @@
                       }
                     },
                     {
+                      "name": "blend-color",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "6ca841056d16d47af129ea9204b07ceae4aa3c0956d3e300b62743bcc8f902ef"
+                        }
+                      }
+                    },
+                    {
                       "name": "blend:one-zero",
                       "observed": {
                         "value": "absent",
@@ -288,6 +298,46 @@
                         "digest": {
                           "kind": "sha256",
                           "hex": "3dd053dd6e5e4280898bcad24d4faa11b71d9fa08ce9103478818b4108e9b90d"
+                        }
+                      }
+                    },
+                    {
+                      "name": "blend:bc-1mbc",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "1bea44750db67cf65eadb73e06b6f99b0689690865028b77b933cd1a4a3c4c0c"
+                        }
+                      }
+                    },
+                    {
+                      "name": "blend:1mbc-zero",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "392898276346942af2bc4cdb4ed1945aa0604dbbdce5dede6bb39a685996e427"
+                        }
+                      }
+                    },
+                    {
+                      "name": "blend:ba-1mba",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "bf36e6e94253c3ced025e698bbc09699eba6996be33f792b73e382ee26f6b6f6"
+                        }
+                      }
+                    },
+                    {
+                      "name": "blend:bc-1msa",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "1a11483adca9343439903aa87afa24a3bdd49aca5145d7e3a3efc8656d028b9a"
                         }
                       }
                     }
@@ -1075,6 +1125,182 @@
                   }
                 },
                 {
+                  "name": "pipeline/bc-1mbc",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "target/bc-1mbc",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "replace-region/bc-1mbc",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "buffer/texels/bc-1mbc",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "pipeline/1mbc-zero",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "target/1mbc-zero",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "replace-region/1mbc-zero",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "buffer/texels/1mbc-zero",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "pipeline/ba-1mba",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "target/ba-1mba",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "replace-region/ba-1mba",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "buffer/texels/ba-1mba",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "pipeline/bc-1msa",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "target/bc-1msa",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "replace-region/bc-1msa",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "buffer/texels/bc-1msa",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
                   "name": "render",
                   "observed": {
                     "value": {
@@ -1282,6 +1508,50 @@
                 },
                 {
                   "name": "read-back/one-one-sub",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "read-back/bc-1mbc",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "read-back/1mbc-zero",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "read-back/ba-1mba",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "read-back/bc-1msa",
                   "observed": {
                     "value": {
                       "variant": {
@@ -1910,6 +2180,158 @@
                       "observed": {
                         "value": {
                           "bytes": "nsBjv5TADsCJwRe+RcFHvwnBdsCMwLS+78AAwNa+3L6mv/69oMBvvXa/pbzWv/W9Gb1Mvci90rvUvja8Q76avVW/QL2mvne9BrvQulO+Hbx/vsq8Qb3euPq9aLvRvWS0eLjSuRq5AJ8+uLizmLXQruS3mLU8tU645LpQrUa53LXouvy16LmAsgC4QK3YMbgxQC2UNWi2EDkArEAkgLZgNOiwvDbIsfAsQC8AMvAsFzzgrEo5QDiQNVQ5sjziORw74C/gPNo7HDuYOsU97DeuOgo72jrvPFg6bTwaP249VjtlPDI8QjsrwVY8OsF8O2rB/z5kwA49OsEGP9rA8T3KvqrAFcCowVzAucGgvtjAmL5KwJbAhcCAwJ7ANsCTwEq+e76LvKnAZb/Zv3m+Cb9IvV7AKb8cvgW+qb5+vnO8cLmMvYS4eL+auA2/3byGvFC3NbzYvCS8u7wfvUm8TLpctyq8Dry8uXC63rsAr7y8nrnItyy5gbzws+y7drhKuNq4ZLlQLqq50DEiufAuGrhgMQC6pDTMtO459LhUNlq4zjjQsUCpBLbINJQ2+DSINMg2AJhkOBgwnjtgMhI6UDBKOfY4bjy6O8Q7GzxaOUE84jqOOq478zwRPsg8lz41PbQ9BDwcPIY9VsB8OaHBkD2+wJw6q7+HPErBCD80wF4+lMBQwcDA/MB0wF7BUMB6wFbAzsB1v6W/IcDuwNe/vb4SwCy+NL5Cvjm9gb70vEK90rsDvW29HL9/vBHA8bxuvAS7ab3lvBC8pbwSvjq6V72Yuty77Lx4urG89L3quTu9jLe8ueC4ob1Is8K4lLcUtgAuOrsAtIa8FLd0u3i2ALjAMeCsNLZEuzgyQLoYM4izgKCALIAhAKq4N5i1DDQ4sFAtUC9AO+Av4jiwsC47YK+4M1izUDiUOYA5QK/2OCArmDmOOrk8sDdJPEI7MjrMOvI84DoePPU8Zj6+OLo+ujirPSg7bj14PeLAZz48wGk8ZsEcPYrATD4wwAY+gMDgPDjB5sEmvxDAdr/kwFK/nsGYwMrANsB1wLO/EsE0vfC+B8Dkv42/Eb/HvH6+kr6+vTq+sL3JvHq9gr6UvpS5oL6Out+8TLpMvR64krsgtwi89rzpvmS2MrpQtRi76LP0uqiw9ruotZC8jLXQt6y3jLrQria7JLUItXiwQLYAGPCtHLcUtICo+rjALri6wDDmuXo4uDAUNsCwIDZ4t/I4XDaENDAuAJhIMgArQCVkNTS0WzzgMyA1FDQgPEg4hDgKOsY6ACumOso7uT1AO8I9lDThPR45CT43PNE9HT0gPdA6gz3MOmg/NzwWwWw5bsFaPqTAwDxqv1s8ZL/8PSm/+j4Ovw=="
+                        },
+                        "shape": {
+                          "bytes": {
+                            "region": {
+                              "texture": {
+                                "level": 0,
+                                "slice": 0,
+                                "aspect": "color",
+                                "sample": 0,
+                                "origin": [
+                                  0,
+                                  0,
+                                  0
+                                ],
+                                "size": [
+                                  16,
+                                  16,
+                                  1
+                                ]
+                              }
+                            },
+                            "element": "u16",
+                            "row_offset": 0,
+                            "row_elements": 2,
+                            "row_pitch": 4,
+                            "rows": 256,
+                            "image_pitch": 1024,
+                            "images": 1,
+                            "gaps": "ignored"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "bc-1mbc",
+                      "observed": {
+                        "value": {
+                          "bytes": "JbaYulm1hrn1K6G6DyguuT0iurYYrqS4gS40tty1B7cssWq3xDFPt3GskreDK3m0urWHtKGxv7V4LES0QSgprIc00ag7M+8pK7Q1rrU0oygwNlIxazPcnrw22TFJN9Cj+q5PM4kgmRnamxYxV6xdMRguPTVPKXE3pTeINWI2LDjWOLI4ojimOJo3wzijK244KjJiOL448zezNnI6xjkgOtw4JzqDOcE7XjjmOxE5uzltOmM7DTdyPIs2vzrENhQ8UDuaOwI2lDxiOOM7ujoqPRM5YT0wN7s9zjhpPMw3CD7ZORM+azu8u+46JLshPFe6NTh6u207pLkrOb25LzuSu+a1+LliKQe5FzA0unKvurnvs1C2xa6etSihg7XpKPG327XeuDEyLLQxl6W0Nq2NtXg0MK6Ur76wLSnsqIu0p7WEp2O16TVStL41PCpdpSeyFKN/Mb4oIjNXNLYz66GLK1EzfDUcLCY1AzXNLiE4fjbJLSM3zjiWNYw4STgBNfE4jDdeNnc41jaYOCc4Xzh2ODM6kjguOEI3eDo8OYw6FDkEOaI7mzoLO2U1gjvUN6U7Azq/O8k59DriOQk8vzpxPIc49TsvNnI8gTYuPRc3ID1pOTc9JTeTPE84nTw2ODg9YTobPsU4h7yVPH+6tzlqu7A8L7wVPIi5KDnFupY6r7mJsOW4NrLiuO4YmLjWsw64UqyJuJm1yrZ7Lna2Irb+tLi2FLd7taW3lbMUt0e2v7f4tVK0PSvPtMU0MbKZtGS00qqvrECzkaj+MQqwzS/PqfurvzHHrwIzqzbsLqU1EiwOF8wxYTjTLUkpCDT3qZotHjaaNNU41TY4OJY3mjTaNNMqvjiWOcI2YDmVN6M1BzltMnc5hjV1OPU4sTk9OLw6uDaaOJ83DDrSOaE5JTodPEk7xzsxNc07ojtCPDA7YjzTNrk7zzlJPNc3Az2+OIY8MDkbPR83cTyuO488GTw8Pf46lD3YOBe8CjhdvFQ7W7rZOju7rzlLu5E6TbpWPKW4HizIuiK4CLpDsaW56DBOt7ysg7cWsK+3yTBXuZS1HrWir+y0brIuuKWzfbTstAq0E7RYtVWzXK6uJoq2Mi7CtLmw7bNvobW0zrIntNquvi9ZN+SwqLCBr3Kcra3fKUesSjIMLcY1cDBBqBE0KjRdMQI2DjUsKOU0wDD9NP4YbDi1MTo39zdTN7Q5BjihOWs2sjBJOKo2xjidOYY4GTEZOus2gjvNNtM74zhsO/k6hDmfOD08EzmzOgE4WTyMNiU8sjtsPBk2bDvaN+U75jsmPGs6VjyaOK08rzczPbs6TD0+O8o8mjrbu5o80bqcOJa7WjtJvDQ8C7yfOsa7vDlcuw=="
+                        },
+                        "shape": {
+                          "bytes": {
+                            "region": {
+                              "texture": {
+                                "level": 0,
+                                "slice": 0,
+                                "aspect": "color",
+                                "sample": 0,
+                                "origin": [
+                                  0,
+                                  0,
+                                  0
+                                ],
+                                "size": [
+                                  16,
+                                  16,
+                                  1
+                                ]
+                              }
+                            },
+                            "element": "u16",
+                            "row_offset": 0,
+                            "row_elements": 2,
+                            "row_pitch": 4,
+                            "rows": 256,
+                            "image_pitch": 1024,
+                            "images": 1,
+                            "gaps": "ignored"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "1mbc-zero",
+                      "observed": {
+                        "value": {
+                          "bytes": "mr0AuW29zLhAvZm4FL1muOe8M7i6vAC4jbyZt2C8M7c0vMy2B7xmtrS7ALZau5m1ALsztae6zLRNuma09LkAtJq5M7NAuWay57iZsY24zLA0uACwtLdmrgC3zKxNtmaqmrVmpue0AAA0tGYmALNmKpqxzCw0sGYumq0AMJqpzDAAAJkxmilmMpotMzM0MAA0mjFmNAAzzDQ0NDM15zSZNZo1ADZNNmY2ADfMNrQ3Mzc0OJk3jTgAOOc4MzhAOWY4mjmZOPQ5zDhNOgA5pzozOQA7ZjlaO5k5tDvMOQc8ADo0PDM6YDxmuo08M7q6PAC65zzMuRQ9mblAPWa5bT0zuZq9ALltvcy4QL2ZuBS9ZrjnvDO4urwAuI28mbdgvDO3NLzMtge8Zra0uwC2WruZtQC7M7Wnusy0TbpmtPS5ALSauTOzQLlmsue4mbGNuMywNLgAsLS3Zq4At8ysTbZmqpq1ZqbntAAANLRmJgCzZiqascwsNLBmLpqtADCaqcwwAACZMZopZjKaLTMzNDAANJoxZjQAM8w0NDQzNec0mTWaNQA2TTZmNgA3zDa0NzM3NDiZN404ADjnODM4QDlmOJo5mTj0Ocw4TToAOac6MzkAO2Y5WjuZObQ7zDkHPAA6NDwzOmA8ZrqNPDO6ujwAuuc8zLkUPZm5QD1muW09M7mavQC5bb3MuEC9mbgUvWa457wzuLq8ALiNvJm3YLwztzS8zLYHvGa2tLsAtlq7mbUAuzO1p7rMtE26ZrT0uQC0mrkzs0C5ZrLnuJmxjbjMsDS4ALC0t2auALfMrE22ZqqatWam57QAADS0ZiYAs2YqmrHMLDSwZi6arQAwmqnMMAAAmTGaKWYymi0zMzQwADSaMWY0ADPMNDQ0MzXnNJk1mjUANk02ZjYAN8w2tDczNzQ4mTeNOAA45zgzOEA5ZjiaOZk49DnMOE06ADmnOjM5ADtmOVo7mTm0O8w5BzwAOjQ8MzpgPGa6jTwzuro8ALrnPMy5FD2ZuUA9ZrltPTO5mr0AuW29zLhAvZm4FL1muOe8M7i6vAC4jbyZt2C8M7c0vMy2B7xmtrS7ALZau5m1ALsztae6zLRNuma09LkAtJq5M7NAuWay57iZsY24zLA0uACwtLdmrgC3zKxNtmaqmrVmpue0AAA0tGYmALNmKpqxzCw0sGYumq0AMJqpzDAAAJkxmilmMpotMzM0MAA0mjFmNAAzzDQ0NDM15zSZNZo1ADZNNmY2ADfMNrQ3Mzc0OJk3jTgAOOc4MzhAOWY4mjmZOPQ5zDhNOgA5pzozOQA7ZjlaO5k5tDvMOQc8ADo0PDM6YDxmuo08M7q6PAC65zzMuRQ9mblAPWa5bT0zuQ=="
+                        },
+                        "shape": {
+                          "bytes": {
+                            "region": {
+                              "texture": {
+                                "level": 0,
+                                "slice": 0,
+                                "aspect": "color",
+                                "sample": 0,
+                                "origin": [
+                                  0,
+                                  0,
+                                  0
+                                ],
+                                "size": [
+                                  16,
+                                  16,
+                                  1
+                                ]
+                              }
+                            },
+                            "element": "u16",
+                            "row_offset": 0,
+                            "row_elements": 2,
+                            "row_pitch": 4,
+                            "rows": 256,
+                            "image_pitch": 1024,
+                            "images": 1,
+                            "gaps": "ignored"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "ba-1mba",
+                      "observed": {
+                        "value": {
+                          "bytes": "2LlguGy5K7amtc240LX9tdm1e638tkG1SrSZrfu407Est6KzU7EMtJa1yLSEsy6rZbhirUe2y7L3sfKuc7KkMB4gGDEDpgU0RrbgJ04rGTKVMIg1dihpLUsyJTWWM6ImK7JmNY+tshtVrT4ysq/fMW4lEzbBn144lDW7Nc00nDiYNyU5fzfkOGY23DiSLTc4jjLuN0M4bjaMNm06STnMOaw4pjlLOak7gDisOyk5gDhVOpc6KTg8PBI4VTlEOBc7dTsjOi44CzxgOSc6UjupPCE63TwSOUE9ITqwOoc5ez0qO3E9QTyhuB08ALixPC62TjrXuHg8ArVGO6e1ezyIub65CrccttG007Q3uK23freQuH6qHbfGorG1aafgtCu037gBtwCxQiS8tBmqhbXEsDuqgTGPtfgstLKQMja3BbSYswm0ty3gsQguZTMYsumvfbGnNZCvaDYPLW02JrAYMKMs6zeMqRQ3TjHZL2o1Fzh3JFg46DYuNrY29DhvM6s57TUiNjo3ZjalNwY4gjdDOEw5OTijN3o1uTnCOOQ5WzjMOK47JzqvOmI2IjtBOCM7AjoVO+85zzkfOig76DoLPEU5oTpAOLo7fDjHPNI4mzxlOqM8DjlUO705QDvGOV08lTt9PW06dbr9PDu2YTuRuC89ELrCPLm0RDtAuD883bVRuBi0irhqtGW2BbSluNSx27aXtBe5V69MtAKvF7minja5tbKeuIO0sbcbtLe4ZrV9uECst7I3sC6fKKBBt5GwGbQPLxC2bzAvqd+gAq0DLbWy0zXFs1I2MDICMwIxTTDFrlw0YTUBMCGqKzWhrrMs5TMzNfM25DcyNkc4zDJrNFwpNDl/OEo2cDgNNxI1CjnDMnQ5aTXBN4k4YzkUOKI6/jYGN+s3UDmlOY04ATrwOwI7IDvdNvk6fzvFO0E77DtlOE46YjpJOwI5jDzCOY87ODp8PAs59joyPBk7czxiPAg8wzx8OkG59DkvulM8PrYxPIK4kjvJuDA8M7cRPQ6yDLajuJG6lbc/uOa2SbQor++27LBktyGyYbONt964i6Sktjumdbd9tbe3YaguuN+kfbfxsPO2ojAQs9202rCVsUm1JrCysvGyrLUqsiG06jRnMvGtL7RQrGWwm6pqrcKpDCo4MBIyGTLQrjg1ZjDfMbkz0zVzozo1vy37NOCh9Dh8ME83eTYSN7I4sTe+OBM1ZzGoN042UDgNOY83ATPCOSY3gjtGN8I76TgEO6c6NjjqOAs8YDl2OaU4AjwuOEY7wjvYOzc4tDkDOSs6HjyIOi873DrcOZo7YDluPME7eDwhPFo73TvPuAI9G7eDOsy4YzxYuto837k1PKC50zs9uQ=="
+                        },
+                        "shape": {
+                          "bytes": {
+                            "region": {
+                              "texture": {
+                                "level": 0,
+                                "slice": 0,
+                                "aspect": "color",
+                                "sample": 0,
+                                "origin": [
+                                  0,
+                                  0,
+                                  0
+                                ],
+                                "size": [
+                                  16,
+                                  16,
+                                  1
+                                ]
+                              }
+                            },
+                            "element": "u16",
+                            "row_offset": 0,
+                            "row_elements": 2,
+                            "row_pitch": 4,
+                            "rows": 256,
+                            "image_pitch": 1024,
+                            "images": 1,
+                            "gaps": "ignored"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "bc-1msa",
+                      "observed": {
+                        "value": {
+                          "bytes": "GK1Vt2aguKmoOte5hDkUsaE4QTjQNEWx7zipNZK09isEKbavazhMsvAuM7ULNLUtorUEoC+wBLRVMGiveiucMl00szF+MbozLbSWp38wgS4IMWQySScApGAtkC/uKtKoc7CULc2uABOUrjsrAK7NLMatDi24rJgqnrFCL2CxFilRtIwggbSoKI2zHSvkKtww/KQaM6G1CDYGsqerA7i7LBi2kzC1t6SyrbTZsRNA3TtOQYRANjywQs46tjyyOlNAUUHNPUE4AkFvPPs8LEDmQRw9E0KnOKZCIjyyPOQ4kEJQPTdCcj9AKWo+YzMFQFA4NziJtUs+jTg6OjQ1fT3KulCpKbDtOooy1DsruPI1pLaKKf04fjT+OIk25Tf+Nm2v7LRouJU4rDXAMiMxuCobrQI43TaMq70yei6QNYG0WLVgqGG1zDQMtJMzmzFqreSx862UMtysYzJuJDwxNa94IDiqgjArrnAuxKwtKgCuzSy/rbsrjrGeLWSyQiZksDSlvbIDMVO0yDHEtHEwtLSwMM23DDKgtB03krhuMte4HDV2tm+zOLnAopyiUqytPY9B3kAtQWxAbT5TQLFA+kCTQUg9AD+VOJRAuTh0QlU5xkGzPZJBlDhrPqA64T3lOUZAJD5PQtc6u7raQCs5ZjxCsKFAFbtIPwc5MzoqtL887DELOPc2GTV1NJg5MzQqLtw1nzZ4HVyy7DXtONE0D7VjN2K2XauetBq0rLDHs0W2w7b1ta4lHTHer2c2KSiQtPSxYKt+L3CzPC9SLoqsdyQAj+Wv2jImsUcyRC2pK3sk+CEAryosJqFIJ1KujCwArs0saq90LZOxECwKss0qGrCkMRim2ByGte8xvrUHMvewciusphcoMLCGNCu2lC67tGWsO7FMOOeyJjRJuLo3O0GoQjRCPEGaOLxAFUJ4QWpBXkFJOjY+Yj8NQCo76kHOPMo/Tz08QYs4oT1xQJA9rEBQQBk/3UASOyq0TjhWurQ+NDjEPWqy7Tt2tu08CB9bP/85Ajx4uOS257Q8Nfuzmjt2OG02qjWcM68xpzmDuBC0+zYiL3o11qsatsSw9zFVtAIx2LIWsFGyFDVqLXm2DDBWs9Cw3LESqai0HrMhtK2wpDJ8Msmwj7Gir8SuAq7lrXmsUqteJI6pjCnArpIsAK7NLGCvKi2erHwulq0jML2mLCUZrVovnrPeMCe2ATGAtno1cCSqMziyDzN1t6o1ey4nLa+xa7LZsESzErZzqR5CRTrSPoVCZD+EPeA8yEFEOo5Ar0H8QGs4VDwvOwM9OEF0PXM/yz0JPAM/FzmiQAA/fUB+P2c9Mz6gqeJADjelOZKzdj4IvJo/8Lr/PJ26XDvcuQ=="
                         },
                         "shape": {
                           "bytes": {
