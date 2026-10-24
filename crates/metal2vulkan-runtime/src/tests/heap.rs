@@ -554,6 +554,105 @@ fn a_heap_texture_s_footprint_takes_no_granularity_padding() {
     );
 }
 
+/// A heap texture takes Metal's answer, which is the number a program sizes a heap and places its
+/// resources by, in one of two ways: its image bound at the texture's offset where the images lie
+/// inside that answer, or a shadow of the texture's bytes with the image in memory of its own
+/// where they do not. Only where neither holds does the answer run past Metal's, and the device
+/// announces `heap-texture-larger-than-metal` there.
+///
+/// The whole decision over the plan's own numbers, every shape the plan can hand it. An image
+/// already in memory of its own takes none of the heap's bytes, so it is held whatever it needs; a
+/// 4:2:2 texture is never held by its image, because its bytes lie where Metal's linear rows do
+/// and not where its image lays them; a texture held with a depth twin is held by neither, since
+/// no shadow of the texture's bytes moves the twin's; a multisample texture is held by a shadow
+/// whether or not a shadow of rows fits it, because its image lies in memory of its own either
+/// way.
+#[test]
+fn a_heap_texture_is_held_to_metal_s_answer_by_its_image_or_by_a_shadow() {
+    use crate::texture::heap::{held_to_metal, HeapTextureShape, HeldToMetal};
+    use crate::SizeAndAlign;
+    let answer = |size, align| SizeAndAlign { size, align };
+    // A plain single-sample texture whose image binds in the heap's memory, and a shadow of its
+    // bytes fits its planes.
+    let plain = HeapTextureShape {
+        apart: false,
+        four_two_two: false,
+        twin: false,
+        multisample: false,
+        shadowable: true,
+    };
+    let metal = answer(16384, 128);
+    // Inside Metal's answer, in both fields and exactly: the image.
+    for images in [answer(16384, 128), answer(1024, 64), answer(128, 128)] {
+        assert_eq!(held_to_metal(images, metal, plain), HeldToMetal::Images);
+    }
+    // Past it in either field: a shadow, which answers Metal's all the same. The NVIDIA shapes
+    // the first replay found: a coarser alignment (1024 where Metal answers 128), and more bytes
+    // (160768 where Metal answers 32768 for a 5000-texel `Type1D`).
+    for images in [answer(16384, 1024), answer(22784, 128), answer(160768, 128)] {
+        assert_eq!(held_to_metal(images, metal, plain), HeldToMetal::Shadow);
+    }
+    // No shadow fits its planes: neither, so the answer runs past Metal's, announced.
+    let unshadowable = HeapTextureShape {
+        shadowable: false,
+        ..plain
+    };
+    let past = answer(16384, 1024);
+    assert_eq!(
+        held_to_metal(past, metal, unshadowable),
+        HeldToMetal::Nothing
+    );
+    // A multisample texture is held by a shadow either way: its image lies in memory of its own.
+    for shadowable in [false, true] {
+        let shape = HeapTextureShape {
+            multisample: true,
+            shadowable,
+            ..plain
+        };
+        assert_eq!(held_to_metal(past, metal, shape), HeldToMetal::Shadow);
+        assert_eq!(held_to_metal(metal, metal, shape), HeldToMetal::Images);
+    }
+    // A depth twin's bytes lie past the image's inside the texture's and no shadow moves them: a
+    // texture whose images do not fit is held by neither, whatever else its shape says.
+    for (multisample, shadowable) in [(false, false), (false, true), (true, false), (true, true)] {
+        let shape = HeapTextureShape {
+            twin: true,
+            multisample,
+            shadowable,
+            ..plain
+        };
+        assert_eq!(held_to_metal(past, metal, shape), HeldToMetal::Nothing);
+        assert_eq!(held_to_metal(metal, metal, shape), HeldToMetal::Images);
+    }
+    // An image in memory of its own takes none of the heap's bytes: held whatever it needs, and a
+    // depth twin never goes with one.
+    let apart = HeapTextureShape {
+        apart: true,
+        ..plain
+    };
+    for images in [answer(160768, 65536), metal] {
+        assert_eq!(held_to_metal(images, metal, apart), HeldToMetal::Images);
+    }
+    // A 4:2:2 texture is a shadow of the heap's bytes even where its image would fit: Metal lays
+    // its rows out linearly there, which its image does not.
+    let chroma = HeapTextureShape {
+        four_two_two: true,
+        ..plain
+    };
+    assert_eq!(held_to_metal(metal, metal, chroma), HeldToMetal::Shadow);
+    assert_eq!(
+        held_to_metal(
+            metal,
+            metal,
+            HeapTextureShape {
+                apart: true,
+                ..chroma
+            }
+        ),
+        HeldToMetal::Images
+    );
+}
+
 /// A heap's memory starts at a multiple of every image alignment measured, so a heap texture of
 /// such an image is placed, not refused: RADV's on an RX 7900 XTX (Mesa 26.0.8), 128 KiB for a
 /// `D16`, `D32F` or `D32FS8` image of 8 x 8 texels or more and 256 KiB for a multisample image from

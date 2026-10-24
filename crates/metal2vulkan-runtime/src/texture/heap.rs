@@ -1083,9 +1083,65 @@ pub(crate) fn heap_extent(
 /// Metal's answer `metal`, so the texture takes Metal's answer with its image bound at the
 /// texture's offset: no more bytes and no coarser alignment. A texture that does not is held to
 /// Metal's answer by a shadow of its bytes, its image in memory of its own, where one serves
-/// (`Device::heap_plan`); the number the query answers is Metal's either way.
+/// ([`held_to_metal`]); the number the query answers is Metal's either way.
 pub(crate) fn images_fit(images: SizeAndAlign, metal: SizeAndAlign) -> bool {
     images.size <= metal.size && images.align <= metal.align
+}
+
+/// What a heap texture's descriptor and its planned images decide about holding it to Metal's
+/// answer, apart from the numbers ([`held_to_metal`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct HeapTextureShape {
+    /// Its image lies in memory of its own already, taking none of the heap's bytes
+    /// ([`AliasRoute::Unaliased`], [`AliasRoute::Planes`], [`AliasRoute::Lossless`]), so the
+    /// texture takes Metal's answer whatever the image needs.
+    pub(crate) apart: bool,
+    /// A 4:2:2 texture, always a shadow of the heap's bytes: its bytes lie where Metal's linear
+    /// rows do (`heap_plane_layout`), never where its image lays them.
+    pub(crate) four_two_two: bool,
+    /// It is held with a depth twin, whose bytes no shadow of the texture's moves.
+    pub(crate) twin: bool,
+    /// More than one sample: no copy of rows shadows its image, which lies in memory of its own
+    /// instead, as one the heap's memory cannot hold.
+    pub(crate) multisample: bool,
+    /// A shadow of the heap's bytes fits the image's planes ([`shadowable`]).
+    pub(crate) shadowable: bool,
+}
+
+/// How a heap texture is held to Metal's answer ([`held_to_metal`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum HeldToMetal {
+    /// Its image bound at the texture's offset of the heap's memory: the images lie inside
+    /// Metal's answer, or in memory of their own already.
+    Images,
+    /// Its image in memory of its own, a shadow of the texture's bytes (Metal's tiles where they
+    /// serve, else rows): the images ask more than Metal's answer and a shadow serves.
+    Shadow,
+    /// Neither: the images ask more and no shadow serves. A measured route's answer is then
+    /// refused (`NotImplemented(HeapTextureMemory)`), since the texture's bytes are no layout the
+    /// image holds; the model's is widened to the images' and announced
+    /// `heap-texture-larger-than-metal`.
+    Nothing,
+}
+
+/// How a heap texture of `shape` whose images take `images` of the heap is held to Metal's answer
+/// `metal`, which a program sizes a heap and places its resources by (`Device::heap_plan`).
+pub(crate) fn held_to_metal(
+    images: SizeAndAlign,
+    metal: SizeAndAlign,
+    shape: HeapTextureShape,
+) -> HeldToMetal {
+    if shape.apart || (!shape.four_two_two && images_fit(images, metal)) {
+        return HeldToMetal::Images;
+    }
+    // A depth twin's bytes lie past the image's inside the texture's, and no shadow moves them.
+    if shape.twin {
+        return HeldToMetal::Nothing;
+    }
+    match shape.multisample || shape.shadowable {
+        true => HeldToMetal::Shadow,
+        false => HeldToMetal::Nothing,
+    }
 }
 
 /// Whether a heap texture of alignment `align` lies at a multiple of it wherever a heap's memory
@@ -1576,41 +1632,41 @@ impl Device {
         // (above). Metal's answer the texture cannot be held to, announced below.
         let mut past_metal = None;
         if let Some(metal) = metal_answer {
-            let fits = matches!(
-                image.route,
-                AliasRoute::Unaliased | AliasRoute::Planes | AliasRoute::Lossless
-            ) || (!chroma_pairs::is_four_two_two(layout.pixel_format)
-                && images_fit(images, metal));
-            let shadowed = matches!(image.route, AliasRoute::Shadow | AliasRoute::MemoryShadow);
-            // Whether the texture is held to Metal's answer: its images inside it, or a shadow of
-            // its bytes that serves.
-            let held = if fits {
-                true
-            } else if twin.is_some() {
-                false
-            } else if layout.samples > 1 {
-                // A multisample image, which no copy of rows shadows, lies in memory of its own,
-                // as one the heap's memory cannot hold (above).
-                image.route = AliasRoute::Lossless;
-                true
-            } else if shadowable(&image.plan, metal.size) {
-                if !shadowed {
-                    image.route = AliasRoute::MemoryShadow;
-                }
-                true
-            } else {
-                false
+            let shape = HeapTextureShape {
+                apart: matches!(
+                    image.route,
+                    AliasRoute::Unaliased | AliasRoute::Planes | AliasRoute::Lossless
+                ),
+                four_two_two: chroma_pairs::is_four_two_two(layout.pixel_format),
+                twin: twin.is_some(),
+                multisample: layout.samples > 1,
+                shadowable: shadowable(&image.plan, metal.size),
             };
-            if held {
-                size_and_align = metal;
-            } else if measured_route {
-                return Err(Error::NotImplemented(RuntimeGap::HeapTextureMemory));
-            } else {
-                past_metal = Some(metal);
-                size_and_align = SizeAndAlign {
-                    size: size_and_align.size.max(metal.size),
-                    align: size_and_align.align.max(metal.align),
-                };
+            match held_to_metal(images, metal, shape) {
+                HeldToMetal::Images => size_and_align = metal,
+                HeldToMetal::Shadow => {
+                    // A multisample image, which no copy of rows shadows, lies in memory of its
+                    // own, as one the heap's memory cannot hold (above); any other is a shadow of
+                    // the heap's bytes, in Metal's tiles below where they serve.
+                    image.route = match shape.multisample {
+                        true => AliasRoute::Lossless,
+                        false => match image.route {
+                            kept @ (AliasRoute::Shadow | AliasRoute::MemoryShadow) => kept,
+                            _ => AliasRoute::MemoryShadow,
+                        },
+                    };
+                    size_and_align = metal;
+                }
+                HeldToMetal::Nothing if measured_route => {
+                    return Err(Error::NotImplemented(RuntimeGap::HeapTextureMemory))
+                }
+                HeldToMetal::Nothing => {
+                    past_metal = Some(metal);
+                    size_and_align = SizeAndAlign {
+                        size: size_and_align.size.max(metal.size),
+                        align: size_and_align.align.max(metal.align),
+                    };
+                }
             }
         }
         // A texture whose image lies in memory of its own as a shadow of the heap's bytes (the
