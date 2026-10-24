@@ -423,49 +423,202 @@ fn ran_here(seen: &Seen, call: &str) {
     );
 }
 
-/// The most loads a spin makes: seconds on the M3 Max (about 135 ns a load there), so a spin whose
-/// word is never seen raised still ends.
-const SPIN_CAP: u32 = 1 << 25;
+/// How long a spin runs when nothing ends it early: the duration [`Spin::new`] calibrates its cap
+/// to, at the device's own measured rate.
+///
+/// **A fixed cap cannot hold both ends of this test.** `release` ends a spin at its next load only
+/// where the device shows a running kernel the host's store; where it does not
+/// (`first_use::release` says so), the cap is the only thing that ends the spin, so the cap's
+/// duration is what every assertion here actually rests on. It has to outlast [`EARLY`], or
+/// `waits_then_refuses` sees the detach return and reads it as a detach that did not wait; and it
+/// has to finish inside the device's hang budget, or the ring is reset, the context is lost
+/// "guilty of a hard recovery", and `Spinning::finish` reads `DeviceLost`.
+///
+/// The constant it replaced, `1 << 25`, was chosen as seconds on the M3 Max (about 135 ns a load)
+/// and held neither end anywhere else. Measured on RADV by the lane that diagnosed this: `1 << 25`
+/// is about 2 s and fails 5 of 5 runs, each adding a `ring gfx_0.0.0` timeout and a ring reset;
+/// `1 << 20` ends inside [`EARLY`], so the other assertion fails instead; `1 << 23`, about half a
+/// second, passes. So half a second is the value the failing device itself measured as holding
+/// both ends: five times [`EARLY`] on one side, a quarter of the observed hang on the other. A
+/// device four times slower than its own fastest measured run still lands inside that gap.
+const SPIN: Duration = Duration::from_millis(500);
 
-/// The owned fixture's kernel that loads a word no one raises until its cap
-/// (`kernel_spin_on_an_unraised_word`): its GPU work runs until the host raises the word. Run
-/// once on `queue`, its word raised from the start, so its `VkPipeline` is made: a dispatch whose
-/// pipeline is still being made records at a host step, which its submission waits for.
-fn spin_state(device: &Device, queue: &CommandQueue) -> ComputePipelineState {
-    let ll = engine_dir().join("kernel_spin_on_an_unraised_word.ll");
-    let library = device
-        .new_library_with_air(&llvm_assemble(&ll).unwrap())
-        .unwrap();
-    let function = library
-        .new_function_with_name("spin_on_an_unraised_word")
-        .unwrap();
-    let state = device
-        .new_compute_pipeline_state(
-            &ComputePipelineDescriptor::new(StageSource::Function(function.function_descriptor())),
-            &PipelineOptions::default(),
-        )
-        .unwrap();
-    let raised = buffer_with(device, &1u32.to_le_bytes()).unwrap();
-    let loads = buffer_with(device, &[0; 4]).unwrap();
-    let command_buffer = queue.command_buffer().unwrap();
-    let mut encoder = command_buffer.compute_command_encoder().unwrap();
-    encoder.set_compute_pipeline_state(&state).unwrap();
-    encoder.set_buffer(Some(&raised), 0, 0).unwrap();
-    encoder.set_buffer(Some(&loads), 0, 1).unwrap();
-    encoder.set_bytes(&SPIN_CAP.to_le_bytes(), 2).unwrap();
-    encoder
-        .dispatch_threadgroups(Size::new(1, 1, 1), Size::new(1, 1, 1))
-        .unwrap();
-    encoder.end_encoding().unwrap();
-    command_buffer.commit().unwrap();
-    command_buffer.wait_until_completed_for(WAIT).unwrap();
-    assert_eq!(command_buffer.error(), None, "the spin, raised");
-    assert_eq!(
-        read_buffer(&loads, 0, 4).unwrap(),
-        [0; 4],
-        "the spin, raised"
+/// The hang budget the calibration must stay inside, for [`the_spin_cap_holds_both_ends`] to check
+/// against. It is the shortest reset observed on this fleet (amdgpu's `ring gfx_0.0.0` timeout at
+/// about 2 s), not a limit any device publishes, so it is a floor for the check and never a claim
+/// about a device.
+const HANG: Duration = Duration::from_secs(2);
+
+/// The cap, in loads, that runs for [`SPIN`] at `rate` loads per second.
+///
+/// Its own function so [`the_spin_cap_holds_both_ends`] can hold both ends of the calibration
+/// over a range of rates with no device: the arithmetic is what decides whether a measured rate
+/// becomes a cap that outlasts [`EARLY`] and finishes inside [`HANG`].
+fn cap_for(rate: f64) -> u32 {
+    (rate * SPIN.as_secs_f64()).clamp(1.0, f64::from(u32::MAX)) as u32
+}
+
+/// The calibration holds **both** ends, and the arithmetic is exact over the fleet's range.
+///
+/// A cap that only fixes one end moves the failure instead of closing it, so the margins are
+/// checked rather than assumed. `cap_for(rate) / rate` is [`SPIN`] by construction, so asserting
+/// that would prove nothing; what can be wrong is the margin [`SPIN`] leaves at each end and the
+/// clamp at the edges of the range.
+#[test]
+fn the_spin_cap_holds_both_ends() {
+    // The lower end, with room: the spin has to be running when `waits_then_refuses` looks, after
+    // it slept EARLY, and the spin started before that sleep began.
+    assert!(
+        SPIN >= EARLY * 2,
+        "a spin of {SPIN:?} leaves no room over the {EARLY:?} the test sleeps before it looks"
     );
-    state
+    // The upper end, with room for a run slower than the fastest rate the calibration measured.
+    // The fastest run is the kernel's own rate, so a loaded device runs the same cap for longer,
+    // and it is that longer run that has to stay inside the hang budget.
+    const SLOWDOWN: u32 = 4;
+    assert!(
+        SPIN * SLOWDOWN <= HANG,
+        "a spin of {SPIN:?} run {SLOWDOWN} times slower than its measured rate is {:?}, past the \
+         {HANG:?} budget",
+        SPIN * SLOWDOWN
+    );
+    // The scaling is exact across the fleet: from a CPU ICD's rate to far past any GPU measured
+    // here, the cap is neither clamped to one load nor to u32::MAX, either of which would silently
+    // stop the cap meaning SPIN. 16.8e6 is RADV's measured rate (1 << 25 loads in about 2 s).
+    for rate in [1.0e4, 1.0e5, 1.0e6, 16.8e6, 1.0e8, 1.0e9, 8.0e9] {
+        let cap = cap_for(rate);
+        assert!(cap > 1, "a rate of {rate} loads/s clamps the cap to {cap}");
+        assert!(
+            cap < u32::MAX,
+            "a rate of {rate} loads/s clamps the cap to u32::MAX"
+        );
+        let runs = Duration::from_secs_f64(f64::from(cap) / rate);
+        assert!(
+            runs > EARLY && runs * SLOWDOWN <= HANG,
+            "a rate of {rate} loads/s gives {cap} loads, which runs {runs:?}"
+        );
+    }
+    // A rate so low the clamp would bite is below anything that can run this kernel at all: one
+    // load every half second. Stated so the floor is read rather than discovered.
+    assert_eq!(cap_for(2.0), 1);
+}
+
+/// The spin kernel and the cap calibrated for the device it will run on.
+///
+/// [`first_use::Busy`]'s shape, for this lane's own kernel rather than a second mechanism: the cap
+/// grows sixteenfold until a run takes [`first_use::MEASURED`] at the fastest rate measured so
+/// far, and the cap that ships is [`cap_for`] of that rate. The fastest run is the kernel's own
+/// rate, because the GPU's other work can only slow a run.
+struct Spin {
+    state: ComputePipelineState,
+    /// The loads the spin makes at most.
+    cap: u32,
+}
+
+impl Spin {
+    /// The owned fixture's kernel that loads a word no one raises until its cap
+    /// (`kernel_spin_on_an_unraised_word`): its GPU work runs until the host raises the word. Run
+    /// once on `queue`, its word raised from the start, so its `VkPipeline` is made: a dispatch
+    /// whose pipeline is still being made records at a host step, which its submission waits for.
+    /// That first run is also the one the calibration does not measure, for
+    /// [`first_use::Busy`]'s reason: it holds the device's first use of the pipeline and of a
+    /// command buffer, which on a loaded host take past [`first_use::MEASURED`] by themselves.
+    fn new(device: &Device, queue: &CommandQueue) -> Spin {
+        let ll = engine_dir().join("kernel_spin_on_an_unraised_word.ll");
+        let library = device
+            .new_library_with_air(&llvm_assemble(&ll).unwrap())
+            .unwrap();
+        let function = library
+            .new_function_with_name("spin_on_an_unraised_word")
+            .unwrap();
+        let state = device
+            .new_compute_pipeline_state(
+                &ComputePipelineDescriptor::new(StageSource::Function(
+                    function.function_descriptor(),
+                )),
+                &PipelineOptions::default(),
+            )
+            .unwrap();
+        let raised = buffer_with(device, &1u32.to_le_bytes()).unwrap();
+        let loads = buffer_with(device, &[0; 4]).unwrap();
+        let command_buffer = queue.command_buffer().unwrap();
+        let mut encoder = command_buffer.compute_command_encoder().unwrap();
+        encoder.set_compute_pipeline_state(&state).unwrap();
+        encoder.set_buffer(Some(&raised), 0, 0).unwrap();
+        encoder.set_buffer(Some(&loads), 0, 1).unwrap();
+        encoder.set_bytes(&cap_for(0.0).to_le_bytes(), 2).unwrap();
+        encoder
+            .dispatch_threadgroups(Size::new(1, 1, 1), Size::new(1, 1, 1))
+            .unwrap();
+        encoder.end_encoding().unwrap();
+        command_buffer.commit().unwrap();
+        command_buffer.wait_until_completed_for(WAIT).unwrap();
+        assert_eq!(command_buffer.error(), None, "the spin, raised");
+        assert_eq!(
+            read_buffer(&loads, 0, 4).unwrap(),
+            [0; 4],
+            "the spin, raised"
+        );
+        let mut spin = Spin {
+            state,
+            cap: 1 << 12,
+        };
+        // The fastest rate of every measured run, in loads per second of its time on the GPU, and
+        // each run's loads and times for the printed line.
+        let mut rate = 0.0_f64;
+        let mut runs = Vec::new();
+        let at_rate =
+            |cap: u32, rate: f64| f64::from(cap) / rate >= super::first_use::MEASURED.as_secs_f64();
+        loop {
+            for _ in 0..super::first_use::RUNS {
+                let (took, wall) = spin.measure(device, queue);
+                rate = rate.max(f64::from(spin.cap) / took.as_secs_f64());
+                runs.push((spin.cap, took, wall));
+                if !at_rate(spin.cap, rate) {
+                    break;
+                }
+            }
+            if at_rate(spin.cap, rate) || spin.cap >= 1 << 28 {
+                break;
+            }
+            spin.cap <<= 4;
+        }
+        spin.cap = cap_for(rate);
+        let runs: Vec<String> = (runs.iter())
+            .map(|(cap, took, wall)| format!("{cap} in {took:.2?} ({wall:.2?})"))
+            .collect();
+        println!(
+            "DETACH SPIN-CAP on {}: {} loads for about {SPIN:?}, at the fastest rate of the runs \
+             of loads in GPU time (from commit to completion): {}",
+            device.name(),
+            spin.cap,
+            runs.join(", ")
+        );
+        spin
+    }
+
+    /// Run one spin of the current cap over a word nothing raises, so the cap is what ends it: the
+    /// time it took on the GPU, and from its commit to its completion.
+    fn measure(&self, device: &Device, queue: &CommandQueue) -> (Duration, Duration) {
+        let at = Instant::now();
+        let unraised = buffer_with(device, &[0; 4]).unwrap();
+        let loads = buffer_with(device, &[0; 4]).unwrap();
+        let command_buffer = queue.command_buffer().unwrap();
+        let mut encoder = command_buffer.compute_command_encoder().unwrap();
+        encoder.set_compute_pipeline_state(&self.state).unwrap();
+        encoder.set_buffer(Some(&unraised), 0, 0).unwrap();
+        encoder.set_buffer(Some(&loads), 0, 1).unwrap();
+        encoder.set_bytes(&self.cap.to_le_bytes(), 2).unwrap();
+        encoder
+            .dispatch_threadgroups(Size::new(1, 1, 1), Size::new(1, 1, 1))
+            .unwrap();
+        encoder.end_encoding().unwrap();
+        command_buffer.commit().unwrap();
+        command_buffer.wait_until_completed_for(WAIT).unwrap();
+        let wall = at.elapsed();
+        assert_eq!(command_buffer.error(), None, "the spin's calibration");
+        (super::first_use::gpu_took(&command_buffer, wall), wall)
+    }
 }
 
 /// A command buffer whose first batch spins over a buffer until [`Spinning::release`] (the
@@ -482,7 +635,7 @@ impl Spinning {
     fn new(
         device: &Device,
         queue: &CommandQueue,
-        state: &ComputePipelineState,
+        spin: &Spin,
         held: &Buffer,
         resident: bool,
     ) -> Spinning {
@@ -494,10 +647,10 @@ impl Spinning {
         let gate = device.new_shared_event().unwrap();
         let command_buffer = queue.command_buffer().unwrap();
         let mut encoder = command_buffer.compute_command_encoder().unwrap();
-        encoder.set_compute_pipeline_state(state).unwrap();
+        encoder.set_compute_pipeline_state(&spin.state).unwrap();
         encoder.set_buffer(Some(&flag), 0, 0).unwrap();
         encoder.set_buffer(Some(&output), 0, 1).unwrap();
-        encoder.set_bytes(&SPIN_CAP.to_le_bytes(), 2).unwrap();
+        encoder.set_bytes(&spin.cap.to_le_bytes(), 2).unwrap();
         if resident {
             encoder
                 .use_resource(held.as_resource(), ResourceUsage::READ)
@@ -600,11 +753,11 @@ fn waits_then_refuses(spinning: &Spinning, detach: impl FnOnce() -> Result<bool,
 fn table_3_a_detach_waits_for_running_work_then_refuses() {
     on_device(|device| {
         let queue = device.new_command_queue().unwrap();
-        let state = spin_state(device, &queue);
+        let spin = Spin::new(device, &queue);
         let Some((member, _)) = member_over(device, A) else {
             return;
         };
-        let named = Spinning::new(device, &queue, &state, &member, false);
+        let named = Spinning::new(device, &queue, &spin, &member, false);
         // A buffer it does not take: at once.
         let (unrelated, _) = member_over(device, B).unwrap();
         detach(&unrelated);
@@ -616,7 +769,7 @@ fn table_3_a_detach_waits_for_running_work_then_refuses() {
         rebind_to(&member, A);
 
         // Resident: its encoder made the buffer resident.
-        let resident = Spinning::new(device, &queue, &state, &member, true);
+        let resident = Spinning::new(device, &queue, &spin, &member, true);
         waits_then_refuses(&resident, || member.detach_backing());
         resident.finish();
         detach(&member);
@@ -625,7 +778,7 @@ fn table_3_a_detach_waits_for_running_work_then_refuses() {
         let Some((heap, placed)) = heap_member(device) else {
             return;
         };
-        let in_heap = Spinning::new(device, &queue, &state, &placed, false);
+        let in_heap = Spinning::new(device, &queue, &spin, &placed, false);
         assert_eq!(heap.detach_backing(), Ok(false));
         assert_ne!(
             in_heap.command_buffer.status(),
@@ -648,7 +801,7 @@ fn table_3_a_detach_waits_for_running_work_then_refuses() {
 fn resident_unreached(
     device: &Device,
     queue: &CommandQueue,
-    state: &ComputePipelineState,
+    spin: &Spin,
     resident: &Buffer,
     gate: Option<&SharedEvent>,
 ) -> (CommandBuffer, Buffer) {
@@ -664,10 +817,10 @@ fn resident_unreached(
     encoder
         .use_resource(resident.as_resource(), ResourceUsage::READ)
         .unwrap();
-    encoder.set_compute_pipeline_state(state).unwrap();
+    encoder.set_compute_pipeline_state(&spin.state).unwrap();
     encoder.set_buffer(Some(&raised), 0, 0).unwrap();
     encoder.set_buffer(Some(&loads), 0, 1).unwrap();
-    encoder.set_bytes(&SPIN_CAP.to_le_bytes(), 2).unwrap();
+    encoder.set_bytes(&spin.cap.to_le_bytes(), 2).unwrap();
     encoder
         .dispatch_threadgroups(Size::new(1, 1, 1), Size::new(1, 1, 1))
         .unwrap();
@@ -684,12 +837,12 @@ fn resident_unreached(
 fn a_resident_buffer_no_command_reaches_fails_its_submission_once_detached() {
     on_device(|device| {
         let queue = device.new_command_queue().unwrap();
-        let state = spin_state(device, &queue);
+        let spin = Spin::new(device, &queue);
         let Some((member, _)) = member_over(device, A) else {
             return;
         };
         detach(&member);
-        let (encoded, loads) = resident_unreached(device, &queue, &state, &member, None);
+        let (encoded, loads) = resident_unreached(device, &queue, &spin, &member, None);
         encoded.wait_until_completed_for(WAIT).unwrap();
         detached_backing(&encoded, "encoded detached");
         assert_eq!(
@@ -700,7 +853,7 @@ fn a_resident_buffer_no_command_reaches_fails_its_submission_once_detached() {
         rebind_to(&member, A);
 
         let gate = device.new_shared_event().unwrap();
-        let (pending, loads) = resident_unreached(device, &queue, &state, &member, Some(&gate));
+        let (pending, loads) = resident_unreached(device, &queue, &spin, &member, Some(&gate));
         detach(&member);
         gate.set_signaled_value(1);
         pending.wait_until_completed_for(WAIT).unwrap();

@@ -114,10 +114,10 @@ const BUSY: Duration = Duration::from_secs(2);
 const LINKS: u32 = 8;
 
 /// The least GPU time the busy kernel's rate is measured over, at that rate.
-const MEASURED: Duration = Duration::from_millis(50);
+pub(super) const MEASURED: Duration = Duration::from_millis(50);
 
 /// The most runs at one cap the busy kernel's rate is measured by.
-const RUNS: usize = 3;
+pub(super) const RUNS: usize = 3;
 
 /// The textures' side, format and bytes per row: one guest page of texels.
 const SIDE: u64 = 64;
@@ -340,7 +340,7 @@ impl BusyWork {
 /// The time `command_buffer`, completed in `wall` from its commit, took on the GPU: its GPU end
 /// less its GPU start, where the device answers them (`CommandBuffer::gpu_start_time`) apart,
 /// else `wall`, which holds it.
-fn gpu_took(command_buffer: &CommandBuffer, wall: Duration) -> Duration {
+pub(super) fn gpu_took(command_buffer: &CommandBuffer, wall: Duration) -> Duration {
     match (
         command_buffer.gpu_start_time(),
         command_buffer.gpu_end_time(),
