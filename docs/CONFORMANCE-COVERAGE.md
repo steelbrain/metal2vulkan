@@ -43,7 +43,7 @@ Its limits, measured rather than asserted:
 | committed recordings | 1100 |
 | distinct SDK items the Metal leg reaches, of any status | 797 |
 | of those, reached only where this cannot name the family | 7 |
-| ledger rows (a case whose gap is recorded) | 809 |
+| ledger rows (a case whose gap is recorded) | 807 |
 | declared crossings of the option space (pairs put to Metal at once) | 24 |
 | declared crossings that are no pair of it (a boolean or numeric field, or one type in two slots) | 30 |
 
@@ -2227,8 +2227,6 @@ A case whose difference from Metal is recorded rather than compared away. The le
 | `compute-descriptor-reset` | Metal's `MTLComputePipelineDescriptor.reset` is PARTIAL. Measured on this M3 Max (macOS 27.0.1, build 26A434), from `compute-descriptor-reset`'s own committed r… |
 | `compute-descriptor-reset` | Metal's `MTLComputePipelineDescriptor.reset` is PARTIAL. Measured on this M3 Max (macOS 27.0.1, build 26A434), from `compute-descriptor-reset`'s own committed r… |
 | `compute-descriptor-reset` | Metal's `MTLComputePipelineDescriptor.reset` is PARTIAL. Measured on this M3 Max (macOS 27.0.1, build 26A434), from `compute-descriptor-reset`'s own committed r… |
-| `function-bindings-visible-function-table` | Metal compiles a kernel that takes a `visible_function_table` argument and links no visible function, and reflects it: the binding is listed as `MTLBindingTypeV… |
-| `function-bindings-data-types-tables` | The same gap as the `function-bindings-visible-function-table` row above, reached through an argument buffer instead of a buffer slot, which is why it is a seco… |
 | `binary-archive-mesh-adder` | `BinaryArchive` has three of Metal's four pipeline adders: `addMeshRenderPipelineFunctionsWithDescriptor:error:` has no counterpart at all. Metal takes the call… |
 | `binary-archive-sources` | Metal accepts a **metallib** as a binary archive and we refuse it. Measured on this M3 Max (macOS 27.0.1) from this case's own committed recording over three ru… |
 | `attribute-stride-buffer` | Metal's `MTLAttributeStrideStatic` on a `[[stage_in]]` layout of `MTLBufferLayoutStrideDynamic` is not "read at stride 0"; it fetches the element at the bind of… |

@@ -4,12 +4,13 @@
 //! `visible_function_table<uint(uint, uint)>`, and one calling visible functions through a helper
 //! that takes a function pointer) and `engine/visible_table_functions` (the visible
 //! functions `table_add`, `table_mul`, `table_sub` of the table's type and `table_half` of
-//! another) are what Apple's compiler emits. Through the public API the caller compiles once the
-//! pipeline links the functions a table can hold: a table call nothing can answer is
-//! `NeedsInput(VisibleFunctionTable)`. The compiled kernels validate on every committed profile
-//! and compute, on the CPU interpreter, what Metal does for every defined entry (a function, a
-//! null entry, a null or empty table); an entry holding a function of another type yields zero
-//! Metal's undefined call. No GPU is used.
+//! another) are what Apple's compiler emits. Through the public API the caller compiles whether or
+//! not the pipeline links a function a table can hold: an entry holds a function handle, and a
+//! handle exists only for a linked function, so with none linked every entry is null and only the
+//! shader's own guards run. The compiled kernels validate on every committed profile and compute,
+//! on the CPU interpreter, what Metal does for every defined entry (a function, a null entry, a
+//! null or empty table); an entry holding a function of another type yields zero Metal's undefined
+//! call. No GPU is used.
 //!
 //! `llvm-as` assembles the fixtures; a missing tool skips visibly.
 
@@ -18,7 +19,7 @@ use std::path::Path;
 use crate::bind::FunctionTableWords;
 use crate::budget::{Budget, SPIRV_WORDS};
 use crate::device::{Device, DeviceDescription, DevicePolicy};
-use crate::error::{Error, RuntimeInput};
+use crate::error::Error;
 use crate::library::{FunctionConstantValues, Library};
 use crate::lower::select::LowerInputs;
 use crate::pipeline::compile::{compile_bitcode_linked, EntryRef, LinkedSource};
@@ -134,26 +135,28 @@ fn dispatch(module: &crate::spirv::ir::TypedModule, n: u32, table: Option<&[u8]>
     words(&out.buffers[0])
 }
 
-/// A table call that no linked function can answer needs the pipeline's linked functions; a
-/// function of another type is no answer either.
+/// A table call that no linked function can answer compiles: a handle exists only for a linked
+/// function, so with nothing of the call's type linked every entry's word is null, the switch is
+/// unreachable, and the shader's `f == nullptr` guard is what runs. The module validates, and on
+/// the CPU interpreter a two-entry table of null entries answers `0xfffffffd` for every thread --
+/// what this M3 Max (macOS 27.0.1) observed from Metal for the same pipeline and table. A linked
+/// function of another type is no answer either, and compiles the same way.
 #[test]
-fn a_table_call_needs_a_function_of_its_type() {
+fn a_table_call_without_a_function_of_its_type_reads_null_entries() {
     let Some((caller, functions)) = fixtures() else {
         return;
     };
-    let needs = Err(Error::NeedsInput(RuntimeInput::VisibleFunctionTable {
-        buffer: Some(1),
-    }));
-    assert_eq!(
-        compile(&caller, TABLE, &[], "moltenvk-m3").map(|_| ()),
-        needs
-    );
     let none = FunctionConstantValues::defaults();
     let half = [LinkedSource::new("table_half", &functions, &none)];
-    assert_eq!(
-        compile(&caller, TABLE, &half, "moltenvk-m3").map(|_| ()),
-        needs
-    );
+    let p = profile("moltenvk-m3", DevicePolicy::default()).expect("profile");
+    let two = FunctionTableWords::new(2).to_bytes();
+    let empty: &[LinkedSource<'_>] = &[];
+    for linked in [empty, &half] {
+        let a = compile(&caller, TABLE, linked, "moltenvk-m3").expect("compiles");
+        link_and_validate(&a, &p).expect("L3");
+        let (_, m) = typed_module_linked(&caller, TABLE, &p, linked).expect("module");
+        assert_eq!(dispatch(&m, 12, Some(&two)), [0xffff_fffd; 12]);
+    }
 }
 
 /// With the functions linked, both kernels compile, link, and pass L3 on every committed
@@ -305,7 +308,7 @@ fn a_function_pointer_argument_calls_its_function() {
 
 /// Through the public API: `functions` and `binary_functions` hold what a table can call, a
 /// function only in `private_functions` has no handle and is no candidate, and the compile
-/// succeeds once one function of the call's type is linked.
+/// succeeds whether or not a function of the call's type is linked.
 #[test]
 fn the_public_api_links_table_functions() {
     let Some((caller, functions)) = fixtures() else {
@@ -323,15 +326,12 @@ fn the_public_api_links_table_functions() {
         dev.compile_compute_pipeline(&d, &Budget::standard())
             .map(|_| ())
     };
-    let needs = Err(Error::NeedsInput(RuntimeInput::VisibleFunctionTable {
-        buffer: Some(1),
-    }));
     let private = LinkedFunctions::new().with_private_function(f("table_add"));
     assert_eq!(
         private.function_handle(&LinkedFunction::new(f("table_add"))),
         None
     );
-    assert_eq!(compile(private), needs);
+    assert_eq!(compile(private), Ok(()));
     let mut binary = LinkedFunctions::new().with_function(f("table_half"));
     binary.binary_functions.push(f("table_mul").into());
     assert_eq!(

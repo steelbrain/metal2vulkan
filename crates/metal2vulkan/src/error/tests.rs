@@ -295,10 +295,6 @@ fn front_end_errors_map_one_to_one() {
             Error::NeedsInput(RuntimeInput::FunctionConstant { index: 3 }),
         ),
         (
-            Air::NeedsInput(MissingInput::VisibleFunctionTable { buffer: Some(2) }),
-            Error::NeedsInput(RuntimeInput::VisibleFunctionTable { buffer: Some(2) }),
-        ),
-        (
             Air::InvalidRequest(RequestError::DuplicateFunctionConstant { index: 1 }),
             Error::InvalidDescriptor(DescriptorError::DuplicateFunctionConstant { index: 1 }),
         ),

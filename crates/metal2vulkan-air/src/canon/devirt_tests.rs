@@ -282,10 +282,7 @@ fn a_devirtualized_body_is_charged_exactly_its_footprint() {
         name: name.as_bytes().into(),
         def: Ok(f),
     });
-    let tables = [devirt::TableParam {
-        arg: 1,
-        buffer: Some(0),
-    }];
+    let tables = [devirt::TableParam { arg: 1 }];
     let params = [dev, dev, i32t];
     let cx = devirt::Cx {
         tables: &tables,
@@ -363,16 +360,23 @@ fn a_table_call_is_a_switch_over_the_candidates_of_its_type() {
     ));
 }
 
-/// A table call no candidate of its type answers needs the pipeline's linked functions, unless
-/// constants remove the call.
+/// A table call no candidate of its type answers is the empty switch, not a refusal: an entry
+/// holds a handle, a handle exists only for a linked function, so with nothing linked the call is
+/// unreachable and only the shader's own guards on the table run, as in Metal.
 #[test]
-fn a_table_call_without_candidates_needs_them_only_if_it_survives() {
+fn a_table_call_without_candidates_is_the_empty_switch() {
     let (module, abi) = table_kernel(false);
-    assert_eq!(
-        specialize_linked(module, &abi, &request(), &[], &mut meter()).map(|_| ()),
-        Err(Error::NeedsInput(MissingInput::VisibleFunctionTable {
-            buffer: Some(1)
-        }))
+    let e = specialize_linked(module, &abi, &request(), &[], &mut meter())
+        .unwrap_or_else(|e| panic!("{e}"));
+    let text = print(&e.module);
+    let switch = text
+        .lines()
+        .find(|l| l.contains("switch "))
+        .unwrap_or_else(|| panic!("no switch:\n{text}"));
+    assert!(switch.trim().ends_with("[ ]"), "no case: {switch}");
+    assert!(
+        text.contains("store i32 zeroinitializer"),
+        "the default answers: {text}"
     );
     let (module, abi) = table_kernel(true);
     assert!(specialize_linked(module, &abi, &request(), &[], &mut meter()).is_ok());
@@ -1667,16 +1671,22 @@ fn a_select_of_loaded_tables_selects_their_ids() {
     }
 }
 
-/// A call through a loaded table that no candidate of its type answers needs the pipeline's
-/// linked functions, with no buffer slot named.
+/// A call through a loaded table that no candidate of its type answers is the empty switch too,
+/// the same answer a table parameter's call gets.
 #[test]
-fn a_loaded_table_call_without_candidates_needs_them() {
+fn a_loaded_table_call_without_candidates_is_the_empty_switch() {
     let (module, abi) = argument_buffer_kernel(TableUse::Calls);
-    assert_eq!(
-        specialize_linked(module, &abi, &request(), &[], &mut meter()).map(|_| ()),
-        Err(Error::NeedsInput(MissingInput::VisibleFunctionTable {
-            buffer: None
-        }))
+    let e = specialize_linked(module, &abi, &request(), &[], &mut meter())
+        .unwrap_or_else(|e| panic!("{e}"));
+    let text = print(&e.module);
+    let switch = text
+        .lines()
+        .find(|l| l.contains("switch "))
+        .unwrap_or_else(|| panic!("no switch:\n{text}"));
+    assert!(switch.trim().ends_with("[ ]"), "no case: {switch}");
+    assert!(
+        text.contains("store i32 zeroinitializer"),
+        "the default answers: {text}"
     );
 }
 

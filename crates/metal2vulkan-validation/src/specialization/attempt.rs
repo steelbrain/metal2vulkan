@@ -74,11 +74,6 @@ pub enum Supplied {
         symbol: String,
         source: LinkSource,
     },
-    /// A visible-function table's candidates: each authored function (name, module) the attempt
-    /// linked at the table's stop.
-    TableFunctions {
-        functions: Vec<(String, String)>,
-    },
 }
 
 /// Where a linked function's module came from.
@@ -102,7 +97,6 @@ impl Supplied {
             Supplied::TileAttachments { .. } => "TileAttachments",
             Supplied::StorageTextureFormat { .. } => "StorageTextureFormat",
             Supplied::LinkedFunction { .. } => "LinkedFunction",
-            Supplied::TableFunctions { .. } => "VisibleFunctionTable",
         }
     }
 }
@@ -368,12 +362,9 @@ impl<'a> Derivation<'a> {
 
     /// Derive `input` into the next compile's inputs, or say why the audit supplies none.
     fn derive(&mut self, input: &RuntimeInput) -> Result<(), Unsupplied> {
-        // A table stop is bounded by the authored functions it links, not by an identity: the
-        // compile asks again for a table while a call of another type than those linked remains.
         let identity = match input {
             RuntimeInput::StorageTextureFormat { slot } => Some(format!("{input:?}{}", slot.index)),
             RuntimeInput::LinkedFunction { symbol } => Some(format!("LinkedFunction{symbol}")),
-            RuntimeInput::VisibleFunctionTable { .. } => None,
             _ => Some(crate::engine::bounded_detail(&format!(
                 "{:?}",
                 Outcome::from(&Error::NeedsInput(input.clone()))
@@ -439,7 +430,6 @@ impl<'a> Derivation<'a> {
                 }
             }
             RuntimeInput::LinkedFunction { symbol } => self.linked_function(&symbol.to_string())?,
-            RuntimeInput::VisibleFunctionTable { .. } => self.table_functions()?,
             other => {
                 return Err(Unsupplied::Why(format!(
                     "{:?} is not an input the audit derives",
@@ -519,49 +509,6 @@ impl<'a> Derivation<'a> {
                 }
             ))),
         }
-    }
-
-    /// A table's candidates: every function the authored cases link that is not linked yet. When
-    /// none is left, the table stays the input: the cases link no function, or none of those
-    /// linked has the type of a call through the table.
-    fn table_functions(&mut self) -> Result<Supplied, Unsupplied> {
-        let linkage = self
-            .linkage
-            .ok_or("the attempt has no index to read authored functions from")?;
-        let remaining = linkage
-            .authored
-            .functions
-            .iter()
-            .filter(|(function, _)| !self.linked.iter().any(|(linked, _)| linked == *function))
-            .map(|(function, module)| (function.clone(), module.clone()))
-            .collect::<Vec<_>>();
-        if remaining.is_empty() {
-            let linked = linkage.authored.functions.len();
-            return Err(Unsupplied::Why(if linked == 0 {
-                let held = crate::library_module::indexed_module_count(
-                    linkage.index,
-                    linkage.parent_libraries,
-                )
-                .map_err(Unsupplied::Tooling)?;
-                format!(
-                    "the row's authored cases link no function, so the audit gives the table no \
-                     candidate (the parent libraries retain {held} modules)"
-                )
-            } else {
-                format!(
-                    "none of the {linked} functions the authored cases link has the type of a \
-                     call through the table"
-                )
-            }));
-        }
-        for (function, module) in &remaining {
-            let bitcode = self.retained(linkage, module)?;
-            self.derived.insert(format!("LinkedFunction{function}"));
-            self.linked.push((function.clone(), Some(bitcode)));
-        }
-        Ok(Supplied::TableFunctions {
-            functions: remaining,
-        })
     }
 
     /// The bitcode of retained module `hash`, read from its indexed byte range on first need.
@@ -974,9 +921,6 @@ mod tests {
                     symbol: "g".into(),
                     source: LinkSource::Row,
                 },
-                Supplied::TableFunctions {
-                    functions: vec![("a".into(), "ef".repeat(32)), ("b".into(), "ef".repeat(32))],
-                },
             ],
             unsupplied: Some("why".into()),
             ray_tracing: true,
@@ -1039,10 +983,10 @@ mod tests {
         );
     }
 
-    /// Without an index a linked function stays the compile's input, and so does a
-    /// visible-function table: each says why.
+    /// Without an index a linked function stays the compile's input and says why; a
+    /// visible-function table is no input at all, and the attempt translates.
     #[test]
-    fn linked_functions_and_tables_say_why_they_stay_inputs() {
+    fn a_linked_function_says_why_it_stays_an_input() {
         let Some(bitcode) = bitcode(engine_dir().join("visible_table_caller.ll")) else {
             return;
         };
@@ -1064,15 +1008,8 @@ mod tests {
             &constants,
             "moltenvk-m3",
         );
-        assert_eq!(
-            table.attempt.outcome.key(),
-            "VisibleFunctionTable",
-            "{table:?}"
-        );
-        assert!(table
-            .unsupplied
-            .as_deref()
-            .is_some_and(|why| why.contains("no index")));
+        assert_eq!(table.attempt.outcome, Outcome::Translated, "{table:?}");
+        assert_eq!(table.unsupplied, None, "{table:?}");
     }
 
     /// A linked function is supplied the one retained module of the row's libraries that defines
@@ -1182,7 +1119,8 @@ mod tests {
     }
 
     /// A reference the authored cases link is linked from their module, which no parent library
-    /// of the row retains; a table is given every authored function, and translates.
+    /// of the row retains; a table call asks for nothing, because with no handle to hold its
+    /// entries are null and its switch is unreachable.
     #[test]
     fn authored_functions_answer_references_and_tables() {
         let Some(caller) = bitcode(engine_dir().join("visible_table_caller.ll")) else {
@@ -1231,34 +1169,16 @@ mod tests {
         );
         let table = run("visible_table_dispatch", &authored);
         assert_eq!(table.attempt.outcome, Outcome::Translated, "{table:?}");
-        assert_eq!(
-            table.supplied,
-            vec![Supplied::TableFunctions {
-                functions: names
-                    .iter()
-                    .map(|name| (name.to_string(), module.clone()))
-                    .collect()
-            }],
-            "{table:?}"
-        );
-        // Only a function of another type than the table's calls: the table stays the input.
+        assert_eq!(table.supplied, Vec::new(), "{table:?}");
+        // Only a function of another type than the table's calls: still no input, and the call
+        // takes the entries' null words.
         let half = AuthoredLinks {
             functions: BTreeMap::from([("table_half".to_string(), module.clone())]),
             conflicts: BTreeSet::new(),
         };
         let untyped = run("visible_table_dispatch", &half);
-        assert_eq!(
-            untyped.attempt.outcome.key(),
-            "VisibleFunctionTable",
-            "{untyped:?}"
-        );
-        assert!(
-            untyped
-                .unsupplied
-                .as_deref()
-                .is_some_and(|why| why.contains("none of the 1 functions")),
-            "{untyped:?}"
-        );
+        assert_eq!(untyped.attempt.outcome, Outcome::Translated, "{untyped:?}");
+        assert_eq!(untyped.supplied, Vec::new(), "{untyped:?}");
         // A name the cases link from two modules is linked by none of them.
         let conflicted = AuthoredLinks {
             functions: BTreeMap::new(),

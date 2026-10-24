@@ -811,13 +811,6 @@ pub enum MissingInput {
         /// The symbol the reference names.
         symbol: DiagName,
     },
-    /// A call through the visible-function table at Metal buffer index `buffer` (`None` when the
-    /// index is a function-constant expression) survived specialization, and no linked function
-    /// has the call's type, so no table entry can hold a function it may call.
-    VisibleFunctionTable {
-        /// The table's Metal buffer index (`None`: a function-constant expression).
-        buffer: Option<u32>,
-    },
     /// A call to a function, or a use of a variable, that the module imports from a dynamic
     /// library (a declaration its `air.dyld_flat_table` names) survived specialization, and no
     /// dynamic library the stage links exports it (`MTLDynamicLibrary`).

@@ -24,8 +24,9 @@
 //!
 //! Nothing here refuses a call SCCP may still remove. A candidate that cannot be imported, of
 //! the call's type or of a type unknown because its module did not decode, is called through a
-//! declaration that the post-check refuses with that candidate's reason; a call no candidate
-//! can answer calls one refused with `NeedsInput(VisibleFunctionTable)`. A word used any other
+//! declaration that the post-check refuses with that candidate's reason; a table call no
+//! candidate can answer is the empty switch, whose default answers, because a table entry holds a
+//! handle and a handle exists only for a linked function. A word used any other
 //! way (stored, passed as an argument, returned, compared with something that is not one, or
 //! merged with a pointer from memory) is an escape ([`Escapes`]): the use takes `poison` in its
 //! place, after a call the post-check refuses as `DynamicCall` if it survives.
@@ -44,7 +45,6 @@
 //! escape as a word is. A table operation on anything else (a table merged with an entry
 //! parameter, or made otherwise) is left as it is, and a call through it is `DynamicCall`.
 
-use std::collections::btree_map::Entry;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use crate::budget::Meter;
@@ -68,8 +68,6 @@ use super::sccp::{self, Fact, FcState};
 pub(super) struct TableParam {
     /// Its LLVM parameter index.
     pub arg: u32,
-    /// Its Metal buffer index, when the ABI states it as a constant.
-    pub buffer: Option<u32>,
 }
 
 /// What a pass devirtualizes against.
@@ -942,15 +940,13 @@ struct Reach {
     any: bool,
     /// Whether a table's entry flows into it.
     table: bool,
-    /// The buffer of a table parameter whose entry flows into it (diagnostics).
-    buffer: Option<u32>,
 }
 
 /// What the word `callee`, a member of `web`, may hold: the carriers' operands back to the
 /// constant addresses and the words that may be any function's.
 fn reach(
     (body, parts, stubs, cx): (&Body, &ModuleParts, &Stubs, &Cx<'_>),
-    (web, plans): (&BTreeMap<InstId, Option<u32>>, &BTreeMap<InstId, Plan>),
+    plans: &BTreeMap<InstId, Plan>,
     callee: Value,
     m: &mut Meter,
     held: &mut usize,
@@ -988,9 +984,6 @@ fn reach(
         r.any = true;
         if matches!(plans.get(&i), Some(Plan::Lookup { .. })) {
             r.table = true;
-            if r.buffer.is_none() {
-                r.buffer = web.get(&i).copied().flatten();
-            }
         }
     }
     Ok(r)
@@ -1006,8 +999,8 @@ fn analyze(
 ) -> Result<Option<Analysis>, Error> {
     let mut plans: BTreeMap<InstId, Plan> = BTreeMap::new();
     let mut calls = false;
-    // The function-pointer words and the table buffer each came from (diagnostics).
-    let mut web: BTreeMap<InstId, Option<u32>> = BTreeMap::new();
+    // The function-pointer words (the web).
+    let mut web: BTreeSet<InstId> = BTreeSet::new();
     let mut seeds = Vec::new();
     let mut id_ops: Vec<IdOp> = Vec::new();
     // The values a use needs as words: a call's callee that is no constant, a carrier of a
@@ -1161,16 +1154,16 @@ fn analyze(
                     });
                     continue;
                 };
-                let Some(t) = cx.tables.iter().find(|t| t.arg == a.raw()) else {
+                if !cx.tables.iter().any(|t| t.arg == a.raw()) {
                     continue;
-                };
+                }
                 let plan = match index {
                     None if *op == FunctionTable::Size => Plan::Size(TableRef::Param(table)),
                     None => Plan::IsNull(TableRef::Param(table)),
                     Some(index) => {
                         m.charge(charge)?;
                         *held += charge;
-                        web.insert(i, t.buffer);
+                        web.insert(i);
                         seeds.push(i);
                         Plan::Lookup {
                             table: TableRef::Param(table),
@@ -1291,7 +1284,7 @@ fn analyze(
                 (_, Some(index)) => {
                     m.charge(charge)?;
                     *held += charge;
-                    web.insert(o.at, None);
+                    web.insert(o.at);
                     seeds.push(o.at);
                     Plan::Lookup { table, index }
                 }
@@ -1341,52 +1334,51 @@ fn analyze(
                 .get(v)
                 .ok_or_else(|| invariant("a word out of range"))?;
             ops.clear();
-            let member = match web.entry(v) {
-                // A lookup.
-                Entry::Occupied(_) => true,
-                Entry::Vacant(slot) if is_ptr(parts, inst.ty) && carried(&inst.kind, &mut ops) => {
-                    m.charge(ops.len() * std::mem::size_of::<InstId>() + charge)?;
-                    *held += ops.len() * std::mem::size_of::<InstId>() + charge;
-                    work.extend(ops.iter().filter_map(|&x| match x {
-                        Value::Inst(x) => Some(x),
-                        _ => None,
-                    }));
-                    slot.insert(None);
-                    true
-                }
-                Entry::Vacant(slot) if is_fn_ptr(parts, inst.ty) => {
-                    let plan = match &inst.kind {
-                        InstKind::Load {
-                            ptr,
-                            volatile: false,
-                            atomic: None,
-                            ..
-                        } if holds_fn_ptrs(body, parts, cx, *ptr) => Some(Plan::WordLoad),
-                        InstKind::Cast {
-                            op: CastOp::IntToPtr,
-                            v: x,
-                        } => match value_ty(body, parts, cx, *x)
-                            .and_then(|t| parts.types.int_bits(t))
-                        {
+            // A lookup is already a member.
+            let member = if web.contains(&v) {
+                true
+            } else if is_ptr(parts, inst.ty) && carried(&inst.kind, &mut ops) {
+                m.charge(ops.len() * std::mem::size_of::<InstId>() + charge)?;
+                *held += ops.len() * std::mem::size_of::<InstId>() + charge;
+                work.extend(ops.iter().filter_map(|&x| match x {
+                    Value::Inst(x) => Some(x),
+                    _ => None,
+                }));
+                web.insert(v);
+                true
+            } else if is_fn_ptr(parts, inst.ty) {
+                let plan = match &inst.kind {
+                    InstKind::Load {
+                        ptr,
+                        volatile: false,
+                        atomic: None,
+                        ..
+                    } if holds_fn_ptrs(body, parts, cx, *ptr) => Some(Plan::WordLoad),
+                    InstKind::Cast {
+                        op: CastOp::IntToPtr,
+                        v: x,
+                    } => {
+                        match value_ty(body, parts, cx, *x).and_then(|t| parts.types.int_bits(t)) {
                             Some(32) => Some(Plan::Forward(*x)),
                             Some(bits) if bits > 32 => Some(Plan::FromInt(CastOp::Trunc)),
                             Some(_) => Some(Plan::FromInt(CastOp::ZExt)),
                             None => None,
-                        },
-                        _ => None,
-                    };
-                    match plan {
-                        Some(plan) => {
-                            m.charge(charge * 2)?;
-                            *held += charge * 2;
-                            plans.insert(v, plan);
-                            slot.insert(None);
-                            true
                         }
-                        None => false,
                     }
+                    _ => None,
+                };
+                match plan {
+                    Some(plan) => {
+                        m.charge(charge * 2)?;
+                        *held += charge * 2;
+                        plans.insert(v, plan);
+                        web.insert(v);
+                        true
+                    }
+                    None => false,
                 }
-                Entry::Vacant(_) => false,
+            } else {
+                false
             };
             if !member {
                 continue;
@@ -1431,12 +1423,12 @@ fn analyze(
         // A carrier any other operand of which is no word (a `phi` or `select` of a word and a
         // pointer from an argument) is no word either, and neither is what it carries on: it
         // stays a pointer, and the words it takes are escapes.
-        let mut check: Vec<InstId> = web.keys().copied().collect();
+        let mut check: Vec<InstId> = web.iter().copied().collect();
         m.charge(check.len() * std::mem::size_of::<InstId>())?;
         *held += check.len() * std::mem::size_of::<InstId>();
         while let Some(v) = check.pop() {
             m.tick(1)?;
-            if !web.contains_key(&v) {
+            if !web.contains(&v) {
                 continue;
             }
             let inst = body
@@ -1449,7 +1441,7 @@ fn analyze(
                 continue;
             }
             let fine = ops.iter().all(|&x| match x {
-                Value::Inst(i) => web.contains_key(&i),
+                Value::Inst(i) => web.contains(&i),
                 other => {
                     word_constant(parts, other) || addr_word(parts, stubs, cx, other).is_some()
                 }
@@ -1457,7 +1449,7 @@ fn analyze(
             if !fine {
                 web.remove(&v);
                 for &u in users.of(v) {
-                    if web.contains_key(&u) {
+                    if web.contains(&u) {
                         m.charge(std::mem::size_of::<InstId>())?;
                         *held += std::mem::size_of::<InstId>();
                         check.push(u);
@@ -1466,10 +1458,10 @@ fn analyze(
             }
         }
         // Every use of every word.
-        let mut refusals: BTreeMap<(Option<usize>, Option<u32>, TypeId), FuncId> = BTreeMap::new();
+        let mut refusals: BTreeMap<(Option<usize>, TypeId), FuncId> = BTreeMap::new();
         // The refused declaration of each return type a settled call has.
         let mut unfolded: BTreeMap<TypeId, FuncId> = BTreeMap::new();
-        let members: Vec<InstId> = web.keys().copied().collect();
+        let members: Vec<InstId> = web.iter().copied().collect();
         m.charge(members.len() * std::mem::size_of::<InstId>())?;
         *held += members.len() * std::mem::size_of::<InstId>();
         for &v in &members {
@@ -1489,7 +1481,7 @@ fn analyze(
             let word = Value::Inst(v);
             for &u in users.of(v) {
                 m.tick(1)?;
-                if web.contains_key(&u) {
+                if web.contains(&u) {
                     continue;
                 }
                 let user = body
@@ -1497,7 +1489,7 @@ fn analyze(
                     .get(u)
                     .ok_or_else(|| invariant("a user out of range"))?;
                 let is_word = |x: Value| match x {
-                    Value::Inst(i) => web.contains_key(&i),
+                    Value::Inst(i) => web.contains(&i),
                     Value::Const(c) => {
                         matches!(parts.consts.get(c).map(|k| &k.value), Some(Const::Null))
                             || addr_word(parts, stubs, cx, x).is_some()
@@ -1533,7 +1525,7 @@ fn analyze(
                         if !call
                             .args
                             .iter()
-                            .any(|x| matches!(x, Value::Inst(i) if web.contains_key(i))) =>
+                            .any(|x| matches!(x, Value::Inst(i) if web.contains(i))) =>
                     {
                         match call.callee {
                             Callee::Indirect { callee, fn_ty } if callee == word => {
@@ -1553,13 +1545,7 @@ fn analyze(
                                     };
                                     Some(Plan::Unfolded(decl))
                                 } else {
-                                    let r = reach(
-                                        (body, parts, stubs, cx),
-                                        (&web, &plans),
-                                        word,
-                                        m,
-                                        held,
-                                    )?;
+                                    let r = reach((body, parts, stubs, cx), &plans, word, m, held)?;
                                     let site = site(
                                         (parts, stubs),
                                         cx,
@@ -1600,7 +1586,7 @@ fn analyze(
                         }
                     }
                     None => {
-                        let words = |i: InstId| web.contains_key(&i) || idweb.contains_key(&i);
+                        let words = |i: InstId| web.contains(&i) || idweb.contains_key(&i);
                         escapes.record((body, &words), (parts, stubs), u, m, held)?
                     }
                 }
@@ -1666,7 +1652,7 @@ fn analyze(
                     _ => false,
                 };
                 if !fine {
-                    let words = |i: InstId| web.contains_key(&i) || idweb.contains_key(&i);
+                    let words = |i: InstId| web.contains(&i) || idweb.contains_key(&i);
                     escapes.record((body, &words), (parts, stubs), u, m, held)?;
                 }
             }
@@ -1711,7 +1697,7 @@ fn analyze(
     if plans.is_empty() && consts.is_empty() && escapes.markers.is_empty() {
         return Ok(None);
     }
-    let words: BTreeSet<InstId> = web.keys().chain(idweb.keys()).copied().collect();
+    let words: BTreeSet<InstId> = web.iter().chain(idweb.keys()).copied().collect();
     m.charge(words.len() * std::mem::size_of::<InstId>() * 2)?;
     *held += words.len() * std::mem::size_of::<InstId>() * 2;
     Ok(Some(Analysis {
@@ -1740,7 +1726,7 @@ fn site(
     cx: &Cx<'_>,
     (fn_ty, ret): (TypeId, TypeId),
     reach: &Reach,
-    refusals: &mut BTreeMap<(Option<usize>, Option<u32>, TypeId), FuncId>,
+    refusals: &mut BTreeMap<(Option<usize>, TypeId), FuncId>,
     m: &mut Meter,
 ) -> Result<Result<Site, FuncId>, Error> {
     let mut arms: Vec<(u32, FuncId)> = Vec::new();
@@ -1787,7 +1773,7 @@ fn site(
                 u.error.clone()
             }
         };
-        let key = (Some(k), None, fn_ty);
+        let key = (Some(k), fn_ty);
         let decl = match refusals.get(&key) {
             Some(&d) => d,
             None => {
@@ -1824,7 +1810,12 @@ fn site(
             arms.push((w, f));
         }
     }
-    if !arms.is_empty() || !reach.any {
+    // A table's entry takes this site with no arms too: an entry holds a function handle, and a
+    // handle exists only for a function the pipeline links, so where nothing of the call's type is
+    // linked every entry's word is null and the switch is unreachable by construction. What runs
+    // is the shader's own guards on the table (`is_null_visible_function_table`, `size()`,
+    // `f == nullptr`), which is what Metal runs for the same program.
+    if !arms.is_empty() || !reach.any || reach.table {
         let zero = match parts.types.get(ret) {
             Some(Type::Void) => None,
             _ => {
@@ -1837,20 +1828,14 @@ fn site(
         };
         return Ok(Ok(Site::new(arms, cx, zero)));
     }
-    // A word that may be any function's, and nothing of its type to call: a table's entry is
-    // refused for the table no linked function answers, and a pointer from memory or an integer
-    // for holding no function of this stage.
-    let key = (None, reach.buffer, fn_ty);
+    // A word that may be any function's with no table behind it, and nothing of its type to call:
+    // a pointer from memory or one made of an integer, holding no function of this stage.
+    let key = (None, fn_ty);
     let decl = match refusals.get(&key) {
         Some(&d) => d,
         None => {
-            let e = match reach.table {
-                true => Error::NeedsInput(MissingInput::VisibleFunctionTable {
-                    buffer: reach.buffer,
-                }),
-                false => Unsupported::not_implemented(Feature::DynamicCall).into(),
-            };
-            let d = refused(parts, stubs, (b"visible_function_table", fn_ty), e, m)?;
+            let e = Unsupported::not_implemented(Feature::DynamicCall).into();
+            let d = refused(parts, stubs, (b"dynamic call", fn_ty), e, m)?;
             refusals.insert(key, d);
             d
         }

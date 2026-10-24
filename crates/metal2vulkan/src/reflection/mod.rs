@@ -147,7 +147,7 @@ pub(crate) fn function_reflection(
 ) -> Result<FunctionReflection, Error> {
     let answer = |ep: &air::abi::EntryPoint, structs: &[air::abi::StructInfo]| {
         Ok(FunctionReflection {
-            bindings: bindings(ep, structs, Channel::Library)?,
+            bindings: bindings(ep, structs, Channel::Library, &BTreeSet::new())?,
             user_annotation: ep.user_annotation.as_ref().map(ToString::to_string),
         })
     };

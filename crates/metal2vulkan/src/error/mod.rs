@@ -275,9 +275,6 @@ impl From<MissingInput> for RuntimeInput {
         match i {
             MissingInput::FunctionConstant { index } => RuntimeInput::FunctionConstant { index },
             MissingInput::LinkedFunction { symbol } => RuntimeInput::LinkedFunction { symbol },
-            MissingInput::VisibleFunctionTable { buffer } => {
-                RuntimeInput::VisibleFunctionTable { buffer }
-            }
             MissingInput::DynamicSymbol { symbol } => RuntimeInput::DynamicSymbol { symbol },
             MissingInput::DynamicLibrary { install_name } => {
                 RuntimeInput::DynamicLibrary { install_name }
@@ -1624,11 +1621,6 @@ pub enum RuntimeInput {
     /// post-tessellation vertex function's patch or control-point attribute, which has no
     /// fixed-function input to fall back on.
     VertexDescriptor { attribute: u32 },
-    /// A call through the visible-function table at Metal buffer index `buffer` (`None` when the
-    /// index is a function-constant expression) survived specialization, and no function the
-    /// stage links in `functions` or `binary_functions` (`MTLLinkedFunctions`) has the call's
-    /// type, so no table entry can hold a function it may call.
-    VisibleFunctionTable { buffer: Option<u32> },
     /// The stage-input descriptor entry of a kernel `[[stage_in]]` attribute
     /// (`MTLComputePipelineDescriptor.stageInputDescriptor`): a kernel fetches its stage inputs in
     /// the shader, so without the descriptor there is nothing to fetch them by.

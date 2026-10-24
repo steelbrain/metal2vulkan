@@ -772,13 +772,7 @@ fn table_params(ep: &EntryPoint) -> Vec<devirt::TableParam> {
     ep.params
         .iter()
         .filter_map(|p| match &p.role {
-            ParamRole::FunctionTable(arg) => Some(devirt::TableParam {
-                arg: p.param,
-                buffer: match arg.location.index {
-                    AbiInt::Const(n) => Some(n),
-                    AbiInt::Global(_) => None,
-                },
-            }),
+            ParamRole::FunctionTable(_) => Some(devirt::TableParam { arg: p.param }),
             _ => None,
         })
         .collect()

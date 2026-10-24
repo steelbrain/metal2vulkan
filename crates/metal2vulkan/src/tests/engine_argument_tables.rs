@@ -12,7 +12,7 @@
 //!   `descriptorBindingPartiallyBound`, `shaderStorageBufferArrayNonUniformIndexing`, and
 //!   `descriptorBindingStorageBufferUpdateAfterBind`, and the stage's function-table snapshot
 //!   where it lacks one (the 2023 desktop baseline and the two Vulkan 1.2 floors). A call nothing
-//!   linked can answer needs the pipeline's linked functions.
+//!   linked can answer compiles too: with no handle to hold, every entry is null.
 //! - Through the public API, the plan writes the set-1 function-table array (the zero buffer at
 //!   element 0, `FunctionTable{index}` at every other element of the class) and the stage's
 //!   directory, whose bytes per dispatch list each listed table's nonzero id with its element;
@@ -36,7 +36,7 @@ use crate::cache::VariantKey;
 use crate::device::profile::BufferAccess;
 use crate::device::requirements::VkFeature;
 use crate::device::{Device, DeviceDescription, DevicePolicy, DeviceProfile};
-use crate::error::{Capability, Error, Feature, RuntimeInput};
+use crate::error::{Capability, Error, Feature};
 use crate::library::{FunctionConstantValues, Library};
 use crate::lower::access::function_table::{directory_symbol, heap_symbol, snapshot_symbol};
 use crate::lower::select::LowerInputs;
@@ -208,31 +208,24 @@ fn argument_tables_compile_on_every_profile() {
 }
 
 /// A call through a table loaded from an argument buffer that no linked function can answer
-/// needs the pipeline's linked functions (no buffer slot holds the table); a function of
-/// another type is no answer either.
+/// compiles and validates, as a table parameter's call does: with nothing of the call's type
+/// linked no entry can hold a handle, so the switch is unreachable. A linked function of another
+/// type is no answer either, and compiles the same way.
 #[test]
-fn an_argument_table_call_needs_a_function_of_its_type() {
+fn an_argument_table_call_without_a_function_of_its_type_compiles() {
     let Some((caller, functions)) = fixtures() else {
         return;
     };
     let p =
         crate::pipeline::testing::profile("moltenvk-m3", DevicePolicy::default()).expect("profile");
-    let needs = Err(Error::NeedsInput(RuntimeInput::VisibleFunctionTable {
-        buffer: None,
-    }));
     let none = FunctionConstantValues::defaults();
     let half = [LinkedSource::new("table_half", &functions, &none)];
+    let empty: &[LinkedSource<'_>] = &[];
     for entry in KERNELS {
-        assert_eq!(
-            compile(&caller, entry, &[], &p).map(|_| ()),
-            needs,
-            "{entry}"
-        );
-        assert_eq!(
-            compile(&caller, entry, &half, &p).map(|_| ()),
-            needs,
-            "{entry}"
-        );
+        for linked in [empty, &half] {
+            let a = compile(&caller, entry, linked, &p).unwrap_or_else(|e| panic!("{entry}: {e}"));
+            link_and_validate(&a, &p).unwrap_or_else(|e| panic!("{entry}: L3: {e}"));
+        }
     }
 }
 

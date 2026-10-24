@@ -36,15 +36,22 @@ pub(crate) enum Channel {
 
 /// The bindings of entry `ep` (its parameters in declaration order; builtins and stage inputs
 /// bind nothing) over the ABI's struct layouts `structs`, as `channel` answers them.
+///
+/// `tables` is the specialized entry's `function_tables`: the Metal buffer indices of its
+/// visible-function-table parameters, which devirtualization states as read-only device buffers of
+/// words. A binding of one is the table it was, as Metal answers it; an unspecialized entry states
+/// the role itself and passes an empty set.
 pub(crate) fn bindings(
     ep: &EntryPoint,
     structs: &[StructInfo],
     channel: Channel,
+    tables: &BTreeSet<u32>,
 ) -> Result<Vec<Binding>, Error> {
     let cx = Cx {
         ep,
         structs,
         channel,
+        tables,
     };
     let mut out = Vec::new();
     for p in &ep.params {
@@ -229,6 +236,8 @@ struct Cx<'a> {
     ep: &'a EntryPoint,
     structs: &'a [StructInfo],
     channel: Channel,
+    /// The Metal buffer indices devirtualization rewrote from visible-function tables.
+    tables: &'a BTreeSet<u32>,
 }
 
 impl Cx<'_> {
@@ -281,6 +290,16 @@ impl Cx<'_> {
         let arg = p.param;
         let ty = p.ty.name.as_ref();
         let (binding_type, access, index, kind) = match &p.role {
+            // A table devirtualization states as the buffer of words it reads: the binding is the
+            // table, which is what Metal answers for the same argument.
+            ParamRole::Buffer(b) if matches!(b.location.index, AbiInt::Const(i) if self.tables.contains(&i)) => {
+                (
+                    BindingType::VisibleFunctionTable,
+                    BindingAccess::ReadOnly,
+                    self.int(arg, b.location.index, ty)?,
+                    BindingKind::Plain,
+                )
+            }
             ParamRole::Buffer(b) | ParamRole::ArgumentBuffer(b) => {
                 let argument_buffer = matches!(p.role, ParamRole::ArgumentBuffer(_));
                 (

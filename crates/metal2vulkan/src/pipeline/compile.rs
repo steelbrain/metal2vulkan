@@ -649,6 +649,7 @@ pub(crate) fn stage_reflection(
                             ep,
                             &decoded.abi.structs,
                             reflection::Channel::Pipeline,
+                            &BTreeSet::new(),
                         )?,
                         attributes: reflection::read_attributes(ep)?,
                     });
@@ -661,6 +662,7 @@ pub(crate) fn stage_reflection(
                         &read,
                         &spec.structs,
                         reflection::Channel::Pipeline,
+                        &spec.function_tables,
                     )?,
                     attributes: reflection::read_attributes(&read)?,
                 })
@@ -2612,7 +2614,12 @@ fn kept_reflection(
     let slot_writes = reflection::entry_slot_writes(&read);
     let answer = (|| {
         Ok(reflection::StageReflection {
-            bindings: reflection::bindings(&read, &spec.structs, reflection::Channel::Pipeline)?,
+            bindings: reflection::bindings(
+                &read,
+                &spec.structs,
+                reflection::Channel::Pipeline,
+                &spec.function_tables,
+            )?,
             attributes: reflection::read_attributes(&read)?,
         })
     })();

@@ -1155,11 +1155,11 @@ mod tests {
                 ..recorded_attempt("r4", &[SpecKind::Inputs], ("translated", ""), false)
             },
             RecordedAttempt {
-                unsupplied: Some("no candidate".into()),
+                unsupplied: Some("no format".into()),
                 ..recorded_attempt(
                     "r5",
                     &[SpecKind::Inputs],
-                    ("needs_input", "VisibleFunctionTable"),
+                    ("needs_input", "StorageTextureFormat"),
                     false,
                 )
             },
@@ -1191,7 +1191,7 @@ mod tests {
         assert!(report
             .inputs
             .unsupplied
-            .contains_key(&("VisibleFunctionTable".into(), "no candidate".into())));
+            .contains_key(&("StorageTextureFormat".into(), "no format".into())));
     }
 
     /// Rows group by their plain outcome; a row translates under some or every set; a row the
