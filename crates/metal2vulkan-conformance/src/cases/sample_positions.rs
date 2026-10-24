@@ -56,7 +56,8 @@ use crate::case::{answered, Abort, Case, Failure, Input, MetalSource, Side};
 use crate::fixture::{Fixture, METAL_TEXT, RUNTIME_TEXT};
 use crate::recording::{ShaderRef, APPLE_M4};
 use crate::render::{
-    ColorState, PassColor, RenderPass, RenderPipelineSpec, RenderStep, RenderWork, TargetSpec,
+    ColorState, PassColor, Plane, RenderPass, RenderPipelineSpec, RenderStep, RenderWork,
+    TargetSpec,
 };
 use crate::replay::NOTICES_SITE;
 use crate::transcript::{ByteLayout, Digest, Element, Node, Observed, Sites, Transcript, Value};
@@ -431,6 +432,7 @@ fn drive(shape: &Shape, side: &mut dyn Side, sites: &mut Sites) -> Result<Vec<u8
             offset: 0,
             row_pitch: TEXEL,
             size: [1, 1],
+            plane: Plane::Whole,
         },
     ];
     let outcome = side.render(&work).map_err(|failure| Abort {

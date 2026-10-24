@@ -64,8 +64,8 @@ use crate::indirect_commands::{
 };
 use crate::recording::ShaderRef;
 use crate::render::{
-    ColorState, PassColor, RenderPass, RenderPipelineSpec, RenderStep, RenderWork, ScissorBox,
-    StageFunction, TargetSpec, TessellationState, VertexLayout,
+    ColorState, PassColor, Plane, RenderPass, RenderPipelineSpec, RenderStep, RenderWork,
+    ScissorBox, StageFunction, TargetSpec, TessellationState, VertexLayout,
 };
 use crate::transcript::{
     Aspect, ByteLayout, Digest, Element, Gaps, Node, Observed, Region, Sites, Value,
@@ -1629,6 +1629,7 @@ impl Case for PassStateCommands {
                 offset: 0,
                 row_pitch: DRAWN_TEXEL * DRAWN_SIDE,
                 size: [DRAWN_SIDE, DRAWN_SIDE],
+                plane: Plane::Whole,
             });
         }
         let outcome = call(sites, "render", side.render(&work), |outcome| {

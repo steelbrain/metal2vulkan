@@ -53,8 +53,8 @@ use crate::case::{
 use crate::fixture::{Fixture, METAL_TEXT, RUNTIME_TEXT};
 use crate::recording::ShaderRef;
 use crate::render::{
-    ColorState, PassColor, RenderPass, RenderPipelineSpec, RenderStep, RenderWork, ScissorBox,
-    StepResource, TargetSpec,
+    ColorState, PassColor, Plane, RenderPass, RenderPipelineSpec, RenderStep, RenderWork,
+    ScissorBox, StepResource, TargetSpec,
 };
 use crate::sparse_query::SparseHeapSpec;
 use crate::transcript::{
@@ -226,6 +226,7 @@ fn read_target(texture: Handle, into: Handle, side: u32) -> RenderWork {
         offset: 0,
         row_pitch: TEXEL * side,
         size: [side; 2],
+        plane: Plane::Whole,
     }
 }
 

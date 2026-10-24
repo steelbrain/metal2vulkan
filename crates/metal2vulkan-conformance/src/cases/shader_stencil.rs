@@ -41,7 +41,8 @@ use crate::case::{call, made, Abort, Case, Failure, Handle, Input, MetalSource, 
 use crate::fixture::{Fixture, METAL_TEXT, RUNTIME_TEXT};
 use crate::recording::ShaderRef;
 use crate::render::{
-    PassStencil, RenderPass, RenderPipelineSpec, RenderStep, RenderWork, StageFunction, TargetSpec,
+    PassStencil, Plane, RenderPass, RenderPipelineSpec, RenderStep, RenderWork, StageFunction,
+    TargetSpec,
 };
 use crate::transcript::{
     Aspect, ByteLayout, Digest, Element, Gaps, Node, Observed, Region, Sites, Value,
@@ -389,6 +390,7 @@ impl Case for ShaderStencil {
             offset: 0,
             row_pitch: WIDTH,
             size: [WIDTH, 1],
+            plane: Plane::Whole,
         });
 
         let outcome = call(sites, "render", side.render(&work), |outcome| {

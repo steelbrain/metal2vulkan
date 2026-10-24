@@ -236,6 +236,37 @@ pub enum Plane {
     RowLinearPvrtc,
 }
 
+impl Plane {
+    /// The `MTLBlitOption` enumerator the plane names.
+    ///
+    /// One name for the fingerprint below and for the site a case records its read at, so the
+    /// bytes a recording holds and the bytes it was keyed by carry the same spelling and the
+    /// suite's option-space axis reads the option off the recording.
+    pub fn option_name(&self) -> &'static str {
+        match self {
+            Plane::Whole => "MTLBlitOptionNone",
+            Plane::Depth => "MTLBlitOptionDepthFromDepthStencil",
+            Plane::Stencil => "MTLBlitOptionStencilFromDepthStencil",
+            Plane::RowLinearPvrtc => "MTLBlitOptionRowLinearPVRTC",
+        }
+    }
+
+    /// The words a case's input fingerprint covers: the `MTLBlitOption`'s own name, and **nothing
+    /// at all** for [`Plane::Whole`].
+    ///
+    /// `Whole` is Metal's own `MTLBlitOptionNone`, so a copy at the default fingerprints to
+    /// exactly the bytes it did before a plane could be stated. That is what keeps every
+    /// recording already committed reading as fresh, and it is stated here, once, rather than in
+    /// each case that states a plane: a fingerprint that missed a new field would make a stale
+    /// recording read as a fresh one, which is worse than the field being absent.
+    pub fn words(&self) -> Vec<u8> {
+        match self {
+            Plane::Whole => Vec::new(),
+            named => named.option_name().as_bytes().to_vec(),
+        }
+    }
+}
+
 /// A resource a case makes. Each is named by its index in [`Work::resources`], so a step refers to
 /// one by position and nothing in a transcript holds an object's identity.
 #[derive(Clone, Debug, PartialEq)]

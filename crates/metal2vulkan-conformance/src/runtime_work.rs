@@ -1028,8 +1028,9 @@ fn size_of(size: &[u64; 3]) -> Size {
     Size::new(size[0], size[1], size[2])
 }
 
-/// The blit option a plane names.
-fn option_of(plane: Plane) -> BlitOption {
+/// The blit option a plane names. The suite's one mapping of [`Plane`] onto the runtime's own
+/// option, which a render case's texture read takes too.
+pub(crate) fn option_of(plane: Plane) -> BlitOption {
     match plane {
         Plane::Whole => BlitOption::None,
         Plane::Depth => BlitOption::DepthFromDepthStencil,

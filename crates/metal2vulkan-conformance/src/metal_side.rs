@@ -61,8 +61,8 @@ use crate::pipeline_option_reflection::UnderOptions;
 use crate::pipeline_options::{OptionOutcome, FRAGMENT_STAGE, KERNEL_STAGE, VERTEX_STAGE};
 use crate::queue_slots::QueueSlots;
 use crate::render::{
-    Dispatch, RenderPass, RenderPipelineSpec, RenderStep, RenderWork, StageFunction, StepResource,
-    TargetSpec,
+    Dispatch, Plane, RenderPass, RenderPipelineSpec, RenderStep, RenderWork, StageFunction,
+    StepResource, TargetSpec,
 };
 use crate::render_descriptors::{
     AttributeFacts as DescriptorAttributeFacts, ColorAway, ColorFacts, DescriptorSpec, LayoutFacts,
@@ -99,6 +99,7 @@ use objc2::{AnyThread, ClassType};
 use objc2_foundation::{
     NSArray, NSDictionary, NSError, NSObjectProtocol, NSRange, NSString, NSUInteger, NSURL,
 };
+use objc2_metal::MTLBlitOption;
 use objc2_metal::{
     MTLArgumentDescriptor, MTLArgumentEncoder, MTLArrayType, MTLAttribute, MTLAttributeFormat,
     MTLBarrierScope, MTLBinaryArchive, MTLBinaryArchiveDescriptor, MTLBinding, MTLBindingAccess,
@@ -5122,6 +5123,7 @@ impl Side for MetalSide {
                     offset,
                     row_pitch,
                     size,
+                    plane,
                 } => self.encode_read_texture(
                     &command_buffer,
                     *texture,
@@ -5129,6 +5131,7 @@ impl Side for MetalSide {
                     *offset,
                     *row_pitch,
                     *size,
+                    *plane,
                 )?,
                 RenderWork::Dispatch(dispatch) => {
                     self.encode_dispatch(&command_buffer, dispatch)?;
@@ -9787,7 +9790,9 @@ impl MetalSide {
         Ok(())
     }
 
-    /// Encode one texture-to-buffer blit of a program into `command_buffer`.
+    /// Encode one texture-to-buffer blit of a program into `command_buffer`, through Metal's
+    /// un-optioned selector at [`Plane::Whole`] and its optioned one for a stated plane.
+    #[allow(clippy::too_many_arguments)]
     fn encode_read_texture(
         &self,
         command_buffer: &ProtocolObject<dyn MTLCommandBuffer>,
@@ -9796,6 +9801,7 @@ impl MetalSide {
         offset: u64,
         row_pitch: u32,
         extent: [u32; 2],
+        plane: Plane,
     ) -> Answer<()> {
         let texture: Retained<ProtocolObject<dyn MTLTexture>> =
             Retained::from(self.held_texture(texture)?);
@@ -9813,28 +9819,115 @@ impl MetalSide {
         let encoder = command_buffer
             .blitCommandEncoder()
             .ok_or_else(|| Failure::named("BlitCommandEncoder", "returned nil".to_owned()))?;
-        // SAFETY: the buffer holds `bytes` from `offset`, checked just above, and the region is
-        // level 0's whole extent of a texture the case made at that extent.
-        unsafe {
-            encoder
-                .copyFromTexture_sourceSlice_sourceLevel_sourceOrigin_sourceSize_toBuffer_destinationOffset_destinationBytesPerRow_destinationBytesPerImage(
-                    &texture,
-                    0,
-                    0,
-                    MTLOrigin { x: 0, y: 0, z: 0 },
-                    MTLSize {
-                        width: extent[0] as usize,
-                        height: extent[1] as usize,
-                        depth: 1,
-                    },
-                    &buffer,
-                    offset as usize,
-                    row_pitch as usize,
-                    bytes as usize,
-                );
+        let origin = MTLOrigin { x: 0, y: 0, z: 0 };
+        let size = MTLSize {
+            width: extent[0] as usize,
+            height: extent[1] as usize,
+            depth: 1,
+        };
+        // Metal binds **two** selectors here and a plane at the default takes the one every
+        // recording was taken through, not the optioned one with `MTLBlitOptionNone`. Apple's
+        // header says the two are the same call, and the suite does not take that on trust: the
+        // blit family's own step vocabulary states both
+        // ([`crate::work::Step::CopyTextureToBufferWithoutOptions`]), and routing every render
+        // read through the optioned selector would have moved thirty modules off the un-optioned
+        // one and left Metal's two selectors agreeing untested.
+        //
+        // One arm a plane and no `A | B` arm or binding: the coverage generator gates a call by
+        // the variants of the arms around it, and a call under several variants at once is only
+        // attributed to a module that names **all** of them, so an arm over three planes would
+        // claim the optioned selector for every module and name none of them.
+        match plane {
+            // SAFETY: the buffer holds `bytes` from `offset`, checked just above, and the region
+            // is level 0's whole extent of a texture the case made at that extent.
+            Plane::Whole => unsafe {
+                encoder
+                    .copyFromTexture_sourceSlice_sourceLevel_sourceOrigin_sourceSize_toBuffer_destinationOffset_destinationBytesPerRow_destinationBytesPerImage(
+                        &texture,
+                        0,
+                        0,
+                        origin,
+                        size,
+                        &buffer,
+                        offset as usize,
+                        row_pitch as usize,
+                        bytes as usize,
+                        );
+            },
+            Plane::Depth => Self::read_texture_plane(
+                &encoder,
+                &texture,
+                &buffer,
+                origin,
+                size,
+                offset,
+                row_pitch,
+                bytes,
+                MTLBlitOption::DepthFromDepthStencil,
+            ),
+            Plane::Stencil => Self::read_texture_plane(
+                &encoder,
+                &texture,
+                &buffer,
+                origin,
+                size,
+                offset,
+                row_pitch,
+                bytes,
+                MTLBlitOption::StencilFromDepthStencil,
+            ),
+            Plane::RowLinearPvrtc => Self::read_texture_plane(
+                &encoder,
+                &texture,
+                &buffer,
+                origin,
+                size,
+                offset,
+                row_pitch,
+                bytes,
+                MTLBlitOption::RowLinearPVRTC,
+            ),
         }
         encoder.endEncoding();
         Ok(())
+    }
+
+    /// One texture-to-buffer blit through Metal's **optioned** selector, under `option`.
+    ///
+    /// Its own function rather than a third arm of the `match` above because each arm there is
+    /// one plane: the coverage generator gates a call by the variants of the arms around it, and
+    /// a call under `A | B | C`, or under a closure defined outside the `match`, would claim the
+    /// optioned selector for every module that reads a texture at all.
+    #[allow(clippy::too_many_arguments)]
+    fn read_texture_plane(
+        encoder: &ProtocolObject<dyn MTLBlitCommandEncoder>,
+        texture: &ProtocolObject<dyn MTLTexture>,
+        buffer: &ProtocolObject<dyn MTLBuffer>,
+        origin: MTLOrigin,
+        size: MTLSize,
+        offset: u64,
+        row_pitch: u32,
+        bytes: u64,
+        option: MTLBlitOption,
+    ) {
+        // SAFETY: as [`MetalSide::encode_read_texture`] states: the buffer holds `bytes` from
+        // `offset`, which it checked, and the region is level 0's whole extent of a texture the
+        // case made at that extent.
+        unsafe {
+            encoder
+                .copyFromTexture_sourceSlice_sourceLevel_sourceOrigin_sourceSize_toBuffer_destinationOffset_destinationBytesPerRow_destinationBytesPerImage_options(
+                    texture,
+                    0,
+                    0,
+                    origin,
+                    size,
+                    buffer,
+                    offset as usize,
+                    row_pitch as usize,
+                    bytes as usize,
+                    option,
+                );
+        }
     }
 }
 

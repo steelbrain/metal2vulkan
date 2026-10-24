@@ -43,8 +43,8 @@ use crate::case::{call, made, Abort, Case, Failure, Input, MetalSource, Side};
 use crate::fixture::{Fixture, METAL_TEXT, RUNTIME_TEXT};
 use crate::recording::ShaderRef;
 use crate::render::{
-    ColorState, PassColor, RenderPass, RenderPipelineSpec, RenderStep, RenderWork, StageFunction,
-    TargetSpec, ViewportRect,
+    ColorState, PassColor, Plane, RenderPass, RenderPipelineSpec, RenderStep, RenderWork,
+    StageFunction, TargetSpec, ViewportRect,
 };
 use crate::transcript::{Digest, Negative, Node, Observed, Sites, Value};
 use metal2vulkan::metal::{PixelFormat, PrimitiveType};
@@ -339,6 +339,7 @@ impl Case for WidePoints {
                 offset: at as u64 * u64::from(TARGET_BYTES),
                 row_pitch: ROW_PITCH,
                 size: [SIDE; 2],
+                plane: Plane::Whole,
             });
         }
         let outcome = call(sites, "render", side.render(&work), |outcome| {

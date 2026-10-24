@@ -4709,6 +4709,7 @@ impl Side for RuntimeSide<'_> {
                     offset,
                     row_pitch,
                     size: extent,
+                    plane,
                 } => texture(*from).and_then(|from| {
                     let into = buffer(*into)?;
                     let mut blit = command_buffer
@@ -4724,7 +4725,7 @@ impl Side for RuntimeSide<'_> {
                         *offset,
                         u64::from(*row_pitch),
                         u64::from(*row_pitch) * u64::from(extent[1]),
-                        BlitOption::None,
+                        crate::runtime_work::option_of(*plane),
                     )
                     .map_err(Failure::from_error)?;
                     blit.end_encoding().map_err(Failure::from_error)

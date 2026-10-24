@@ -161,6 +161,7 @@ pub mod sparse_tiles;
 pub mod srgb_fetch;
 pub mod stage_in_regions;
 pub mod stencil_resolve_pairs;
+pub mod stencil_resolved_sample;
 pub mod surface_fills;
 pub mod swizzled_storage;
 pub mod tessellation_sweeps;
@@ -527,6 +528,7 @@ pub fn all() -> Vec<Box<dyn Case>> {
     cases.extend(depth_stencil_space::all());
     cases.extend(depth_resolve_pairs::all());
     cases.extend(stencil_resolve_pairs::all());
+    cases.extend(stencil_resolved_sample::all());
     cases.extend(pass_attachment_pairs::all());
     cases.extend(pass_bound_pairs::all());
     cases.extend(pass_sequence_actions::all());

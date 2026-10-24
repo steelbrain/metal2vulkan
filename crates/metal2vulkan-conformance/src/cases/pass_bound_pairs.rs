@@ -126,8 +126,8 @@ use crate::case::{call, made, Abort, Case, Failure, Handle, Input, MetalSource, 
 use crate::fixture::{Fixture, METAL_TEXT, RUNTIME_TEXT};
 use crate::recording::ShaderRef;
 use crate::render::{
-    ColorState, PassColor, RenderPass, RenderPipelineSpec, RenderStep, RenderWork, ScissorBox,
-    TargetSpec, ViewportRect,
+    ColorState, PassColor, Plane, RenderPass, RenderPipelineSpec, RenderStep, RenderWork,
+    ScissorBox, TargetSpec, ViewportRect,
 };
 use crate::transcript::{
     Aspect, ByteLayout, Digest, Element, Gaps, Node, Observed, Region, Sites, Value,
@@ -552,6 +552,7 @@ impl Case for BoundReach {
                 offset: 0,
                 row_pitch: TEXEL * SIDE,
                 size: [SIDE; 2],
+                plane: Plane::Whole,
             });
             names.push(format!("read:{}", cell.name));
         }

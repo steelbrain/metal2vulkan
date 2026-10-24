@@ -69,6 +69,12 @@ use metal2vulkan_runtime::{
     StoreAction, StoreActionOptions, VisibilityResultMode,
 };
 
+/// The `MTLBlitOption` a texture read takes, which the suite states in one place
+/// ([`crate::work::Plane`]) for every copy that names one. Re-exported here because
+/// [`RenderWork::ReadTexture`] is a render case's own copy and states it beside the rest of this
+/// module's vocabulary.
+pub use crate::work::Plane;
+
 /// A render target a case makes: `MTLTextureDescriptor`'s facts a render case states.
 ///
 /// The usage is part of what the case means, not a detail: Metal clears a `BGR10_XR` target
@@ -2318,14 +2324,27 @@ pub enum RenderWork {
     /// One render pass, opened with its descriptor and ended.
     Pass(RenderPass),
     /// `copyFromTexture:sourceSlice:sourceLevel:sourceOrigin:sourceSize:toBuffer:
-    /// destinationOffset:destinationBytesPerRow:destinationBytesPerImage:` of level 0's whole
-    /// extent, which is how a private target's texels reach the host.
+    /// destinationOffset:destinationBytesPerRow:destinationBytesPerImage:options:` of level 0's
+    /// whole extent, which is how a private target's texels reach the host.
     ReadTexture {
         texture: Handle,
         into: Handle,
         offset: u64,
         row_pitch: u32,
         size: [u32; 2],
+        /// Which plane of a combined depth/stencil texture the read moves, as the
+        /// `MTLBlitOption` the copy takes ([`Plane`]).
+        ///
+        /// [`Plane::Whole`] is Metal's own default (`MTLBlitOptionNone`) and is what a read of a
+        /// single-aspect texture states. It is here because a `Depth32Float_Stencil8` texture's
+        /// stencil cannot be read back at all without
+        /// `MTLBlitOptionStencilFromDepthStencil`, and a combined attachment is the only shape in
+        /// which Metal takes
+        /// [`MultisampleStencilResolveFilter::DepthResolvedSample`].
+        ///
+        /// A case fingerprints it **only where it is not `Whole`**, so every recording taken
+        /// before the field existed still reads as fresh.
+        plane: Plane,
     },
     /// One compute dispatch.
     Dispatch(Dispatch),
@@ -2419,6 +2438,22 @@ mod tests {
     use std::collections::BTreeMap;
     use std::fmt::Debug;
     use std::mem::{discriminant, Discriminant};
+
+    /// A texture read at Metal's own `MTLBlitOptionNone` fingerprints to **nothing** for its
+    /// plane, so every recording taken before [`RenderWork::ReadTexture`] grew the field still
+    /// reads as fresh, and a read that states an aspect fingerprints the option's own name.
+    ///
+    /// The same invariant the target's backing learned the hard way, in the one place a case
+    /// reaches it: a fingerprint that missed the new field would make a stale recording read as a
+    /// fresh one, and a `Whole` that wrote a discriminant would move all 1080-odd recordings at
+    /// once.
+    #[test]
+    fn a_read_of_the_whole_texture_fingerprints_as_it_always_did() {
+        assert!(Plane::Whole.words().is_empty());
+        for plane in [Plane::Depth, Plane::Stencil, Plane::RowLinearPvrtc] {
+            assert!(!plane.words().is_empty(), "{plane:?}");
+        }
+    }
 
     /// A target of its own memory fingerprints to exactly the bytes it did before a backing could
     /// be stated, and a target over a buffer appends its backing's words after them.
@@ -2553,6 +2588,7 @@ mod tests {
                 offset: 0,
                 row_pitch: 16,
                 size: [4, 4],
+                plane: Plane::Whole,
             },
             RenderWork::ReadTexture { .. } => RenderWork::Dispatch(Dispatch {
                 pipeline: handle(),

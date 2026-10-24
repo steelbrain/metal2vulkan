@@ -74,7 +74,8 @@ use crate::case::{call, made, Abort, Case, Failure, Handle, Input, MetalSource, 
 use crate::fixture::{Fixture, METAL_TEXT, RUNTIME_TEXT};
 use crate::recording::ShaderRef;
 use crate::render::{
-    ColorState, PassColor, RenderPass, RenderPipelineSpec, RenderStep, RenderWork, TargetSpec,
+    ColorState, PassColor, Plane, RenderPass, RenderPipelineSpec, RenderStep, RenderWork,
+    TargetSpec,
 };
 use crate::transcript::{
     Aspect, ByteLayout, Digest, Element, Gaps, Node, Observed, Region, Sites, Value,
@@ -558,6 +559,7 @@ fn read_target(texture: Handle, into: Handle, size: [u32; 2]) -> RenderWork {
         offset: 0,
         row_pitch: TEXEL * size[0],
         size,
+        plane: Plane::Whole,
     }
 }
 

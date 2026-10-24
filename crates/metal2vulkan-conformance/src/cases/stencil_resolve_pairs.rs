@@ -3,9 +3,9 @@
 //! attachment's resolve texture holds.
 //!
 //! `conf/dspairs` closed `MTLMultisampleDepthResolveFilter` at 3 of 3 behaviourally and left the
-//! stencil filter at **0 of 2**. One of its two values is reachable with the vocabulary as it
-//! stands and one is not, and this module takes the first and says exactly what the second waits
-//! on:
+//! stencil filter at **0 of 2**. One of its two values can be stated on a pass whose stencil is a
+//! texture of its own, and one cannot; this module takes the first, and
+//! [`crate::cases::stencil_resolved_sample`] takes the second on a combined attachment:
 //!
 //! | case | what it crosses |
 //! |---|---|
@@ -96,15 +96,12 @@
 //! # What is not asked, and why
 //!
 //! - **`MTLMultisampleStencilResolveFilterDepthResolvedSample`**, the other of the two values.
-//!   Metal takes it only where the depth and the stencil are **one** attachment, Metal requires a
-//!   resolve texture of the attachment's own format, and reading a `Depth32Float_Stencil8`
-//!   texture's stencil back needs `MTLBlitOptionStencilFromDepthStencil`, which
-//!   [`RenderWork::ReadTexture`] has no field for: its Metal side is a plain
-//!   `copyFromTexture:toBuffer:`. So the value is **unreachable rather than unwritten**, and
-//!   closing it wants an aspect or blit-option field on that work in both sides, written only
-//!   where it is not the default so every committed recording stays valid. Our runtime implements
-//!   it through a whole private path (`depth_stencil_resolve.rs`: the stencil of the sample the
-//!   depth filter picked, drawn after the pass) that no case puts beside Metal.
+//!   Metal takes it only where the depth and the stencil are **one** attachment and the resolve
+//!   texture is of the attachment's own format, so neither case here can state it: both attach the
+//!   stencil as a texture of its own. It is
+//!   [`crate::cases::stencil_resolved_sample`]'s, which crosses both stencil filters with every
+//!   depth filter on one combined `Depth32Float_Stencil8` attachment and reads its resolve
+//!   texture's two aspects through [`RenderWork::ReadTexture`]'s plane.
 //! - **A non-resolving store action beside a `resolveTexture`.** Measured to resolve nothing and
 //!   leave the texture untouched, and a shape **Metal's API validation stops**; record mode runs a
 //!   validated leg, so a case for it is one keystroke from an assertion that ends the process.
@@ -129,8 +126,8 @@ use crate::case::{call, made, Abort, Case, Failure, Handle, Input, MetalSource, 
 use crate::fixture::{Fixture, METAL_TEXT, RUNTIME_TEXT};
 use crate::recording::ShaderRef;
 use crate::render::{
-    ColorState, PassColor, PassDepth, PassStencil, RenderPass, RenderPipelineSpec, RenderStep,
-    RenderWork, ScissorBox, TargetSpec,
+    ColorState, PassColor, PassDepth, PassStencil, Plane, RenderPass, RenderPipelineSpec,
+    RenderStep, RenderWork, ScissorBox, TargetSpec,
 };
 use crate::transcript::{
     Aspect, ByteLayout, Digest, Element, Gaps, Node, Observed, Region, Sites, Value,
@@ -831,6 +828,7 @@ impl Case for StencilResolves {
                 offset: 0,
                 row_pitch: SIDE,
                 size: [SIDE; 2],
+                plane: Plane::Whole,
             });
             names.push(format!("read:stencil:{name}"));
             if depth {
@@ -840,6 +838,7 @@ impl Case for StencilResolves {
                     offset: 0,
                     row_pitch: DEPTH_TEXEL * SIDE,
                     size: [SIDE; 2],
+                    plane: Plane::Whole,
                 });
                 names.push(format!("read:depth:{name}"));
             }

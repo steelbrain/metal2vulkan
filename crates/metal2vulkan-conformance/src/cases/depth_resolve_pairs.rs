@@ -87,13 +87,10 @@
 //!   API validation stops**. The suite's record mode runs a validated leg beside the plain one, so
 //!   a case here would be one keystroke from an assertion that ends the process, and this family
 //!   does not find out by trying. It stays a runtime-lane fact.
-//! - **`MTLMultisampleStencilResolveFilterDepthResolvedSample`**, the one stencil filter value
-//!   still uncompared. Metal takes it only where the depth and the stencil are **one**
-//!   attachment, and reading a `Depth32Float_Stencil8` texture back needs
-//!   `MTLBlitOptionDepthFromDepthStencil` or its stencil twin, which
-//!   [`RenderWork::ReadTexture`] has no field for: the
-//!   suite's one texture read is a plain `copyFromTexture:toBuffer:`. So the value is reachable
-//!   only once that vocabulary grows an aspect, and this says so rather than skipping it quietly.
+//! - **`MTLMultisampleStencilResolveFilterDepthResolvedSample`** beside these filters. Metal takes
+//!   it only where the depth and the stencil are **one** attachment, which this family's
+//!   depth-only pass is not. It is [`crate::cases::stencil_resolved_sample`]'s, which crosses it
+//!   with every one of these three filters on a combined `Depth32Float_Stencil8` attachment.
 //! - **A layered pass, a resolve slice or level past the first, and a memoryless resolve
 //!   texture.** Each is a separate rule of the runtime's resolve path with its own measured
 //!   answer, and each is a cross of its own rather than this one's.
@@ -112,8 +109,8 @@ use crate::case::{call, made, Abort, Case, Failure, Handle, Input, MetalSource, 
 use crate::fixture::{Fixture, METAL_TEXT, RUNTIME_TEXT};
 use crate::recording::ShaderRef;
 use crate::render::{
-    ColorState, PassColor, PassDepth, RenderPass, RenderPipelineSpec, RenderStep, RenderWork,
-    ScissorBox, TargetSpec,
+    ColorState, PassColor, PassDepth, Plane, RenderPass, RenderPipelineSpec, RenderStep,
+    RenderWork, ScissorBox, TargetSpec,
 };
 use crate::transcript::{
     Aspect, ByteLayout, Digest, Element, Gaps, Node, Observed, Region, Sites, Value,
@@ -606,6 +603,7 @@ impl Case for DepthFilters {
                 offset: 0,
                 row_pitch: DEPTH_TEXEL * SIDE,
                 size: [SIDE; 2],
+                plane: Plane::Whole,
             });
             names.push(format!("read:{name}"));
         }

@@ -1333,8 +1333,9 @@ fn size_of(size: &[u64; 3]) -> MTLSize {
     }
 }
 
-/// The blit option a plane names.
-fn option_of(plane: Plane) -> MTLBlitOption {
+/// The blit option a plane names. The suite's one mapping of [`Plane`] onto Metal's own option,
+/// which a render case's texture read takes too.
+pub(crate) fn option_of(plane: Plane) -> MTLBlitOption {
     match plane {
         Plane::Whole => MTLBlitOption::empty(),
         Plane::Depth => MTLBlitOption::DepthFromDepthStencil,
