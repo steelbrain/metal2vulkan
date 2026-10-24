@@ -1,0 +1,34 @@
+# A crossing of the option space: two or more Metal enums or option sets that one case module
+# puts to Metal **together**, where the answer is a function of the pair and not of either value
+# alone. The per-value columns of docs/CONFORMANCE-COVERAGE.md count values; this counts pairs.
+#
+# A row is ONE claim about ONE set of axes, at the cell where its falsification is read: a case of
+# the module, or `family` where the cross takes more than one of its cases. The same claim at a
+# second sample count, format or shape is not a second row.
+#
+# The generator FAILS on a row whose module ran no Metal, whose cell is not one of that module's
+# recorded cases, whose axis has no generated value list, which crosses fewer than two axes or
+# names one twice, or whose module states fewer than TWO values of an axis by name -- a module
+# that cannot vary an axis cannot cross it, so one value would falsify the row. What it cannot
+# check is whether the expected answer needs both axes; that is what the last field is for, and a
+# reader checks it against the case.
+#
+# An axis is a Metal enum or option set. A cross with a number (a stencil mask, a per-sample
+# depth), with a grouping that is no Metal type (a format's class), or of a type with itself in
+# two slots (the two stencil faces) cannot be said here, and the document states that limit.
+# module	cell	axes	what only the cross decides
+blend_interactions	blend-interaction-mask-blend	MTLColorWriteMask+MTLBlendOperation	whether the write mask is applied before the blend reads the destination or after it. Only `Min` and `Subtract` can see the order: under `Add`, `Max` and `ReverseSubtract` a channel the mask drops stores the destination either way, which is the one blend the mask's own sweep was written with
+blend_interactions	blend-interaction-mask-blend	MTLColorWriteMask+MTLBlendFactor	whether a mask that drops alpha changes what an RGB factor reads from the destination's alpha. Neither sweep can ask it: the mask sweep's blend reads no channel but its own, and the factor sweep's mask keeps every channel
+blend_interactions	family	MTLBlendFactor+MTLPixelFormat	whether Metal clamps the blend colour to `[0, 1]` before a factor multiplies by it. The float attachment alone reads as the colour not being clamped and the normalized one alone as the result being clamped like any overflow; the pair says the factor was 1 and not 2
+border_swizzles	family	MTLPixelFormat+MTLSamplerBorderColor	which channel of the border colour a format's channel reads. `A8Unorm`'s one channel takes the colour's **red**, so its opaque-black border reads alpha 0 where a four-channel format's reads 1
+border_swizzles	border-swizzles-rgba8unorm	MTLSamplerBorderColor+MTLTextureSwizzle	whether a border texel goes through the texture's swizzle like any other texel: a side that swizzled the texel it fetched and not the border it substituted answers the colour's own channels in a swizzled lane
+depth_resolve_pairs	resolve-depth-filters-4	MTLMultisampleDepthResolveFilter+MTLStoreAction	whether the resolve is the same under both resolving store actions. Twenty-one cells say so under each, so a side that resolves from the stored copy under one and from the tile under the other diverges in a cell while each value alone is right
+depth_stencil_space	depthstencil-facing-faces	MTLCullMode+MTLWinding	whether the face whose rules a primitive takes is read from the same two settings as whether it is culled: a side that culls correctly and then applies the other face's operations leaves the other face's value in the stencil
+depth_stencil_space	depthstencil-depth-slot	MTLCompareFunction+MTLStencilOperation	which of the three stencil slots a fragment reaches, which the depth comparison and the stencil comparison decide together, and what the slot then writes: a side that routed a failed depth test to the stencil-failure slot is right about every comparison and every operation alone
+fetch_ordered	family	MTLColorWriteMask+MTLPixelFormat	which memory bytes a channel mask keeps, which the format's channel order decides: a side that wrote the attachment through a channel-swapped view without swapping the mask is exact on one format and divergent on the other
+format_footprints	family	MTLPixelFormat+MTLTextureType	which texture types Metal describes a texture of, which is the format's to decide: the one-plane `YCBCR*` and `RGB10A8_2P` formats answer a size and **no texture** for `Cube` and `CubeArray` and a texture for the other six types, while the padded and plain formats answer a texture for all eight
+int_attributes	integer-vertex-attributes	MTLVertexFormat+MTLVertexStepFunction	whether the conversion of an integer attribute is the same whichever step function fetched the record. Metal's constant step is a fetch no fixed-function vertex input can express, so a side whose shader-pulled path converts unlike its fixed-function one is right about every format and every step function alone
+pixel_samplers	family	MTLPixelFormat+MTLSamplerMinMagFilter+MTLSamplerAddressMode	what a pixel-coordinate sample reads at and past the texture's edge: the address mode decides which texel a tap outside falls on, the filter decides how many taps there are, and the format decides what their average rounds to. The family's sixteen cases are the cells
+render_state	render-state-facing	MTLCullMode+MTLWinding	which of a triangle and its reverse survives a draw: flipping the winding flips it and flipping the cull mode flips it back, so neither setting's own value decides anything and a side that reads one and not the other draws the wrong one of the pair
+shader_stencil	stencil-output	MTLCompareFunction+MTLStencilOperation	which operation a fragment's `[[stencil]]` output fires, under a state whose two faces carry different comparisons and different operations: a side that fired the pass operation where the comparison failed writes a byte the comparison alone and the operation alone both allow
+heap_metal_sizes	heap-sizes-block-writes-only	MTLTextureUsage+MTLPixelFormat+MTLTextureType	whether Apple's private `BlockWritesOnly` usage bit changes a heap answer. Every shape is recorded with the bit and without it, so a side whose layout depends on the bit for one format or one texture type and not another diverges in a cell while the bit alone and each format alone are right

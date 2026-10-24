@@ -6,6 +6,8 @@ This is not [METAL-COVERAGE.md](METAL-COVERAGE.md), which says what we **impleme
 
 It says it along **two axes**, because either one alone reads as more than it is. The **items** axis is reach: one call of a selector is enough, so a selector that takes an enum counts as exercised whatever value reached it. The **option space** axis is depth: of each Metal enum's and option set's values, which ones the suite compared. A high number on the first and a low one on the second is what a suite that touches everything shallowly looks like.
 
+Both are **per value**, which is the limit the suite's own blind spot sits in: a side can be right about every value of two types alone and wrong about a cell of the two together. *By crossing* inside the option-space axis counts the pairs a case puts to Metal at once, from a declaration the generator checks. It is the only number here about interactions, and it is a floor by every crossing nobody declared.
+
 ## What this measures, and what it cannot
 
 The suite reaches Metal through `objc2-metal`, whose Rust name for a binding is the selector with each `:` written `_`. So a call site names its selector outright, and the derivation resolves the **receiver's type** by following what made it — a class's constructor, a getter whose answer `objc2_metal.tsv` records, a field of the side's own struct, a parameter's declared type — and then walks that type's supertypes to the container the SDK declares the item on. A message to a class, written `MTLType::selector(..)`, names its own receiver and needs no typing.
@@ -42,6 +44,7 @@ Its limits, measured rather than asserted:
 | distinct SDK items the Metal leg reaches, of any status | 794 |
 | of those, reached only where this cannot name the family | 7 |
 | ledger rows (a case whose gap is recorded) | 67 |
+| declared crossings of the option space (pairs put to Metal at once) | 15 |
 
 A tolerance names a **site of a transcript**, not an item, so the last two rows are read as written: a case that loosens one site of its own transcript may compare every other field of it exactly, and this derivation cannot tell which of a case's fields came from which Metal call. Where the distinction matters, read the case.
 
@@ -66,7 +69,7 @@ What this axis cannot see, measured rather than asserted:
 - **A value a case states as a raw ordinal.** A case may hand the Metal leg an enum's ordinal as a number — a sweep over `0..n` rather than over named variants — and no reading of the text can say which value a computed number is. So *in effect*, and the *stated* column of the hand-modelled table below, are floors by every sweep written that way: a type they report short of its values may in fact be swept exhaustively, and the case is what says so. Read the case before taking a row of the work list as work.
 - **Which case put a value in effect.** The unit is the case module, as it is for the items axis: a value named anywhere in a module whose cases include a Metal run counts for that module, even where one of its cases names it and the rest do not.
 - **A value only the suite's shared sources name** — 27 of them. Some case puts it to Metal through the render or texture vocabulary, but which case is not a property of the text, so it is neither compared nor missing and has its own column.
-- **Combinations.** Every column here is per value. A type whose values are all compared says nothing about the pairs and triples of them, which is where most of the behaviour an implementation can get wrong lives.
+- **Combinations.** Every column here is per value. A type whose values are all compared says nothing about the pairs and triples of them, which is where most of the behaviour an implementation can get wrong lives. *By crossing* below counts the pairs a case states together, which is the measure of that and is a floor by every crossing nobody declared.
 - **Metal's API validation is excluded.** Its complaints name enumerators, and the suite records that leg and never compares it, so reading it would count Apple's prose as a comparison. So are the cost and timing tables: a site name there is what was measured, not an answer that was compared.
 - **A `#[cfg(test)]` item is excluded.** One of the suite's unit tests names four blend factors to assert that no case uses them; counting those would have this report the opposite of what the code says.
 
@@ -159,6 +162,80 @@ Counted apart from the gap above, because a gap is work and these are not. Each 
   Held by `cases/tile_pipeline_reflection.rs`: `MTLDataTypeR16Snorm`, `MTLDataTypeR16Unorm`, `MTLDataTypeR8Snorm`, `MTLDataTypeR8Unorm`, `MTLDataTypeRG11B10Float`, `MTLDataTypeRG16Snorm`, `MTLDataTypeRG16Unorm`, `MTLDataTypeRG8Snorm`, `MTLDataTypeRG8Unorm`, `MTLDataTypeRGB10A2Unorm`, `MTLDataTypeRGB9E5Float`, `MTLDataTypeRGBA16Snorm`, `MTLDataTypeRGBA16Unorm`, `MTLDataTypeRGBA8Snorm`, `MTLDataTypeRGBA8Unorm`, `MTLDataTypeRGBA8Unorm_sRGB`
 - **`MTLPixelFormat`**, 35 of 301: every MTLTextureDescriptor bearing it fails `-[MTLTextureDescriptorInternal validateWithDevice:]` with `has invalid pixelFormat` and the process ends on SIGABRT: measured over 350 shapes on an M3 Max / macOS 27.0.1 (all eight non-multisample texture types, both storage modes, newTextureWithDescriptor: and heapTextureSizeAndAlignWithDescriptor:), every one fatal and not one answering nil.
   Held by `cases/format_footprints.rs`: `MTLPixelFormatBGRA10Uint`, `MTLPixelFormatBGRA10Uint_PACKED`, `MTLPixelFormatBGRA10Unorm`, `MTLPixelFormatBGRA10Unorm_HLG`, `MTLPixelFormatBGRA10Unorm_PACKED`, `MTLPixelFormatBGRA10Unorm_PACKED_HLG`, `MTLPixelFormatBGRA10Unorm_PACKED_PQ`, `MTLPixelFormatBGRA10Unorm_PACKED_sRGB`, `MTLPixelFormatBGRA10Unorm_PQ`, `MTLPixelFormatBGRA10Unorm_sRGB`, `MTLPixelFormatBGRA10_XR_PACKED`, `MTLPixelFormatBGRA10_XR_PACKED_sRGB`, `MTLPixelFormatR10Uint_PACKED`, `MTLPixelFormatR10Uint_X6`, `MTLPixelFormatR12Uint_PACKED`, `MTLPixelFormatR12Uint_X4`, `MTLPixelFormatRG10Uint_PACKED`, `MTLPixelFormatRG10Uint_X12`, `MTLPixelFormatRG12Uint_PACKED`, `MTLPixelFormatRG12Uint_X8`, `MTLPixelFormatRGB10A8Uint_2P`, `MTLPixelFormatRGB16Bfloat`, `MTLPixelFormatRGB16Float`, `MTLPixelFormatRGB16Sint`, `MTLPixelFormatRGB16Snorm`, `MTLPixelFormatRGB16Uint`, `MTLPixelFormatRGB16Unorm`, `MTLPixelFormatRGB32Float`, `MTLPixelFormatRGB32Sint`, `MTLPixelFormatRGB32Uint`, `MTLPixelFormatRGB8Sint`, `MTLPixelFormatRGB8Snorm`, `MTLPixelFormatRGB8Uint`, `MTLPixelFormatRGB8Unorm`, `MTLPixelFormatX24_Stencil8`
+
+### By crossing, which is depth in the pairs
+
+Every column above is per value, and the pairs are where most of the behaviour an implementation can get wrong lives: a side can be right about each value of two types alone and wrong about a cell of the two together. This counts the crossings, which is a third thing again — not reach, not per-value depth, but how many **pairs of the option space** a case puts to Metal at once.
+
+A crossing is **declared**, in `scripts/conformance-coverage/crossings.tsv`: one row a crossing, naming the case module, the cell its falsification is read at (one of the module's recorded cases, or `family` where the cross is read across the family's cases rather than inside one of them), the Metal types crossed, and what only the cross decides. The count is therefore of crossings **declared**, never of crossings proved, and what makes the list worth reading is what the derivation refuses. **This document is not written** if a row names a module no case of which ran Metal, a cell that is not one of that module's recorded cases, an axis with no generated value list, fewer than two axes or one axis twice, or an axis of which the module's own text states **fewer than two values by name** — a module that cannot vary an axis cannot cross it, so one value would falsify the row.
+
+What this axis cannot see, stated rather than implied:
+
+- **Whether the expected answer needs both axes.** No reading of the text can say that: it is a property of the case's reasoning. The last column says it in words, for a reader to check against the case, and the refusals above check only that the claim is **stateable** — that the module varies both axes and the cell ran Metal.
+- **A crossing nobody declared.** Every number here is a floor by exactly that. A family that crosses two types and carries no row counts for nothing, so this axis grows by declaration and not by discovery.
+- **An axis that is not a Metal enum or option set.** A crossing of a type with a number — a stencil mask, a per-sample depth, a draw count — or with a grouping that is not a Metal type, such as a pixel format's class, is real depth this count does not hold. The option space is what it measures, as the columns above do.
+- **A type crossed with itself in two slots**, which the two stencil faces are: an axis may not be named twice, so such a cross is outside the count.
+- **A module that takes its value list from the suite's shared vocabulary** states none of those values itself, so its cross cannot be declared until the module names them. The per-value columns above hold such values in their own *shared only* column for the same reason.
+- **Which cell varies which axis.** The values are read from the **module's** text while the claim is about a cell of it, so a module whose cases each fix one axis reads as varying both. `family` says outright that the cross is read across the cases; a named cell is the one case the row's reasoning is read at.
+- **A triple told apart from three pairs.** A row of three axes counts as its three pairs, and an interaction no pair of its axes can see is not distinguished from them.
+
+| | |
+|---|---|
+| crossings declared | 15 |
+| distinct pairs of Metal types crossed | 16 |
+| types in at least one crossing | 18 |
+| types with two or more values compared and in no crossing | 28 |
+
+| case module | cell | crossed | what only the cross decides |
+|---|---|---|---|
+| `blend_interactions` | `blend-interaction-mask-blend` | `MTLColorWriteMask` x `MTLBlendFactor` | whether a mask that drops alpha changes what an RGB factor reads from the destination's alpha. Neither sweep can ask it: the mask sweep's blend reads no channel but its own, and the factor sweep's mask keeps every channel |
+| `blend_interactions` | `blend-interaction-mask-blend` | `MTLColorWriteMask` x `MTLBlendOperation` | whether the write mask is applied before the blend reads the destination or after it. Only `Min` and `Subtract` can see the order: under `Add`, `Max` and `ReverseSubtract` a channel the mask drops stores the destination either way, which is the one blend the mask's own sweep was written with |
+| `blend_interactions` | its cases | `MTLBlendFactor` x `MTLPixelFormat` | whether Metal clamps the blend colour to `[0, 1]` before a factor multiplies by it. The float attachment alone reads as the colour not being clamped and the normalized one alone as the result being clamped like any overflow; the pair says the factor was 1 and not 2 |
+| `border_swizzles` | `border-swizzles-rgba8unorm` | `MTLSamplerBorderColor` x `MTLTextureSwizzle` | whether a border texel goes through the texture's swizzle like any other texel: a side that swizzled the texel it fetched and not the border it substituted answers the colour's own channels in a swizzled lane |
+| `border_swizzles` | its cases | `MTLPixelFormat` x `MTLSamplerBorderColor` | which channel of the border colour a format's channel reads. `A8Unorm`'s one channel takes the colour's **red**, so its opaque-black border reads alpha 0 where a four-channel format's reads 1 |
+| `depth_resolve_pairs` | `resolve-depth-filters-4` | `MTLMultisampleDepthResolveFilter` x `MTLStoreAction` | whether the resolve is the same under both resolving store actions. Twenty-one cells say so under each, so a side that resolves from the stored copy under one and from the tile under the other diverges in a cell while each value alone is right |
+| `depth_stencil_space` | `depthstencil-depth-slot` | `MTLCompareFunction` x `MTLStencilOperation` | which of the three stencil slots a fragment reaches, which the depth comparison and the stencil comparison decide together, and what the slot then writes: a side that routed a failed depth test to the stencil-failure slot is right about every comparison and every operation alone |
+| `depth_stencil_space` | `depthstencil-facing-faces` | `MTLCullMode` x `MTLWinding` | whether the face whose rules a primitive takes is read from the same two settings as whether it is culled: a side that culls correctly and then applies the other face's operations leaves the other face's value in the stencil |
+| `fetch_ordered` | its cases | `MTLColorWriteMask` x `MTLPixelFormat` | which memory bytes a channel mask keeps, which the format's channel order decides: a side that wrote the attachment through a channel-swapped view without swapping the mask is exact on one format and divergent on the other |
+| `format_footprints` | its cases | `MTLPixelFormat` x `MTLTextureType` | which texture types Metal describes a texture of, which is the format's to decide: the one-plane `YCBCR*` and `RGB10A8_2P` formats answer a size and **no texture** for `Cube` and `CubeArray` and a texture for the other six types, while the padded and plain formats answer a texture for all eight |
+| `heap_metal_sizes` | `heap-sizes-block-writes-only` | `MTLTextureUsage` x `MTLPixelFormat` x `MTLTextureType` | whether Apple's private `BlockWritesOnly` usage bit changes a heap answer. Every shape is recorded with the bit and without it, so a side whose layout depends on the bit for one format or one texture type and not another diverges in a cell while the bit alone and each format alone are right |
+| `int_attributes` | `integer-vertex-attributes` | `MTLVertexFormat` x `MTLVertexStepFunction` | whether the conversion of an integer attribute is the same whichever step function fetched the record. Metal's constant step is a fetch no fixed-function vertex input can express, so a side whose shader-pulled path converts unlike its fixed-function one is right about every format and every step function alone |
+| `pixel_samplers` | its cases | `MTLPixelFormat` x `MTLSamplerMinMagFilter` x `MTLSamplerAddressMode` | what a pixel-coordinate sample reads at and past the texture's edge: the address mode decides which texel a tap outside falls on, the filter decides how many taps there are, and the format decides what their average rounds to. The family's sixteen cases are the cells |
+| `render_state` | `render-state-facing` | `MTLCullMode` x `MTLWinding` | which of a triangle and its reverse survives a draw: flipping the winding flips it and flipping the cull mode flips it back, so neither setting's own value decides anything and a side that reads one and not the other draws the wrong one of the pair |
+| `shader_stencil` | `stencil-output` | `MTLCompareFunction` x `MTLStencilOperation` | which operation a fragment's `[[stencil]]` output fires, under a state whose two faces carry different comparisons and different operations: a side that fired the pass operation where the comparison failed writes a byte the comparison alone and the operation alone both allow |
+
+#### Types with per-value depth and no crossing
+
+The work list of this axis, and the shape of the answer to *is the depth sufficient?*: each of these is a type the suite compared two or more values of and crossed with nothing. The number is the values compared. A row is a question and not a verdict — the type may be crossed by a family that declared no row, and a type whose values cannot interact with anything has nothing to answer — but a type deep on the per-value axis and absent here is where a cell of a pair is least likely to have been looked at.
+
+- **`MTLDataType`**, 75 of 97 compared
+- **`MTLAttributeFormat`**, 53 of 54 compared
+- **`MTLBindingType`**, 8 of 12 compared
+- **`MTLFunctionType`**, 6 of 7 compared
+- **`MTLIndirectCommandType`**, 5 of 8 compared
+- **`MTLPrimitiveType`**, 5 of 5 compared
+- **`MTLRenderStages`**, 5 of 5 compared
+- **`MTLStepFunction`**, 5 of 9 compared
+- **`MTLTessellationFactorStepFunction`**, 4 of 4 compared
+- **`MTLTessellationPartitionMode`**, 4 of 4 compared
+- **`MTLBindingAccess`**, 3 of 3 compared
+- **`MTLLoadAction`**, 3 of 3 compared
+- **`MTLMutability`**, 3 of 3 compared
+- **`MTLPatchType`**, 3 of 3 compared
+- **`MTLSamplerMipFilter`**, 3 of 3 compared
+- **`MTLSamplerReductionMode`**, 3 of 3 compared
+- **`MTLSparsePageSize`**, 3 of 3 compared
+- **`MTLTessellationControlPointIndexType`**, 3 of 3 compared
+- **`MTLVisibilityResultMode`**, 3 of 3 compared
+- **`MTLDepthClipMode`**, 2 of 2 compared
+- **`MTLFunctionOptions`**, 2 of 5 compared
+- **`MTLHeapType`**, 2 of 3 compared
+- **`MTLIndexType`**, 2 of 2 compared
+- **`MTLMultisampleStencilResolveFilter`**, 2 of 2 compared
+- **`MTLPrimitiveTopologyClass`**, 2 of 4 compared
+- **`MTLResourceUsage`**, 2 of 3 compared
+- **`MTLStoreActionOptions`**, 2 of 2 compared
+- **`MTLTriangleFillMode`**, 2 of 2 compared
 
 ### Types a case is about, whose values this axis cannot read
 

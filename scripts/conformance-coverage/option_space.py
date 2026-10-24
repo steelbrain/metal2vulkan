@@ -44,6 +44,26 @@ Metal's validation leg, and which case put a value in effect. A type the tree mo
 says so nowhere on the item is outside both tables and so outside the axis, which the document
 states where it lists them.
 
+# The crossings, which are the pairs rather than the values
+
+Every column above is per value, and a type whose values are all compared says nothing about the
+pairs of them. `crossings.tsv` is the declaration of the pairs: one row a crossing, naming the case
+module, the cell the falsification is read at, the Metal types crossed, and what only the cross
+decides. It is a **declaration**, so what makes it worth reading is not the list but what the
+derivation refuses:
+
+- a module no case of which ran Metal, and a cell that is not one of that module's recorded cases;
+- an axis that is not a Metal enum or option set with a generated value list;
+- fewer than two axes, or one axis twice;
+- an axis of which the module's own text states fewer than two values by name, which is the one
+  check that bears on the claim itself: a module that cannot vary the axis cannot hold a cross over
+  it, so a single-value falsification would satisfy the row.
+
+What the derivation cannot check is whether the expected answer **needs** both axes. That is a
+property of the case's reasoning, not of its text, so the row states it in words for a reader and
+the count is of crossings declared, never of crossings proved. The document says so where it
+prints the number.
+
 # Why a value stated as a raw ordinal is not resolved, and must not be
 
 Both numerators read **names**. A case may instead hand the Metal leg an enum's ordinal as a
@@ -196,6 +216,156 @@ def read_unreachable(root: Path) -> dict[tuple[str, str], tuple[str, str]]:
         if not why.strip() or not finding.strip():
             raise SystemExit(f"{path.name}: {value} of {metal} carries no reason or no finding")
         out[(metal, value)] = (why, finding)
+    return out
+
+
+#: The declared crossings, relative to the tree's root.
+CROSSINGS = "scripts/conformance-coverage/crossings.tsv"
+
+#: What a row's `cell` field says where the cross is read **across** the family's cases -- one case
+#: a cell of it, or one axis fixed per case and the others swept inside each -- rather than inside
+#: one case that holds the whole grid.
+FAMILY = "family"
+
+
+def read_crossings(root: Path) -> list[tuple[str, str, tuple[str, ...], str]]:
+    """Every declared crossing as `(module, cell, axes, what only the cross decides)`.
+
+    The shape of the row and nothing about the suite: the caller checks it against the sources, the
+    way `read_unreachable`'s caller checks that list. Refused here is only what the row itself gets
+    wrong -- a field missing, a crossing of one axis, an axis named twice, a row declared twice, or
+    a row that says nothing about what the cross decides.
+
+    A crossing of **one axis** is a sweep, which the per-value columns above already count, so a row
+    with fewer than two axes is a mistake and not a smaller claim. An axis named twice is the same
+    mistake spelled differently: a type crossed with itself in two slots -- the two stencil faces --
+    is a real interaction and this file cannot say it, which the document states as a limit rather
+    than taking `A+A` to mean it.
+    """
+    path = root / CROSSINGS
+    out: list[tuple[str, str, tuple[str, ...], str]] = []
+    if not path.exists():
+        # A tree that declares none, which is every synthetic tree the self-test builds unless it
+        # asks for one. Absence is "none declared", which the counts read as nothing crossed.
+        return out
+    seen: set[tuple[str, str, tuple[str, ...]]] = set()
+    for line in path.read_text().splitlines():
+        if not line.strip() or line.startswith("#"):
+            continue
+        fields = line.split("\t")
+        if len(fields) != 4:
+            raise SystemExit(
+                f"{path.name}: {line!r} is not `module\tcell\taxes\twhat only the cross decides`"
+            )
+        module, cell, axes, why = (field.strip() for field in fields)
+        held = tuple(axis.strip() for axis in axes.split("+") if axis.strip())
+        if len(held) < 2:
+            raise SystemExit(
+                f"{path.name}: {module} {cell} crosses {axes!r}, which is one axis -- a sweep of "
+                "one type is what the per-value columns already count"
+            )
+        if len(set(held)) != len(held):
+            raise SystemExit(
+                f"{path.name}: {module} {cell} names an axis twice in {axes!r}; a type crossed "
+                "with itself in two slots is outside this count"
+            )
+        if not why:
+            raise SystemExit(
+                f"{path.name}: {module} {cell} says nothing about what only the cross decides"
+            )
+        key = (module, cell, held)
+        if key in seen:
+            raise SystemExit(f"{path.name}: {module} {cell} {axes} is declared twice")
+        seen.add(key)
+        out.append((module, cell, held, why))
+    return out
+
+
+def crossings(
+    root: Path,
+    types: dict[str, Type],
+    effect: dict[tuple[str, str], set[str]],
+    ran_cases: dict[str, str],
+) -> list[dict]:
+    """The declared crossings, each checked against the sources it names.
+
+    `ran_cases` is every case whose committed recording holds an answer Metal **ran**, to the
+    module that declares its name -- the same join the items axis makes, and the same gate: a case
+    that ran no Metal put no pair to Metal however much its module's text names.
+
+    Four things are refused, and each is a way a row can be false of the tree rather than merely
+    optimistic:
+
+    - a module no case of which ran Metal, or a cell that is not one of **that** module's recorded
+      cases. This is what catches a row left behind by a renamed or deleted case;
+    - `family` where the module has fewer than two recorded cases, since a cross read across the
+      family's cases needs at least two of them;
+    - an axis with no generated value list, which is a typo or a Metal type outside this axis;
+    - an axis of which the module's own text states fewer than **two** values by name. A module
+      that states one value of an axis, or none, cannot vary it, so nothing in the text tells the
+      claimed cross from a sweep of the other axis at a fixed cell -- a single-value falsification
+      would satisfy the row. This is the one check that bears on the claim, and it is a check of
+      what the text can state, never of what the case's expected answer needs.
+
+    What is **not** refused, because no reading of the text can see it: whether the expected answer
+    is a function of both axes. A row's last field says that in words, for a reader to check against
+    the case.
+    """
+    modules_ran: dict[str, set[str]] = {}
+    for case, module in ran_cases.items():
+        modules_ran.setdefault(module, set()).add(case)
+    out: list[dict] = []
+    for module, cell, axes, why in read_crossings(root):
+        held = modules_ran.get(module)
+        if not held:
+            raise SystemExit(
+                f"crossings.tsv declares {module} {cell}, and no case of {module} has a recording "
+                "of an answer Metal ran -- a module that ran no Metal put no pair to it"
+            )
+        if cell == FAMILY:
+            if len(held) < 2:
+                raise SystemExit(
+                    f"crossings.tsv says {module}'s cross is read across its own cases, and it "
+                    f"has {len(held)} recorded case -- a cross across cases needs at least two"
+                )
+        elif cell not in held:
+            raise SystemExit(
+                f"crossings.tsv declares the cell {cell} of {module}, which is not a case of "
+                f"{module} with a recording of an answer Metal ran -- a renamed or deleted case, "
+                "or the wrong module"
+            )
+        for axis in axes:
+            if axis not in types:
+                raise SystemExit(
+                    f"crossings.tsv crosses {axis}, which has no generated value list here"
+                )
+            stated = [
+                value for value in types[axis].names if module in effect.get((axis, value), ())
+            ]
+            if len(stated) < 2:
+                raise SystemExit(
+                    f"crossings.tsv says {module} {cell} crosses {axis}, and {module}'s own text "
+                    f"states {len(stated)} of its values by name -- a module that cannot vary an "
+                    "axis cannot cross it, so one value would falsify the row"
+                )
+        out.append(
+            {
+                "module": module,
+                "cell": cell,
+                "axes": list(axes),
+                "why": why,
+                # Each unordered pair of the row's axes, so a three-axis grid holds three. A
+                # pair is sorted, so two rows crossing the same two types in either order are one
+                # pair and not two.
+                "pairs": sorted(
+                    {
+                        tuple(sorted((one, other)))
+                        for i, one in enumerate(axes)
+                        for other in axes[i + 1 :]
+                    }
+                ),
+            }
+        )
     return out
 
 
@@ -583,8 +753,15 @@ def by_hand(root: Path, types: dict[str, Type]) -> list[tuple[str, str, list[str
     return [(metal, rust, names) for metal, (rust, names) in sorted(out.items())]
 
 
-def inventory(root: Path, ran: set[str]) -> dict:
-    """The axis, derived: every type with its three sets of values."""
+def inventory(root: Path, ran_cases: dict[str, str]) -> dict:
+    """The axis, derived: every type with its three sets of values, and the declared crossings.
+
+    `ran_cases` is every case whose committed recording holds an answer Metal **ran**, to the case
+    module that declares its name. The module-level gate the per-value columns apply is that same
+    fact read coarsely -- a module with at least one such case -- so there is one input and not two
+    that could disagree.
+    """
+    ran = set(ran_cases.values())
     types = read_types(root)
     # The tree's own name for each type it models by hand, read off the declaring item, so the
     # generated table of their SDK values can be keyed the way a case spells them.
@@ -680,4 +857,7 @@ def inventory(root: Path, ran: set[str]) -> dict:
         "at_a_site": at_a_site,
         "in_effect": effect,
         "unreachable": unreachable,
+        # The pairs axis. Checked against the sources each row names, and a floor by every crossing
+        # the suite holds and nobody declared.
+        "crossings": crossings(root, types, effect, ran_cases),
     }
