@@ -409,6 +409,16 @@ that makes it look so: 0.275 against 0.236 us is 1.17x, inside the 1.5x the cali
 allows. `known-slow-calls.tsv`'s header carries the rest, including the four live per-call costs
 that went unwritten because that header had said they changed sides when they had not.
 
+**And a per-call row now has to carry its per-case figure**, because the two-tables warning above
+is not advisory. Metal compiles the AIR at `library` and we translate it at pipeline creation and
+at reflection, so five rows that read 20x to 50x per call turned out to sit on cases we finish
+25 to 50 times faster than Metal: `function-facts-*` is 0.04x a case and
+`library-facts-descriptor-*` 0.02x, against Metal's 21-27 ms at `library` where we spend under a
+millisecond. The per-call gate still earns its place — `replace_region` is 265x with 92% of ours
+blocked and its own cases are 0.23x, so nothing else could see it — but what separates it from
+those five is that its cost is work Metal never does, not work Metal already did earlier in the
+case. The ledger's header asks that question of every new row.
+
 So the gate judges a per-call row only when the measurement can say something about it. It withholds
 when the **instrument's own cost** disagrees with itself across a leg, across the two legs, or with
 what this chip's recordings carry — bracketed per leg, because a single reading at a leg's start is
