@@ -1231,6 +1231,17 @@ const fn scale_bits(value: f32) -> Option<u32> {
     Some(value.to_bits())
 }
 
+/// `2^exponent` as a scale, built from `f32`'s own fields rather than written as a decimal: the
+/// two cells that ask where Metal's `half` rounding takes a scale to nothing state powers of two
+/// no decimal literal spells without rounding of its own.
+const fn scale_power_of_two(exponent: i32) -> Option<u32> {
+    assert!(
+        exponent >= -126 && exponent <= 127,
+        "a scale is a normal `f32`"
+    );
+    Some(((exponent + 127) as u32) << 23)
+}
+
 /// The factor records the scale sweep lays out, one a record of [`QUAD_FACTOR_BYTES`], every edge
 /// and inside factor the same number.
 ///
@@ -1345,14 +1356,14 @@ const SCALE_CELLS: [ScaleCell; 16] = [
         enabled: true,
         record: 0,
         // 2^-15, below `half`'s least normal and well above its least subnormal.
-        scale: scale_bits(3.051_757_8e-5),
+        scale: scale_power_of_two(-15),
     },
     ScaleCell {
         site: "scale-zero-as-half",
         enabled: true,
         record: 0,
         // 2^-30, which rounds to 0 as a `half`.
-        scale: scale_bits(9.313_225_7e-10),
+        scale: scale_power_of_two(-30),
     },
     ScaleCell {
         site: "scale-2-of-below-1",
