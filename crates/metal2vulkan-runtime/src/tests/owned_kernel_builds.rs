@@ -33,14 +33,17 @@ const CHROMA: (u64, u64) = (2 * W * H, 2 * W);
 /// The surface's bytes.
 const LENGTH: usize = (CHROMA.0 + CHROMA.1 * H / 2) as usize;
 
-/// The kernels built and the SPIR-V bytes they compiled while `run` ran.
-fn built(device: &Device, run: impl FnOnce()) -> [u64; 2] {
+/// The kernels built and the SPIR-V bytes they compiled while `run` ran, and the conversion
+/// scratch buffers it took and their bytes.
+fn built(device: &Device, run: impl FnOnce()) -> [u64; 4] {
     let before = device.work_counts();
     run();
     let after = device.work_counts();
     [
         after.owned_kernels_made - before.owned_kernels_made,
         after.owned_kernel_spirv_bytes - before.owned_kernel_spirv_bytes,
+        after.ycbcr_conversion_scratch_buffers - before.ycbcr_conversion_scratch_buffers,
+        after.ycbcr_conversion_scratch_bytes - before.ycbcr_conversion_scratch_bytes,
     ]
 }
 
@@ -74,14 +77,17 @@ fn an_emulated_formats_kernels_are_built_by_the_call_that_first_needs_them() {
             return;
         }
     }
-    let [kernels, words] = counted;
+    let [kernels, words, scratch, scratch_bytes] = counted;
     let again = built(&device, || drop(plane_texture(&buffer)));
     eprintln!(
-        "{}: making the first such texture built {kernels} kernels of {words} SPIR-V bytes, \
-         the second {} of {}",
+        "{}: making the first such texture built {kernels} kernels of {words} SPIR-V bytes and \
+         took {scratch} scratch buffers of {scratch_bytes} bytes; the second built {} of {} and \
+         took {} of {}",
         device.name(),
         again[0],
-        again[1]
+        again[1],
+        again[2],
+        again[3]
     );
     assert!(
         kernels > 0 && words > 0,
@@ -89,8 +95,19 @@ fn an_emulated_formats_kernels_are_built_by_the_call_that_first_needs_them() {
          so the counter no longer names where the build falls"
     );
     assert_eq!(
-        again,
+        [again[0], again[1]],
         [0, 0],
         "a second making built kernels again, so they are not kept for the device"
+    );
+    // The kernels are the device's, the scratch is the texture's: the second making takes its own.
+    assert!(
+        scratch > 0 && scratch_bytes >= LENGTH as u64,
+        "the conversion took no scratch of the planes' byte range"
+    );
+    assert_eq!(
+        [again[2], again[3]],
+        [scratch, scratch_bytes],
+        "a second texture over the same surface took different scratch, so the count is not \
+         per texture"
     );
 }

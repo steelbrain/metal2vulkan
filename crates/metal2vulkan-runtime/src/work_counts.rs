@@ -308,6 +308,8 @@ pub(crate) struct Counters {
     owned_descriptor_pools: AtomicU64,
     owned_kernels_made: AtomicU64,
     owned_kernel_spirv_bytes: AtomicU64,
+    ycbcr_conversion_scratch_buffers: AtomicU64,
+    ycbcr_conversion_scratch_bytes: AtomicU64,
     shadow_texels_kept: AtomicU64,
     bounded_shadow_copies: AtomicU64,
     views_through_swizzle: AtomicU64,
@@ -2047,6 +2049,14 @@ impl Counters {
             .fetch_add(4 * spirv as u64, Ordering::Relaxed);
     }
 
+    /// A YCbCr texture's conversion took a scratch buffer of `bytes` (`ycbcr.rs`).
+    pub(crate) fn ycbcr_conversion_scratch(&self, bytes: u64) {
+        self.ycbcr_conversion_scratch_buffers
+            .fetch_add(1, Ordering::Relaxed);
+        self.ycbcr_conversion_scratch_bytes
+            .fetch_add(bytes, Ordering::Relaxed);
+    }
+
     /// An encoder planned keeps of shadowed textures that copy `texels` texels into their merges'
     /// scratch (`shadow_merge.rs`).
     pub(crate) fn shadow_texels_kept(&self, texels: u64) {
@@ -3757,6 +3767,18 @@ pub struct WorkCounts {
     /// allocates besides (a YCbCr conversion's staging buffer, whose bytes are in
     /// `device_memory_allocated`).
     pub owned_kernel_spirv_bytes: u64,
+    /// The scratch buffers a YCbCr texture's conversion took (`ycbcr.rs`), counted as each was
+    /// allocated: one for the conversion that reads the texture's planes, and one more for the
+    /// write-back where the texture takes writes. **One of each per texture**, not per device, and
+    /// each is `Private` memory the size of the planes' whole byte range: a 3840 x 2160 `x420`
+    /// surface's plane is a 24.9 MiB allocation a texture of it, however many such textures a
+    /// program makes over the same surface. Metal wraps the plane and samples the format, so it
+    /// takes none of this; it is what the emulation costs.
+    pub ycbcr_conversion_scratch_buffers: u64,
+    /// Those buffers' bytes, summed as each was allocated, so a reading is what a run allocated
+    /// rather than what it holds now. It is memory for a texture's planes and is nothing to do
+    /// with `owned_kernel_spirv_bytes`, which is the code a kernel's build compiled.
+    pub ycbcr_conversion_scratch_bytes: u64,
     /// The texels the keeps among `shadow_copies` copy from a shadow into their merge's scratch:
     /// those inside the rectangle the encoder's commands write in, each row widened to whole
     /// words of the buffer, where the commands bound it and the merge goes in place; every texel
@@ -4447,6 +4469,12 @@ impl Device {
             owned_descriptor_pools: counters.owned_descriptor_pools.load(Ordering::Relaxed),
             owned_kernels_made: counters.owned_kernels_made.load(Ordering::Relaxed),
             owned_kernel_spirv_bytes: counters.owned_kernel_spirv_bytes.load(Ordering::Relaxed),
+            ycbcr_conversion_scratch_buffers: counters
+                .ycbcr_conversion_scratch_buffers
+                .load(Ordering::Relaxed),
+            ycbcr_conversion_scratch_bytes: counters
+                .ycbcr_conversion_scratch_bytes
+                .load(Ordering::Relaxed),
             shadow_texels_kept: counters.shadow_texels_kept.load(Ordering::Relaxed),
             bounded_shadow_copies: counters.bounded_shadow_copies.load(Ordering::Relaxed),
             replay_logs_kept: counters.replay_logs_kept.load(Ordering::Relaxed),

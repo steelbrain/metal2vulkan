@@ -567,6 +567,12 @@ impl YCbCrConversion {
         let zeros = planes_end(planes).saturating_sub(bytes).next_multiple_of(4);
         let held = bytes + zeros;
         let staging = device.own_buffer(BYTES_AT + held, ResourceOptions::private())?;
+        // One of these a texture, the planes' whole byte range
+        // (`WorkCounts::ycbcr_conversion_scratch_buffers`).
+        device
+            .shared()
+            .counts
+            .ycbcr_conversion_scratch(BYTES_AT + held);
         let (raw, start) = staging.at(0);
         let (identity, range) = staging.tracked(0..BYTES_AT + held);
         let shape = YCbCrConvertModule::shape(planes);
@@ -856,6 +862,8 @@ impl YCbCrWriteBack {
             None => BYTES_AT + held,
         };
         let staging = device.own_buffer(length, ResourceOptions::private())?;
+        // As the conversion's, one a texture that takes writes.
+        device.shared().counts.ycbcr_conversion_scratch(length);
         let (raw, start) = staging.at(0);
         let (identity, range) = staging.tracked(0..length);
         let shape = YCbCrWriteModule::shape(planes, all);
