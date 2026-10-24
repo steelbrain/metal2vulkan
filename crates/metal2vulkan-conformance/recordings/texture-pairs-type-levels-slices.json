@@ -3526,5 +3526,77 @@
       ],
       "validated": "ran"
     }
+  ],
+  "times": [
+    {
+      "leg": "metal",
+      "venue": "native Metal",
+      "chip": "apple-m3-max",
+      "os_build": "26A434",
+      "rounds": 8,
+      "measured": "8 round(s) of the whole selection, in the case set's own order, each round on a fresh device, our shader cache carried over between the cases of a round; a figure is the median of the rounds' own medians; Metal's leg ran at a one-minute load average of 4.95 and ours at 4.36; the legs run one after the other, so the per-call margin is judged only when both are 26.0 or under and within 2.0x of each other",
+      "instrument": 244,
+      "times": {
+        "case": "texture-pairs-type-levels-slices",
+        "calls": 123,
+        "in_calls": 84165,
+        "on_cpu": 99502,
+        "blocked": 0,
+        "elsewhere": 1125,
+        "spend": 88623,
+        "spend_least": 82288,
+        "spend_most": 97578,
+        "per_call": [
+          {
+            "call": "heap_texture_size_and_align",
+            "least_calls": 123,
+            "most_calls": 123,
+            "wall": 667,
+            "on_cpu": 792,
+            "blocked": 0,
+            "wall_least": 666,
+            "wall_most": 708,
+            "wall_total": 84165,
+            "on_cpu_total": 99502,
+            "blocked_total": 0
+          }
+        ]
+      }
+    },
+    {
+      "leg": "ours",
+      "venue": "Apple M3 Max",
+      "chip": "apple-m3-max",
+      "os_build": "26A434",
+      "rounds": 8,
+      "measured": "8 round(s) of the whole selection, in the case set's own order, each round on a fresh device, our shader cache carried over between the cases of a round; a figure is the median of the rounds' own medians; Metal's leg ran at a one-minute load average of 4.95 and ours at 4.36; the legs run one after the other, so the per-call margin is judged only when both are 26.0 or under and within 2.0x of each other",
+      "instrument": 240,
+      "times": {
+        "case": "texture-pairs-type-levels-slices",
+        "calls": 123,
+        "in_calls": 418463,
+        "on_cpu": 433039,
+        "blocked": 0,
+        "elsewhere": 500,
+        "spend": 418463,
+        "spend_least": 402788,
+        "spend_most": 441289,
+        "per_call": [
+          {
+            "call": "heap_texture_size_and_align",
+            "least_calls": 123,
+            "most_calls": 123,
+            "wall": 3333,
+            "on_cpu": 3417,
+            "blocked": 0,
+            "wall_least": 3209,
+            "wall_most": 3667,
+            "wall_total": 418463,
+            "on_cpu_total": 433039,
+            "blocked_total": 0
+          }
+        ]
+      }
+    }
   ]
 }

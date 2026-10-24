@@ -1136,8 +1136,8 @@
       "chip": "apple-m3-max",
       "os_build": "26A434",
       "rounds": 8,
-      "measured": "8 round(s) of the whole selection, in the case set's own order, each round on a fresh device, our shader cache carried over between the cases of a round; a figure is the median of the rounds' own medians; Metal's leg ran at a one-minute load average of 2.74 and ours at 3.46; the legs run one after the other, so the per-call margin is judged only when both are 26.0 or under and within 2.0x of each other",
-      "instrument": 275,
+      "measured": "8 round(s) of the whole selection, in the case set's own order, each round on a fresh device, our shader cache carried over between the cases of a round; a figure is the median of the rounds' own medians; Metal's leg ran at a one-minute load average of 4.95 and ours at 4.36; the legs run one after the other, so the per-call margin is judged only when both are 26.0 or under and within 2.0x of each other",
+      "instrument": 244,
       "times": {
         "case": "texture-buffer-fill-streams",
         "calls": 0,
@@ -1158,18 +1158,18 @@
       "chip": "apple-m3-max",
       "os_build": "26A434",
       "rounds": 8,
-      "measured": "8 round(s) of the whole selection, in the case set's own order, each round on a fresh device, our shader cache carried over between the cases of a round; a figure is the median of the rounds' own medians; Metal's leg ran at a one-minute load average of 2.74 and ours at 3.46; the legs run one after the other, so the per-call margin is judged only when both are 26.0 or under and within 2.0x of each other",
-      "instrument": 269,
+      "measured": "8 round(s) of the whole selection, in the case set's own order, each round on a fresh device, our shader cache carried over between the cases of a round; a figure is the median of the rounds' own medians; Metal's leg ran at a one-minute load average of 4.95 and ours at 4.36; the legs run one after the other, so the per-call margin is judged only when both are 26.0 or under and within 2.0x of each other",
+      "instrument": 240,
       "times": {
         "case": "texture-buffer-fill-streams",
         "calls": 1,
-        "in_calls": 9817041,
-        "on_cpu": 2204542,
-        "blocked": 7476708,
-        "elsewhere": 3996084,
-        "spend": 14045792,
-        "spend_least": 13317667,
-        "spend_most": 14702959,
+        "in_calls": 7896292,
+        "on_cpu": 376042,
+        "blocked": 7465792,
+        "elsewhere": 2511000,
+        "spend": 10407292,
+        "spend_least": 9335000,
+        "spend_most": 14614291,
         "degraded": [
           "metal2vulkan-degrade-texture-buffer-fill-leftover"
         ],
@@ -1178,14 +1178,14 @@
             "call": "work",
             "least_calls": 1,
             "most_calls": 1,
-            "wall": 9817041,
-            "on_cpu": 2204542,
-            "blocked": 7476708,
-            "wall_least": 9355875,
-            "wall_most": 10706875,
-            "wall_total": 9817041,
-            "on_cpu_total": 2204542,
-            "blocked_total": 7476708
+            "wall": 7896292,
+            "on_cpu": 376042,
+            "blocked": 7465792,
+            "wall_least": 6645833,
+            "wall_most": 12075875,
+            "wall_total": 7896292,
+            "on_cpu_total": 376042,
+            "blocked_total": 7465792
           }
         ]
       }
