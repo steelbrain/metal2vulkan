@@ -91,7 +91,7 @@ fn a_device_opens_without_the_layers_the_loader_cannot_provide() {
         let layer = layer.to_string_lossy();
         assert!(text.contains(layer.as_ref()), "{text}");
     }
-    assert!(text.contains(&name), "{text}");
+    assert!(text.contains(name), "{text}");
     drop(device);
 }
 
