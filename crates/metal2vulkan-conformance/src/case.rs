@@ -1718,6 +1718,27 @@ pub trait Side {
     /// error, which compares as a refusal.
     ///
     /// A case asks this only of descriptors Metal makes no texture of, so nothing is allocated.
+    /// `newTextureWithDescriptor:` of the descriptor `query` names, and every `MTLTexture` getter
+    /// the texture it answers has ([`crate::buffer_texture::BufferTextureFacts`], which is the
+    /// same set [`Side::buffer_texture`] reads of a texture over a buffer). `None` where plain
+    /// Metal answers nil.
+    ///
+    /// This is the one call that reads a descriptor's **answered** fields rather than its
+    /// footprint, and so the only one that can say what Metal made of the descriptor's own words:
+    /// what usage a texture of `MTLTextureUsageUnknown` answers, what a usage of only the bits
+    /// Metal drops answers, and what storage mode, level count and array length survive the
+    /// crossing a case asked for. A size query can say none of that.
+    ///
+    /// The texture is kept, as every other texture of a side is, so a case may ask it nothing more
+    /// and the handle space stays one pool.
+    fn queried_texture_facts(
+        &mut self,
+        query: &crate::texture_query::HeapTextureQuery,
+    ) -> Answer<Option<crate::buffer_texture::BufferTextureFacts>> {
+        let _ = query;
+        Err(Failure::unavailable("queried_texture_facts"))
+    }
+
     fn makes_texture(&mut self, query: &crate::texture_query::HeapTextureQuery) -> Answer<bool> {
         let _ = query;
         Err(Failure::unavailable("makes_texture"))

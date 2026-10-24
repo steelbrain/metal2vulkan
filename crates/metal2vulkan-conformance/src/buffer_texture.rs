@@ -158,6 +158,7 @@ impl BufferTextureRequest {
             Storage::Shared => [0u8],
             Storage::Private => [1u8],
             Storage::Managed => [2u8],
+            Storage::Memoryless => [3u8],
         });
         out.extend(self.offset.to_le_bytes());
         out.extend(self.bytes_per_row.to_le_bytes());

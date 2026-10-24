@@ -5256,6 +5256,7 @@ impl Side for MetalSide {
     }
 
     fn heap_texture_size_and_align(&mut self, query: &HeapTextureQuery) -> Answer<SizeAndAlign> {
+        would_end_metals_process(query)?;
         let descriptor = queried_descriptor(query);
         let answered = self
             .device
@@ -6144,7 +6145,22 @@ impl Side for MetalSide {
         Ok(facts)
     }
 
+    fn queried_texture_facts(
+        &mut self,
+        query: &HeapTextureQuery,
+    ) -> Answer<Option<crate::buffer_texture::BufferTextureFacts>> {
+        would_end_metals_process(query)?;
+        let descriptor = queried_descriptor(query);
+        let Some(texture) = self.device.newTextureWithDescriptor(&descriptor) else {
+            return Ok(None);
+        };
+        let facts = buffer_texture_facts(&texture);
+        self.textures.push(texture);
+        Ok(Some(facts))
+    }
+
     fn makes_texture(&mut self, query: &HeapTextureQuery) -> Answer<bool> {
+        would_end_metals_process(query)?;
         let descriptor = queried_descriptor(query);
         // The texture, where Metal makes one, is released as this statement ends: the case asks
         // this only of descriptors Metal makes none of, and nothing here keeps a handle, so no
@@ -7050,6 +7066,19 @@ pub(crate) fn require_selector(
     }
 }
 
+/// The guard every call that hands a queried descriptor to Metal runs first
+/// ([`HeapTextureQuery::forbidden`]): the shapes Metal's own validation stops, which ends this
+/// process rather than answering nil.
+///
+/// A case's own table is held to the same list with no device at all, so this is the second line,
+/// for a row somebody adds to a recorded table by mistake.
+fn would_end_metals_process(query: &HeapTextureQuery) -> Answer<()> {
+    match query.forbidden() {
+        None => Ok(()),
+        Some(why) => Err(Failure::named("WouldEndMetalsProcess", why)),
+    }
+}
+
 /// Metal's descriptor for a queried one: every field the case names, by its raw ordinal, so a
 /// private format and a private usage bit reach Metal as readily as a public one.
 fn queried_descriptor(query: &HeapTextureQuery) -> Retained<MTLTextureDescriptor> {
@@ -7068,6 +7097,7 @@ fn queried_descriptor(query: &HeapTextureQuery) -> Retained<MTLTextureDescriptor
     }
     descriptor.setUsage(MTLTextureUsage(query.usage.as_raw() as usize));
     descriptor.setStorageMode(storage_mode(query.storage).0);
+    descriptor.setAllowGPUOptimizedContents(query.gpu_optimized);
     descriptor
 }
 
@@ -7115,7 +7145,7 @@ fn stencil_descriptor(face: &StencilDescriptor) -> Retained<MTLStencilDescriptor
 }
 
 /// The storage mode and resource options a [`Storage`] names: the Metal side's one spelling of the
-/// three modes, which [`crate::metal_work`] reads too, so a case's storage mode cannot mean one
+/// four modes, which [`crate::metal_work`] reads too, so a case's storage mode cannot mean one
 /// thing to a queried descriptor and another to a program's buffer.
 pub fn storage_mode(storage: Storage) -> (MTLStorageMode, MTLResourceOptions) {
     match storage {
@@ -7130,6 +7160,10 @@ pub fn storage_mode(storage: Storage) -> (MTLStorageMode, MTLResourceOptions) {
         Storage::Private => (
             MTLStorageMode::Private,
             MTLResourceOptions::StorageModePrivate,
+        ),
+        Storage::Memoryless => (
+            MTLStorageMode::Memoryless,
+            MTLResourceOptions::StorageModeMemoryless,
         ),
     }
 }

@@ -5513,6 +5513,37 @@ impl Side for RuntimeSide<'_> {
         Ok(facts)
     }
 
+    fn queried_texture_facts(
+        &mut self,
+        query: &HeapTextureQuery,
+    ) -> Answer<Option<crate::buffer_texture::BufferTextureFacts>> {
+        let texture = match self.device.new_texture(&queried_descriptor(query)) {
+            Ok(texture) => texture,
+            // Plain Metal answers nil for a descriptor it describes no texture of, and the runtime
+            // answers the typed `Nil` for the same descriptor: the same fact, so both sides answer
+            // the absent texture. Anything else is our own refusal and is recorded as one.
+            Err(metal2vulkan_runtime::Error::Nil(_)) => return Ok(None),
+            Err(error) => return Err(Failure::of(&error)),
+        };
+        let facts = crate::buffer_texture::BufferTextureFacts {
+            texture_type: u64::from(texture.texture_type().as_raw()),
+            pixel_format: u64::from(texture.pixel_format().as_raw()),
+            width: texture.width(),
+            height: texture.height(),
+            depth: texture.depth(),
+            mipmap_level_count: texture.mipmap_level_count(),
+            array_length: texture.array_length(),
+            sample_count: texture.sample_count(),
+            usage: u64::from(texture.usage().as_raw()),
+            storage_mode: texture.storage_mode().raw(),
+            cpu_cache_mode: texture.cpu_cache_mode().raw(),
+            hazard_tracking_mode: texture.hazard_tracking_mode().raw(),
+            gpu_optimized: texture.allow_gpu_optimized_contents(),
+        };
+        self.textures.push(texture);
+        Ok(Some(facts))
+    }
+
     fn makes_texture(&mut self, query: &HeapTextureQuery) -> Answer<bool> {
         match self.device.new_texture(&queried_descriptor(query)) {
             Ok(_) => Ok(true),
@@ -6207,13 +6238,14 @@ impl Side for RuntimeSide<'_> {
 
 /// The storage mode a [`Storage`] names, as the runtime's own enumeration spells it.
 ///
-/// [`resource_options`] already maps the three to whole option words; a heap states its cache and
+/// [`resource_options`] already maps the four to whole option words; a heap states its cache and
 /// hazard modes too, so it needs the storage field alone.
 fn storage_mode_of(storage: Storage) -> metal2vulkan_runtime::StorageMode {
     match storage {
         Storage::Shared => metal2vulkan_runtime::StorageMode::Shared,
         Storage::Managed => metal2vulkan_runtime::StorageMode::Managed,
         Storage::Private => metal2vulkan_runtime::StorageMode::Private,
+        Storage::Memoryless => metal2vulkan_runtime::StorageMode::Memoryless,
     }
 }
 
@@ -6313,6 +6345,7 @@ fn queried_descriptor(query: &HeapTextureQuery) -> TextureDescriptor {
     descriptor.array_length = u64::from(query.array_length);
     descriptor.usage = query.usage;
     descriptor.resource_options = resource_options(query.storage);
+    descriptor.allow_gpu_optimized_contents = query.gpu_optimized;
     descriptor
 }
 
@@ -6325,6 +6358,11 @@ pub fn resource_options(storage: Storage) -> ResourceOptions {
         Storage::Private => ResourceOptions::private(),
         Storage::Managed => ResourceOptions::new(
             metal2vulkan_runtime::StorageMode::Managed,
+            metal2vulkan_runtime::CpuCacheMode::DefaultCache,
+            metal2vulkan_runtime::HazardTrackingMode::Default,
+        ),
+        Storage::Memoryless => ResourceOptions::new(
+            metal2vulkan_runtime::StorageMode::Memoryless,
             metal2vulkan_runtime::CpuCacheMode::DefaultCache,
             metal2vulkan_runtime::HazardTrackingMode::Default,
         ),

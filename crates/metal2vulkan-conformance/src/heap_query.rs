@@ -191,6 +191,10 @@ impl HeapSpec {
     ///   is one Metal stops.
     /// - **`Managed` storage**: Metal's validation stops a managed heap on this chip, and a managed
     ///   resource needs an explicit synchronization no case here encodes.
+    /// - **`Memoryless` storage**: `MTLStorageModeMemoryless` describes a texture's bytes inside a
+    ///   render pass, and nothing in this tree says Metal's heap allocator takes it. A memoryless
+    ///   **texture** is a different question and is compared
+    ///   ([`crate::cases::texture_descriptor_pairs`]).
     /// - A **size of 0**: nothing in this tree says Metal's heap allocator takes one.
     pub fn is_well_formed(&self) -> Option<String> {
         if matches!(self.heap_type, HeapType::Sparse) {
@@ -200,6 +204,12 @@ impl HeapSpec {
         }
         if matches!(self.storage, Storage::Managed) {
             return Some("Metal's validation stops a managed heap".into());
+        }
+        if matches!(self.storage, Storage::Memoryless) {
+            return Some(
+                "nothing in this tree says Metal's heap allocator takes MTLStorageModeMemoryless"
+                    .into(),
+            );
         }
         if self.size == 0 {
             return Some(
@@ -241,6 +251,7 @@ fn storage_word(storage: Storage) -> [u8; 1] {
         Storage::Shared => [0],
         Storage::Private => [1],
         Storage::Managed => [2],
+        Storage::Memoryless => [3],
     }
 }
 

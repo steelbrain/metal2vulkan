@@ -163,6 +163,7 @@ pub mod tessellation_sweeps;
 pub mod texel_swizzles;
 pub mod texture_accesses;
 pub mod texture_buffer_fills;
+pub mod texture_descriptor_pairs;
 pub mod texture_fills;
 pub mod texture_views;
 pub mod textures;
@@ -402,6 +403,7 @@ pub fn all() -> Vec<Box<dyn Case>> {
     for case in heap_facts::all() {
         cases.push(Box::new(case));
     }
+    cases.extend(texture_descriptor_pairs::all());
     for case in resource_facts::all() {
         cases.push(Box::new(case));
     }
