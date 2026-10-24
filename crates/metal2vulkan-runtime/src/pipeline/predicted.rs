@@ -219,6 +219,20 @@ impl GraphicsState {
         let primitive = match descriptor.input_primitive_topology {
             PrimitiveTopologyClass::Point => PrimitiveType::Point,
             PrimitiveTopologyClass::Line => PrimitiveType::Line,
+            // Unspecified is Metal's default and lets a draw take any primitive, so the class
+            // says nothing and this guess decides whether the prediction is used at all: a draw
+            // of another topology makes its own `VkPipeline`, and the one made here is never
+            // taken. A state that **discards rasterization** runs its vertex stage for its side
+            // effects alone -- Metal refuses such a state whose vertex function returns a value
+            // (`unrasterized.rs`), so it writes through buffers and nothing else -- and a draw
+            // like that takes a point list, which shades every vertex of any count and assembles
+            // none of them away. Measured over this suite: of the five case families that make an
+            // unrasterized state, the four that draw at all draw points, and every triangle draw
+            // belongs to a rasterizing state. A rasterizing state keeps the triangle guess, which
+            // is what its draws take.
+            PrimitiveTopologyClass::Unspecified if graphics.rasterizer_discard => {
+                PrimitiveType::Point
+            }
             PrimitiveTopologyClass::Triangle | PrimitiveTopologyClass::Unspecified => {
                 PrimitiveType::Triangle
             }
