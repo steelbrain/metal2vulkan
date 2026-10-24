@@ -43,7 +43,7 @@ Its limits, measured rather than asserted:
 | committed recordings | 1099 |
 | distinct SDK items the Metal leg reaches, of any status | 797 |
 | of those, reached only where this cannot name the family | 7 |
-| ledger rows (a case whose gap is recorded) | 559 |
+| ledger rows (a case whose gap is recorded) | 774 |
 | declared crossings of the option space (pairs put to Metal at once) | 24 |
 | declared crossings that are no pair of it (a boolean or numeric field, or one type in two slots) | 30 |
 
@@ -2760,4 +2760,219 @@ A case whose difference from Metal is recorded rather than compared away. The le
 | `texture-pairs-usage-crossings` | Plain Metal answers a smaller footprint from `heapTextureSizeAndAlignWithDescriptor:` than we do for this descriptor, and the row's two numbers are the pair. `D… |
 | `texture-pairs-usage-crossings` | Plain Metal answers 128 bytes of alignment from `heapTextureSizeAndAlignWithDescriptor:` for every descriptor of this family, and we answer 1024 on this driver … |
 | `texture-pairs-usage-crossings` | Plain Metal answers a smaller footprint from `heapTextureSizeAndAlignWithDescriptor:` than we do for this descriptor, and the row's two numbers are the pair. `D… |
+| `a2c-on-1-alpha-50` | Metal's alpha-to-coverage covers `floor(alpha * rasterSampleCount)` samples, so at ONE sample an alpha of 0.5 covers NO sample and the destination survives the … |
+| `a2c-on-1-alpha-50` | Metal's alpha-to-coverage covers `floor(alpha * rasterSampleCount)` samples, so at ONE sample an alpha of 0.5 covers NO sample and the destination survives the … |
+| `a2one-off-1-blend-source-alpha` | Metal's stored code and ours differ by one at this site, in a draw whose blend reads the source alpha with `alphaToOneEnabled` set and clear. The cause is estab… |
+| `a2one-on-1-blend-source-alpha` | Metal's stored code and ours differ by one at this site, in a draw whose blend reads the source alpha with `alphaToOneEnabled` set and clear. The cause is estab… |
+| `argb8-targets-additive-alpha` | Metal's stored 8-bit blend code and ours differ at this site over the case's 8,192 texels, and the row's count and bound are this run's. The two formats of the … |
+| `argb8-targets-additive-alpha` | Metal's stored 8-bit blend code and ours differ at this site over the case's 8,192 texels, and the row's count and bound are this run's. The two formats of the … |
+| `argb8-targets-additive-alpha` | Metal's stored 8-bit blend code and ours differ at this site over the case's 8,192 texels, and the row's count and bound are this run's. The two formats of the … |
+| `argb8-targets-additive-alpha` | Metal's stored 8-bit blend code and ours differ at this site over the case's 8,192 texels, and the row's count and bound are this run's. The two formats of the … |
+| `argb8-targets-blend-alpha` | Metal's stored 8-bit blend code and ours differ at this site over the case's 8,192 texels, and the row's count and bound are this run's. The two formats of the … |
+| `argb8-targets-blend-alpha` | Metal's stored 8-bit blend code and ours differ at this site over the case's 8,192 texels, and the row's count and bound are this run's. The two formats of the … |
+| `argb8-targets-blend-alpha` | Metal's stored 8-bit blend code and ours differ at this site over the case's 8,192 texels, and the row's count and bound are this run's. The two formats of the … |
+| `argb8-targets-blend-alpha` | Metal's stored 8-bit blend code and ours differ at this site over the case's 8,192 texels, and the row's count and bound are this run's. The two formats of the … |
+| `argb8-targets-destination-alpha` | Metal's stored 8-bit blend code and ours differ at this site over the case's 8,192 texels, and the row's count and bound are this run's. The two formats of the … |
+| `argb8-targets-destination-alpha` | Metal's stored 8-bit blend code and ours differ at this site over the case's 8,192 texels, and the row's count and bound are this run's. The two formats of the … |
+| `argb8-targets-max` | Metal's stored 8-bit blend code and ours differ at this site over the case's 8,192 texels, and the row's count and bound are this run's. The two formats of the … |
+| `argb8-targets-max` | Metal's stored 8-bit blend code and ours differ at this site over the case's 8,192 texels, and the row's count and bound are this run's. The two formats of the … |
+| `argb8-targets-max` | Metal's stored 8-bit blend code and ours differ at this site over the case's 8,192 texels, and the row's count and bound are this run's. The two formats of the … |
+| `argb8-targets-max` | Metal's stored 8-bit blend code and ours differ at this site over the case's 8,192 texels, and the row's count and bound are this run's. The two formats of the … |
+| `argb8-targets-multiply` | Metal's stored 8-bit blend code and ours differ at this site over the case's 8,192 texels, and the row's count and bound are this run's. The two formats of the … |
+| `argb8-targets-multiply` | Metal's stored 8-bit blend code and ours differ at this site over the case's 8,192 texels, and the row's count and bound are this run's. The two formats of the … |
+| `argb8-targets-multiply` | Metal's stored 8-bit blend code and ours differ at this site over the case's 8,192 texels, and the row's count and bound are this run's. The two formats of the … |
+| `argb8-targets-multiply` | Metal's stored 8-bit blend code and ours differ at this site over the case's 8,192 texels, and the row's count and bound are this run's. The two formats of the … |
+| `argb8-targets-premultiplied` | Metal's stored 8-bit blend code and ours differ at this site over the case's 8,192 texels, and the row's count and bound are this run's. The two formats of the … |
+| `argb8-targets-premultiplied` | Metal's stored 8-bit blend code and ours differ at this site over the case's 8,192 texels, and the row's count and bound are this run's. The two formats of the … |
+| `argb8-targets-premultiplied` | Metal's stored 8-bit blend code and ours differ at this site over the case's 8,192 texels, and the row's count and bound are this run's. The two formats of the … |
+| `argb8-targets-premultiplied` | Metal's stored 8-bit blend code and ours differ at this site over the case's 8,192 texels, and the row's count and bound are this run's. The two formats of the … |
+| `argb8-targets-reverse-subtract-alpha` | Metal's stored 8-bit blend code and ours differ at this site over the case's 8,192 texels, and the row's count and bound are this run's. The two formats of the … |
+| `argb8-targets-reverse-subtract-alpha` | Metal's stored 8-bit blend code and ours differ at this site over the case's 8,192 texels, and the row's count and bound are this run's. The two formats of the … |
+| `argb8-targets-reverse-subtract-alpha` | Metal's stored 8-bit blend code and ours differ at this site over the case's 8,192 texels, and the row's count and bound are this run's. The two formats of the … |
+| `argb8-targets-reverse-subtract-alpha` | Metal's stored 8-bit blend code and ours differ at this site over the case's 8,192 texels, and the row's count and bound are this run's. The two formats of the … |
+| `argb8-targets-source-color` | Metal's stored 8-bit blend code and ours differ at this site over the case's 8,192 texels, and the row's count and bound are this run's. The two formats of the … |
+| `argb8-targets-source-color` | Metal's stored 8-bit blend code and ours differ at this site over the case's 8,192 texels, and the row's count and bound are this run's. The two formats of the … |
+| `argb8-targets-source-color` | Metal's stored 8-bit blend code and ours differ at this site over the case's 8,192 texels, and the row's count and bound are this run's. The two formats of the … |
+| `argb8-targets-source-color` | Metal's stored 8-bit blend code and ours differ at this site over the case's 8,192 texels, and the row's count and bound are this run's. The two formats of the … |
+| `argb8-targets-straight` | Metal's stored 8-bit blend code and ours differ at this site over the case's 8,192 texels, and the row's count and bound are this run's. The two formats of the … |
+| `argb8-targets-straight` | Metal's stored 8-bit blend code and ours differ at this site over the case's 8,192 texels, and the row's count and bound are this run's. The two formats of the … |
+| `argb8-targets-straight` | Metal's stored 8-bit blend code and ours differ at this site over the case's 8,192 texels, and the row's count and bound are this run's. The two formats of the … |
+| `argb8-targets-straight` | Metal's stored 8-bit blend code and ours differ at this site over the case's 8,192 texels, and the row's count and bound are this run's. The two formats of the … |
+| `argb8-targets-straight-alpha-one` | Metal's stored 8-bit blend code and ours differ at this site over the case's 8,192 texels, and the row's count and bound are this run's. The two formats of the … |
+| `argb8-targets-straight-alpha-one` | Metal's stored 8-bit blend code and ours differ at this site over the case's 8,192 texels, and the row's count and bound are this run's. The two formats of the … |
+| `argb8-targets-straight-alpha-one` | Metal's stored 8-bit blend code and ours differ at this site over the case's 8,192 texels, and the row's count and bound are this run's. The two formats of the … |
+| `argb8-targets-straight-alpha-one` | Metal's stored 8-bit blend code and ours differ at this site over the case's 8,192 texels, and the row's count and bound are this run's. The two formats of the … |
+| `argb8-targets-straight-red-green-alpha` | Metal's stored 8-bit blend code and ours differ at this site over the case's 8,192 texels, and the row's count and bound are this run's. The two formats of the … |
+| `argb8-targets-straight-red-green-alpha` | Metal's stored 8-bit blend code and ours differ at this site over the case's 8,192 texels, and the row's count and bound are this run's. The two formats of the … |
+| `argb8-targets-straight-red-green-alpha` | Metal's stored 8-bit blend code and ours differ at this site over the case's 8,192 texels, and the row's count and bound are this run's. The two formats of the … |
+| `argb8-targets-straight-red-green-alpha` | Metal's stored 8-bit blend code and ours differ at this site over the case's 8,192 texels, and the row's count and bound are this run's. The two formats of the … |
+| `argb8-targets-subtract-one-minus-alpha` | Metal's stored 8-bit blend code and ours differ at this site over the case's 8,192 texels, and the row's count and bound are this run's. The two formats of the … |
+| `argb8-targets-subtract-one-minus-alpha` | Metal's stored 8-bit blend code and ours differ at this site over the case's 8,192 texels, and the row's count and bound are this run's. The two formats of the … |
+| `argb8-targets-subtract-one-minus-alpha` | Metal's stored 8-bit blend code and ours differ at this site over the case's 8,192 texels, and the row's count and bound are this run's. The two formats of the … |
+| `argb8-targets-subtract-one-minus-alpha` | Metal's stored 8-bit blend code and ours differ at this site over the case's 8,192 texels, and the row's count and bound are this run's. The two formats of the … |
+| `attribute-format-fetches` | Metal's fetch of a narrow float into a `float` parameter answers the canonical positive quiet NaN 0x7FC00000, payload and sign dropped (verified: this case's ow… |
+| `attribute-format-fetches` | Metal's fetch of a narrow float into a `float` parameter answers the canonical positive quiet NaN 0x7FC00000, payload and sign dropped (verified: this case's ow… |
+| `attribute-format-fetches` | Metal's fetch of a narrow float into a `float` parameter answers the canonical positive quiet NaN 0x7FC00000, payload and sign dropped (verified: this case's ow… |
+| `attribute-format-fetches` | Metal's fetch of a narrow float into a `float` parameter answers the canonical positive quiet NaN 0x7FC00000, payload and sign dropped (verified: this case's ow… |
+| `attribute-format-fetches` | Metal's fetch of a narrow float into a `float` parameter answers the canonical positive quiet NaN 0x7FC00000, payload and sign dropped (verified: this case's ow… |
+| `attribute-format-fetches` | Metal's fetch of a narrow float into a `float` parameter answers the canonical positive quiet NaN 0x7FC00000, payload and sign dropped (verified: this case's ow… |
+| `attribute-format-fetches` | Metal's fetch of a narrow float into a `float` parameter answers the canonical positive quiet NaN 0x7FC00000, payload and sign dropped (verified: this case's ow… |
+| `attribute-format-fetches` | Metal's fetch of a narrow float into a `float` parameter answers the canonical positive quiet NaN 0x7FC00000, payload and sign dropped (verified: this case's ow… |
+| `attribute-format-fetches` | Metal's fetch of a narrow float into a `float` parameter answers the canonical positive quiet NaN 0x7FC00000, payload and sign dropped (verified: this case's ow… |
+| `attribute-format-fetches` | Metal's fetch of a narrow float into a `float` parameter answers the canonical positive quiet NaN 0x7FC00000, payload and sign dropped (verified: this case's ow… |
+| `blend-interaction-format-srgb8` | Metal's stored sRGB code and ours differ at this site, and the row's count and bound are this run's. The cause is established and is not half precision: Metal's… |
+| `blend-interaction-format-srgb8` | Metal's stored sRGB code and ours differ at this site, and the row's count and bound are this run's. The cause is established and is not half precision: Metal's… |
+| `blend-interaction-format-srgb8` | Metal's stored sRGB code and ours differ at this site, and the row's count and bound are this run's. The cause is established and is not half precision: Metal's… |
+| `blend-interaction-format-srgb8` | Metal's stored sRGB code and ours differ at this site, and the row's count and bound are this run's. The cause is established and is not half precision: Metal's… |
+| `blend-interaction-format-srgb8` | Metal's stored sRGB code and ours differ at this site, and the row's count and bound are this run's. The cause is established and is not half precision: Metal's… |
+| `blend-interaction-format-srgb8` | Metal's stored sRGB code and ours differ at this site, and the row's count and bound are this run's. The cause is established and is not half precision: Metal's… |
+| `blend-interaction-format-srgb8` | Metal's stored sRGB code and ours differ at this site, and the row's count and bound are this run's. The cause is established and is not half precision: Metal's… |
+| `blend-interaction-format-srgb8` | Metal's stored sRGB code and ours differ at this site, and the row's count and bound are this run's. The cause is established and is not half precision: Metal's… |
+| `blend-interaction-format-srgb8` | Metal's stored sRGB code and ours differ at this site, and the row's count and bound are this run's. The cause is established and is not half precision: Metal's… |
+| `blend-interaction-format-srgb8` | Metal's stored sRGB code and ours differ at this site, and the row's count and bound are this run's. The cause is established and is not half precision: Metal's… |
+| `blend-interaction-format-srgb8` | Metal's stored sRGB code and ours differ at this site, and the row's count and bound are this run's. The cause is established and is not half precision: Metal's… |
+| `blend-sweep-operations` | Metal stores a NEGATIVE zero where we store a positive one: the first differing element is Metal 0x80000000 against our 0x0, and all four of the site's elements… |
+| `half-output-blends-r16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are this run's. The cause is established and is not half precision: Meta… |
+| `half-output-blends-r16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are this run's. The cause is established and is not half precision: Meta… |
+| `half-output-blends-r16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are this run's. The cause is established and is not half precision: Meta… |
+| `half-output-blends-r16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are this run's. The cause is established and is not half precision: Meta… |
+| `half-output-blends-r16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are this run's. The cause is established and is not half precision: Meta… |
+| `half-output-blends-r16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are this run's. The cause is established and is not half precision: Meta… |
+| `half-output-blends-r16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are this run's. The cause is established and is not half precision: Meta… |
+| `half-output-blends-r16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are this run's. The cause is established and is not half precision: Meta… |
+| `half-output-blends-r16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are this run's. The cause is established and is not half precision: Meta… |
+| `half-output-blends-r16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are this run's. The cause is established and is not half precision: Meta… |
+| `half-output-blends-r16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are this run's. The cause is established and is not half precision: Meta… |
+| `half-output-blends-r16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are this run's. The cause is established and is not half precision: Meta… |
+| `half-output-blends-r16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are this run's. The cause is established and is not half precision: Meta… |
+| `half-output-blends-r16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are this run's. The cause is established and is not half precision: Meta… |
+| `half-output-blends-r16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are this run's. The cause is established and is not half precision: Meta… |
+| `half-output-blends-r16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are this run's. The cause is established and is not half precision: Meta… |
+| `half-output-blends-r16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are this run's. The cause is established and is not half precision: Meta… |
+| `half-output-blends-r16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are this run's. The cause is established and is not half precision: Meta… |
+| `half-output-blends-r16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are this run's. The cause is established and is not half precision: Meta… |
+| `half-output-blends-r16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are this run's. The cause is established and is not half precision: Meta… |
+| `half-output-blends-r16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are this run's. The cause is established and is not half precision: Meta… |
+| `half-output-blends-r16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are this run's. The cause is established and is not half precision: Meta… |
+| `half-output-blends-r32f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are this run's. The cause is established and is not half precision: Meta… |
+| `half-output-blends-r32f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are this run's. The cause is established and is not half precision: Meta… |
+| `half-output-blends-r32f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are this run's. The cause is established and is not half precision: Meta… |
+| `half-output-blends-r32f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are this run's. The cause is established and is not half precision: Meta… |
+| `half-output-blends-r32f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are this run's. The cause is established and is not half precision: Meta… |
+| `half-output-blends-r32f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are this run's. The cause is established and is not half precision: Meta… |
+| `half-output-blends-r32f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are this run's. The cause is established and is not half precision: Meta… |
+| `half-output-blends-r32f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are this run's. The cause is established and is not half precision: Meta… |
+| `half-output-blends-rg16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are this run's. The cause is established and is not half precision: Meta… |
+| `half-output-blends-rg16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are this run's. The cause is established and is not half precision: Meta… |
+| `half-output-blends-rg16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are this run's. The cause is established and is not half precision: Meta… |
+| `half-output-blends-rg16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are this run's. The cause is established and is not half precision: Meta… |
+| `half-output-blends-rg16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are this run's. The cause is established and is not half precision: Meta… |
+| `half-output-blends-rg16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are this run's. The cause is established and is not half precision: Meta… |
+| `half-output-blends-rg16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are this run's. The cause is established and is not half precision: Meta… |
+| `half-output-blends-rg16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are this run's. The cause is established and is not half precision: Meta… |
+| `half-output-blends-rg16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are this run's. The cause is established and is not half precision: Meta… |
+| `half-output-blends-rg16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are this run's. The cause is established and is not half precision: Meta… |
+| `half-output-blends-rg16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are this run's. The cause is established and is not half precision: Meta… |
+| `half-output-blends-rg16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are this run's. The cause is established and is not half precision: Meta… |
+| `half-output-blends-rg16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are this run's. The cause is established and is not half precision: Meta… |
+| `half-output-blends-rg16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are this run's. The cause is established and is not half precision: Meta… |
+| `half-output-blends-rg16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are this run's. The cause is established and is not half precision: Meta… |
+| `half-output-blends-rg16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are this run's. The cause is established and is not half precision: Meta… |
+| `half-output-blends-rg16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are this run's. The cause is established and is not half precision: Meta… |
+| `half-output-blends-rg16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are this run's. The cause is established and is not half precision: Meta… |
+| `half-output-blends-rg16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are this run's. The cause is established and is not half precision: Meta… |
+| `half-output-blends-rg16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are this run's. The cause is established and is not half precision: Meta… |
+| `half-output-blends-rg16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are this run's. The cause is established and is not half precision: Meta… |
+| `half-output-blends-rg16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are this run's. The cause is established and is not half precision: Meta… |
+| `half-output-blends-rg32f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are this run's. The cause is established and is not half precision: Meta… |
+| `half-output-blends-rg32f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are this run's. The cause is established and is not half precision: Meta… |
+| `half-output-blends-rg32f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are this run's. The cause is established and is not half precision: Meta… |
+| `half-output-blends-rg32f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are this run's. The cause is established and is not half precision: Meta… |
+| `half-output-blends-rg32f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are this run's. The cause is established and is not half precision: Meta… |
+| `half-output-blends-rg32f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are this run's. The cause is established and is not half precision: Meta… |
+| `half-output-blends-rg32f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are this run's. The cause is established and is not half precision: Meta… |
+| `half-output-blends-rg32f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are this run's. The cause is established and is not half precision: Meta… |
+| `half-output-blends-rg32f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are this run's. The cause is established and is not half precision: Meta… |
+| `half-output-blends-rg32f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are this run's. The cause is established and is not half precision: Meta… |
+| `half-output-blends-rgba16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are this run's. The cause is established and is not half precision: Meta… |
+| `half-output-blends-rgba16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are this run's. The cause is established and is not half precision: Meta… |
+| `half-output-blends-rgba16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are this run's. The cause is established and is not half precision: Meta… |
+| `half-output-blends-rgba16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are this run's. The cause is established and is not half precision: Meta… |
+| `half-output-blends-rgba16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are this run's. The cause is established and is not half precision: Meta… |
+| `half-output-blends-rgba16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are this run's. The cause is established and is not half precision: Meta… |
+| `half-output-blends-rgba16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are this run's. The cause is established and is not half precision: Meta… |
+| `half-output-blends-rgba16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are this run's. The cause is established and is not half precision: Meta… |
+| `half-output-blends-rgba16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are this run's. The cause is established and is not half precision: Meta… |
+| `half-output-blends-rgba16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are this run's. The cause is established and is not half precision: Meta… |
+| `half-output-blends-rgba16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are this run's. The cause is established and is not half precision: Meta… |
+| `half-output-blends-rgba16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are this run's. The cause is established and is not half precision: Meta… |
+| `half-output-blends-rgba16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are this run's. The cause is established and is not half precision: Meta… |
+| `half-output-blends-rgba16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are this run's. The cause is established and is not half precision: Meta… |
+| `half-output-blends-rgba16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are this run's. The cause is established and is not half precision: Meta… |
+| `half-output-blends-rgba16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are this run's. The cause is established and is not half precision: Meta… |
+| `half-output-blends-rgba16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are this run's. The cause is established and is not half precision: Meta… |
+| `half-output-blends-rgba16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are this run's. The cause is established and is not half precision: Meta… |
+| `half-output-blends-rgba16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are this run's. The cause is established and is not half precision: Meta… |
+| `half-output-blends-rgba16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are this run's. The cause is established and is not half precision: Meta… |
+| `half-output-blends-rgba16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are this run's. The cause is established and is not half precision: Meta… |
+| `half-output-blends-rgba16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are this run's. The cause is established and is not half precision: Meta… |
+| `half-output-blends-rgba16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are this run's. The cause is established and is not half precision: Meta… |
+| `half-output-blends-rgba16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are this run's. The cause is established and is not half precision: Meta… |
+| `half-output-blends-rgba32f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are this run's. The cause is established and is not half precision: Meta… |
+| `half-output-blends-rgba32f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are this run's. The cause is established and is not half precision: Meta… |
+| `half-output-blends-rgba32f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are this run's. The cause is established and is not half precision: Meta… |
+| `half-output-blends-rgba32f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are this run's. The cause is established and is not half precision: Meta… |
+| `half-output-blends-rgba32f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are this run's. The cause is established and is not half precision: Meta… |
+| `half-output-blends-rgba32f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are this run's. The cause is established and is not half precision: Meta… |
+| `half-output-blends-rgba32f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are this run's. The cause is established and is not half precision: Meta… |
+| `half-output-blends-rgba32f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are this run's. The cause is established and is not half precision: Meta… |
+| `half-output-blends-rgba32f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are this run's. The cause is established and is not half precision: Meta… |
+| `half-output-blends-rgba32f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are this run's. The cause is established and is not half precision: Meta… |
+| `half-output-blends-rgba32f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are this run's. The cause is established and is not half precision: Meta… |
+| `half-output-blends-rgba32f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are this run's. The cause is established and is not half precision: Meta… |
+| `half-output-blends-rgba32f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are this run's. The cause is established and is not half precision: Meta… |
+| `half-texel-nans-r16f` | Metal's `half` result of a 16-bit float texel hands back the texel's own NaN code, with its sign, its payload and its signalling bit kept (verified: this case's… |
+| `half-texel-nans-r16f` | Metal's `half` result of a 16-bit float texel hands back the texel's own NaN code, with its sign, its payload and its signalling bit kept (verified: this case's… |
+| `half-texel-nans-r16f` | Metal's `half` result of a 16-bit float texel hands back the texel's own NaN code, with its sign, its payload and its signalling bit kept (verified: this case's… |
+| `half-texel-nans-rg16f` | Metal's `half` result of a 16-bit float texel hands back the texel's own NaN code, with its sign, its payload and its signalling bit kept (verified: this case's… |
+| `half-texel-nans-rg16f` | Metal's `half` result of a 16-bit float texel hands back the texel's own NaN code, with its sign, its payload and its signalling bit kept (verified: this case's… |
+| `half-texel-nans-rg16f` | Metal's `half` result of a 16-bit float texel hands back the texel's own NaN code, with its sign, its payload and its signalling bit kept (verified: this case's… |
+| `half-texel-nans-rgba16f` | Metal's `half` result of a 16-bit float texel hands back the texel's own NaN code, with its sign, its payload and its signalling bit kept (verified: this case's… |
+| `half-texel-nans-rgba16f` | Metal's `half` result of a 16-bit float texel hands back the texel's own NaN code, with its sign, its payload and its signalling bit kept (verified: this case's… |
+| `half-texel-nans-rgba16f` | Metal's `half` result of a 16-bit float texel hands back the texel's own NaN code, with its sign, its payload and its signalling bit kept (verified: this case's… |
+| `sampler-mip-linear` | Metal's `lodMinClamp` of `FLT_MAX` holds a linear-mip sample at the LAST level: lane 0 answers 2001, the level-2 value, which is the row this case's own recorde… |
+| `vertex-format-constant-step` | Metal's fetch of a narrow float into a `float` parameter answers the canonical positive quiet NaN 0x7FC00000, payload and sign dropped (verified: this case's ow… |
+| `vertex-format-constant-step` | Metal's fetch of a narrow float into a `float` parameter answers the canonical positive quiet NaN 0x7FC00000, payload and sign dropped (verified: this case's ow… |
+| `vertex-format-constant-step` | Metal's fetch of a narrow float into a `float` parameter answers the canonical positive quiet NaN 0x7FC00000, payload and sign dropped (verified: this case's ow… |
+| `vertex-format-constant-step` | Metal's fetch of a narrow float into a `float` parameter answers the canonical positive quiet NaN 0x7FC00000, payload and sign dropped (verified: this case's ow… |
+| `vertex-format-constant-step` | Metal's fetch of a narrow float into a `float` parameter answers the canonical positive quiet NaN 0x7FC00000, payload and sign dropped (verified: this case's ow… |
+| `vertex-format-constant-step` | Metal's fetch of a narrow float into a `float` parameter answers the canonical positive quiet NaN 0x7FC00000, payload and sign dropped (verified: this case's ow… |
+| `vertex-format-constant-step` | Metal's fetch of a narrow float into a `float` parameter answers the canonical positive quiet NaN 0x7FC00000, payload and sign dropped (verified: this case's ow… |
+| `vertex-format-constant-step` | Metal's fetch of a narrow float into a `float` parameter answers the canonical positive quiet NaN 0x7FC00000, payload and sign dropped (verified: this case's ow… |
+| `vertex-format-constant-step` | Metal's fetch of a narrow float into a `float` parameter answers the canonical positive quiet NaN 0x7FC00000, payload and sign dropped (verified: this case's ow… |
+| `vertex-format-constant-step` | Metal's fetch of a narrow float into a `float` parameter answers the canonical positive quiet NaN 0x7FC00000, payload and sign dropped (verified: this case's ow… |
+| `vertex-format-float4` | Metal's fixed-function vertex fetch of a narrow float canonicalizes a NaN: a `half` code and a `FloatRG11B10` field whose 5-bit exponent is all ones both reach … |
+| `vertex-format-float4` | This is NOT a rounding difference and it is not the narrow-float NaN gap of the sibling rows in the same case. Metal's `float4` fetch of an `MTLVertexFormatFloa… |
+| `vertex-format-float4` | Metal's fixed-function vertex fetch of a narrow float canonicalizes a NaN: a `half` code and a `FloatRG11B10` field whose 5-bit exponent is all ones both reach … |
+| `vertex-format-float4` | Metal's fixed-function vertex fetch of a narrow float canonicalizes a NaN: a `half` code and a `FloatRG11B10` field whose 5-bit exponent is all ones both reach … |
+| `vertex-format-float4` | Metal's fixed-function vertex fetch of a narrow float canonicalizes a NaN: a `half` code and a `FloatRG11B10` field whose 5-bit exponent is all ones both reach … |
+| `vertex-format-float4` | Metal's fixed-function vertex fetch of a narrow float canonicalizes a NaN: a `half` code and a `FloatRG11B10` field whose 5-bit exponent is all ones both reach … |
+| `vertex-format-float4` | Metal converts a normalized vertex field as `c / (2^b - 1)`, correctly rounded, and this device's fixed-function vertex input is one ULP high: at the first diff… |
+| `vertex-format-float4` | Metal converts a normalized vertex field as `c / (2^b - 1)`, correctly rounded, and this device's fixed-function vertex input is one ULP high: at the first diff… |
+| `vertex-format-float4` | Metal converts a normalized vertex field as `c / (2^b - 1)`, correctly rounded, and this device's fixed-function vertex input is one ULP high: at the first diff… |
+| `vertex-format-float4` | Metal converts a normalized vertex field as `c / (2^b - 1)`, correctly rounded, and this device's fixed-function vertex input is one ULP high: at the first diff… |
+| `vertex-format-float4` | Metal converts a normalized vertex field as `c / (2^b - 1)`, correctly rounded, and this device's fixed-function vertex input is one ULP high: at the first diff… |
+| `vertex-format-float4` | Metal's fixed-function vertex fetch of a narrow float canonicalizes a NaN: a `half` code and a `FloatRG11B10` field whose 5-bit exponent is all ones both reach … |
+| `vertex-format-float4` | Metal's fixed-function vertex fetch of a narrow float canonicalizes a NaN: a `half` code and a `FloatRG11B10` field whose 5-bit exponent is all ones both reach … |
+| `vertex-format-float4` | Metal's fixed-function vertex fetch of a narrow float canonicalizes a NaN: a `half` code and a `FloatRG11B10` field whose 5-bit exponent is all ones both reach … |
+| `vertex-format-float4` | Metal's fixed-function vertex fetch of a narrow float canonicalizes a NaN: a `half` code and a `FloatRG11B10` field whose 5-bit exponent is all ones both reach … |
+| `vertex-format-float4` | Metal's fixed-function vertex fetch of a narrow float canonicalizes a NaN: a `half` code and a `FloatRG11B10` field whose 5-bit exponent is all ones both reach … |
+| `vertex-format-half4` | This is NOT a rounding difference and it is not the narrow-float NaN gap of the sibling rows in the same case. Metal's `float4` fetch of an `MTLVertexFormatFloa… |
+| `vertex-format-instance-step` | This is NOT a rounding difference and it is not the narrow-float NaN gap of the sibling rows in the same case. Metal's `float4` fetch of an `MTLVertexFormatFloa… |
+| `vertex-format-instance-step` | Metal's fixed-function vertex fetch of a narrow float canonicalizes a NaN: a `half` code and a `FloatRG11B10` field whose 5-bit exponent is all ones both reach … |
+| `vertex-format-instance-step` | Metal converts a normalized vertex field as `c / (2^b - 1)`, correctly rounded, and this device's fixed-function vertex input is one ULP high: at the first diff… |
+| `vertex-format-instance-step` | Metal converts a normalized vertex field as `c / (2^b - 1)`, correctly rounded, and this device's fixed-function vertex input is one ULP high: at the first diff… |
+| `vertex-format-instance-step` | Metal converts a normalized vertex field as `c / (2^b - 1)`, correctly rounded, and this device's fixed-function vertex input is one ULP high: at the first diff… |
+| `vertex-format-instance-step` | Metal converts a normalized vertex field as `c / (2^b - 1)`, correctly rounded, and this device's fixed-function vertex input is one ULP high: at the first diff… |
+| `vertex-format-instance-step` | Metal's fixed-function vertex fetch of a narrow float canonicalizes a NaN: a `half` code and a `FloatRG11B10` field whose 5-bit exponent is all ones both reach … |
 
