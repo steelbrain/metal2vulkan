@@ -19,6 +19,8 @@
 //! | `depthstencil-stencil-operations` | all eight stencil operations in `depthStencilPassOperation` and in `stencilFailureOperation`, each driven at a stored stencil of 0, 128 and 255; and `writeMask` at 0, 0xff, a nibble each way and a one-bit drop |
 //! | `depthstencil-faces` | the two faces set **differently** under both windings of the same triangle, the per-face read masks, and the one-sided and two-sided spellings of the same reference |
 //! | `depthstencil-depth-slot` | `depthFailureOperation`, the slot only a failed depth test reaches: all eight operations at the same three stored stencils, the four depth-test-by-stencil-test outcomes, and whether a stencil failure suppresses the depth write |
+//! | `depthstencil-mask-crossings` | the two masks **crossed with each other and with the operation**: twelve rows that state `readMask` and `writeMask` apart at once, including the four operations whose answer tells a mask applied to the operation's result from one applied to its operand, and the read mask deciding which slot fires |
+//! | `depthstencil-facing-faces` | the two faces set differently **crossed with `setFrontFacingWinding:` and `setCullMode:`**: three cull modes by both windings by both windings of one triangle, so a side whose culling is right and whose face choice is wrong is visible |
 //!
 //! # Why each sweep is not vacuous
 //!
@@ -51,6 +53,21 @@
 //!   primitive leaves the other face's value in the stencil. The case does not assume which
 //!   winding Metal calls front: it reads that from one cell and holds the rest to it, and both
 //!   readings are falsifiable.
+//! - **The two masks crossed.** A row that states `readMask` and `writeMask` apart at once has
+//!   three wrong answers beside its right one, each a different crossing: the read mask used where
+//!   the write mask belongs, the write mask used where the read mask belongs, and the two swapped.
+//!   The rows are chosen so all three differ from Metal's, which neither mask's own sweep can do:
+//!   the read-mask sweep writes nothing and the write-mask sweep compares under a whole read mask.
+//! - **The operation crossed with the write mask.** `IncrementClamp`, `DecrementClamp`,
+//!   `IncrementWrap` and `DecrementWrap` carry between the mask's bits, so a mask applied to the
+//!   operation's **operand** gives a different byte from one applied to its **result** — but only
+//!   at stored values where the carry or the borrow crosses the mask's edge. `Replace`, `Zero` and
+//!   `Invert` commute with masking and can never tell the two apart, which is why the sweep that
+//!   claimed to is named below.
+//! - **The facing cross.** Culling and the face choice are read from the same two settings, so a
+//!   side may cull correctly and still take the wrong face's rules. Twelve cells of
+//!   `depthstencil-facing-faces` separate them: the three cull modes by both windings by both
+//!   windings of one triangle, answered in the stencil rather than in whether the draw survived.
 //!
 //! Values indistinguishable by construction, named rather than left to be noticed:
 //!
@@ -63,6 +80,12 @@
 //! - `MTLCompareFunctionNever` and `MTLCompareFunctionAlways` ignore both operands, so their cells
 //!   say nothing about the operands and only about the two constants. They are swept because the
 //!   constants are what the other six are told apart from.
+//! - `MTLStencilOperationReplace`, `Zero` and `Invert` give the same byte whether the write mask
+//!   narrows the operation's operand or its result, because each is a bitwise function applied
+//!   bit by bit. `WRITE_MASKS`'s `(IncrementWrap, 0xf0)` row is documented as the row that tells
+//!   the two apart and does not: from `0xa5` both rules leave `0xa5`, the stored value itself, so
+//!   that cell cannot even tell a write from a draw that wrote nothing. `CROSSINGS` carries the
+//!   five rows that do separate them.
 //!
 //! # The depth format's quantisation
 //!
@@ -104,7 +127,8 @@ use crate::transcript::{
 };
 use metal2vulkan::metal::state::{DepthStencilDescriptor, StencilDescriptor};
 use metal2vulkan::metal::{
-    ColorWriteMask, CompareFunction, PixelFormat, PrimitiveType, StencilOperation,
+    ColorWriteMask, CompareFunction, CullMode, PixelFormat, PrimitiveType, StencilOperation,
+    Winding,
 };
 use metal2vulkan_runtime::{Degradation, StoreAction};
 
@@ -439,6 +463,15 @@ impl Reference {
     }
 }
 
+/// The two encoder settings that decide which **face** a primitive is, stated together because
+/// neither decides it alone: `setFrontFacingWinding:` says which winding Metal calls front, and
+/// `setCullMode:` says which of the two faces is thrown away before it reaches the stencil at all.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct FacingState {
+    cull: CullMode,
+    winding: Winding,
+}
+
 /// One draw: the pipeline, the state, the triangle, the reference and the rectangle it is confined
 /// to. A prime draw is one whose rectangle is a band rather than a cell.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -450,6 +483,10 @@ struct Row {
     triangle: usize,
     reference: Reference,
     rect: ScissorBox,
+    /// The cull mode and the front-facing winding the row states, where it states them. A row of
+    /// `None` leaves both at Metal's own defaults, which every case but
+    /// [`FacesFacing`] relies on.
+    facing: Option<FacingState>,
 }
 
 /// What one case of this module runs: its attachments, the states and triangles it states, and the
@@ -507,6 +544,10 @@ impl Program {
                 index: 0,
             });
             steps.push(RenderStep::Scissor(row.rect));
+            if let Some(held) = row.facing {
+                steps.push(RenderStep::Cull(held.cull));
+                steps.push(RenderStep::FrontFacing(held.winding));
+            }
             steps.push(TRIANGLE);
         }
         steps
@@ -568,6 +609,12 @@ impl Program {
             rows.extend((row.triangle as u32).to_le_bytes());
             rows.extend(row.reference.words());
             rows.extend(row.rect.words());
+            // Written **only where the row states them**, as the target's optional backing is, so
+            // the field left every case recorded before it valid rather than moving their inputs.
+            if let Some(held) = row.facing {
+                rows.extend(held.cull.as_raw().to_le_bytes());
+                rows.extend(held.winding.as_raw().to_le_bytes());
+            }
         }
         inputs.push(Input::bytes("rows", &rows));
         Ok(inputs)
@@ -799,6 +846,8 @@ pub fn all() -> Vec<Box<dyn Case>> {
         Box::new(StencilOperations),
         Box::new(Faces),
         Box::new(DepthSlot),
+        Box::new(MaskCrossings),
+        Box::new(FacesFacing),
     ]
 }
 
@@ -854,6 +903,7 @@ impl DepthCompares {
             triangle,
             reference,
             rect,
+            facing: None,
         };
         // The prime: the whole target to the stored depth, writing no colour.
         let mut rows = vec![row(Pipe::Masked, 0, 0, band(0, GRID))];
@@ -1029,6 +1079,7 @@ impl DepthCodes {
             triangle,
             reference,
             rect,
+            facing: None,
         };
         let prime = |triangle, rect| Row {
             pipe: Pipe::Masked,
@@ -1036,6 +1087,7 @@ impl DepthCodes {
             triangle,
             reference,
             rect,
+            facing: None,
         };
         // Three primes, one a band: the middle code over the first four cell rows, the low code
         // over the next two and the high code over the last two.
@@ -1188,6 +1240,7 @@ impl StencilCompares {
                     triangle: 0,
                     reference: Reference::Together(*held),
                     rect: cell(input * GRID as usize + at),
+                    facing: None,
                 });
             }
         }
@@ -1198,6 +1251,7 @@ impl StencilCompares {
                 triangle: 0,
                 reference: Reference::Together(*reference),
                 rect: cell(MASK_CELLS + at),
+                facing: None,
             });
         }
 
@@ -1354,6 +1408,7 @@ impl StencilOperations {
             triangle: 0,
             reference: Reference::Together(reference),
             rect,
+            facing: None,
         };
         // The primes: the pass slot's second and third rows and the failure slot's, plus the
         // `writeMask` row. The first row of each slot is the pass's own clear of 0.
@@ -1496,6 +1551,7 @@ impl Faces {
             triangle,
             reference,
             rect,
+            facing: None,
         };
         let together = Reference::Together(FACE_START);
         let rows = vec![
@@ -1719,6 +1775,7 @@ impl DepthSlot {
             triangle,
             reference,
             rect,
+            facing: None,
         };
         let plain = Reference::Together(TEST_REFERENCE);
         // The depth prime over the whole target, writing no colour.
@@ -1834,6 +1891,421 @@ impl Case for DepthSlot {
     }
 }
 
+// ------------------------------------------------------------------------------------------------
+// depthstencil-mask-crossings
+
+/// One row of `depthstencil-mask-crossings`: the stored stencil, the two masks, the comparison and
+/// the reference that together decide which slot fires, the two slots a pass with no depth
+/// attachment can reach, and the stencil Metal's rule leaves.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct Crossing {
+    /// The stencil the row's cell is primed to before its draw.
+    start: u32,
+    read_mask: u32,
+    write_mask: u32,
+    compare: CompareFunction,
+    reference: u32,
+    pass: StencilOperation,
+    failure: StencilOperation,
+    /// The stencil the row leaves, which the module's own test derives again from Metal's rule
+    /// rather than reading it back from a recording.
+    left: u32,
+    /// Whether applying the **write mask to the operation's operand** instead of to its result
+    /// moves this row's answer: the one crossing of the two masks with the operation that no
+    /// single-value sweep of either can see.
+    operand_visible: bool,
+}
+
+/// The rows, each a crossing of the two masks with the operation or with the slot choice.
+///
+/// Every row primes its own cell to `start`, states both masks, and draws once under a state whose
+/// `depthStencilPassOperation` and `stencilFailureOperation` differ. The attachment is a `Stencil8`
+/// alone, so the depth-failure slot is unreachable and which of the two remaining slots fires is
+/// the comparison's answer **under the read mask**.
+///
+/// | start | read | write | compare | reference | pass | failure | left | why this row is here |
+/// |---|---|---|---|---|---|---|---|---|
+/// | `0x5a` | `0x0f` | `0xf0` | `Equal` | `0x1a` | `Replace` | `Zero` | `0x1a` | the two masks apart, each in the other's reach: applying either where the other belongs moves the cell three different ways |
+/// | `0x5a` | `0xf0` | `0x0f` | `Equal` | `0x51` | `Replace` | `Zero` | `0x51` | the mirror of it, so neither answer can be the other mask's by coincidence |
+/// | `0x10` | `0xff` | `0x0f` | `Always` | `0x5a` | `DecrementClamp` | `Keep` | `0x1f` | `DecrementClamp` borrows across the mask's edge: masking its operand clamps at 0 and leaves `0x10` |
+/// | `0x0f` | `0xff` | `0xf0` | `Always` | `0x5a` | `IncrementClamp` | `Keep` | `0x1f` | the carry out of the low nibble is what the mask then stores |
+/// | `0xff` | `0xff` | `0xf0` | `Always` | `0x5a` | `IncrementWrap` | `Keep` | `0x0f` | the wrap's modulus: 256, not the mask's width |
+/// | `0x0f` | `0xff` | `0xf0` | `Always` | `0x5a` | `IncrementWrap` | `Keep` | `0x1f` | the same wrap below its modulus, so the row above is read against a step that does not wrap |
+/// | `0x02` | `0xff` | `0x55` | `Always` | `0x5a` | `DecrementWrap` | `Keep` | `0x03` | a mask whose bits are not one run, which is where `DecrementWrap`'s borrow separates |
+/// | `0x5a` | `0xff` | `0x0f` | `Always` | `0x5a` | `Invert` | `Keep` | `0x55` | the control: `Invert` commutes with masking, so this row's answer is the same under either rule and it is swept for the mask and not for the operand |
+/// | `0x5a` | `0x00` | `0xff` | `Equal` | `0x1a` | `Replace` | `Zero` | `0x1a` | a read mask of 0 compares 0 against 0 and passes, while the write mask is whole |
+/// | `0x5a` | `0xff` | `0x00` | `Equal` | `0x1a` | `Replace` | `Invert` | `0x5a` | the failure slot fires and a write mask of 0 stores none of it |
+/// | `0x5a` | `0xf0` | `0xff` | `Equal` | `0x5b` | `Replace` | `Invert` | `0x5b` | the read mask drops the bit the reference differs in, so the **pass** slot fires |
+/// | `0x5a` | `0x0f` | `0xff` | `Equal` | `0x5b` | `Replace` | `Invert` | `0xa5` | the same reference under the other mask, so the **failure** slot fires: the read mask crossed with the slot choice |
+const CROSSINGS: [Crossing; 12] = [
+    Crossing {
+        start: 0x5a,
+        read_mask: 0x0f,
+        write_mask: 0xf0,
+        compare: CompareFunction::Equal,
+        reference: 0x1a,
+        pass: StencilOperation::Replace,
+        failure: StencilOperation::Zero,
+        left: 0x1a,
+        operand_visible: false,
+    },
+    Crossing {
+        start: 0x5a,
+        read_mask: 0xf0,
+        write_mask: 0x0f,
+        compare: CompareFunction::Equal,
+        reference: 0x51,
+        pass: StencilOperation::Replace,
+        failure: StencilOperation::Zero,
+        left: 0x51,
+        operand_visible: false,
+    },
+    Crossing {
+        start: 0x10,
+        read_mask: ALL_BITS,
+        write_mask: 0x0f,
+        compare: CompareFunction::Always,
+        reference: TEST_REFERENCE,
+        pass: StencilOperation::DecrementClamp,
+        failure: StencilOperation::Keep,
+        left: 0x1f,
+        operand_visible: true,
+    },
+    Crossing {
+        start: 0x0f,
+        read_mask: ALL_BITS,
+        write_mask: 0xf0,
+        compare: CompareFunction::Always,
+        reference: TEST_REFERENCE,
+        pass: StencilOperation::IncrementClamp,
+        failure: StencilOperation::Keep,
+        left: 0x1f,
+        operand_visible: true,
+    },
+    Crossing {
+        start: 0xff,
+        read_mask: ALL_BITS,
+        write_mask: 0xf0,
+        compare: CompareFunction::Always,
+        reference: TEST_REFERENCE,
+        pass: StencilOperation::IncrementWrap,
+        failure: StencilOperation::Keep,
+        left: 0x0f,
+        operand_visible: true,
+    },
+    Crossing {
+        start: 0x0f,
+        read_mask: ALL_BITS,
+        write_mask: 0xf0,
+        compare: CompareFunction::Always,
+        reference: TEST_REFERENCE,
+        pass: StencilOperation::IncrementWrap,
+        failure: StencilOperation::Keep,
+        left: 0x1f,
+        operand_visible: true,
+    },
+    Crossing {
+        start: 0x02,
+        read_mask: ALL_BITS,
+        write_mask: 0x55,
+        compare: CompareFunction::Always,
+        reference: TEST_REFERENCE,
+        pass: StencilOperation::DecrementWrap,
+        failure: StencilOperation::Keep,
+        left: 0x03,
+        operand_visible: true,
+    },
+    Crossing {
+        start: 0x5a,
+        read_mask: ALL_BITS,
+        write_mask: 0x0f,
+        compare: CompareFunction::Always,
+        reference: TEST_REFERENCE,
+        pass: StencilOperation::Invert,
+        failure: StencilOperation::Keep,
+        left: 0x55,
+        operand_visible: false,
+    },
+    Crossing {
+        start: 0x5a,
+        read_mask: 0x00,
+        write_mask: ALL_BITS,
+        compare: CompareFunction::Equal,
+        reference: 0x1a,
+        pass: StencilOperation::Replace,
+        failure: StencilOperation::Zero,
+        left: 0x1a,
+        operand_visible: false,
+    },
+    Crossing {
+        start: 0x5a,
+        read_mask: ALL_BITS,
+        write_mask: 0x00,
+        compare: CompareFunction::Equal,
+        reference: 0x1a,
+        pass: StencilOperation::Replace,
+        failure: StencilOperation::Invert,
+        left: 0x5a,
+        operand_visible: false,
+    },
+    Crossing {
+        start: 0x5a,
+        read_mask: 0xf0,
+        write_mask: ALL_BITS,
+        compare: CompareFunction::Equal,
+        reference: 0x5b,
+        pass: StencilOperation::Replace,
+        failure: StencilOperation::Invert,
+        left: 0x5b,
+        operand_visible: false,
+    },
+    Crossing {
+        start: 0x5a,
+        read_mask: 0x0f,
+        write_mask: ALL_BITS,
+        compare: CompareFunction::Equal,
+        reference: 0x5b,
+        pass: StencilOperation::Replace,
+        failure: StencilOperation::Invert,
+        left: 0xa5,
+        operand_visible: false,
+    },
+];
+
+/// `readMask` crossed with `writeMask` and with the operation: the one mask narrows the
+/// comparison's operands and the other narrows the store, and a side that applies either where the
+/// other belongs passes every single-value sweep of both.
+///
+/// The family beside this one sweeps each mask alone
+/// ([`StencilCompares`]'s [`READ_MASKS`], [`StencilOperations`]'s [`WRITE_MASKS`]), and that is
+/// what leaves the crossing open: a read-mask row whose every operation is `Keep` cannot see a
+/// write, and a write-mask row whose read mask is whole cannot see a comparison narrowed. Twelve
+/// rows here state both masks at once.
+///
+/// It also closes a sweep that could not fire. `WRITE_MASKS`'s `(IncrementWrap, 0xf0)` row is
+/// documented as what tells a write mask applied **after** the operation from one applied to its
+/// operand, and it cannot: from `0xa5` both rules leave `0xa5`, which is the stored value itself,
+/// so the row's cell is also indistinguishable from a draw that wrote nothing at all. The five
+/// rows here marked `operand_visible` are the ones whose two answers differ, held apart by
+/// [`tests::the_crossings_see_an_operand_masked_operation_and_the_old_table_cannot`] with no
+/// device.
+pub struct MaskCrossings;
+
+impl MaskCrossings {
+    /// The program: a `Stencil8` attachment alone, read back as the answer.
+    fn program() -> Program {
+        let triangles = vec![Triangle::at(FLAT)];
+        // State 0 primes a cell to the row's own stored stencil.
+        let mut states = vec![both_faces(
+            CompareFunction::Always,
+            face(
+                CompareFunction::Always,
+                StencilOperation::Keep,
+                StencilOperation::Keep,
+                StencilOperation::Replace,
+                ALL_BITS,
+                ALL_BITS,
+            ),
+        )];
+        states.extend(CROSSINGS.map(|row| {
+            both_faces(
+                CompareFunction::Always,
+                face(
+                    row.compare,
+                    row.failure,
+                    StencilOperation::Keep,
+                    row.pass,
+                    row.read_mask,
+                    row.write_mask,
+                ),
+            )
+        }));
+
+        let draw = |state, reference, rect| Row {
+            pipe: Pipe::NoFragment,
+            state,
+            triangle: 0,
+            reference: Reference::Together(reference),
+            rect,
+            facing: None,
+        };
+        let mut rows = Vec::new();
+        for (at, row) in CROSSINGS.iter().enumerate() {
+            rows.push(draw(0, row.start, cell(at)));
+            rows.push(draw(1 + at, row.reference, cell(at)));
+        }
+
+        Program {
+            depth: None,
+            stencil: true,
+            color: false,
+            clear_stencil: 0,
+            triangles,
+            states,
+            rows,
+        }
+    }
+}
+
+impl Case for MaskCrossings {
+    fn name(&self) -> &'static str {
+        "depthstencil-mask-crossings"
+    }
+
+    fn metal_source(&self) -> MetalSource {
+        MetalSource::Run
+    }
+
+    fn record_runs(&self) -> u32 {
+        RUNS
+    }
+
+    fn allowances(&self) -> Vec<Allowance> {
+        // Exact: every stencil byte Metal leaves is a byte we must leave.
+        Vec::new()
+    }
+
+    fn shaders(&self) -> Result<Vec<ShaderRef>, String> {
+        shader_refs()
+    }
+
+    fn inputs(&self) -> Result<Vec<Input>, String> {
+        Self::program().inputs()
+    }
+
+    fn run(&self, side: &mut dyn Side, sites: &mut Sites) -> Result<(), Abort> {
+        Self::program().run(side, sites)
+    }
+}
+
+// ------------------------------------------------------------------------------------------------
+// depthstencil-facing-faces
+
+/// The three cull modes, in the generated table's order.
+const CULLS: [CullMode; 3] = [CullMode::None, CullMode::Front, CullMode::Back];
+
+/// Both windings, in the generated table's order.
+const WINDINGS: [Winding; 2] = [Winding::Clockwise, Winding::CounterClockwise];
+
+/// The two faces set differently, crossed with `setFrontFacingWinding:` and `setCullMode:`.
+///
+/// Which face's rules a primitive takes is not a property of the primitive: it is the primitive's
+/// winding read against the encoder's `frontFacingWinding`, and `cullMode` then decides whether
+/// that face reaches the stencil at all. Three settings decide one answer, and each of them is
+/// already swept alone — [`Faces`] sets the two faces apart under Metal's **default** winding and
+/// no culling, and `render-state-facing` sweeps the cull mode and the winding over a **colour**
+/// target, where what is read is whether the primitive drew. Neither can see a side whose culling
+/// is right and whose face choice is wrong, which is the one thing twelve cells of this shape read.
+///
+/// Twelve cells: three cull modes, by both windings, by both windings of one triangle. The state's
+/// front face steps the stencil up and its back face steps it down, both under a stencil
+/// comparison of `Always`, so a cell holds `0x41` where the front face's rules applied, `0x3f`
+/// where the back face's did, and the cleared `0x40` where the primitive was culled. The three
+/// values are distinct, so no cell's answer is two readings at once.
+///
+/// Nothing here assumes which winding Metal calls front for a triangle of
+/// [`CORNERS`]: the module's test reads that from one cell and holds the other eleven to it, and
+/// both readings are falsifiable.
+pub struct FacesFacing;
+
+impl FacesFacing {
+    /// The program: a `Stencil8` attachment alone, read back as the answer.
+    fn program() -> Program {
+        let triangles = vec![Triangle::at(FLAT), Triangle::reversed(FLAT)];
+        // One state: the front face steps up, the back face steps down. The comparison is `Always`
+        // on both faces, so the pass operation fires whichever face the primitive is and the cell
+        // answers the face choice alone.
+        let states = vec![faced(
+            CompareFunction::Always,
+            face(
+                CompareFunction::Always,
+                StencilOperation::Keep,
+                StencilOperation::Keep,
+                StencilOperation::IncrementClamp,
+                ALL_BITS,
+                ALL_BITS,
+            ),
+            face(
+                CompareFunction::Always,
+                StencilOperation::Keep,
+                StencilOperation::Keep,
+                StencilOperation::DecrementClamp,
+                ALL_BITS,
+                ALL_BITS,
+            ),
+        )];
+
+        let mut rows = Vec::new();
+        for (at, (cull, winding, triangle)) in facing_cells().into_iter().enumerate() {
+            rows.push(Row {
+                pipe: Pipe::NoFragment,
+                state: 0,
+                triangle,
+                reference: Reference::Together(FACE_START),
+                rect: cell(at),
+                facing: Some(FacingState { cull, winding }),
+            });
+        }
+
+        Program {
+            depth: None,
+            stencil: true,
+            color: false,
+            clear_stencil: FACE_START,
+            triangles,
+            states,
+            rows,
+        }
+    }
+}
+
+/// The twelve cells in the order they are laid out: a cull mode, a front-facing winding and which
+/// of the two windings of one triangle is drawn.
+fn facing_cells() -> Vec<(CullMode, Winding, usize)> {
+    let mut cells = Vec::new();
+    for cull in CULLS {
+        for winding in WINDINGS {
+            for triangle in [0, 1] {
+                cells.push((cull, winding, triangle));
+            }
+        }
+    }
+    cells
+}
+
+impl Case for FacesFacing {
+    fn name(&self) -> &'static str {
+        "depthstencil-facing-faces"
+    }
+
+    fn metal_source(&self) -> MetalSource {
+        MetalSource::Run
+    }
+
+    fn record_runs(&self) -> u32 {
+        RUNS
+    }
+
+    fn allowances(&self) -> Vec<Allowance> {
+        // Exact: every stencil byte Metal leaves is a byte we must leave. Metal's cull mode and
+        // front-facing winding are both encoder state the runtime carries into the pipeline it is
+        // about to draw with, so no pass of this case is split and nothing is announced.
+        Vec::new()
+    }
+
+    fn shaders(&self) -> Result<Vec<ShaderRef>, String> {
+        shader_refs()
+    }
+
+    fn inputs(&self) -> Result<Vec<Input>, String> {
+        Self::program().inputs()
+    }
+
+    fn run(&self, side: &mut dyn Side, sites: &mut Sites) -> Result<(), Abort> {
+        Self::program().run(side, sites)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1888,6 +2360,15 @@ mod tests {
                 "{} is a stencil operation this module states no rule for",
                 other.name()
             ),
+        }
+    }
+
+    /// The steps one row of a program encodes: its six settings, and the two facing calls where
+    /// the row states them.
+    fn row_steps(row: &Row) -> usize {
+        match row.facing {
+            Some(_) => 8,
+            None => 6,
         }
     }
 
@@ -2195,6 +2676,8 @@ mod tests {
             (StencilOperations.name(), StencilOperations::program()),
             (Faces.name(), Faces::program()),
             (DepthSlot.name(), DepthSlot::program()),
+            (MaskCrossings.name(), MaskCrossings::program()),
+            (FacesFacing.name(), FacesFacing::program()),
         ]
     }
 
@@ -2258,7 +2741,8 @@ mod tests {
                     .collect::<Vec<_>>(),
                 Handle(0),
             );
-            assert_eq!(steps.len(), 6 * program.rows.len(), "{name}");
+            let encoded: usize = program.rows.iter().map(row_steps).sum();
+            assert_eq!(steps.len(), encoded, "{name}");
             // The positions buffer holds exactly the triangles the rows index.
             assert_eq!(
                 positions_bytes(&program.triangles).len() as u64,
@@ -2290,11 +2774,11 @@ mod tests {
 
     /// **Every case of the family names itself once**, under the settings the module states.
     #[test]
-    fn the_family_names_six_cases_apart() {
+    fn the_family_names_eight_cases_apart() {
         let names: Vec<&str> = all().iter().map(|case| case.name()).collect();
         let distinct: BTreeSet<&str> = names.iter().copied().collect();
         assert_eq!(distinct.len(), names.len(), "two cases share a name");
-        assert_eq!(names.len(), 6);
+        assert_eq!(names.len(), 8);
         for case in all() {
             assert_eq!(case.record_runs(), RUNS);
             assert!(matches!(case.metal_source(), MetalSource::Run));
@@ -2835,6 +3319,309 @@ mod tests {
         for at in (MATRIX_ROW as usize + 1) * GRID as usize..CELLS {
             assert_eq!(
                 cell_stencil(&stencil, at),
+                0,
+                "cell {at} holds no row of the case and is not the clear"
+            );
+        }
+    }
+
+    /// What `operation` leaves under `mask` when the mask narrows the operation's **operand**
+    /// rather than its result: the crossing of the two that no single-value sweep of either can
+    /// see.
+    ///
+    /// This is not Metal's rule and is not asserted to be. It is the wrong rule the crossing rows
+    /// exist to separate from the right one, written here so the separation is a computation rather
+    /// than a claim.
+    fn operand_masked(operation: StencilOperation, start: u32, reference: u32, mask: u32) -> u32 {
+        let narrowed = start & mask & 0xff;
+        written(start, applied(operation, narrowed, reference), mask)
+    }
+
+    /// **Every crossing row's answer is what Metal's rule leaves**, derived here from the same
+    /// three steps Metal takes — the comparison under the read mask, the operation of the slot that
+    /// fires, and the write under the write mask — rather than copied from a recording.
+    #[test]
+    fn the_crossing_rows_are_what_metals_three_steps_say() {
+        for (at, row) in CROSSINGS.iter().enumerate() {
+            let ordering =
+                (row.reference & row.read_mask & 0xff).cmp(&(row.start & row.read_mask & 0xff));
+            let operation = match holds(row.compare, ordering) {
+                true => row.pass,
+                false => row.failure,
+            };
+            assert_eq!(
+                written(
+                    row.start,
+                    applied(operation, row.start, row.reference),
+                    row.write_mask
+                ),
+                row.left,
+                "crossing {at} states {:#04x}, which is not what the rule leaves",
+                row.left
+            );
+            // Every mask is inside a `Stencil8`'s eight bits, and so is every value, so no row's
+            // answer turns on a bit the attachment does not hold.
+            for value in [row.start, row.read_mask, row.write_mask, row.left] {
+                assert_eq!(
+                    value & 0xff,
+                    value,
+                    "crossing {at} names a value past 8 bits"
+                );
+            }
+        }
+        // Exactly one row leaves the stencil it started at: the `writeMask` of 0 control, which is
+        // read against the row above it. Every other row's cell is distinguishable from a draw that
+        // did nothing, so a cell that holds its start is a failure rather than a pass.
+        let unchanged: Vec<usize> = CROSSINGS
+            .iter()
+            .enumerate()
+            .filter(|(_, row)| row.left == row.start)
+            .map(|(at, _)| at)
+            .collect();
+        assert_eq!(unchanged, vec![9], "{unchanged:?} leave the stencil alone");
+    }
+
+    /// **The crossing rows see a write mask applied to the operation's operand, and
+    /// `WRITE_MASKS` cannot.**
+    ///
+    /// The existing write-mask sweep carries `Replace`, `Invert`, `Zero` and one `IncrementWrap`
+    /// row. The first three are bitwise functions of the stored value, so narrowing the operand and
+    /// narrowing the result give the same byte for every mask; and the `IncrementWrap` row is at
+    /// `0xa5` under `0xf0`, where the carry does not cross the mask's edge, so it gives the same
+    /// byte too. The whole table is therefore **invariant** under the wrong rule, which this
+    /// asserts rather than describes — and five rows of `CROSSINGS` are not.
+    #[test]
+    fn the_crossings_see_an_operand_masked_operation_and_the_old_table_cannot() {
+        for (at, (operation, mask)) in WRITE_MASKS.iter().enumerate() {
+            assert_eq!(
+                written(
+                    MASKED_START,
+                    applied(*operation, MASKED_START, TEST_REFERENCE),
+                    *mask
+                ),
+                operand_masked(*operation, MASKED_START, TEST_REFERENCE, *mask),
+                "WRITE_MASKS row {at} does separate the two rules, so the module's claim that it \
+                 cannot is now wrong"
+            );
+        }
+        let mut seen = 0;
+        for (at, row) in CROSSINGS.iter().enumerate() {
+            let ordering =
+                (row.reference & row.read_mask & 0xff).cmp(&(row.start & row.read_mask & 0xff));
+            let operation = match holds(row.compare, ordering) {
+                true => row.pass,
+                false => row.failure,
+            };
+            let wrong = operand_masked(operation, row.start, row.reference, row.write_mask);
+            assert_eq!(
+                wrong != row.left,
+                row.operand_visible,
+                "crossing {at} ({}) says operand_visible = {}, and the two rules leave \
+                 {:#04x} and {wrong:#04x}",
+                operation.name(),
+                row.operand_visible,
+                row.left
+            );
+            seen += u32::from(row.operand_visible);
+        }
+        assert_eq!(seen, 5, "the rows that separate the two rules are not five");
+    }
+
+    /// **Each of the three ways the two masks can be crossed moves a row of `CROSSINGS`**, which is
+    /// what makes the pair's rows the pair's rather than two single-value rows side by side.
+    ///
+    /// The three wrong rules are: the read mask used where the write mask belongs, the write mask
+    /// used where the read mask belongs, and the two swapped. Each is applied to the first two rows
+    /// — the only two whose masks are both away from `0xff` — and each gives a different byte from
+    /// Metal's.
+    #[test]
+    fn each_mask_crossing_moves_the_rows_that_state_both_masks() {
+        let answer = |row: &Crossing, read: u32, write: u32| {
+            let ordering = (row.reference & read & 0xff).cmp(&(row.start & read & 0xff));
+            let operation = match holds(row.compare, ordering) {
+                true => row.pass,
+                false => row.failure,
+            };
+            written(
+                row.start,
+                applied(operation, row.start, row.reference),
+                write,
+            )
+        };
+        let both_narrow: Vec<&Crossing> = CROSSINGS
+            .iter()
+            .filter(|row| row.read_mask != ALL_BITS && row.write_mask != ALL_BITS)
+            .collect();
+        assert_eq!(both_narrow.len(), 2, "the crossed rows are not two");
+        for row in both_narrow {
+            for (what, read, write) in [
+                (
+                    "the read mask where the write mask belongs",
+                    row.read_mask,
+                    row.read_mask,
+                ),
+                (
+                    "the write mask where the read mask belongs",
+                    row.write_mask,
+                    row.write_mask,
+                ),
+                ("the two swapped", row.write_mask, row.read_mask),
+            ] {
+                assert_ne!(
+                    answer(row, read, write),
+                    row.left,
+                    "a side that used {what} answers this row exactly as Metal does"
+                );
+            }
+        }
+    }
+
+    /// Which stencil each of the facing case's twelve cells holds, given `forward_is_clockwise`:
+    /// whether the forward-wound triangle of [`CORNERS`] is the clockwise one as Metal's rasterizer
+    /// reads it.
+    ///
+    /// The convention is read from a cell rather than assumed, as [`faces_expected`] reads its own:
+    /// what the case asks is whether the two settings together pick the face, not which way round
+    /// Metal calls a triangle.
+    fn facing_expected(forward_is_clockwise: bool) -> Vec<u32> {
+        let up = FACE_START + 1;
+        let down = FACE_START - 1;
+        facing_cells()
+            .into_iter()
+            .map(|(cull, winding, triangle)| {
+                // The drawn triangle's own winding, and then whether that is the face the encoder
+                // calls front.
+                let clockwise = match triangle {
+                    0 => forward_is_clockwise,
+                    _ => !forward_is_clockwise,
+                };
+                let front = clockwise == (winding == Winding::Clockwise);
+                let culled = match cull {
+                    CullMode::Front => front,
+                    CullMode::Back => !front,
+                    _ => false,
+                };
+                match (culled, front) {
+                    (true, _) => FACE_START,
+                    (false, true) => up,
+                    (false, false) => down,
+                }
+            })
+            .collect()
+    }
+
+    /// **The facing rule holds for either convention, and the two conventions give different
+    /// maps**, which is what lets the case state its expectation without assuming one and what
+    /// makes the reading a reading rather than a definition.
+    #[test]
+    fn the_facing_cross_separates_the_cull_mode_from_the_face_choice() {
+        let one = facing_expected(true);
+        let other = facing_expected(false);
+        assert_eq!(one.len(), 12);
+        assert_ne!(one, other, "the convention changes nothing the case reads");
+        let cells = facing_cells();
+        // Twelve distinct settings, so no cell is another's answer under a different name.
+        let distinct: BTreeSet<(u32, u32, usize)> = cells
+            .iter()
+            .map(|(cull, winding, triangle)| (cull.as_raw(), winding.as_raw(), *triangle))
+            .collect();
+        assert_eq!(distinct.len(), 12);
+        for held in [&one, &other] {
+            // Under `CullMode::None` nothing is culled, so each of the four cells holds a face's
+            // own answer and the two windings of one setting disagree.
+            for at in 0..4 {
+                assert_ne!(held[at], FACE_START, "cell {at} is culled under no culling");
+            }
+            assert_ne!(held[0], held[1]);
+            assert_ne!(held[2], held[3]);
+            // Changing `setFrontFacingWinding:` swaps which winding is the front face, so the
+            // first pair is the second pair reversed.
+            assert_eq!(held[0], held[3]);
+            assert_eq!(held[1], held[2]);
+            // Under each one-sided cull mode exactly one winding of each setting survives, and the
+            // one that survives is the other face from the one the other cull mode keeps.
+            for base in [4, 8] {
+                let survived: Vec<usize> = (base..base + 4)
+                    .filter(|at| held[*at] != FACE_START)
+                    .collect();
+                assert_eq!(survived.len(), 2, "cells {base}..{} ", base + 4);
+            }
+            // `CullMode::Front` keeps the back face's answer and `CullMode::Back` the front's,
+            // which is what says the cull mode and the face choice are read from the same setting
+            // and are not the same thing.
+            for at in 4..8 {
+                assert!(held[at] == FACE_START || held[at] == FACE_START - 1);
+            }
+            for at in 8..12 {
+                assert!(held[at] == FACE_START || held[at] == FACE_START + 1);
+            }
+        }
+        // The three values a cell can hold are distinct, so a cell's answer is one reading.
+        let values = BTreeSet::from([FACE_START, FACE_START + 1, FACE_START - 1]);
+        assert_eq!(values.len(), 3);
+    }
+
+    /// **Metal's recorded stencil holds what the two faces, the winding and the cull mode together
+    /// say it should.**
+    #[test]
+    fn metal_picked_the_face_from_the_winding_under_every_cull_mode() {
+        let Some(bytes) = recorded(FacesFacing.name(), "stencil", STENCIL_PLANE as usize) else {
+            println!("depthstencil-facing-faces: no recording in the tree yet");
+            return;
+        };
+        let first = cell_stencil(&bytes, 0);
+        assert!(
+            first == FACE_START + 1 || first == FACE_START - 1,
+            "the first cell holds {first:#04x}, which is neither face's pass operation's answer \
+             and is not what a cell under no culling can hold"
+        );
+        // Cell 0 draws the forward triangle under `frontFacingWinding = Clockwise` and no culling,
+        // so it steps up exactly where the forward triangle is the clockwise one.
+        let forward_is_clockwise = first == FACE_START + 1;
+        let want = facing_expected(forward_is_clockwise);
+        let got: Vec<u32> = (0..want.len()).map(|at| cell_stencil(&bytes, at)).collect();
+        assert_eq!(
+            got,
+            want,
+            "the stencils Metal left are not what the facing cross implies (the forward-wound \
+             triangle is {} as the rasterizer reads it)",
+            match forward_is_clockwise {
+                true => "clockwise",
+                false => "counter-clockwise",
+            }
+        );
+        for at in want.len()..CELLS {
+            assert_eq!(
+                cell_stencil(&bytes, at),
+                FACE_START,
+                "cell {at} holds no row of the case and is not the clear"
+            );
+        }
+    }
+
+    /// **Metal's recorded stencil holds what the two masks, crossed with each other and with the
+    /// operation, say it should.**
+    #[test]
+    fn metal_crossed_the_two_masks_as_its_rule_says() {
+        let Some(bytes) = recorded(MaskCrossings.name(), "stencil", STENCIL_PLANE as usize) else {
+            println!("depthstencil-mask-crossings: no recording in the tree yet");
+            return;
+        };
+        for (at, row) in CROSSINGS.iter().enumerate() {
+            assert_eq!(
+                cell_stencil(&bytes, at),
+                row.left,
+                "crossing {at} (read {:#04x}, write {:#04x}, {} on a pass and {} on a failure) \
+                 did not leave what the two masks imply",
+                row.read_mask,
+                row.write_mask,
+                row.pass.name(),
+                row.failure.name()
+            );
+        }
+        for at in CROSSINGS.len()..CELLS {
+            assert_eq!(
+                cell_stencil(&bytes, at),
                 0,
                 "cell {at} holds no row of the case and is not the clear"
             );
