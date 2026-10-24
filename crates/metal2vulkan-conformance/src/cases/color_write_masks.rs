@@ -33,6 +33,31 @@
 //! The mask of every channel is the control. Without it a side that quietly stopped drawing at all
 //! would pass both of the other two, and the family would prove nothing.
 //!
+//! # `MTLColorWriteMaskUnspecialized`, and why it is not a placeholder here
+//!
+//! The fourth and fifth cases are `MTLColorWriteMaskUnspecialized` (`0x10`), which MTL4 defines as
+//! the placeholder for a mask a render command specializes later. A **classic**
+//! `MTLRenderPipelineDescriptor` takes it and draws, measured in a throwaway probe on this Apple
+//! M3 Max, macOS 27.0.1:
+//!
+//! - a pipeline whose `writeMask` is `0x10` stores **every** channel, and so does one whose mask is
+//!   `0x18` or `0x1f`. So the bit **dominates** the four channel bits rather than being ignored:
+//!   ignoring it would leave `0x10` as a mask of no channel, which stores nothing, and
+//!   `0x10 | Red` as red alone;
+//! - Metal's setter keeps five bits and no more — `0x20` reads back as `0x0`, `0x30` as `0x10` and
+//!   `0xffffffff` as `0x1f` — so there is no sixth bit to ask about.
+//!
+//! Each of the two cases is therefore told from the answer the bit-dropped mask would give, which
+//! is the whole reason both are here rather than one: `write-mask-unspecialized` differs from
+//! `write-mask-none`'s answer and `write-mask-unspecialized-and-red` from a mask of red alone. What
+//! neither can be told from is `write-mask-all`, because every channel is every channel — that
+//! agreement is **by construction** and is asserted as such below rather than left to look like a
+//! coincidence.
+//!
+//! Our side refused this mask until this round (`metal2vulkan::metal::state::color_write_mask`
+//! answered a `PlaceholderEnumValue` descriptor error), which is a refusal where Metal draws, so
+//! the two cases are what hold the fix.
+//!
 //! Nothing here can fault a GPU: one 4 by 4 target a case, one triangle, no loop.
 
 use crate::allowance::{Allowance, Justification, Loosening};
@@ -89,6 +114,14 @@ const SUBJECTS: &[Subject] = &[
     Subject {
         name: "write-mask-all",
         mask: ColorWriteMask::ALL,
+    },
+    Subject {
+        name: "write-mask-unspecialized",
+        mask: ColorWriteMask::UNSPECIALIZED,
+    },
+    Subject {
+        name: "write-mask-unspecialized-and-red",
+        mask: ColorWriteMask::UNSPECIALIZED.union(ColorWriteMask::RED),
     },
 ];
 
@@ -304,6 +337,11 @@ mod tests {
     /// The texel Metal leaves under `mask`: `0xff` in each channel it names, the prefill byte in
     /// each it does not.
     fn expected(mask: ColorWriteMask) -> [u8; 4] {
+        // Measured: the placeholder bit dominates the four channel bits and stores every channel,
+        // so a mask holding it is every channel whatever else it names.
+        if mask.contains(ColorWriteMask::UNSPECIALIZED) {
+            return [0xff; 4];
+        }
         let bits = [
             ColorWriteMask::RED,
             ColorWriteMask::GREEN,
@@ -360,14 +398,23 @@ mod tests {
         }
     }
 
-    /// The three masks are the three shapes a mask can have, and each is a different answer, so no
-    /// case of the family can be passed by the answer another case expects.
+    /// The three channel masks are three shapes a mask can have and each is a different answer, so
+    /// none of those cases can be passed by the answer another expects.
+    ///
+    /// The two placeholder cases are **not** in that set, and this test says why rather than
+    /// quietly excluding them: each stores every channel, so each agrees with `write-mask-all` by
+    /// construction. What tells them apart from a mask whose placeholder bit was dropped is the
+    /// next test.
     #[test]
-    fn the_three_masks_ask_three_different_questions() {
-        let answers: Vec<[u8; 4]> = SUBJECTS.iter().map(|s| expected(s.mask)).collect();
-        assert_eq!(answers.len(), 3);
-        for (i, a) in answers.iter().enumerate() {
-            for b in &answers[i + 1..] {
+    fn the_three_channel_masks_ask_three_different_questions() {
+        let channel: Vec<[u8; 4]> = SUBJECTS
+            .iter()
+            .filter(|s| !s.mask.contains(ColorWriteMask::UNSPECIALIZED))
+            .map(|s| expected(s.mask))
+            .collect();
+        assert_eq!(channel.len(), 3);
+        for (i, a) in channel.iter().enumerate() {
+            for b in &channel[i + 1..] {
                 assert_ne!(a, b, "two masks expect the same texel");
             }
         }
@@ -375,6 +422,38 @@ mod tests {
         // channel, the masked-off case writes none.
         assert_eq!(expected(ColorWriteMask::NONE), PREFILL);
         assert_eq!(expected(ColorWriteMask::ALL), [0xff; 4]);
+    }
+
+    /// Each placeholder case stores something the **bit-dropped** mask would not, which is what
+    /// makes the pair non-vacuous, and Metal's own recording says so.
+    ///
+    /// `0x10` with the bit dropped is a mask of no channel, which keeps the prefill; `0x10 | Red`
+    /// with it dropped is red alone. Both recordings hold every channel written instead.
+    #[test]
+    fn metal_reads_the_placeholder_bit_as_every_channel_and_not_as_nothing() {
+        let dropped = |mask: ColorWriteMask| mask.intersection(ColorWriteMask::ALL);
+        for (name, mask) in [
+            ("write-mask-unspecialized", ColorWriteMask::UNSPECIALIZED),
+            (
+                "write-mask-unspecialized-and-red",
+                ColorWriteMask::UNSPECIALIZED.union(ColorWriteMask::RED),
+            ),
+        ] {
+            let recorded = only_outcome(name);
+            let texels = bytes(&recorded, "case/drawn/texels");
+            assert_eq!(
+                texels,
+                [0xffu8; 4].repeat((SIDE * SIDE) as usize),
+                "{name}: Metal did not store every channel"
+            );
+            // The answer the bit-dropped mask would have given is a different image, so the case
+            // cannot pass for a side that dropped the bit.
+            let without = expected(dropped(mask));
+            assert_ne!(
+                without, [0xff; 4],
+                "{name}: the bit-dropped mask stores every channel too, so the case asks nothing"
+            );
+        }
     }
 
     /// No case of the family loosens a texel: the notices site is the only loosened site, and the
@@ -413,8 +492,8 @@ mod tests {
         }
     }
 
-    /// The three cases fingerprint three different pipelines, so a recording cannot be read for the
-    /// wrong mask.
+    /// Every case fingerprints its own pipeline, so a recording cannot be read for the wrong mask —
+    /// the two placeholder cases included, whose stored texels agree.
     #[test]
     fn each_mask_fingerprints_its_own_pipeline() {
         let words: Vec<Vec<u8>> = all()

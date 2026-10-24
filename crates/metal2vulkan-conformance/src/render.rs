@@ -60,9 +60,9 @@ use crate::case::Failure;
 use crate::case::Handle;
 use metal2vulkan::metal::{
     BarrierScope, BlendFactor, BlendOperation, ColorWriteMask, CullMode, DepthClipMode, IndexType,
-    PixelFormat, PrimitiveType, RenderStages, ResourceUsage, TessellationControlPointIndexType,
-    TessellationFactorFormat, TessellationFactorStepFunction, TessellationPartitionMode,
-    TriangleFillMode, VertexFormat, VertexStepFunction, Winding,
+    PixelFormat, PrimitiveTopologyClass, PrimitiveType, RenderStages, ResourceUsage,
+    TessellationControlPointIndexType, TessellationFactorFormat, TessellationFactorStepFunction,
+    TessellationPartitionMode, TriangleFillMode, VertexFormat, VertexStepFunction, Winding,
 };
 use metal2vulkan_runtime::{
     LoadAction, MultisampleDepthResolveFilter, MultisampleStencilResolveFilter, SamplePosition,
@@ -681,6 +681,22 @@ pub struct RenderPipelineSpec<'a> {
     /// function; `None` leaves every one of them at Metal's default, which is what a pipeline of an
     /// ordinary vertex function states.
     pub tessellation: Option<TessellationState>,
+    /// `alphaToCoverageEnabled`: the fragment's alpha at attachment 0 narrows the coverage the
+    /// rasterizer gave the pixel, to `floor(alpha * rasterSampleCount)` of its samples on this M3
+    /// Max. Metal reads the alpha **before** the attachment's write mask, and ANDs the result with
+    /// a sample mask the fragment writes; a first output with no alpha component leaves the
+    /// coverage as rasterized. [`super::cases::alpha_coverage_pairs`] is where each of those is
+    /// measured.
+    pub alpha_to_coverage: bool,
+    /// `alphaToOneEnabled`: the fragment's alpha becomes 1 before the blend reads it and before it
+    /// is stored, which the attachment's write mask can still stop from being stored.
+    pub alpha_to_one: bool,
+    /// `inputPrimitiveTopology`. Metal's default is `Unspecified`, and a pipeline that states a
+    /// class is only told from one that does not where its **vertex function writes
+    /// `[[point_size]]`**: Metal refuses such a function under `Line` and `Triangle` and accepts it
+    /// under `Point` and `Unspecified` ([`super::cases::topology_classes`]). Nothing else this
+    /// suite has measured depends on the class, the drawn primitive type included.
+    pub input_primitive_topology: PrimitiveTopologyClass,
 }
 
 impl<'a> RenderPipelineSpec<'a> {
@@ -713,6 +729,9 @@ impl<'a> RenderPipelineSpec<'a> {
             label: None,
             support_indirect_command_buffers: false,
             tessellation: None,
+            alpha_to_coverage: false,
+            alpha_to_one: false,
+            input_primitive_topology: PrimitiveTopologyClass::Unspecified,
         }
     }
 
@@ -759,6 +778,27 @@ impl<'a> RenderPipelineSpec<'a> {
     #[must_use]
     pub const fn multisampled(mut self, samples: u32) -> Self {
         self.samples = samples;
+        self
+    }
+
+    /// The pipeline with `alphaToCoverageEnabled`.
+    #[must_use]
+    pub const fn covering_by_alpha(mut self) -> Self {
+        self.alpha_to_coverage = true;
+        self
+    }
+
+    /// The pipeline with `alphaToOneEnabled`.
+    #[must_use]
+    pub const fn alpha_to_one(mut self) -> Self {
+        self.alpha_to_one = true;
+        self
+    }
+
+    /// The pipeline whose `inputPrimitiveTopology` is `class`.
+    #[must_use]
+    pub const fn topology_class(mut self, class: PrimitiveTopologyClass) -> Self {
+        self.input_primitive_topology = class;
         self
     }
 
@@ -816,6 +856,22 @@ impl<'a> RenderPipelineSpec<'a> {
         if let Some(state) = &self.tessellation {
             bytes.push(0xfb);
             bytes.extend(state.words());
+        }
+        // Appended, and each only where the pipeline moves it away from Metal's own default, for
+        // the reason the fields above are: a pipeline that states none of the three fingerprints to
+        // the bytes it always had, so every recording already committed still reads. A field that
+        // IS stated must reach the key, or a recording taken without it would read as fresh for a
+        // case that now sets it, which is worse than the field being missing -- so each has its
+        // own marker byte and none of the three can collide with another.
+        if self.alpha_to_coverage {
+            bytes.push(0xfa);
+        }
+        if self.alpha_to_one {
+            bytes.push(0xf9);
+        }
+        if self.input_primitive_topology != PrimitiveTopologyClass::Unspecified {
+            bytes.push(0xf8);
+            bytes.extend(self.input_primitive_topology.as_raw().to_le_bytes());
         }
         bytes
     }

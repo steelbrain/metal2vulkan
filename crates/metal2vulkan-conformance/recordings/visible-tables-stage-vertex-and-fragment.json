@@ -262,7 +262,12 @@
           }
         }
       ],
-      "validated": "ran"
+      "validated": {
+        "stopped": {
+          "call": "visible_function_table",
+          "message": "stage invalid.\nstage invalid.\nstage invalid."
+        }
+      }
     }
   ],
   "times": [

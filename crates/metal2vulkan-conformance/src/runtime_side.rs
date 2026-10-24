@@ -1228,6 +1228,9 @@ pub(crate) struct PipelineFields {
     pub label: Option<String>,
     /// The tessellation fields, where the case states them.
     pub tessellation: Option<metal2vulkan::pipeline::TessellationDescriptor>,
+    pub alpha_to_coverage: bool,
+    pub alpha_to_one: bool,
+    pub input_primitive_topology: metal2vulkan::metal::PrimitiveTopologyClass,
 }
 
 /// [`PipelineFields`] of `spec`: `Err` where the spec names a colour attachment past the eight a
@@ -1251,6 +1254,9 @@ pub(crate) fn pipeline_fields(spec: &RenderPipelineSpec<'_>) -> Answer<PipelineF
         support_indirect_command_buffers: spec.support_indirect_command_buffers,
         label: spec.label.map(str::to_owned),
         tessellation: spec.tessellation.as_ref().map(tessellation_descriptor),
+        alpha_to_coverage: spec.alpha_to_coverage,
+        alpha_to_one: spec.alpha_to_one,
+        input_primitive_topology: spec.input_primitive_topology,
     })
 }
 
@@ -6363,6 +6369,9 @@ impl RuntimeSide<'_> {
         descriptor.vertex_descriptor = apart.vertex_descriptor;
         descriptor.support_indirect_command_buffers = apart.support_indirect_command_buffers;
         descriptor.tessellation = apart.tessellation;
+        descriptor.alpha_to_coverage = apart.alpha_to_coverage;
+        descriptor.alpha_to_one = apart.alpha_to_one;
+        descriptor.input_primitive_topology = apart.input_primitive_topology;
         let mut options = PipelineOptions::default();
         options.label = apart.label;
         Ok((descriptor, options))

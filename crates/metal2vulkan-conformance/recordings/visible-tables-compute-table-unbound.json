@@ -433,7 +433,12 @@
           }
         }
       ],
-      "validated": "ran"
+      "validated": {
+        "stopped": {
+          "call": "visible_function_table",
+          "message": "Compute Function(visible_table_dispatch): missing Visible Function Table binding at index 1 for ops[0]."
+        }
+      }
     }
   ],
   "times": [

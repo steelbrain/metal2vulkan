@@ -7547,6 +7547,16 @@ impl MetalSide {
         descriptor.setSupportIndirectCommandBuffers(spec.support_indirect_command_buffers);
         descriptor.setRasterSampleCount(spec.samples as usize);
         descriptor.setRasterizationEnabled(spec.rasterization);
+        descriptor.setAlphaToCoverageEnabled(spec.alpha_to_coverage);
+        descriptor.setAlphaToOneEnabled(spec.alpha_to_one);
+        // SAFETY: the value is an enumerator of the SDK's own `MTLPrimitiveTopologyClass` table,
+        // and the descriptor is this call's own. The setter takes a raw `NSUInteger`, which is why
+        // `objc2` marks it unsafe.
+        unsafe {
+            descriptor.setInputPrimitiveTopology(MTLPrimitiveTopologyClass(
+                spec.input_primitive_topology.as_raw() as usize,
+            ));
+        }
         descriptor.setSupportIndirectCommandBuffers(spec.support_indirect_command_buffers);
         // Every tessellation field, and only where the case states them: a pipeline that names no
         // tessellation state leaves Metal's own defaults alone, which is what every other family's

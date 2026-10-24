@@ -4664,6 +4664,9 @@ fn the_metal_side_mentions_every_pipeline_field() {
         "colors",
         "label",
         "support_indirect_command_buffers",
+        "alpha_to_coverage",
+        "alpha_to_one",
+        "input_primitive_topology",
     ] {
         assert!(
             body.contains(field),
@@ -4733,6 +4736,11 @@ fn the_runtime_side_forwards_every_field_of_a_pipeline_spec() {
     });
     spec.label = Some("a-pipeline-spec-label");
     spec.support_indirect_command_buffers = true;
+    spec.alpha_to_coverage = true;
+    spec.alpha_to_one = true;
+    // A class that is neither Metal's default nor the ordinal of any other field here, so a class
+    // forwarded from a neighbour reads wrong.
+    spec.input_primitive_topology = metal2vulkan::metal::PrimitiveTopologyClass::Line;
     // Every tessellation field away from Metal's default, and no two of them equal as ordinals, so
     // a field forwarded from another's reads wrong rather than passing.
     spec.tessellation = Some(
@@ -4769,6 +4777,13 @@ fn the_runtime_side_forwards_every_field_of_a_pipeline_spec() {
     assert!(
         made.support_indirect_command_buffers,
         "support_indirect_command_buffers"
+    );
+    assert!(made.alpha_to_coverage, "alpha_to_coverage");
+    assert!(made.alpha_to_one, "alpha_to_one");
+    assert_eq!(
+        made.input_primitive_topology,
+        metal2vulkan::metal::PrimitiveTopologyClass::Line,
+        "input_primitive_topology"
     );
     let tessellation = made.tessellation.expect("the tessellation fields");
     assert_eq!(tessellation.max_tessellation_factor, 12, "max_factor");

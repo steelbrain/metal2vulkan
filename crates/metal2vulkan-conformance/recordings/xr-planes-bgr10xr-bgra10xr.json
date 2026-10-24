@@ -480,7 +480,7 @@
           }
         }
       ],
-      "validated": "not_run"
+      "validated": "ran"
     }
   ],
   "costs": [

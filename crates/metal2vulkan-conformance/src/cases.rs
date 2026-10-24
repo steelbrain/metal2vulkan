@@ -42,6 +42,7 @@
 //! has written it. Until somebody does, those two fields are held by construction alone, by
 //! `tests::the_runtime_side_forwards_every_field_of_a_pipeline_spec`.
 
+pub mod alpha_coverage_pairs;
 pub mod argument_encoder_crossings;
 pub mod argument_encoders;
 pub mod astc_textures;
@@ -168,6 +169,7 @@ pub mod textures;
 pub mod tile_pipeline_descriptors;
 pub mod tile_pipeline_reflection;
 pub mod tile_threadgroups;
+pub mod topology_classes;
 pub mod two_plane_copies;
 pub mod two_plane_heap_blits;
 pub mod two_plane_samples;
@@ -417,6 +419,12 @@ pub fn all() -> Vec<Box<dyn Case>> {
         cases.push(Box::new(case));
     }
     for case in color_write_masks::all() {
+        cases.push(Box::new(case));
+    }
+    for case in topology_classes::all() {
+        cases.push(Box::new(case));
+    }
+    for case in alpha_coverage_pairs::all() {
         cases.push(Box::new(case));
     }
     for case in blend_sweeps::all() {

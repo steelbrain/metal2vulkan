@@ -79,11 +79,22 @@ pub fn blend_op(op: BlendOperation) -> Result<vk::BlendOp, Error> {
 }
 
 /// `MTLColorWriteMask` → `VkColorComponentFlags`. Metal numbers the channels from alpha
-/// (`Alpha = 1`, `Red = 8`), Vulkan from red (`R = 1`, `A = 8`); `Unspecialized` is a
-/// placeholder.
+/// (`Alpha = 1`, `Red = 8`), Vulkan from red (`R = 1`, `A = 8`).
+///
+/// `MTLColorWriteMaskUnspecialized` (`0x10`) is MTL4's placeholder for a mask a render command
+/// specializes later, but a **classic** `MTLRenderPipelineDescriptor` takes it and draws: measured
+/// on an Apple M3 Max, macOS 27.0.1, a pipeline whose `writeMask` is `0x10` stores **every**
+/// channel of its fragment, and so does one whose mask is `0x18` or `0x1f`, so the bit dominates
+/// the four channel bits rather than being ignored (ignoring it would leave `0x10` as a mask of no
+/// channel, which stores nothing). Metal's setter keeps five bits: `0x20` reads back as `0x0`,
+/// `0x30` as `0x10` and `0xffffffff` as `0x1f`. So the bit is every channel here, which is what
+/// `cases/write_mask_unspecialized.rs` of the conformance suite compares against Metal.
 pub fn color_write_mask(mask: ColorWriteMask) -> Result<vk::ColorComponentFlags, Error> {
     if mask.contains(ColorWriteMask::UNSPECIALIZED) {
-        return Err(placeholder(ColorWriteMask::METAL_NAME, mask.as_raw()));
+        return Ok(vk::ColorComponentFlags::R
+            | vk::ColorComponentFlags::G
+            | vk::ColorComponentFlags::B
+            | vk::ColorComponentFlags::A);
     }
     let mut out = vk::ColorComponentFlags::empty();
     for (m, v) in [
@@ -623,7 +634,22 @@ mod tests {
             color_write_mask(ColorWriteMask::NONE),
             Ok(vk::ColorComponentFlags::empty())
         );
-        assert!(color_write_mask(ColorWriteMask::UNSPECIALIZED).is_err());
+        // Metal draws every channel under the placeholder bit, measured, and the bit dominates the
+        // channel bits rather than being masked out of them: `0x10` alone and `0x10 | RED` are both
+        // every channel, where dropping the bit would make the first a mask of none.
+        let all = vk::ColorComponentFlags::R
+            | vk::ColorComponentFlags::G
+            | vk::ColorComponentFlags::B
+            | vk::ColorComponentFlags::A;
+        assert_eq!(color_write_mask(ColorWriteMask::UNSPECIALIZED), Ok(all));
+        assert_eq!(
+            color_write_mask(ColorWriteMask::UNSPECIALIZED | ColorWriteMask::RED),
+            Ok(all)
+        );
+        assert_eq!(
+            color_write_mask(ColorWriteMask::ALL.union(ColorWriteMask::UNSPECIALIZED)),
+            Ok(all)
+        );
     }
 
     #[test]
