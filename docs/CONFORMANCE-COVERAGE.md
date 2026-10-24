@@ -604,7 +604,7 @@ Each case module: the cases it holds, the `Side` methods it calls, and how many 
 | `fresh_contents` | 87 | 87 | every field | 58 |
 | `function_bindings` | 15 | 15 | every field | 65 |
 | `function_facts` | 15 | 15 | every field | 38 |
-| `half_output_blends` | 6 | 6 | every field | 123 |
+| `half_output_blends` | 6 | 6 | every field | 124 |
 | `half_read_nans` | 6 | 6 | every field | 49 |
 | `half_storage_writes` | 9 | 9 | every field | 33 |
 | `half_texel_nans` | 8 | 8 | every field | 32 |
@@ -1542,7 +1542,7 @@ One row per implemented item of the SDK, in the coverage map's order. *exercised
 | `setFragmentSamplerStates:lodMinClamps:lodMaxClamps:withRange:` | yes | `render_state` | 3 |
 | `setFragmentVisibleFunctionTable:atBufferIndex:` | no | — | — |
 | `setFragmentVisibleFunctionTables:withBufferRange:` | no | — | — |
-| `setBlendColorRed:green:blue:alpha:` | yes | `blend_interactions`, `blend_sweeps`, `rotated_targets` | 30 |
+| `setBlendColorRed:green:blue:alpha:` | yes | `blend_interactions`, `blend_sweeps`, `half_output_blends`, `rotated_targets` | 36 |
 | `setDepthStencilState:` | yes | `depth_resolve_pairs`, `depth_stencil_space`, `layered_targets`, `pass_sequence_actions`, `render_depth_stencil_state`, `shader_stencil`, `srgb_fetch`, `stencil_resolve_pairs`, `stencil_resolved_sample`, `visibility` | 37 |
 | `setStencilReferenceValue:` | yes | `depth_stencil_space`, `render_depth_stencil_state`, `shader_stencil`, `stencil_resolve_pairs`, `stencil_resolved_sample` | 16 |
 | `setStencilFrontReferenceValue:backReferenceValue:` | yes | `depth_stencil_space`, `render_depth_stencil_state` | 11 |
