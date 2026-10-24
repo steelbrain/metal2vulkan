@@ -2805,16 +2805,39 @@ fn the_known_gaps_ledger_parses_and_names_real_cases() {
             known.waiting_on
         );
     }
-    // The divergence rows this round left open: the fragment quad's placement on llvmpipe, which
-    // MoltenVK answers exactly, so the rows are venue-scoped rather than global.
+    // The divergence rows this round left open: the fragment quad's placement on one lavapipe
+    // build, which MoltenVK answers exactly, so the rows are venue-scoped rather than global.
+    //
+    // The scope is the build and not the implementation. These rows were measured in the gate
+    // container's arm64 lavapipe, and the suite's other lavapipe -- x86-64, `LLVM 23.1.1`,
+    // 256-bit vectors -- does not hold them. A venue field of `llvmpipe` is a substring of both
+    // device names, so it held the rows on a venue the gap was never measured on, where the
+    // retire direction then read all three as fixed. The two legs are told apart by the only thing
+    // in a venue's description that differs, which is the device name `llvmpipe` writes itself,
+    // so that is what the field carries.
     let quads: Vec<&crate::known_gaps::KnownGap> = ledger
         .iter()
         .filter(|known| known.case == "discard-quad-sum-placement")
         .collect();
     assert_eq!(quads.len(), 3, "{ledger:?}");
+    let lavapipe = |device: &str| crate::case::Venue {
+        device: device.to_owned(),
+        driver: "vendor 0x10005 device 0x0000".to_owned(),
+        api: "1.2".to_owned(),
+        metal_level: "27.0.1".to_owned(),
+    };
+    let measured = lavapipe("llvmpipe (LLVM 21.1.8, 128 bits)");
+    let other = lavapipe("llvmpipe (LLVM 23.1.1, 256 bits)");
+    for known in &quads {
+        assert!(known.covers_venue(&measured), "{known:?}");
+        assert!(
+            !known.covers_venue(&other),
+            "the row holds on a lavapipe it was never measured on: {known:?}"
+        );
+    }
     for known in quads {
         assert_eq!(known.expects, crate::known_gaps::Expects::Divergent);
-        assert_eq!(known.venue, "llvmpipe");
+        assert_eq!(known.venue, "llvmpipe (LLVM 21.1.8, 128 bits)");
         // A divergence row says how much moved -- how many of the site's leaves differ and how
         // far -- and never where the walk first noticed, which is a property of the data and not
         // of the bug. All four texels of the kept quad differ, which the first-mismatch answer
