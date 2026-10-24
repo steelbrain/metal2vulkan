@@ -146,10 +146,41 @@ const RUNS: u32 = 8;
 /// `render-draw-forms-lines` is the control, and it is a case rather than an argument: its
 /// indexed draw is the eight-argument direct form, so it reaches no bounds pass, moves neither
 /// count, declares nothing and replays **exact** on the same venue in the same run.
+/// The degrade notices **every** case of the family may announce, whatever draw form it uses. A
+/// list rather than a device query, because a case never branches on the device: it runs and reads
+/// what came back, and a venue that announces a kind not here fails the case until the kind is
+/// added.
+///
+/// Each is a declaration over the notices site and loosens no value: an `RGBA32Uint` texel is the
+/// `uint4` the fragment function returned, so every channel of every case still compares exactly.
+const PASS_NOTICES: &[Degradation] = &[
+    // The vertex stage's own compiler rewrote its arithmetic as it made the pipeline, on a device
+    // whose float arithmetic is not Metal's.
+    Degradation::DeviceArithmetic,
+    // The vertex function writes `[[point_size]]`, which a device without `shaderPointSize`'s
+    // guarantee takes as its own point size rather than Metal's.
+    Degradation::DevicePointSize,
+    // The positions, the indices, the indirect arguments and the read-back are all `Shared`, and a
+    // device with no unified memory keeps a `Shared` allocation in system memory because that is
+    // the only memory both sides can reach. It belongs to the venue's memory model rather than to
+    // any draw form of this family.
+    Degradation::SharedInSystemMemory,
+];
+
+/// The allowances every case keeps: one declaration per kind of [`PASS_NOTICES`].
+fn pass_notices() -> Vec<Allowance> {
+    PASS_NOTICES
+        .iter()
+        .map(|kind| crate::replay::notice_allowance(kind.code()))
+        .collect()
+}
+
 fn bounds_pass_notice() -> Vec<Allowance> {
-    vec![crate::replay::notice_allowance(
+    let mut allowances = pass_notices();
+    allowances.push(crate::replay::notice_allowance(
         Degradation::IndirectIndexBoundsPass.code(),
-    )]
+    ));
+    allowances
 }
 
 /// Every case of the family, in the order the report lists them.
@@ -1129,11 +1160,12 @@ impl Case for Lines {
     }
 
     fn allowances(&self) -> Vec<Allowance> {
-        // Nothing loosened and no notice declared, for the reason the points case states. A line's
-        // covered set is a rasterization rule rather than arithmetic, so the module test holds this
-        // case to what any rule implies and the comparison holds both legs to the same bytes: a
-        // coverage rule that differs is a finding, not a tolerance.
-        Vec::new()
+        // Nothing loosened, for the reason the points case states, and no bounds-pass notice:
+        // this case's indexed draw is the eight-argument direct form, so it reaches no bounds
+        // pass. A line's covered set is a rasterization rule rather than arithmetic, so the module
+        // test holds this case to what any rule implies and the comparison holds both legs to the
+        // same bytes: a coverage rule that differs is a finding, not a tolerance.
+        pass_notices()
     }
 
     fn shaders(&self) -> Result<Vec<ShaderRef>, String> {
@@ -1307,7 +1339,7 @@ impl Case for Empty {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::allowance::Justification;
+    use crate::allowance::{Justification, Loosening};
     use crate::transcript::Transcript;
     use std::collections::{BTreeMap, BTreeSet};
 
@@ -2045,25 +2077,36 @@ mod tests {
             assert_eq!(case.record_runs(), RUNS);
             assert!(matches!(case.metal_source(), MetalSource::Run));
             // No case loosens a value: every channel it reads is a `uint` the fragment function
-            // returned. What a case declares is the one notice its **indexed indirect** draw
-            // provokes, and exactly the two cases that make one declare it -- which is the
-            // falsification of the declaration rather than a restatement of it, because the third
-            // case reaches the same code with every other draw form and announces nothing.
+            // returned, so every allowance any case names sits over the notices site.
+            //
+            // Every case declares the family's own list ([`PASS_NOTICES`]). On top of it, the
+            // notice an **indexed indirect** draw provokes is declared by exactly the cases that
+            // make one -- which is the falsification of that declaration rather than a
+            // restatement of it, because the lines case reaches the same code with the direct
+            // indexed form and announces nothing.
             let declared = case.allowances();
-            let indirect = line_rows_hold_no_indexed_indirect(case.name());
-            match indirect {
-                true => assert!(declared.is_empty(), "{} declares something", case.name()),
-                false => {
-                    assert_eq!(declared.len(), 1, "{} declares one notice", case.name());
-                    assert_eq!(
-                        declared[0].justified_by,
-                        Justification::Degradation(
-                            Degradation::IndirectIndexBoundsPass.code().to_owned()
-                        ),
-                    );
-                    assert!(declared[0].path.starts_with("case/notices"));
-                }
+            for allowance in &declared {
+                assert!(allowance.path.starts_with("case/notices"), "{allowance:?}");
+                assert_eq!(allowance.loosening, Loosening::Unchecked, "{allowance:?}");
             }
+            let bounds_pass =
+                Justification::Degradation(Degradation::IndirectIndexBoundsPass.code().to_owned());
+            let names_bounds_pass = declared
+                .iter()
+                .any(|allowance| allowance.justified_by == bounds_pass);
+            let indirect = line_rows_hold_no_indexed_indirect(case.name());
+            assert_eq!(
+                names_bounds_pass,
+                !indirect,
+                "{} and its bounds-pass declaration disagree",
+                case.name()
+            );
+            assert_eq!(
+                declared.len(),
+                PASS_NOTICES.len() + usize::from(!indirect),
+                "{} declares the wrong number of notices",
+                case.name()
+            );
             assert!(case.inputs().is_ok());
             assert!(case.shaders().is_ok());
         }

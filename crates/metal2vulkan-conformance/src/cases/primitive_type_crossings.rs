@@ -125,6 +125,7 @@ use crate::recording::ShaderRef;
 use crate::render::{ColorState, PassColor, Plane, ReadAt, RenderPass, RenderStep, RenderWork};
 use crate::transcript::{Node, Observed, Sites, Value};
 use metal2vulkan::metal::{IndexType, PrimitiveType};
+use metal2vulkan_runtime::Degradation;
 
 use super::render_draw_forms::{
     fixture_inputs, layout, library, pipeline, plane, positions_buffer, shader_refs, target_spec,
@@ -322,9 +323,25 @@ impl Case for RestartIndices {
     }
 
     fn allowances(&self) -> Vec<Allowance> {
-        // Nothing is loosened and nothing is declared: every draw here is the direct indexed form,
-        // which reaches no bounds pass and announces nothing.
-        Vec::new()
+        // **Nothing is loosened.** Every draw here is the direct indexed form, which reaches no
+        // bounds pass, and every texel of every cell still compares exactly.
+        //
+        // Three kinds are declared over the notices site. The vertex stage's own compiler rewrites
+        // its arithmetic on a device whose float arithmetic is not Metal's
+        // (`device-arithmetic`); the vertex function writes `[[point_size]]`, which a device
+        // without `shaderPointSize`'s guarantee takes as its own (`device-point-size`); and the
+        // positions, indices, marks, frames and read-back are all `Shared`, which a device with no
+        // unified memory keeps in system memory because that is the only memory both sides can
+        // reach (`shared-in-system-memory`). The last two belong to the venue -- its point-size
+        // guarantee and its memory model -- rather than to a primitive type or an index type.
+        [
+            Degradation::DeviceArithmetic,
+            Degradation::DevicePointSize,
+            Degradation::SharedInSystemMemory,
+        ]
+        .iter()
+        .map(|kind| crate::replay::notice_allowance(kind.code()))
+        .collect()
     }
 
     fn shaders(&self) -> Result<Vec<ShaderRef>, String> {

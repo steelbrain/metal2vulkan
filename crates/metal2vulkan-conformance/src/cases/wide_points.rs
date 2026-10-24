@@ -214,9 +214,15 @@ impl Case for WidePoints {
         // The same device also converts the float the fragment writes to the normalized colour
         // attachment in the shader (`shader-color-conversion`, lavapipe). Declared, not loosened:
         // every coverage still compares exactly.
+        //
+        // The positions and the read-back are `Shared`, and a device with no unified memory keeps
+        // a `Shared` allocation in system memory because that is the only memory both sides can
+        // reach (`shared-in-system-memory`). That is the venue's memory model, not this case's
+        // point.
         [
             Degradation::DevicePointSize,
             Degradation::ShaderColorConversion,
+            Degradation::SharedInSystemMemory,
         ]
         .into_iter()
         .map(|kind| crate::replay::notice_allowance(kind.code()))

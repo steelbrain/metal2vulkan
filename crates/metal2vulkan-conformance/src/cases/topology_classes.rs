@@ -237,14 +237,30 @@ impl Case for TopologyClassCase {
         // announces nothing, which is why its case declares no allowance at all -- and that
         // asymmetry is itself a small confirmation that the notice is the arithmetic's and not the
         // topology class's.
-        match self.subject.vertex == PLAIN_VERTEX {
-            true => vec![Allowance::new(
+        //
+        // Three more are declared for both cases. A device whose own conversion of a float written
+        // to a normalized colour attachment is not Metal's converts it in the shader instead
+        // (`shader-color-conversion`); a device without `shaderPointSize`'s guarantee takes the
+        // point size the function writes as its own (`device-point-size`); and the positions and
+        // the read-back are `Shared`, which a device with no unified memory keeps in system memory
+        // because that is the only memory both sides can reach (`shared-in-system-memory`). All
+        // three belong to the venue rather than to a topology class, and none loosens a texel.
+        let mut allowances: Vec<Allowance> = [
+            Degradation::ShaderColorConversion,
+            Degradation::DevicePointSize,
+            Degradation::SharedInSystemMemory,
+        ]
+        .iter()
+        .map(|kind| crate::replay::notice_allowance(kind.code()))
+        .collect();
+        if self.subject.vertex == PLAIN_VERTEX {
+            allowances.push(Allowance::new(
                 format!("case/{NOTICES_SITE}/*"),
                 Loosening::Unchecked,
                 Justification::notice(Degradation::FastMathRewrites),
-            )],
-            false => Vec::new(),
+            ));
         }
+        allowances
     }
 
     fn shaders(&self) -> Result<Vec<ShaderRef>, String> {
@@ -509,9 +525,11 @@ mod tests {
                     assert_ne!(a, b, "{}: two classes fingerprint alike", case.name());
                 }
             }
-            // Only the notices site may be loosened, and only for the case whose function has
-            // arithmetic to rewrite: the point-size function computes nothing and declares nothing,
-            // which is what says the notice is the arithmetic's and not the topology class's.
+            // Only the notices site may be loosened. Both cases declare the three kinds that
+            // belong to the device -- its colour conversion, its point-size guarantee and its
+            // memory model -- and only the case whose function has arithmetic to rewrite declares
+            // the fast-math notice: the point-size function computes nothing, which is what says
+            // that notice is the arithmetic's and not the topology class's.
             for allowance in case.allowances() {
                 assert_eq!(
                     allowance.path,
@@ -520,10 +538,22 @@ mod tests {
                     case.name()
                 );
             }
+            let fast_math =
+                Justification::Degradation(Degradation::FastMathRewrites.code().to_owned());
+            let names_fast_math = case
+                .allowances()
+                .iter()
+                .any(|allowance| allowance.justified_by == fast_math);
             assert_eq!(
-                case.allowances().is_empty(),
-                writes_point_size(&case.subject),
-                "{}: the point-size case declares a notice, or the plain one declares none",
+                names_fast_math,
+                !writes_point_size(&case.subject),
+                "{}: the point-size case declares the fast-math notice, or the plain one does not",
+                case.name()
+            );
+            assert_eq!(
+                case.allowances().len(),
+                3 + usize::from(names_fast_math),
+                "{}: an unexpected number of declarations",
                 case.name()
             );
             case.shaders().unwrap();
