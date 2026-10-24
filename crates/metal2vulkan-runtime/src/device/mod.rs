@@ -128,6 +128,12 @@ pub(super) struct InstanceShared {
     /// an adopted instance): part of a making's pipeline cache record's name
     /// (`shader_cache/driver.rs`).
     pub(super) settings: metal2vulkan::cache::Hash256,
+    /// The instance layers the caller asked for that the loader could not provide, which the
+    /// instance was created without (`create::layers_after`), in the order asked: each device
+    /// made of the instance says so as it is made (`create::layers_dropped`). Empty for an
+    /// instance created with every layer asked for, for one adopted, and where none was asked
+    /// for.
+    pub(super) dropped_layers: Vec<std::ffi::CString>,
 }
 
 impl InstanceShared {

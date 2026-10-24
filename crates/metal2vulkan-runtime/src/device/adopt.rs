@@ -263,6 +263,7 @@ impl Device {
                 messenger: None,
                 relay: None,
                 settings: [0; 32],
+                dropped_layers: Vec::new(),
             }),
             physical: raw.physical_device,
             raw: device,

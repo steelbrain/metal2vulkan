@@ -17,9 +17,9 @@ fn the_registry_id_folds_the_uuid_and_is_never_zero() {
 }
 
 use crate::device::create::{
-    default_loaders, dma_buf_image_names, dma_buf_names, enable_set, host_image_copy,
-    instance_version, layer_settings, linear_color_attachment, open_loader, queue_plan,
-    setting_values, timeline_difference, QueuePlan,
+    default_loaders, dma_buf_image_names, dma_buf_names, drops_layers, enable_set, host_image_copy,
+    instance_version, layer_settings, layers_dropped, linear_color_attachment, open_loader,
+    queue_plan, setting_values, timeline_difference, QueuePlan, LAYERS_DROPPED,
 };
 use crate::enables::host_image_copy_names;
 use crate::{DeviceOptions, Error, InstanceApiVersion, LayerSetting, LayerSettingValue};
@@ -720,4 +720,48 @@ fn native_device_maths_rounds_a_tiny_product_before_its_flush_off_moltenvk() {
         rounding > 0 && metals > 0,
         "{rounding} rounding, {metals} Metal's own"
     );
+}
+
+/// Only a `vkCreateInstance` that answered `VK_ERROR_LAYER_NOT_PRESENT` with a layer asked for is
+/// answered by creating the instance again without the layers; every other failure, and that
+/// answer with no layer asked for, is the caller's. The creation clears the list to drop them, so
+/// the second attempt cannot answer so again: two `vkCreateInstance` calls at most.
+#[test]
+fn only_a_missing_layer_drops_the_layers_asked_for() {
+    let asked = vec![CString::new("VK_LAYER_KHRONOS_validation").unwrap()];
+    let missing = vk::Result::ERROR_LAYER_NOT_PRESENT;
+    assert!(drops_layers(missing, &asked));
+    // The list cleared: the guard is false, so the attempts end at two.
+    assert!(!drops_layers(missing, &[]));
+    // Every other failure, which the caller answers: the fallback is this error code's alone.
+    for error in [
+        vk::Result::ERROR_OUT_OF_HOST_MEMORY,
+        vk::Result::ERROR_OUT_OF_DEVICE_MEMORY,
+        vk::Result::ERROR_INITIALIZATION_FAILED,
+        vk::Result::ERROR_EXTENSION_NOT_PRESENT,
+        vk::Result::ERROR_INCOMPATIBLE_DRIVER,
+        vk::Result::ERROR_DEVICE_LOST,
+        vk::Result::SUCCESS,
+    ] {
+        assert!(!drops_layers(error, &asked), "{error:?} dropped the layers");
+    }
+}
+
+/// The message a device of such an instance sends as it is made names its layers, its device and
+/// the id name; a device whose instance dropped none sends nothing.
+#[test]
+fn the_dropped_layers_are_announced_by_name() {
+    assert_eq!(layers_dropped(&[], "a device"), None);
+    let dropped = vec![
+        CString::new("VK_LAYER_KHRONOS_validation").unwrap(),
+        CString::new("VK_LAYER_absent").unwrap(),
+    ];
+    let text = layers_dropped(&dropped, "an Apple M3 Max").expect("the message");
+    assert!(
+        text.contains("VK_LAYER_KHRONOS_validation, VK_LAYER_absent"),
+        "{text}"
+    );
+    assert!(text.contains("an Apple M3 Max"), "{text}");
+    assert!(text.contains(LAYERS_DROPPED), "{text}");
+    assert_eq!(LAYERS_DROPPED, "metal2vulkan-instance-layers-dropped");
 }

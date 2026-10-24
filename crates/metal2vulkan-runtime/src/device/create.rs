@@ -598,7 +598,6 @@ fn create_instance(options: &DeviceOptions) -> Result<Arc<InstanceShared>, Error
     // not enable refuses the options before the instance is made, where a driver need not.
     instance_requirements_met(&options.device_extensions, &extensions)?;
     let extension_names: Vec<*const c_char> = extensions.iter().map(|n| n.as_ptr()).collect();
-    let layer_names: Vec<*const c_char> = options.layers.iter().map(|n| n.as_ptr()).collect();
     let api_version = instance_version(options.instance_api_version, || {
         // SAFETY: a global command of a loaded entry.
         let version = unsafe { entry.try_enumerate_instance_version() }.map_err(vulkan)?;
@@ -622,6 +621,7 @@ fn create_instance(options: &DeviceOptions) -> Result<Arc<InstanceShared>, Error
     let (bools, strings) = setting_values(&chained_settings);
     let settings = layer_settings(&chained_settings, &bools, &strings);
     let mut settings_info = vk::LayerSettingsCreateInfoEXT::default().settings(&settings);
+    let layer_names: Vec<*const c_char> = options.layers.iter().map(|n| n.as_ptr()).collect();
     let mut info = vk::InstanceCreateInfo::default()
         .application_info(&application)
         .enabled_extension_names(&extension_names)
@@ -631,17 +631,36 @@ fn create_instance(options: &DeviceOptions) -> Result<Arc<InstanceShared>, Error
         } else {
             vk::InstanceCreateFlags::empty()
         });
+    // The chain is built once, before the attempts below: `push_next` writes the pushed
+    // structure's own `pNext`, so pushing these onto a second create info would leave the one
+    // pushed last pointing at the one pushed first, whose `pNext` the second push then sets to
+    // itself -- a cycle the loader walks without end, allocating as it goes.
     if let Some(chained) = chained.as_mut() {
         info = info.push_next(chained);
     }
     if !settings.is_empty() {
         info = info.push_next(&mut settings_info);
     }
-    // SAFETY: `info` and everything it points at live for the call.
-    let raw = match unsafe { new_instance(&entry, &info) } {
-        Ok(raw) => raw,
-        Err(vk::Result::ERROR_INCOMPATIBLE_DRIVER) => return Err(Error::NoDevice),
-        Err(error) => return Err(vulkan(error)),
+    // A layer the loader cannot provide is not something the device lacks: the layers are
+    // diagnostics, so a caller that asked for a device gets one. The instance of the layers asked
+    // for and, where the loader answers `VK_ERROR_LAYER_NOT_PRESENT` ([`drops_layers`]), of no
+    // layer at all, whose answer is the caller's: two `vkCreateInstance` calls at most, the same
+    // create info but for its layer list, which the second has none of, so the arm cannot run
+    // twice. What was left out is announced as each device is made ([`layers_dropped`]).
+    let mut layers: &[CString] = &options.layers;
+    let mut dropped: Vec<CString> = Vec::new();
+    let raw = loop {
+        // SAFETY: `info` and everything it points at live for the call.
+        match unsafe { new_instance(&entry, &info) } {
+            Ok(raw) => break raw,
+            Err(vk::Result::ERROR_INCOMPATIBLE_DRIVER) => return Err(Error::NoDevice),
+            Err(error) if drops_layers(error, layers) => {
+                dropped = options.layers.clone();
+                layers = &[];
+                info = info.enabled_layer_names(&[]);
+            }
+            Err(error) => return Err(vulkan(error)),
+        }
     };
     let messenger = match (sink, messenger_info.as_mut()) {
         (Some(sink), Some(info)) => {
@@ -688,8 +707,38 @@ fn create_instance(options: &DeviceOptions) -> Result<Arc<InstanceShared>, Error
         messenger,
         relay,
         settings,
+        dropped_layers: dropped,
     }))
 }
+
+/// Whether `error`, which `vkCreateInstance` of `layers` answered, is answered by creating the
+/// instance again with no layer at all: a missing layer's answer alone, and only where a layer was
+/// asked for (`VK_ERROR_LAYER_NOT_PRESENT` with none asked for is the loader's own answer, with
+/// nothing of ours to drop). Every other failure is the caller's.
+pub(crate) fn drops_layers(error: vk::Result, layers: &[CString]) -> bool {
+    error == vk::Result::ERROR_LAYER_NOT_PRESENT && !layers.is_empty()
+}
+
+/// The informational message a device of an instance created without the layers `dropped`, which
+/// its caller asked for and the loader could not provide, sends as it is made: no degrade notice,
+/// as nothing of Metal's answers differs (the layers are diagnostics). `None` where none was
+/// dropped.
+pub(crate) fn layers_dropped(dropped: &[CString], device: &str) -> Option<String> {
+    if dropped.is_empty() {
+        return None;
+    }
+    let names: Vec<String> = dropped
+        .iter()
+        .map(|name| name.to_string_lossy().into_owned())
+        .collect();
+    Some(format!(
+        "metal2vulkan: the device on {device} was made without the instance layer(s) {}, which          the loader answered VK_ERROR_LAYER_NOT_PRESENT for: a layer it does not list, or one it          lists and cannot load (a layer manifest naming its library by a bare filename, which the          loader looks for on the system library search path). The device is the same in every          other way and its answers are Metal's; what those layers would have reported is missing          [{LAYERS_DROPPED}]"
+    , names.join(", ")))
+}
+
+/// The id name of the informational message a device made without the layers its caller asked for
+/// sends as it is made ([`layers_dropped`]).
+pub(crate) const LAYERS_DROPPED: &str = "metal2vulkan-instance-layers-dropped";
 
 /// The physical devices of `instance` that `options` admit, in the order
 /// `Device::system_default` prefers them (by [`DeviceKind`], then enumeration order).
@@ -1388,6 +1437,9 @@ fn create_on(
     };
     // SAFETY: the device was made from these parts just now.
     let device = unsafe { Device::assemble(parts) }?;
+    if let Some(text) = layers_dropped(&instance.dropped_layers, device.name()) {
+        device.inform(LAYERS_DROPPED, text);
+    }
     if let Some(why) = cache_kept {
         let object = format!("the device, on {}", device.name());
         if kept_cache_is_metals(device.properties().description.driver_id) {
