@@ -72,6 +72,28 @@
 //!    write mask that drops alpha still lets alpha-to-one feed the blend, and only stops the 1
 //!    from being stored.
 //!
+//! # Which rows can detect the field at all, by falsification
+//!
+//! Measured, not reasoned: with `reads_alpha_to_coverage` forced to `false` in our own leg
+//! (`crates/metal2vulkan/src/pipeline/link/graphics.rs`) and nothing else changed, **eight** of
+//! this family's rows diverge and the rest stay exact. The eight are every `a2c-on` row of a
+//! four-component output below full coverage, the one-sample row included. Two `a2c-on` rows do
+//! **not** move, and both are deliberate:
+//!
+//! - **`a2c-on-4-alpha-100`** — an alpha of 1 covers `floor(1 * 4) = 4` samples, which is every
+//!   sample the rasterizer gave, so the field on and off store the same texel. It is the sweep's
+//!   endpoint and the proof that the top of the range is full coverage rather than a count the
+//!   suite never reached; it is **not** evidence that the field was read, and the rows below it
+//!   are what carry that.
+//! - **`a2c-on-4-no-alpha-output`** — no alpha component, so there is nothing to narrow.
+//!
+//! A second falsification separates the pair from its axes. Dropping the alpha's coverage **only
+//! where the fragment writes a sample mask** — the "coverage taken after the mask" order — moves
+//! exactly **two** rows, `a2c-on-4-alpha-50-shadermask-5` and `-shadermask-a`, by 47 codes, which
+//! is the resolve's distance between one covered sample and two. Every single-axis row stays
+//! exact: the mask-alone control, the alpha-alone row, the whole sweep and the write-mask cross.
+//! That is a divergence only the pair can see, which is the property the cross was authored for.
+//!
 //! # What turned out independent
 //!
 //! Said here because a pair that shows nothing is a result:
