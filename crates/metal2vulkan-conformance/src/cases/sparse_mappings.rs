@@ -132,7 +132,20 @@ const FILL: u8 = 0xc3;
 /// texture. It is a device gap, announced honestly, so each row declares it and then compares
 /// every number exactly; a venue with native sparse residency announces nothing and the
 /// declaration simply does not fire there.
-const EVERY_ROWS_NOTICES: [Degradation; 1] = [Degradation::EmulatedSparseTexture];
+///
+/// A device that *has* sparse residency announces the other of the pair instead:
+/// `non-strict-residency` says the device does not guarantee that a read of an unmapped tile
+/// answers zero, where Metal's sparse texture does. Both are the device's own and neither loosens
+/// a number: every row still compares each texel and each count with Metal's exactly, so a texel
+/// a non-strict read moved would be this family's finding and not its tolerance.
+///
+/// Measured on llvmpipe (LLVM 23.1.1, 256 bits, Mesa 26.2.4) in a whole-suite replay: all nine
+/// rows announce `non-strict-residency`, and eight of them announce no
+/// `emulated-sparse-texture` at all, which is the declaration that leaves the other unfired.
+const EVERY_ROWS_NOTICES: [Degradation; 2] = [
+    Degradation::EmulatedSparseTexture,
+    Degradation::NonStrictResidency,
+];
 
 /// A single-sampled 2D sparse texture of [`WIDTH`] by [`WIDTH`].
 fn plain() -> SparseTextureSpec {

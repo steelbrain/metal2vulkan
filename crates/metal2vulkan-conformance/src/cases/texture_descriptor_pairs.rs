@@ -796,10 +796,18 @@ impl Case for HeapTextureGetters {
         // own way needs more of the heap's bytes than Metal's does
         // (`heap-texture-larger-than-metal`), and it is laid out untiled where Metal tiles it
         // (`heap-texture-untiled-layout`).
+        //
+        // A fourth, `shadowed-texture`, is the end of the same layout: where the device's image
+        // cannot lie over the heap's bytes at all, the texture's texels are copied into an image
+        // before each use and back after each write. It is a cost rather than a value -- this
+        // case still reads only where a texture lives and what may be done to it -- and it was
+        // measured firing for this row on llvmpipe (LLVM 23.1.1, 256 bits, Mesa 26.2.4) in a
+        // whole-suite replay.
         [
             metal2vulkan_runtime::Degradation::HeapTextureLosslessLayout,
             metal2vulkan_runtime::Degradation::HeapTextureLargerThanMetal,
             metal2vulkan_runtime::Degradation::HeapTextureUntiledLayout,
+            metal2vulkan_runtime::Degradation::ShadowedTexture,
         ]
         .iter()
         .map(|kind| crate::replay::notice_allowance(kind.code()))
