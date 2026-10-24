@@ -617,15 +617,27 @@ const HEAP_SIZE: u64 = 1 << 20;
 ///
 /// - a heap-placed texture never had a descriptor stating a CPU cache mode or a hazard tracking
 ///   mode, so what it answers is the **heap's**, composed by Metal;
-/// - `heapOffset` is where Metal's suballocator put it, which depends on the footprint of every
-///   texture placed before it — so the table places a run of textures of **different shapes** in
-///   one heap, in a stated order, and the offsets are a sequence rather than a value;
-/// - the heap's own `usedSize` after each placement is Metal's allocator's answer to the same
-///   question from the other side, and is read beside each offset.
+/// - **`heapOffset` is 0 for a heap-placed texture however it is placed**, which is the measured
+///   answer rather than the expected one. Metal answers 0 at every one of the fifteen sites of
+///   this case while the heap's own `usedSize` climbs past each texture — 16512, 39040, 138496,
+///   142336, 207872 — so the five plainly occupy distinct, growing regions and Metal reports not
+///   one of their offsets. A heap **buffer**'s is not like this:
+///   [`crate::cases::resource_facts`] records a placement-heap buffer at the offsets 0, 256 and
+///   512 it asked for, and a suballocated one at Metal's own. So `heapOffset` is a buffer's fact
+///   and a texture's is a constant, which is itself worth a case because an implementation that
+///   reported a texture's real offset would be wrong;
+/// - the heap's own `usedSize` after each placement is therefore the **only** reading that says
+///   where Metal put each texture, and it is read after every one.
 ///
-/// The positive control is the sequence itself: three textures of three footprints cannot all
-/// answer offset 0, so a side that answered 0 always differs at two sites, and a side whose
-/// suballocator packs differently differs in the `usedSize` run as well.
+/// So the positive control is the `usedSize` run and not the offsets — which was learnt by
+/// falsification rather than assumed. Our leg patched to answer `heapOffset` 0 for a texture moves
+/// **nothing**, because 0 is already Metal's answer at all fifteen sites; patched to answer the
+/// heap's `size` where the case reads its `usedSize` it moves all fifteen of those sites and no
+/// getter at all. The heap's modes are a second control and bind independently: the three heaps
+/// answer `resourceOptions` 288 for the `Default` and `Untracked` descriptors and 544 for
+/// `Tracked`, with `hazardTrackingMode` 1, 1 and 2 — two values a side echoing one constant could
+/// not give, and the same resolution [`crate::cases::resource_facts`] measured for a heap buffer,
+/// asked here of the one resource kind that family never placed.
 pub struct HeapTextureGetters;
 
 /// The textures placed in one heap, in order: a shape whose footprint differs from the next, so the
@@ -945,7 +957,8 @@ mod tests {
     }
 
     /// Every heap this family places into is one Metal makes, and the textures it places are of
-    /// more than one footprint — which is what makes the offsets a sequence rather than a value.
+    /// more than one footprint — which is what makes the heap's `usedSize` run a sequence rather
+    /// than a value.
     #[test]
     fn the_heap_table_is_well_formed_and_its_textures_differ() {
         for spec in heaps() {
@@ -979,6 +992,9 @@ mod tests {
             before,
             "two placed textures are one descriptor"
         );
-        assert!(before > 2, "a sequence of offsets needs more than two rows");
+        assert!(
+            before > 2,
+            "a sequence of used sizes needs more than two rows"
+        );
     }
 }

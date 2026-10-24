@@ -704,6 +704,14 @@ impl<S: Side, W: Watcher> Side for Watching<S, W> {
         self.inner.heap_texture_size_and_align(query)
     }
 
+    fn queried_texture_facts(
+        &mut self,
+        query: &crate::texture_query::HeapTextureQuery,
+    ) -> Answer<Option<crate::buffer_texture::BufferTextureFacts>> {
+        let _span = self.watch("queried_texture_facts");
+        self.inner.queried_texture_facts(query)
+    }
+
     fn makes_texture(&mut self, query: &crate::texture_query::HeapTextureQuery) -> Answer<bool> {
         let _span = self.watch("makes_texture");
         self.inner.makes_texture(query)
