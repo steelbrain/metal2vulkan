@@ -249,6 +249,22 @@ pub(super) fn read_kinds(device: &Device) -> BTreeSet<Degradation> {
     }
 }
 
+/// The kind a read of a timed command buffer's GPU times may announce on `device` once, or not,
+/// where [`read_kinds`] does not already ask for it: a device that writes timestamps and
+/// calibrates them can still place one command buffer's times outside its life, which the
+/// runtime finds at the read (`WorkCounts::calibration_disagreements`) and announces then. A test
+/// whose own work reads GPU times cannot know in advance whether one of its command buffers
+/// disagrees, so it allows the kind rather than requiring it (the RX 7900 XTX under RADV
+/// disagreed in `first_use`'s busy work and not in the test beside it).
+pub(super) fn disagreeable_kinds(device: &Device) -> BTreeSet<Degradation> {
+    let venue = Venue::of(device);
+    let may = !from_host_by_driver(device) && venue.bits > 0 && venue.calibrates();
+    match may {
+        true => BTreeSet::from(GPU_TIMES),
+        false => BTreeSet::new(),
+    }
+}
+
 /// `cb`'s four times: GPU start and end, kernel start and end.
 fn times(cb: &CommandBuffer) -> [f64; 4] {
     [

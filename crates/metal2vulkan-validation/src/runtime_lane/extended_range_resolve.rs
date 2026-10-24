@@ -15,7 +15,7 @@
 //! lacks (2 is optional in Vulkan: lavapipe offers 1 and 4), refused as `Unsupported` with
 //! `Feature::RasterSampleCount`, is skipped with a printed line, and the other counts are checked.
 
-use super::degrade_notices::assert_once;
+use super::degrade_notices::{assert_once, forced, shared_in_system_memory};
 use super::{buffer_with, read_buffer, validated_device_with, Messages, ScratchCache, WAIT};
 use crate::air_library::AirLibrary;
 use crate::gpu::TEST_DEVICE;
@@ -413,10 +413,14 @@ fn extended_range_resolves_are_metals_or_within_a_code() {
         wrong.len(),
         wrong.join("\n")
     );
-    assert_once(
-        &messages.take_notices(),
-        &[XR_RESOLVE[0], Degradation::ShaderResolve],
-    );
+    // The `Shared` textures and buffers the draws read and write announce their memory on a
+    // device without unified memory.
+    let mut kinds = vec![XR_RESOLVE[0], Degradation::ShaderResolve];
+    kinds.extend(forced(&[(
+        Degradation::SharedInSystemMemory,
+        shared_in_system_memory(&lane.device),
+    )]));
+    assert_once(&messages.take_notices(), &kinds);
     drop(lane);
     let reported = messages.take();
     assert!(

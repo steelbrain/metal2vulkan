@@ -71,7 +71,7 @@ use super::commit_work::relay_marks;
 use super::degrade_notices::{
     assert_once_allowing, forced, made_compute_kinds, shared_in_system_memory,
 };
-use super::gpu_times::read_kinds;
+use super::gpu_times::{disagreeable_kinds, read_kinds};
 use super::host_memory::{no_copy, not_importable, recording, Mapping, Seen, GUEST_PAGE};
 use super::rebind_reach::{node, walk, Outputs, Uses, A, POINTER_WALKER};
 use super::rebinds::rebind;
@@ -1242,7 +1242,9 @@ fn neutrals_and_sparse_textures_wait_for_no_gpu_work() {
         // The dispatches bind nothing at the kernels' texture slots, so the values they push
         // there (a format class the function reads as data) decide the notes their stages keep by
         // such values, which a making does not announce: each is allowed.
-        let mut allowed = BTreeSet::new();
+        // A calibrating device may yet place one of these command buffers' GPU times outside its
+        // life, which it announces at the read (`gpu_times::disagreeable_kinds`).
+        let mut allowed = disagreeable_kinds(device);
         for (_, case, _, _) in &cases {
             kinds.extend(case_making_kinds(device, case));
             allowed.extend(case_bound_value_kinds(device, case));
