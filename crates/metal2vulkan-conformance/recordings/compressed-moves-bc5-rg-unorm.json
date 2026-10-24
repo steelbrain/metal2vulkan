@@ -3033,7 +3033,6 @@
         "completed_waits": 33,
         "completed_where_seen": 25,
         "device_memory_allocated": 268435456,
-        "empty_memory_blocks_live": 1,
         "encoder_command_buffers_begun": 25,
         "finales_folded": 25,
         "internal_submissions": 56,

@@ -594,7 +594,7 @@
         "variant_pipelines_made": 2,
         "variants_taken_back": 1,
         "wakes_completion_waiters": 8,
-        "wakes_spared": 71
+        "wakes_spared": 83
       },
       "moving": {
         "command_buffers_begun": 3462,

@@ -592,6 +592,15 @@
       }
     }
   ],
+  "costs": [
+    {
+      "venue": "Apple M3 Max",
+      "runs": 0,
+      "measured": "no measurement: the run stopped before the case finished (a call did not answer, at outcome/step/16/dispatchThreadgroups)",
+      "bounds": {},
+      "unmeasurable": "a call did not answer, at outcome/step/16/dispatchThreadgroups"
+    }
+  ],
   "times": [
     {
       "leg": "metal",

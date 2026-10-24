@@ -496,10 +496,12 @@
       "venue": "Apple M3 Max",
       "runs": 8,
       "measured": "8 run(s) of the whole selection on Apple M3 Max, in the case set's own order, the largest each count reached",
+      "contrasted": "8 run(s) of each case on its own on Apple M3 Max, nothing before it on the device, the largest each count reached",
       "degraded": [
         "metal2vulkan-degrade-emulated-mesh-draws"
       ],
       "bounds": {
+        "addressable_buffers_made": 2,
         "arena_pools_made": 3,
         "argument_objects_retained": 1,
         "argument_samplers_taken": 1,
@@ -515,7 +517,6 @@
         "command_buffers_deferred": 7,
         "command_buffers_replayed_inline": 7,
         "command_buffers_submitted": 6,
-        "command_pools_made": 2,
         "commands_replayed.begin_command_buffer": 7,
         "commands_replayed.cmd_begin_render_pass": 1,
         "commands_replayed.cmd_bind_descriptor_sets": 8,
@@ -544,9 +545,9 @@
         "commands_replayed.cmd_set_viewport": 1,
         "commands_replayed.end_command_buffer": 7,
         "commits_handed_off": 1,
-        "completed_waits": 2,
+        "completed_waits": 4,
         "completed_where_seen": 1,
-        "device_memory_allocated": 1140850688,
+        "device_memory_allocated": 1342177280,
         "draw_shapes_made": 2,
         "draw_states_recorded": 19,
         "draws_settled": 2,
@@ -563,12 +564,12 @@
         "live_tables_uploaded": 1,
         "new_buffer_bytes_cleared": 8992,
         "object_churn.buffers_parked": 5,
-        "object_churn.buffers_recycled": 3,
+        "object_churn.buffers_recycled": 5,
         "object_churn.images_own_memory": 1,
         "object_churn.textures_image": 1,
-        "object_churn.vk_buffer_bindings": 3,
+        "object_churn.vk_buffer_bindings": 1,
         "object_churn.vk_buffers_destroyed": 1,
-        "object_churn.vk_buffers_made": 3,
+        "object_churn.vk_buffers_made": 1,
         "object_churn.vk_image_bindings": 1,
         "object_churn.vk_image_views_made": 1,
         "object_churn.vk_images_destroyed": 3,
@@ -577,7 +578,7 @@
         "object_churn.vk_memory_freed": 1,
         "owned_descriptor_pools": 2,
         "pipeline_layouts_made": 1,
-        "pooled_memory_blocks_made": 1,
+        "pooled_memory_blocks_made": 4,
         "queue_submissions": 1,
         "render_encoders_ended": 1,
         "render_passes_begun_instances": 1,
@@ -589,11 +590,20 @@
         "set_zero_sets_reused": 1,
         "shader_modules_made": 4,
         "slot_returns": 1,
+        "spare_command_pools_taken": 2,
         "stage_tables_read": 8,
         "submit_infos": 2,
         "variant_pipelines_made": 6,
         "wakes_completion_waiters": 1,
         "wakes_spared": 6
+      },
+      "composed": {
+        "device_memory_allocated": 1342177280
+      },
+      "ceilings": {
+        "addressable_buffers_made": 2,
+        "arena_pools_made": 3,
+        "pooled_memory_blocks_made": 4
       }
     }
   ],

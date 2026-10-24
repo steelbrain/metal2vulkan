@@ -191,7 +191,7 @@
         "command_buffers_begun_batch_work": 1,
         "command_buffers_begun_encoders": 3,
         "command_buffers_deferred": 3,
-        "command_buffers_replayed": 2,
+        "command_buffers_replayed": 3,
         "command_buffers_replayed_inline": 1,
         "command_buffers_submitted": 5,
         "command_pools_made": 2,
@@ -201,7 +201,7 @@
         "commands_replayed.end_command_buffer": 3,
         "commits_handed_off": 3,
         "completed_waits": 8,
-        "completed_where_seen": 1,
+        "completed_where_seen": 2,
         "device_memory_allocated": 201326592,
         "encoder_command_buffers_begun": 3,
         "event_waits_met": 1,
@@ -213,9 +213,9 @@
         "primaries_begun_ahead": 2,
         "queue_submissions": 3,
         "scheduled_where_submitted": 2,
-        "scheduler_passes": 3,
+        "scheduler_passes": 4,
         "scheduler_sleep_slices": 1,
-        "scheduler_sleeps": 3,
+        "scheduler_sleeps": 4,
         "scheduler_wakes_commit": 3,
         "scheduler_wakes_host": 1,
         "slot_returns": 3,
@@ -223,7 +223,7 @@
         "submit_infos": 3,
         "wakes_completion_waiters": 2,
         "wakes_handler_threads": 3,
-        "wakes_spared": 16
+        "wakes_spared": 18
       },
       "moving": {
         "commands_replayed.begin_command_buffer": 2

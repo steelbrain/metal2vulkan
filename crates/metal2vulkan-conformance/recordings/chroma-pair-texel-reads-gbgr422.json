@@ -288,6 +288,7 @@
         "command_buffers_begun_segments": 1,
         "command_buffers_deferred": 3,
         "command_buffers_replayed": 3,
+        "command_buffers_replayed_inline": 1,
         "command_buffers_submitted": 5,
         "commands_replayed.begin_command_buffer": 3,
         "commands_replayed.cmd_bind_descriptor_sets": 1,
@@ -307,11 +308,13 @@
         "host_texel_copies": 3,
         "images_started_on_the_host": 2,
         "new_buffer_bytes_cleared": 6144,
+        "object_churn.buffers_evicted": 22,
         "object_churn.buffers_parked": 2,
         "object_churn.buffers_recycled": 1,
         "object_churn.images_own_memory": 2,
         "object_churn.textures_image": 1,
         "object_churn.vk_buffer_bindings": 1,
+        "object_churn.vk_buffers_destroyed": 22,
         "object_churn.vk_buffers_made": 1,
         "object_churn.vk_image_bindings": 2,
         "object_churn.vk_image_views_made": 1,
@@ -331,7 +334,7 @@
         "submit_infos": 2,
         "variant_pipelines_made": 2,
         "wakes_completion_waiters": 1,
-        "wakes_spared": 6
+        "wakes_spared": 7
       },
       "moving": {
         "host_texel_copies": 2

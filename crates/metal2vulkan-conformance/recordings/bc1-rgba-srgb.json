@@ -602,7 +602,7 @@
         "command_buffers_begun_segments": 1,
         "command_buffers_deferred": 6,
         "command_buffers_replayed": 3,
-        "command_buffers_replayed_inline": 4,
+        "command_buffers_replayed_inline": 3,
         "command_buffers_submitted": 15,
         "commands_replayed.begin_command_buffer": 6,
         "commands_replayed.cmd_bind_descriptor_sets": 4,

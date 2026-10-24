@@ -201,6 +201,57 @@
       "validated": "ran"
     }
   ],
+  "costs": [
+    {
+      "venue": "Apple M3 Max",
+      "runs": 8,
+      "measured": "8 run(s) of the whole selection on Apple M3 Max, in the case set's own order, the largest each count reached",
+      "contrasted": "8 run(s) of each case on its own on Apple M3 Max, nothing before it on the device, the largest each count reached",
+      "degraded": [
+        "metal2vulkan-degrade-emulated-sparse-texture"
+      ],
+      "bounds": {
+        "addressable_buffers_made": 2,
+        "bare_starts": 1,
+        "batches_with_none_pending": 1,
+        "command_buffers_begun": 4,
+        "command_buffers_begun_batch_barriers": 2,
+        "command_buffers_begun_batch_work": 2,
+        "command_buffers_submitted": 4,
+        "commits_handed_off": 1,
+        "completed_waits": 4,
+        "completed_where_seen": 1,
+        "device_memory_allocated": 201326592,
+        "finales_apart": 1,
+        "new_buffer_bytes_cleared": 4400,
+        "object_churn.buffers_parked": 4,
+        "object_churn.buffers_recycled": 4,
+        "object_churn.images_other": 1,
+        "object_churn.textures_in_heaps": 1,
+        "object_churn.vk_image_bindings": 1,
+        "object_churn.vk_images_destroyed": 1,
+        "object_churn.vk_images_made": 1,
+        "pooled_memory_blocks_made": 3,
+        "queue_submissions": 1,
+        "scheduled_where_submitted": 1,
+        "scheduler_passes": 1,
+        "scheduler_sleeps": 1,
+        "scheduler_wakes_commit": 1,
+        "slot_returns": 1,
+        "spare_command_pools_taken": 1,
+        "submit_infos": 2,
+        "wakes_completion_waiters": 1,
+        "wakes_spared": 6
+      },
+      "composed": {
+        "device_memory_allocated": 201326592
+      },
+      "ceilings": {
+        "addressable_buffers_made": 2,
+        "pooled_memory_blocks_made": 3
+      }
+    }
+  ],
   "times": [
     {
       "leg": "metal",

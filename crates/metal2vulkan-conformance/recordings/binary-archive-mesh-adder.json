@@ -261,6 +261,15 @@
       "validated": "ran"
     }
   ],
+  "costs": [
+    {
+      "venue": "Apple M3 Max",
+      "runs": 0,
+      "measured": "no measurement: the run stopped before the case finished (a call did not answer, at program)",
+      "bounds": {},
+      "unmeasurable": "a call did not answer, at program"
+    }
+  ],
   "times": [
     {
       "leg": "metal",

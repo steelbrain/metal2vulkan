@@ -187,6 +187,77 @@
       }
     }
   ],
+  "costs": [
+    {
+      "venue": "Apple M3 Max",
+      "runs": 8,
+      "measured": "8 run(s) of the whole selection on Apple M3 Max, in the case set's own order, the largest each count reached",
+      "contrasted": "8 run(s) of each case on its own on Apple M3 Max, nothing before it on the device, the largest each count reached",
+      "degraded": [
+        "metal2vulkan-degrade-shadowed-texture"
+      ],
+      "bounds": {
+        "addressable_buffers_made": 2,
+        "bare_starts": 1,
+        "batches_with_none_pending": 1,
+        "command_buffers_begun": 3,
+        "command_buffers_begun_batch_work": 1,
+        "command_buffers_begun_encoders": 1,
+        "command_buffers_begun_secondaries": 1,
+        "command_buffers_deferred": 2,
+        "command_buffers_replayed_inline": 2,
+        "command_buffers_submitted": 2,
+        "commands_replayed.begin_command_buffer": 2,
+        "commands_replayed.cmd_begin_render_pass": 1,
+        "commands_replayed.cmd_end_render_pass": 1,
+        "commands_replayed.cmd_execute_commands": 1,
+        "commands_replayed.cmd_pipeline_barrier": 1,
+        "commands_replayed.end_command_buffer": 2,
+        "commits_handed_off": 1,
+        "completed_waits": 4,
+        "completed_where_seen": 1,
+        "device_memory_allocated": 201326592,
+        "encoder_command_buffers_begun": 2,
+        "finales_folded": 1,
+        "new_buffer_bytes_cleared": 2048,
+        "object_churn.buffers_parked": 1,
+        "object_churn.buffers_recycled": 1,
+        "object_churn.images_own_memory": 1,
+        "object_churn.images_parked": 1,
+        "object_churn.images_recycled": 1,
+        "object_churn.textures_shadow": 1,
+        "object_churn.vk_image_views_made": 2,
+        "passes_not_inline_actions": 1,
+        "passes_not_inline_actions_store": 1,
+        "pooled_memory_blocks_made": 3,
+        "queue_submissions": 1,
+        "render_encoders_ended": 1,
+        "render_passes_begun_instances": 1,
+        "render_passes_made": 2,
+        "scheduled_where_submitted": 1,
+        "scheduler_passes": 1,
+        "scheduler_sleeps": 1,
+        "scheduler_wakes_commit": 1,
+        "shadow_attachment_clears": 1,
+        "shadow_attachment_passes": 1,
+        "shadow_attachment_textures": 1,
+        "shadowed_textures": 1,
+        "slot_returns": 1,
+        "spare_command_pools_taken": 2,
+        "submit_infos": 1,
+        "wakes_completion_waiters": 1,
+        "wakes_spared": 6
+      },
+      "composed": {
+        "device_memory_allocated": 201326592,
+        "render_passes_made": 2
+      },
+      "ceilings": {
+        "addressable_buffers_made": 2,
+        "pooled_memory_blocks_made": 3
+      }
+    }
+  ],
   "times": [
     {
       "leg": "metal",

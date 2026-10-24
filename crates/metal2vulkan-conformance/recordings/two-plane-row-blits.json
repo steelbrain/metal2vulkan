@@ -1880,6 +1880,7 @@
         "copy_regions_split": 4,
         "device_memory_allocated": 268435456,
         "encoder_command_buffers_begun": 24,
+        "fences_made": 1,
         "finales_folded": 24,
         "images_started_on_the_host": 18,
         "internal_submissions": 52,

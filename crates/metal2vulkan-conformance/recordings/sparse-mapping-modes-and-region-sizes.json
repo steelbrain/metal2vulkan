@@ -526,6 +526,62 @@
       "validated": "ran"
     }
   ],
+  "costs": [
+    {
+      "venue": "Apple M3 Max",
+      "runs": 8,
+      "measured": "8 run(s) of the whole selection on Apple M3 Max, in the case set's own order, the largest each count reached",
+      "contrasted": "8 run(s) of each case on its own on Apple M3 Max, nothing before it on the device, the largest each count reached",
+      "degraded": [
+        "metal2vulkan-degrade-emulated-sparse-texture"
+      ],
+      "bounds": {
+        "addressable_buffers_made": 2,
+        "bare_starts": 6,
+        "batches_with_none_pending": 10,
+        "command_buffers_begun": 13,
+        "command_buffers_begun_batch_barriers": 6,
+        "command_buffers_begun_batch_work": 7,
+        "command_buffers_submitted": 13,
+        "commits_handed_off": 10,
+        "completed_waits": 9,
+        "completed_where_seen": 10,
+        "device_memory_allocated": 201326592,
+        "finales_apart": 6,
+        "new_buffer_bytes_cleared": 24880,
+        "object_churn.buffers_evicted": 158,
+        "object_churn.buffers_parked": 166,
+        "object_churn.buffers_recycled": 8,
+        "object_churn.images_other": 1,
+        "object_churn.textures_in_heaps": 1,
+        "object_churn.vk_buffer_bindings": 1,
+        "object_churn.vk_buffers_destroyed": 158,
+        "object_churn.vk_buffers_made": 1,
+        "object_churn.vk_image_bindings": 1,
+        "object_churn.vk_images_destroyed": 1,
+        "object_churn.vk_images_made": 1,
+        "pooled_memory_blocks_made": 3,
+        "primaries_begun_ahead": 1,
+        "queue_submissions": 10,
+        "scheduled_where_submitted": 10,
+        "scheduler_passes": 10,
+        "scheduler_sleeps": 10,
+        "scheduler_wakes_commit": 10,
+        "slot_returns": 10,
+        "spare_command_pools_taken": 10,
+        "submit_infos": 16,
+        "wakes_completion_waiters": 10,
+        "wakes_spared": 60
+      },
+      "composed": {
+        "device_memory_allocated": 201326592
+      },
+      "ceilings": {
+        "addressable_buffers_made": 2,
+        "pooled_memory_blocks_made": 3
+      }
+    }
+  ],
   "times": [
     {
       "leg": "metal",

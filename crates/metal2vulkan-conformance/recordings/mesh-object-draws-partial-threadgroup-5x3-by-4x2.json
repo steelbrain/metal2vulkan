@@ -315,6 +315,15 @@
       "validated": "not_run"
     }
   ],
+  "costs": [
+    {
+      "venue": "Apple M3 Max",
+      "runs": 0,
+      "measured": "no measurement: the run stopped before the case finished (a call did not answer, at object-threads-5x3-by-4x2/buffer/calls/2-drawMeshThreads)",
+      "bounds": {},
+      "unmeasurable": "a call did not answer, at object-threads-5x3-by-4x2/buffer/calls/2-drawMeshThreads"
+    }
+  ],
   "times": [
     {
       "leg": "metal",

@@ -539,7 +539,6 @@
         "command_buffers_begun_segments": 2,
         "command_buffers_deferred": 11,
         "command_buffers_replayed": 9,
-        "command_buffers_replayed_inline": 1,
         "command_buffers_submitted": 16,
         "commands_replayed.begin_command_buffer": 9,
         "commands_replayed.cmd_begin_render_pass": 1,

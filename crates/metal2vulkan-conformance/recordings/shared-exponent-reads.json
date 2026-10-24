@@ -372,7 +372,6 @@
         "command_buffers_begun_segments": 2,
         "command_buffers_deferred": 6,
         "command_buffers_replayed": 6,
-        "command_buffers_replayed_inline": 1,
         "command_buffers_submitted": 9,
         "commands_replayed.begin_command_buffer": 6,
         "commands_replayed.cmd_bind_descriptor_sets": 2,

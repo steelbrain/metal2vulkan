@@ -193,7 +193,7 @@
         "commands_replayed.cmd_set_viewport": 3,
         "commands_replayed.end_command_buffer": 7,
         "commits_handed_off": 1,
-        "completed_waits": 3,
+        "completed_waits": 4,
         "completed_where_seen": 1,
         "creation_pipelines_made": 1,
         "device_memory_allocated": 201326720,

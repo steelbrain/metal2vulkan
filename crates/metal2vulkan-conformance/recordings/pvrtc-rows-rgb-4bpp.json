@@ -792,7 +792,6 @@
         "device_memory_allocated": 201326592,
         "encoder_command_buffers_begun": 12,
         "finales_folded": 12,
-        "memory_blocks_live": 1,
         "new_buffer_bytes_cleared": 8448,
         "object_churn.buffers_evicted": 42,
         "object_churn.buffers_parked": 100,

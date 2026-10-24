@@ -6803,6 +6803,52 @@
       "validated": "ran"
     }
   ],
+  "costs": [
+    {
+      "venue": "Apple M3 Max",
+      "runs": 8,
+      "measured": "8 run(s) of the whole selection on Apple M3 Max, in the case set's own order, the largest each count reached",
+      "contrasted": "8 run(s) of each case on its own on Apple M3 Max, nothing before it on the device, the largest each count reached",
+      "degraded": [
+        "metal2vulkan-degrade-memoryless-texture-buffer"
+      ],
+      "bounds": {
+        "addressable_buffers_made": 2,
+        "device_memory_allocated": 335544320,
+        "images_started_on_the_host": 12,
+        "memory_blocks_live": 1,
+        "new_buffer_bytes_cleared": 512,
+        "object_churn.buffers_evicted": 2,
+        "object_churn.buffers_parked": 4,
+        "object_churn.buffers_recycled": 2,
+        "object_churn.images_evicted": 31,
+        "object_churn.images_own_memory": 44,
+        "object_churn.images_parked": 32,
+        "object_churn.images_recycled": 1,
+        "object_churn.textures_image": 44,
+        "object_churn.textures_texels": 4,
+        "object_churn.vk_buffer_bindings": 2,
+        "object_churn.vk_buffers_destroyed": 2,
+        "object_churn.vk_buffers_made": 2,
+        "object_churn.vk_image_bindings": 43,
+        "object_churn.vk_images_destroyed": 65,
+        "object_churn.vk_images_made": 65,
+        "object_churn.vk_memory_allocations": 1,
+        "pooled_memory_blocks_made": 5,
+        "requirement_images_made": 15,
+        "requirement_limits_asked": 15
+      },
+      "composed": {
+        "device_memory_allocated": 335544320,
+        "requirement_images_made": 15,
+        "requirement_limits_asked": 15
+      },
+      "ceilings": {
+        "addressable_buffers_made": 2,
+        "pooled_memory_blocks_made": 5
+      }
+    }
+  ],
   "times": [
     {
       "leg": "metal",

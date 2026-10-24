@@ -484,6 +484,15 @@
       "validated": "ran"
     }
   ],
+  "costs": [
+    {
+      "venue": "Apple M3 Max",
+      "runs": 0,
+      "measured": "no measurement: the run stopped before the case finished (a call did not answer, at pipeline/argb8)",
+      "bounds": {},
+      "unmeasurable": "a call did not answer, at pipeline/argb8"
+    }
+  ],
   "times": [
     {
       "leg": "metal",

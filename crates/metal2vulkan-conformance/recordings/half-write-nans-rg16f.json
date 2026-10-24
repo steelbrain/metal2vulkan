@@ -287,7 +287,6 @@
         "command_buffers_begun_segments": 1,
         "command_buffers_deferred": 3,
         "command_buffers_replayed": 3,
-        "command_buffers_replayed_inline": 1,
         "command_buffers_submitted": 5,
         "commands_replayed.begin_command_buffer": 3,
         "commands_replayed.cmd_bind_descriptor_sets": 1,

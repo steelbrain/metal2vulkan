@@ -550,6 +550,78 @@
       "validated": "ran"
     }
   ],
+  "costs": [
+    {
+      "venue": "Apple M3 Max",
+      "runs": 8,
+      "measured": "8 run(s) of the whole selection on Apple M3 Max, in the case set's own order, the largest each count reached",
+      "contrasted": "8 run(s) of each case on its own on Apple M3 Max, nothing before it on the device, the largest each count reached",
+      "bounds": {
+        "addressable_buffers_made": 2,
+        "arena_pools_made": 1,
+        "argument_objects_retained": 8,
+        "argument_tables_retained": 4,
+        "bare_starts": 1,
+        "batches_with_none_pending": 1,
+        "command_barriers": 12,
+        "command_buffers_begun": 17,
+        "command_buffers_begun_batch_barriers": 1,
+        "command_buffers_begun_continuations": 4,
+        "command_buffers_begun_encoders": 8,
+        "command_buffers_begun_segments": 4,
+        "command_buffers_deferred": 16,
+        "command_buffers_replayed_inline": 16,
+        "command_buffers_submitted": 17,
+        "commands_replayed.begin_command_buffer": 16,
+        "commands_replayed.cmd_bind_descriptor_sets": 16,
+        "commands_replayed.cmd_bind_pipeline": 16,
+        "commands_replayed.cmd_dispatch": 16,
+        "commands_replayed.cmd_pipeline_barrier": 20,
+        "commands_replayed.cmd_push_constants": 16,
+        "commands_replayed.end_command_buffer": 16,
+        "commits_handed_off": 1,
+        "completed_waits": 4,
+        "completed_where_seen": 1,
+        "creation_pipelines_made": 1,
+        "device_memory_allocated": 201326592,
+        "dispatches_planned_as_before": 15,
+        "encoder_command_buffers_begun": 16,
+        "finales_apart": 1,
+        "indirect_records_read": 16,
+        "live_tables_uploaded": 1,
+        "new_buffer_bytes_cleared": 38176,
+        "object_churn.buffers_parked": 14,
+        "object_churn.buffers_recycled": 14,
+        "pipeline_layouts_made": 1,
+        "pooled_memory_blocks_made": 3,
+        "queue_submissions": 1,
+        "scheduled_where_submitted": 1,
+        "scheduler_passes": 1,
+        "scheduler_sleeps": 1,
+        "scheduler_wakes_commit": 1,
+        "shader_modules_made": 1,
+        "slot_returns": 1,
+        "spare_command_pools_taken": 2,
+        "submit_infos": 2,
+        "variant_pipelines_made": 2,
+        "variants_taken_back": 1,
+        "wakes_completion_waiters": 1,
+        "wakes_spared": 6
+      },
+      "composed": {
+        "device_memory_allocated": 201326592
+      },
+      "ceilings": {
+        "addressable_buffers_made": 2,
+        "arena_pools_made": 1,
+        "creation_pipelines_made": 1,
+        "pipeline_layouts_made": 1,
+        "pooled_memory_blocks_made": 3,
+        "shader_modules_made": 1,
+        "variant_pipelines_made": 2
+      }
+    }
+  ],
   "times": [
     {
       "leg": "metal",

@@ -534,7 +534,6 @@
         "pipeline_layouts_made": 4,
         "pooled_memory_blocks_made": 4,
         "queue_submissions": 2,
-        "sampler_sets_destroyed": 1,
         "scheduled_where_submitted": 2,
         "scheduler_passes": 6,
         "scheduler_sleeps": 4,

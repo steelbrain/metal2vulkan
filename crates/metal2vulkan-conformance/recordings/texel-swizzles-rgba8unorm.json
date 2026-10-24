@@ -779,10 +779,10 @@
         "object_churn.buffers_parked": 10,
         "object_churn.buffers_recycled": 2,
         "object_churn.textures_texels": 10,
-        "object_churn.vk_buffer_bindings": 9,
+        "object_churn.vk_buffer_bindings": 8,
         "object_churn.vk_buffer_views_destroyed": 10,
         "object_churn.vk_buffers_destroyed": 8,
-        "object_churn.vk_buffers_made": 9,
+        "object_churn.vk_buffers_made": 8,
         "pipeline_layouts_made": 1,
         "pooled_memory_blocks_made": 3,
         "queue_submissions": 5,
@@ -800,7 +800,10 @@
         "wakes_spared": 30
       },
       "composed": {
+        "command_buffers_begun": 21,
+        "command_buffers_begun_batch_work": 1,
         "command_buffers_deferred": 0,
+        "command_buffers_submitted": 21,
         "commands_replayed.begin_command_buffer": 0,
         "commands_replayed.cmd_bind_descriptor_sets": 0,
         "commands_replayed.cmd_bind_pipeline": 0,

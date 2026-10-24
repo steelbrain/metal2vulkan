@@ -1236,6 +1236,7 @@
         "host_texel_copies": 33,
         "images_started_on_the_host": 2,
         "new_buffer_bytes_cleared": 19680,
+        "object_churn.buffers_evicted": 3,
         "object_churn.buffers_parked": 71,
         "object_churn.buffers_recycled": 71,
         "object_churn.images_evicted": 9,
@@ -1243,6 +1244,9 @@
         "object_churn.images_parked": 28,
         "object_churn.images_recycled": 17,
         "object_churn.textures_image": 16,
+        "object_churn.vk_buffer_bindings": 3,
+        "object_churn.vk_buffers_destroyed": 3,
+        "object_churn.vk_buffers_made": 3,
         "object_churn.vk_image_bindings": 13,
         "object_churn.vk_images_destroyed": 11,
         "object_churn.vk_images_made": 13,
@@ -1252,15 +1256,15 @@
         "row_copies": 1,
         "row_copy_regions": 2,
         "scheduled_where_submitted": 21,
-        "scheduler_passes": 28,
-        "scheduler_sleeps": 28,
+        "scheduler_passes": 30,
+        "scheduler_sleeps": 30,
         "scheduler_wakes_commit": 21,
         "scheduler_wakes_host": 11,
         "slot_returns": 21,
         "spare_command_pools_taken": 42,
         "submit_infos": 21,
         "wakes_completion_waiters": 21,
-        "wakes_spared": 126
+        "wakes_spared": 127
       },
       "moving": {
         "commands_replayed.begin_command_buffer": 20

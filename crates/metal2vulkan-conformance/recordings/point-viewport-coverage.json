@@ -5259,7 +5259,7 @@
         "command_buffers_begun_secondaries": 882,
         "command_buffers_begun_segments": 294,
         "command_buffers_deferred": 2058,
-        "command_buffers_replayed_inline": 913,
+        "command_buffers_replayed_inline": 1008,
         "command_buffers_submitted": 1765,
         "commands_replayed.begin_command_buffer": 2058,
         "commands_replayed.cmd_begin_render_pass": 294,
@@ -5374,11 +5374,12 @@
         "device_memory_allocated": 201326592,
         "encoder_command_buffers_begun": 883,
         "graphics_pipelines_looked_up": 60,
-        "inline_passes": 241,
+        "inline_passes": 250,
         "passes_not_inline_draws": 59,
         "pooled_memory_blocks_made": 3,
-        "render_passes_begun_inline": 241,
-        "render_passes_begun_instances": 59
+        "render_passes_begun_inline": 250,
+        "render_passes_begun_instances": 59,
+        "render_passes_made": 2
       }
     }
   ],

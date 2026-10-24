@@ -2289,6 +2289,38 @@
       "validated": "ran"
     }
   ],
+  "costs": [
+    {
+      "venue": "Apple M3 Max",
+      "runs": 8,
+      "measured": "8 run(s) of the whole selection on Apple M3 Max, in the case set's own order, the largest each count reached",
+      "contrasted": "8 run(s) of each case on its own on Apple M3 Max, nothing before it on the device, the largest each count reached",
+      "bounds": {
+        "creation_pipelines_made": 1,
+        "dedicated_memory_blocks_live": 5,
+        "device_memory_allocated": 201328256,
+        "memory_blocks_live": 1,
+        "object_churn.vk_buffer_bindings": 1,
+        "object_churn.vk_buffers_made": 1,
+        "object_churn.vk_image_bindings": 5,
+        "object_churn.vk_image_views_made": 5,
+        "object_churn.vk_images_made": 5,
+        "object_churn.vk_memory_allocations": 5,
+        "pipeline_layouts_made": 1,
+        "pooled_memory_blocks_made": 3,
+        "scheduler_sleep_slices": 1,
+        "scheduler_sleeps": 1,
+        "shader_modules_made": 1,
+        "variant_pipelines_made": 1
+      },
+      "composed": {
+        "device_memory_allocated": 201328256
+      },
+      "ceilings": {
+        "pooled_memory_blocks_made": 3
+      }
+    }
+  ],
   "times": [
     {
       "leg": "metal",

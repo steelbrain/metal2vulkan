@@ -387,6 +387,7 @@
         "wakes_spared": 6
       },
       "composed": {
+        "argument_samplers_taken": 1,
         "command_buffers_deferred": 0,
         "commands_replayed.begin_command_buffer": 0,
         "commands_replayed.cmd_begin_render_pass": 0,

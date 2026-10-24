@@ -200,7 +200,7 @@
         "spare_command_pools_taken": 4,
         "submit_infos": 2,
         "wakes_completion_waiters": 2,
-        "wakes_spared": 13
+        "wakes_spared": 14
       },
       "composed": {
         "addressable_buffers_made": 2,

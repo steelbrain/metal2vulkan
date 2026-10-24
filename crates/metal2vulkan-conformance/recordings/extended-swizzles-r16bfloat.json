@@ -3070,7 +3070,7 @@
         "command_buffers_begun_segments": 30,
         "command_buffers_deferred": 95,
         "command_buffers_replayed": 90,
-        "command_buffers_replayed_inline": 29,
+        "command_buffers_replayed_inline": 11,
         "command_buffers_submitted": 126,
         "commands_replayed.begin_command_buffer": 95,
         "commands_replayed.cmd_bind_descriptor_sets": 35,
@@ -3115,7 +3115,7 @@
         "variant_pipelines_made": 61,
         "variants_taken_back": 4,
         "wakes_completion_waiters": 35,
-        "wakes_spared": 210
+        "wakes_spared": 211
       },
       "composed": {
         "command_buffers_begun": 126,

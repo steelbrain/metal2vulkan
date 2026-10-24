@@ -1237,15 +1237,18 @@
         "host_texel_copies": 33,
         "images_started_on_the_host": 2,
         "new_buffer_bytes_cleared": 19680,
+        "object_churn.buffers_evicted": 16,
         "object_churn.buffers_parked": 71,
-        "object_churn.buffers_recycled": 41,
+        "object_churn.buffers_recycled": 47,
+        "object_churn.images_evicted": 1,
         "object_churn.images_own_memory": 30,
         "object_churn.images_parked": 28,
         "object_churn.textures_image": 16,
-        "object_churn.vk_buffer_bindings": 30,
-        "object_churn.vk_buffers_made": 30,
+        "object_churn.vk_buffer_bindings": 24,
+        "object_churn.vk_buffers_destroyed": 16,
+        "object_churn.vk_buffers_made": 24,
         "object_churn.vk_image_bindings": 30,
-        "object_churn.vk_images_destroyed": 6,
+        "object_churn.vk_images_destroyed": 7,
         "object_churn.vk_images_made": 34,
         "owned_descriptor_pools": 23,
         "pooled_memory_blocks_made": 4,
@@ -1261,7 +1264,7 @@
         "spare_command_pools_taken": 42,
         "submit_infos": 21,
         "wakes_completion_waiters": 21,
-        "wakes_spared": 126
+        "wakes_spared": 127
       },
       "moving": {
         "commands_replayed.begin_command_buffer": 19

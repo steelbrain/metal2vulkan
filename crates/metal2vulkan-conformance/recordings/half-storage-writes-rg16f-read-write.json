@@ -300,7 +300,6 @@
         "command_buffers_begun_segments": 1,
         "command_buffers_deferred": 3,
         "command_buffers_replayed": 3,
-        "command_buffers_replayed_inline": 1,
         "command_buffers_submitted": 5,
         "commands_replayed.begin_command_buffer": 3,
         "commands_replayed.cmd_bind_descriptor_sets": 1,
@@ -345,7 +344,7 @@
         "variant_pipelines_made": 3,
         "variants_taken_back": 1,
         "wakes_completion_waiters": 1,
-        "wakes_spared": 7
+        "wakes_spared": 6
       },
       "composed": {
         "command_buffers_begun": 5,

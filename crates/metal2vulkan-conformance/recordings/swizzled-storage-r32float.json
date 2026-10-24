@@ -1475,7 +1475,7 @@
         "command_buffers_begun_encoders": 12,
         "command_buffers_begun_segments": 10,
         "command_buffers_deferred": 18,
-        "command_buffers_replayed": 7,
+        "command_buffers_replayed": 9,
         "command_buffers_replayed_inline": 12,
         "command_buffers_submitted": 43,
         "commands_replayed.begin_command_buffer": 18,

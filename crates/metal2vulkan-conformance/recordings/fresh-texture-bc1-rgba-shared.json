@@ -216,6 +216,7 @@
         "completed_where_seen": 3,
         "device_memory_allocated": 268435456,
         "encoder_command_buffers_begun": 3,
+        "encoder_primaries_begun_ahead": 2,
         "finales_folded": 3,
         "new_buffer_bytes_cleared": 6144,
         "object_churn.buffers_parked": 3,
@@ -230,6 +231,7 @@
         "object_churn.vk_images_destroyed": 1,
         "object_churn.vk_images_made": 1,
         "pooled_memory_blocks_made": 4,
+        "primaries_begun_ahead": 1,
         "queue_submissions": 3,
         "scheduled_where_submitted": 3,
         "scheduler_passes": 3,
@@ -240,6 +242,9 @@
         "submit_infos": 3,
         "wakes_completion_waiters": 3,
         "wakes_spared": 18
+      },
+      "moving": {
+        "commands_replayed.begin_command_buffer": 1
       },
       "composed": {
         "command_buffers_deferred": 0,

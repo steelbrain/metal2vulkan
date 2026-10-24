@@ -21258,6 +21258,15 @@
       }
     }
   ],
+  "costs": [
+    {
+      "venue": "Apple M3 Max",
+      "runs": 0,
+      "measured": "no measurement: the run stopped before the case finished (a call did not answer, at MTLPixelFormatRGB10A2Unorm_PQ/Type2D/64x64x1/levels-1/samples-1/slices-1/usage-0x1/shared/size-and-align)",
+      "bounds": {},
+      "unmeasurable": "a call did not answer, at MTLPixelFormatRGB10A2Unorm_PQ/Type2D/64x64x1/levels-1/samples-1/slices-1/usage-0x1/shared/size-and-align"
+    }
+  ],
   "times": [
     {
       "leg": "metal",

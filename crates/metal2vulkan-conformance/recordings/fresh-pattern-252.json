@@ -180,6 +180,7 @@
         "object_churn.images_recycled": 1,
         "object_churn.textures_image": 1,
         "pooled_memory_blocks_made": 3,
+        "primaries_begun_ahead": 1,
         "queue_submissions": 1,
         "scheduled_where_submitted": 1,
         "scheduler_passes": 1,
