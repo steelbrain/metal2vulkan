@@ -1503,6 +1503,20 @@ pub enum PrecisionNote {
     /// every lane of the output is opaque to the blend and its form fits every state, the blend is
     /// Metal's and the function records nothing.
     ///
+    /// The pipeline's stage also records it for an attachment of `StageIo::half_fast_colors` that
+    /// stores some channel **without** blending (`color_writes::stores_output`, which is the test
+    /// it makes), and that is deliberate rather than the blend's name read loosely: under fast math
+    /// Metal's compiler may keep the output's last operation at `float` and let the attachment's own
+    /// conversion round once, where this rounds the output to `half` first, so a channel whose format
+    /// converts the `float` and its `half` to different codes may store a value apart from Metal's.
+    /// It is the cause [`PrecisionNote::HalfOutputPrecision`] records for a module naming no math
+    /// mode, under a name that reads as a blend's alone. **Unmeasured**: no sweep has made an
+    /// unblended fast-math store differ. The 12 `xr-draw-*` conformance cases are the closest
+    /// reading of it and all 12 store Metal's codes, so for those shapes the note is a may-differ
+    /// and not a measured difference. Narrowing it to a blend would stop announcing a class the
+    /// `HalfOutputPrecision` measurement says exists, so it stays where it fires until a sweep over
+    /// the formats whose two conversions disagree says otherwise.
+    ///
     /// Validation derives no tolerance from it; C3 takes a row it leaves unbounded as showing
     /// the fast-math regrouping cause.
     HalfOutputFastMathBlend,
