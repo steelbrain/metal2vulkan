@@ -420,8 +420,14 @@ impl<T> Pool<T> {
         }
     }
 
-    /// Whether a pooled block has room for `size` bytes (above 0) at the largest alignment asked
-    /// of the pool so far: whether [`Pool::room`] is that long.
+    /// Whether a pooled block has room for `size` bytes at the largest alignment asked of the
+    /// pool so far: whether [`Pool::room`] is that long.
+    ///
+    /// For a `size` above 0, which is every `size` asked -- [`keep_room`] asks half a block, and
+    /// [`BLOCK_BYTES`] is capped by `maxMemoryAllocationSize`, which Vulkan requires to be at
+    /// least a gibibyte -- that is the question exactly. For a `size` of 0 it is whether the pool
+    /// has any room at all rather than whether it has a pooled block, which is the same answer
+    /// wherever a pooled block holds a free byte.
     pub(super) fn has_room(&mut self, size: u64) -> bool {
         self.room() >= size
     }
