@@ -86,6 +86,7 @@ pub mod extended_range_two_planes;
 pub mod extended_swizzles;
 pub mod fetch_ordered;
 pub mod format_copies;
+pub mod format_footprints;
 pub mod fragment_imageblock_reflection;
 pub mod frame_chains;
 pub mod fresh_contents;
@@ -380,6 +381,9 @@ pub fn all() -> Vec<Box<dyn Case>> {
         cases.push(Box::new(case));
     }
     for case in tile_threadgroups::all() {
+        cases.push(Box::new(case));
+    }
+    for case in format_footprints::all() {
         cases.push(Box::new(case));
     }
     for case in heap_metal_sizes::all() {

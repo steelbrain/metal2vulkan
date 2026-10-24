@@ -1,0 +1,4129 @@
+{
+  "format": 1,
+  "case": "format-footprints-packed-without-textures",
+  "suite_version": 1,
+  "answers": [
+    {
+      "key": {
+        "chip": "apple-m3-max",
+        "os_version": "27.0.1",
+        "os_build": "26A434",
+        "metal_level": "27.0.1"
+      },
+      "provenance": "metal_run",
+      "device": "Apple M3 Max",
+      "runs": 3,
+      "outcomes": [
+        {
+          "runs": 3,
+          "transcript": {
+            "root": {
+              "name": "case",
+              "observed": {
+                "value": "absent"
+              },
+              "children": [
+                {
+                  "name": "inputs",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "descriptors",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "7ff9e4bb5956d8bcc05e2ac9ab72b327b93b2b02bd02a585601021c960958bc5"
+                        }
+                      }
+                    },
+                    {
+                      "name": "asks",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "2982767eac54020323467b76110615acbd2ab691ea26dd8994e183659ee35d12"
+                        }
+                      }
+                    },
+                    {
+                      "name": "before",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "c962f1e16a1fe4ed53691245ea742f5ac614c9090be1c4431294cc072ec9e6a3"
+                        }
+                      }
+                    },
+                    {
+                      "name": "round-trips",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "MTLPixelFormatR10Unorm_PACKED/Type2D/64x64x1/levels-1/samples-1/slices-1/usage-0x1/shared",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "size-and-align",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "fields": {
+                                "align": {
+                                  "uint": 16
+                                },
+                                "size": {
+                                  "uint": 0
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "makes-texture",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "bool": false
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "MTLPixelFormatR10Unorm_PACKED/Type2D/64x64x1/levels-1/samples-1/slices-1/usage-0x1/private",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "size-and-align",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "fields": {
+                                "align": {
+                                  "uint": 16
+                                },
+                                "size": {
+                                  "uint": 0
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "makes-texture",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "bool": false
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "MTLPixelFormatR10Unorm_PACKED/Type2DArray/64x64x1/levels-1/samples-1/slices-2/usage-0x1/shared",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "size-and-align",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "fields": {
+                                "align": {
+                                  "uint": 128
+                                },
+                                "size": {
+                                  "uint": 0
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "makes-texture",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "bool": false
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "MTLPixelFormatR10Unorm_PACKED/Type2DArray/64x64x1/levels-1/samples-1/slices-2/usage-0x1/private",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "size-and-align",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "fields": {
+                                "align": {
+                                  "uint": 128
+                                },
+                                "size": {
+                                  "uint": 0
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "makes-texture",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "bool": false
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "MTLPixelFormatR10Unorm_PACKED/Cube/64x64x1/levels-1/samples-1/slices-1/usage-0x1/shared",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "size-and-align",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "fields": {
+                                "align": {
+                                  "uint": 16
+                                },
+                                "size": {
+                                  "uint": 0
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "makes-texture",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "bool": false
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "MTLPixelFormatR10Unorm_PACKED/Cube/64x64x1/levels-1/samples-1/slices-1/usage-0x1/private",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "size-and-align",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "fields": {
+                                "align": {
+                                  "uint": 16
+                                },
+                                "size": {
+                                  "uint": 0
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "makes-texture",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "bool": false
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "MTLPixelFormatR10Unorm_PACKED/CubeArray/64x64x1/levels-1/samples-1/slices-2/usage-0x1/shared",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "size-and-align",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "fields": {
+                                "align": {
+                                  "uint": 16
+                                },
+                                "size": {
+                                  "uint": 0
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "makes-texture",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "bool": false
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "MTLPixelFormatR10Unorm_PACKED/CubeArray/64x64x1/levels-1/samples-1/slices-2/usage-0x1/private",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "size-and-align",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "fields": {
+                                "align": {
+                                  "uint": 16
+                                },
+                                "size": {
+                                  "uint": 0
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "makes-texture",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "bool": false
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "MTLPixelFormatR10Unorm_PACKED/Type3D/64x64x2/levels-1/samples-1/slices-1/usage-0x1/shared",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "size-and-align",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "fields": {
+                                "align": {
+                                  "uint": 16
+                                },
+                                "size": {
+                                  "uint": 0
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "makes-texture",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "bool": false
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "MTLPixelFormatR10Unorm_PACKED/Type3D/64x64x2/levels-1/samples-1/slices-1/usage-0x1/private",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "size-and-align",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "fields": {
+                                "align": {
+                                  "uint": 16
+                                },
+                                "size": {
+                                  "uint": 0
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "makes-texture",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "bool": false
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "MTLPixelFormatR10Unorm_PACKED/Type1D/64x1x1/levels-1/samples-1/slices-1/usage-0x1/shared",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "size-and-align",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "fields": {
+                                "align": {
+                                  "uint": 16
+                                },
+                                "size": {
+                                  "uint": 0
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "makes-texture",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "bool": false
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "MTLPixelFormatR10Unorm_PACKED/Type1D/64x1x1/levels-1/samples-1/slices-1/usage-0x1/private",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "size-and-align",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "fields": {
+                                "align": {
+                                  "uint": 16
+                                },
+                                "size": {
+                                  "uint": 0
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "makes-texture",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "bool": false
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "MTLPixelFormatR10Unorm_PACKED/Type1DArray/64x1x1/levels-1/samples-1/slices-2/usage-0x1/shared",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "size-and-align",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "fields": {
+                                "align": {
+                                  "uint": 16
+                                },
+                                "size": {
+                                  "uint": 0
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "makes-texture",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "bool": false
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "MTLPixelFormatR10Unorm_PACKED/Type1DArray/64x1x1/levels-1/samples-1/slices-2/usage-0x1/private",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "size-and-align",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "fields": {
+                                "align": {
+                                  "uint": 16
+                                },
+                                "size": {
+                                  "uint": 0
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "makes-texture",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "bool": false
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "MTLPixelFormatR10Unorm_PACKED/TextureBuffer/64x1x1/levels-1/samples-1/slices-1/usage-0x1/shared",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "size-and-align",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "fields": {
+                                "align": {
+                                  "uint": 16
+                                },
+                                "size": {
+                                  "uint": 0
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "makes-texture",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "bool": false
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "MTLPixelFormatR10Unorm_PACKED/TextureBuffer/64x1x1/levels-1/samples-1/slices-1/usage-0x1/private",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "size-and-align",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "fields": {
+                                "align": {
+                                  "uint": 16
+                                },
+                                "size": {
+                                  "uint": 0
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "makes-texture",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "bool": false
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "MTLPixelFormatR10Unorm_PACKED/Type2D/1x1x1/levels-1/samples-1/slices-1/usage-0x1/private",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "size-and-align",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "fields": {
+                                "align": {
+                                  "uint": 16
+                                },
+                                "size": {
+                                  "uint": 0
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "makes-texture",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "bool": false
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "MTLPixelFormatR10Unorm_PACKED/Type2D/2x1x1/levels-1/samples-1/slices-1/usage-0x1/private",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "size-and-align",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "fields": {
+                                "align": {
+                                  "uint": 16
+                                },
+                                "size": {
+                                  "uint": 0
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "makes-texture",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "bool": false
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "MTLPixelFormatR10Unorm_PACKED/Type2D/3x1x1/levels-1/samples-1/slices-1/usage-0x1/private",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "size-and-align",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "fields": {
+                                "align": {
+                                  "uint": 16
+                                },
+                                "size": {
+                                  "uint": 0
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "makes-texture",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "bool": false
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "MTLPixelFormatR10Unorm_PACKED/Type2D/4x1x1/levels-1/samples-1/slices-1/usage-0x1/private",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "size-and-align",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "fields": {
+                                "align": {
+                                  "uint": 16
+                                },
+                                "size": {
+                                  "uint": 0
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "makes-texture",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "bool": false
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "MTLPixelFormatR10Unorm_PACKED/Type2D/5x1x1/levels-1/samples-1/slices-1/usage-0x1/private",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "size-and-align",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "fields": {
+                                "align": {
+                                  "uint": 16
+                                },
+                                "size": {
+                                  "uint": 0
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "makes-texture",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "bool": false
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "MTLPixelFormatR10Unorm_PACKED/Type2D/6x1x1/levels-1/samples-1/slices-1/usage-0x1/private",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "size-and-align",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "fields": {
+                                "align": {
+                                  "uint": 16
+                                },
+                                "size": {
+                                  "uint": 0
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "makes-texture",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "bool": false
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "MTLPixelFormatR10Unorm_PACKED/Type2D/7x1x1/levels-1/samples-1/slices-1/usage-0x1/private",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "size-and-align",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "fields": {
+                                "align": {
+                                  "uint": 16
+                                },
+                                "size": {
+                                  "uint": 0
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "makes-texture",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "bool": false
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "MTLPixelFormatR10Unorm_PACKED/Type2D/8x1x1/levels-1/samples-1/slices-1/usage-0x1/private",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "size-and-align",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "fields": {
+                                "align": {
+                                  "uint": 16
+                                },
+                                "size": {
+                                  "uint": 0
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "makes-texture",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "bool": false
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "MTLPixelFormatR10Unorm_PACKED/Type2D/9x1x1/levels-1/samples-1/slices-1/usage-0x1/private",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "size-and-align",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "fields": {
+                                "align": {
+                                  "uint": 16
+                                },
+                                "size": {
+                                  "uint": 0
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "makes-texture",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "bool": false
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "MTLPixelFormatR10Unorm_PACKED/Type2D/10x1x1/levels-1/samples-1/slices-1/usage-0x1/private",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "size-and-align",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "fields": {
+                                "align": {
+                                  "uint": 16
+                                },
+                                "size": {
+                                  "uint": 0
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "makes-texture",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "bool": false
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "MTLPixelFormatR10Unorm_PACKED/Type2D/11x1x1/levels-1/samples-1/slices-1/usage-0x1/private",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "size-and-align",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "fields": {
+                                "align": {
+                                  "uint": 16
+                                },
+                                "size": {
+                                  "uint": 0
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "makes-texture",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "bool": false
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "MTLPixelFormatR10Unorm_PACKED/Type2D/12x1x1/levels-1/samples-1/slices-1/usage-0x1/private",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "size-and-align",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "fields": {
+                                "align": {
+                                  "uint": 16
+                                },
+                                "size": {
+                                  "uint": 0
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "makes-texture",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "bool": false
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "MTLPixelFormatR10Unorm_PACKED/Type2D/13x1x1/levels-1/samples-1/slices-1/usage-0x1/private",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "size-and-align",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "fields": {
+                                "align": {
+                                  "uint": 16
+                                },
+                                "size": {
+                                  "uint": 0
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "makes-texture",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "bool": false
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "MTLPixelFormatR10Unorm_PACKED/Type2D/14x1x1/levels-1/samples-1/slices-1/usage-0x1/private",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "size-and-align",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "fields": {
+                                "align": {
+                                  "uint": 16
+                                },
+                                "size": {
+                                  "uint": 0
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "makes-texture",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "bool": false
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "MTLPixelFormatR10Unorm_PACKED/Type2D/15x1x1/levels-1/samples-1/slices-1/usage-0x1/private",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "size-and-align",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "fields": {
+                                "align": {
+                                  "uint": 16
+                                },
+                                "size": {
+                                  "uint": 0
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "makes-texture",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "bool": false
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "MTLPixelFormatR10Unorm_PACKED/Type2D/16x1x1/levels-1/samples-1/slices-1/usage-0x1/private",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "size-and-align",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "fields": {
+                                "align": {
+                                  "uint": 16
+                                },
+                                "size": {
+                                  "uint": 0
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "makes-texture",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "bool": false
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "MTLPixelFormatR10Unorm_PACKED/Type2D/17x1x1/levels-1/samples-1/slices-1/usage-0x1/private",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "size-and-align",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "fields": {
+                                "align": {
+                                  "uint": 16
+                                },
+                                "size": {
+                                  "uint": 0
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "makes-texture",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "bool": false
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "MTLPixelFormatR10Unorm_PACKED/Type2D/16x2x1/levels-1/samples-1/slices-1/usage-0x1/private",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "size-and-align",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "fields": {
+                                "align": {
+                                  "uint": 16
+                                },
+                                "size": {
+                                  "uint": 0
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "makes-texture",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "bool": false
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "MTLPixelFormatR10Unorm_PACKED/Type2D/16x3x1/levels-1/samples-1/slices-1/usage-0x1/private",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "size-and-align",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "fields": {
+                                "align": {
+                                  "uint": 16
+                                },
+                                "size": {
+                                  "uint": 0
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "makes-texture",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "bool": false
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "MTLPixelFormatR10Unorm_PACKED/Type2D/16x4x1/levels-1/samples-1/slices-1/usage-0x1/private",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "size-and-align",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "fields": {
+                                "align": {
+                                  "uint": 16
+                                },
+                                "size": {
+                                  "uint": 0
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "makes-texture",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "bool": false
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "MTLPixelFormatR10Unorm_PACKED/Type2D/16x5x1/levels-1/samples-1/slices-1/usage-0x1/private",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "size-and-align",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "fields": {
+                                "align": {
+                                  "uint": 16
+                                },
+                                "size": {
+                                  "uint": 0
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "makes-texture",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "bool": false
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "MTLPixelFormatR10Unorm_PACKED/Type2D/16x6x1/levels-1/samples-1/slices-1/usage-0x1/private",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "size-and-align",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "fields": {
+                                "align": {
+                                  "uint": 16
+                                },
+                                "size": {
+                                  "uint": 0
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "makes-texture",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "bool": false
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "MTLPixelFormatR10Unorm_PACKED/Type2D/16x7x1/levels-1/samples-1/slices-1/usage-0x1/private",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "size-and-align",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "fields": {
+                                "align": {
+                                  "uint": 16
+                                },
+                                "size": {
+                                  "uint": 0
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "makes-texture",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "bool": false
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "MTLPixelFormatR10Unorm_PACKED/Type2D/16x8x1/levels-1/samples-1/slices-1/usage-0x1/private",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "size-and-align",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "fields": {
+                                "align": {
+                                  "uint": 16
+                                },
+                                "size": {
+                                  "uint": 0
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "makes-texture",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "bool": false
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "MTLPixelFormatR10Unorm_PACKED/Type2D/16x9x1/levels-1/samples-1/slices-1/usage-0x1/private",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "size-and-align",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "fields": {
+                                "align": {
+                                  "uint": 16
+                                },
+                                "size": {
+                                  "uint": 0
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "makes-texture",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "bool": false
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "MTLPixelFormatR10Unorm_PACKED/Type2D/16x10x1/levels-1/samples-1/slices-1/usage-0x1/private",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "size-and-align",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "fields": {
+                                "align": {
+                                  "uint": 16
+                                },
+                                "size": {
+                                  "uint": 0
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "makes-texture",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "bool": false
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "MTLPixelFormatR10Unorm_PACKED/Type2D/16x11x1/levels-1/samples-1/slices-1/usage-0x1/private",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "size-and-align",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "fields": {
+                                "align": {
+                                  "uint": 16
+                                },
+                                "size": {
+                                  "uint": 0
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "makes-texture",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "bool": false
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "MTLPixelFormatR10Unorm_PACKED/Type2D/16x12x1/levels-1/samples-1/slices-1/usage-0x1/private",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "size-and-align",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "fields": {
+                                "align": {
+                                  "uint": 16
+                                },
+                                "size": {
+                                  "uint": 0
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "makes-texture",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "bool": false
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "MTLPixelFormatR10Unorm_PACKED/Type2D/16x13x1/levels-1/samples-1/slices-1/usage-0x1/private",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "size-and-align",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "fields": {
+                                "align": {
+                                  "uint": 16
+                                },
+                                "size": {
+                                  "uint": 0
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "makes-texture",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "bool": false
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "MTLPixelFormatR10Unorm_PACKED/Type2D/16x14x1/levels-1/samples-1/slices-1/usage-0x1/private",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "size-and-align",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "fields": {
+                                "align": {
+                                  "uint": 16
+                                },
+                                "size": {
+                                  "uint": 0
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "makes-texture",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "bool": false
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "MTLPixelFormatR10Unorm_PACKED/Type2D/16x15x1/levels-1/samples-1/slices-1/usage-0x1/private",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "size-and-align",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "fields": {
+                                "align": {
+                                  "uint": 16
+                                },
+                                "size": {
+                                  "uint": 0
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "makes-texture",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "bool": false
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "MTLPixelFormatR10Unorm_PACKED/Type2D/16x16x1/levels-1/samples-1/slices-1/usage-0x1/private",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "size-and-align",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "fields": {
+                                "align": {
+                                  "uint": 16
+                                },
+                                "size": {
+                                  "uint": 0
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "makes-texture",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "bool": false
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "MTLPixelFormatR10Unorm_PACKED/Type2D/16x17x1/levels-1/samples-1/slices-1/usage-0x1/private",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "size-and-align",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "fields": {
+                                "align": {
+                                  "uint": 16
+                                },
+                                "size": {
+                                  "uint": 0
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "makes-texture",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "bool": false
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "MTLPixelFormatRG10Unorm_PACKED/Type2D/64x64x1/levels-1/samples-1/slices-1/usage-0x1/shared",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "size-and-align",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "fields": {
+                                "align": {
+                                  "uint": 16
+                                },
+                                "size": {
+                                  "uint": 0
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "makes-texture",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "bool": false
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "MTLPixelFormatRG10Unorm_PACKED/Type2D/64x64x1/levels-1/samples-1/slices-1/usage-0x1/private",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "size-and-align",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "fields": {
+                                "align": {
+                                  "uint": 16
+                                },
+                                "size": {
+                                  "uint": 0
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "makes-texture",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "bool": false
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "MTLPixelFormatRG10Unorm_PACKED/Type2DArray/64x64x1/levels-1/samples-1/slices-2/usage-0x1/shared",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "size-and-align",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "fields": {
+                                "align": {
+                                  "uint": 128
+                                },
+                                "size": {
+                                  "uint": 0
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "makes-texture",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "bool": false
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "MTLPixelFormatRG10Unorm_PACKED/Type2DArray/64x64x1/levels-1/samples-1/slices-2/usage-0x1/private",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "size-and-align",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "fields": {
+                                "align": {
+                                  "uint": 128
+                                },
+                                "size": {
+                                  "uint": 0
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "makes-texture",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "bool": false
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "MTLPixelFormatRG10Unorm_PACKED/Cube/64x64x1/levels-1/samples-1/slices-1/usage-0x1/shared",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "size-and-align",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "fields": {
+                                "align": {
+                                  "uint": 16
+                                },
+                                "size": {
+                                  "uint": 0
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "makes-texture",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "bool": false
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "MTLPixelFormatRG10Unorm_PACKED/Cube/64x64x1/levels-1/samples-1/slices-1/usage-0x1/private",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "size-and-align",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "fields": {
+                                "align": {
+                                  "uint": 16
+                                },
+                                "size": {
+                                  "uint": 0
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "makes-texture",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "bool": false
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "MTLPixelFormatRG10Unorm_PACKED/CubeArray/64x64x1/levels-1/samples-1/slices-2/usage-0x1/shared",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "size-and-align",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "fields": {
+                                "align": {
+                                  "uint": 16
+                                },
+                                "size": {
+                                  "uint": 0
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "makes-texture",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "bool": false
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "MTLPixelFormatRG10Unorm_PACKED/CubeArray/64x64x1/levels-1/samples-1/slices-2/usage-0x1/private",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "size-and-align",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "fields": {
+                                "align": {
+                                  "uint": 16
+                                },
+                                "size": {
+                                  "uint": 0
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "makes-texture",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "bool": false
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "MTLPixelFormatRG10Unorm_PACKED/Type3D/64x64x2/levels-1/samples-1/slices-1/usage-0x1/shared",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "size-and-align",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "fields": {
+                                "align": {
+                                  "uint": 16
+                                },
+                                "size": {
+                                  "uint": 0
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "makes-texture",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "bool": false
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "MTLPixelFormatRG10Unorm_PACKED/Type3D/64x64x2/levels-1/samples-1/slices-1/usage-0x1/private",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "size-and-align",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "fields": {
+                                "align": {
+                                  "uint": 16
+                                },
+                                "size": {
+                                  "uint": 0
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "makes-texture",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "bool": false
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "MTLPixelFormatRG10Unorm_PACKED/Type1D/64x1x1/levels-1/samples-1/slices-1/usage-0x1/shared",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "size-and-align",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "fields": {
+                                "align": {
+                                  "uint": 16
+                                },
+                                "size": {
+                                  "uint": 0
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "makes-texture",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "bool": false
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "MTLPixelFormatRG10Unorm_PACKED/Type1D/64x1x1/levels-1/samples-1/slices-1/usage-0x1/private",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "size-and-align",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "fields": {
+                                "align": {
+                                  "uint": 16
+                                },
+                                "size": {
+                                  "uint": 0
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "makes-texture",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "bool": false
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "MTLPixelFormatRG10Unorm_PACKED/Type1DArray/64x1x1/levels-1/samples-1/slices-2/usage-0x1/shared",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "size-and-align",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "fields": {
+                                "align": {
+                                  "uint": 16
+                                },
+                                "size": {
+                                  "uint": 0
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "makes-texture",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "bool": false
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "MTLPixelFormatRG10Unorm_PACKED/Type1DArray/64x1x1/levels-1/samples-1/slices-2/usage-0x1/private",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "size-and-align",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "fields": {
+                                "align": {
+                                  "uint": 16
+                                },
+                                "size": {
+                                  "uint": 0
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "makes-texture",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "bool": false
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "MTLPixelFormatRG10Unorm_PACKED/TextureBuffer/64x1x1/levels-1/samples-1/slices-1/usage-0x1/shared",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "size-and-align",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "fields": {
+                                "align": {
+                                  "uint": 16
+                                },
+                                "size": {
+                                  "uint": 0
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "makes-texture",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "bool": false
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "MTLPixelFormatRG10Unorm_PACKED/TextureBuffer/64x1x1/levels-1/samples-1/slices-1/usage-0x1/private",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "size-and-align",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "fields": {
+                                "align": {
+                                  "uint": 16
+                                },
+                                "size": {
+                                  "uint": 0
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "makes-texture",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "bool": false
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "MTLPixelFormatRG10Unorm_PACKED/Type2D/1x1x1/levels-1/samples-1/slices-1/usage-0x1/private",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "size-and-align",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "fields": {
+                                "align": {
+                                  "uint": 16
+                                },
+                                "size": {
+                                  "uint": 0
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "makes-texture",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "bool": false
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "MTLPixelFormatRG10Unorm_PACKED/Type2D/2x1x1/levels-1/samples-1/slices-1/usage-0x1/private",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "size-and-align",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "fields": {
+                                "align": {
+                                  "uint": 16
+                                },
+                                "size": {
+                                  "uint": 0
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "makes-texture",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "bool": false
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "MTLPixelFormatRG10Unorm_PACKED/Type2D/3x1x1/levels-1/samples-1/slices-1/usage-0x1/private",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "size-and-align",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "fields": {
+                                "align": {
+                                  "uint": 16
+                                },
+                                "size": {
+                                  "uint": 0
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "makes-texture",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "bool": false
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "MTLPixelFormatRG10Unorm_PACKED/Type2D/4x1x1/levels-1/samples-1/slices-1/usage-0x1/private",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "size-and-align",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "fields": {
+                                "align": {
+                                  "uint": 16
+                                },
+                                "size": {
+                                  "uint": 0
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "makes-texture",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "bool": false
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "MTLPixelFormatRG10Unorm_PACKED/Type2D/5x1x1/levels-1/samples-1/slices-1/usage-0x1/private",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "size-and-align",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "fields": {
+                                "align": {
+                                  "uint": 16
+                                },
+                                "size": {
+                                  "uint": 0
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "makes-texture",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "bool": false
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "MTLPixelFormatRG10Unorm_PACKED/Type2D/6x1x1/levels-1/samples-1/slices-1/usage-0x1/private",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "size-and-align",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "fields": {
+                                "align": {
+                                  "uint": 16
+                                },
+                                "size": {
+                                  "uint": 0
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "makes-texture",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "bool": false
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "MTLPixelFormatRG10Unorm_PACKED/Type2D/7x1x1/levels-1/samples-1/slices-1/usage-0x1/private",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "size-and-align",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "fields": {
+                                "align": {
+                                  "uint": 16
+                                },
+                                "size": {
+                                  "uint": 0
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "makes-texture",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "bool": false
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "MTLPixelFormatRG10Unorm_PACKED/Type2D/8x1x1/levels-1/samples-1/slices-1/usage-0x1/private",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "size-and-align",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "fields": {
+                                "align": {
+                                  "uint": 16
+                                },
+                                "size": {
+                                  "uint": 0
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "makes-texture",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "bool": false
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "MTLPixelFormatRG10Unorm_PACKED/Type2D/9x1x1/levels-1/samples-1/slices-1/usage-0x1/private",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "size-and-align",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "fields": {
+                                "align": {
+                                  "uint": 16
+                                },
+                                "size": {
+                                  "uint": 0
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "makes-texture",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "bool": false
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "MTLPixelFormatRG10Unorm_PACKED/Type2D/10x1x1/levels-1/samples-1/slices-1/usage-0x1/private",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "size-and-align",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "fields": {
+                                "align": {
+                                  "uint": 16
+                                },
+                                "size": {
+                                  "uint": 0
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "makes-texture",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "bool": false
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "MTLPixelFormatRG10Unorm_PACKED/Type2D/11x1x1/levels-1/samples-1/slices-1/usage-0x1/private",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "size-and-align",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "fields": {
+                                "align": {
+                                  "uint": 16
+                                },
+                                "size": {
+                                  "uint": 0
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "makes-texture",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "bool": false
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "MTLPixelFormatRG10Unorm_PACKED/Type2D/12x1x1/levels-1/samples-1/slices-1/usage-0x1/private",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "size-and-align",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "fields": {
+                                "align": {
+                                  "uint": 16
+                                },
+                                "size": {
+                                  "uint": 0
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "makes-texture",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "bool": false
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "MTLPixelFormatRG10Unorm_PACKED/Type2D/13x1x1/levels-1/samples-1/slices-1/usage-0x1/private",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "size-and-align",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "fields": {
+                                "align": {
+                                  "uint": 16
+                                },
+                                "size": {
+                                  "uint": 0
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "makes-texture",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "bool": false
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "MTLPixelFormatRG10Unorm_PACKED/Type2D/14x1x1/levels-1/samples-1/slices-1/usage-0x1/private",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "size-and-align",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "fields": {
+                                "align": {
+                                  "uint": 16
+                                },
+                                "size": {
+                                  "uint": 0
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "makes-texture",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "bool": false
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "MTLPixelFormatRG10Unorm_PACKED/Type2D/15x1x1/levels-1/samples-1/slices-1/usage-0x1/private",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "size-and-align",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "fields": {
+                                "align": {
+                                  "uint": 16
+                                },
+                                "size": {
+                                  "uint": 0
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "makes-texture",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "bool": false
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "MTLPixelFormatRG10Unorm_PACKED/Type2D/16x1x1/levels-1/samples-1/slices-1/usage-0x1/private",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "size-and-align",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "fields": {
+                                "align": {
+                                  "uint": 16
+                                },
+                                "size": {
+                                  "uint": 0
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "makes-texture",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "bool": false
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "MTLPixelFormatRG10Unorm_PACKED/Type2D/17x1x1/levels-1/samples-1/slices-1/usage-0x1/private",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "size-and-align",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "fields": {
+                                "align": {
+                                  "uint": 16
+                                },
+                                "size": {
+                                  "uint": 0
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "makes-texture",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "bool": false
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "MTLPixelFormatRG10Unorm_PACKED/Type2D/16x2x1/levels-1/samples-1/slices-1/usage-0x1/private",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "size-and-align",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "fields": {
+                                "align": {
+                                  "uint": 16
+                                },
+                                "size": {
+                                  "uint": 0
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "makes-texture",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "bool": false
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "MTLPixelFormatRG10Unorm_PACKED/Type2D/16x3x1/levels-1/samples-1/slices-1/usage-0x1/private",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "size-and-align",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "fields": {
+                                "align": {
+                                  "uint": 16
+                                },
+                                "size": {
+                                  "uint": 0
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "makes-texture",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "bool": false
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "MTLPixelFormatRG10Unorm_PACKED/Type2D/16x4x1/levels-1/samples-1/slices-1/usage-0x1/private",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "size-and-align",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "fields": {
+                                "align": {
+                                  "uint": 16
+                                },
+                                "size": {
+                                  "uint": 0
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "makes-texture",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "bool": false
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "MTLPixelFormatRG10Unorm_PACKED/Type2D/16x5x1/levels-1/samples-1/slices-1/usage-0x1/private",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "size-and-align",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "fields": {
+                                "align": {
+                                  "uint": 16
+                                },
+                                "size": {
+                                  "uint": 0
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "makes-texture",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "bool": false
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "MTLPixelFormatRG10Unorm_PACKED/Type2D/16x6x1/levels-1/samples-1/slices-1/usage-0x1/private",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "size-and-align",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "fields": {
+                                "align": {
+                                  "uint": 16
+                                },
+                                "size": {
+                                  "uint": 0
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "makes-texture",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "bool": false
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "MTLPixelFormatRG10Unorm_PACKED/Type2D/16x7x1/levels-1/samples-1/slices-1/usage-0x1/private",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "size-and-align",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "fields": {
+                                "align": {
+                                  "uint": 16
+                                },
+                                "size": {
+                                  "uint": 0
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "makes-texture",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "bool": false
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "MTLPixelFormatRG10Unorm_PACKED/Type2D/16x8x1/levels-1/samples-1/slices-1/usage-0x1/private",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "size-and-align",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "fields": {
+                                "align": {
+                                  "uint": 16
+                                },
+                                "size": {
+                                  "uint": 0
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "makes-texture",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "bool": false
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "MTLPixelFormatRG10Unorm_PACKED/Type2D/16x9x1/levels-1/samples-1/slices-1/usage-0x1/private",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "size-and-align",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "fields": {
+                                "align": {
+                                  "uint": 16
+                                },
+                                "size": {
+                                  "uint": 0
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "makes-texture",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "bool": false
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "MTLPixelFormatRG10Unorm_PACKED/Type2D/16x10x1/levels-1/samples-1/slices-1/usage-0x1/private",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "size-and-align",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "fields": {
+                                "align": {
+                                  "uint": 16
+                                },
+                                "size": {
+                                  "uint": 0
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "makes-texture",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "bool": false
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "MTLPixelFormatRG10Unorm_PACKED/Type2D/16x11x1/levels-1/samples-1/slices-1/usage-0x1/private",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "size-and-align",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "fields": {
+                                "align": {
+                                  "uint": 16
+                                },
+                                "size": {
+                                  "uint": 0
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "makes-texture",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "bool": false
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "MTLPixelFormatRG10Unorm_PACKED/Type2D/16x12x1/levels-1/samples-1/slices-1/usage-0x1/private",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "size-and-align",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "fields": {
+                                "align": {
+                                  "uint": 16
+                                },
+                                "size": {
+                                  "uint": 0
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "makes-texture",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "bool": false
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "MTLPixelFormatRG10Unorm_PACKED/Type2D/16x13x1/levels-1/samples-1/slices-1/usage-0x1/private",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "size-and-align",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "fields": {
+                                "align": {
+                                  "uint": 16
+                                },
+                                "size": {
+                                  "uint": 0
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "makes-texture",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "bool": false
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "MTLPixelFormatRG10Unorm_PACKED/Type2D/16x14x1/levels-1/samples-1/slices-1/usage-0x1/private",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "size-and-align",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "fields": {
+                                "align": {
+                                  "uint": 16
+                                },
+                                "size": {
+                                  "uint": 0
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "makes-texture",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "bool": false
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "MTLPixelFormatRG10Unorm_PACKED/Type2D/16x15x1/levels-1/samples-1/slices-1/usage-0x1/private",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "size-and-align",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "fields": {
+                                "align": {
+                                  "uint": 16
+                                },
+                                "size": {
+                                  "uint": 0
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "makes-texture",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "bool": false
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "MTLPixelFormatRG10Unorm_PACKED/Type2D/16x16x1/levels-1/samples-1/slices-1/usage-0x1/private",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "size-and-align",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "fields": {
+                                "align": {
+                                  "uint": 16
+                                },
+                                "size": {
+                                  "uint": 0
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "makes-texture",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "bool": false
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "MTLPixelFormatRG10Unorm_PACKED/Type2D/16x17x1/levels-1/samples-1/slices-1/usage-0x1/private",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "size-and-align",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "fields": {
+                                "align": {
+                                  "uint": 16
+                                },
+                                "size": {
+                                  "uint": 0
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "makes-texture",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "bool": false
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "notices",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "set",
+                      "observed": {
+                        "value": {
+                          "nothing": "announced_nothing"
+                        }
+                      }
+                    },
+                    {
+                      "name": "counts",
+                      "observed": {
+                        "value": {
+                          "fields": {}
+                        }
+                      }
+                    }
+                  ]
+                }
+              ]
+            }
+          }
+        }
+      ],
+      "validated": {
+        "stopped": {
+          "call": "makes_texture",
+          "message": "Texture Descriptor Validation\npixel format (MTLPixelFormatR10Unorm_PACKED) cannot be used for a texture buffer"
+        }
+      }
+    }
+  ]
+}
