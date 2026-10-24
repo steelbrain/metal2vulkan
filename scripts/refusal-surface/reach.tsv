@@ -168,7 +168,6 @@ gap	ShaderLogging	rare	shader os_log
 gap	DeviceNotifications	rare	device hotplug notifications (deprecated)
 gap	RateMapRegions	rare	draws in rate-mapped passes the region path does not draw
 gap	LayeredPass	rare	layered passes needing a per-layer color resolve
-gap	FunctionOptions	rare	function descriptor options beyond CompileToBinary
 gap	OverlappingTextureCopies	rare	overlapping texture copies (Metal races)
 gap	RebindTextures	none	a runtime extension's rebind with a live texture
 gap	DetachTextures	none	a runtime extension's detach with a texture no stand-in presents exactly

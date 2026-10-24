@@ -49,7 +49,7 @@ use super::wrapped_buffer::WrappedBufferProblem;
 use metal2vulkan::bind::UnpinnedCompile;
 use metal2vulkan::device::{ApiVersion, VkExtension, VkFeature};
 use metal2vulkan::error::{BindError, Error as CompileError, Unsupported};
-use metal2vulkan::metal::{FunctionOptions, PixelFormat};
+use metal2vulkan::metal::PixelFormat;
 use metal2vulkan::pipeline::Stage;
 use metal2vulkan::reflection::LinkedUseGap;
 use std::fmt;
@@ -1343,10 +1343,6 @@ pub enum RuntimeGap {
     /// layer: a color resolve from the sample planes (`color_resolve.rs`). Resolves, separate
     /// depth and stencil textures (copied by draws once per layer) and stand-ins take every layer.
     LayeredPass,
-    /// A function descriptor's options beyond `CompileToBinary` and
-    /// `StoreFunctionInMetalPipelinesScript` (`Library::new_function_with_descriptor`): the
-    /// options named, which the runtime does not make.
-    FunctionOptions(FunctionOptions),
     /// A blit copy between overlapping regions of one texture's texels (`copyFromTexture:...` with
     /// the source's region meeting the destination's, through the texture or views of it), other
     /// than a region copied onto itself, which keeps its texels. Not scheduled: no exact answer

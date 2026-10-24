@@ -1040,7 +1040,7 @@ fn without_the_array_s_features_a_table_past_the_storage_range_is_called_through
 ///   calls both.
 /// - A required size Metal refuses refuses the creation; a dispatch of another size runs the size
 ///   given, as plain Metal runs it.
-/// - A function descriptor's options that the runtime does not make are refused.
+/// - Every combination of a function descriptor's options is taken and answered back.
 #[test]
 fn binary_functions_and_required_threads_answer_as_metal_s_do() {
     use metal2vulkan::metal::FunctionOptions;
@@ -1075,13 +1075,14 @@ fn binary_functions_and_required_threads_answer_as_metal_s_do() {
             )
         };
 
-        // The options a function descriptor takes.
-        assert_eq!(
-            with_options("table_add", FunctionOptions::FAIL_ON_BINARY_ARCHIVE_MISS).err(),
-            Some(Error::NotImplemented(RuntimeGap::FunctionOptions(
-                FunctionOptions::FAIL_ON_BINARY_ARCHIVE_MISS
-            )))
-        );
+        // The options a function descriptor takes: every combination of the four bits, each
+        // answered back verbatim, as plain Metal answers it over a descriptor that lists no
+        // binary archive (`library-facts-descriptor-*`).
+        for raw in 0..16u32 {
+            let options = FunctionOptions::try_from(raw).unwrap();
+            let made = with_options("table_add", options).unwrap();
+            assert_eq!(made.options(), options, "options {raw:#x}");
+        }
         let stored = with_options(
             "table_add",
             FunctionOptions::COMPILE_TO_BINARY

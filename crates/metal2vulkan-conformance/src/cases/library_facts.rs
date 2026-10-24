@@ -34,11 +34,15 @@
 //!   constants dictionary empty. `function-facts-specialized-by-index` is the same specialization
 //!   through the other call, so a descriptor that dropped its values reads as that case's
 //!   unspecialized answer;
-//! - **a descriptor carrying an option** (`MTLFunctionOptionStoreFunctionInMetalPipelinesScript`):
-//!   the one `MTLFunctionOptions` bit a plain function may be made with that changes nothing a
-//!   program sees. Every other case of the suite answers `options` as
-//!   `MTLFunctionOptionNone`, so this is the one case where the field holds a value nothing else
-//!   leaves, and a side that ignored a descriptor's options reads as `None` here.
+//! - **a descriptor carrying an option** (`MTLFunctionOptionStoreFunctionInMetalPipelinesScript`,
+//!   then `MTLFunctionOptionCompileToBinary`, `MTLFunctionOptionFailOnBinaryArchiveMiss`,
+//!   `MTLFunctionOptionPipelineIndependent`, then all four at once): every `MTLFunctionOptions`
+//!   bit a plain function may be made with, one case a bit and one case for the whole word. No
+//!   other case of the suite leaves `options` anything but `MTLFunctionOptionNone`, so a side that
+//!   ignored a descriptor's options reads as `None` here, and one that masked a bit it has no use
+//!   for reads as a smaller set. Plain Metal takes all sixteen combinations over a descriptor that
+//!   lists no binary archive and answers the word back verbatim (an M3 Max, macOS 27.0.1,
+//!   `probes/argument_descriptor_types.m`).
 //!
 //! # Why the library getters are not an empty comparison
 //!
@@ -149,6 +153,61 @@ pub fn all() -> Vec<LibraryFactsCase> {
                 name: "ob1_threadgroup".to_owned(),
                 constants: Vec::new(),
                 options: FunctionOptions::STORE_FUNCTION_IN_METAL_PIPELINES_SCRIPT,
+            }),
+        },
+        // The two option bits the runtime used to refuse. Plain Metal takes each on its own over
+        // a descriptor that lists no binary archive and answers `options` back verbatim, measured
+        // on an Apple M3 Max under macOS 27.0.1 (`probes/argument_descriptor_types.m`, the
+        // `function` shape, every one of the sixteen combinations of the four bits, and these
+        // rows' own recordings). Each is here on its own so the per-value axis reads the bit back
+        // from a site rather than from a combination, and a side that masked the bit out of
+        // `options` reads as `None`.
+        //
+        // `MTLFunctionOptionFailOnBinaryArchiveMiss` asks the creation to fail where the
+        // descriptor's binary archives hold no such function; with no archive listed there is
+        // nothing to miss, which is what makes the bit askable of one library on its own.
+        LibraryFactsCase {
+            name: "library-facts-descriptor-fail-on-binary-archive-miss",
+            fixture: "a27_ob1_threadgroup",
+            entry: "ob1_threadgroup",
+            reads: Reads::Descriptor(FunctionDescriptorSpec {
+                name: "ob1_threadgroup".to_owned(),
+                constants: Vec::new(),
+                options: FunctionOptions::FAIL_ON_BINARY_ARCHIVE_MISS,
+            }),
+        },
+        // `MTLFunctionOptionPipelineIndependent`, which asks that a compiled binary function not
+        // be specialized to one pipeline. What a case can ask of it without an archive is the
+        // same as of the bit above: that the creation succeeds and the word comes back. This is
+        // the one row of the family where Metal's **own API validation** disagrees with plain
+        // Metal: it stops the creation ("MTLFunctionOptionPipelineIndependent requires
+        // MTLFunctionOptionCompileToBinary") where plain Metal, the oracle, answers the call.
+        LibraryFactsCase {
+            name: "library-facts-descriptor-pipeline-independent",
+            fixture: "a27_ob1_threadgroup",
+            entry: "ob1_threadgroup",
+            reads: Reads::Descriptor(FunctionDescriptorSpec {
+                name: "ob1_threadgroup".to_owned(),
+                constants: Vec::new(),
+                options: FunctionOptions::PIPELINE_INDEPENDENT,
+            }),
+        },
+        // All four bits at once, which no single-bit case decides: the bits are not exclusive, and
+        // a side that answered `options` from one state field, or dropped a bit it has no use for
+        // once another is set, reads as a smaller set here. 0xf is one of the sixteen combinations
+        // the probe put to Metal, and it is also the combination Metal's own validation accepts
+        // where it refuses `PIPELINE_INDEPENDENT` alone.
+        LibraryFactsCase {
+            name: "library-facts-descriptor-every-option",
+            fixture: "a27_ob1_threadgroup",
+            entry: "ob1_threadgroup",
+            reads: Reads::Descriptor(FunctionDescriptorSpec {
+                name: "ob1_threadgroup".to_owned(),
+                constants: Vec::new(),
+                options: FunctionOptions::COMPILE_TO_BINARY
+                    | FunctionOptions::STORE_FUNCTION_IN_METAL_PIPELINES_SCRIPT
+                    | FunctionOptions::FAIL_ON_BINARY_ARCHIVE_MISS
+                    | FunctionOptions::PIPELINE_INDEPENDENT,
             }),
         },
         // `MTLFunctionOptionCompileToBinary`, with **no** binary archive listed on the descriptor.

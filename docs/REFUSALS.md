@@ -14,14 +14,14 @@ Columns:
   - `none`: no public API path: malformed or non-Metal input, Apple-private calls, or a cap no valid program of ordinary size meets;
   - `?`: not assessed yet.
 
-Generated at `7a98708ea`.
+Generated at `eb4cf6daf`.
 
 ## Totals
 
 | Kind | Variants | With a site | Reach system | Reach app | Reach rare | Reach none | Unassessed |
 |---|---|---|---|---|---|---|---|
 | Translator and front-end refusals | 126 | 126 | 6 | 33 | 70 | 17 | 0 |
-| Runtime gaps | 65 | 65 | 1 | 8 | 42 | 14 | 0 |
+| Runtime gaps | 64 | 64 | 1 | 8 | 41 | 14 | 0 |
 | Apple-only calls | 5 | 5 | 0 | 0 | 0 | 5 | 0 |
 | Binder refusals at a device limit | 9 | 9 | 0 | 1 | 7 | 1 | 0 |
 | Translation caps | 14 | 14 | 0 | 0 | 7 | 7 | 0 |
@@ -206,7 +206,6 @@ Generated at `7a98708ea`.
 | `DeviceNotifications` | Device notifications (`MTLCopyAllDevicesWithObserver`) (not scheduled) | every device (runtime piece not built) | family audit only: 1: `crates/metal2vulkan-runtime/src/families/features.rs:1479` | `rare`: device hotplug notifications (deprecated) |
 | `RateMapRegions` | A draw in a rate-mapped pass that the region path does not draw, for the compile layer's reason (`rate_mapped_pass.rs`) | every device (runtime piece not built) | 1: `crates/metal2vulkan-runtime/src/rate_mapped_pass.rs:479` | `rare`: draws in rate-mapped passes the region path does not draw |
 | `LayeredPass` | A layered render pass (`renderTargetArrayLength` 2 or more) that needs a step of one layer | every device (runtime piece not built) | 1: `crates/metal2vulkan-runtime/src/color_resolve.rs:928` | `rare`: layered passes needing a per-layer color resolve |
-| `FunctionOptions` | A function descriptor's options beyond `CompileToBinary` and `StoreFunctionInMetalPipelinesScript` (`Library::new_function_with_descriptor`) | every device (runtime piece not built) | 1: `crates/metal2vulkan-runtime/src/library.rs:215` | `rare`: function descriptor options beyond CompileToBinary |
 | `OverlappingTextureCopies` | A blit copy between overlapping regions of one texture's texels (`copyFromTexture:...` with the source's region meeting the destination's, through... (not scheduled) | every device (runtime piece not built) | 1: `crates/metal2vulkan-runtime/src/blit_texture.rs:1340` | `rare`: overlapping texture copies (Metal races) |
 | `RebindTextures` | `Buffer::rebind_bytes_no_copy` of a no-copy buffer with a live texture over its bytes, given memory at another offset in its page than the old | every device (runtime piece not built) | 5: `crates/metal2vulkan-runtime/src/buffer_descriptor.rs:637`, `crates/metal2vulkan-runtime/src/texture/heap.rs:2742` (+3) | `none`: a runtime extension's rebind with a live texture |
 | `PvrtcBlockOrder` | A PVRTC texture's blocks in a Metal block order the runtime does not lay out | every device (runtime piece not built) | 1: `crates/metal2vulkan-runtime/src/texture.rs:5896` | `rare`: PVRTC regions off whole levels |
@@ -214,7 +213,7 @@ Generated at `7a98708ea`.
 | `VertexFetchPast4GiB` | A draw (`drawPrimitives:` and its forms, or an indirect command buffer's command) that may read a vertex attribute the pipeline fetches in its... | every device (runtime piece not built) | 1: `crates/metal2vulkan-runtime/src/render/vertex_reach.rs:72` | `rare`: vertex fetch past 4 GiB of a bind offset |
 | `StageInFetchPast4GiB` | A dispatch (`dispatchThreads:threadsPerThreadgroup:` and its forms, or an indirect command buffer's command) whose kernel may read a... | every device (runtime piece not built) | 1: `crates/metal2vulkan-runtime/src/fetch_reach.rs:126` | `rare`: stage-in fetch past 4 GiB of a bind offset |
 | `MappedTextureSampling` | A command that would sample a texture of an address-mode map (`TextureDescriptor::address_mode_map`) where the runtime cannot map it at bind... | every device (runtime piece not built) | 1: `crates/metal2vulkan-runtime/src/address_map.rs:158` | `none`: a runtime extension's texture (address_mode_map) sampled where the runtime cannot map it; no Metal API path |
-| `LibrarySource` | A library compiled from Metal Shading Language source | every device (runtime piece not built) | 1: `crates/metal2vulkan-runtime/src/library.rs:107` | `app`: a library compiled from Metal source (newLibraryWithSource:); the runtime takes metallibs and AIR |
+| `LibrarySource` | A library compiled from Metal Shading Language source | every device (runtime piece not built) | 1: `crates/metal2vulkan-runtime/src/library.rs:108` | `app`: a library compiled from Metal source (newLibraryWithSource:); the runtime takes metallibs and AIR |
 | `RestartedStrip` | An indexed strip after `set_primitive_restart_enabled` with an index Vulkan does not restart at, which the runtime draws as a list an index... | every device (runtime piece not built) | 1: `crates/metal2vulkan-runtime/src/render/restart.rs:71` | `none`: a strip after the Apple-private setPrimitiveRestartEnabled:index: whose rewrite pass cannot run as Metal draws |
 | `PrivatePrimitives` | A draw of one of Metal's private primitive types (`DrawPrimitiveType` | every device (runtime piece not built) | 2: `crates/metal2vulkan-runtime/src/render.rs:8174`, `crates/metal2vulkan-runtime/src/render/restart.rs:72` | `none`: a draw of an Apple-private primitive type (OpenGL on Metal's quads and kin) whose list cannot draw as Metal draws: a list past a u32 or one storage range, indices or arguments an unordered earlier draw wrote |
 | `ProvokingVertex` | A draw under Apple's last provoking vertex (`setProvokingVertexMode:` 1) on a device without `VK_EXT_provoking_vertex`'s last vertex, which the... | every device (runtime piece not built) | 1: `crates/metal2vulkan-runtime/src/render/restart.rs:73` | `none`: a draw after the Apple-private setProvokingVertexMode: 1, on a device without the last provoking vertex, whose rotated list cannot draw as Metal draws |
@@ -461,7 +460,6 @@ Each refusal's sites, with the function that builds it.
 - `gap::DeviceNotifications`: `crates/metal2vulkan-runtime/src/families/features.rs:1479 (state)`
 - `gap::RateMapRegions`: `crates/metal2vulkan-runtime/src/rate_mapped_pass.rs:479 (refusal)`
 - `gap::LayeredPass`: `crates/metal2vulkan-runtime/src/color_resolve.rs:928 (plan)`
-- `gap::FunctionOptions`: `crates/metal2vulkan-runtime/src/library.rs:215 (new_function_with_descriptor)`
 - `gap::OverlappingTextureCopies`: `crates/metal2vulkan-runtime/src/blit_texture.rs:1340 (texture_copies_of_bytes)`
 - `gap::RebindTextures`: `crates/metal2vulkan-runtime/src/buffer_descriptor.rs:637 (rebind_host_pages)`; `crates/metal2vulkan-runtime/src/texture/heap.rs:2742 (rebound_heap_images)`; `crates/metal2vulkan-runtime/src/texture/heap.rs:2757 (rebound_heap_images)`; `crates/metal2vulkan-runtime/src/texture/heap.rs:2768 (rebound_heap_images)`; `crates/metal2vulkan-runtime/src/texture/heap.rs:2811 (dma_buf_heap_images_again)`
 - `gap::PvrtcBlockOrder`: `crates/metal2vulkan-runtime/src/texture.rs:5896 (host_copy)`
@@ -469,7 +467,7 @@ Each refusal's sites, with the function that builds it.
 - `gap::VertexFetchPast4GiB`: `crates/metal2vulkan-runtime/src/render/vertex_reach.rs:72 (check_vertex_reach)`
 - `gap::StageInFetchPast4GiB`: `crates/metal2vulkan-runtime/src/fetch_reach.rs:126 (check_stage_in_reach)`
 - `gap::MappedTextureSampling`: `crates/metal2vulkan-runtime/src/address_map.rs:158 (resolve)`
-- `gap::LibrarySource`: `crates/metal2vulkan-runtime/src/library.rs:107 (new_library_with_source)`
+- `gap::LibrarySource`: `crates/metal2vulkan-runtime/src/library.rs:108 (new_library_with_source)`
 - `gap::RestartedStrip`: `crates/metal2vulkan-runtime/src/render/restart.rs:71 (gap)`
 - `gap::PrivatePrimitives`: `crates/metal2vulkan-runtime/src/render.rs:8174 (draw_resident)`; `crates/metal2vulkan-runtime/src/render/restart.rs:72 (gap)`
 - `gap::ProvokingVertex`: `crates/metal2vulkan-runtime/src/render/restart.rs:73 (gap)`

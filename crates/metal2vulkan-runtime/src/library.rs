@@ -68,8 +68,9 @@ pub struct FunctionDescriptor {
     /// `constantValues`: `None` for nil, the function as `newFunctionWithName:` makes it.
     pub constant_values: Option<FunctionConstantValues>,
     /// `options`. `COMPILE_TO_BINARY` makes a function a stage's `binary_functions` and a made
-    /// state's additions take, and `STORE_FUNCTION_IN_METAL_PIPELINES_SCRIPT` changes nothing
-    /// a program sees; the others are refused (`NotImplemented(FunctionOptions)`).
+    /// state's additions take; the other three change nothing a program sees, and every
+    /// combination of the four is taken and answered back
+    /// ([`Library::new_function_with_descriptor`]).
     pub options: FunctionOptions,
 }
 
@@ -200,20 +201,21 @@ impl Library {
     /// `COMPILE_TO_BINARY`, its [`linked_function`](Function::linked_function) is precompiled, as
     /// a stage's `binary_functions` and a made state's added binary functions must be (Metal's
     /// API validation stops another, and its creation fails without validation; measured on an
-    /// M3 Max and an M4). `FAIL_ON_BINARY_ARCHIVE_MISS` (the descriptor has no binary archives
-    /// yet) and `PIPELINE_INDEPENDENT`, whose effect on Metal is not measured, are refused
-    /// (`NotImplemented(FunctionOptions)`).
+    /// M3 Max and an M4). Every other bit is taken and kept for [`Function::options`] to answer,
+    /// as plain Metal takes it: `newFunctionWithDescriptor:error:` over a descriptor that lists
+    /// no binary archive answers a function for each of the sixteen combinations of the four
+    /// `MTLFunctionOptions` bits and answers `options` back verbatim, 0x4 and 0x8 among them
+    /// (measured on an M3 Max under macOS 27.0.1). `FAIL_ON_BINARY_ARCHIVE_MISS` has no archive
+    /// to miss: a [`FunctionDescriptor`] lists none, there being no `binaryArchives` on it.
+    /// `PIPELINE_INDEPENDENT` changes nothing the runtime makes of the function: what it asks of
+    /// Metal is that a compiled binary not be specialized to one pipeline, and the runtime
+    /// compiles no Metal binary. Metal's own API validation stops `PIPELINE_INDEPENDENT` without
+    /// `COMPILE_TO_BINARY` ("MTLFunctionOptionPipelineIndependent requires
+    /// MTLFunctionOptionCompileToBinary"), where plain Metal, the oracle, answers the call.
     pub fn new_function_with_descriptor(
         &self,
         descriptor: &FunctionDescriptor,
     ) -> Result<Function, Error> {
-        let others = descriptor.options.difference(
-            FunctionOptions::COMPILE_TO_BINARY
-                | FunctionOptions::STORE_FUNCTION_IN_METAL_PIPELINES_SCRIPT,
-        );
-        if !others.is_empty() {
-            return Err(Error::NotImplemented(RuntimeGap::FunctionOptions(others)));
-        }
         let call = "new_function_with_descriptor";
         let mut function = match &descriptor.constant_values {
             Some(constants) => self.function(call, &descriptor.name, constants, true)?,

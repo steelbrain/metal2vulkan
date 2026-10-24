@@ -40,7 +40,7 @@ Its limits, measured rather than asserted:
 | of those exercised, no case reaching it loosens anything | 597 |
 | of those exercised, a case reaching it loosens some site | 188 |
 | case modules | 139 |
-| committed recordings | 1076 |
+| committed recordings | 1079 |
 | distinct SDK items the Metal leg reaches, of any status | 797 |
 | of those, reached only where this cannot name the family | 7 |
 | ledger rows (a case whose gap is recorded) | 91 |
@@ -79,11 +79,11 @@ What this axis cannot see, measured rather than asserted:
 | their values | 757 |
 | of those, unreachable: no case can put them to Metal | 51 |
 | so reachable by some case | 706 |
-| values compared | 659 |
-| share of the reachable compared | 93% |
+| values compared | 661 |
+| share of the reachable compared | 94% |
 | values only the suite's shared sources name | 25 |
-| values no source names and no recording holds | 22 |
-| types every reachable value of which is compared | 39 |
+| values no source names and no recording holds | 20 |
+| types every reachable value of which is compared | 40 |
 | types no value of which is compared | 7 |
 
 The share is weakly informative on its own: `MTLPixelFormat`, `MTLDataType`, `MTLAttributeFormat`, `MTLVertexFormat` hold 506 of the 757 values between them, so an aggregate over types this uneven is mostly theirs. The per-type table is the one to read.
@@ -100,7 +100,6 @@ Deepest gap first, which is the order the work list reads in. *answered*, *at a 
 | `MTLArgumentBuffersTier` | 2 | 0 | 0 | 0 | 0 | 0 | 0 | 2 |
 | `MTLBarrierScope` | 3 | 1 | 0 | 0 | 1 | 0 | 0 | 2 |
 | `MTLDataType` | 97 | 79 | 74 | 0 | 14 | 0 | 16 | 2 |
-| `MTLFunctionOptions` | 5 | 3 | 2 | 0 | 3 | 0 | 0 | 2 |
 | `MTLAttributeFormat` | 54 | 53 | 0 | 53 | 1 | 0 | 0 | 1 |
 | `MTLFunctionType` | 7 | 6 | 6 | 0 | 0 | 0 | 0 | 1 |
 | `MTLResourceUsage` | 3 | 2 | 0 | 0 | 2 | 0 | 0 | 1 |
@@ -121,6 +120,7 @@ Deepest gap first, which is the order the work list reads in. *answered*, *at a 
 | `MTLCompareFunction` | 8 | 8 | 0 | 0 | 8 | 0 | 0 | 0 |
 | `MTLCullMode` | 3 | 3 | 0 | 0 | 3 | 0 | 0 | 0 |
 | `MTLDepthClipMode` | 2 | 2 | 0 | 0 | 2 | 0 | 0 | 0 |
+| `MTLFunctionOptions` | 5 | 5 | 4 | 0 | 5 | 0 | 0 | 0 |
 | `MTLHazardTrackingMode` | 3 | 3 | 0 | 0 | 3 | 0 | 0 | 0 |
 | `MTLIndexType` | 2 | 2 | 0 | 0 | 2 | 0 | 0 | 0 |
 | `MTLLoadAction` | 3 | 3 | 0 | 3 | 3 | 0 | 0 | 0 |
@@ -213,6 +213,7 @@ The work list of this axis, and the shape of the answer to *is the depth suffici
 - **`MTLBindingType`**, 8 of 12 compared
 - **`MTLIndirectCommandType`**, 7 of 8 compared
 - **`MTLFunctionType`**, 6 of 7 compared
+- **`MTLFunctionOptions`**, 5 of 5 compared
 - **`MTLPrimitiveType`**, 5 of 5 compared
 - **`MTLRenderStages`**, 5 of 5 compared
 - **`MTLStepFunction`**, 5 of 9 compared
@@ -220,7 +221,6 @@ The work list of this axis, and the shape of the answer to *is the depth suffici
 - **`MTLTessellationFactorStepFunction`**, 4 of 4 compared
 - **`MTLTessellationPartitionMode`**, 4 of 4 compared
 - **`MTLBindingAccess`**, 3 of 3 compared
-- **`MTLFunctionOptions`**, 3 of 5 compared
 - **`MTLHazardTrackingMode`**, 3 of 3 compared
 - **`MTLLoadAction`**, 3 of 3 compared
 - **`MTLMutability`**, 3 of 3 compared
@@ -265,7 +265,6 @@ The work list. A name here is a value of Metal's that no committed recording hol
 - **`MTLArgumentBuffersTier`**, 2 of 2: `MTLArgumentBuffersTier1`, `MTLArgumentBuffersTier2`
 - **`MTLBarrierScope`**, 2 of 3: `MTLBarrierScopeBuffers`, `MTLBarrierScopeRenderTargets`
 - **`MTLDataType`**, 2 of 97: `MTLDataTypeNone`, `MTLDataTypeTensor`
-- **`MTLFunctionOptions`**, 2 of 5: `MTLFunctionOptionFailOnBinaryArchiveMiss`, `MTLFunctionOptionPipelineIndependent`
 - **`MTLAttributeFormat`**, 1 of 54: `MTLAttributeFormatInvalid`
 - **`MTLFunctionType`**, 1 of 7: `MTLFunctionTypeIntersection`
 - **`MTLResourceUsage`**, 1 of 3: `MTLResourceUsageSample`
@@ -467,12 +466,12 @@ An implemented container no case's Metal leg touches. These are the families of 
 | | |
 |---|---|
 | case modules | 139 |
-| committed recordings | 1076 |
+| committed recordings | 1079 |
 | recorded runs behind a case, median | 3 |
 | recorded runs, least and most | 1 and 30 |
 | cases whose recording holds more than one outcome | 0 |
-| cases running a committed shader fixture | 671 |
-| cases whose Metal answer is `metal_run` | 992 |
+| cases running a committed shader fixture | 674 |
+| cases whose Metal answer is `metal_run` | 995 |
 | cases whose Metal answer is `carried` | 80 |
 | cases whose Metal answer is `never_returned` | 4 |
 | modules that loosen a measured value | 11 |
@@ -488,7 +487,7 @@ An implemented container no case's Metal leg touches. These are the families of 
 | Metal call sites in the leg | 1644 |
 | distinct selectors the leg sends | 634 |
 | of those, resolved to an item of the coverage map | 630 |
-| oracles the recordings name | `apple-m3-max` ×1076 |
+| oracles the recordings name | `apple-m3-max` ×1079 |
 
 ## By family
 
@@ -564,7 +563,7 @@ Each case module: the cases it holds, the `Side` methods it calls, and how many 
 | `indirect_private_types` | 1 | 0 | every field | 0 |
 | `int_attributes` | 1 | 1 | every field | 101 |
 | `level_sizes` | 2 | 2 | every field | 42 |
-| `library_facts` | 6 | 6 | every field | 46 |
+| `library_facts` | 9 | 9 | every field | 46 |
 | `math_routines` | 2 | 2 | every field | 25 |
 | `mesh_barriers` | 2 | 2 | every field | 51 |
 | `mesh_commands` | 2 | 2 | 1 tolerance(s): `AcceptedDifference` | 60 |
@@ -744,13 +743,13 @@ One row per implemented item of the SDK, in the coverage map's order. *exercised
 
 | item | exercised | families | cases Metal ran |
 |---|---|---|---|
-| `MTLAttribute` | yes | `function_facts`, `library_facts` | 21 |
-| `name` | yes | `function_facts`, `library_facts` | 21 |
-| `attributeIndex` | yes | `function_facts`, `library_facts` | 21 |
-| `attributeType` | yes | `function_facts`, `library_facts` | 21 |
-| `active` | yes | `function_facts`, `library_facts` | 21 |
-| `patchData` | yes | `function_facts`, `library_facts` | 21 |
-| `patchControlPointData` | yes | `function_facts`, `library_facts` | 21 |
+| `MTLAttribute` | yes | `function_facts`, `library_facts` | 24 |
+| `name` | yes | `function_facts`, `library_facts` | 24 |
+| `attributeIndex` | yes | `function_facts`, `library_facts` | 24 |
+| `attributeType` | yes | `function_facts`, `library_facts` | 24 |
+| `active` | yes | `function_facts`, `library_facts` | 24 |
+| `patchData` | yes | `function_facts`, `library_facts` | 24 |
+| `patchControlPointData` | yes | `function_facts`, `library_facts` | 24 |
 
 ### `MTLAttributeDescriptor`
 
@@ -1020,9 +1019,9 @@ One row per implemented item of the SDK, in the coverage map's order. *exercised
 
 | item | exercised | families | cases Metal ran |
 |---|---|---|---|
-| `MTLDevice` | yes | `alpha_coverage_pairs`, `argument_encoder_crossings`, `argument_encoders`, `astc_textures`, `attribute_formats`, `attribute_strides`, `binary_archives`, `blend_interactions`, `blend_sweeps`, `blit_encoder_commands`, `blit_indirect_commands`, `border_swizzles`, `buffer_blits`, `buffer_depth_samples`, `buffer_target_clears`, `buffer_texture_blits`, `buffer_textures`, `chroma_pairs`, `color_write_masks`, `command_buffer_facts`, `command_queues`, `compressed_blits`, `compressed_decode`, `compressed_moves`, `compressed_views`, `compute_encoder_commands`, `compute_heap_residency`, `compute_pipeline_descriptors`, `compute_render_chains`, `compute_threadgroups`, `denormal_word_fetches`, `depth_resolve_pairs`, `depth_stencil_space`, `depth_texel_reads`, `device_queries`, `discard_hoist`, `draw_state_changes`, `dynamic_libraries`, `etc_textures`, `event_orders`, `extended_range_blends`, `extended_range_planes`, `extended_range_targets`, `extended_range_two_planes`, `extended_swizzles`, `fetch_ordered`, `format_copies`, `format_footprints`, `fragment_imageblock_reflection`, `frame_chains`, `fresh_contents`, `function_bindings`, `function_facts`, `half_output_blends`, `half_read_nans`, `half_storage_writes`, `half_texel_nans`, `half_write_nans`, `heap_facts`, `heap_metal_sizes`, `host_detach`, `host_page_writes`, `indirect_command_depth`, `indirect_commands`, `int_attributes`, `level_sizes`, `library_facts`, `math_routines`, `mesh_barriers`, `mesh_commands`, `mesh_draws`, `mesh_pipeline_descriptors`, `mesh_pipeline_reflection`, `nearest_positions`, `norm_storage_writes`, `pass_bytes`, `pipeline_descriptors`, `pipeline_facts`, `pipeline_functions`, `pipeline_handlers`, `pipeline_option_reflection`, `pipeline_options`, `pixel_downscales`, `pixel_samplers`, `pvrtc_cpu_order`, `pvrtc_rows`, `rate_map_sweeps`, `rate_maps`, `render_chains`, `render_depth_stencil_state`, `render_draw_forms`, `render_residency`, `render_state`, `resource_facts`, `rgb10a2_srgb`, `rotated_planes`, `rotated_targets`, `sample_positions`, `sampler_crossings`, `sampler_filtering`, `scheduled_handlers`, `shader_stencil`, `shared_events`, `shared_exponent_storage`, `simdgroup_lockstep`, `snorm_tile_store`, `sparse_heaps`, `sparse_mappings`, `sparse_tiles`, `srgb_fetch`, `stage_in_regions`, `swizzled_storage`, `tessellation_sweeps`, `texel_swizzles`, `texture_accesses`, `texture_descriptor_pairs`, `texture_fills`, `texture_views`, `textures`, `tile_pipeline_descriptors`, `tile_pipeline_reflection`, `tile_threadgroups`, `topology_classes`, `two_plane_copies`, `two_plane_heap_blits`, `two_plane_samples`, `vertex_formats`, `visibility`, `visible_tables`, `wide_int_attributes`, `wide_points`, `ycbcr_minify`, `ycbcr_textures` | 980 |
+| `MTLDevice` | yes | `alpha_coverage_pairs`, `argument_encoder_crossings`, `argument_encoders`, `astc_textures`, `attribute_formats`, `attribute_strides`, `binary_archives`, `blend_interactions`, `blend_sweeps`, `blit_encoder_commands`, `blit_indirect_commands`, `border_swizzles`, `buffer_blits`, `buffer_depth_samples`, `buffer_target_clears`, `buffer_texture_blits`, `buffer_textures`, `chroma_pairs`, `color_write_masks`, `command_buffer_facts`, `command_queues`, `compressed_blits`, `compressed_decode`, `compressed_moves`, `compressed_views`, `compute_encoder_commands`, `compute_heap_residency`, `compute_pipeline_descriptors`, `compute_render_chains`, `compute_threadgroups`, `denormal_word_fetches`, `depth_resolve_pairs`, `depth_stencil_space`, `depth_texel_reads`, `device_queries`, `discard_hoist`, `draw_state_changes`, `dynamic_libraries`, `etc_textures`, `event_orders`, `extended_range_blends`, `extended_range_planes`, `extended_range_targets`, `extended_range_two_planes`, `extended_swizzles`, `fetch_ordered`, `format_copies`, `format_footprints`, `fragment_imageblock_reflection`, `frame_chains`, `fresh_contents`, `function_bindings`, `function_facts`, `half_output_blends`, `half_read_nans`, `half_storage_writes`, `half_texel_nans`, `half_write_nans`, `heap_facts`, `heap_metal_sizes`, `host_detach`, `host_page_writes`, `indirect_command_depth`, `indirect_commands`, `int_attributes`, `level_sizes`, `library_facts`, `math_routines`, `mesh_barriers`, `mesh_commands`, `mesh_draws`, `mesh_pipeline_descriptors`, `mesh_pipeline_reflection`, `nearest_positions`, `norm_storage_writes`, `pass_bytes`, `pipeline_descriptors`, `pipeline_facts`, `pipeline_functions`, `pipeline_handlers`, `pipeline_option_reflection`, `pipeline_options`, `pixel_downscales`, `pixel_samplers`, `pvrtc_cpu_order`, `pvrtc_rows`, `rate_map_sweeps`, `rate_maps`, `render_chains`, `render_depth_stencil_state`, `render_draw_forms`, `render_residency`, `render_state`, `resource_facts`, `rgb10a2_srgb`, `rotated_planes`, `rotated_targets`, `sample_positions`, `sampler_crossings`, `sampler_filtering`, `scheduled_handlers`, `shader_stencil`, `shared_events`, `shared_exponent_storage`, `simdgroup_lockstep`, `snorm_tile_store`, `sparse_heaps`, `sparse_mappings`, `sparse_tiles`, `srgb_fetch`, `stage_in_regions`, `swizzled_storage`, `tessellation_sweeps`, `texel_swizzles`, `texture_accesses`, `texture_descriptor_pairs`, `texture_fills`, `texture_views`, `textures`, `tile_pipeline_descriptors`, `tile_pipeline_reflection`, `tile_threadgroups`, `topology_classes`, `two_plane_copies`, `two_plane_heap_blits`, `two_plane_samples`, `vertex_formats`, `visibility`, `visible_tables`, `wide_int_attributes`, `wide_points`, `ycbcr_minify`, `ycbcr_textures` | 983 |
 | `name` | no | — | — |
-| `registryID` | yes | `argument_encoder_crossings`, `argument_encoders`, `binary_archives`, `command_buffer_facts`, `dynamic_libraries`, `function_facts`, `heap_facts`, `library_facts`, `pipeline_facts`, `pipeline_handlers`, `resource_facts`, `shared_events`, `texture_descriptor_pairs`, `texture_views`, `visible_tables` | 108 |
+| `registryID` | yes | `argument_encoder_crossings`, `argument_encoders`, `binary_archives`, `command_buffer_facts`, `dynamic_libraries`, `function_facts`, `heap_facts`, `library_facts`, `pipeline_facts`, `pipeline_handlers`, `resource_facts`, `shared_events`, `texture_descriptor_pairs`, `texture_views`, `visible_tables` | 111 |
 | `maxThreadsPerThreadgroup` | no | — | — |
 | `hasUnifiedMemory` | no | — | — |
 | `depth24Stencil8PixelFormatSupported` | no | — | — |
@@ -1114,48 +1113,48 @@ One row per implemented item of the SDK, in the coverage map's order. *exercised
 
 | item | exercised | families | cases Metal ran |
 |---|---|---|---|
-| `MTLFunction` | yes | `argument_encoder_crossings`, `argument_encoders`, `function_facts`, `library_facts`, `tile_pipeline_descriptors` | 33 |
-| `device` | yes | `function_facts`, `library_facts` | 21 |
-| `functionType` | yes | `function_facts`, `library_facts` | 21 |
-| `patchType` | yes | `function_facts`, `library_facts` | 21 |
-| `patchControlPointCount` | yes | `function_facts`, `library_facts` | 21 |
-| `vertexAttributes` | yes | `function_facts`, `library_facts` | 21 |
-| `stageInputAttributes` | yes | `function_facts`, `library_facts` | 21 |
-| `name` | yes | `function_facts`, `library_facts`, `tile_pipeline_descriptors` | 24 |
-| `functionConstantsDictionary` | yes | `function_facts`, `library_facts` | 21 |
+| `MTLFunction` | yes | `argument_encoder_crossings`, `argument_encoders`, `function_facts`, `library_facts`, `tile_pipeline_descriptors` | 36 |
+| `device` | yes | `function_facts`, `library_facts` | 24 |
+| `functionType` | yes | `function_facts`, `library_facts` | 24 |
+| `patchType` | yes | `function_facts`, `library_facts` | 24 |
+| `patchControlPointCount` | yes | `function_facts`, `library_facts` | 24 |
+| `vertexAttributes` | yes | `function_facts`, `library_facts` | 24 |
+| `stageInputAttributes` | yes | `function_facts`, `library_facts` | 24 |
+| `name` | yes | `function_facts`, `library_facts`, `tile_pipeline_descriptors` | 27 |
+| `functionConstantsDictionary` | yes | `function_facts`, `library_facts` | 24 |
 | `newArgumentEncoderWithBufferIndex:` | yes | `argument_encoder_crossings`, `argument_encoders` | 9 |
 | `newArgumentEncoderWithBufferIndex:reflection:` | no | — | — |
-| `options` | yes | `function_facts`, `library_facts` | 21 |
+| `options` | yes | `function_facts`, `library_facts` | 24 |
 
 ### `MTLFunctionConstant`
 
 | item | exercised | families | cases Metal ran |
 |---|---|---|---|
-| `MTLFunctionConstant` | yes | `function_facts`, `library_facts` | 21 |
-| `name` | yes | `function_facts`, `library_facts` | 21 |
-| `type` | yes | `function_facts`, `library_facts` | 21 |
-| `index` | yes | `function_facts`, `library_facts` | 21 |
-| `required` | yes | `function_facts`, `library_facts` | 21 |
+| `MTLFunctionConstant` | yes | `function_facts`, `library_facts` | 24 |
+| `name` | yes | `function_facts`, `library_facts` | 24 |
+| `type` | yes | `function_facts`, `library_facts` | 24 |
+| `index` | yes | `function_facts`, `library_facts` | 24 |
+| `required` | yes | `function_facts`, `library_facts` | 24 |
 
 ### `MTLFunctionConstantValues`
 
 | item | exercised | families | cases Metal ran |
 |---|---|---|---|
-| `MTLFunctionConstantValues` | yes | `function_facts`, `library_facts` | 21 |
-| `setConstantValue:type:atIndex:` | yes | `function_facts`, `library_facts` | 21 |
-| `setConstantValues:type:withRange:` | yes | `function_facts`, `library_facts` | 21 |
-| `setConstantValue:type:withName:` | yes | `function_facts`, `library_facts` | 21 |
+| `MTLFunctionConstantValues` | yes | `function_facts`, `library_facts` | 24 |
+| `setConstantValue:type:atIndex:` | yes | `function_facts`, `library_facts` | 24 |
+| `setConstantValues:type:withRange:` | yes | `function_facts`, `library_facts` | 24 |
+| `setConstantValue:type:withName:` | yes | `function_facts`, `library_facts` | 24 |
 | `reset` | no | — | — |
 
 ### `MTLFunctionDescriptor`
 
 | item | exercised | families | cases Metal ran |
 |---|---|---|---|
-| `MTLFunctionDescriptor` | yes | `library_facts` | 6 |
-| `functionDescriptor` | yes | `library_facts` | 6 |
-| `name` | yes | `library_facts` | 6 |
-| `constantValues` | yes | `library_facts` | 6 |
-| `options` | yes | `library_facts` | 6 |
+| `MTLFunctionDescriptor` | yes | `library_facts` | 9 |
+| `functionDescriptor` | yes | `library_facts` | 9 |
+| `name` | yes | `library_facts` | 9 |
+| `constantValues` | yes | `library_facts` | 9 |
+| `options` | yes | `library_facts` | 9 |
 
 ### `MTLFunctionHandle`
 
@@ -1292,17 +1291,17 @@ One row per implemented item of the SDK, in the coverage map's order. *exercised
 
 | item | exercised | families | cases Metal ran |
 |---|---|---|---|
-| `MTLLibrary` | yes | `alpha_coverage_pairs`, `argument_encoder_crossings`, `argument_encoders`, `astc_textures`, `attribute_formats`, `attribute_strides`, `binary_archives`, `blend_interactions`, `blend_sweeps`, `blit_encoder_commands`, `blit_indirect_commands`, `border_swizzles`, `buffer_blits`, `buffer_depth_samples`, `buffer_texture_blits`, `buffer_textures`, `chroma_pairs`, `color_write_masks`, `compressed_blits`, `compressed_decode`, `compressed_moves`, `compressed_views`, `compute_encoder_commands`, `compute_heap_residency`, `compute_pipeline_descriptors`, `compute_render_chains`, `compute_threadgroups`, `denormal_word_fetches`, `depth_resolve_pairs`, `depth_stencil_space`, `depth_texel_reads`, `discard_hoist`, `draw_state_changes`, `dynamic_libraries`, `etc_textures`, `extended_range_blends`, `extended_range_planes`, `extended_range_targets`, `extended_range_two_planes`, `extended_swizzles`, `fetch_ordered`, `format_copies`, `fragment_imageblock_reflection`, `frame_chains`, `fresh_contents`, `function_bindings`, `function_facts`, `half_output_blends`, `half_read_nans`, `half_storage_writes`, `half_texel_nans`, `half_write_nans`, `host_page_writes`, `indirect_command_depth`, `indirect_commands`, `int_attributes`, `level_sizes`, `library_facts`, `math_routines`, `mesh_barriers`, `mesh_commands`, `mesh_draws`, `mesh_pipeline_descriptors`, `mesh_pipeline_reflection`, `nearest_positions`, `norm_storage_writes`, `pass_bytes`, `pipeline_descriptors`, `pipeline_facts`, `pipeline_functions`, `pipeline_handlers`, `pipeline_option_reflection`, `pipeline_options`, `pixel_downscales`, `pixel_samplers`, `pvrtc_cpu_order`, `pvrtc_rows`, `render_chains`, `render_depth_stencil_state`, `render_draw_forms`, `render_residency`, `render_state`, `rgb10a2_srgb`, `rotated_planes`, `rotated_targets`, `sample_positions`, `sampler_crossings`, `sampler_filtering`, `shader_stencil`, `shared_exponent_storage`, `simdgroup_lockstep`, `snorm_tile_store`, `srgb_fetch`, `stage_in_regions`, `swizzled_storage`, `tessellation_sweeps`, `texel_swizzles`, `texture_accesses`, `texture_fills`, `tile_pipeline_descriptors`, `tile_pipeline_reflection`, `tile_threadgroups`, `topology_classes`, `two_plane_copies`, `two_plane_heap_blits`, `two_plane_samples`, `vertex_formats`, `visibility`, `visible_tables`, `wide_int_attributes`, `wide_points`, `ycbcr_minify`, `ycbcr_textures` | 824 |
-| `device` | yes | `dynamic_libraries`, `library_facts` | 9 |
+| `MTLLibrary` | yes | `alpha_coverage_pairs`, `argument_encoder_crossings`, `argument_encoders`, `astc_textures`, `attribute_formats`, `attribute_strides`, `binary_archives`, `blend_interactions`, `blend_sweeps`, `blit_encoder_commands`, `blit_indirect_commands`, `border_swizzles`, `buffer_blits`, `buffer_depth_samples`, `buffer_texture_blits`, `buffer_textures`, `chroma_pairs`, `color_write_masks`, `compressed_blits`, `compressed_decode`, `compressed_moves`, `compressed_views`, `compute_encoder_commands`, `compute_heap_residency`, `compute_pipeline_descriptors`, `compute_render_chains`, `compute_threadgroups`, `denormal_word_fetches`, `depth_resolve_pairs`, `depth_stencil_space`, `depth_texel_reads`, `discard_hoist`, `draw_state_changes`, `dynamic_libraries`, `etc_textures`, `extended_range_blends`, `extended_range_planes`, `extended_range_targets`, `extended_range_two_planes`, `extended_swizzles`, `fetch_ordered`, `format_copies`, `fragment_imageblock_reflection`, `frame_chains`, `fresh_contents`, `function_bindings`, `function_facts`, `half_output_blends`, `half_read_nans`, `half_storage_writes`, `half_texel_nans`, `half_write_nans`, `host_page_writes`, `indirect_command_depth`, `indirect_commands`, `int_attributes`, `level_sizes`, `library_facts`, `math_routines`, `mesh_barriers`, `mesh_commands`, `mesh_draws`, `mesh_pipeline_descriptors`, `mesh_pipeline_reflection`, `nearest_positions`, `norm_storage_writes`, `pass_bytes`, `pipeline_descriptors`, `pipeline_facts`, `pipeline_functions`, `pipeline_handlers`, `pipeline_option_reflection`, `pipeline_options`, `pixel_downscales`, `pixel_samplers`, `pvrtc_cpu_order`, `pvrtc_rows`, `render_chains`, `render_depth_stencil_state`, `render_draw_forms`, `render_residency`, `render_state`, `rgb10a2_srgb`, `rotated_planes`, `rotated_targets`, `sample_positions`, `sampler_crossings`, `sampler_filtering`, `shader_stencil`, `shared_exponent_storage`, `simdgroup_lockstep`, `snorm_tile_store`, `srgb_fetch`, `stage_in_regions`, `swizzled_storage`, `tessellation_sweeps`, `texel_swizzles`, `texture_accesses`, `texture_fills`, `tile_pipeline_descriptors`, `tile_pipeline_reflection`, `tile_threadgroups`, `topology_classes`, `two_plane_copies`, `two_plane_heap_blits`, `two_plane_samples`, `vertex_formats`, `visibility`, `visible_tables`, `wide_int_attributes`, `wide_points`, `ycbcr_minify`, `ycbcr_textures` | 827 |
+| `device` | yes | `dynamic_libraries`, `library_facts` | 12 |
 | `newFunctionWithName:` | yes | `alpha_coverage_pairs`, `argument_encoder_crossings`, `argument_encoders`, `astc_textures`, `attribute_formats`, `attribute_strides`, `binary_archives`, `blend_interactions`, `blend_sweeps`, `blit_encoder_commands`, `blit_indirect_commands`, `border_swizzles`, `buffer_blits`, `buffer_depth_samples`, `buffer_texture_blits`, `buffer_textures`, `chroma_pairs`, `color_write_masks`, `compressed_blits`, `compressed_decode`, `compressed_moves`, `compressed_views`, `compute_encoder_commands`, `compute_heap_residency`, `compute_pipeline_descriptors`, `compute_render_chains`, `compute_threadgroups`, `denormal_word_fetches`, `depth_resolve_pairs`, `depth_stencil_space`, `depth_texel_reads`, `discard_hoist`, `draw_state_changes`, `etc_textures`, `extended_range_blends`, `extended_range_planes`, `extended_range_targets`, `extended_range_two_planes`, `extended_swizzles`, `fetch_ordered`, `format_copies`, `fragment_imageblock_reflection`, `frame_chains`, `fresh_contents`, `function_bindings`, `function_facts`, `half_output_blends`, `half_read_nans`, `half_storage_writes`, `half_texel_nans`, `half_write_nans`, `host_page_writes`, `indirect_command_depth`, `indirect_commands`, `int_attributes`, `level_sizes`, `math_routines`, `mesh_barriers`, `mesh_commands`, `mesh_draws`, `mesh_pipeline_descriptors`, `mesh_pipeline_reflection`, `nearest_positions`, `norm_storage_writes`, `pass_bytes`, `pipeline_descriptors`, `pipeline_facts`, `pipeline_functions`, `pipeline_handlers`, `pipeline_option_reflection`, `pipeline_options`, `pixel_downscales`, `pixel_samplers`, `pvrtc_cpu_order`, `pvrtc_rows`, `render_chains`, `render_depth_stencil_state`, `render_draw_forms`, `render_residency`, `render_state`, `rgb10a2_srgb`, `rotated_planes`, `rotated_targets`, `sample_positions`, `sampler_crossings`, `sampler_filtering`, `shader_stencil`, `shared_exponent_storage`, `simdgroup_lockstep`, `snorm_tile_store`, `srgb_fetch`, `stage_in_regions`, `swizzled_storage`, `tessellation_sweeps`, `texel_swizzles`, `texture_accesses`, `texture_fills`, `tile_pipeline_descriptors`, `tile_pipeline_reflection`, `tile_threadgroups`, `topology_classes`, `two_plane_copies`, `two_plane_heap_blits`, `two_plane_samples`, `vertex_formats`, `visibility`, `visible_tables`, `wide_int_attributes`, `wide_points`, `ycbcr_minify`, `ycbcr_textures` | 815 |
 | `newFunctionWithName:constantValues:error:` | yes | `function_facts` | 15 |
 | `newFunctionWithName:constantValues:completionHandler:` | no | — | — |
 | `reflectionForFunctionWithName:` | no | — | — |
 | `newFunctionWithDescriptor:completionHandler:` | no | — | — |
-| `newFunctionWithDescriptor:error:` | yes | `library_facts` | 6 |
-| `functionNames` | yes | `dynamic_libraries`, `library_facts` | 9 |
-| `type` | yes | `dynamic_libraries`, `library_facts` | 9 |
-| `installName` | yes | `dynamic_libraries`, `library_facts` | 9 |
+| `newFunctionWithDescriptor:error:` | yes | `library_facts` | 9 |
+| `functionNames` | yes | `dynamic_libraries`, `library_facts` | 12 |
+| `type` | yes | `dynamic_libraries`, `library_facts` | 12 |
+| `installName` | yes | `dynamic_libraries`, `library_facts` | 12 |
 
 ### `MTLLinkedFunctions`
 
@@ -2013,13 +2012,13 @@ One row per implemented item of the SDK, in the coverage map's order. *exercised
 
 | item | exercised | families | cases Metal ran |
 |---|---|---|---|
-| `MTLVertexAttribute` | yes | `function_facts`, `library_facts` | 21 |
-| `name` | yes | `function_facts`, `library_facts` | 21 |
-| `attributeIndex` | yes | `function_facts`, `library_facts` | 21 |
-| `attributeType` | yes | `function_facts`, `library_facts` | 21 |
-| `active` | yes | `function_facts`, `library_facts` | 21 |
-| `patchData` | yes | `function_facts`, `library_facts` | 21 |
-| `patchControlPointData` | yes | `function_facts`, `library_facts` | 21 |
+| `MTLVertexAttribute` | yes | `function_facts`, `library_facts` | 24 |
+| `name` | yes | `function_facts`, `library_facts` | 24 |
+| `attributeIndex` | yes | `function_facts`, `library_facts` | 24 |
+| `attributeType` | yes | `function_facts`, `library_facts` | 24 |
+| `active` | yes | `function_facts`, `library_facts` | 24 |
+| `patchData` | yes | `function_facts`, `library_facts` | 24 |
+| `patchControlPointData` | yes | `function_facts`, `library_facts` | 24 |
 
 ### `MTLVertexAttributeDescriptor`
 
