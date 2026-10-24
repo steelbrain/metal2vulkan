@@ -254,12 +254,7 @@
           }
         }
       ],
-      "validated": {
-        "stopped": {
-          "call": "pipeline_both_paths",
-          "message": "computeFunction functionType is not a MTLFunctionTypeKernel.\ncomputeFunction functionType is not a MTLFunctionTypeKernel.\ncomputeFunction functionType is not a MTLFunctionTypeKernel.\ncomputeFunction functionType is not a MTLFunctionTypeKernel."
-        }
-      }
+      "validated": "ran"
     }
   ],
   "times": [

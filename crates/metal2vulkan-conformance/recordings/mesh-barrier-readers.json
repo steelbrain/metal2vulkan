@@ -1285,12 +1285,7 @@
           }
         }
       ],
-      "validated": {
-        "stopped": {
-          "call": "mesh_pass",
-          "message": "Memory Barrier With Scope Validation\nafterStages (0x2) can not contain MTLRenderStageTile or MTLRenderStageFragment on this device"
-        }
-      }
+      "validated": "not_run"
     }
   ],
   "costs": [

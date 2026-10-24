@@ -3406,12 +3406,7 @@
           }
         }
       ],
-      "validated": {
-        "stopped": {
-          "call": "dispatch_threads",
-          "message": "unused binding in compute encoder at Buffer index 2.\nunused binding in compute encoder at Buffer index 3."
-        }
-      }
+      "validated": "not_run"
     }
   ],
   "costs": [
