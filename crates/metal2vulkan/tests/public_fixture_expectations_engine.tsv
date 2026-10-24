@@ -239,6 +239,16 @@ engine/a2_sparse_status.air.ll	a2_sparse_status	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
 engine/a2_sparse_status.ll	a2_sparse_status	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
 engine/a2_storage_read_formats.air.ll	a2_storage_read_formats	ok	ok	ok	ok	ok	ok	ok	NeedsInput{StorageTextureFormat { slot: SlotRef { stage: Kernel, class: Texture, index: 0 } }}	NeedsInput{StorageTextureFormat { slot: SlotRef { stage: Kernel, class: Texture, index: 0 } }}	NeedsInput{StorageTextureFormat { slot: SlotRef { stage: Kernel, class: Texture, index: 0 } }}	ok	NeedsInput{StorageTextureFormat { slot: SlotRef { stage: Kernel, class: Texture, index: 0 } }}	ok	ok	ok	ok	ok	NeedsInput{StorageTextureFormat { slot: SlotRef { stage: Kernel, class: Texture, index: 0 } }}	NeedsInput{StorageTextureFormat { slot: SlotRef { stage: Kernel, class: Texture, index: 0 } }}	NeedsInput{StorageTextureFormat { slot: SlotRef { stage: Kernel, class: Texture, index: 0 } }}
 engine/a2_storage_read_formats.ll	a2_storage_read_formats	ok	ok	ok	ok	ok	ok	ok	NeedsInput{StorageTextureFormat { slot: SlotRef { stage: Kernel, class: Texture, index: 0 } }}	NeedsInput{StorageTextureFormat { slot: SlotRef { stage: Kernel, class: Texture, index: 0 } }}	NeedsInput{StorageTextureFormat { slot: SlotRef { stage: Kernel, class: Texture, index: 0 } }}	ok	NeedsInput{StorageTextureFormat { slot: SlotRef { stage: Kernel, class: Texture, index: 0 } }}	ok	ok	ok	ok	ok	NeedsInput{StorageTextureFormat { slot: SlotRef { stage: Kernel, class: Texture, index: 0 } }}	NeedsInput{StorageTextureFormat { slot: SlotRef { stage: Kernel, class: Texture, index: 0 } }}	NeedsInput{StorageTextureFormat { slot: SlotRef { stage: Kernel, class: Texture, index: 0 } }}
+engine/a2c_coverage.air.ll	a2c_full	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
+engine/a2c_coverage.air.ll	a2c_color	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
+engine/a2c_coverage.air.ll	a2c_report	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	Unsupported{StageStoresAndAtomics; AnyOf[[Feature(FragmentStoresAndAtomics)]]}
+engine/a2c_coverage.air.ll	a2c_report_masked	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	Unsupported{StageStoresAndAtomics; AnyOf[[Feature(FragmentStoresAndAtomics)]]}
+engine/a2c_coverage.air.ll	a2c_rg	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
+engine/a2c_coverage.ll	a2c_full	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
+engine/a2c_coverage.ll	a2c_color	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
+engine/a2c_coverage.ll	a2c_report	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	Unsupported{StageStoresAndAtomics; AnyOf[[Feature(FragmentStoresAndAtomics)]]}
+engine/a2c_coverage.ll	a2c_report_masked	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	Unsupported{StageStoresAndAtomics; AnyOf[[Feature(FragmentStoresAndAtomics)]]}
+engine/a2c_coverage.ll	a2c_rg	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
 engine/a3_early_return_barrier.air.ll	a3_early_return_barrier	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
 engine/a3_early_return_barrier.ll	a3_early_return_barrier	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
 engine/a3_matrix_thread_elements.air.ll	a3_matrix_thread_elements	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
