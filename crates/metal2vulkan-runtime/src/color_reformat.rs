@@ -254,6 +254,10 @@ pub(crate) fn uncovered<'a>(
 /// ([`Uncovered::Zeroed`]), reads it ([`Uncovered::Kept`]), or reads it unless its output folds
 /// ([`Uncovered::KeptUnlessFolded`]).
 fn color_reads(color: &ColorAttachmentDescriptor) -> Uncovered {
+    // Metal 4's blend placeholders resolve to their slot's own default, which is the factor and
+    // the operation the draw blends with, so what the attachment reads is decided from the
+    // resolved blend rather than from the placeholder ([`ColorAttachmentDescriptor::specialized`]).
+    let color = &color.specialized();
     let Some(channels) = has_channels(color.pixel_format) else {
         return Uncovered::Kept;
     };
@@ -282,7 +286,6 @@ fn color_reads(color: &ColorAttachmentDescriptor) -> Uncovered {
                 | F::DestinationAlpha
                 | F::OneMinusDestinationAlpha
                 | F::SourceAlphaSaturated
-                | F::Unspecialized
         )
     };
     let operations = [color.rgb_blend_operation, color.alpha_blend_operation];
@@ -294,12 +297,9 @@ fn color_reads(color: &ColorAttachmentDescriptor) -> Uncovered {
         color.destination_rgb_blend_factor,
         color.destination_alpha_blend_factor,
     ];
-    let reading_operation = operations.iter().any(|op| {
-        matches!(
-            op,
-            BlendOperation::Min | BlendOperation::Max | BlendOperation::Unspecialized
-        )
-    });
+    let reading_operation = operations
+        .iter()
+        .any(|op| matches!(op, BlendOperation::Min | BlendOperation::Max));
     if reading_operation || sources.into_iter().any(reads_destination) {
         return Uncovered::Kept;
     }

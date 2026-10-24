@@ -15,14 +15,41 @@
 //! unclassified factor in `tests::every_blend_factor_of_the_sdk_table_is_classified` rather than
 //! as silence, and a value renamed upstream renames its site loudly.
 //!
-//! # What is not swept, and why
+//! # The two specialization placeholders, which a classic descriptor does take
 //!
-//! `MTLBlendFactorUnspecialized`, `MTLBlendOperationUnspecialized` and
-//! `MTLColorWriteMaskUnspecialized` are Metal 4's pipeline-specialization placeholders, not a
-//! factor, an operation or a channel. `MTLRenderPipelineColorAttachmentDescriptor` is the Metal 3
-//! descriptor and takes none of them; our own translator refuses each as
-//! `PlaceholderEnumValue` (`metal2vulkan::metal::state`). No case here sets one, and **no case
-//! anywhere compares that refusal against Metal's** — stated as a gap rather than guessed at.
+//! `MTLBlendFactorUnspecialized` (19) and `MTLBlendOperationUnspecialized` (5) are Metal 4's
+//! pipeline-specialization placeholders, so the slot and operation sweeps above leave them out: a
+//! sweep of what a factor *is* has no arm for a value that is not one. What a **classic**
+//! `MTLRenderPipelineColorAttachmentDescriptor` does with one is a different question, and
+//! `blend-sweep-placeholders` is where it is asked, because the answer is not "refuses it":
+//!
+//! - the setter **keeps** the placeholder — the descriptor reads 19 and 5 back, so what is at
+//!   stake is what the blend does with it rather than what the descriptor holds;
+//! - `newRenderPipelineStateWithDescriptor:error:` answers a state with **no error**, and the draw
+//!   stores what each slot's own **default** computes: a source slot blends the placeholder as
+//!   `One`, a destination slot as `Zero`, and an operation slot as `Add`;
+//! - and they are accepted **specifically**, not by a range check Metal skips: the next value up
+//!   ends plain Metal's process on an assertion — `Invalid blend factor` for a factor of 20,
+//!   `func is not a valid MTLBlendOperation` for an operation of 6 — with no API validation layer
+//!   enabled.
+//!
+//! The three bullets were measured on this Apple M3 Max, macOS 27.0.1 (26A434), one run a shape, by
+//! `probes/blend_placeholder_values.m`; `blend-sweep-placeholders` is what holds the accepting half
+//! against Metal from then on. The aborting half kills the process by its nature, so no case sets
+//! it and the two values stay the probe's.
+//!
+//! Our side refused all three placeholders until this round
+//! (`metal2vulkan::metal::state` answered a `PlaceholderEnumValue` descriptor error), which is a
+//! refusal where Metal draws. `ColorAttachmentDescriptor::specialized` is the resolution that
+//! replaced it, and this case is what holds the fix. The third placeholder,
+//! `MTLColorWriteMaskUnspecialized`, is one bit of a mask rather than a slot's whole value and is
+//! [`super::color_write_masks`]' subject, which is why no row here sets it.
+//!
+//! **Every row of that case is a pair**: the state with the placeholder, and the state with the
+//! default it resolves to, which must store the identical image. That is what makes the case a
+//! measurement rather than a restatement of the probe — a release that moved the resolution
+//! breaks the pair — and the seven pairs are `COLLAPSED` rows like every other agreement this
+//! family measures.
 //!
 //! # The inputs, and why these numbers separate the factors
 //!
@@ -104,11 +131,11 @@
 //!
 //! # What the sweep measured about Metal that nothing here knew before
 //!
-//! The eleven cases hold **179 blend states**, each over 64 pixels and four channels, so Metal's
-//! answer is held against the written blend equation at **45,824** compared channels; the counts
+//! The twelve cases hold **193 blend states**, each over 64 pixels and four channels, so Metal's
+//! answer is held against the written blend equation at **49,408** compared channels; the counts
 //! are the subject of `tests::the_sweep_is_the_size_its_prose_claims` rather than of this
-//! sentence. **45,820 of them agree** on this M3 Max, macOS 27.0.1. The four that do not are one
-//! fact, and it is the sort a sweep finds and a once-each suite cannot:
+//! sentence. **49,404 of them agree** on this M3 Max, macOS 27.0.1 (26A434). The four that do not
+//! are one fact, and it is the sort a sweep finds and a once-each suite cannot:
 //!
 //! **`MTLBlendOperationSubtract` stores negative zero where both factored terms are zero.** The
 //! four leaves are `dc-1mdc-subtract` at the one pixel in each channel where the destination is
@@ -403,6 +430,16 @@ fn factor_value(
     }
 }
 
+/// `factor` with Metal 4's specialization placeholder replaced by `default`, the own default of the
+/// slot it was set in.
+#[cfg(test)]
+fn specialized(factor: F, default: F) -> F {
+    match factor {
+        F::Unspecialized => default,
+        other => other,
+    }
+}
+
 /// What the attachment holds after one draw of `variant` over the destination of `pixel`.
 ///
 /// Blending off stores the source; blending on applies the operation to the two factored terms,
@@ -428,6 +465,19 @@ fn model(variant: &Variant, pixel: usize) -> [f32; 4] {
                     (blend.source_alpha, blend.destination_alpha, blend.alpha)
                 } else {
                     (blend.source_rgb, blend.destination_rgb, blend.rgb)
+                };
+                // Metal 4's specialization placeholders are not factors or operations, so they are
+                // resolved here, at the slot, rather than in `factor_value`, which says what each
+                // factor *is*. The default each resolves to is the slot's own — `One` in a source
+                // slot, `Zero` in a destination slot, `Add` in an operation slot — which is
+                // measured and not derived: `blend-sweep-placeholders` holds each of the seven
+                // pairs against Metal's recorded texels, and `metal2vulkan`'s own
+                // `ColorAttachmentDescriptor::specialized` carries the probe this came from.
+                let source_factor = specialized(source_factor, F::One);
+                let destination_factor = specialized(destination_factor, F::Zero);
+                let op = match op {
+                    O::Unspecialized => O::Add,
+                    other => other,
                 };
                 let factored = |factor| {
                     factor_value(factor, channel, source, destination, blend_color, SECOND)
@@ -534,6 +584,82 @@ fn operation_pairs() -> Vec<(&'static str, F, F)> {
     ]
 }
 
+/// Every row-pair of [`Sweep::Placeholders`]: the site's name, the blend with a specialization
+/// placeholder in the field under test, and the blend with the **default** that placeholder
+/// resolves to.
+///
+/// The two blends of a pair differ in exactly the field under test, so a pair that stores one image
+/// says the placeholder blended as that default and a pair that does not says it blended as
+/// something else. Which makes the case Metal's measurement rather than the probe's restatement,
+/// and `COLLAPSED` is where the seven pairs are named.
+///
+/// The other five fields of each row are chosen so that **every site's answer is its own image**,
+/// which a slot sweep's own `Slot::blend` does not give here: with the destination term at `Zero`
+/// a source slot's default and an alpha slot's default both store the source, and four sites would
+/// collapse into one for no reason about Metal. So each factor site keeps the *other* term at `One`
+/// instead — the one site's answer is then the factored term **plus** the whole of the other,
+/// and "nothing drew" is visible as the destination — and each operation site states the
+/// opposite operation in the equation it is not asking about, which says at the same time that the
+/// two operation fields are read separately.
+fn placeholder_rows() -> Vec<(&'static str, Blend, Blend)> {
+    let add = O::Add;
+    let sub = O::Subtract;
+    let unspec = F::Unspecialized;
+    vec![
+        // Colour: the placeholder times the source, plus the whole destination. Alpha: the source.
+        (
+            "source-rgb",
+            Blend::separate((unspec, F::One, add), (F::One, F::Zero, add)),
+            Blend::separate((F::One, F::One, add), (F::One, F::Zero, add)),
+        ),
+        // Colour: the source plus the placeholder times the destination. Alpha: the destination.
+        (
+            "destination-rgb",
+            Blend::separate((F::One, unspec, add), (F::Zero, F::One, add)),
+            Blend::separate((F::One, F::Zero, add), (F::Zero, F::One, add)),
+        ),
+        // Alpha: the placeholder times the source's alpha, plus the destination's. Colour: the
+        // source.
+        (
+            "source-alpha",
+            Blend::separate((F::One, F::Zero, add), (unspec, F::One, add)),
+            Blend::separate((F::One, F::Zero, add), (F::One, F::One, add)),
+        ),
+        // Alpha: the source's alpha plus the placeholder times the destination's. Colour: the
+        // destination.
+        (
+            "destination-alpha",
+            Blend::separate((F::Zero, F::One, add), (F::One, unspec, add)),
+            Blend::separate((F::Zero, F::One, add), (F::One, F::Zero, add)),
+        ),
+        // The colour operation, against a factor pair whose two terms are different numbers, so
+        // `Add` is told from each of the other four operations; the alpha equation subtracts, which
+        // is what says the colour field alone moved.
+        (
+            "rgb-operation",
+            Blend::separate((F::One, F::One, O::Unspecialized), (F::One, F::One, sub)),
+            Blend::separate((F::One, F::One, add), (F::One, F::One, sub)),
+        ),
+        // The mirror: the alpha operation under test, the colour equation subtracting.
+        (
+            "alpha-operation",
+            Blend::separate((F::One, F::One, sub), (F::One, F::One, O::Unspecialized)),
+            Blend::separate((F::One, F::One, sub), (F::One, F::One, add)),
+        ),
+        // All six fields at once: a pipeline specialized nowhere, which is the shape a Metal 4
+        // consumer would hand a classic descriptor by mistake. Its resolution is Metal's own
+        // defaults, so it stores the source untouched.
+        (
+            "all",
+            Blend::separate(
+                (unspec, unspec, O::Unspecialized),
+                (unspec, unspec, O::Unspecialized),
+            ),
+            Blend::separate((F::One, F::Zero, add), (F::One, F::Zero, add)),
+        ),
+    ]
+}
+
 /// What one case sweeps.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Sweep {
@@ -562,6 +688,9 @@ enum Sweep {
     BlendColourOrder,
     /// The four `Source1` factors in each slot, through a fragment function with a second output.
     SecondSource,
+    /// Metal 4's two blend placeholders in each field that takes one, each beside the default it
+    /// resolves to ([`placeholder_rows`]).
+    Placeholders,
 }
 
 /// One row of a case's sweep: the site's name, the colour-attachment state its pipeline takes, and
@@ -626,6 +755,7 @@ pub fn all() -> Vec<BlendSweep> {
         case("blend-sweep-blend-color", Sweep::BlendColour),
         case("blend-sweep-blend-color-order", Sweep::BlendColourOrder),
         case("blend-sweep-second-source", Sweep::SecondSource),
+        case("blend-sweep-placeholders", Sweep::Placeholders),
     ]
 }
 
@@ -799,6 +929,20 @@ impl BlendSweep {
                             plain.blended(slot.blend(factor)),
                         ));
                     }
+                }
+                rows
+            }
+            Sweep::Placeholders => {
+                let mut rows = Vec::new();
+                for (name, placeholder, default) in placeholder_rows() {
+                    rows.push(Variant::new(
+                        format!("{name}-unspecialized"),
+                        plain.blended(placeholder),
+                    ));
+                    rows.push(Variant::new(
+                        format!("{name}-default"),
+                        plain.blended(default),
+                    ));
                 }
                 rows
             }
@@ -1039,6 +1183,52 @@ const COLLAPSED: &[(&str, &str, &str, &str)] = &[
         "above",
         "below-complement",
         "one minus the below-range colour is the above-range one, exactly and unclamped",
+    ),
+    // Metal 4's two blend placeholders, each beside the default it resolves to. Seven pairs, and
+    // every one of them is the finding: a pair that stopped agreeing would say a release changed
+    // what a classic descriptor does with a placeholder, and a pair that was never there would
+    // leave the probe's answer as the only thing the tree believed.
+    (
+        "blend-sweep-placeholders",
+        "source-rgb-unspecialized",
+        "source-rgb-default",
+        "a source slot blends the placeholder as its own default, One",
+    ),
+    (
+        "blend-sweep-placeholders",
+        "destination-rgb-unspecialized",
+        "destination-rgb-default",
+        "a destination slot blends the placeholder as its own default, Zero",
+    ),
+    (
+        "blend-sweep-placeholders",
+        "source-alpha-unspecialized",
+        "source-alpha-default",
+        "a source slot blends the placeholder as its own default, One",
+    ),
+    (
+        "blend-sweep-placeholders",
+        "destination-alpha-unspecialized",
+        "destination-alpha-default",
+        "a destination slot blends the placeholder as its own default, Zero",
+    ),
+    (
+        "blend-sweep-placeholders",
+        "rgb-operation-unspecialized",
+        "rgb-operation-default",
+        "an operation slot blends the placeholder as its own default, Add",
+    ),
+    (
+        "blend-sweep-placeholders",
+        "alpha-operation-unspecialized",
+        "alpha-operation-default",
+        "an operation slot blends the placeholder as its own default, Add",
+    ),
+    (
+        "blend-sweep-placeholders",
+        "all-unspecialized",
+        "all-default",
+        "all six fields at once resolve to Metal's own defaults, which store the source",
     ),
     // The dual-source slots' alpha channels collapse exactly as the ordinary alpha slots do.
     (
@@ -1420,11 +1610,24 @@ mod tests {
         }
     }
 
-    /// No case names a value the model has no arm for, and no row names a placeholder.
+    /// Only `blend-sweep-placeholders` sets a specialization placeholder, and no row of the family
+    /// sets the write mask's.
+    ///
+    /// The mask bit is [`super::super::color_write_masks`]' subject, which is a different question
+    /// from a slot's whole value: it is one bit of a field whose other four bits a row may also
+    /// set, so a row setting it would be asking two things at once.
     #[test]
-    fn no_row_of_the_family_sets_a_specialization_placeholder() {
+    fn only_the_placeholder_case_sets_a_specialization_placeholder() {
         for case in all() {
             for row in case.variants() {
+                if case.sweep == Sweep::Placeholders {
+                    assert!(
+                        !row.color.write_mask.contains(ColorWriteMask::UNSPECIALIZED),
+                        "{}",
+                        case.name
+                    );
+                    continue;
+                }
                 if let Some(blend) = row.color.blend {
                     for factor in [
                         blend.source_rgb,
@@ -1445,6 +1648,82 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// The placeholder case sets `MTLBlendFactorUnspecialized` in each of the four factor slots and
+    /// `MTLBlendOperationUnspecialized` in each of the two operation slots, each row beside the
+    /// default twin that `COLLAPSED` holds it to, and the twin itself holds no placeholder.
+    ///
+    /// Without this the case could lose a field and still pass: every remaining pair would agree,
+    /// and nothing would say the sixth was gone.
+    #[test]
+    fn the_placeholder_case_holds_every_field_that_takes_one() {
+        let case = all()
+            .into_iter()
+            .find(|case| case.sweep == Sweep::Placeholders)
+            .expect("the family holds a placeholder case");
+        let rows = case.variants();
+        assert_eq!(rows.len(), 2 * placeholder_rows().len());
+        // Which of the six fields each row sets to a placeholder, and how often.
+        let mut set: BTreeMap<&str, usize> = BTreeMap::new();
+        for row in &rows {
+            let blend = row.color.blend.expect("a placeholder row blends");
+            for (field, held) in [
+                (
+                    "source-rgb",
+                    family(blend.source_rgb) == Family::Placeholder,
+                ),
+                (
+                    "destination-rgb",
+                    family(blend.destination_rgb) == Family::Placeholder,
+                ),
+                (
+                    "source-alpha",
+                    family(blend.source_alpha) == Family::Placeholder,
+                ),
+                (
+                    "destination-alpha",
+                    family(blend.destination_alpha) == Family::Placeholder,
+                ),
+                ("rgb-operation", blend.rgb == O::Unspecialized),
+                ("alpha-operation", blend.alpha == O::Unspecialized),
+            ] {
+                if held {
+                    *set.entry(field).or_default() += 1;
+                }
+                // A `-default` row is the pair's other half and must hold none of them, or the
+                // pair would agree for the wrong reason.
+                assert!(
+                    !held || !row.name.ends_with("-default"),
+                    "{}: the default twin {} holds a placeholder in {field}",
+                    case.name,
+                    row.name
+                );
+            }
+        }
+        // Each of the six fields is set to a placeholder by its own row and by the `all` row.
+        assert_eq!(
+            set,
+            BTreeMap::from([
+                ("source-rgb", 2),
+                ("destination-rgb", 2),
+                ("source-alpha", 2),
+                ("destination-alpha", 2),
+                ("rgb-operation", 2),
+                ("alpha-operation", 2),
+            ])
+        );
+        // And every value of the two tables that is a placeholder is one this case sets, so a
+        // third placeholder in a later SDK is a failure here rather than a silence.
+        assert_eq!(factors(Family::Placeholder), vec![F::Unspecialized]);
+        assert_eq!(
+            O::ALL
+                .iter()
+                .copied()
+                .filter(|op| !operations().contains(op))
+                .collect::<Vec<O>>(),
+            vec![O::Unspecialized]
+        );
     }
 
     /// The groups of sites the model gives one answer to are exactly the pairs `COLLAPSED` names,
@@ -1642,7 +1921,7 @@ mod tests {
         }
     }
 
-    /// The sweep is the size the module docs quote: 177 blend states over 64 pixels and four
+    /// The sweep is the size the module docs quote: 193 blend states over 64 pixels and four
     /// channels, and each case holds the rows its own rule gives.
     ///
     /// A number in prose is a number that rots, so the prose quotes these and this holds them. The
@@ -1666,6 +1945,7 @@ mod tests {
             ("blend-sweep-blend-color", 9),
             ("blend-sweep-blend-color-order", 3),
             ("blend-sweep-second-source", 1 + 4 * second),
+            ("blend-sweep-placeholders", 2 * placeholder_rows().len()),
         ];
         let held: Vec<(&str, usize)> = all()
             .iter()
@@ -1673,8 +1953,8 @@ mod tests {
             .collect();
         assert_eq!(held, want);
         let states: usize = held.iter().map(|(_, rows)| rows).sum();
-        assert_eq!(states, 179, "the family holds {states} blend states");
-        assert_eq!(states * PIXELS * 4, 45_824);
+        assert_eq!(states, 193, "the family holds {states} blend states");
+        assert_eq!(states * PIXELS * 4, 49_408);
         // And every state is compared over the whole level, which is what makes the channel count
         // the comparison's own size rather than a multiplication in the prose.
         assert_eq!(layout().extent(), LEVEL);

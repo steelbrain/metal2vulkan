@@ -227,6 +227,9 @@ pub(crate) fn rotated_form(
     if !matches!(rotated_blend(a, p), Ok(Some(_))) {
         return None;
     }
+    // The same resolution [`rotated_blend`] makes, so the form of a blend holding a placeholder is
+    // the form of the blend Metal draws with.
+    let a = &a.specialized();
     if matches!(
         a.rgb_blend_operation,
         BlendOperation::Min | BlendOperation::Max
@@ -441,8 +444,11 @@ pub(crate) fn rotated_blend(
     a: &ColorAttachmentDescriptor,
     p: &DeviceProfile,
 ) -> Result<Option<RotatedBlend>, Error> {
-    // The descriptor's own errors first: a placeholder, and a `Source1` factor without
-    // dual-source blending.
+    // Metal 4's blend placeholders resolve to their slot's own default before anything here reads
+    // a factor or an operation, so the rotated form of a blend holding one is the rotated form of
+    // the blend Metal draws with (`ColorAttachmentDescriptor::specialized`).
+    let a = &a.specialized();
+    // The descriptor's own errors first: a `Source1` factor without dual-source blending.
     let Some(plain) = blend_factors(a, p)? else {
         return Ok(None);
     };

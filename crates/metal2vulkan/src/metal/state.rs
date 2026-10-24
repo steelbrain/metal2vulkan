@@ -88,7 +88,11 @@ pub fn blend_op(op: BlendOperation) -> Result<vk::BlendOp, Error> {
 /// the four channel bits rather than being ignored (ignoring it would leave `0x10` as a mask of no
 /// channel, which stores nothing). Metal's setter keeps five bits: `0x20` reads back as `0x0`,
 /// `0x30` as `0x10` and `0xffffffff` as `0x1f`. So the bit is every channel here, which is what
-/// `cases/write_mask_unspecialized.rs` of the conformance suite compares against Metal.
+/// `cases/color_write_masks.rs` of the conformance suite compares against Metal, in its
+/// `write-mask-unspecialized` and `write-mask-unspecialized-and-red` cases. The other two
+/// placeholders are a slot's whole value rather than one bit of a field, and
+/// [`ColorAttachmentDescriptor::specialized`](crate::pipeline::ColorAttachmentDescriptor::specialized)
+/// is where their own measurement and resolution live.
 pub fn color_write_mask(mask: ColorWriteMask) -> Result<vk::ColorComponentFlags, Error> {
     if mask.contains(ColorWriteMask::UNSPECIALIZED) {
         return Ok(vk::ColorComponentFlags::R
@@ -112,6 +116,9 @@ pub fn color_write_mask(mask: ColorWriteMask) -> Result<vk::ColorComponentFlags,
 
 /// The Vulkan blend state of a Metal color attachment: `None` when blending is disabled (the
 /// factors and operations are then ignored, placeholders included).
+///
+/// Where blending is on, Metal 4's specialization placeholders are resolved to their slot's own
+/// default first ([`ColorAttachmentDescriptor::specialized`]), as plain Metal blends them.
 ///
 /// A portability-subset device without `constantAlphaColorBlendFactors` cannot take `BlendAlpha`
 /// or `OneMinusBlendAlpha` as an RGB factor: refused as `Unsupported{ConstantAlphaBlendFactor,
@@ -141,6 +148,14 @@ pub(crate) fn blend_factors(
     if !attachment.blending_enabled {
         return Ok(None);
     }
+    // Metal 4's two blend placeholders resolve to their slot's own default here, which is what a
+    // classic `MTLRenderPipelineDescriptor` blends with: the measurement is on
+    // `ColorAttachmentDescriptor::specialized`, and
+    // `cases::blend_sweeps`' `blend-sweep-placeholders` of the conformance suite is what holds it
+    // against Metal. The factor and operation conversions below still refuse a placeholder, since
+    // neither is a factor or an operation and a caller that hands one straight to them is asking
+    // what it is rather than what a slot does with it.
+    let attachment = &attachment.specialized();
     let color_op = match attachment.pixel_format {
         PixelFormat::A8Unorm => attachment.alpha_blend_operation,
         _ => attachment.rgb_blend_operation,

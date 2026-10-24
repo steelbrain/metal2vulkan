@@ -709,6 +709,68 @@ impl ColorAttachmentDescriptor {
             write_mask: metal::ColorWriteMask::ALL,
         }
     }
+
+    /// The attachment with Metal 4's three specialization placeholders replaced by what a
+    /// **classic** `MTLRenderPipelineDescriptor` blends with where one is set: each slot's own
+    /// default.
+    ///
+    /// Measured on an Apple M3 Max, macOS 27.0.1, one run a shape, drawing one triangle over a
+    /// known destination through a classic descriptor whose other five blend fields were `One`,
+    /// `One` and `Add` (so a slot that fell back to its default read differently from one that
+    /// kept the probe's value):
+    ///
+    /// - `MTLBlendFactorUnspecialized` (19) in a **source** slot blends as
+    ///   [`One`](metal::BlendFactor::One), in a **destination** slot as
+    ///   [`Zero`](metal::BlendFactor::Zero), and `MTLBlendOperationUnspecialized` (5) as
+    ///   [`Add`](metal::BlendOperation::Add) — each the slot's own default;
+    /// - the setter keeps the placeholder: the descriptor reads 19 and 5 back, so what changes is
+    ///   what the blend does with it, not what the descriptor holds;
+    /// - `newRenderPipelineStateWithDescriptor:error:` answers a state with no error, and the
+    ///   draw stores what those defaults compute. The placeholders are accepted **specifically**:
+    ///   the next value up ends plain Metal's process on an assertion (`Invalid blend factor` for
+    ///   a factor of 20, `func is not a valid MTLBlendOperation` for an operation of 6), with no
+    ///   API validation layer enabled.
+    ///
+    /// `MTLColorWriteMaskUnspecialized` is the third placeholder and is not here: it is one bit of
+    /// a mask rather than a slot's whole value, and
+    /// [`color_write_mask`](crate::metal::state::color_write_mask) holds its own measurement.
+    ///
+    /// The resolution happens where the blend is **interpreted**, never where the descriptor is
+    /// built, because Metal's own getter answers the placeholder back and a binary archive's key
+    /// is the raw word.
+    #[must_use]
+    pub fn specialized(&self) -> ColorAttachmentDescriptor {
+        fn factor(held: metal::BlendFactor, default: metal::BlendFactor) -> metal::BlendFactor {
+            match held {
+                metal::BlendFactor::Unspecialized => default,
+                other => other,
+            }
+        }
+        fn operation(held: metal::BlendOperation) -> metal::BlendOperation {
+            match held {
+                metal::BlendOperation::Unspecialized => metal::BlendOperation::Add,
+                other => other,
+            }
+        }
+        ColorAttachmentDescriptor {
+            source_rgb_blend_factor: factor(self.source_rgb_blend_factor, metal::BlendFactor::One),
+            destination_rgb_blend_factor: factor(
+                self.destination_rgb_blend_factor,
+                metal::BlendFactor::Zero,
+            ),
+            rgb_blend_operation: operation(self.rgb_blend_operation),
+            source_alpha_blend_factor: factor(
+                self.source_alpha_blend_factor,
+                metal::BlendFactor::One,
+            ),
+            destination_alpha_blend_factor: factor(
+                self.destination_alpha_blend_factor,
+                metal::BlendFactor::Zero,
+            ),
+            alpha_blend_operation: operation(self.alpha_blend_operation),
+            ..*self
+        }
+    }
 }
 
 /// `MTLVertexDescriptor`.
