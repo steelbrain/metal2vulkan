@@ -282,6 +282,30 @@ recorded here.
 Open differences from Metal that no note announces yet, and runtime costs still above the
 driver's. Each is open work.
 
+- **A sparse tile mapped after a write covered it while unmapped**: Metal reads the texture's
+  unwritten pattern there, not zero. Measured on an Apple M3 Max under macOS 27.0.1 (26A434),
+  three runs each in its own process, over a 256 by 256 `R32Uint` sparse texture of 64-texel
+  (16 KiB) tiles on a sparse heap, eight of its sixteen tiles mapped in a checkerboard: a
+  `copyFromBuffer:toTexture:` over the whole level puts the copy's word in all 4,096 texels of each
+  mapped tile and leaves all 4,096 of each unmapped tile at **zero**, by `copyFromTexture:toBuffer:`
+  and by a kernel's `read()` alike; map one of those tiles afterwards (`usedSize` 131,072 to
+  147,456, one tile) and all 4,096 of its texels read `0xFFFFFFFF`, and an unmap-and-map round trip
+  of a tile that held the copy's words reads the same. The control says what that value is: a plain
+  `Private` `R32Uint` texture of the same extent, off any heap, reads `0xFFFFFFFF` at every one of
+  its 65,536 texels before anything writes it, so the newly mapped tile holds Metal's unwritten
+  pattern (`fresh_unwritten.rs`) rather than the dropped write or anything undefined. Our side
+  reads zero there: the runtime zeroes a sparse texture's unmapped texels and a newly bound block
+  whole, and `BlitEncoder::scrub` has already marked the blit's whole destination written, so
+  nothing holds the tile unwritten the way Metal does. Keeping the dropped part of a write
+  unwritten in `FreshUnwritten` would reach it. No conformance case compares it, and that is the
+  shape of the hole rather than a choice: the measurement above needs Metal, which is macOS and so
+  MoltenVK, and MoltenVK binds no sparse memory, so a sparse heap there is
+  `NotImplemented(SparseTileMaps)` and our side never reaches the site. Confirming it needs a venue
+  with `sparseBinding`, a queue family that binds sparse memory and `sparseResidencyImage2D` (the
+  three `SparseNeed` checks) -- of this round's venues the RTX 5080 Laptop is the candidate,
+  unverified for those three here -- and the Metal half of the comparison stays this probe's, since
+  Metal runs on neither.
+
 - **A `half` or `FloatRG11B10` vertex or stage-in attribute read as `float`, fetched by Vulkan's
   fixed-function vertex input**: Metal's fetch canonicalizes a NaN to `0x7FC00000`, payload and
   sign dropped, and the device's widening carries the field's bits up into the payload instead

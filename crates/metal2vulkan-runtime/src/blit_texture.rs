@@ -1034,6 +1034,20 @@ impl BlitCommandEncoder {
     /// its texels are no longer a new texture's unwritten pattern (`fresh_unwritten.rs`, by box and
     /// aspect); and where it is a sparse texture the runtime zeroes, its scrub, so what the command
     /// wrote into unmapped tiles reads zero, as Metal drops it.
+    ///
+    /// Measured for a **blit** and not only for a shader's read, on an Apple M3 Max under macOS
+    /// 27.0.1 (26A434), three runs each in its own process, over a 256 by 256 `R32Uint` sparse
+    /// texture of 64-texel tiles with eight of its sixteen tiles mapped in a checkerboard:
+    /// `copyFromBuffer:toTexture:` over the whole level leaves every one of the 4,096 texels of
+    /// each mapped tile holding the copy's word and every texel of each unmapped tile at **zero**,
+    /// read back both by `copyFromTexture:toBuffer:` and by a kernel's `read()`, which agree tile
+    /// for tile. A second such copy after a tile is mapped writes it, so the first reading is not
+    /// a copy that did nothing.
+    ///
+    /// Where this scrub is **not** Metal: a tile mapped **after** a blit covered it while unmapped
+    /// reads Metal's unwritten pattern rather than zero, because Metal dropped the write and so
+    /// still holds the tile unwritten, while this call has already marked the blit's whole
+    /// destination written. `docs/FAST-PATHS.md`'s known gaps carries it with the measurement.
     pub(super) fn scrub(
         &mut self,
         texture: &Texture,

@@ -1628,7 +1628,9 @@ impl Device {
     /// `shaderResourceResidency`), with its tile map where its type has one. A cube or
     /// multisampled texture has none: a slot that reads residency from a tile map refuses it as it
     /// is bound (`NotImplemented(SparseTileMaps)`), and every other read is the image's, zero at an
-    /// unmapped tile. Either way the runtime zeroes its unmapped texels (`Device::sparse_zeroing`).
+    /// unmapped tile. Either way the runtime zeroes its unmapped texels (`Device::sparse_zeroing`),
+    /// which is Metal's answer while a tile is unmapped and not after it is mapped
+    /// (`docs/FAST-PATHS.md`'s known gaps).
     /// Refused otherwise: where a function may read the image's residency, as `sparse_refusal`
     /// names what the device lacks (an ordinary image would answer resident everywhere at a slot
     /// of the sparse arm and through a handle); where the runtime cannot zero the texture, as
@@ -3550,7 +3552,14 @@ impl Heap {
     /// the texture and no function reads an image's own residency (the device does not enable
     /// `shaderResourceResidency`; MoltenVK, which binds no sparse memory), it is an ordinary image
     /// whose unmapped tiles the runtime keeps at zero: Metal's answers. A blit's or a render pass's
-    /// writes into unmapped tiles are zeroed again after it, as Metal drops them. The runtime
+    /// writes into unmapped tiles are zeroed again after it, as Metal drops them: measured for a
+    /// blit as well as for a shader's read on an Apple M3 Max under macOS 27.0.1 (26A434), three
+    /// runs, where a `copyFromBuffer:toTexture:` over a checkerboard-mapped level leaves every
+    /// texel of each unmapped tile at zero under `copyFromTexture:toBuffer:` and under a kernel's
+    /// `read()` alike, and the mapped tiles holding the copy's words (the probe
+    /// `probes/sparse_unmapped_blit.m`). What that measurement also says, and what the runtime does
+    /// not yet answer, is in `docs/FAST-PATHS.md`'s known gaps: a tile **mapped after** such a blit
+    /// reads Metal's unwritten pattern, not zero. The runtime
     /// zeroes a single-sampled texture by copies, and a multisampled one, which no copy writes, by
     /// clears in a render pass, its image made an attachment of its format, as Metal's reads zero
     /// where unmapped (the M3 Max at 2x and 4x). Its storage is the heap's (`Private`), its CPU cache mode the descriptor's, its tracking
