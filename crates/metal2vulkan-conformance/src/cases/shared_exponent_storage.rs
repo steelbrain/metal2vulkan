@@ -38,6 +38,7 @@
 //! Nothing here can fault a GPU: one compute pass a case, one thread a texel, no loop and no
 //! sampling.
 
+use crate::allowance::Allowance;
 use crate::case::{call, made, Abort, Bindings, Case, Failure, Input, MetalSource, Side};
 use crate::fixture::{Fixture, METAL_TEXT, RUNTIME_TEXT};
 use crate::recording::ShaderRef;
@@ -49,6 +50,7 @@ use metal2vulkan::metal::{PixelFormat, TextureUsage};
 
 /// The fixture every kernel lives in.
 const FIXTURE: &str = "fpv_srgb_storage";
+use metal2vulkan_runtime::Degradation;
 
 /// The texture's width; its height holds the values.
 pub const WIDTH: u32 = 256;
@@ -356,6 +358,21 @@ impl SharedExponentStorage {
     }
 }
 
+/// The degrade notices one of these passes may announce. A list rather than a device query,
+/// because a case never branches on the device: it runs and reads what came back, and a venue that
+/// announces a kind not here fails the case until the kind is added.
+///
+/// Declaring a kind states what our side announced at the notices site and loosens no value:
+/// every `RGB9E5Float` word still compares exactly.
+const PASS_NOTICES: &[Degradation] = &[
+    // The buffer each dispatch reads its input words from and writes its result into is `Shared`.
+    // A device with no unified memory keeps a `Shared` allocation in system memory because that is
+    // the only memory both sides can reach, so the notice belongs to the venue's memory model
+    // rather than to anything these cases do. A device whose driver is Metal announces nothing
+    // here.
+    Degradation::SharedInSystemMemory,
+];
+
 impl Case for SharedExponentStorage {
     fn name(&self) -> &'static str {
         self.name
@@ -363,6 +380,13 @@ impl Case for SharedExponentStorage {
 
     fn metal_source(&self) -> MetalSource {
         MetalSource::Run
+    }
+
+    fn allowances(&self) -> Vec<Allowance> {
+        PASS_NOTICES
+            .iter()
+            .map(|kind| crate::replay::notice_allowance(kind.code()))
+            .collect()
     }
 
     fn shaders(&self) -> Result<Vec<ShaderRef>, String> {
