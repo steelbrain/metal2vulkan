@@ -258,11 +258,14 @@ it did not do before is `over` rather than unnoticed.
 Every other bound is a ceiling, which cannot see a saving go away: a change that makes a render or
 compute state's creation-time prediction miss *lowers* `creation_pipelines_drawn` and raises
 `variant_pipelines_made` into the room the ceiling leaves, so both readings pass. Such a count is
-named in `cost.rs`'s `SPARED` table with the measurement behind it, held to the bound from both
-sides, and a reading below it is `under` rather than `over`, because the two findings are opposite.
-A gated count's bound is every run's reading, so the floor and the ceiling are the same number; a
-count the measurement saw move, or that reads differently with the case alone, stays reported in
-both directions.
+named in `cost.rs`'s `SPARED` table with the measurement behind it and gated from **below alone**,
+and a reading below it is `under` rather than `over`, because the two findings are opposite. It has
+no ceiling: a ceiling on a count of work avoided reads a win as "cost more", and the whole set has
+`integer-vertex-attributes` taking all 64 of its predictions where the record's reading was 0.
+Nothing is lost by dropping it, because no command can take a prediction that was not made and
+`creation_pipelines_made` keeps its own ceiling. A gated count's bound is every run's reading, so
+the floor is that reading; a count the measurement saw move, or that reads differently with the
+case alone, stays reported in both directions.
 
 Some counts are reported and never gated, because holding them would give a gate that fires at
 random on honest work. Each reason is written at its site in `cost.rs` with the runs behind it:

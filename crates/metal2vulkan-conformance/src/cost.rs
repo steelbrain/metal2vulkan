@@ -1426,7 +1426,12 @@ pub fn judge(
             // do before is exactly what this half is for.
             None => (0, racy(count).is_none()),
         };
-        if gated && found > bound {
+        // A count of work avoided is gated from BELOW ONLY: more of it is a win, and a ceiling on
+        // it reads that win as "cost more". Measured on the whole set: `integer-vertex-attributes`
+        // takes all 64 of its predictions where the record's reading was 0, and the ceiling was its
+        // only breach. Its `creation_pipelines_made` keeps its own ceiling, and no command can take
+        // a prediction that was not made, so the ceiling here held nothing the other one did not.
+        if gated && found > bound && spared(count).is_none() {
             over.push(Overrun {
                 count: count.to_owned(),
                 region: region_of(count),

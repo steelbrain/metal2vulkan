@@ -7120,12 +7120,27 @@ fn a_count_of_work_avoided_is_gated_from_below_as_well() {
         "a saving that went to nothing, which the run reports by not reporting the count"
     );
     // And the other direction is a win, never a breach: a case that avoided more work than the
-    // measurement saw is within, because `most` is a ceiling for every count and a floor only for
-    // the spared ones.
+    // measurement saw is within, because a spared count is gated from below ONLY. Measured on the
+    // whole set before this held: `integer-vertex-attributes` takes all 64 of its predictions where
+    // the record's reading was 0, and a ceiling on the count made that its only breach, reading a
+    // win as "cost more".
     assert_eq!(
         judge(4, 4, 3).word(),
         "within",
         "fewer pipelines made at a draw is a win"
+    );
+    assert_eq!(
+        judge(4, 5, 4).word(),
+        "within",
+        "a prediction taken that the measurement never saw taken is a win, not a breach"
+    );
+    // The ceiling is dropped for the spared count alone. `creation_pipelines_made` is not in the
+    // table, so one more pipeline made at a creation is still `over` -- and no command can take a
+    // prediction that was not made, so nothing is lost by the spared count having no ceiling.
+    assert_eq!(
+        judge(5, 4, 4).word(),
+        "over",
+        "one more pipeline made at a creation is still a breach"
     );
 }
 
