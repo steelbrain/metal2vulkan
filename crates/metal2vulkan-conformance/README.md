@@ -40,6 +40,28 @@ the runtime's own defaults instead — the fast form of every speed-for-accuracy
 what a consumer runs — so the suite can say whether a difference is the policy's or the
 implementation's.
 
+A refusal the **venue** honestly cannot answer is not a gap of ours and reads `lacks-feature`
+instead. That fact rides in the failure's own recorded value, beside the typed error, so it reaches
+the comparison wherever in a case the refusal happened: a case whose site is one node but whose rows
+are many names the row in its abort and pushes the node at the site, and filing the fact under a
+path the case states twice is how one run came to score the same missing extension `refused` in one
+family and `lacks-feature` in another.
+
+## Does it answer the same thing twice?
+
+```sh
+conformance replay --runs 3                   # three passes, one process, one device
+```
+
+Every other reading the suite takes is of one run, so a reading that moves run to run is
+indistinguishable from one that moved because the implementation changed — and a one-shot gate gives
+the second answer, because it is the only one it has. `--runs N` replays the selection N times in
+the one process and flags every verdict, every transcript site and every cost count that is not the
+same in all N, naming the case, the reading and what each run read, in order. A time is deliberately
+not a reading: it moves on every host under every load.
+
+It is off by default, and it has its own line of the exit status.
+
 ## The known-gaps ledger
 
 `known-gaps.tsv` holds the gaps we have written down as open. Each row is an **open bug with a todo

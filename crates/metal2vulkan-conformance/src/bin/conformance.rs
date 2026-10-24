@@ -3,7 +3,7 @@
 //!
 //! ```text
 //! conformance record [case ...]
-//! conformance replay [--cpu] [--default-policy] [case ...]
+//! conformance replay [--cpu] [--default-policy] [--runs N] [case ...]
 //! conformance cost [--cpu] [--default-policy] [--runs N] [--write] [--show] [--alone] [--check] [case ...]
 //! conformance times [--cpu] [--default-policy] [--runs N] [--leg metal|ours] [--write] [--show]
 //!                    [--call NAME]... [--cold-shaders] [case ...]
@@ -27,6 +27,14 @@
 //! The ledger never changes a verdict. A gap it expects is still printed as `Refused` or
 //! `Divergent`, with our answer and Metal's, and still counted, because its rows are open bugs
 //! rather than accepted differences.
+//!
+//! `replay --runs N` replays the selection N times in **this** process and on **this** device, and
+//! flags every verdict, site and count that is not the same in all N
+//! ([`metal2vulkan_conformance::stability`]). It is off by default — one pass, nothing compared —
+//! because the point of a replay is one honest pass over a shared venue. It has its own line of
+//! the exit status, for the same reason the cost half does: a reading that moves run to run is
+//! neither a difference from Metal nor a count over a bound, and a one-shot gate reads it as a
+//! regression because that is the only reading it has.
 //!
 //! `times` is the cost half's other face ([`metal2vulkan_conformance::times`]): it runs **both**
 //! legs over the same selection on this Mac, back to back, and prints what each call cost on
@@ -57,7 +65,7 @@ use metal2vulkan_conformance::run;
 /// running the whole set against the GPU for anyone who typed the command to find out what it took.
 const USAGE: &str = "\
 conformance record [case ...]
-conformance replay [--cpu] [--default-policy] [case ...]
+conformance replay [--cpu] [--default-policy] [--runs N] [case ...]
 conformance cost [--cpu] [--default-policy] [--runs N] [--write] [--show] [--alone] [--check] [case ...]
 conformance times [--cpu] [--default-policy] [--runs N] [--leg metal|ours] [--write] [--show]
                    [--call NAME]... [--cold-shaders] [case ...]
@@ -97,6 +105,10 @@ fn command() -> Result<bool, String> {
     // replays, then reached 3 — and running that case alone for eight rounds moved it 2..3. A rare
     // second arm is the one thing a thin measurement turns into a false regression.
     let mut runs = 8;
+    // Whether `--runs` was stated, so `replay` can default to one pass while `cost` and `times`
+    // keep their eight. A sentinel in `runs` itself would make "the default" a number a reader
+    // has to look up in two places.
+    let mut asked_runs = false;
     let mut how = How::default();
     let mut legs = Legs::Both;
     let mut calls = Vec::new();
@@ -130,6 +142,10 @@ fn command() -> Result<bool, String> {
                 runs = value
                     .parse()
                     .map_err(|_| format!("--runs {value}: not a number"))?;
+                if runs == 0 {
+                    return Err("--runs 0: a run that happens no times reads nothing".to_owned());
+                }
+                asked_runs = true;
             }
             flag if flag.starts_with('-') => return Err(format!("unknown flag {flag}")),
             name => names.push(name.to_owned()),
@@ -161,8 +177,13 @@ fn command() -> Result<bool, String> {
         "timing-coverage" => timing_coverage(venues, policy, &cases),
         metal2vulkan_conformance::validated::LEG_VERB => validated_leg(&cases),
         "replay" => {
-            let report = run::replay_on_under(venues, policy, &cases)?;
+            // `--runs` defaults to one pass for `replay`, not to `cost`'s eight: the point of a
+            // replay is one honest pass over a venue, and a venue is shared. More than one pass
+            // is asked for, and what it buys is the run-to-run comparison below.
+            let passes = if asked_runs { runs } else { 1 };
+            let (report, stability) = run::replay_on_under(venues, policy, &cases, passes)?;
             print!("{}", report.render());
+            print!("{}", stability.render());
             // The known-gaps ledger decides the exit status and nothing else: each of its rows
             // is still printed above as a `Refused` or `Divergent` row and still counted there.
             // It is held in both directions and per venue, so a new gap fails the run and a row
@@ -180,7 +201,18 @@ fn command() -> Result<bool, String> {
                     report.cost_overruns().len()
                 );
             }
-            if unexpected.is_empty() && within {
+            // A reading that moves between two runs of one unchanged selection is its own gate,
+            // kept apart from the other two as the cost half is: it is neither a difference from
+            // Metal nor a count over a bound, and a one-shot gate cannot tell it from either.
+            let steady = stability.is_stable();
+            if !steady {
+                println!(
+                    "\n{} reading(s) moved between runs of the same selection; they are listed \
+                     above",
+                    stability.moved().len()
+                );
+            }
+            if unexpected.is_empty() && within && steady {
                 let expected = ledger
                     .iter()
                     .filter(|known| {

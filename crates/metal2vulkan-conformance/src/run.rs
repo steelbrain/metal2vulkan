@@ -8,6 +8,7 @@ use crate::device::{self, Notices, Policy, ScratchCache, Venues};
 use crate::replay::replay;
 use crate::report::{CostRow, Report};
 use crate::runtime_side::RuntimeSide;
+use crate::stability::Stability;
 
 /// The runs record mode takes a case's answer over by default, so a case whose behaviour varies
 /// records its outcomes with their frequencies rather than whichever run came last.
@@ -29,25 +30,43 @@ pub fn selected(names: &[String]) -> Result<Vec<Box<dyn Case>>, String> {
         .collect()
 }
 
-/// Replay `cases` on the venue `venues` names, with exact answers, as a report.
-pub fn replay_on(venues: Venues, cases: &[Box<dyn Case>]) -> Result<Report, String> {
-    replay_on_under(venues, Policy::Exact, cases)
-}
-
-/// [`replay_on`] under `policy`: either form of every speed-for-accuracy choice.
+/// Replay `cases` on the venue `venues` names under `policy`, as a report, and say whether the
+/// same selection read the same thing in each of `runs` passes ([`crate::stability`]).
+///
+/// Every pass is in **this** process and on **this** device, which is what makes the comparison
+/// mean anything: a second process would differ in its caches, its pools and its shader compiles,
+/// so a reading that moved could be blamed on the process rather than on the run. `runs` of 1 is
+/// the default replay — one pass, nothing compared and nothing flattened.
 pub fn replay_on_under(
     venues: Venues,
     policy: Policy,
     cases: &[Box<dyn Case>],
-) -> Result<Report, String> {
+    runs: u32,
+) -> Result<(Report, Stability), String> {
     let mut notices = Notices::default();
     let cache = ScratchCache::new().map_err(|error| error.to_string())?;
     let device = device::open_under(venues, policy, &notices, &cache)?;
     // The notices a device announces as it is made are the venue's, not any case's: they say what
     // this host's driver and release cost, once, before a case runs. They go in the report's venue
     // line; no case's scope was open for them, so none of them can reach a case.
+    let venue_notices = notices.venue();
+    let mut report = one_replay_pass(&device, &mut notices, cases);
+    report.venue_announced(device.name(), venue_notices);
+    let mut stability = Stability::new(runs);
+    for at in 2..=runs {
+        let again = one_replay_pass(&device, &mut notices, cases);
+        stability.observe(at, &report, &again);
+    }
+    Ok((report, stability))
+}
+
+/// One pass of `cases` over `device`: the report that pass came to.
+fn one_replay_pass(
+    device: &metal2vulkan_runtime::Device,
+    notices: &mut Notices,
+    cases: &[Box<dyn Case>],
+) -> Report {
     let mut report = Report::new();
-    report.venue_announced(device.name(), notices.venue());
     // The cost half's gate: the counts the runtime moved over each case, held to the bounds the
     // case's own recording carries for this venue. It rides along with the correctness replay
     // because the two readings must be of the same run, and it is cheap: two reads of
@@ -55,15 +74,15 @@ pub fn replay_on_under(
     let whole_set = cases.len() == crate::cases::all().len();
     let venue_label = device.name().to_owned();
     for case in cases {
-        let before = read_counts(&device);
+        let before = read_counts(device);
         let started = std::time::Instant::now();
         // The case's own notice scope, open for exactly as long as its side lives. Nothing it
         // announces can reach another case, and nothing another case announced can reach it.
-        let mut side = RuntimeSide::new(&device, notices.open(case.name()));
+        let mut side = RuntimeSide::new(device, notices.open(case.name()));
         let replayed = replay(case.as_ref(), &mut side);
         drop(side);
         let nanos = u64::try_from(started.elapsed().as_nanos()).unwrap_or(u64::MAX);
-        let moved = match (before, read_counts(&device)) {
+        let moved = match (before, read_counts(device)) {
             (Ok(before), Ok(after)) => Ok(after.since(&before)),
             (Err(why), _) | (_, Err(why)) => Err(why),
         };
@@ -87,7 +106,7 @@ pub fn replay_on_under(
     // A notice that arrived with no case's scope open is the harness's own gap in attribution, not
     // any case's difference, so it is reported rather than charged to whichever case drained next.
     report.unattributed_notices(notices.unattributed());
-    Ok(report)
+    report
 }
 
 /// The device's counts, or nothing where they could not be read as counts.
