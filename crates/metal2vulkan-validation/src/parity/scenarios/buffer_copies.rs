@@ -2,7 +2,7 @@
 //! `fillBuffer:range:value:` at odd offsets and lengths, between buffers and within one, and the
 //! calls Metal's API validation stops that the runtime refuses (a range past either buffer, a
 //! fill past the buffer). A zero size and an empty fill, which plain Metal runs as nothing and
-//! the runtime too, are the lane tests' (`runtime_lane::blits`, DESIGN D406 item 2).
+//! the runtime too, are the lane tests' (`runtime_lane::blits`).
 
 use super::super::api::{Api, Observation};
 use super::steps::{pattern, shared_with, submit};

@@ -1,4 +1,4 @@
-//! The parity records (DESIGN D308 item 7): what a scenario observed, record by record, one line
+//! The parity records: what a scenario observed, record by record, one line
 //! per Metal environment in `corpus/observations/parity/<scenario>.jsonl`, and the exact
 //! comparison of a run's records with them.
 //!
