@@ -329,6 +329,10 @@ fn multisampled_depth_and_stencil_copy_every_sample_with_colour() {
             .properties()
             .driver_facts
             .contains(&DriverFact::FragmentDepthStoresUnchanged);
+        let exact_codes = device
+            .properties()
+            .driver_facts
+            .contains(&DriverFact::FragmentDepthKeepsDepth16Codes);
         messages.take_notices();
         // Whether a copy into a 32-bit float depth ran by a fragment-depth draw that is not exact.
         let mut degraded = false;
@@ -358,11 +362,18 @@ fn multisampled_depth_and_stencil_copy_every_sample_with_colour() {
                 (stencil && defects.contains(&stencil_only)).then_some(stencil_only)
             };
             let copies = maintenance8 && defect.is_none();
-            // The draws copy a stencil, and a 32-bit float depth where the driver's fragment
-            // depth stores it unchanged; never a 16-bit depth. A 32-bit float depth's copy in
-            // elsewhere runs announced.
-            let drawn = pair.depth_stencil != PixelFormat::Depth16Unorm
-                && (matches!(pair.read, SampleRead::Stencil) || exact_depth);
+            // The draws copy a stencil (the plane draws are exact), a 32-bit float depth where
+            // the driver's fragment depth stores it unchanged, and a 16-bit normalized one where
+            // the driver keeps its codes, which the draw crosses as codes rather than as floats
+            // (`depth_copy::copies_exactly`). A 32-bit float depth's copy in elsewhere runs
+            // announced.
+            let drawn = if matches!(pair.read, SampleRead::Stencil) {
+                true
+            } else if pair.depth_stencil == PixelFormat::Depth16Unorm {
+                exact_codes
+            } else {
+                exact_depth
+            };
             let near = !copies && !drawn && pair.depth_stencil == PixelFormat::Depth32Float;
             match run_pair(&device, pair, form) {
                 Outcome::Ran => {

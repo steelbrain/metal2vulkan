@@ -24,7 +24,8 @@ use crate::air_library::AirLibrary;
 use crate::candidate::runtime_samples::encode;
 use crate::executor_contract::multisample::{ReadbackView, SampleRead};
 use crate::gpu::TEST_DEVICE;
-use metal2vulkan::device::{DriverFact, VkExtension};
+use metal2vulkan::device::{DriverFact, VkExtension, VkProperty};
+use metal2vulkan::error::{Capability, Feature, Unsupported};
 use metal2vulkan::metal::state::{DepthStencilDescriptor, StencilDescriptor};
 use metal2vulkan::metal::{
     CompareFunction, PixelFormat, PrimitiveType, StencilOperation, TextureType, TextureUsage,
@@ -109,6 +110,28 @@ impl Lane {
             && d.limits
                 .sample_location_sample_counts
                 .contains(SampleCountFlags::from_raw(count))
+    }
+
+    /// The refusal a pass of `samples` samples with custom positions answers here, or `None`
+    /// where the device programs them: the device's own lack where it takes no custom locations
+    /// at the pass's sample count, which is the only count the grid is programmed at, whatever
+    /// the number of positions the caller gave; then the runtime's gap where the device's
+    /// locations may not differ between a pass's pipelines, so the pass would need them at its
+    /// begin (the runtime's `sample_positions.rs`, `PositionRules`).
+    fn unprogrammed(&self, samples: u32) -> Option<Error> {
+        if !self.located(samples) {
+            return Some(Error::Unsupported(Unsupported::needs(
+                Feature::SamplePositions,
+                Capability::Property(VkProperty::SampleLocationSampleCount(samples)),
+            )));
+        }
+        let variable = self
+            .device
+            .properties()
+            .description
+            .limits
+            .variable_sample_locations;
+        (!variable).then_some(Error::NotImplemented(RuntimeGap::SamplePositionsAtBegin))
     }
 
     /// A `samples` render target of one pixel (multisampled above 1), private; or a shared
@@ -262,16 +285,15 @@ fn the_samples_land_where_metal_puts_them() {
             eprintln!("{name} on {device}: no {samples}x textures");
             continue;
         }
-        if !positions.is_empty() && !lane.located(samples as u32) {
+        let unprogrammed = (!positions.is_empty())
+            .then(|| lane.unprogrammed(samples as u32))
+            .flatten();
+        if let Some(refusal) = unprogrammed {
             let store = (StoreAction::MultisampleResolve, StoreActionOptions::NONE);
             let (descriptor, _) = lane.pass(samples, positions, store, true);
-            let count = samples;
             assert_eq!(
                 lane.draw(&descriptor, samples, edge, |_| Ok(())),
-                Err(invalid(
-                    "render_command_encoder",
-                    RenderPassProblem::SamplePositionCount { count }
-                )),
+                Err(refusal),
                 "{name} on {device}"
             );
             continue;
@@ -286,7 +308,8 @@ fn the_samples_land_where_metal_puts_them() {
 /// runs them (an M4: 2 positions in a pass of 4 samples put samples 2 and 3
 /// at the pixel's corner, (0, 0)): two positions at (0.75, 0.5) leave two samples covered left
 /// of an edge at 0.1 and at 0.5 (Metal's own positions, none and two), and two at (0.25, 0.5)
-/// all four left of 0.5. Refused where the device takes no custom positions at 2 or at 4.
+/// all four left of 0.5. Refused where the device programs no such pass (`Lane::unprogrammed`):
+/// the position count is never asked of the device, only the pass's sample count.
 #[test]
 fn fewer_positions_than_samples_put_the_rest_at_the_corner() {
     let (messages, _cache, lane) = lane();
@@ -302,16 +325,7 @@ fn fewer_positions_than_samples_put_the_rest_at_the_corner() {
         (at(0.25, 0.5, 2), 0.0, 4),
     ];
     for (positions, edge, metal) in cases {
-        let refusal = if !lane.located(2) {
-            Some(invalid(
-                "render_command_encoder",
-                RenderPassProblem::SamplePositionCount { count: 2 },
-            ))
-        } else if !lane.located(4) {
-            Some(Error::NotImplemented(RuntimeGap::SamplePositionsAtBegin))
-        } else {
-            None
-        };
+        let refusal = lane.unprogrammed(4);
         if let Some(refusal) = refusal {
             let store = (StoreAction::MultisampleResolve, StoreActionOptions::NONE);
             let (descriptor, _) = lane.pass(4, positions, store, true);
