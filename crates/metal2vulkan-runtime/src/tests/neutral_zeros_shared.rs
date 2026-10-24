@@ -33,9 +33,18 @@
 //!
 //! Held in both directions. `neutral_zeros_made` must be exactly **1**: more than one is a memo
 //! that stopped answering, and **zero** means no neutral was bound at all, so the test would be
-//! proving nothing about the path it names. What it does not cover is the writable half -- no
-//! fixture here leaves a storage buffer binding unbound -- and the dispatch path, which binds
-//! neutrals by the same code and is unexercised by these draws.
+//! proving nothing about the path it names.
+//!
+//! The dispatch path binds neutrals through the same code, and is covered below by a kernel with
+//! a `constant` slot left unbound. So is the writable half, by the same kernel with its written
+//! `device` slot left unbound instead: that one must still take a region of its own per dispatch,
+//! and the test requires it to, so a later change cannot quietly start sharing one buffer between
+//! commands that may store through the binding.
+//!
+//! What none of it covers: a draw or dispatch whose read-only slot is unbound **and** whose
+//! length differs from `zero_buffer_bytes` on this device, since one device offers one length; and
+//! the fully-bound case, which binds no neutral at all and whose per-draw work was already one
+//! `vkCmdDraw` and nothing else.
 
 use crate::{
     Device, DeviceKind, DeviceOptions, LoadAction, PipelineOptions, RenderPassDescriptor,
@@ -184,5 +193,97 @@ fn draws_that_share_the_zero_buffer_bind_their_set_once() {
         (binds, draws),
         (1, 64),
         "64 draws recorded {binds} descriptor-set binds and {draws} draws"
+    );
+}
+
+/// `scale_and_offset` of the examples fixture, whose `input` and `output` are written `device`
+/// pointers (storage buffers) and whose `scale` is a `constant` (a read-only uniform buffer).
+/// `unbound` is the buffer index left unset, which the plan binds a neutral at.
+fn dispatched(dispatches: usize, unbound: u64) -> (u64, crate::WorkCounts, crate::WorkCounts) {
+    let scratch = Scratch::new();
+    let device = device(&scratch.0);
+    let queue = device.new_command_queue().unwrap();
+    let ll = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../metal2vulkan-validation/fixtures/public/examples/runtime_examples.ll");
+    let bitcode = metal2vulkan_devtools::llvm_assemble(&ll).unwrap();
+    let library = metal2vulkan::library::Library::from_air(&bitcode).unwrap();
+    let function = device
+        .new_library_with_compile_library(library)
+        .new_function_with_name("scale_and_offset")
+        .unwrap();
+    let state = device
+        .new_compute_pipeline_state_with_function(&function, &PipelineOptions::default())
+        .unwrap();
+    let buffer = device.new_buffer(1024, ResourceOptions::shared()).unwrap();
+    let command_buffer = queue.command_buffer().unwrap();
+    let mut encoder = command_buffer.compute_command_encoder().unwrap();
+    encoder.set_compute_pipeline_state(&state).unwrap();
+    for index in [0, 1, 2] {
+        if index != unbound {
+            encoder.set_buffer(Some(&buffer), 0, index as u32).unwrap();
+        }
+    }
+    let before = device.work_counts();
+    for _ in 0..dispatches {
+        encoder
+            .dispatch_threads(crate::Size::new(1, 1, 1), crate::Size::new(1, 1, 1))
+            .unwrap();
+    }
+    encoder.end_encoding().unwrap();
+    command_buffer.commit().unwrap();
+    command_buffer
+        .wait_until_completed_for(std::time::Duration::from_secs(60))
+        .unwrap();
+    assert_eq!(command_buffer.error(), None, "the dispatches ran");
+    let after = device.work_counts();
+    (device.neutral_zeros_made(), before, after)
+}
+
+/// A kernel's unbound `constant` slot is a read-only binding: sixty-four dispatches share the
+/// device's one zero buffer and none of them allocates or zeroes a buffer for it.
+#[test]
+fn dispatches_share_the_devices_one_zero_buffer() {
+    let (made, before, after) = dispatched(64, 2);
+    assert_eq!(
+        made, 1,
+        "64 dispatches made {made} zero buffers for their unbound `constant` slot, not 1"
+    );
+    let cleared = after.new_buffer_bytes_cleared - before.new_buffer_bytes_cleared;
+    assert_eq!(
+        cleared, 0,
+        "64 dispatches wrote {cleared} bytes of a new buffer to zero for a read-only neutral"
+    );
+}
+
+/// A kernel's unbound **written** `device` slot is not read-only, so its neutral keeps a region of
+/// its own per dispatch, exactly as every neutral binding did before the device kept one buffer.
+///
+/// This is the half that must NOT be shared: the kernel stores through `output`, and one buffer
+/// shared by every command would hand a later command what an earlier one wrote. The claim is
+/// that the regions still scale with the dispatches -- twice as many dispatches clear twice the
+/// bytes -- so a change that started sharing them fails here rather than silently handing one
+/// command another's stores. Measured as a ratio of two runs rather than an absolute, because
+/// what a region costs is a chunk size and an alignment and neither is this test's business.
+///
+/// The device's zero-buffer count is deliberately not asserted here: `make_neutrals` pre-makes it
+/// at the pipeline's creation, whose plan has every slot unbound and so a read-only neutral among
+/// them, which is exactly what pre-making is for.
+#[test]
+fn a_written_slots_neutral_is_not_shared() {
+    let cleared = |dispatches| {
+        let (_, before, after) = dispatched(dispatches, 1);
+        after.new_buffer_bytes_cleared - before.new_buffer_bytes_cleared
+    };
+    let eight = cleared(8);
+    let sixteen = cleared(16);
+    assert!(
+        eight > 0,
+        "8 dispatches with a written slot unbound took no region of their own, so they shared one"
+    );
+    assert_eq!(
+        sixteen,
+        eight * 2,
+        "8 dispatches cleared {eight} bytes and 16 cleared {sixteen}, which is not one region \
+         each: a written slot's neutral must not be shared between commands"
     );
 }
