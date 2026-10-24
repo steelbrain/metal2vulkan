@@ -789,8 +789,7 @@ fn inherit_commands(
 ///
 /// Three buffers hold the **same two commands** — same pipeline, same parameter offsets, same
 /// draws — and differ only in one field of their descriptors. The parent encoder binds a pipeline,
-/// a `params` window no command binds ([`PARENT_PARAMS`]) and the segment no command binds
-/// ([`PARENT_SEGMENT`]), and re-binds all three before each execution, because Metal leaves a
+/// a `params` window no command binds and the segment no command binds, and re-binds all three before each execution, because Metal leaves a
 /// render encoder's state undefined after an indirect execution.
 ///
 /// - **`own-state`** is the control: nothing inherited. Each command's own segment holds its own
@@ -1952,7 +1951,7 @@ fn bind_limit_commands(pipeline: Handle, params: Handle) -> Vec<EncodedCommand> 
 /// The row **makes the buffer and never executes it**. There is no pass, no dispatch and no
 /// read-back: what it compares is the encoding's own answers and the buffer's `size`, so a binding
 /// that landed somewhere plain Metal does not define is never handed to a GPU. It is also why the
-/// two indices are small ([`OVER_INDICES`]).
+/// two indices are small: the index at the maximum, and one two past it.
 pub struct BindLimits;
 
 impl Case for BindLimits {
