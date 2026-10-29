@@ -28,16 +28,16 @@
 use crate::air::intrinsics::{PackDir, PackFormat};
 use crate::error::{Error, Feature, Unsupported};
 use crate::lower::arith::color_write::half_rounded;
-use crate::lower::arith::nan::NanTest;
 use crate::lower::arith::ops::{fsplat, splat, ty};
-use crate::lower::arith::{FloatFmt, Form, Held};
+use crate::lower::arith::{pack, FloatFmt, Form, Held};
 use crate::lower::select::SelectCx;
 use crate::metal::format::WordAttachment;
+use crate::pipeline::artifact::PrecisionNote;
 use crate::pipeline::stage_io::{IoNumeric, IoType};
 use crate::pipeline::sym::Stage;
 use crate::spirv::builder::FunctionBuilder;
 use crate::spirv::error::BResult;
-use crate::spirv::ids::{GlobalId, Value};
+use crate::spirv::ids::Value;
 use crate::spirv::ir::{BinOp, ConvOp, GlslOp, UnOp};
 
 /// An upper estimate of the SPIR-V words of one output's [`encode`]: per channel the rounding to
@@ -45,13 +45,16 @@ use crate::spirv::ir::{BinOp, ConvOp, GlslOp, UnOp};
 pub(crate) const WORDS: u64 = 4 * (40 * 6 + 12 * 6);
 
 /// An upper estimate of the SPIR-V words of one output's [`encode`] into `word`: [`WORDS`], and
-/// for an 8-bit sRGB word `math::pack`'s encode, the products and a search of Metal's table per
-/// color channel.
+/// for an 8-bit sRGB word `arith::pack::pack`'s encode.
 pub(crate) fn encode_words(word: WordAttachment) -> u64 {
     match word {
         WordAttachment::Packed16 { .. } => WORDS,
         WordAttachment::Srgb8 { .. } => {
-            WORDS + 4 * u64::from(crate::lower::arith::srgb::SEARCH_WORDS) + 400
+            let f4 = Form {
+                held: Held::Float(FloatFmt::F32),
+                lanes: 4,
+            };
+            WORDS + u64::from(pack::words(PackFormat::Unorm4x8Srgb, PackDir::Pack, f4))
         }
         WordAttachment::Rgb9e5 => crate::lower::texture::RGB9E5_WORDS + 6 * 8,
     }
@@ -88,9 +91,9 @@ pub(super) fn plan(
         .word_colors
         .insert(color, word);
     cx.families.stage_io.words_written.insert(color, word);
-    // An 8-bit sRGB word encodes through Metal's table.
+    // An 8-bit sRGB word encodes by the device's conversion.
     if let WordAttachment::Srgb8 { .. } = word {
-        cx.families.arith.srgb.get_or_insert(PackDir::Pack);
+        cx.precision.insert(PrecisionNote::DevicePackConversion);
     }
     Ok(Some(IoType {
         numeric: IoNumeric::Uint,
@@ -99,24 +102,15 @@ pub(super) fn plan(
     }))
 }
 
-/// The module's sRGB table and NaN test, which an 8-bit sRGB word's [`encode`] reads, where the
-/// plan declares the table.
-pub(crate) fn srgb_table(cx: &crate::lower::emit::EmitCx<'_>) -> Option<(GlobalId, NanTest)> {
-    let test = NanTest::for_modes(&cx.plan.families.arith.modes);
-    cx.decl.families.arith.srgb.map(|table| (table, test))
-}
-
 /// The word Metal stores for output `x` (form `f`, `float` or `half` lanes held in 32-bit
 /// containers) to a word attachment `word` (the module docs), as a `u32`. A channel the output
-/// lacks is 0, a missing alpha 1. An 8-bit sRGB word encodes through Metal's table `srgb` (the
-/// module's sRGB table, `ArithPlan::srgb`, and its NaN test), as `math::pack`'s
-/// `unorm4x8_srgb` encodes a color channel; `None` there is malformed. An `RGB9E5Float` word
-/// takes a `float` output's red, green and blue (`texture::rgb9e5_word`).
+/// lacks is 0, a missing alpha 1. An 8-bit sRGB word encodes by the device's conversion
+/// (`arith::pack::pack` of `unorm4x8_srgb`, `PrecisionNote::DevicePackConversion`). An
+/// `RGB9E5Float` word takes a `float` output's red, green and blue (`texture::rgb9e5_word`).
 pub(crate) fn encode(
     fb: &mut FunctionBuilder<'_>,
     word: WordAttachment,
     (f, x): (Form, Value),
-    srgb: Option<(GlobalId, NanTest)>,
 ) -> BResult<Value> {
     let s = Form {
         held: Held::Float(FloatFmt::F32),
@@ -140,13 +134,7 @@ pub(crate) fn encode(
         return crate::lower::texture::rgb9e5_word(fb, x3);
     }
     if let WordAttachment::Srgb8 { .. } = word {
-        let Some((table, test)) = srgb else {
-            return Err(crate::spirv::error::BuildError::Operand {
-                op: crate::spv::Op::ExtInst,
-                rule: crate::spirv::error::OperandRule::Arity,
-            });
-        };
-        // The output's four lanes (a lane it lacks 0), packed by Metal's sRGB encode: red's byte
+        // The output's four lanes (a lane it lacks 0), packed by the device's sRGB encode: red's byte
         // first, then green's; the word keeps the format's.
         let mut lanes = Vec::with_capacity(4);
         for lane in 0..4u8 {
@@ -162,14 +150,7 @@ pub(crate) fn encode(
         };
         let t = ty(fb, f4)?;
         let x4 = fb.composite_construct(t, &lanes)?;
-        let packed = crate::lower::arith::math::pack(
-            fb,
-            PackFormat::Unorm4x8Srgb,
-            f4,
-            x4,
-            Some(table),
-            test,
-        )?;
+        let packed = pack::pack(fb, PackFormat::Unorm4x8Srgb, f4, x4)?;
         let u = Form {
             held: Held::Int {
                 bits: 32,

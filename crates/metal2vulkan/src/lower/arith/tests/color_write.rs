@@ -3,27 +3,13 @@
 //! (`runtime_lane::color_writes` holds the same rules).
 //!
 //! Each case writes one value to every lane of a four-lane output whose lanes take different
-//! rules, so every rule runs beside the others. The reference is the value each rule writes:
-//! `c` times the `f32` nearest `1 / m` for Metal's unorm code `c`, and the small float Metal
-//! stores, widened. A further check asserts that a device which rounds the `f32` product to
-//! nearest (every Vulkan driver measured, ties aside) stores each such value as its code.
+//! rules, so every rule runs beside the others. The reference is the value each rule writes: the
+//! small float Metal stores, widened, or the value as computed. A unorm channel is the device's
+//! conversion's, which `round` does not take.
 
 use super::*;
 use crate::lower::arith::color_write;
 use crate::pipeline::lower_inputs::ChannelWrite;
-
-/// Metal's code of `x` in a unorm channel of maximum `m`: NaN 0, clamped to `[0, 1]`, the exact
-/// product rounded to nearest (its only tie, at 0.5, to even).
-fn unorm_code(x: f32, m: u32) -> u32 {
-    let x = if x.is_nan() { 0.0 } else { x.clamp(0.0, 1.0) };
-    exact_round(f64::from(x), m)
-}
-
-/// The exact product `x * m` (`x` an `f32` in `[0, 1]`, `m < 2^16`) rounded to nearest even:
-/// the product of a 24-bit significand and a 16-bit integer is exact in `f64`.
-fn exact_round(x: f64, m: u32) -> u32 {
-    (x * f64::from(m)).round_ties_even() as u32
-}
 
 /// Metal's code of `x` in a float channel of a five-bit exponent (bias 15) and `man` fraction
 /// bits (a sign bit above where `signed`): rounded toward zero, a finite value past the largest
@@ -97,19 +83,10 @@ fn small_float_value(c: u32, man: u32, signed: bool) -> f64 {
     }
 }
 
-/// The value written for code `c` of maximum `m`: `c` times the `f32` nearest `1 / m`.
-fn code_value(c: u32, m: u32) -> f32 {
-    c as f32 * (1.0 / m as f32)
-}
-
 /// The value `rule` writes for `x`, as `f32` bits.
 fn written(rule: Option<ChannelWrite>, x: f32) -> u64 {
     let bits = match rule {
         None | Some(ChannelWrite::Device | ChannelWrite::BlendedNearestEven { .. }) => x.to_bits(),
-        Some(ChannelWrite::Unorm { bits }) => {
-            let m = (1u32 << bits) - 1;
-            code_value(unorm_code(x, m), m).to_bits()
-        }
         Some(
             rule @ (ChannelWrite::FloatTowardZero { mantissa, signed }
             | ChannelWrite::FloatNearestEven { mantissa, signed }),
@@ -306,44 +283,34 @@ fn nearest_even_halves_round_to_mode_twos_codes() {
     }
 }
 
-/// Every unorm code's value written lies within `2^-7` of the code once multiplied by its
-/// maximum, exactly and as an `f32` product, so a device that rounds that product to nearest
-/// stores the code, whatever it does at ties, and so does Metal.
+/// A unorm channel is the device's conversion's: `round` takes no unorm rule (it is malformed
+/// there), and a lane of `ChannelWrite::Device` beside a lane of no rule is written as computed.
 #[test]
-fn written_values_store_their_codes() {
-    for m in [1u32, 3, 15, 31, 63, 255, 1023, 65535, 127, 32767] {
-        for c in 0..=m {
-            let q = code_value(c, m);
-            let exact = f64::from(q) * f64::from(m);
-            assert!(
-                (exact - f64::from(c)).abs() < 1.0 / 128.0,
-                "code {c} of {m}: {exact}"
-            );
-            let product = f64::from(q * m as f32);
-            assert!(
-                (product - f64::from(c)).abs() < 1.0 / 128.0,
-                "code {c} of {m}: {product}"
-            );
-            assert_eq!(
-                exact_round(f64::from(q.min(1.0)), m),
-                c,
-                "Metal's code {c} of {m}"
-            );
-        }
+fn unorm_channels_are_the_device_s_to_convert() {
+    let f = vec(float(32), 4);
+    for bits in [8u8, 10, 16] {
+        let rules = [Some(ChannelWrite::Unorm { bits }), None, None, None];
+        let built = kernel_with(
+            &[f],
+            f,
+            &|fb, x| color_write::round(fb, f, x[0], &rules),
+            true,
+            false,
+        );
+        assert!(
+            built.is_err(),
+            "a {bits}-bit unorm rule is rounded in the shader"
+        );
     }
-}
-
-#[test]
-fn eight_bit_channels_round_to_metals_codes() {
-    let mut values = around_codes(255, 1, 2);
-    values.extend(specials());
+    let mut values = specials();
+    values.extend(half_values().into_iter().step_by(9));
     run_rules(
-        "unorm8, device, none, unorm8",
+        "device, none, device, none",
         [
-            Some(ChannelWrite::Unorm { bits: 8 }),
             Some(ChannelWrite::Device),
             None,
-            Some(ChannelWrite::Unorm { bits: 8 }),
+            Some(ChannelWrite::Device),
+            None,
         ],
         &values,
     );
@@ -395,18 +362,16 @@ fn small_float_codes_give_metals_spot_answers() {
 /// A scalar output and a half output (held widened) round as their lanes do.
 #[test]
 fn scalar_and_half_outputs_round() {
-    let values: Vec<f32> = around_codes(255, 1, 1)
-        .into_iter()
-        .chain(specials())
-        .collect();
+    let values: Vec<f32> = half_values().into_iter().chain(specials()).collect();
     let s = float(32);
     let cases: Vec<Case> = values
         .iter()
         .map(|x| vec![vec![u64::from(x.to_bits())]])
         .collect();
-    let rules = [Some(ChannelWrite::Unorm { bits: 8 }), None, None, None];
+    let nearest = Some(crate::pipeline::color_writes::HALF_NEAREST);
+    let rules = [nearest, None, None, None];
     check_accept(
-        "scalar unorm8",
+        "scalar nearest-even half",
         &[s],
         s,
         &|fb, x| color_write::round(fb, s, x[0], &rules),
@@ -417,11 +382,14 @@ fn scalar_and_half_outputs_round() {
     let h = vec(float(16), 2);
     let halves: Vec<u64> = (0u64..0x10000).step_by(3).collect();
     let cases: Vec<Case> = halves.iter().map(|b| vec![vec![*b, *b]]).collect();
-    let unorm8 = Some(ChannelWrite::Unorm { bits: 8 });
-    let rules = [unorm8, unorm8, None, None];
+    let toward = Some(ChannelWrite::FloatTowardZero {
+        mantissa: 6,
+        signed: false,
+    });
+    let rules = [nearest, toward, None, None];
     let out = vec(float(32), 2);
     check_accept(
-        "half unorm8",
+        "half nearest-even half, 11-bit",
         &[h],
         out,
         &|fb, x| color_write::round(fb, h, x[0], &rules),
@@ -430,7 +398,7 @@ fn scalar_and_half_outputs_round() {
             let x = f16_to_f64(c[0][0] as u16) as f32;
             Some(vec![written(rules[0], x), written(rules[1], x)])
         },
-        &|g, w| g == w,
+        &|g, w| (is_nan(out, g) && is_nan(out, w)) || g == w,
     );
 }
 
@@ -488,7 +456,7 @@ fn word_attachments_store_metals_words() {
                 &format!("{pf:?} word of {lanes} lanes"),
                 &[f],
                 int(32),
-                &|fb, x| crate::lower::stage_io::word_color::encode(fb, word, (f, x[0]), None),
+                &|fb, x| crate::lower::stage_io::word_color::encode(fb, word, (f, x[0])),
                 &cases,
                 &|c| {
                     let mut rgba = [0.0, 0.0, 0.0, 1.0];

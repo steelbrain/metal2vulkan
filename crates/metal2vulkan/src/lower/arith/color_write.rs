@@ -1,18 +1,12 @@
 //! A float rounded to the code Metal stores in a color channel, where a translation writes the
 //! code itself rather than leaving the conversion to the device.
 //!
-//! A fragment function's color output is the device's to convert (`LoweringInputs::color_writes`):
-//! these rules serve the writes whose value the translation computes, Metal's
-//! `textureWriteRoundingMode` 2 (a half-float channel rounded to nearest even), and the blends the
-//! shader computes in the storage form of framebuffer fetch, whose result it stores itself:
+//! A fragment function's color output is the device's to convert (`LoweringInputs::color_writes`),
+//! a unorm channel's too, also where the shader computes a blend in the storage form of framebuffer
+//! fetch (`PrecisionNote::DeviceColorConversion`): these rules serve the writes whose value the
+//! translation computes, Metal's `textureWriteRoundingMode` 2 (a half-float channel rounded to
+//! nearest even), and the private alpha test's 8-bit code ([`unorm8_code`]):
 //!
-//! - unorm ([`ChannelWrite::Unorm`]): NaN is 0, the value is clamped to `[0, 1]`, the code `c` is
-//!   the exact product with `m = 2^k - 1` rounded to nearest (`round_mersenne_product`, about
-//!   fourteen float instructions; its only ties, at `x = 0.5`, round to even as Metal's round away
-//!   from zero), and the value written is `c` times the `f32` nearest `1 / m`: within two `f32`
-//!   rounding errors of `c / m`, so its product with `m` lies within `2^-7` of `c` (`m < 2^16`)
-//!   and a device that rounds the product to nearest stores `c`, as Vulkan's conversion does,
-//!   whatever it does at ties;
 //! - a small float ([`ChannelWrite::FloatTowardZero`]: a half, or an unsigned 11- or 10-bit
 //!   float): the value rounded toward zero, by integer operations on the bits, to the `f32` that
 //!   holds it exactly: a finite value past the largest is the largest, an infinity stays, a NaN
@@ -23,7 +17,8 @@
 //!   dropped bits rounded to nearest with ties to even, by integer operations on the bits, and a
 //!   finite value from the midpoint past the largest infinity.
 //!
-//! A channel without a rule ([`ChannelWrite::Device`] or `None`) is written as computed.
+//! A channel without a rule ([`ChannelWrite::Device`] or `None`) is written as computed; another
+//! rule (a unorm, snorm or sRGB one) is the device's conversion's, which [`round`] does not take.
 
 use crate::lower::arith::legal::{FloatFmt, Form, Held};
 use crate::lower::arith::ops::{fsplat, splat, ty};
@@ -36,9 +31,6 @@ use crate::spirv::ir::{BinOp, ConvOp, GlslOp, UnOp};
 /// An upper estimate of the SPIR-V words of one channel's rounding by `rule`.
 pub fn channel_words(rule: ChannelWrite) -> u64 {
     match rule {
-        // The NaN select, clamp, exact product and scale, their constants included: about 31
-        // instructions and the product's nine `NoContraction` decorations.
-        ChannelWrite::Unorm { .. } => 36 * 6,
         ChannelWrite::FloatTowardZero { .. } => 32 * 6,
         // The rounding's bias and the denormal's shift clamped beside the toward-zero rule's.
         ChannelWrite::FloatNearestEven { .. } => 36 * 6,
@@ -67,7 +59,7 @@ fn malformed() -> BuildError {
 }
 
 /// Output `x` (float lanes of form `f`, a 32-bit container) with each lane `i` rounded by
-/// `rules[i]` (see the module docs): a unorm or small float channel's rule, or as computed for
+/// `rules[i]` (see the module docs): a small float channel's rule, or as computed for
 /// [`ChannelWrite::Device`], [`ChannelWrite::BlendedNearestEven`] and `None`. Another rule is
 /// malformed.
 pub fn round(
@@ -92,7 +84,6 @@ pub fn round(
         };
         written.push(match *rule {
             None | Some(ChannelWrite::Device | ChannelWrite::BlendedNearestEven { .. }) => v,
-            Some(ChannelWrite::Unorm { bits }) => normalized(fb, s, v, unorm_bits(bits)?)?,
             Some(
                 rule @ (ChannelWrite::FloatTowardZero { .. }
                 | ChannelWrite::FloatNearestEven { .. }),
@@ -189,15 +180,6 @@ fn clamped(fb: &mut FunctionBuilder<'_>, s: Form, v: Value) -> BResult<Value> {
     let v = fb.select(is_nan, zero, v)?;
     let one = fsplat(fb, s, 1.0)?;
     fb.glsl(GlslOp::NClamp, &[v, zero, one])
-}
-
-/// A unorm channel of maximum code `2^k - 1`.
-fn normalized(fb: &mut FunctionBuilder<'_>, s: Form, v: Value, k: u32) -> BResult<Value> {
-    let v = clamped(fb, s, v)?;
-    let c = round_mersenne_product(fb, s, v, k)?;
-    let m = (1u32 << k) - 1;
-    let r = fsplat(fb, s, f64::from(1.0 / m as f32))?;
-    fb.binary(BinOp::FMul, c, r)
 }
 
 /// `x` (`f32` lanes of form `f`) each rounded by the small-float rule `rule`

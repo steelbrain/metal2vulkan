@@ -1331,7 +1331,8 @@ impl Blend {
     /// (the output's type), into an 8-bit unorm attachment of format `pf` (`R8Unorm`, `RG8Unorm`,
     /// `RGBA8Unorm`, `BGRA8Unorm`) storing the channels `written` of four (a channel the format
     /// lacks counts as written), computed by [`blend_unorm8`] over the output clamped to `[0, 1]`
-    /// and the destination's code decoded in that type, the result stored by Metal's unorm write.
+    /// and the destination's code decoded in that type, the result stored by the device's
+    /// conversion.
     /// Without fast math the rounded forms (the module docs). Under fast math the 16-bit float
     /// blend's forms, but as Metal's compiler builds an 8-bit unorm attachment's blend (plain Metal
     /// on the M3 Max under macOS 27.0.1, `lower::fragment::fetch`'s module docs):
@@ -2390,8 +2391,8 @@ pub fn blend_float32(
 /// output's `half`s, or a `float4` one) over `texel`, the 8-bit unorm attachment's texel as the
 /// storage image reads it (a `vec4` of `f32`, each channel its code over 255; a channel the format
 /// lacks reads 0, alpha 1), in `arith`: a `vec4` of `f32` holding each blended lane, a `half`
-/// (`BlendArith::Half`) or a `float` (`BlendArith::Float`), which the caller stores by Metal's
-/// unorm write (`arith::color_write`'s 8-bit unorm rule). Metal clamps the output to `[0, 1]`
+/// (`BlendArith::Half`) or a `float` (`BlendArith::Float`), which the caller stores by the
+/// device's conversion (`PrecisionNote::DeviceColorConversion`). Metal clamps the output to `[0, 1]`
 /// first, a NaN to 0, every lane ([`clamped`]), and reads the destination as its code over 255
 /// correctly rounded to the arithmetic's type ([`unorm8_tile_value`]), the value a fetch reads.
 /// `color`, the encoder's blend color (a `uvec4` of its `f32`s' bits, `PushField::HalfBlendColor`,
@@ -2602,37 +2603,6 @@ pub fn unorm8_tile_value(
             let inverse = fsplat(fb, f, f64::from(1.0f32 / 255.0))?;
             let v = fb.binary_no_contraction(BinOp::FMul, rounded, inverse)?;
             half_of(fb, f, v)
-        }
-    }
-}
-
-/// Metal's 8-bit unorm write of `v` (a `vec4` of `f32`, the lanes [`blend_unorm8`] gives in
-/// `arith`): each lane's code (a NaN 0, clamped to `[0, 1]`, the exact product with 255 rounded to
-/// nearest, ties to even) as the `f32` `c` times the `f32` nearest `1 / 255`, which the device
-/// stores as `c`. In `half` arithmetic every lane is a `half` (each blended lane is rounded to one,
-/// and a kept lane is the output's `half` or the destination's), so its product with 255 is exact
-/// in `f32` (11 significand bits times 8) and `RoundEven` rounds it: a few vector instructions
-/// where the general rule ([`color_write::round`](crate::lower::arith::color_write::round), which
-/// a `float` lane takes) splits each lane's product exactly, about fourteen a lane; the two agree
-/// on every `half` and every NaN (`lower::arith::tests::blend8::a_half_s_code_is_metals`).
-pub fn unorm8_write(fb: &mut FunctionBuilder<'_>, arith: BlendArith, v: Value) -> BResult<Value> {
-    let f = floats();
-    match arith {
-        BlendArith::Float => {
-            let rule = Some(crate::pipeline::lower_inputs::ChannelWrite::Unorm { bits: 8 });
-            crate::lower::arith::color_write::round(fb, f, v, &[rule; 4])
-        }
-        BlendArith::Half => {
-            let zero = fsplat(fb, f, 0.0)?;
-            let one = fsplat(fb, f, 1.0)?;
-            let nan = fb.unary(UnOp::IsNan, v)?;
-            let v = fb.select(nan, zero, v)?;
-            let v = fb.glsl(GlslOp::FClamp, &[v, zero, one])?;
-            let k255 = fsplat(fb, f, 255.0)?;
-            let p = fb.binary_no_contraction(BinOp::FMul, v, k255)?;
-            let c = fb.glsl(GlslOp::RoundEven, &[p])?;
-            let inverse = fsplat(fb, f, f64::from(1.0f32 / 255.0))?;
-            fb.binary_no_contraction(BinOp::FMul, c, inverse)
         }
     }
 }

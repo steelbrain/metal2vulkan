@@ -692,12 +692,6 @@ pub enum DriverDeviation {
     /// computed either way; where the profile takes it the module requires the property, and
     /// unmeasured such a write records `PrecisionNote::DeviceNanEncoding`.
     MetalHalfStorageNans,
-    /// The device stores the NaN `0x7fc00000` a shader writes to a half-float storage image as
-    /// Metal's `0x7e00` (`VkProperty::MetalFloatStorageNans`): the NaN of every blend a fragment
-    /// function computes into a 16-bit float attachment in the storage form. Where the profile
-    /// takes it the module requires the property; unmeasured, such a write records
-    /// `PrecisionNote::DeviceNanEncoding`.
-    MetalFloatStorageNans,
     /// The device's fragment subgroups are Metal's simdgroups
     /// (`VkProperty::MetalFragmentSimdgroups`): the driver hands the fragment function to Metal, so
     /// a fragment subgroup holds the pixels (at sample rate, the samples) Apple's rasterizer packs

@@ -13,20 +13,16 @@
 //! `fbl_over_product`'s product Metal folds into the blend, so it records the note. The same module
 //! stating no fast math (`air.compile.fast_math_disable`) computes the rounded forms, exact, noted
 //! by none, rounded in the fact. Before the shader computed the blend, each was refused
-//! `NotImplemented(FramebufferFetch)` at color 0. The blend gives every NaN as `0x7fc00000`, which
-//! the storage image's store converts: on a profile measured to store it as Metal's `0x7e00`
-//! (`DriverDeviation::MetalFloatStorageNans`) the module requires that property and records no
-//! `DeviceNanEncoding`; on any other (ANV stores `0xfe00`) it records the note, which it did not
-//! before (the Iris Xe's lane stored `0xfe00` unannounced). No GPU is used.
+//! `NotImplemented(FramebufferFetch)` at color 0. A NaN of the blend is the device's arithmetic's,
+//! which the storage image's store converts: every module records `DeviceNanEncoding`. No GPU is
+//! used.
 //!
 //! `llvm-as` assembles the fixture; a missing tool skips visibly.
 
 use std::path::Path;
 
 use crate::budget::Budget;
-use crate::device::requirements::VkProperty;
 use crate::device::{Device, DeviceDescription, DevicePolicy, DeviceProfile};
-use crate::error::DriverDeviation;
 use crate::library::{FunctionArtifact, Library};
 use crate::metal::{BlendFactor, BlendOperation, ColorWriteMask, PixelFormat};
 use crate::pipeline::artifact::PrecisionNote;
@@ -147,15 +143,11 @@ fn a_blended_sixteen_bit_float_fetch_computes_metals_blend() {
     ];
     let note = PrecisionNote::HalfOutputFastMathBlend;
     let mut checked = 0;
-    // The interlock profiles not measured to store Metal's NaN, and those measured.
-    let mut nan_profiles = [0; 2];
     for (stem, p) in committed_profiles().expect("profiles") {
         if !crate::lower::fragment::interlock_orders(&p) {
             continue;
         }
         let inputs = state(&p, OVER);
-        let metal_nans = p.takes_driver_deviation(DriverDeviation::MetalFloatStorageNans);
-        nan_profiles[usize::from(metal_nans)] += 1;
         for (entry, folds) in entries {
             for (bc, rounded) in [(&fast, false), (&safe, true)] {
                 let what = format!("{stem} {entry} rounded {rounded}");
@@ -182,18 +174,12 @@ fn a_blended_sixteen_bit_float_fetch_computes_metals_blend() {
                     "{what}: {:?}",
                     a.precision
                 );
-                // The blend's NaN, `0x7fc00000`, is Metal's where the storage image's store is
-                // measured to convert it so, and the device's elsewhere, noted.
-                assert_eq!(
+                // The blend's NaN is the device's arithmetic's, which the store converts, noted on
+                // every profile.
+                assert!(
                     a.precision.contains(&PrecisionNote::DeviceNanEncoding),
-                    !metal_nans,
                     "{what}: {:?}",
                     a.precision
-                );
-                assert_eq!(
-                    (a.requirements.properties).contains(&VkProperty::MetalFloatStorageNans),
-                    metal_nans,
-                    "{what}"
                 );
                 link_and_validate(&a, &p).unwrap_or_else(|e| panic!("{what}: L3: {e}"));
                 checked += 1;
@@ -247,10 +233,6 @@ fn a_blended_sixteen_bit_float_fetch_computes_metals_blend() {
         }
     }
     assert!(checked > 0, "no interlock profile took the storage form");
-    assert!(
-        nan_profiles.iter().all(|&n| n > 0),
-        "interlock profiles without and with Metal's storage NaN: {nan_profiles:?}"
-    );
 }
 
 /// Each blend constant's difference into color 0 under fast math (`BlendColor` with

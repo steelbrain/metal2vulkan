@@ -107,10 +107,6 @@ fn taken(p: &crate::device::DeviceProfile) -> Vec<crate::error::DriverDeviation>
             property(VkProperty::MetalHalfStorageNans),
         ),
         (
-            D::MetalFloatStorageNans,
-            property(VkProperty::MetalFloatStorageNans),
-        ),
-        (
             D::MetalFragmentSimdgroups,
             property(VkProperty::MetalFragmentSimdgroups),
         ),
@@ -202,19 +198,16 @@ fn the_profile_takes_the_deviations_its_driver_is_measured_with() {
         D::MetalHalfArithmetic,
         D::MetalHalfStorageWrites,
         D::MetalHalfStorageNans,
-        D::MetalFloatStorageNans,
         D::MetalFragmentSimdgroups,
         D::MetalVertexSimdgroups,
     ];
     // NVIDIA's 615.71.09 on the RTX 3090 and the RTX 5080 Laptop GPU: the color-NaN stores, the
-    // `float` denormals, the half-float storage writes and their `0x7fc00000`, and the half texel
-    // writes' NaN bits.
+    // `float` denormals, the half-float storage writes, and the half texel writes' NaN bits.
     let nvidia_measured = vec![
         D::MetalFloatColorNans,
         D::MetalHalfColorNans,
         D::MetalFloatDenormals,
         D::MetalHalfStorageWrites,
-        D::MetalFloatStorageNans,
         D::MetalHalfTexelWrites,
     ];
     // In `taken`'s order: the graphics route of the identity both chips share under macOS 27
@@ -264,11 +257,9 @@ fn the_profile_takes_the_deviations_its_driver_is_measured_with() {
         let want = match (moltenvk, stem.as_str()) {
             (true, _) => want_all,
             (false, "nvidia-rtx5080-laptop") => nvidia_measured.clone(),
-            (false, "lavapipe" | "gate-lavapipe" | "gate-lavapipe-x86_64") => vec![
-                D::MetalFloatColorNans,
-                D::MetalHalfStorageWrites,
-                D::MetalFloatStorageNans,
-            ],
+            (false, "lavapipe" | "gate-lavapipe" | "gate-lavapipe-x86_64") => {
+                vec![D::MetalFloatColorNans, D::MetalHalfStorageWrites]
+            }
             // The per-sample `FragCoord.z` last, in `taken`'s order. The 780M under Phoenix's
             // `deviceID` and Hawk Point's alike.
             (false, "amd-780m-radv" | "amd-780m-hawkpoint-radv") => vec![
@@ -276,7 +267,6 @@ fn the_profile_takes_the_deviations_its_driver_is_measured_with() {
                 D::MetalSmallFloatColorWrites,
                 D::MetalNorm16ColorWrites,
                 D::MetalHalfStorageWrites,
-                D::MetalFloatStorageNans,
                 D::SampleFragCoordDepth,
                 D::MetalHalfTexelWrites,
                 D::MetalNormStorageWrites,
@@ -342,11 +332,7 @@ fn the_profile_takes_the_deviations_its_driver_is_measured_with() {
     let p = profile_of(lavapipe);
     assert_eq!(
         taken(&p),
-        [
-            D::MetalFloatColorNans,
-            D::MetalHalfStorageWrites,
-            D::MetalFloatStorageNans,
-        ]
+        [D::MetalFloatColorNans, D::MetalHalfStorageWrites]
     );
     assert_eq!(p.fields().cube_gradients, vulkan);
     assert!(centered(&p));

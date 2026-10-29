@@ -775,10 +775,6 @@ fn half_float_storage_slots_leave_their_writes_to_the_device() {
                 nans,
                 "{what}"
             );
-            assert!(
-                !relied.contains(&VkProperty::MetalFloatStorageNans),
-                "{what}"
-            );
             assert_eq!(
                 a.precision.contains(&PrecisionNote::DeviceNanEncoding),
                 !nans || formatless,

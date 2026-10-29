@@ -80,10 +80,6 @@ pub const TABLE_WORDS: u32 = 256 * 4 + 262 + 8;
 /// instructions) besides the index.
 pub const SEARCH_WORDS: u32 = 8 * 6 * 6;
 
-/// An upper estimate of the SPIR-V words of one decode's step read (an access chain, a load,
-/// and a mask) besides the division.
-pub const STEP_WORDS: u32 = 3 * 6;
-
 /// Declare the module's sRGB table: a `Private` `u32[256]` initialized to the steps (low halves)
 /// and thresholds (high halves).
 pub fn declare(mb: &mut ModuleBuilder) -> BResult<GlobalId> {

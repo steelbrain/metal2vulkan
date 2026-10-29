@@ -84,11 +84,9 @@
 //!   Conversions), so `v * D` lies within far less than half of one of `c`, and "OpFMul ...
 //!   Correctly rounded" with `RoundEven` exact (Precision and Operation of SPIR-V Instructions)
 //!   give `c` back; a signed form's `-2^(b-1)`, whose value is `-1` as the code above it's is, comes
-//!   back as that code. A read decodes `c` as Metal reads it, `c / D` correctly rounded with
-//!   integer operations (`exact_division::div_exact_lanes`), a signed code its magnitude so and
-//!   then negated, `-1` at most: on a device whose fetch of the format answers that (every device
-//!   the path runs on but one whose decode multiplies by a reciprocal, as lavapipe's does, which
-//!   takes the split), the value the fetch returned.
+//!   back as that code. A read decodes `c` by the device's arithmetic, `c` times the `f32` nearest
+//!   `1 / D` (a signed code's at least `-1`), within an `f32` rounding or two of `c / D`
+//!   (`PrecisionNote::DevicePackConversion`; Metal reads `c / D` correctly rounded).
 //! - `Half`: each lane's half-float code (`narrow::to_bits`, exact for every half value, a NaN's
 //!   payload included), in an `R16G16B16A16_UINT` image; a read widens it back as a `half` read
 //!   from memory widens (`narrow::from_bits`): the device's widening on every device, every code's
@@ -108,7 +106,6 @@ use std::collections::BTreeMap;
 
 use crate::device::requirements::VkFeature;
 use crate::error::{Capability, Error, Feature, LowerFamily, Unsupported};
-use crate::lower::arith::exact_division::div_exact_lanes;
 use crate::lower::arith::legal::{FloatFmt, Form, Held};
 use crate::lower::arith::narrow;
 use crate::lower::arith::ops::{splat, ty};
@@ -116,6 +113,7 @@ use crate::lower::emit::EmitCx;
 use crate::lower::select::SelectCx;
 use crate::lower::stage_io;
 use crate::lower::sync::barrier::BarrierModel;
+use crate::pipeline::artifact::PrecisionNote;
 use crate::pipeline::sym::{PushField, ResourceKind, ResourceSlot, SlotClass, SnapshotForm, Stage};
 use crate::spirv::builder::constructs::{ArmEnd, ArmFn};
 use crate::spirv::builder::{FunctionBuilder, ModuleBuilder};
@@ -131,8 +129,7 @@ use crate::spirv::ir::{
 const BLOCK_WORDS: u64 = 80;
 /// An upper estimate of the words one slot adds: its snapshot's variable, type and decorations, the
 /// pixel, the copy's fetch, encode and write, and at a read the selection, the read and its decode
-/// (a signed normalized form's, the longest: the sign's extension, the exact division and the
-/// negation).
+/// (a signed normalized form's, the longest: the sign's extension, the product and the bound).
 const SLOT_WORDS: u64 = 400;
 
 /// The fragment texture slots function `cx` reads through a snapshot, from its lowering inputs:
@@ -174,6 +171,10 @@ pub(super) fn finish(
     }
     cx.families.fragment.fetch_coord = Some(stage_io::frag_coord(cx));
     cx.push.insert(PushField::SnapshotPhase);
+    // A normalized form's read decodes its codes by the device's arithmetic.
+    if slots.values().any(|f| normalized(*f)) {
+        cx.precision.insert(PrecisionNote::DevicePackConversion);
+    }
     let n = u32::try_from(slots.len()).unwrap_or(u32::MAX);
     cx.descriptors.storage_images = cx.descriptors.storage_images.saturating_add(n);
     let words = BLOCK_WORDS.saturating_add(SLOT_WORDS.saturating_mul(u64::from(n)));
@@ -517,26 +518,28 @@ pub(crate) fn decode(
         let up = fb.convert(ConvOp::Bitcast, up, ivec4)?;
         fb.binary(BinOp::ShiftRightArithmetic, up, shift)
     };
+    // A normalized code `c` times the `f32` nearest `1 / D`.
+    let f = lanes(Held::Float(FloatFmt::F32));
+    let reciprocal = |fb: &mut FunctionBuilder<'_>, signed: bool| -> BResult<SValue> {
+        let r = 1.0 / scale(width, signed) as f32;
+        splat(fb, f, u64::from(r.to_bits()))
+    };
     let value = match form {
         SnapshotForm::Unorm8 | SnapshotForm::Unorm16 => {
-            div_exact_lanes(fb, u, codes, &[scale(width, false)])?
+            let vec4 = ty(fb, f)?;
+            let c = fb.convert(ConvOp::ConvertUToF, codes, vec4)?;
+            let r = reciprocal(fb, false)?;
+            fb.binary(BinOp::FMul, c, r)?
         }
         SnapshotForm::Snorm8 | SnapshotForm::Snorm16 => {
-            let d = scale(width, true);
             let n = extended(fb)?;
-            let magnitude = fb.glsl(GlslOp::SAbs, &[n])?;
-            let uvec4 = ty(fb, u)?;
-            let magnitude = fb.convert(ConvOp::Bitcast, magnitude, uvec4)?;
-            // `-2^(b-1)`'s magnitude reads `-1`, as the code above it.
-            let top = splat(fb, u, u64::from(d))?;
-            let magnitude = fb.glsl(GlslOp::UMin, &[magnitude, top])?;
-            let v = div_exact_lanes(fb, u, magnitude, &[d])?;
-            let ivec4 = fb.value_ty(n)?;
-            let zero = fb.module().constant(Constant::Null { ty: ivec4 })?;
-            let zero = fb.module().const_value(zero)?;
-            let negative = fb.binary(BinOp::SLessThan, n, zero)?;
-            let negated = fb.unary(UnOp::FNegate, v)?;
-            fb.select(negative, negated, v)?
+            let vec4 = ty(fb, f)?;
+            let c = fb.convert(ConvOp::ConvertSToF, n, vec4)?;
+            let r = reciprocal(fb, true)?;
+            let v = fb.binary(BinOp::FMul, c, r)?;
+            // `-2^(b-1)` reads `-1`, as the code above it.
+            let low = splat(fb, f, u64::from((-1.0f32).to_bits()))?;
+            fb.glsl(GlslOp::FMax, &[v, low])?
         }
         SnapshotForm::Half => narrow::from_bits(fb, lanes(Held::Float(FloatFmt::Half)), codes)?,
         _ => match signed {
@@ -548,6 +551,14 @@ pub(crate) fn decode(
         true => Ok(value),
         false => fb.convert(ConvOp::Bitcast, value, texel),
     }
+}
+
+/// Whether `form` is a normalized form, whose read decodes its codes by the device's arithmetic.
+fn normalized(form: SnapshotForm) -> bool {
+    matches!(
+        form,
+        SnapshotForm::Unorm8 | SnapshotForm::Unorm16 | SnapshotForm::Snorm8 | SnapshotForm::Snorm16
+    )
 }
 
 /// The scale `D` of a normalized code of `width` bits: `2^b - 1`, or `2^(b-1) - 1` where signed.

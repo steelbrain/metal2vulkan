@@ -22,9 +22,12 @@
 //!   across its dispatches in one buffer of every tile's: dispatches accumulate in their own tile's
 //!   words, and arguments placed at overlapping offsets share them.
 //! - `cfb_tile_norm`: tile functions over a normalized attachment, whose cell holds the texel's
-//!   bits, each access converting them as Metal's pack functions do: every format's reads, stores
-//!   and a read after the function's own write, against the probes's model; and through `half`
-//!   members, against probe 12's.
+//!   bits, each access converting them by the device's conversion of Metal's pack functions
+//!   (`arith::pack`, `PrecisionNote::DevicePackConversion`): every format's reads, stores and a
+//!   read after the function's own write, within the note's bound of the probes's model; and
+//!   through `half` members, of probe 12's. The interpreter models no `Pow` and leaves a pack of a
+//!   NaN undefined, so the sRGB formats and NaN stores are the device lane's
+//!   (`runtime_lane::tile_normalized`).
 //! - The refusals are typed: no tile inputs, a converting format, an attachment without a format,
 //!   a multisampled pass, a threadgroup variable in a tile function; the binder specializes the
 //!   render area, refuses an empty one, and binds the attachments in their staging formats, and
@@ -1762,6 +1765,47 @@ impl Channel {
     }
 }
 
+/// Whether `have`, the device's conversion's value of a `channel` read (through a `half` member
+/// where `half`), lies within `PrecisionNote::DevicePackConversion`'s bound of Metal's `want`: 3
+/// `f32` units in the last place (2.5 of the quotient), and one `half` step more through a `half`
+/// member. A lane past the channels holds its constant exactly.
+fn near(channel: Option<Channel>, have: f32, want: f32, half: bool) -> bool {
+    let Some(channel) = channel else {
+        return have.to_bits() == want.to_bits();
+    };
+    let ulp = |x: f32| f32::from_bits(x.abs().to_bits() + 1) - x.abs();
+    let half_step = |x: f32| match x.abs() {
+        a if a < f32::powi(2.0, -14) => f32::powi(2.0, -24),
+        a => f32::powi(2.0, (a.to_bits() >> 23) as i32 - 127 - 10),
+    };
+    let mut bound = match channel {
+        Channel::Srgb => 1.0 / 8190.0 + f32::powi(2.0, -14),
+        Channel::Unorm(_) | Channel::Snorm(_) => 3.0 * ulp(want),
+    };
+    if half {
+        bound += half_step(want);
+    }
+    (have - want).abs() <= bound
+}
+
+/// Whether code `a` of `channel` lies within one of code `b` (a packed code's bound under
+/// `PrecisionNote::DevicePackConversion`; signed codes as their values).
+fn code_near(channel: Channel, a: u32, b: u32) -> bool {
+    match channel {
+        Channel::Snorm(bits) => {
+            let signed = |c: u32| i64::from(((c << (32 - bits)) as i32) >> (32 - bits));
+            (signed(a) - signed(b)).abs() <= 1
+        }
+        Channel::Unorm(_) | Channel::Srgb => a.abs_diff(b) <= 1,
+    }
+}
+
+/// Whether the interpreter runs `fmt`'s conversions: an sRGB one's transfer takes the device's
+/// `Pow`, which it does not model.
+fn interpreted(fmt: &NormFormat) -> bool {
+    !fmt.channels.iter().any(|(c, _)| matches!(c, Channel::Srgb))
+}
+
 /// The IEEE binary16 bits of `x` (within `[-1, 1]`) rounded to nearest even once.
 fn f64_to_half_bits(x: f64) -> u16 {
     let sign = if x.is_sign_negative() { 0x8000 } else { 0 };
@@ -1913,12 +1957,10 @@ impl NormFormat {
     }
 }
 
-/// The floats a store writes: specials, the bounds, every tie of an 8-bit code and some of
-/// others, and their neighbours.
+/// The floats a store writes: specials but NaN (whose code is the device's), the bounds, every tie
+/// of an 8-bit code and some of others, and their neighbours.
 fn norm_inputs() -> Vec<f32> {
     let mut xs = vec![
-        f32::NAN,
-        -f32::NAN,
         f32::INFINITY,
         f32::NEG_INFINITY,
         -0.0,
@@ -2026,8 +2068,8 @@ fn norm_entries(op: &str, n: usize) -> Vec<(usize, String)> {
 /// A tile function's implicit imageblock over a normalized attachment reads as Metal does (probes):
 /// a member of the format's channels or of four floats reads each channel's value, in Metal's
 /// channel order, and green and blue 0 and alpha 1 past them, through the attachment's bits in its
-/// unsigned-integer view, which the read keeps. The texels cover every code of each 8-bit channel
-/// and the extremes of the others.
+/// unsigned-integer view, which the read keeps; each value within the device's conversion's bound
+/// ([`near`]). The texels cover every code of each 8-bit channel and the extremes of the others.
 #[test]
 fn a_normalized_attachment_reads_as_metal_does() {
     let Some(bc) = assemble("cfb_tile_norm") else {
@@ -2035,7 +2077,7 @@ fn a_normalized_attachment_reads_as_metal_does() {
     };
     let cells = NORM_CELLS;
     let mut ran = 0;
-    for fmt in &NORM_FORMATS {
+    for fmt in NORM_FORMATS.iter().filter(|f| interpreted(f)) {
         let n = fmt.channels.len();
         // Texel `i`'s channel `k` holds code `(i * (2k + 1) + 37k) mod 2^bits`, and the last
         // texels the extremes, so each 8-bit channel takes every code.
@@ -2060,17 +2102,20 @@ fn a_normalized_attachment_reads_as_metal_does() {
             {
                 let got = floats(&buf);
                 for (i, &t) in texels.iter().enumerate() {
-                    let want: Vec<u32> = (0..4)
+                    let want: Vec<f32> = (0..4)
                         .map(|k| match k {
                             k if k < n => fmt.channels[k].0.value(fmt.code(t, k)),
                             k if k < lanes => [0.0, 0.0, 0.0, 1.0][k],
                             _ => -7.0,
                         })
-                        .map(f32::to_bits)
                         .collect();
-                    let have: Vec<u32> =
-                        got[4 * i..4 * i + 4].iter().map(|x| x.to_bits()).collect();
-                    assert_eq!(have, want, "{stem} {:?} {entry} texel {t:#x}", fmt.pf);
+                    let have = &got[4 * i..4 * i + 4];
+                    let channel = |k: usize| fmt.channels.get(k).map(|c| c.0);
+                    assert!(
+                        (0..4).all(|k| near(channel(k), have[k], want[k], false)),
+                        "{stem} {:?} {entry} texel {t:#x}: {have:?}, Metal's {want:?}",
+                        fmt.pf
+                    );
                 }
                 assert_eq!(after, texels, "{stem} {:?} {entry} keeps", fmt.pf);
                 ran += 1;
@@ -2082,8 +2127,9 @@ fn a_normalized_attachment_reads_as_metal_does() {
 
 /// A tile function's implicit imageblock over a normalized attachment stores as Metal does
 /// (probes): a member of the format's channels or of four floats stores each channel's code, in
-/// Metal's channel order, its lanes past the channels dropped. The stores cover the ties between
-/// 8-bit codes, some of the 12-bit sRGB grid's, and the specials.
+/// Metal's channel order, its lanes past the channels dropped, each code within one of Metal's
+/// (the device's conversion, [`code_near`]). The stores cover the ties between 8-bit codes, some of
+/// the 12-bit grid's, and the specials.
 #[test]
 fn a_normalized_attachment_stores_as_metal_does() {
     let Some(bc) = assemble("cfb_tile_norm") else {
@@ -2094,7 +2140,7 @@ fn a_normalized_attachment_stores_as_metal_does() {
     let lane = |i: usize, k: usize| xs[(3 * i + k) % xs.len()];
     let cleared = vec![0xCDCD_CDCD_CDCD_CDCD; cells];
     let mut ran = 0;
-    for fmt in &NORM_FORMATS {
+    for fmt in NORM_FORMATS.iter().filter(|f| interpreted(f)) {
         for (_, entry) in norm_entries("write", fmt.channels.len()) {
             for (stem, _, after) in norm_runs(&bc, &entry, fmt, &values, &cleared) {
                 for (i, &t) in after.iter().enumerate() {
@@ -2105,10 +2151,13 @@ fn a_normalized_attachment_stores_as_metal_does() {
                         .fold(0u64, |w, (k, &(channel, at))| {
                             w | (u64::from(channel.code(lane(i, k))) << at)
                         });
-                    assert_eq!(
-                        t,
-                        want,
-                        "{stem} {:?} {entry} cell {i}: {:?}",
+                    let near = (fmt.channels.iter().enumerate())
+                        .all(|(k, &(c, _))| code_near(c, fmt.code(t, k), fmt.code(want, k)));
+                    let unwritten = !(fmt.channels.iter())
+                        .fold(0u64, |m, &(c, at)| m | (((1u64 << c.bits()) - 1) << at));
+                    assert!(
+                        near && (t & unwritten) == (want & unwritten),
+                        "{stem} {:?} {entry} cell {i}: {t:#x}, Metal's {want:#x}: {:?}",
                         fmt.pf,
                         (0..4).map(|k| lane(i, k)).collect::<Vec<_>>()
                     );
@@ -2121,7 +2170,8 @@ fn a_normalized_attachment_stores_as_metal_does() {
 }
 
 /// A read after the tile function's own write of a normalized attachment reads the codes it
-/// stored (a probe): the cell holds the texel's bits.
+/// stored (a probe): the cell holds the texel's bits, each code within one of Metal's and its read
+/// within the device's conversion's bound.
 #[test]
 fn a_normalized_cell_reads_back_the_codes_it_stored() {
     let Some(bc) = assemble("cfb_tile_norm") else {
@@ -2138,12 +2188,15 @@ fn a_normalized_cell_reads_back_the_codes_it_stored() {
         for i in 0..cells {
             for k in 0..4 {
                 let (channel, _) = fmt.channels[k];
-                let code = channel.code(lane(i, k));
-                assert_eq!(fmt.code(after[i], k), code, "{stem} cell {i} lane {k}");
-                assert_eq!(
-                    got[4 * i + k].to_bits(),
-                    channel.value(code).to_bits(),
-                    "{stem} cell {i} lane {k}"
+                let stored = fmt.code(after[i], k);
+                assert!(
+                    code_near(channel, stored, channel.code(lane(i, k))),
+                    "{stem} cell {i} lane {k}: code {stored}"
+                );
+                let (have, want) = (got[4 * i + k], channel.value(stored));
+                assert!(
+                    near(Some(channel), have, want, false),
+                    "{stem} cell {i} lane {k}: {have}, Metal's {want}"
                 );
             }
         }
@@ -2153,8 +2206,9 @@ fn a_normalized_cell_reads_back_the_codes_it_stored() {
 }
 
 /// A tile function's implicit imageblock over a normalized attachment reads through a `half`
-/// member as Metal does (a probe on an M4 and an M3 Max): each channel's exact value correctly
-/// rounded to `half` once, in Metal's channel order, and green and blue 0 and alpha 1 past them.
+/// member within the device's conversion's bound of Metal's (a probe on an M4 and an M3 Max: each
+/// channel's exact value correctly rounded to `half` once; the device rounds its unpacked `float`
+/// again, [`near`]), in Metal's channel order, and green and blue 0 and alpha 1 past them.
 /// Channel 0 takes the top 256 codes, channel 1 the bottom 256 of an snorm one (an unorm one's
 /// spread over its range), channel 2 the lowest, the `half` denormals, so a 16-bit channel reaches
 /// the codes whose `float` value rounded again to `half` differs (unorm 65455 and 65519, snorm
@@ -2166,7 +2220,7 @@ fn a_normalized_attachment_reads_through_halves_as_metal_does() {
     };
     let cells = NORM_CELLS;
     let (mut ran, mut twice) = (0, 0);
-    for fmt in &NORM_FORMATS {
+    for fmt in NORM_FORMATS.iter().filter(|f| interpreted(f)) {
         let n = fmt.channels.len();
         let texels: Vec<u64> = (0..cells as u32)
             .map(|i| {
@@ -2204,17 +2258,20 @@ fn a_normalized_attachment_reads_through_halves_as_metal_does() {
             {
                 let got = floats(&buf);
                 for (i, &t) in texels.iter().enumerate() {
-                    let want: Vec<u32> = (0..4)
+                    let want: Vec<f32> = (0..4)
                         .map(|k| match k {
                             k if k < n => fmt.channels[k].0.half(fmt.code(t, k)),
                             k if k < lanes => [0.0, 0.0, 0.0, 1.0][k],
                             _ => -7.0,
                         })
-                        .map(f32::to_bits)
                         .collect();
-                    let have: Vec<u32> =
-                        got[4 * i..4 * i + 4].iter().map(|x| x.to_bits()).collect();
-                    assert_eq!(have, want, "{stem} {:?} {entry} texel {t:#x}", fmt.pf);
+                    let have = &got[4 * i..4 * i + 4];
+                    let channel = |k: usize| fmt.channels.get(k).map(|c| c.0);
+                    assert!(
+                        (0..4).all(|k| near(channel(k), have[k], want[k], true)),
+                        "{stem} {:?} {entry} texel {t:#x}: {have:?}, Metal's {want:?}",
+                        fmt.pf
+                    );
                 }
                 assert_eq!(after, texels, "{stem} {:?} {entry} keeps", fmt.pf);
                 ran += 1;
@@ -2228,17 +2285,17 @@ fn a_normalized_attachment_reads_through_halves_as_metal_does() {
 
 /// A tile function's implicit imageblock over a normalized attachment stores a `half` member as
 /// Metal does (a probe): each channel's code of the `float` of the same value, in Metal's channel
-/// order, its lanes past the channels dropped. The halves are every sixteenth pattern, the
-/// specials, and the `half`s nearest each tie between 8-bit codes.
+/// order, its lanes past the channels dropped, each code within one of Metal's ([`code_near`]).
+/// The halves are every sixteenth pattern but a NaN (whose code is the device's), the specials, and
+/// the `half`s nearest each tie between 8-bit codes.
 #[test]
 fn a_normalized_attachment_stores_halves_as_metal_does() {
     let Some(bc) = assemble("cfb_tile_norm") else {
         return;
     };
-    let mut hs: Vec<u16> = (0..=u16::MAX).step_by(16).collect();
-    hs.extend([
-        0x7C00, 0xFC00, 0x7E00, 0xFE01, 0x7C01, 0x8000, 0x0001, 0x8001, 0x3BFF, 0x3C01,
-    ]);
+    let nan = |h: u16| h & 0x7C00 == 0x7C00 && h & 0x3FF != 0;
+    let mut hs: Vec<u16> = (0..=u16::MAX).step_by(16).filter(|&h| !nan(h)).collect();
+    hs.extend([0x7C00, 0xFC00, 0x8000, 0x0001, 0x8001, 0x3BFF, 0x3C01]);
     for k in 0..255 {
         let tie = f64_to_half_bits((f64::from(k) + 0.5) / 255.0);
         hs.extend([tie - 1, tie, tie + 1, tie | 0x8000]);
@@ -2250,7 +2307,7 @@ fn a_normalized_attachment_stores_halves_as_metal_does() {
         .collect();
     let cleared = vec![0xCDCD_CDCD_CDCD_CDCD; cells];
     let mut ran = 0;
-    for fmt in &NORM_FORMATS {
+    for fmt in NORM_FORMATS.iter().filter(|f| interpreted(f)) {
         for (_, entry) in norm_entries("hwrite", fmt.channels.len()) {
             for (stem, _, after) in norm_runs(&bc, &entry, fmt, &values, &cleared) {
                 for (i, &t) in after.iter().enumerate() {
@@ -2262,7 +2319,13 @@ fn a_normalized_attachment_stores_halves_as_metal_does() {
                                 let x = f32::from_bits(half_bits_to_f32(lane(i, k)));
                                 w | (u64::from(channel.code(x)) << at)
                             });
-                    assert_eq!(t, want, "{stem} {:?} {entry} cell {i}", fmt.pf);
+                    let near = (fmt.channels.iter().enumerate())
+                        .all(|(k, &(c, _))| code_near(c, fmt.code(t, k), fmt.code(want, k)));
+                    assert!(
+                        near,
+                        "{stem} {:?} {entry} cell {i}: {t:#x}, Metal's {want:#x}",
+                        fmt.pf
+                    );
                 }
                 ran += 1;
             }

@@ -1024,7 +1024,7 @@ codec_enum! {
         MetalColorWrites, MetalFloatColorNans, MetalHalfColorNans,
         MetalHalfFma, MetalFloatDenormals,
         MetalCenterVaryings, MetalSmallFloatColorWrites, MetalNorm16ColorWrites, MetalMinMax,
-        MetalHalfArithmetic, MetalHalfStorageWrites, MetalHalfStorageNans, MetalFloatStorageNans,
+        MetalHalfArithmetic, MetalHalfStorageWrites, MetalHalfStorageNans,
         MetalFragmentSimdgroups, MetalVertexSimdgroups, CenterFragCoordDepth, SampleFragCoordDepth,
         MetalHalfTexelWrites, MetalNormStorageWrites, DeviceSampling,
         MetalDepth16Stores, MetalDepth16BiasedStores, MetalInterpolation, MetalFirstVertexIndices,

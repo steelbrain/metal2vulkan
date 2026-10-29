@@ -21,8 +21,10 @@
 //!
 //! Where the draw announces no `half-output-fast-math-blend`, `half-output-precision` or
 //! `device-color-conversion`, every channel is Metal's. On a device that fetches through the pixel
-//! interlock (RADV, ANV, NVIDIA, MoltenVK) the function computes Metal's blend itself, exactly,
-//! announcing none of the three, which is asserted; a format whose storage the device lacks there
+//! interlock (RADV, ANV, NVIDIA, MoltenVK) the function computes Metal's blend itself, and the
+//! storage image's store converts its result to the code, the device's conversion: the draw
+//! announces `device-color-conversion` alone, and every channel lies within one code of Metal's
+//! (a tie's other code), which is asserted; a format whose storage the device lacks there
 //! is refused by that capability, which is printed. Through input attachments (lavapipe) the device
 //! blends; what it announces and how many channels are Metal's is printed. A format the device
 //! renders through another (an emulation or a word view) has no storage form at all and is refused
@@ -37,9 +39,10 @@
 //! above.
 //!
 //! The four-channel 8-bit sRGB formats (`BGRA8Unorm_sRGB`, `RGBA8Unorm_sRGB`) under premultiplied
-//! over and those blends: the same arithmetic over the texel as a fetch decodes it, encoded by
-//! Metal's table (`Blend::srgb8`, measured on the M3 Max); asserted on a device that fetches
-//! through the pixel interlock.
+//! over and those blends: the same arithmetic over the texel as a fetch decodes it, encoded
+//! (`Blend::srgb8`, measured on the M3 Max); the decode and the encode are the device's
+//! conversion, so a device that fetches through the pixel interlock announces
+//! `device-pack-conversion` alone, which is asserted, and its texels' agreement is printed.
 
 use super::{form, library, through_inputs};
 use crate::runtime_lane::degrade_notices::counts;
@@ -425,13 +428,16 @@ fn returned(
 }
 
 /// Check one draw (the module docs): print its line, assert that a device fetching through the
-/// pixel interlock announces none of [`NOTES`], and that every texel is Metal's where none is
-/// announced. `wrong` holds each texel that is not: its index, the bytes read and Metal's.
+/// pixel interlock announces `native.0` (the device's conversion of the draw's codes) and nothing
+/// else, every texel there within `native.1` codes of Metal's where one is given, and that every
+/// texel is Metal's where nothing is announced. `wrong` holds each texel that is not Metal's: its
+/// index, the bytes read and Metal's.
 fn checked(
     lane: &Lane,
     what: (&str, PixelFormat),
     noted: &[Degradation],
     wrong: &[(usize, Vec<u8>, Vec<u8>)],
+    native: (PrecisionNote, Option<u8>),
 ) {
     let device = lane.device.name();
     let (entry, pf) = what;
@@ -444,7 +450,22 @@ fn checked(
     );
     let what = format!("{entry} into {pf:?} on {device}");
     if !through_inputs(lane) {
-        assert!(noted.is_empty(), "{what}: announced {noted:?}");
+        let (note, codes) = native;
+        let kind = Degradation::from_precision_note(note);
+        assert_eq!(noted, [kind], "{what}: announced {noted:?}");
+        if let Some(codes) = codes {
+            let far: Vec<_> = (wrong.iter())
+                .filter(|(_, got, want)| {
+                    (got.iter().zip(want)).any(|(g, w)| g.abs_diff(*w) > codes)
+                })
+                .take(8)
+                .collect();
+            assert!(
+                far.is_empty(),
+                "{what}: texels past {codes} code(s) of Metal's, first (index, read, Metal's) \
+                 {far:?}"
+            );
+        }
     }
     if noted.is_empty() {
         let shown = &wrong[..wrong.len().min(8)];
@@ -458,7 +479,8 @@ fn checked(
 }
 
 /// Each draw's channels are Metal's where it announces none of [`NOTES`], and on a device that
-/// fetches through the pixel interlock it announces none (the module docs).
+/// fetches through the pixel interlock it announces `device-color-conversion` alone, every channel
+/// within one code of Metal's (the module docs).
 #[test]
 fn a_blended_eight_bit_unorm_fetch_stores_metals_blend() {
     let kinds = NOTES.map(Degradation::from_precision_note);
@@ -505,7 +527,8 @@ fn a_blended_eight_bit_unorm_fetch_stores_metals_blend() {
                         wrong.push((i, got.to_vec(), want));
                     }
                 }
-                checked(&lane, (entry, pf), &noted, &wrong);
+                let native = (PrecisionNote::DeviceColorConversion, Some(1));
+                checked(&lane, (entry, pf), &noted, &wrong, native);
                 drawn += 1;
             }
         }
@@ -649,7 +672,7 @@ fn states() -> [State; 4] {
 /// Metal on the M3 Max under macOS 27.0.1) is each color lane's and alpha's form `Blend::unorm8`
 /// names; a channel the mask leaves out keeps its code. Each draw's channels are Metal's where it
 /// announces none of [`NOTES`], and on a device that fetches through the pixel interlock it
-/// announces none.
+/// announces `device-color-conversion` alone, every channel within one code of Metal's.
 #[test]
 fn other_blends_masks_and_the_blend_color_store_metals_blend() {
     let states = states();
@@ -722,7 +745,8 @@ fn other_blends_masks_and_the_blend_color_store_metals_blend() {
                     }
                 }
                 let what = format!("{entry} {color:?} {alpha:?} {mask:?} {bc:?}");
-                checked(&lane, (&what, pf), &noted, &wrong);
+                let native = (PrecisionNote::DeviceColorConversion, Some(1));
+                checked(&lane, (&what, pf), &noted, &wrong, native);
                 drawn += 1;
             }
         }
@@ -751,7 +775,8 @@ pub(super) static SRGB_BYTES: std::sync::LazyLock<Vec<u8>> = std::sync::LazyLock
 /// Metal's sRGB encode (the exact product with 4095 rounded to nearest, through its thresholds)
 /// and alpha's by its unorm write. The texels' codes cover every byte in each channel. On a device
 /// that fetches through the pixel interlock (RADV, ANV, NVIDIA, MoltenVK) the function computes
-/// that blend itself, exactly, announcing none of [`NOTES`], which is asserted with every channel;
+/// that blend itself over the device's decode and encodes it by the device's conversion,
+/// announcing `device-pack-conversion` alone, which is asserted, its texels' agreement printed;
 /// through input attachments (lavapipe) the device blends, and what it announces and how many
 /// texels are Metal's is printed. Each draw prints a `FETCH-BLEND8` line.
 #[test]
@@ -800,8 +825,9 @@ fn srgb_blends(formats: &[(PixelFormat, &[usize])]) {
         Some(over_form),
     );
     let unmeasured = Degradation::from_precision_note(PrecisionNote::UnmeasuredFetchBlend);
+    let pack = Degradation::from_precision_note(PrecisionNote::DevicePackConversion);
     let kinds: Vec<Degradation> = (NOTES.map(Degradation::from_precision_note).into_iter())
-        .chain([unmeasured])
+        .chain([unmeasured, pack])
         .collect();
     let (messages, _cache, lane) = lane_with(|options| {
         options.announce_each = kinds.iter().copied().collect();
@@ -909,7 +935,8 @@ fn srgb_blends(formats: &[(PixelFormat, &[usize])]) {
                             TEXELS,
                         );
                     } else {
-                        checked(&lane, (&what, pf), &noted, &wrong);
+                        let native = (PrecisionNote::DevicePackConversion, None);
+                        checked(&lane, (&what, pf), &noted, &wrong, native);
                     }
                     drawn += 1;
                 }

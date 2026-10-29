@@ -301,7 +301,7 @@ fn a_packed_word_attachment_blend_stores_metals_words() {
                     let d = crate::lower::stage_io::word_color::decode(fb, word, x[1])?;
                     let color = b.reads_constant().then_some(x[2]);
                     let v = blend_packed16(fb, &b, (x[0], d), color)?;
-                    let w = crate::lower::stage_io::word_color::encode(fb, word, (f4, v), None)?;
+                    let w = crate::lower::stage_io::word_color::encode(fb, word, (f4, v))?;
                     let u = Form {
                         held: Held::Int {
                             bits: 32,

@@ -550,10 +550,11 @@ Where Metal's rules differ from Vulkan's, the pipeline gives Metal's answer:
 - An 8-bit sRGB attachment of one or two channels (`R8Unorm_sRGB`, `RG8Unorm_sRGB`) the device
   does not render (the RTX 5080: it renders neither `R8_SRGB` nor `R8G8_SRGB`, and holds the
   latter in its UNORM twin) renders through an `R8_UINT` or `R16_UINT` view of its texture the
-  same way: the fragment function writes Metal's bytes (its twelve-bit encode), a pass clears it
-  to the bytes of Metal's clear, and a partial mask merges the word in the interlock, or over the
-  attachment's input attachment on a device that orders fetch through rasterization-order input
-  attachments (lavapipe; `RuntimeFact::WordInputMerge`). Exact. A blend of one
+  same way: the fragment function writes the bytes of the device's sRGB encode
+  (`DevicePackConversion`), a pass clears it to the bytes of Metal's clear, and a partial mask
+  merges the word in the interlock, or over the attachment's input attachment on a device that
+  orders fetch through rasterization-order input attachments (lavapipe;
+  `RuntimeFact::WordInputMerge`). A blend of one
   other than one and zero is refused as the device lacking the format; a color input or resolve
   of one is `NotImplemented(Format)`.
 - An `RGB9E5Float` attachment the device does not render (the RTX 5080) renders through an
@@ -2822,8 +2823,9 @@ bound.
   blend of the second source, a one- or two-channel one under a lerp, each in a module compiled with
   fast math, and one written by an output of fewer than four lanes, announce it too: the shader
   computes Metal's 8-bit unorm blend's rounded forms over the decoded texel, in the output's type (a
-  missing lane zero), and stores the result by Metal's sRGB encode, Metal's without fast math at
-  four lanes; under fast math Metal regroups the blend, unmeasured.
+  missing lane zero), and stores the result by the device's sRGB encode (`DevicePackConversion`),
+  Metal's blend without fast math at four lanes; under fast math Metal regroups the blend,
+  unmeasured.
 - `metal2vulkan-degrade-fp8-value` (precision). `PrecisionNote::Fp8Value`: An 8-bit float converts
   to an integer from the format's documented value with Metal's saturating float-to-integer rule,
   where Metal's device here answers otherwise: Metal on Apple M3 compiles these reads but extends
@@ -2873,7 +2875,10 @@ bound.
   device's copy keeps the bits. The runtime announces it too for a plain color fill
   (`BlitCommandEncoder::fill_texture_color` without a pixel format) to a NaN of a half or
   small-float texture the device's clear writes, which converts the NaN as the device likes, where
-  Metal's fill keeps a half NaN's sign and payload and makes a small float's all ones.
+  Metal's fill keeps a half NaN's sign and payload and makes a small float's all ones. Also a blend
+  a fragment function computes into a 16-bit float attachment through the pixel interlock: a NaN
+  of the blend is the device's arithmetic's, which the storage image's store converts, where Metal
+  stores every NaN of the blend as `0x7e00`.
 - `metal2vulkan-degrade-restricted-depth-range` (precision). `PrecisionNote::RestrictedDepthRange`:
   The device compares a depth texture's texels on a device without `VK_EXT_depth_range_unrestricted`
   enabled whose driver is not measured to keep depth values outside `[0, 1]` without it.
@@ -2944,7 +2949,8 @@ bound.
   even and the device's store as it rounds a `float` (toward zero on every measured driver, one
   unit in the last place, a finite value past 65504 stored as 65504); and a fragment function's
   `float` blend into a 16-bit float attachment through the pixel interlock on a device not
-  measured to round a `half` store as Metal does. The recorded bound past one code, measured on
+  measured to round a `half` store as Metal does, and a blend into an 8-bit unorm attachment through
+  the pixel interlock, whose result the storage image's store converts to its code. The recorded bound past one code, measured on
   lavapipe against plain Metal on an Apple M3 Max: a blend into an 8-bit unorm attachment
   (`RGBA8Unorm`, `ARGB8Unorm`) within 2 codes of Metal's; a fragment function that fetches an 8-bit
   sRGB attachment and writes it again, within 2 codes once a later draw reads an earlier one's code
@@ -3143,7 +3149,8 @@ bound.
   is opaque to the blend and its form fits every measured state, the function's blend is Metal's
   and records nothing; so does the blend of a fetched 8-bit unorm attachment it computes there
   (every factor, operation, write mask and blend color it builds), which Metal reads the output
-  into clamped, folding none of it. On a device that enables `storageInputOutput16` the output
+  into clamped, folding none of it (the storage image's store of its result is the device's
+  conversion, `DeviceColorConversion`). On a device that enables `storageInputOutput16` the output
   reaches the device as a 16-bit `half` (`StageIo::half_outputs`); MoltenVK 1.4.2 on an Apple M3
   Max then stores Metal's codes for a loaded `half4` under every blend measured (21, into 16- and
   32-bit float formats).
@@ -3258,7 +3265,11 @@ bound.
   takes an sRGB colour through its twelve-bit table; a packed code is within one of Metal's, an
   unpacked value within 2.5 ulp, a decoded sRGB colour within half a twelve-bit step (`1 / 8190`)
   of Metal's step beyond its `Pow`'s bound. Not recorded for a
-  `float` conversion of the four named formats on MoltenVK, Metal's own there.
+  `float` conversion of the four named formats on MoltenVK, Metal's own there. The same conversions
+  serve an implicit imageblock access of a normalized attachment (a `half` load rounding the
+  unpacked `float` once more), a fragment function's read and write of an 8-bit sRGB attachment
+  in the interlocked storage form or through its word view, and a snapshot read's decode of a
+  normalized code (`c` times the `f32` nearest `1 / D`), noted alike.
 - `metal2vulkan-degrade-color-attachment-groups` (precision).
   `PrecisionNote::ColorAttachmentGroups`: A render pipeline whose color attachments the device
   draws in more than one group (more than the lesser of its `maxColorAttachments` and

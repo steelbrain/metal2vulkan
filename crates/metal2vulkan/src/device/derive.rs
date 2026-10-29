@@ -768,9 +768,6 @@ fn enabled_caps(desc: &DeviceDescription, deviations: &BTreeSet<DriverDeviation>
     if deviations.contains(&DriverDeviation::MetalHalfStorageNans) {
         properties.insert(VkProperty::MetalHalfStorageNans);
     }
-    if deviations.contains(&DriverDeviation::MetalFloatStorageNans) {
-        properties.insert(VkProperty::MetalFloatStorageNans);
-    }
     if deviations.contains(&DriverDeviation::MetalFragmentSimdgroups) {
         properties.insert(VkProperty::MetalFragmentSimdgroups);
     }

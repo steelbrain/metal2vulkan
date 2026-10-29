@@ -846,11 +846,9 @@ pub enum PrecisionNote {
     /// widening need not. A pulled attribute's decode records it in the module (a vertex
     /// function's, a kernel's `[[stage_in]]` attribute's, a post-tessellation function's). Also
     /// recorded by a
-    /// 16-bit float attachment's blend
-    /// the function computes in the storage form, on a device not measured to store `0x7fc00000` in
-    /// a 16-bit float storage image as Metal's `0x7e00` (`DriverDeviation::MetalFloatStorageNans`):
-    /// the blend gives every NaN as `0x7fc00000`, and the device's store converts it (ANV stores
-    /// `0xfe00`). Also recorded by a `float` read of a heap's texture buffer on a device without
+    /// 16-bit float attachment's blend the function computes in the storage form: a NaN of the
+    /// blend is the device's arithmetic's, which the storage image's store converts, where Metal
+    /// stores every NaN of the blend as `0x7e00`. Also recorded by a `float` read of a heap's texture buffer on a device without
     /// Metal's sampler: Metal hands back a half-float texel's NaN as `0x7fc00000`, and the handle
     /// carries no class to convert it by. The runtime announces it too for a GPU blit through an
     /// `RG11B10Float` texture Metal keeps losslessly compressed: Metal's compression makes a NaN
@@ -1108,6 +1106,11 @@ pub enum PrecisionNote {
     /// (`metal::format::WordAttachment`), which under fast math also sums a few states otherwise
     /// than Metal (3,527 of 94,732,288 channels measured a code apart, none further). `RGBA8Unorm`
     /// and `RGB10A2Unorm` hold their codes there, as the device does.
+    ///
+    /// Also: a blend the function computes in the storage form into an 8-bit unorm attachment
+    /// (`R8Unorm`, `RG8Unorm`, `RGBA8Unorm`, `BGRA8Unorm`), whose result the storage image's store
+    /// converts to its code, where Metal rounds the exact product with 255 (a NaN 0); the store may
+    /// take the other code near a tie.
     ///
     /// Also (the runtime announces it): a render pass clears a normalized, sRGB, packed 16-bit,
     /// half or small-float color attachment to a color whose conversion is in question. The
@@ -1803,7 +1806,12 @@ pub enum PrecisionNote {
     /// Metal's (the transfer's `Pow` inherited from `Exp2(y * Log2(x))`), and a decoded sRGB
     /// colour within half a twelve-bit step (`1 / 8190`) of Metal's step, beyond its division's
     /// and `Pow`'s bounds; a NaN channel's code, and a `half` result rounded once more to `half`,
-    /// the device's. Validation derives no tolerance from it.
+    /// the device's. The same conversions serve, noted alike: an implicit imageblock access of a
+    /// normalized attachment (a `half` one's load rounding the unpacked `float` once more, where
+    /// Metal rounds `c / D` once), a fragment function's read and write of an 8-bit sRGB attachment
+    /// in the interlocked storage form or through its word view, and a snapshot read's decode of a
+    /// normalized code (`c` times the `f32` nearest `1 / D`, where Metal reads `c / D` correctly
+    /// rounded). Validation derives no tolerance from it.
     DevicePackConversion,
     /// A render pipeline whose color attachments the device draws in more than one group
     /// (`GraphicsState::color_group`, the module docs of `pipeline::compile::color_group`): a

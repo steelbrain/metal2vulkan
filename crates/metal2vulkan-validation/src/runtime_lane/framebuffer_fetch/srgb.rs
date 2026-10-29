@@ -28,14 +28,15 @@
 //! `RGBA8Uint` view (`candidate::runtime_samples`); the fill is checked to store the bytes drawn.
 //!
 //! In the pixel interlock (RADV, ANV, NVIDIA, MoltenVK) the compile layer reads and writes the
-//! attachment through an `R32_UINT` view, decoding and encoding by Metal's measured conversions
-//! (`lower::fragment::fetch`): the pass renders the target into a scratch image made mutable to
+//! attachment through an `R32_UINT` view, decoding and encoding by the device's conversion
+//! (`lower::fragment::fetch`, `device-pack-conversion`): the pass renders the target into a scratch image made mutable to
 //! that view (`runtime::attachment_stand_in`), or at 4x, on a device without multisampled storage
 //! images, into sample planes made so (`runtime::sample_planes`). Through input attachments
 //! (lavapipe) the function reads the device's own decode of the code, which on llvmpipe is not
 //! Metal's, and the pipeline records `srgb-texel-decode` there alone (asserted).
 //! Every byte is Metal's in either form, but where the pipeline records `device-color-conversion`
-//! (the device's encode of the written color, every device but MoltenVK's): there a channel within
+//! (the device's encode of the written color, every device but MoltenVK's) or
+//! `device-pack-conversion` (the interlock's decode and encode): there a channel within
 //! one code of Metal's holds, counted and printed (`device_rounded`), and a case of more than one
 //! draw without a failing depth test is held to Metal's one-draw map over the bytes the device
 //! stored after one draw fewer (each draw reads what the last one stored, so the device's codes
@@ -485,7 +486,8 @@ fn an_srgb_target_is_fetched_as_metal_fetches_it() {
                 .unwrap();
             let descriptor = target.descriptor(&lane, (&fetch, "fetch_ordered"), false, all);
             let made = made_render_kinds(&lane.device, &descriptor);
-            let converts = made.contains(&Degradation::DeviceColorConversion);
+            let converts = made.contains(&Degradation::DeviceColorConversion)
+                || made.contains(&Degradation::DevicePackConversion);
             assert_eq!(
                 made.contains(&Degradation::SrgbTexelDecode),
                 inputs,

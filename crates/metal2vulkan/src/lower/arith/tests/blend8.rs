@@ -1,11 +1,13 @@
 //! A fetched 8-bit unorm attachment's blend on the interpreter
-//! (`extended_range::blend::blend_unorm8`, then its 8-bit unorm write, `unorm8_write`),
-//! of a `half4` or `float4` output, under fast math and without, against Metal's measured
-//! arithmetic. Metal clamps the output to `[0, 1]` (a NaN to 0), reads the destination's code `c`
-//! as `h(c / 255)` (`f(c / 255)` for a `float4` output) and the blend color clamped to `[0, 1]`
-//! (as `half` in `half` arithmetic), blends in the output's type, and stores the result's code by
-//! its unorm write (a NaN 0, clamped, the exact product with 255 rounded to nearest). The function
-//! writes that code as `c` times the `f32` nearest `1 / 255`.
+//! (`extended_range::blend::blend_unorm8`), of a `half4` or `float4` output, under fast math and
+//! without, against Metal's measured arithmetic. Metal clamps the output to `[0, 1]` (a NaN to 0),
+//! reads the destination's code `c` as `h(c / 255)` (`f(c / 255)` for a `float4` output) and the
+//! blend color clamped to `[0, 1]` (as `half` in `half` arithmetic), blends in the output's type,
+//! and stores the result's code by its unorm write (a NaN 0, clamped, the exact product with 255
+//! rounded to nearest). The function writes the blend's result, which the storage image's store
+//! converts (the device's conversion, `PrecisionNote::DeviceColorConversion`): each lane is checked
+//! through Vulkan's conversion of it ([`stored`]: a NaN 0, clamped, the product with 255 rounded to
+//! nearest), which gives Metal's code.
 //!
 //! Premultiplied source-over (one over one minus the source alpha, added, for color and alpha):
 //! fast math `h(fma(d, h(1 - a), s))`, without `h(s + h(d · h(1 - a)))`, in `float` likewise.
@@ -25,10 +27,10 @@
 
 use super::*;
 use crate::lower::arith::extended_range::blend::{
-    blend_unorm8, half_of, unorm8_tile_value, unorm8_write, Blend, BlendArith, BlendMath,
+    blend_unorm8, half_of, unorm8_tile_value, Blend, BlendArith, BlendMath,
 };
 use crate::metal::{BlendFactor as F, BlendOperation as O, ColorWriteMask, PixelFormat};
-use crate::pipeline::lower_inputs::{BlendEquation, ChannelWrite};
+use crate::pipeline::lower_inputs::BlendEquation;
 
 /// `x` rounded to `half`, nearest even.
 fn h(x: f64) -> f64 {
@@ -276,51 +278,15 @@ fn half_of_rounds_as_metal_under_each_form() {
     }
 }
 
-/// `unorm8_write` stores Metal's code of a `half` lane in `half` arithmetic, as the general rule
-/// (`color_write::round`'s 8-bit unorm rule) does: every `half` from `-2` to `2` (both zeros, every
-/// denormal), the infinities and a NaN, against the exact product with 255 rounded to nearest even
-/// after the clamp.
-#[test]
-fn a_half_s_code_is_metals() {
-    let f4 = vec(float(32), 4);
-    let mut inputs: Vec<f32> = (0..=0x4000u16)
-        .flat_map(|b| [f16_to_f64(b) as f32, -(f16_to_f64(b) as f32)])
-        .collect();
-    inputs.extend([f32::INFINITY, f32::NEG_INFINITY, f32::NAN, -f32::NAN]);
-    while !inputs.len().is_multiple_of(4) {
-        inputs.push(0.5);
-    }
-    let cases: Vec<Case> = inputs
-        .chunks(4)
-        .map(|l| vec![l.iter().map(|x| u64::from(x.to_bits())).collect()])
-        .collect();
-    let unorm = Some(ChannelWrite::Unorm { bits: 8 });
-    let reference = |c: &Case| {
-        let lanes = c[0].iter().map(|&b| {
-            let code = (clamp01(f64::from(f32v(b))) * 255.0).round_ties_even();
-            u64::from((code as f32 * (1.0f32 / 255.0)).to_bits())
-        });
-        Some(lanes.collect())
-    };
-    check(
-        "a half lane's code by its product",
-        &[f4],
-        f4,
-        &|fb, x| unorm8_write(fb, BlendArith::Half, x[0]),
-        &cases,
-        &reference,
-        // Either zero's sign: the device stores both as code 0.
-        true,
-    );
-    check(
-        "a half lane's code by the general rule",
-        &[f4],
-        f4,
-        &|fb, x| crate::lower::arith::color_write::round(fb, f4, x[0], &[unorm; 4]),
-        &cases,
-        &reference,
-        true,
-    );
+/// The 8-bit unorm code Vulkan's conversion stores for the `f32` lane `bits` (Fixed-Point Data
+/// Conversions: a NaN 0, the value clamped to `[0, 1]`, its product with 255 rounded to nearest).
+fn stored(bits: u64) -> u64 {
+    (clamp01(f64::from(f32v(bits))) * 255.0).round_ties_even() as u64
+}
+
+/// Whether lane `got`, stored by Vulkan's conversion, gives the code of lane `want`.
+fn same_code(got: u64, want: u64) -> bool {
+    stored(got) == stored(want)
 }
 
 #[test]
@@ -364,14 +330,13 @@ fn a_fetched_eight_bit_unorm_blend_stores_metals_code() {
                 let b = Blend::unorm8(&over, pf, ColorWriteMask::ALL, (math, arith))
                     .unwrap_or_else(|e| panic!("{what}: {e:?}"));
                 for q in HALF_FORMS {
-                    check(
+                    check_accept(
                         &format!("the fetched 8-bit unorm blend, {what}, half by {q:?}"),
                         &[f4, f4],
                         f4,
                         &|fb, x| {
                             fb.module().set_quantize_form(q);
-                            let v = blend_unorm8(fb, &b, arith, (x[0], x[1]), None)?;
-                            unorm8_write(fb, arith, v)
+                            blend_unorm8(fb, &b, arith, (x[0], x[1]), None)
                         },
                         &cases,
                         &|c| {
@@ -393,7 +358,7 @@ fn a_fetched_eight_bit_unorm_blend_stores_metals_code() {
                                     .collect(),
                             )
                         },
-                        false,
+                        &same_code,
                     );
                 }
             }
@@ -633,15 +598,14 @@ fn the_factor_set_masks_and_blend_color_store_metals_code() {
                     .unwrap_or_else(|err| panic!("{what}: {err:?}"));
                 assert_eq!(b.reads_constant(), pf == PixelFormat::RGBA8Unorm, "{what}");
                 for q in HALF_FORMS {
-                    check(
+                    check_accept(
                         &format!("the fetched 8-bit unorm blend, {what}, half by {q:?}"),
                         &[f4, f4, u4],
                         f4,
                         &|fb, x| {
                             fb.module().set_quantize_form(q);
                             let color = b.reads_constant().then_some(x[2]);
-                            let v = blend_unorm8(fb, &b, arith, (x[0], x[1]), color)?;
-                            unorm8_write(fb, arith, v)
+                            blend_unorm8(fb, &b, arith, (x[0], x[1]), color)
                         },
                         &cases,
                         &|c| {
@@ -671,7 +635,7 @@ fn the_factor_set_masks_and_blend_color_store_metals_code() {
                                     .collect(),
                             )
                         },
-                        false,
+                        &same_code,
                     );
                 }
             }

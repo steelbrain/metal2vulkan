@@ -16,13 +16,10 @@
 //! finite operand stored as that infinity): the parent's model, every NaN `0x7e00`, the rounded
 //! forms without fast math ([`super::zero`]'s). Before the blend's exact multiply-add took the
 //! device's result for an infinite sum (`fma::float_fma_exact`), a `float4` output's infinite sum
-//! stored a NaN (1,080 of 4,096 texels on the RTX 3090 and the 780M). The function's blend gives
-//! every NaN as `0x7fc00000` before the storage image's store, which a device measured to store it
-//! as Metal's (`DriverDeviation::MetalFloatStorageNans`) does; the NaN a device's own arithmetic
-//! gives keeps its sign and payload there (RADV and NVIDIA), so a `half` output's blend would store
-//! the texel's NaN unchanged otherwise. Where the draw announces `device-nan-encoding` (a device
-//! not measured so: ANV stores `0xfe00`) a channel Metal stores as a NaN holds any NaN. Each draw
-//! prints a `FETCH-BLEND16-NAN` line.
+//! stored a NaN (1,080 of 4,096 texels on the RTX 3090 and the 780M). A NaN of the function's blend
+//! is the device's arithmetic's, which the storage image's store converts (RADV and NVIDIA keep its
+//! sign and payload, ANV stores `0xfe00`): every draw announces `device-nan-encoding`, and a
+//! channel Metal stores as a NaN holds any NaN. Each draw prints a `FETCH-BLEND16-NAN` line.
 
 use super::{
     half_bits, stores_metals_blend, Blending, Case, Data, Sweep, Words, DIFFERENCE_COLOR, FAST,

@@ -58,13 +58,14 @@
 //! The cell holds the texel's bits, which the staging moves through the unsigned-integer view of
 //! its bytes in 32-bit words (`R32Uint`, `RG32Uint`, or `R16Uint` for a texel of two bytes), so a
 //! read after the function's own write gives the value of the code it stored, as Metal's does. An
-//! implicit access converts them ([`Norm`]): a load unpacks each word (`math::unpack`), a store
-//! packs (`math::pack`), both exact on every device. The access's member is `float` lanes of the
-//! format's channels, or four, whose lanes past the channels a load reads as green and blue 0 and
-//! alpha 1 and a store drops (probes 9d and 9e), or `half` lanes of the same (probe 12 on both
-//! GPUs: every code of every format, and every `half` a store writes): a load reads each channel's
-//! exact value `c / D` correctly rounded to `half`, not its `float` value rounded again, and a
-//! store converts a `half` as the `float` of the same value ([`NormAccess`]). Every other format
+//! implicit access converts them ([`Norm`]) by the device's conversion (`arith::pack`, the
+//! instruction or its definition on the format's fields; `PrecisionNote::DevicePackConversion`):
+//! a load unpacks each word (`pack::unpack`), a store packs (`pack::pack`). The access's member is
+//! `float` lanes of the format's channels, or four, whose lanes past the channels a load reads as
+//! green and blue 0 and alpha 1 and a store drops (probes 9d and 9e), or `half` lanes of the same:
+//! a load rounds each channel's unpacked `float` to `half` by the device's rounding (Metal rounds
+//! the exact value `c / D` once, probe 12), and a store converts a `half` as the `float` of the
+//! same value ([`NormAccess`]). Every other format
 //! converts between the pixel and the cell in a way not read yet:
 //! `Unsupported{TileShading, NotImplemented}`.
 //!
@@ -117,12 +118,13 @@ use std::collections::{BTreeMap, BTreeSet};
 use crate::air::abi::{ImageblockArg, ImageblockKind, ParamBinding, ParamRole};
 use crate::air::intrinsics::{Imageblock, PackDir, PackFormat};
 use crate::air::ir::{Call, Const, Value};
+use crate::device::profile::FloatFunctions;
 use crate::device::requirements::{FormatUsage, VkFeature};
 use crate::error::{
     Attachment, Capability, DescriptorError, Error, Feature, RuntimeInput, Unsupported,
 };
 use crate::lower::arith::nan::NanTest;
-use crate::lower::arith::{math, ops, srgb, texel_round, FloatFmt, Form, Held};
+use crate::lower::arith::{math, ops, pack, FloatFmt, Form, Held};
 use crate::lower::dispatch::KernelBuiltin;
 use crate::lower::emit::EmitCx;
 use crate::lower::select::SelectCx;
@@ -132,6 +134,7 @@ use crate::memory::arena::ArenaMem;
 use crate::memory::leaf::{self, Leaf, Path, WordMem, WordOps};
 use crate::metal::format::FormatEmulation;
 use crate::metal::PixelFormat;
+use crate::pipeline::artifact::PrecisionNote;
 use crate::pipeline::facts::RuntimeFact;
 use crate::pipeline::sym::{
     PushField, ResourceKind, ResourceSlot, SpecKey, Stage, SyntheticBinding,
@@ -141,8 +144,8 @@ use crate::spirv::builder::{FunctionBuilder, ModuleBuilder};
 use crate::spirv::error::BResult;
 use crate::spirv::ids::{ConstId, FuncId, GlobalId, Value as SValue};
 use crate::spirv::ir::{
-    BinOp, ConstBits, Constant, Dim, ImageOperands, ImageType, ImageUsage, MemAccess, MemoryOrder,
-    Scope, StorageClass, Type as SType,
+    BinOp, ConstBits, Dim, ImageOperands, ImageType, ImageUsage, MemAccess, MemoryOrder, Scope,
+    StorageClass, Type as SType,
 };
 
 use super::imageblock::{self, ImageblockStrategy};
@@ -215,9 +218,9 @@ pub struct TileSlot {
 }
 
 /// The conversion between a normalized attachment's texel bits, which its cell holds, and the
-/// lanes an implicit access reads and writes ([`NormAccess`]): Metal's `unpack_*_to_float` and
-/// `pack_float_to_*` of the format's channels (`lower::arith::math`), one 32-bit word of the bits
-/// at a time (see the module docs).
+/// lanes an implicit access reads and writes ([`NormAccess`]): the device's conversion of the pack
+/// function of the format's channels (`lower::arith::pack`), one 32-bit word of the bits at a time
+/// (see the module docs).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Norm {
     /// The pack function of each word of the bits.
@@ -235,23 +238,6 @@ impl Norm {
     pub fn word_lanes(&self) -> u8 {
         math::pack_layout(self.format).map_or(0, |(widths, _)| widths.len() as u8)
     }
-
-    /// The grid `D` of channel `k`'s codes (in Metal's order), whose value is `c / D` (an snorm
-    /// code's clamped to `-1`): `2^b - 1` of a `b`-bit unorm field of the pack function
-    /// (`math::pack_layout`), `2^(b-1) - 1` of an snorm one, and 4095 of an sRGB color channel,
-    /// whose byte decodes to a twelve-bit step (`srgb`). `None` past the format's fields.
-    pub fn grid(&self, k: u8) -> Option<u32> {
-        if self.format == PackFormat::Unorm4x8Srgb && k < 3 {
-            return Some(4095);
-        }
-        let (widths, signed) = math::pack_layout(self.format)?;
-        let bits = *widths.get(usize::from(k) % widths.len().max(1))?;
-        Some(if signed {
-            (1 << (bits - 1)) - 1
-        } else {
-            (1 << bits) - 1
-        })
-    }
 }
 
 /// An implicit access of a normalized attachment: the attachment's conversion and the access's
@@ -262,24 +248,28 @@ pub struct NormAccess {
     pub norm: Norm,
     /// The access's lanes: the channels, or four.
     pub lanes: u8,
-    /// The lanes are `half`, held as their `f32`: a load rounds each channel's exact value `c / D`
-    /// to nearest even, and a store converts the held value as a `float` one (probe 12).
+    /// The lanes are `half`, held as their `f32`: a load rounds each channel's unpacked `float` to
+    /// `half` (`narrow::round`), and a store converts the held value as a `float` one (probe 12).
     pub half: bool,
 }
 
 impl NormAccess {
     /// An upper estimate of the words the access's conversion of `words` words of bits emits:
-    /// per word, the pack or unpack sequence as `air.pack`'s strategy charges it (`arith`; a store
-    /// packs, `store`), and per lane an extract and a construct; a `half` load's rounding per
-    /// lane (`texel_round::grid_step`, `grid_value` and `ratio_to_half`).
+    /// per word, the pack or unpack sequence as `air.pack`'s strategy charges it (`arith::pack`; a
+    /// store packs, `store`), and per lane an extract and a construct; a `half` load's rounding per
+    /// lane (`narrow::round`).
     pub fn words(&self, words: u8, store: bool) -> u32 {
-        let table = match (self.norm.format, store) {
-            (PackFormat::Unorm4x8Srgb, true) => 3 * srgb::SEARCH_WORDS,
-            (PackFormat::Unorm4x8Srgb, false) => 3 * srgb::STEP_WORDS,
-            _ => 0,
+        let dir = match store {
+            true => PackDir::Pack,
+            false => PackDir::Unpack,
         };
-        let per = 464 + table + 24 * u32::from(self.norm.word_lanes());
-        let round = if self.half && !store { 320 } else { 0 };
+        let floats = Form {
+            held: Held::Float(FloatFmt::F32),
+            lanes: self.norm.word_lanes(),
+        };
+        let per =
+            pack::words(self.norm.format, dir, floats) + 24 * u32::from(self.norm.word_lanes());
+        let round = if self.half && !store { 64 } else { 0 };
         u32::from(words) * per + (16 + round) * u32::from(self.lanes)
     }
 }
@@ -888,14 +878,20 @@ pub(super) fn select_texel(
     slot.staged = true;
     slot.stored |= store;
     let (offset, leaf) = (slot.offset, slot.leaf);
-    // Metal's sRGB table, which the conversion of an sRGB attachment reads.
-    if norm.is_some_and(|n| n.norm.format == PackFormat::Unorm4x8Srgb) {
-        let dir = if store {
-            PackDir::Pack
-        } else {
-            PackDir::Unpack
+    // The device's conversion, but a `float` one of a format `GLSL.std.450` names on a device
+    // whose `float` functions are Metal's (Metal's own `pack_float_to_*` and `unpack_*_to_float`,
+    // as `air.pack`'s strategy notes it); a `half` load rounds the unpacked `float` once more.
+    if let Some(n) = norm {
+        let dir = match store {
+            true => PackDir::Pack,
+            false => PackDir::Unpack,
         };
-        cx.families.arith.srgb.get_or_insert(dir);
+        let own = cx.profile.fields().float_functions == FloatFunctions::Metal
+            && (store || !n.half)
+            && pack::instruction(n.norm.format, dir).is_some();
+        if !own {
+            cx.precision.insert(PrecisionNote::DevicePackConversion);
+        }
     }
     imageblock::place_region(cx, cell_bytes)?;
     let coord = imageblock::operand(cx, coord)?;
@@ -1604,46 +1600,39 @@ pub(super) fn emit_texel(
     let Some(n) = norm else {
         return super::local::emit_access_at(cx, fb, &a, off, stored);
     };
-    let table = cx.decl.families.arith.srgb;
     match stored {
         Some(v) => {
-            let test = NanTest::for_modes(&cx.plan.families.arith.modes);
-            let bits = pack_texel(fb, n, leaf.form, v, table, test)?;
+            let bits = pack_texel(fb, n, leaf.form, v)?;
             super::local::emit_access_at(cx, fb, &a, off, Some(bits))
         }
         None => {
             let Some(bits) = super::local::emit_access_at(cx, fb, &a, off, None)? else {
                 return Err(cx.fail("an implicit imageblock load without a value"));
             };
-            let Some(grids) = (0..n.norm.channels)
-                .map(|k| n.norm.grid(k))
-                .collect::<Option<Vec<u32>>>()
-            else {
-                return Err(cx.fail("a normalized channel without its grid"));
-            };
-            unpack_texel(fb, n, leaf.form, bits, table, &grids).map(Some)
+            unpack_texel(fb, n, leaf.form, bits).map(Some)
         }
     }
 }
 
 /// The lanes access `a` reads of a normalized texel whose bits `bits` are of form `words` (one or
-/// two `u32` words, or a 16-bit one zero-extended): each word unpacked by the format's pack
-/// function (`math::unpack`, Metal's `unpack_*_to_float`), its channels in Metal's order, each
-/// rounded to `half` on its grid `grids[k]` ([`Norm::grid`]) where the access's lanes are
-/// (`half_channels`), then green and blue 0 and alpha 1 up to the access's lanes.
+/// two `u32` words, or a 16-bit one zero-extended): each word unpacked by the device's conversion
+/// of the format's pack function (`pack::unpack`), each lane rounded to `half` where the access's
+/// lanes are (`narrow::round`), its channels in Metal's order, then green and blue 0 and alpha 1 up
+/// to the access's lanes.
 fn unpack_texel(
     fb: &mut FunctionBuilder<'_>,
     a: NormAccess,
     words: Form,
     bits: SValue,
-    table: Option<GlobalId>,
-    grids: &[u32],
 ) -> BResult<SValue> {
     let n = a.norm;
     let f32_ = Held::Float(FloatFmt::F32);
     let per = n.word_lanes();
     let word = Form {
-        held: f32_,
+        held: match a.half {
+            true => Held::Float(FloatFmt::Half),
+            false => f32_,
+        },
         lanes: per,
     };
     let mut lanes = Vec::with_capacity(usize::from(words.lanes) * usize::from(per));
@@ -1653,7 +1642,7 @@ fn unpack_texel(
         } else {
             fb.composite_extract(bits, &[u32::from(i)])?
         };
-        let v = math::unpack(fb, n.format, word, w, table)?;
+        let v = pack::unpack(fb, n.format, word, w)?;
         for k in 0..per {
             lanes.push(fb.composite_extract(v, &[u32::from(k)])?);
         }
@@ -1661,9 +1650,6 @@ fn unpack_texel(
     lanes.truncate(usize::from(n.channels));
     if n.bgra {
         lanes.swap(0, 2);
-    }
-    if a.half {
-        lanes = half_channels(fb, grids, &lanes)?;
     }
     // The lanes past the channels: green and blue 0, alpha 1, each a `half` as it is a `float`.
     for i in n.channels..a.lanes {
@@ -1692,101 +1678,16 @@ fn unpack_texel(
     }
 }
 
-/// The `half` values, held as their `f32`, of normalized channels `channels` (`f32` scalars in
-/// Metal's order, `math::unpack`'s): each channel's exact value `c / D` correctly rounded to
-/// nearest even, as an Apple M4 and M3 Max read a `half` member (a probe), not the `float` value
-/// rounded again, which differs at four 16-bit codes. The `float` value is `c / D` rounded to `f32`
-/// (an sRGB color channel's its twelve-bit step's, `srgb`), so `texel_round::grid_step` recovers
-/// `c` on the channel's grid `grids[k]` ([`Norm::grid`]), and `grid_value` rounds `c / D` with
-/// `ratio_to_half`.
-fn half_channels(
-    fb: &mut FunctionBuilder<'_>,
-    grids: &[u32],
-    channels: &[SValue],
-) -> BResult<Vec<SValue>> {
-    let lanes = channels.len() as u8;
-    let f = Form {
-        held: Held::Float(FloatFmt::F32),
-        lanes,
-    };
-    let u = Form {
-        held: Held::Int {
-            bits: 32,
-            container: 32,
-        },
-        lanes,
-    };
-    let lane_consts = |fb: &mut FunctionBuilder<'_>, form: Form, bits: &[u64]| -> BResult<SValue> {
-        let scalar = Form { lanes: 1, ..form };
-        let st = ops::ty(fb, scalar)?;
-        let parts = bits
-            .iter()
-            .map(|&b| {
-                fb.module().constant(Constant::Scalar {
-                    ty: st,
-                    bits: ConstBits(b),
-                })
-            })
-            .collect::<BResult<Vec<ConstId>>>()?;
-        let c = match parts[..] {
-            [one] => one,
-            _ => {
-                let t = ops::ty(fb, form)?;
-                fb.module().constant(Constant::Composite {
-                    ty: t,
-                    parts: parts.into(),
-                })?
-            }
-        };
-        fb.module().const_value(c)
-    };
-    let fbits = |g: u32, sign: f32| u64::from((sign * g as f32).to_bits());
-    let d = lane_consts(
-        fb,
-        f,
-        &grids.iter().map(|&g| fbits(g, 1.0)).collect::<Vec<_>>(),
-    )?;
-    let neg_d = lane_consts(
-        fb,
-        f,
-        &grids.iter().map(|&g| fbits(g, -1.0)).collect::<Vec<_>>(),
-    )?;
-    let dv = lane_consts(
-        fb,
-        u,
-        &grids.iter().map(|&g| u64::from(g)).collect::<Vec<_>>(),
-    )?;
-    let x = match channels {
-        [one] => *one,
-        _ => {
-            let t = ops::ty(fb, f)?;
-            fb.composite_construct(t, channels)?
-        }
-    };
-    let step = texel_round::grid_step(fb, f, x, d, neg_d)?;
-    let h = texel_round::grid_value(fb, u, step, dv, |fb, m, d| {
-        texel_round::ratio_to_half(fb, u, m, d)
-    })?;
-    if lanes == 1 {
-        return Ok(vec![h]);
-    }
-    (0..lanes)
-        .map(|k| fb.composite_extract(h, &[u32::from(k)]))
-        .collect()
-}
-
 /// The bits, of form `words`, of the lanes `v` access `a` writes (`a.lanes` of them, in Metal's
 /// channel order; `half` ones held as their `f32`, which Metal converts as that `float`, a probe):
-/// its channels, then 0 in a word's lanes past them, each word packed by the format's pack function
-/// (`math::pack`, Metal's `pack_float_to_*`), whose lanes past a 16-bit word's are 0, so it is
+/// its channels, then 0 in a word's lanes past them, each word packed by the device's conversion of
+/// the format's pack function (`pack::pack`), whose lanes past a 16-bit word's are 0, so it is
 /// zero-extended.
 fn pack_texel(
     fb: &mut FunctionBuilder<'_>,
     a: NormAccess,
     words: Form,
     v: SValue,
-    table: Option<GlobalId>,
-    test: NanTest,
 ) -> BResult<SValue> {
     let n = a.norm;
     let f32_ = Held::Float(FloatFmt::F32);
@@ -1819,7 +1720,7 @@ fn pack_texel(
     let mut packed = Vec::with_capacity(usize::from(words.lanes));
     for chunk in lanes.chunks(per.max(1)) {
         let x = fb.composite_construct(t, chunk)?;
-        packed.push(math::pack(fb, n.format, word, x, table, test)?);
+        packed.push(pack::pack(fb, n.format, word, x)?);
     }
     match packed[..] {
         [one] => Ok(one),

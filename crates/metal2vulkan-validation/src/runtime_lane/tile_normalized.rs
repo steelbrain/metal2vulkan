@@ -27,6 +27,12 @@
 //! channels; a store gives each channel's code of the `float` of the same value. These cover every
 //! code of every channel and every `half` pattern in every lane.
 //!
+//! The function converts by the device's conversion (`arith::pack`, `device-pack-conversion`), so
+//! each read and store is checked within that note's bound of Metal's ([`near`], [`code_near`]):
+//! a value within 3 `f32` units in the last place (an sRGB colour within half a twelve-bit step
+//! and the transfer's `Pow`, `1/8190 + 2^-14`), a `half` one within one more `half` step, a code
+//! within one (a NaN channel's the device's).
+//!
 //! A format the device does not render to, or whose staging view it cannot store to, is refused
 //! typed (`Unsupported`) and said.
 
@@ -153,6 +159,39 @@ struct Format {
     pf: PixelFormat,
     channels: &'static [(Channel, u32)],
     bytes: u32,
+}
+
+/// Whether `have`, the device's conversion's value of a `channel` read (through a `half` member
+/// where `half`), lies within `PrecisionNote::DevicePackConversion`'s bound of Metal's `want` (the
+/// module docs). A lane past the channels holds its constant exactly.
+fn near(channel: Option<Channel>, have: f32, want: f32, half: bool) -> bool {
+    let Some(channel) = channel else {
+        return have.to_bits() == want.to_bits();
+    };
+    let ulp = |x: f32| f32::from_bits(x.abs().to_bits() + 1) - x.abs();
+    let half_step = |x: f32| match x.abs() {
+        a if a < f32::powi(2.0, -14) => f32::powi(2.0, -24),
+        a => f32::powi(2.0, (a.to_bits() >> 23) as i32 - 127 - 10),
+    };
+    let mut bound = match channel {
+        Channel::Srgb => 1.0 / 8190.0 + f32::powi(2.0, -14),
+        Channel::Unorm(_) | Channel::Snorm(_) => 3.0 * ulp(want),
+    };
+    if half {
+        bound += half_step(want);
+    }
+    (have - want).abs() <= bound
+}
+
+/// Whether code `a` of `channel` lies within one of code `b` (signed codes as their values).
+fn code_near(channel: Channel, a: u32, b: u32) -> bool {
+    match channel {
+        Channel::Snorm(bits) => {
+            let signed = |c: u32| i64::from(((c << (32 - bits)) as i32) >> (32 - bits));
+            (signed(a) - signed(b)).abs() <= 1
+        }
+        Channel::Unorm(_) | Channel::Srgb => a.abs_diff(b) <= 1,
+    }
 }
 
 impl Format {
@@ -448,19 +487,18 @@ fn a_normalized_attachment_reads_as_metal_does() {
                 };
                 let got = floats(&buffer);
                 for (i, &t) in texels.iter().enumerate() {
-                    let want: Vec<u32> = (0..4)
+                    let want: Vec<f32> = (0..4)
                         .map(|k| match k {
                             k if k < n => format.channels[k].0.value(format.code(t, k)),
                             k if k < lanes => [0.0, 0.0, 0.0, 1.0][k],
                             _ => -7.0,
                         })
-                        .map(f32::to_bits)
                         .collect();
-                    let have: Vec<u32> =
-                        got[4 * i..4 * i + 4].iter().map(|x| x.to_bits()).collect();
-                    assert_eq!(
-                        have, want,
-                        "{name}: {entry} over {:?}, texel {t:#x}",
+                    let have = &got[4 * i..4 * i + 4];
+                    let channel = |k: usize| format.channels.get(k).map(|c| c.0);
+                    assert!(
+                        (0..4).all(|k| near(channel(k), have[k], want[k], false)),
+                        "{name}: {entry} over {:?}, texel {t:#x}: {have:?}, Metal's {want:?}",
                         format.pf
                     );
                 }
@@ -504,10 +542,17 @@ fn a_normalized_attachment_stores_as_metal_does() {
                         .fold(0u64, |w, (k, &(c, at))| {
                             w | (u64::from(c.code(lane(i, k))) << at)
                         });
-                    assert_eq!(
-                        t,
-                        want,
-                        "{name}: {entry} over {:?}, cell {i}: {:?}",
+                    let unwritten = !format
+                        .channels
+                        .iter()
+                        .fold(0u64, |m, &(c, at)| m | (((1u64 << c.bits()) - 1) << at));
+                    // A NaN channel's code is the device's (the note's bound).
+                    let codes_near = (format.channels.iter().enumerate()).all(|(k, &(c, _))| {
+                        lane(i, k).is_nan() || code_near(c, format.code(t, k), format.code(want, k))
+                    });
+                    assert!(
+                        codes_near && (t & unwritten) == (want & unwritten),
+                        "{name}: {entry} over {:?}, cell {i}: {t:#x}, Metal's {want:#x}: {:?}",
                         format.pf,
                         (0..4).map(|k| lane(i, k)).collect::<Vec<_>>()
                     );
@@ -525,16 +570,15 @@ fn a_normalized_attachment_stores_as_metal_does() {
         for i in 0..cells {
             for k in 0..4 {
                 let (channel, _) = format.channels[k];
-                let code = channel.code(lane(i, k));
-                assert_eq!(
-                    format.code(after[i], k),
-                    code,
-                    "{name}: round cell {i} lane {k}"
+                let stored = format.code(after[i], k);
+                assert!(
+                    lane(i, k).is_nan() || code_near(channel, stored, channel.code(lane(i, k))),
+                    "{name}: round cell {i} lane {k}: code {stored}"
                 );
-                assert_eq!(
-                    got[4 * i + k].to_bits(),
-                    channel.value(code).to_bits(),
-                    "{name}: round cell {i} lane {k}"
+                let (have, want) = (got[4 * i + k], channel.value(stored));
+                assert!(
+                    near(Some(channel), have, want, false),
+                    "{name}: round cell {i} lane {k}: {have}, Metal's {want}"
                 );
             }
         }
@@ -578,19 +622,18 @@ fn a_normalized_attachment_reads_through_halves_as_metal_does() {
                 };
                 let got = floats(&buffer);
                 for (i, &t) in texels.iter().enumerate() {
-                    let want: Vec<u32> = (0..4)
+                    let want: Vec<f32> = (0..4)
                         .map(|k| match k {
                             k if k < n => format.channels[k].0.half(format.code(t, k)),
                             k if k < lanes => [0.0, 0.0, 0.0, 1.0][k],
                             _ => -7.0,
                         })
-                        .map(f32::to_bits)
                         .collect();
-                    let have: Vec<u32> =
-                        got[4 * i..4 * i + 4].iter().map(|x| x.to_bits()).collect();
-                    assert_eq!(
-                        have, want,
-                        "{name}: {entry} over {:?}, texel {t:#x}",
+                    let have = &got[4 * i..4 * i + 4];
+                    let channel = |k: usize| format.channels.get(k).map(|c| c.0);
+                    assert!(
+                        (0..4).all(|k| near(channel(k), have[k], want[k], true)),
+                        "{name}: {entry} over {:?}, texel {t:#x}: {have:?}, Metal's {want:?}",
                         format.pf
                     );
                     for (k, &(c, _)) in format.channels.iter().enumerate() {
@@ -639,10 +682,14 @@ fn a_normalized_attachment_stores_halves_as_metal_does() {
                         .fold(0u64, |w, (k, &(c, at))| {
                             w | (u64::from(c.code(half_value(lane(i, k)))) << at)
                         });
-                    assert_eq!(
-                        t,
-                        want,
-                        "{name}: {entry} over {:?}, cell {i}: {:04x?}",
+                    // A NaN channel's code is the device's (the note's bound).
+                    let codes_near = (format.channels.iter().enumerate()).all(|(k, &(c, _))| {
+                        half_value(lane(i, k)).is_nan()
+                            || code_near(c, format.code(t, k), format.code(want, k))
+                    });
+                    assert!(
+                        codes_near,
+                        "{name}: {entry} over {:?}, cell {i}: {t:#x}, Metal's {want:#x}: {:04x?}",
                         format.pf,
                         (0..4).map(|k| lane(i, k)).collect::<Vec<_>>()
                     );

@@ -12777,7 +12777,6 @@ variant	metal2vulkan::device::VkProperty::MetalDepth16Stores	MetalDepth16Stores
 variant	metal2vulkan::device::VkProperty::MetalFirstVertexIndices	MetalFirstVertexIndices
 variant	metal2vulkan::device::VkProperty::MetalFloatColorNans	MetalFloatColorNans
 variant	metal2vulkan::device::VkProperty::MetalFloatDenormals	MetalFloatDenormals
-variant	metal2vulkan::device::VkProperty::MetalFloatStorageNans	MetalFloatStorageNans
 variant	metal2vulkan::device::VkProperty::MetalFragmentSimdgroups	MetalFragmentSimdgroups
 variant	metal2vulkan::device::VkProperty::MetalFullQuads	MetalFullQuads
 variant	metal2vulkan::device::VkProperty::MetalHalfArithmetic	MetalHalfArithmetic
@@ -12933,7 +12932,6 @@ variant	metal2vulkan::error::DriverDeviation::MetalFirstVertexIndices	MetalFirst
 variant	metal2vulkan::error::DriverDeviation::MetalFloatColorNans	MetalFloatColorNans
 variant	metal2vulkan::error::DriverDeviation::MetalFloatDenormals	MetalFloatDenormals
 variant	metal2vulkan::error::DriverDeviation::MetalFloatFunctions	MetalFloatFunctions
-variant	metal2vulkan::error::DriverDeviation::MetalFloatStorageNans	MetalFloatStorageNans
 variant	metal2vulkan::error::DriverDeviation::MetalFragmentSimdgroups	MetalFragmentSimdgroups
 variant	metal2vulkan::error::DriverDeviation::MetalFullQuads	MetalFullQuads
 variant	metal2vulkan::error::DriverDeviation::MetalHalfArithmetic	MetalHalfArithmetic

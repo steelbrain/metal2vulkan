@@ -8,9 +8,12 @@
 //! compiles with color 0 in the storage form for each 8-bit unorm format (`BGRA8Unorm`,
 //! `RGBA8Unorm`, `RG8Unorm`, `R8Unorm`) and the blend it computes
 //! (`RuntimeFact::InterlockedFramebufferFetch` names the blend, rounded without fast math), and
-//! its module passes L3. Every output, the fast-math product of `fbl8_over_product` too, stores
-//! Metal's blend exactly (Metal clamps the output before the blend, so nothing folds into it): no
-//! function records `HalfOutputFastMathBlend`, `HalfOutputPrecision` or `DeviceColorConversion`.
+//! its module passes L3. Every output, the fast-math product of `fbl8_over_product` too, blends
+//! as Metal does (Metal clamps the output before the blend, so nothing folds into it): no
+//! function records `HalfOutputFastMathBlend` or `HalfOutputPrecision`. The storage image's store
+//! converts the blend's result to its code, the device's conversion: every function records
+//! `DeviceColorConversion`; an sRGB attachment's encode and decode are the device's
+//! (`DevicePackConversion`).
 //! The guest's format (`BGRA8Unorm`) takes the form on every such profile (ANV's through its
 //! RGBA-order twin, the shader exchanging red and blue around the blend), and the guest's whole
 //! pipeline is made there, color 0 a written storage attachment and no color attachment of the
@@ -74,11 +77,10 @@ const FORMATS: [PixelFormat; 4] = [
     PixelFormat::R8Unorm,
 ];
 
-/// The notes a draw announces where a channel may be another than Metal's.
-const NOTES: [PrecisionNote; 3] = [
+/// The notes a draw announces where the blend's arithmetic may be another than Metal's.
+const NOTES: [PrecisionNote; 2] = [
     PrecisionNote::HalfOutputFastMathBlend,
     PrecisionNote::HalfOutputPrecision,
-    PrecisionNote::DeviceColorConversion,
 ];
 
 /// The attachments: color 0 of `pf` blended by `eq` under write mask `mask`, color 1 of mask none.
@@ -198,6 +200,11 @@ fn a_blended_eight_bit_unorm_fetch_computes_metals_blend() {
                 for note in NOTES {
                     assert!(!a.precision.contains(&note), "{what}: {:?}", a.precision);
                 }
+                assert!(
+                    a.precision.contains(&PrecisionNote::DeviceColorConversion),
+                    "{what}: {:?}",
+                    a.precision
+                );
                 link_and_validate(&a, &p).unwrap_or_else(|e| panic!("{what}: L3: {e}"));
                 checked += 1;
             }
@@ -237,6 +244,11 @@ fn a_blended_eight_bit_unorm_fetch_computes_metals_blend() {
                     fragment.precision_notes
                 );
             }
+            assert!(
+                (fragment.precision_notes).contains(&PrecisionNote::DeviceColorConversion),
+                "{what}: {:?}",
+                fragment.precision_notes
+            );
             for s in &pipe.stages {
                 check_words_valid(&s.spirv, &pipe.requirements, dev.profile())
                     .unwrap_or_else(|e| panic!("{what}: L3: {e}"));
@@ -301,12 +313,17 @@ fn a_blended_four_channel_srgb_fetch_computes_metals_blend() {
                     let a = compile_with(bc, entry, &p, &inputs)
                         .unwrap_or_else(|e| panic!("{what}: {e}"));
                     assert_eq!(fetched(&a), Some((true, Some(eq), rounded)), "{what}");
-                    for note in NOTES
-                        .into_iter()
-                        .chain([PrecisionNote::UnmeasuredFetchBlend])
-                    {
+                    for note in NOTES.into_iter().chain([
+                        PrecisionNote::UnmeasuredFetchBlend,
+                        PrecisionNote::DeviceColorConversion,
+                    ]) {
                         assert!(!a.precision.contains(&note), "{what}: {:?}", a.precision);
                     }
+                    assert!(
+                        a.precision.contains(&PrecisionNote::DevicePackConversion),
+                        "{what}: {:?}",
+                        a.precision
+                    );
                     link_and_validate(&a, &p).unwrap_or_else(|e| panic!("{what}: L3: {e}"));
                     checked += 1;
                 }
@@ -332,7 +349,8 @@ fn a_blended_four_channel_srgb_fetch_computes_metals_blend() {
 
 /// Other blends and write masks of an 8-bit unorm attachment: on every committed profile that
 /// orders fetch through the pixel interlock alone, each compiles in the storage form with the
-/// blend it computes, rounded without fast math, and announces nothing; one reading the blend
+/// blend it computes, rounded without fast math, and announces only the device's conversion of its
+/// result (`DeviceColorConversion`); one reading the blend
 /// color pushes it as `half` (`PushField::HalfBlendColor`), and its module passes L3.
 #[test]
 fn another_eight_bit_unorm_blend_or_mask_computes_metals_blend() {
@@ -426,6 +444,11 @@ fn another_eight_bit_unorm_blend_or_mask_computes_metals_blend() {
                 for note in NOTES {
                     assert!(!a.precision.contains(&note), "{what}: {:?}", a.precision);
                 }
+                assert!(
+                    a.precision.contains(&PrecisionNote::DeviceColorConversion),
+                    "{what}: {:?}",
+                    a.precision
+                );
                 let pushes =
                     |field: PushField| a.interface.push.fields.iter().any(|x| x.field == field);
                 assert_eq!(pushes(PushField::HalfBlendColor), reads_color, "{what}");

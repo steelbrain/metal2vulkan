@@ -73,13 +73,10 @@
 //!   8-bit sRGB format the device renders (`R8Unorm_sRGB`, `RG8Unorm_sRGB`, `RGBA8Unorm_sRGB`,
 //!   `BGRA8Unorm_sRGB`) through a view of the attachment in the unsigned integer format of its
 //!   texel (`R8_UINT`, `R16_UINT`, `R32_UINT`; `StorageView::uint_view`), whose bytes the function
-//!   converts by Metal's measured conversions itself: a read decodes each color byte to its
-//!   twelve-bit step over 4095 and alpha's to its byte over 255, a channel the format lacks 0 and
-//!   alpha 1, a write encodes by Metal's thresholds and keeps the format's bytes (`math::unpack`
-//!   and `math::pack` of `unorm4x8_srgb`; on the M4: every byte read, a texel an earlier draw of
-//!   the pass wrote read as the decode of its stored byte, every encode threshold, 4, 194, 304
-//!   floats and every half written; on the M3 Max under macOS 27.0.1 the same reads and writes of
-//!   the one- and two-channel formats, probe `s12`); a blended write encodes Metal's blend, its
+//!   converts itself by the device's conversion (`arith::pack`'s `unpack` and `pack` of
+//!   `unorm4x8_srgb`: the 8-bit instruction and the sRGB transfer by the device's `Pow`,
+//!   `PrecisionNote::DevicePackConversion`): a read decodes each byte, a channel the format lacks
+//!   0 and alpha 1, a write encodes and keeps the format's bytes; a blended write encodes Metal's blend, its
 //!   8-bit unorm blend of the format's unorm twin over the texel as a fetch decodes it
 //!   (`extended_range::Blend::srgb8`, [`srgb_texel`]: on the M3 Max every channel of the blends
 //!   measured, both maths, `half4` and `float4`, each format), and where that blend is not built
@@ -224,11 +221,9 @@
 //! that names no math mode): measured within 2 `half` units in the last place at the operands'
 //! magnitude, 16 at the output's under cancellation (below one at the function's own largest term).
 //! A `half` output's blend stores a `half` in every channel, so no conversion of the device's
-//! bears on it, and a `float` one's only by the store's rounding above; for a NaN, the blend gives
-//! every NaN as `0x7fc00000` (Metal stores each as `0x7e00`), which the
-//! storage image's store converts, Metal's where the profile takes
-//! `DriverDeviation::MetalFloatStorageNans` and the device's elsewhere, noted
-//! `PrecisionNote::DeviceNanEncoding` (`stage_io::color_write`; ANV stores `0xfe00`). An
+//! bears on it, and a `float` one's only by the store's rounding above; a NaN of the blend is the
+//! device's arithmetic's, which the storage image's store converts, noted
+//! `PrecisionNote::DeviceNanEncoding` (`stage_io::color_write`; Metal stores each as `0x7e00`). An
 //! attachment the function does not read takes the form only where a draw moved it into the
 //! storage form (`VariantKey::interlocked_colors`) and its blend is exact; elsewhere the variant
 //! is refused and the render pass splits around the draw, whose blend is the device's.
@@ -239,9 +234,10 @@
 //! `[0, 1]` (a NaN to 0), reads each code `c` as `h(c / 255)` (`f(c / 255)` for a `float4` output)
 //! and the blend color clamped to `[0, 1]` (pushed as `PushField::HalfBlendColor`), blends in the
 //! output's type in the forms Metal's compiler builds (`extended_range::Blend::unorm8`: fused and
-//! regrouped under fast math, each step rounded without), stores the result's code by Metal's unorm
-//! write (`extended_range::blend::blend_unorm8`), and keeps the codes of the channels its write
-//! mask leaves out. Measured with plain Metal on the M3 Max under macOS 27.0.1: our probe
+//! regrouped under fast math, each step rounded without) (`extended_range::blend::blend_unorm8`),
+//! stores the result, which the storage image's store converts to its code by the device's
+//! conversion (`PrecisionNote::DeviceColorConversion`), and keeps the codes of the channels its
+//! write mask leaves out. Measured with plain Metal on the M3 Max under macOS 27.0.1: our probe
 //! (premultiplied source-over, every `half` alpha in `[0, 1]` against every code of each channel,
 //! `half4` and `float4`, fast and safe math, each of the four formats: Metal's code in every
 //! channel); our probes (every factor and operation pair for color beside source-over alpha and the
@@ -322,7 +318,7 @@ use crate::error::{
     Attachment, Capability, DescriptorError, Error, ExtendedRangeBlend, Feature, RuntimeInput,
     Unsupported,
 };
-use crate::lower::arith::{extended_range, math, narrow, ops, srgb, FloatFmt, Form, Held};
+use crate::lower::arith::{extended_range, narrow, ops, pack, FloatFmt, Form, Held};
 use crate::lower::emit::EmitCx;
 use crate::lower::select::SelectCx;
 use crate::lower::stage_io::{self, Returned};
@@ -772,7 +768,7 @@ pub struct StorageView {
     pub generic_blend: bool,
     /// The unsigned-integer format of the texel size an sRGB attachment is viewed in
     /// (`StorageAttachmentUse::view_alias`): the declaration's texels are its `uint`s, which a
-    /// read unpacks and decodes and a write encodes and packs, by Metal's measured conversions.
+    /// read unpacks and decodes and a write encodes and packs, by the device's conversion.
     /// `None` for another format.
     pub uint_view: Option<vk::Format>,
     /// The RGBA-order twin a BGRA-order attachment is viewed in (`StorageAttachmentUse::
@@ -996,10 +992,9 @@ pub(crate) fn storage_form(
         .block()
         .is_some_and(|b| b.color == Some(vk::NumericFormat::Srgb));
     // An 8-bit sRGB attachment is viewed in the unsigned integer format of its texel (`R8_UINT`,
-    // `R16_UINT` or `R32_UINT`), whose bytes the function decodes and encodes by Metal's measured
-    // conversions (a fetch reads Metal's twelve-bit decode of the stored byte, `math::unpack`'s,
-    // even after an earlier draw of the pass wrote it, a channel the format lacks 0 and alpha 1,
-    // and a write stores `math::pack`'s encode, of Metal's blend where it blends).
+    // `R16_UINT` or `R32_UINT`), whose bytes the function decodes and encodes by the device's
+    // conversion (`arith::pack`'s, a channel the format lacks 0 and alpha 1, a write's encode of
+    // Metal's blend where it blends).
     // A BGRA-order attachment on a device that accesses its format without one in neither
     // direction (SPIR-V names no image format for it) is viewed in its RGBA-order twin, whose red
     // and blue the function exchanges on every read and write: the device converts each channel
@@ -2011,9 +2006,9 @@ pub(super) fn select_read(cx: &mut SelectCx<'_>, c: ColorInput) -> Result<(), Er
     if let Some(e) = sc.view.extended {
         cx.families.arith.converts(e);
     }
-    // An sRGB texel decodes through Metal's twelve-bit table.
+    // An sRGB texel decodes by the device's conversion.
     if sc.view.uint_view.is_some() {
-        cx.families.arith.srgb.get_or_insert(PackDir::Unpack);
+        cx.precision.insert(PrecisionNote::DevicePackConversion);
     }
     plan_sample(cx)?;
     let coord = stage_io::frag_coord(cx);
@@ -2128,7 +2123,7 @@ pub fn select_output(
     }
     plan_sample(cx)?;
     // The write rounds to the code Metal stores where the format converts it; an sRGB attachment's
-    // write encodes its bytes itself (`math::pack` of a `float` or `half` output), and a word
+    // write encodes its bytes itself (`arith::pack::pack` of a `float` or `half` output), and a word
     // attachment's Metal's word of a `float` or `half` output ([`word_texel`]): each records the
     // pipeline's map, which link checks, without rounding a lane.
     if sc.view.word.is_some() {
@@ -2139,9 +2134,9 @@ pub fn select_output(
         if !measured {
             return Err(Unsupported::not_implemented(Feature::Format).into());
         }
-        // An 8-bit sRGB word encodes through Metal's table.
+        // An 8-bit sRGB word encodes by the device's conversion.
         if let Some(WordAttachment::Srgb8 { .. }) = sc.view.word {
-            cx.families.arith.srgb.get_or_insert(PackDir::Pack);
+            cx.precision.insert(PrecisionNote::DevicePackConversion);
         }
         if let Some(rules) = cx.inputs.color_writes.get(&color).copied() {
             cx.families
@@ -2158,7 +2153,7 @@ pub fn select_output(
         if !measured {
             return Err(Unsupported::not_implemented(Feature::Format).into());
         }
-        cx.families.arith.srgb.get_or_insert(PackDir::Pack);
+        cx.precision.insert(PrecisionNote::DevicePackConversion);
         if let Some(rules) = cx.inputs.color_writes.get(&color).copied() {
             cx.families
                 .stage_io
@@ -2168,6 +2163,12 @@ pub fn select_output(
         }
     } else {
         stage_io::color_write::plan(cx, color, form);
+        // An 8-bit unorm blend's result is the storage image's to convert, the device's
+        // conversion ([`unorm8_blended`]).
+        if sc.view.blend.is_some() && !sc.view.generic_blend && unorm8_format(sc.view.pixel_format)
+        {
+            cx.precision.insert(PrecisionNote::DeviceColorConversion);
+        }
     }
     let coord = stage_io::frag_coord(cx);
     let fp = &mut cx.families.fragment;
@@ -2247,8 +2248,8 @@ pub(super) fn words(cx: &SelectCx<'_>, uses: u64, rets: u64) -> u64 {
     // A 16-bit float attachment's blended write (and a generic one, in `float`, its source and
     // blend color clamped) reads its texel and blends in `half`, or in `float` with exact
     // multiply-adds (twice the words) and Metal's conversion of the result; an
-    // 8-bit unorm one's clamps the output, decodes the codes by exact division (about 45
-    // instructions) and stores by Metal's unorm rule (`arith::color_write::channel_words`); a
+    // 8-bit unorm one's clamps the output and decodes the codes (the storage image's store
+    // converts the result); a
     // packed 16-bit one's clamps the output and rounds it to `half`, and decodes the word.
     let sixteen: u64 = fetch
         .values()
@@ -2263,10 +2264,7 @@ pub(super) fn words(cx: &SelectCx<'_>, uses: u64, rets: u64) -> u64 {
                 false => direct_blend(&eq, pf, kept, (blend_math(cx), half)).ok()?,
             };
             let unorm8 = match unorm8_format(pf) {
-                true => {
-                    let rule = crate::pipeline::lower_inputs::ChannelWrite::Unorm { bits: 8 };
-                    48 * 6 + crate::lower::arith::color_write::channel_words(rule)
-                }
+                true => 48 * 6,
                 false => 0,
             };
             let packed = match sc.view.word {
@@ -2288,7 +2286,7 @@ pub(super) fn words(cx: &SelectCx<'_>, uses: u64, rets: u64) -> u64 {
     // A shadowed attachment's object, and a read and a write of its shadow at each return.
     let shadowed = fetch.values().filter(|sc| sc.shadowed).count() as u64;
     // An extended-range attachment's read decodes its texel, an sRGB one's reorders its bytes and
-    // decodes three channels' steps and four quotients.
+    // decodes them (`arith::pack::unpack`).
     // An RGBA-order view's read and write exchange red and blue: one shuffle each.
     const EXCHANGE: u64 = 10;
     let exchanged = fetch
@@ -2302,7 +2300,7 @@ pub(super) fn words(cx: &SelectCx<'_>, uses: u64, rets: u64) -> u64 {
         fetch.values().any(|sc| sc.view.uint_view.is_some()),
     ) {
         (true, _) => READ.saturating_add(u64::from(extended_range::DECODE_WORDS) + 120),
-        (false, true) => READ.saturating_add(u64::from(3 * srgb::STEP_WORDS) + 400),
+        (false, true) => READ.saturating_add(u64::from(srgb_words(PackDir::Unpack)) + 120),
         (false, false) => READ,
     }
     // A packed 16-bit word attachment's read decodes the word's four fields. Added, not chosen:
@@ -2314,13 +2312,13 @@ pub(super) fn words(cx: &SelectCx<'_>, uses: u64, rets: u64) -> u64 {
     })
     .saturating_add(EXCHANGE.saturating_mul(exchanged))
     .saturating_add(super::color::ALPHA_IN_RED_WORDS.saturating_mul(moved));
-    // An sRGB attachment's write encodes four channels (three through Metal's thresholds),
-    // reorders its bytes, and merges kept ones from the texel it reads first.
+    // An sRGB attachment's write encodes four channels (`arith::pack::pack`), reorders its bytes,
+    // and merges kept ones from the texel it reads first.
     let srgb_writes = fetch
         .values()
         .filter(|sc| sc.writes && sc.view.uint_view.is_some())
         .count() as u64;
-    let srgb_write = READ.saturating_add(u64::from(3 * srgb::SEARCH_WORDS) + 400);
+    let srgb_write = READ.saturating_add(u64::from(srgb_words(PackDir::Pack)) + 120);
     // A word attachment's write encodes Metal's word and merges the kept fields: its kept mask
     // from the draw's four bits (a test and a select per field).
     let word_write: u64 = fetch
@@ -2609,11 +2607,8 @@ pub(super) fn value(
             extended_range::tile_value(fb, form, texel, table)?
         }
         (None, Some(_)) => {
-            let Some(table) = cx.decl.families.arith.srgb else {
-                return Err(cx.fail("an sRGB storage read without Metal's table"));
-            };
             let word = fb.composite_extract(texel, &[0])?;
-            srgb_decode(fb, sc.view.format, word, table)?
+            srgb_decode(fb, sc.view.format, word)?
         }
         // A packed 16-bit word attachment's texel is the word, whose channels the read decodes as
         // Metal's programmable blending hands them to the function, and as its blend reads them
@@ -2783,7 +2778,8 @@ type Write = (SValue, SValue, SValue, ImageOperands);
 /// the device's conversion (Metal's blended write's, toward zero, the largest finite `half` past
 /// it, where the profile takes `DriverDeviation::MetalHalfStorageWrites`), or rounded to nearest
 /// even under `TextureWriteRoundingMode::NearestEven` (`color_writes::HALF_NEAREST`), which no
-/// measured device's store gives.
+/// measured device's store gives. A NaN of the blend is the device's arithmetic's, which the
+/// store converts (`PrecisionNote::DeviceNanEncoding`).
 /// An output of fewer than four lanes blends as four whose missing lanes are zero, alpha among
 /// them, and the result keeps the output's lanes. The channels a write
 /// mask keeps are [`merge`]'s to take back from the texel.
@@ -2828,15 +2824,10 @@ fn half_blended(
     let v = extended_range::blend::blend_half_float(fb, &b, arith, (s, d), constant)?;
     let v = output_lanes(fb, form, v)?;
     if arith == extended_range::blend::BlendArith::Half || !sc.nearest_even {
-        // Every NaN as `0x7fc00000`, which the storage image's store converts (a NaN the
-        // device's arithmetic gave keeps its own sign and payload there; a `float` result's
-        // rounded to nearest even is rounded to it below): Metal stores every NaN of the blend as
-        // `0x7e00`. A `float` result is the device's store's to convert, as Metal's blended write
-        // converts it toward zero where the profile takes `MetalHalfStorageWrites`.
-        let f32_form = form.with(Held::Float(FloatFmt::F32));
-        let nan = fb.unary(UnOp::IsNan, v)?;
-        let quiet = ops::splat(fb, f32_form, 0x7FC0_0000)?;
-        return fb.select(nan, quiet, v);
+        // The blend's result is the storage image's store's to convert, its NaN the device's
+        // (`PrecisionNote::DeviceNanEncoding`): a `float` result as Metal's blended write converts
+        // it toward zero where the profile takes `MetalHalfStorageWrites`.
+        return Ok(v);
     }
     let rule = crate::pipeline::color_writes::HALF_NEAREST;
     crate::lower::arith::color_write::small_float(fb, form, v, rule)
@@ -2850,10 +2841,9 @@ fn half_blended(
 /// RGBA-order twin has red and blue exchanged, and the write exchanges them back,
 /// [`emit_return`]), Metal's arithmetic of the clamped output over the destination's code decoded
 /// in the output's type, the blend color from `PushField::HalfBlendColor` where the blend reads it
-/// (`extended_range::blend::blend_unorm8`), and the result's code by Metal's 8-bit unorm rule
-/// (`arith::color_write`'s `ChannelWrite::Unorm`: a NaN 0, clamped, the exact product with 255
-/// rounded to nearest), written as the `f32` the device stores as that code; a channel the write
-/// mask keeps takes the texel's after (Metal's code in every channel, the module docs).
+/// (`extended_range::blend::blend_unorm8`), the result written as it is: the storage image's
+/// store converts it to its code, the device's conversion (`PrecisionNote::DeviceColorConversion`);
+/// a channel the write mask keeps takes the texel's after (the module docs).
 fn unorm8_blended(
     cx: &mut EmitCx<'_>,
     fb: &mut FunctionBuilder<'_>,
@@ -2880,8 +2870,7 @@ fn unorm8_blended(
         }
         false => None,
     };
-    let v = extended_range::blend::blend_unorm8(fb, &b, arith, (part, texel), constant)?;
-    extended_range::blend::unorm8_write(fb, arith, v)
+    extended_range::blend::blend_unorm8(fb, &b, arith, (part, texel), constant)
 }
 
 /// The four-lane output `part` of `form` (a `half4` output's `half`s, or a `float4` one's)
@@ -3225,8 +3214,18 @@ fn blended(
     Ok((stored, held))
 }
 
+/// An upper estimate of the SPIR-V words of an sRGB texel's conversion in direction `dir`
+/// ([`srgb_decode`], [`srgb_texel`]'s encode).
+fn srgb_words(dir: PackDir) -> u32 {
+    let f4 = Form {
+        held: Held::Float(FloatFmt::F32),
+        lanes: 4,
+    };
+    pack::words(PackFormat::Unorm4x8Srgb, dir, f4)
+}
+
 /// The bytes of a texel of the sRGB format `format` held in one `u32` (`word`, the texel's bytes
-/// in memory order), in red, green, blue, alpha order, as `math::pack` and `math::unpack` hold
+/// in memory order), in red, green, blue, alpha order, as `arith::pack`'s `pack` and `unpack` hold
 /// `unorm4x8_srgb`'s: `B8G8R8A8_SRGB`'s blue and red bytes swapped, `R8G8B8A8_SRGB`'s as they
 /// are. The swap is its own inverse.
 fn rgba_order(fb: &mut FunctionBuilder<'_>, format: vk::Format, word: SValue) -> BResult<SValue> {
@@ -3247,17 +3246,12 @@ fn rgba_order(fb: &mut FunctionBuilder<'_>, format: vk::Format, word: SValue) ->
     fb.binary(BinOp::BitwiseOr, swapped, up)
 }
 
-/// The `vec4` a fetch reads from the sRGB texel `word` of `format`: Metal's decode
-/// (`math::unpack` of `unorm4x8_srgb` through the module's table `table`): each color channel's
-/// twelve-bit step over 4095 and the alpha byte over 255, correctly rounded (every byte, and every
-/// texel an earlier draw of the pass wrote), a one- or two-channel format's missing channels 0 and
-/// its alpha 1 (its word's bytes are its channels', the rest zero).
-fn srgb_decode(
-    fb: &mut FunctionBuilder<'_>,
-    format: vk::Format,
-    word: SValue,
-    table: GlobalId,
-) -> BResult<SValue> {
+/// The `vec4` a fetch reads from the sRGB texel `word` of `format`: the device's decode
+/// (`arith::pack::unpack` of `unorm4x8_srgb`, `PrecisionNote::DevicePackConversion`): each byte
+/// by the 8-bit instruction, the color channels through the sRGB transfer by the device's `Pow`,
+/// a one- or two-channel format's missing channels 0 and its alpha 1 (its word's bytes are its
+/// channels', the rest zero).
+fn srgb_decode(fb: &mut FunctionBuilder<'_>, format: vk::Format, word: SValue) -> BResult<SValue> {
     let word = match format {
         vk::Format::R8_SRGB | vk::Format::R8G8_SRGB => {
             let alpha = fb.u32_const(0xff00_0000)?;
@@ -3271,15 +3265,14 @@ fn srgb_decode(
         held: Held::Float(crate::lower::arith::FloatFmt::F32),
         lanes: 4,
     };
-    math::unpack(fb, PackFormat::Unorm4x8Srgb, f4, rgba, Some(table))
+    pack::unpack(fb, PackFormat::Unorm4x8Srgb, f4, rgba)
 }
 
 /// The `uvec4` texel (its first lane the texel's word, in the view's `R8_UINT`, `R16_UINT` or
 /// `R32_UINT`) a write of output `part` (one to four `float` or `half` lanes of `form`, a missing
-/// lane 0) to the sRGB attachment `color` stores: Metal's encode
-/// (`math::pack` of `unorm4x8_srgb` through the module's table; a NaN 0, the value clamped to `[0,
-/// 1]`, the exact product with 4095 rounded to nearest even through Metal's thresholds, alpha's
-/// with 255; our probe checked every threshold, 4, 194, 304 floats and every half), its
+/// lane 0) to the sRGB attachment `color` stores: the device's encode
+/// (`arith::pack::pack` of `unorm4x8_srgb`, `PrecisionNote::DevicePackConversion`: the color
+/// channels through the sRGB transfer by the device's `Pow`, then the 8-bit instruction), its
 /// bytes in `format`'s order; a write that keeps channels takes their bytes from the texel read
 /// first at the invocation's pixel (and sample), inside the interlock, so they stay as they were,
 /// bit for bit. Under a blend (`StorageView::blend`) the encode is of Metal's blend of the output
@@ -3295,9 +3288,6 @@ fn srgb_texel(
     (form, part): (Form, SValue),
     second: Option<(Form, SValue)>,
 ) -> BResult<SValue> {
-    let Some(table) = cx.decl.families.arith.srgb else {
-        return Err(cx.fail("an sRGB storage write without Metal's table"));
-    };
     if form
         .float_fmt()
         .map(crate::lower::arith::FloatFmt::container)
@@ -3338,7 +3328,7 @@ fn srgb_texel(
                 (true, _) => return Err(cx.fail("a blend of the second source without its output")),
                 (false, _) => None,
             };
-            let decoded = srgb_decode(fb, sc.view.format, old, table)?;
+            let decoded = srgb_decode(fb, sc.view.format, old)?;
             let constant = match b.reads_constant() {
                 true => {
                     let field = cx.push_field(fb, PushField::HalfBlendColor)?;
@@ -3353,8 +3343,7 @@ fn srgb_texel(
         (None, _) => part,
     };
     let f4 = form.with(Held::Float(crate::lower::arith::FloatFmt::F32));
-    let test = crate::lower::arith::nan::NanTest::for_modes(&cx.plan.families.arith.modes);
-    let rgba = math::pack(fb, PackFormat::Unorm4x8Srgb, f4, part, Some(table), test)?;
+    let rgba = pack::pack(fb, PackFormat::Unorm4x8Srgb, f4, part)?;
     let mut word = rgba_order(fb, sc.view.format, rgba)?;
     // A one- or two-channel format's word is its channels' bytes alone: the view's integer format
     // holds no other.
@@ -3451,12 +3440,9 @@ fn word_texel(
             };
             let v = extended_range::blend::blend_packed16(fb, &b, (part, d), constant)?;
             let f4 = form.with(Held::Float(FloatFmt::F32));
-            stage_io::word_color::encode(fb, word, (f4, v), None)?
+            stage_io::word_color::encode(fb, word, (f4, v))?
         }
-        None => {
-            let srgb = stage_io::word_color::srgb_table(cx);
-            stage_io::word_color::encode(fb, word, (form, part), srgb)?
-        }
+        None => stage_io::word_color::encode(fb, word, (form, part))?,
     };
     if sc.view.merges() {
         let channels = [

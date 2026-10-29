@@ -249,11 +249,6 @@ pub(crate) fn among<F: Copy + Ord>(
 ///   (the linux-gate container) and arm64 (on an M4 mini), and Mesa 26.2.4 on LLVM 23.1.1, x86_64
 ///   (Arch's, on an i9-13900), all at fd90c81e3.
 /// - `MetalHalfStorageNans`: every NaN `0x7e00` too, on MoltenVK 1.4.1 on the M3 Max and the M4.
-/// - `MetalFloatStorageNans`: the NaN `0x7fc00000` stored as `0x7e00`, on MoltenVK 1.4.1 on the
-///   M3 Max and the M4, RADV on the Radeon 780M, NVIDIA's on the RTX 3090 and the RTX 5080
-///   Laptop GPU, and lavapipe from Mesa 26.0.8 through 26.2.4 (the same probes). RADV and NVIDIA
-///   keep another NaN's sign and top payload bits, lavapipe its sign (and on x86_64 its top
-///   payload bits). ANV stores every NaN as `0xfe00`, so it is not listed.
 ///
 /// One row per GPU, as measured.
 ///
@@ -519,26 +514,6 @@ pub(crate) const DEVIATIONS: &[Measured<DriverDeviation>] = &[
     Measured {
         device: Some(APPLE9),
         ..moltenvk_on_apple(DriverDeviation::MetalHalfStorageNans)
-    },
-    Measured {
-        device: Some(APPLE9),
-        ..moltenvk_on_apple(DriverDeviation::MetalFloatStorageNans)
-    },
-    mesa_on(
-        DriverDeviation::MetalFloatStorageNans,
-        DriverId::MESA_RADV,
-        (AMD_VENDOR_ID, AMD_RADEON_780M),
-    ),
-    nvidia_on(DriverDeviation::MetalFloatStorageNans, NVIDIA_RTX_3090),
-    nvidia_on(
-        DriverDeviation::MetalFloatStorageNans,
-        NVIDIA_RTX_5080_LAPTOP,
-    ),
-    Measured {
-        fact: DriverDeviation::MetalFloatStorageNans,
-        driver: DriverId::MESA_LLVMPIPE,
-        vendor: None,
-        device: None,
     },
     Measured {
         device: Some(APPLE9),

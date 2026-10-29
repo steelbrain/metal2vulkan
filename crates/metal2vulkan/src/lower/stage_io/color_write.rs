@@ -49,10 +49,9 @@
 //! An attachment no lane of which rounds is not listed as rounded: it keeps its Vulkan blend of
 //! one and zero, through which the facts were measured too. A write in the storage form records
 //! the device's conversion: the facts are of the device's conversion of an output variable. A
-//! storage write the shader blends into a 16-bit float attachment gives every NaN as
-//! `0x7fc00000`, which the storage image's store converts: Metal's `0x7e00` where the profile takes
-//! `DriverDeviation::MetalFloatStorageNans` (the module requires its property), else the device's
-//! NaN, noted `PrecisionNote::DeviceNanEncoding` (ANV stores `0xfe00`). An attachment a lane of
+//! storage write the shader blends into a 16-bit float attachment stores the NaN of the device's
+//! arithmetic, which the storage image's store converts, noted `PrecisionNote::DeviceNanEncoding`
+//! (Metal stores every NaN of the blend as `0x7e00`). An attachment a lane of
 //! which rounds is listed as rounded (`rounded_colors`), and takes no Vulkan blend of one and zero.
 
 use crate::device::requirements::VkProperty;
@@ -94,10 +93,10 @@ pub(crate) fn plan(cx: &mut SelectCx<'_>, color: u32, f: Form) {
     // output's `float`, which the storage image's store rounds to `half` as Metal's blended write
     // does where the profile takes `DriverDeviation::MetalHalfStorageWrites` (the module requires
     // its property), else as the device rounds it (`PrecisionNote::DeviceColorConversion`). No
-    // conversion of an output variable's bears on it, and its NaN is the storage image's store's
-    // ([`storage_nan`]).
-    // One the shader blends into an 8-bit unorm attachment stores the code Metal's unorm rule
-    // gives the blend's result, which the shader rounds itself (`fetch::unorm8_blended`).
+    // conversion of an output variable's bears on it, and its NaN is the device's arithmetic's,
+    // which the storage image's store converts (`PrecisionNote::DeviceNanEncoding`).
+    // One the shader blends into an 8-bit unorm attachment stores the blend's result, which the
+    // storage image's store converts (`fetch::unorm8_blended`, which notes it).
     let shader_blended = crate::lower::fragment::blends_in_storage(cx, color);
     let sixteen_blended = crate::lower::fragment::blends_sixteen_in_storage(cx, color);
     let mut lanes = [None; 4];
@@ -154,9 +153,7 @@ pub(crate) fn plan(cx: &mut SelectCx<'_>, color: u32, f: Form) {
     if blended {
         cx.precision.insert(PrecisionNote::BlendedWriteRounding);
     }
-    if sixteen_blended {
-        nans |= !storage_nan(cx, &mut relied);
-    }
+    nans |= sixteen_blended;
     if nans {
         cx.precision.insert(PrecisionNote::DeviceNanEncoding);
     }
@@ -170,23 +167,6 @@ pub(crate) fn plan(cx: &mut SelectCx<'_>, color: u32, f: Form) {
     if let Err(at) = listed.binary_search(&color) {
         listed.insert(at, color);
     }
-}
-
-/// Whether a storage write the shader blends into a 16-bit float attachment stores its NaN as
-/// Metal does: the blend gives every NaN as `0x7fc00000` (`fetch::half_blended`; Metal stores
-/// every NaN of that blend as `0x7e00`), which the storage image's store converts to Metal's
-/// `0x7e00` where the profile takes `DriverDeviation::MetalFloatStorageNans`, whose property the
-/// module then relies on (`relied`). Elsewhere the NaN stored is the device's (ANV stores every NaN
-/// as `0xfe00`), which the module notes (`PrecisionNote::DeviceNanEncoding`): no value written to a
-/// 16-bit float storage image stores another there.
-fn storage_nan(cx: &SelectCx<'_>, relied: &mut BTreeSet<VkProperty>) -> bool {
-    let metal = cx
-        .profile
-        .takes_driver_deviation(DriverDeviation::MetalFloatStorageNans);
-    if metal {
-        relied.insert(VkProperty::MetalFloatStorageNans);
-    }
-    metal
 }
 
 /// How the device converts a lane of an output of `fmt` (`F32` or `Half`) to a channel of rule

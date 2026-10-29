@@ -285,10 +285,6 @@ impl DeviceProfile {
                 .enabled
                 .properties
                 .contains(&VkProperty::MetalHalfStorageNans),
-            DriverDeviation::MetalFloatStorageNans => f
-                .enabled
-                .properties
-                .contains(&VkProperty::MetalFloatStorageNans),
             DriverDeviation::MetalFragmentSimdgroups => f
                 .enabled
                 .properties

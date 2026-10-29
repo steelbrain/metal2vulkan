@@ -17,8 +17,8 @@
 //!   with ties away, by an addition and a mask.
 //! - [`f32_to_half_from_even`]: toward zero saturating or ties away, derived from an exact
 //!   rounding to nearest even.
-//! - [`grid_step`] and [`grid_value`]: a normalized texel's step on its format's grid, and a
-//!   signed step's value `n / D` exactly, shared by the bicubic sums and the tile reads.
+//! - [`grid_value`]: a signed step's value `n / D` on a normalized format's grid exactly, the
+//!   bicubic sums'.
 //!
 //! Metal's texture reads and samples decode a raw sRGB code through its twelve-bit table, as
 //! `air.unpack` does: the step `k` of [`srgb`](crate::lower::arith::srgb), then `k / 4095`
@@ -467,29 +467,6 @@ pub fn ratio_to_half(fb: &mut FunctionBuilder<'_>, u: Form, k: Value, d: Value) 
     let bits = fb.select(zero, z, bits)?;
     let ft = ty(fb, floats(u))?;
     fb.convert(ConvOp::Bitcast, bits, ft)
-}
-
-/// The step of normalized texel value `x` (`f32` lanes of form `f`) on the grid of `±D` (`d` and
-/// `neg_d`, `f32` lanes of the same form): `RoundEven(x · D)`, the product taken without
-/// contraction and clamped into `[-D, D]` first, as `i32` bits in `u32` lanes. Vulkan converts a
-/// normalized code `c` of `b` bits to `c / (2^b - 1)` rounded to one of the two nearest `f32`
-/// values (or exactly to `±1`), so on a grid `D` that is a multiple of the code scale `2^b - 1`
-/// the product lies within `0.006` of the integer `c · D / (2^b - 1)` and `RoundEven` recovers it
-/// exactly; a value already on the grid (`n / D` rounded to `f32`) recovers its step `n` the same
-/// way. The clamp changes no normalized texel's product; it keeps a value of another format,
-/// whose result a caller selects away, within range.
-pub fn grid_step(
-    fb: &mut FunctionBuilder<'_>,
-    f: Form,
-    x: Value,
-    d: Value,
-    neg_d: Value,
-) -> BResult<Value> {
-    let y = fb.binary_no_contraction(BinOp::FMul, x, d)?;
-    let y = fb.glsl(GlslOp::NClamp, &[y, neg_d, d])?;
-    let y = fb.glsl(GlslOp::RoundEven, &[y])?;
-    let it = ty(fb, words(f))?;
-    fb.convert(ConvOp::ConvertFToS, y, it)
 }
 
 /// The value `n / D` of signed grid step `n` (`i32` bits in `u32` lanes of form `u`, within

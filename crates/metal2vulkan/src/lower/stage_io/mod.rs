@@ -1986,8 +1986,7 @@ fn output_part(
             cx.plan.families.stage_io.extended.get(&color).copied(),
         ) {
             (Some(w), _) => {
-                let srgb = word_color::srgb_table(cx);
-                let word = word_color::encode(fb, w, (o.link.form, part), srgb)?;
+                let word = word_color::encode(fb, w, (o.link.form, part))?;
                 // A write of some of the word's channels over the attachment's input attachment.
                 match cx.plan.families.fragment.word_merges.get(&color).copied() {
                     Some(kept) => {

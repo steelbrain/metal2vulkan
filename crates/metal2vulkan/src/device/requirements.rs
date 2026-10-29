@@ -701,13 +701,6 @@ pub enum VkProperty {
     /// No Vulkan query reports it. A module that writes such a NaN requires it; without it, the
     /// module records `PrecisionNote::DeviceNanEncoding`.
     MetalHalfStorageNans,
-    /// The device stores the NaN `0x7fc00000` a shader writes to a half-float storage image as
-    /// `0x7e00`, Metal's (the driver's measured deviation
-    /// [`DriverDeviation::MetalFloatStorageNans`](crate::error::DriverDeviation::MetalFloatStorageNans)).
-    /// No Vulkan query reports it. A module whose fragment function blends into a 16-bit float
-    /// attachment in the storage form, whose blend gives every NaN as `0x7fc00000`, requires it;
-    /// without it, the write records `PrecisionNote::DeviceNanEncoding`.
-    MetalFloatStorageNans,
     /// The device's fragment subgroups are Metal's simdgroups, and `SubgroupLocalInvocationId` in
     /// a fragment shader is Metal's `thread_index_in_simdgroup` (the driver's measured deviation
     /// [`DriverDeviation::MetalFragmentSimdgroups`](crate::error::DriverDeviation::MetalFragmentSimdgroups)).
