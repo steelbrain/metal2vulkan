@@ -581,7 +581,8 @@ impl Device {
     /// type both the pages and a host-allocation buffer allow, with the device-address flag where
     /// the device enables `bufferDeviceAddress` (`Memory::import_host`), and a `VkBuffer` over the
     /// whole of it. Refused where the device's import alignment misses the span's start or end,
-    /// it passes the device's allocation size, or the driver refuses the pages.
+    /// it passes the device's allocation size, or the driver refuses the pages (or the runtime
+    /// does for it, `Device::refuse_unpinnable`).
     ///
     /// # Safety
     ///
@@ -607,6 +608,9 @@ impl Device {
             return Err(Error::OutOfMemory(MemoryKind::Device));
         }
         let pointer = NonNull::new(span.start as *mut u8).ok_or_else(not_importable)?;
+        // Pages the kernel cannot pin, never handed to a driver whose failed import of them
+        // breaks its later allocations.
+        self.refuse_unpinnable(pointer, size)?;
         let mut external = vk::ExternalMemoryBufferCreateInfo::default()
             .handle_types(vk::ExternalMemoryHandleTypeFlags::HOST_ALLOCATION_EXT);
         let info = shared.sharing().buffer(

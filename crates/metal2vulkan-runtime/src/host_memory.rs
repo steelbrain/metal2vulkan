@@ -45,7 +45,8 @@
 //!   both are refusals ([`import_refused`]). NVIDIA and lavapipe imported the same shared memory.
 //! - **Dma-bufs of the pages** ([`HostMemory::with_dma_buf`]), the last resort before that
 //!   refusal: where the device refuses the pointer ([`refused`]: the import window, the buffer's
-//!   binding in it, the memory types, or the driver) and imports dma-bufs, the buffer is bound in
+//!   binding in it, the memory types, the driver, or the runtime for a driver that breaks on
+//!   pages the kernel cannot pin, [`unpinnable`]) and imports dma-bufs, the buffer is bound in
 //!   imports of the source's dma-bufs of the pages instead (`dma_buf.rs`). Every import the device
 //!   takes by its pointer is made exactly as before, with no call more.
 //! - **When**. The pages are imported when the buffer is made, on every platform, as Metal wires
@@ -111,7 +112,7 @@ use super::program_objects::ProgramObject;
 use super::work_counts::Counters;
 use ash::vk;
 use metal2vulkan::device::{EnableSet, VkExtension};
-use metal2vulkan::error::{Feature, Unsupported};
+use metal2vulkan::error::{Feature, RuntimeDriverDefect, Unsupported};
 use std::ffi::c_void;
 use std::ops::Range;
 use std::ptr::NonNull;
@@ -610,9 +611,22 @@ pub(super) fn not_importable() -> Error {
 
 /// Whether `error` is the refusal of host memory this device cannot import exactly
 /// ([`not_importable`]): the window, the buffer's binding in it, the memory types or the driver
-/// refused the pointer, which a dma-buf of its pages may serve ([`DmaBufSource`]).
+/// refused the pointer, or the runtime refused it for the driver ([`unpinnable`]); a dma-buf of
+/// its pages may serve it ([`DmaBufSource`]).
 pub(super) fn refused(error: &Error) -> bool {
-    *error == not_importable()
+    *error == not_importable() || *error == unpinnable()
+}
+
+/// The runtime's refusal of host pages the kernel cannot pin, made before a driver that breaks as
+/// it fails their import sees their pointer (`RuntimeDriverDefect::UnpinnablePagesBreakHostMemory`,
+/// `Device::refuse_unpinnable`): a dma-buf of the pages may serve them, as where the driver
+/// refuses the pointer ([`refused`]), and else a no-copy object is a copy of them (`copied.rs`),
+/// as where their import fails.
+pub(super) fn unpinnable() -> Error {
+    Error::Unsupported(Unsupported::runtime_driver_defect(
+        Feature::HostMemory,
+        RuntimeDriverDefect::UnpinnablePagesBreakHostMemory,
+    ))
 }
 
 /// The error of a failed import call (`vkGetMemoryHostPointerPropertiesEXT` or the allocation): a
@@ -654,6 +668,38 @@ pub(super) fn refuse_unwritable(window: &ImportWindow, counts: &Counters) -> Res
             Feature::HostMemory,
         ))),
     }
+}
+
+impl super::Device {
+    /// Refuse `size` bytes of host pages at `pages` before the driver is handed their pointer
+    /// ([`unpinnable`]), where the device's driver breaks its later allocations as it fails an
+    /// import of pages the kernel cannot pin (`RuntimeDriverDefect::UnpinnablePagesBreakHostMemory`)
+    /// and the kernel does not pin every mapping over them (`Access::Pin`: one `PROCMAP_QUERY`
+    /// and one read a mapping, or the lines of `/proc/self/maps` before Linux 6.11); counted
+    /// (`WorkCounts::host_imports_unpinnable`). Pages whose mappings cannot be asked are refused
+    /// too. On every other driver, and off Linux, nothing is asked.
+    pub(super) fn refuse_unpinnable(&self, pages: NonNull<u8>, size: u64) -> Result<(), Error> {
+        let defect = RuntimeDriverDefect::UnpinnablePagesBreakHostMemory;
+        if !self.properties().driver_defects.contains(&defect) || kernel_pins(pages, size) {
+            return Ok(());
+        }
+        self.shared().counts.host_import_unpinnable();
+        Err(unpinnable())
+    }
+}
+
+/// Whether the kernel pins every mapping over `size` bytes of host pages at `pages`
+/// ([`Access::Pin`]); `false` where the mappings cannot be asked.
+#[cfg(target_os = "linux")]
+fn kernel_pins(pages: NonNull<u8>, size: u64) -> bool {
+    let start = pages.as_ptr() as u64;
+    mappings_permitted(start, start.saturating_add(size), Access::Pin, &mut 0) == Some(true)
+}
+
+/// [`kernel_pins`] off Linux, where no driver is kept from host pages: `true`.
+#[cfg(not(target_os = "linux"))]
+fn kernel_pins(_pages: NonNull<u8>, _size: u64) -> bool {
+    true
 }
 
 /// Whether the process maps every page of `[start, end)` with read permission, as the kernel
@@ -748,6 +794,13 @@ pub(super) enum Access {
     Read,
     /// `VM_WRITE`, the `w`: Linux drivers pin imported pages for writing ([`refuse_unwritable`]).
     Write,
+    /// `VM_READ`, and the kernel pins the mapping's pages: it reads a byte of the mapping's first
+    /// page in the window through `process_vm_readv`, which pins each page it reads
+    /// (`copied::read_pages`). The kernel pins no page of a `VM_IO` or `VM_PFNMAP` mapping, such
+    /// as a mapping of a dma-buf, and answers that for the whole mapping (`check_vma_flags` in
+    /// `mm/gup.c`), so one read a mapping answers for all of its pages
+    /// (`Device::refuse_unpinnable`).
+    Pin,
 }
 
 #[cfg(target_os = "linux")]
@@ -755,15 +808,28 @@ impl Access {
     /// The mapping's flag of the permission in `PROCMAP_QUERY`'s answer (`vma_flags`).
     fn queried(self) -> u64 {
         match self {
-            Access::Read => PROCMAP_QUERY_VMA_READABLE,
+            Access::Read | Access::Pin => PROCMAP_QUERY_VMA_READABLE,
             Access::Write => PROCMAP_QUERY_VMA_WRITABLE,
         }
+    }
+
+    /// Whether the mapping holding `address` meets the access beyond its permission: for
+    /// [`Access::Pin`], whether the kernel reads the byte at `address` through a pin of its page;
+    /// for the others, always.
+    fn pinned(self, address: u64) -> bool {
+        if self != Access::Pin {
+            return true;
+        }
+        let Some(page) = NonNull::new(address as *mut u8) else {
+            return false;
+        };
+        super::copied::read_pages(page, &mut [0])
     }
 
     /// The permission's place and letter in a maps line's permissions (`rw-p`).
     fn letter(self) -> (usize, u8) {
         match self {
-            Access::Read => (0, b'r'),
+            Access::Read | Access::Pin => (0, b'r'),
             Access::Write => (1, b'w'),
         }
     }
@@ -886,7 +952,7 @@ pub(super) fn queried_permitted(
         if query.vma_start > covered || query.vma_end <= covered {
             return None;
         }
-        if query.vma_flags & access.queried() == 0 {
+        if query.vma_flags & access.queried() == 0 || !access.pinned(covered) {
             return Some(false);
         }
         covered = query.vma_end;
@@ -925,7 +991,7 @@ pub(super) fn permitted(
             continue;
         }
         *asked += 1;
-        if from > covered || !allowed {
+        if from > covered || !allowed || !access.pinned(covered) {
             return false;
         }
         covered = to;

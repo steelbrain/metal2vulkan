@@ -991,6 +991,20 @@ pub enum RuntimeDriverDefect {
     /// low (1023 as 0.999039). Nothing is refused: the runtime converts such a texture's planes
     /// with its own kernel there, as on a device without the conversion.
     TenBitCodesReadAsWords,
+    /// An import of a host pointer (`VK_EXT_external_memory_host`) over pages the kernel cannot
+    /// pin (a mapping of a dma-buf, `VM_PFNMAP`) fails as out of device memory, where Vulkan
+    /// requires `VK_ERROR_INVALID_EXTERNAL_HANDLE` of a pointer a platform restriction keeps from
+    /// being imported, and from then on the process's host-visible allocations fail as out of
+    /// device memory too, imports and plain allocations alike, on every device of the process,
+    /// where an out-of-memory error modifies no existing object. Nothing is refused that the
+    /// driver would import, and the pages are still served: on Linux the runtime asks the kernel
+    /// whether it pins each mapping over them before it hands the driver their pointer, and pages
+    /// it cannot pin are never handed to the driver. A no-copy buffer, heap or rebind over them
+    /// takes the caller's dma-buf source where one is given, and else, or where its import fails,
+    /// a copy of them, as where a pointer import fails (`copied-host-pages`); a guest RAM's chunk
+    /// over them is not imported, its objects taking their own paths. Pages that are not mapped
+    /// readable cannot be copied, and are refused (`Unsupported`, `HostMemory`).
+    UnpinnablePagesBreakHostMemory,
 }
 
 /// One device capability a refusal can name.

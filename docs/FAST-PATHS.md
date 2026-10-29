@@ -865,6 +865,17 @@ driver's. Each is open work.
   (importing the pointer) is the one NVIDIA takes for writable pages and is unaffected. A device
   that imports dma-bufs (RADV) is **unaudited** for the clone.
 
+- **A pointer import of pages the kernel cannot pin on NVIDIA** (a dma-buf's mapping, `VM_PFNMAP`)
+  fails as out of device memory (615.71.09), where Vulkan requires
+  `VK_ERROR_INVALID_EXTERNAL_HANDLE`, and leaves the process's later host-visible allocations failing
+  (`RuntimeDriverDefect::UnpinnablePagesBreakHostMemory`, the runtime's `driver_defects.rs`). The
+  runtime keeps such pages from that driver, asking the kernel before it hands their pointer over
+  (`host_memory.rs`), at a `PROCMAP_QUERY` and a one-byte `process_vm_readv` a mapping per import:
+  a no-copy buffer, heap or rebind over them takes its dma-buf source (whose import of a udmabuf
+  NVIDIA fails, above), and with none, or where its import fails, a copy of them
+  (`copied-host-pages`), at a copy's cost; a guest RAM's chunk over them is not imported. Which later allocations the driver fails, and for how long, is
+  **unaudited** past the shapes measured there.
+
 - **Reflection after a compute descriptor reset on RADV**: `max_total_threads_per_threadgroup`
   answers 0 where Metal answers 96, `required_threads_per_threadgroup` `0x0x0` where Metal answers
   `8x6x2`, and `threadgroup_size_is_multiple_of_execution_width` false where Metal answers true

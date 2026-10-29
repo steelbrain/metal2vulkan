@@ -444,6 +444,32 @@ pub(super) struct Affected {
 ///   Nothing is refused: a 10-bit two-plane texture converts through Metal's arithmetic there, and
 ///   its planes read in place through the texel buffer (`ycbcr_device.rs`,
 ///   `texture/ycbcr_planes.rs`).
+///
+/// `UnpinnablePagesBreakHostMemory`:
+/// - NVIDIA's (`NVIDIA_PROPRIETARY`): on the RTX 5080 Laptop GPU (`deviceID` 0x2c19) under Linux,
+///   `vkAllocateMemory` importing the pointer of a mapping of a udmabuf of a `memfd`'s pages
+///   (`VM_PFNMAP`, which the kernel's `get_user_pages` refuses) answers
+///   `VK_ERROR_OUT_OF_DEVICE_MEMORY` on both memory types `vkGetMemoryHostPointerPropertiesEXT`
+///   allows (2 and 3), where Vulkan requires `VK_ERROR_INVALID_EXTERNAL_HANDLE` of a pointer
+///   "platform-specific restrictions" keep from being imported ("Host External Memory"), and
+///   later allocations of the process fail as out of device memory too, where Vulkan's
+///   out-of-memory errors "do not modify any currently existing Vulkan objects". After such an
+///   import tried as type 2, then 3: every host-pointer import measured (a `memfd`'s shared pages,
+///   8 KiB to 8 MiB at any offset; 8 MiB of private anonymous pages; 8 MiB 512 MiB away from the
+///   mapping; 40 tries over 3 s; on a second device made after it) and a plain 64 KiB
+///   allocation of host-visible type 2, while a device-local one allocates. After the runtime's
+///   own import of such pages (type 3, then 2): an 8 MiB import 8 times in a row, and a guest
+///   RAM's chunk at each of 7 objects over it, while each object's own one-page import succeeded.
+///   Neither the pointer's properties query alone, a failed import of the udmabuf itself, nor a
+///   mapping of one never imported broke anything. Measured on 615.71.09 with the runtime's
+///   device tests: known broken through 615.71.09; every other NVIDIA GPU, unprobed, takes the
+///   same path. Nothing is refused that the driver would import: on Linux the runtime asks the
+///   kernel whether it pins each mapping over the pages before it hands the driver their pointer
+///   (`host_memory.rs`'s `refuse_unpinnable`), and never hands it pages it cannot pin: a no-copy
+///   buffer, heap or rebind over them takes the caller's dma-buf source, and else, or where its
+///   import fails, a copy of them, as where a pointer import fails (`copied.rs`,
+///   `copied-host-pages`); a RAM's chunk over them is not imported, and its objects take their
+///   own paths to the same end.
 pub(super) const AFFECTED: &[Affected] = &[
     Affected {
         defect: RuntimeDriverDefect::HostTransferImagesCopiedAtBind,
@@ -575,6 +601,11 @@ pub(super) const AFFECTED: &[Affected] = &[
     Affected {
         defect: RuntimeDriverDefect::TenBitCodesReadAsWords,
         driver: DriverId::MESA_RADV,
+        clean: &[],
+    },
+    Affected {
+        defect: RuntimeDriverDefect::UnpinnablePagesBreakHostMemory,
+        driver: DriverId::NVIDIA_PROPRIETARY,
         clean: &[],
     },
 ];

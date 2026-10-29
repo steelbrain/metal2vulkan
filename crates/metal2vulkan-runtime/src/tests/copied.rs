@@ -314,6 +314,25 @@ impl DmaBufMapping {
     }
 }
 
+#[cfg(all(target_os = "linux", any(m2v_gpu, m2v_cpu_icd)))]
+impl DmaBufMapping {
+    /// A source of the mapping's own dma-buf, for a request of all of its pages: a clone of the
+    /// descriptor, which the runtime takes. A request of other pages is refused.
+    pub(super) fn source(&self) -> crate::DmaBufSource {
+        let dma_buf = std::sync::Arc::new(self._dma_buf.try_clone().unwrap());
+        let (start, length) = (self.pages.as_ptr() as usize, self.length as u64);
+        std::sync::Arc::new(move |request: crate::DmaBufRequest| {
+            if request.start.as_ptr() as usize != start || request.length != length {
+                return Err(std::io::Error::other("not the mapping's pages"));
+            }
+            Ok(vec![crate::DmaBufChunk {
+                fd: dma_buf.try_clone()?,
+                length,
+            }])
+        })
+    }
+}
+
 #[cfg(target_os = "linux")]
 impl Drop for DmaBufMapping {
     fn drop(&mut self) {

@@ -2508,7 +2508,10 @@ bound.
   the device's own, which no import maps (a heap's textures shadows of its bytes):
   the caller's gate (`HostMemory::with_import_gate`) refused the pages' import, or the import the
   device and the gate admitted failed, of the pointer or of the caller's dma-bufs (out of memory, or
-  another Vulkan error, such as a driver out of the mappings the host kernel allows). The gate is
+  another Vulkan error, such as a driver out of the mappings the host kernel allows), or the
+  runtime kept pages the kernel cannot pin (a dma-buf's mapping) from NVIDIA's driver, whose failed
+  import of them breaks it (`RuntimeDriverDefect::UnpinnablePagesBreakHostMemory`), and no dma-buf
+  of them served. The gate is
   asked before the pages' write permission: pages the process maps read-only (a VMM's alias of a
   read-only replace) are copied as any, and the copy drops the GPU's writes, as Metal drops them:
   each batch's completion takes them back out of the copy and writes nothing to the pages

@@ -204,7 +204,9 @@ the runtime made.
   attachment lies in them uses them from its open. Where a driver refuses the pointer (RADV
   refuses shared mappings, a `memfd`'s among them), memory made with `HostMemory::with_dma_buf` is
   imported from dma-bufs of its pages instead
-  ([HOWTO](../../docs/HOWTO.md#6-host-memory-a-driver-refuses)). A no-copy buffer's import of such
+  ([HOWTO](../../docs/HOWTO.md#6-host-memory-a-driver-refuses)); on NVIDIA's driver the runtime
+  never hands the driver pages the kernel cannot pin (a dma-buf's mapping): they take the source,
+  and else, or where its import fails, a copy, as below. A no-copy buffer's import of such
   dma-bufs that only blits have read may be released while idle and imported again at its next
   blit, which then costs time: RADV lists every import in every submission. Nothing of Metal's
   observes it. A no-copy buffer, heap, or buffer's or heap's rebind whose import the caller's gate

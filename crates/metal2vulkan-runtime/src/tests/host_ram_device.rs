@@ -15,6 +15,13 @@
 //! - **Rebinds.** A buffer's or heap's rebind asks the resolver once with its new window: one run
 //!   in a chunk binds there, the gate unasked and nothing imported; several runs take the gate,
 //!   and the copy where it refuses.
+//! - **After pages the kernel cannot pin.** A no-copy buffer over a dma-buf's mapping
+//!   (`VM_PFNMAP`, Linux, where `/dev/udmabuf` opens), made first, takes nothing from the device:
+//!   the RAM's first chunk is imported after it, and buffers bound in it, on a driver whose failed
+//!   import of such pages breaks its later ones
+//!   (`RuntimeDriverDefect::UnpinnablePagesBreakHostMemory`, NVIDIA's) too, where the runtime
+//!   refuses the pages before the driver sees them. There a buffer, a heap and a rebind over such
+//!   pages with no dma-buf source are each a copy of them, whose bytes the GPU reads.
 //! - **The use.** Dropping the use while a command buffer still holds a chunk frees the chunk
 //!   after that command buffer completed, and the RAM's keep-alive goes after it; the same RAM
 //!   used twice is refused, a RAM apart from it taken; a new RAM over the same ranges is taken once
@@ -837,4 +844,203 @@ fn a_rebind_onto_several_runs_takes_the_gate_and_the_copy_where_it_refuses() {
     eprintln!("HOST-RAM-REBIND: a rebind onto two runs, refused by the gate, is a copy");
     drop((made, used, ram));
     assert!(settles(&dropped));
+}
+
+/// Whether `device`'s driver breaks its later allocations as it fails an import of pages the
+/// kernel cannot pin (`RuntimeDriverDefect::UnpinnablePagesBreakHostMemory`, NVIDIA's).
+#[cfg(target_os = "linux")]
+fn breaks_on_unpinnable_pages(device: &Device) -> bool {
+    let defect = metal2vulkan::error::RuntimeDriverDefect::UnpinnablePagesBreakHostMemory;
+    device.properties().driver_defects.contains(&defect)
+}
+
+/// A new RAM's first chunk is imported on `device`, two buffers bound in it, their bytes the
+/// GPU's.
+#[cfg(target_os = "linux")]
+fn a_chunk_binds(device: &Device) {
+    let page = device.shared().host_import.as_ref().unwrap().page;
+    let (ram, start, dropped) = new_ram();
+    let used = device.use_host_ram(&ram).unwrap();
+    let (a, b) = (start + MIB, start + 3 * MIB);
+    fill_pattern(a..a + 2 * page);
+    fill_pattern(b..b + page);
+    let (runs, gates): (Arc<Mutex<_>>, Arc<Mutex<_>>) = Default::default();
+    let before = device.work_counts();
+    let over = |at, length| {
+        buffer(
+            device,
+            at,
+            length,
+            resolver(&runs, itself),
+            gate(&gates, true),
+        )
+    };
+    let (first, second) = (over(a, 2 * page).unwrap(), over(b, page).unwrap());
+    let after = device.work_counts();
+    let made = (
+        after.host_ram_chunks_imported - before.host_ram_chunks_imported,
+        after.chunk_bound_buffers_made - before.chunk_bound_buffers_made,
+    );
+    assert_eq!(
+        made,
+        (1, 2),
+        "the first chunk imported, both buffers bound in it"
+    );
+    assert_eq!(gpu_bytes(device, &first, 2 * page), bytes(a..a + 2 * page));
+    assert_eq!(gpu_bytes(device, &second, page), bytes(b..b + page));
+    drop((first, second, used, ram));
+    assert!(settles(&dropped));
+}
+
+/// A no-copy buffer over a dma-buf's mapping, with a source of its dma-buf, made before the RAM's
+/// first chunk is imported, leaves that import and the buffers bound in it as they are without
+/// it ([`a_chunk_binds`]). On a driver whose failed import of such pages breaks its later ones,
+/// the runtime refuses the pages before the driver sees them, and the buffer is the dma-buf's or
+/// a copy of the pages; elsewhere it is whatever the driver makes of them. Linux only, where
+/// `/dev/udmabuf` opens.
+#[cfg(target_os = "linux")]
+#[test]
+fn a_chunk_is_imported_after_a_refused_import_of_a_dma_buf_mapping() {
+    let Some(device) = device() else {
+        return;
+    };
+    let page = device.shared().host_import.as_ref().unwrap().page;
+    let Some(mapping) = super::copied::DmaBufMapping::new(&vec![0x5Au8; 2 * page as usize]) else {
+        return;
+    };
+    let before = device.work_counts();
+    // SAFETY: the mapping outlives the buffer, and the source makes dma-bufs of its pages.
+    let first = unsafe {
+        device.new_buffer_with_bytes_no_copy(
+            HostMemory::with_dma_buf(mapping.pages, mapping.source()),
+            2 * page,
+            ResourceOptions::default(),
+            None,
+        )
+    };
+    let after = device.work_counts();
+    let unpinnable = after.host_imports_unpinnable - before.host_imports_unpinnable;
+    eprintln!(
+        "HOST-RAM: the dma-buf mapping's buffer: {:?}; refused unpinnable {unpinnable}, pointer \
+         imports {}, dma-buf imports {}, copies {}",
+        first.as_ref().map(|buffer| buffer.copied()),
+        after.host_pointer_imports_made - before.host_pointer_imports_made,
+        after.dma_buf_imports - before.dma_buf_imports,
+        after.copied_host_buffers_made - before.copied_host_buffers_made,
+    );
+    let breaks = breaks_on_unpinnable_pages(&device);
+    assert_eq!(unpinnable, u64::from(breaks), "refused before the driver");
+    assert!(!breaks || first.is_ok(), "the dma-buf's or a copy");
+    drop(first);
+    a_chunk_binds(&device);
+    drop(mapping);
+}
+
+/// A no-copy buffer, a no-copy heap and a buffer's rebind over pages of a dma-buf's mapping, each
+/// with no gate and no source: on a driver whose failed import of such pages breaks its later ones,
+/// the runtime refuses the pages before the driver sees them (`WorkCounts::host_imports_unpinnable`)
+/// and each is a copy of them (`WorkCounts::copied_host_buffers_made`, for a failed import), whose
+/// bytes the GPU reads; the RAM's first chunk is imported after them, and buffers bound in it
+/// ([`a_chunk_binds`]). Elsewhere each is whatever the driver makes of the pages, and the chunk is
+/// imported all the same. Linux only, where `/dev/udmabuf` opens.
+#[cfg(target_os = "linux")]
+#[test]
+fn pages_refused_before_the_driver_with_no_source_are_copied() {
+    let Some(device) = device() else {
+        return;
+    };
+    let importer = device.shared().host_import.as_ref().unwrap();
+    let unit = importer.page.max(importer.alignment);
+    let length = 4 * unit;
+    // Three objects' pages, one after the other: the buffer's, the heap's, the rebind's.
+    let pattern: Vec<u8> = (0..3 * length).map(|i| (i % 251) as u8 ^ 0xA5).collect();
+    let Some(mapping) = super::copied::DmaBufMapping::new(&pattern) else {
+        return;
+    };
+    let pages = |object: u64| {
+        let at = mapping
+            .pages
+            .as_ptr()
+            .wrapping_add((object * length) as usize);
+        // SAFETY: the mapping's pages, which outlive every object over them.
+        unsafe { HostMemory::new(NonNull::new(at).unwrap()) }
+    };
+    let expected = |object: u64| &pattern[(object * length) as usize..][..length as usize];
+    let (ram, start, dropped) = new_ram();
+    // SAFETY: the RAM's bytes, mapped until its keep-alive goes, after every device let go.
+    let rebound = unsafe {
+        let memory = HostMemory::new(NonNull::new((start + 5 * MIB) as *mut u8).unwrap());
+        device.new_buffer_with_bytes_no_copy(memory, length, ResourceOptions::default(), None)
+    }
+    .unwrap();
+    let before = device.work_counts();
+    // SAFETY: as above.
+    let made = unsafe {
+        device.new_buffer_with_bytes_no_copy(pages(0), length, ResourceOptions::default(), None)
+    };
+    let descriptor = crate::HeapDescriptor::new(
+        crate::HeapType::Placement,
+        length,
+        ResourceOptions::default(),
+    );
+    // SAFETY: as above.
+    let heap = unsafe { device.new_heap_with_bytes_no_copy(pages(1), &descriptor, None, None) };
+    // SAFETY: as above; nothing uses the buffer.
+    let rebind = unsafe { rebound.rebind_bytes_no_copy(pages(2), None, None) };
+    let after = device.work_counts();
+    let counted = |of: fn(&crate::WorkCounts) -> u64| of(&after) - of(&before);
+    eprintln!(
+        "HOST-RAM: over the dma-buf mapping, no source: buffer {:?}, heap {:?}, rebind {:?}; \
+         refused unpinnable {}, copies {} ({} for a failed import), heaps copied {}, rebinds \
+         copied {}",
+        made.as_ref().map(|buffer| buffer.copied()),
+        heap.as_ref().map(|_| ()),
+        rebind,
+        counted(|counts| counts.host_imports_unpinnable),
+        counted(|counts| counts.copied_host_buffers_made),
+        counted(|counts| counts.copied_host_buffers_degraded),
+        counted(|counts| counts.copied_heaps_made),
+        counted(|counts| counts.copied_rebind_pages_made),
+    );
+    let breaks = breaks_on_unpinnable_pages(&device);
+    assert_eq!(
+        counted(|counts| counts.host_imports_unpinnable),
+        3 * u64::from(breaks),
+        "refused before the driver, each"
+    );
+    if breaks {
+        let made = made.unwrap();
+        let heap = heap.unwrap();
+        rebind.unwrap();
+        assert!(made.copied() && rebound.copied(), "copies");
+        let copies = (
+            counted(|counts| counts.copied_host_buffers_made),
+            counted(|counts| counts.copied_host_buffers_degraded),
+            counted(|counts| counts.copied_heaps_made),
+            counted(|counts| counts.copied_rebind_pages_made),
+        );
+        assert_eq!(
+            copies,
+            (3, 3, 1, 1),
+            "three copies, each for a failed import"
+        );
+        let placed = (heap.new_buffer_at_offset(length, ResourceOptions::default(), 0)).unwrap();
+        assert!(
+            gpu_bytes(&device, &made, length) == expected(0),
+            "the buffer's bytes"
+        );
+        assert!(
+            gpu_bytes(&device, &placed, length) == expected(1),
+            "the heap's bytes"
+        );
+        assert!(
+            gpu_bytes(&device, &rebound, length) == expected(2),
+            "the rebind's bytes"
+        );
+        drop((made, placed, heap));
+    }
+    drop((rebound, ram));
+    assert!(settles(&dropped));
+    a_chunk_binds(&device);
+    drop(mapping);
 }

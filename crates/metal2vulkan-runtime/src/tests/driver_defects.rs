@@ -31,6 +31,7 @@ const BIND_COPIES: RuntimeDriverDefect = RuntimeDriverDefect::HostTransferImages
 const LOST_SIGNALS: RuntimeDriverDefect = RuntimeDriverDefect::WaitForAnyObjectLosesASignal;
 const CHROMA: RuntimeDriverDefect = RuntimeDriverDefect::TwoPlaneChromaMisplaced;
 const TEN_BIT_WORDS: RuntimeDriverDefect = RuntimeDriverDefect::TenBitCodesReadAsWords;
+const UNPINNABLE: RuntimeDriverDefect = RuntimeDriverDefect::UnpinnablePagesBreakHostMemory;
 
 /// Every committed profile's driver has its defects at every release and GPU but those a probe
 /// found clean: MoltenVK the multisampled depth/stencil colour copies, the inexact depths past
@@ -53,7 +54,8 @@ const TEN_BIT_WORDS: RuntimeDriverDefect = RuntimeDriverDefect::TenBitCodesReadA
 /// descriptors a pipeline bind leaves stale on every GPU (Arrow Lake's, not measured, too);
 /// NVIDIA's the
 /// stencil colour copies on every GPU but the RTX 5080 Laptop GPU, measured clean (the GTX 1060 and
-/// the RTX 5080 desktop GPU, not measured, take them); SwiftShader none.
+/// the RTX 5080 desktop GPU, not measured, take them), and the host memory a failed import of
+/// unpinnable pages breaks on every GPU; SwiftShader none.
 #[test]
 fn the_committed_profiles_drivers_have_their_defects() {
     let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../metal2vulkan-validation/profiles");
@@ -93,8 +95,8 @@ fn the_committed_profiles_drivers_have_their_defects() {
             }
             Some(DriverId::MESA_RADV) => vec![NAN_COPIES, PREPROCESS, TEN_BIT_WORDS],
             Some(DriverId::INTEL_OPEN_SOURCE_MESA) => vec![COMPRESSION, COUNTS, STALE_PUSHES],
-            Some(DriverId::NVIDIA_PROPRIETARY) if desc.device_id == 0x2c19 => Vec::new(),
-            Some(DriverId::NVIDIA_PROPRIETARY) => vec![STENCIL_COPIES],
+            Some(DriverId::NVIDIA_PROPRIETARY) if desc.device_id == 0x2c19 => vec![UNPINNABLE],
+            Some(DriverId::NVIDIA_PROPRIETARY) => vec![STENCIL_COPIES, UNPINNABLE],
             _ => Vec::new(),
         };
         let defects: Vec<_> = of(&desc).into_iter().collect();
@@ -102,8 +104,8 @@ fn the_committed_profiles_drivers_have_their_defects() {
         drivers += usize::from(!expected.is_empty());
     }
     assert!(
-        drivers >= 13,
-        "lavapipe's three, MoltenVK's two, ANV's four, RADV's three and NVIDIA's two"
+        drivers >= 14,
+        "lavapipe's three, MoltenVK's two, ANV's four, RADV's three and NVIDIA's three"
     );
 }
 
@@ -125,7 +127,8 @@ fn a_clean_gpu_alone_lacks_the_defect() {
 
 /// NVIDIA's stencil colour-copy defect, measured on the RTX 3090 (`deviceID` 0x2204), is every
 /// NVIDIA GPU's but the RTX 5080 Laptop GPU's (0x2c19), measured clean: the RTX 3070 (0x2484) and
-/// an Ada GPU (0x2684) take it; a device that runs another driver has none.
+/// an Ada GPU (0x2684) take it; a device that runs another driver has none. The unpinnable pages'
+/// defect, measured on the 5080, is every NVIDIA GPU's, and no other driver's.
 #[test]
 fn nvidia_s_colour_copies_are_clean_on_the_gpu_measured_alone() {
     let nvidia = Some(DriverId::NVIDIA_PROPRIETARY);
@@ -133,13 +136,21 @@ fn nvidia_s_colour_copies_are_clean_on_the_gpu_measured_alone() {
     for device in [0x2204, 0x2484, 0x2684] {
         assert_eq!(
             of(device).into_iter().collect::<Vec<_>>(),
-            vec![STENCIL_COPIES],
+            vec![STENCIL_COPIES, UNPINNABLE],
             "{device:#x}"
         );
     }
-    assert!(of(0x2c19).is_empty());
+    assert_eq!(of(0x2c19).into_iter().collect::<Vec<_>>(), vec![UNPINNABLE]);
     let radv = among(AFFECTED, Some(DriverId::MESA_RADV), 0x2204);
     assert!(!radv.contains(&COPIES) && !radv.contains(&STENCIL_COPIES));
+    for driver in [
+        DriverId::MESA_RADV,
+        DriverId::MESA_LLVMPIPE,
+        DriverId::INTEL_OPEN_SOURCE_MESA,
+        DriverId::MOLTENVK,
+    ] {
+        assert!(!among(AFFECTED, Some(driver), 0x2c19).contains(&UNPINNABLE));
+    }
 }
 
 /// RADV's implicit preprocessing after an execution set, measured broken on the RX 7900 XTX

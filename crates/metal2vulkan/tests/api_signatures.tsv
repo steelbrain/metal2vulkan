@@ -2612,6 +2612,7 @@ field	metal2vulkan-runtime::WorkCounts.host_imports_reimported	pub host_imports_
 field	metal2vulkan-runtime::WorkCounts.host_imports_released	pub host_imports_released: u64
 field	metal2vulkan-runtime::WorkCounts.host_imports_remapped	pub host_imports_remapped: u64
 field	metal2vulkan-runtime::WorkCounts.host_imports_resident	pub host_imports_resident: u64
+field	metal2vulkan-runtime::WorkCounts.host_imports_unpinnable	pub host_imports_unpinnable: u64
 field	metal2vulkan-runtime::WorkCounts.host_imports_used	pub host_imports_used: u64
 field	metal2vulkan-runtime::WorkCounts.host_keep_alives_covered	pub host_keep_alives_covered: u64
 field	metal2vulkan-runtime::WorkCounts.host_keep_alives_kept	pub host_keep_alives_kept: u64
@@ -13222,6 +13223,7 @@ variant	metal2vulkan::error::RuntimeDriverDefect::ReadsCommandBuffersAfterTheirS
 variant	metal2vulkan::error::RuntimeDriverDefect::SetLayoutSupportUnderstated	SetLayoutSupportUnderstated
 variant	metal2vulkan::error::RuntimeDriverDefect::TenBitCodesReadAsWords	TenBitCodesReadAsWords
 variant	metal2vulkan::error::RuntimeDriverDefect::TwoPlaneChromaMisplaced	TwoPlaneChromaMisplaced
+variant	metal2vulkan::error::RuntimeDriverDefect::UnpinnablePagesBreakHostMemory	UnpinnablePagesBreakHostMemory
 variant	metal2vulkan::error::RuntimeDriverDefect::WaitForAnyObjectLosesASignal	WaitForAnyObjectLosesASignal
 variant	metal2vulkan::error::RuntimeInput::AlphaTest	AlphaTest
 variant	metal2vulkan::error::RuntimeInput::ColorWrites	ColorWrites

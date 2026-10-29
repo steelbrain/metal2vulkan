@@ -175,6 +175,15 @@ Linux) imports a pointer through amdgpu's userptr, which takes anonymous pages o
 `memory-backend-memfd,share=on` guest RAM among them) with `Unsupported`, `HostMemory`. NVIDIA and
 lavapipe import the same memory.
 
+No driver that pins imported pages imports a mapping the kernel cannot pin (`VM_IO` or `VM_PFNMAP`:
+a mapping of a dma-buf). NVIDIA's driver fails such an import as out of device memory and then fails
+the process's later host-visible allocations too
+(`RuntimeDriverDefect::UnpinnablePagesBreakHostMemory`), so on Linux the runtime asks the kernel
+first on that driver (one `PROCMAP_QUERY` and one one-byte `process_vm_readv` per mapping) and
+never hands it such pages (`WorkCounts::host_imports_unpinnable`): the source is called, and with
+none, or where its import fails, the object is a copy of the pages, as where an import fails
+([Copied host buffers](#copied-host-buffers)). Pages not mapped readable are refused.
+
 A consumer whose memory is such a mapping passes `HostMemory::with_dma_buf(pointer, source)` instead
 of `HostMemory::new(pointer)`. The runtime still imports the pointer first, exactly as without a
 source, and calls the source only where the device refuses it: for dma-bufs of the pages the range
@@ -330,7 +339,11 @@ happens where:
   Metal's private option bit 24 drops, a rebind whose bytes moved in their page under a texture
   (below), or where the device refused the pointer before it;
 - an import the device and the gate admitted fails, of the pointer or of the dma-bufs of the
-  caller's source (out of memory, another Vulkan error: `copied_host_buffers_degraded`).
+  caller's source (out of memory, another Vulkan error: `copied_host_buffers_degraded`);
+- on NVIDIA's driver, the pages are a mapping the kernel cannot pin (a dma-buf's), which the
+  runtime never hands that driver (`RuntimeDriverDefect::UnpinnablePagesBreakHostMemory`,
+  `WorkCounts::host_imports_unpinnable`), and no dma-buf of the caller's source served them
+  (`copied_host_buffers_degraded`).
 
 The copy is host-visible memory of the device's own; the buffer's `contents` is still the pointer.
 Each commit writes into the copy every byte the CPU changed in the pages since the copy and the

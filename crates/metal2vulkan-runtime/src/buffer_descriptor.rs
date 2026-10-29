@@ -22,8 +22,8 @@ use super::heap::{Heap, HeapProblem};
 use super::host_bytes::HostBytes;
 use super::host_memory::{
     based_size, binds_in, buffer_base, import_refused, import_window, not_importable,
-    refuse_unwritable, refused, Deallocator, HostMemory, HostParts, HostRelease, ImportRequest,
-    ImportWindow, Importer, KeepAlive, Source,
+    refuse_unwritable, refused, unpinnable, Deallocator, HostMemory, HostParts, HostRelease,
+    ImportRequest, ImportWindow, Importer, KeepAlive, Source,
 };
 use super::host_ram::Routed;
 #[cfg(unix)]
@@ -584,18 +584,20 @@ impl Device {
                             Ok((buffer, memory, again))
                         }
                         // SAFETY: as above.
-                        Ok(Err(source)) => unsafe {
+                        Ok(Err((source, refusal))) => unsafe {
                             let keep = !of_heap;
                             let window = &window;
                             self.import_from_source(
                                 call, importer, pointer, length, window, source, class, keep,
                             )
-                        },
+                        }
+                        .map_err(|failed| source_failure(failed, refusal)),
                         Err(error) => Err(error),
                     };
                 let (buffer, memory, again) = match imported {
                     Ok(imported) => imported,
-                    // An import the device and the gate admitted that then failed: a copy,
+                    // An import the device and the gate admitted that then failed, or pages the
+                    // runtime refused for the driver that no dma-buf of them served: a copy,
                     // announced.
                     Err(error) if copyable && copies_after(&error) => {
                         // SAFETY: the caller's contract.
@@ -860,7 +862,7 @@ impl Device {
                     // The source is called with no lock of the runtime's held (`dma_buf.rs`):
                     // the textures over detached bytes are let go of meanwhile, and must be
                     // settled again after it.
-                    Ok(Err(source)) => {
+                    Ok(Err((source, refusal))) => {
                         let was_settled = settled.take().is_some();
                         // SAFETY: as above, and the source's pieces hold the pages
                         // (`HostMemory::with_dma_buf`).
@@ -869,7 +871,8 @@ impl Device {
                             self.import_from_source(
                                 call, importer, pointer, length, window, source, class, false,
                             )
-                        };
+                        }
+                        .map_err(|failed| source_failure(failed, refusal));
                         let made = match from_source {
                             Ok((host, placement, _)) => {
                                 // The heap's images bound to its bytes, and the images in place
@@ -900,7 +903,8 @@ impl Device {
                                 }
                             }
                             // An import of the caller's dma-bufs the gate admitted that then
-                            // failed: a copy, as where the pointer's fails.
+                            // failed, or that served pages the runtime refused for the driver: a
+                            // copy, as where the pointer's fails.
                             Err(error) if copyable && copies_after(&error) => Err(Some(error)),
                             Err(error) => return Err(error),
                         };
@@ -1122,9 +1126,10 @@ impl Device {
 
     /// The pointer's import of `host`'s window ([`Device::import_pointer`]), where the device's
     /// import alignment covers it, exactly as ever; and where the device refuses it ([`refused`]:
-    /// no window, a buffer that does not fit it, no memory type, a driver refusal) and the caller
-    /// gave a dma-buf source the device can use, the source, uncalled (`Err`), for the caller to
-    /// call with no lock of the runtime's held (`Device::import_from_source`, `dma_buf.rs`). A
+    /// no window, a buffer that does not fit it, no memory type, a driver refusal, the runtime's
+    /// refusal of pages the kernel cannot pin) and the caller gave a dma-buf source the device can
+    /// use, the source, uncalled, with the refusal (`Err`), for the caller to call with no lock of
+    /// the runtime's held (`Device::import_from_source`, `dma_buf.rs`; [`source_failure`]). A
     /// refusal without such a source is the pointer's.
     ///
     /// # Safety
@@ -1138,7 +1143,7 @@ impl Device {
         length: u64,
         host: HostWindow,
         class: MemoryClass,
-    ) -> Result<Result<(HostBuffer, Placement), Source>, Error> {
+    ) -> Result<Result<(HostBuffer, Placement), (Source, Error)>, Error> {
         let HostWindow {
             window,
             by_pointer,
@@ -1157,7 +1162,10 @@ impl Device {
             },
             false => not_importable(),
         };
-        source.map(Err).ok_or(refusal)
+        match source {
+            Some(source) => Ok(Err((source, refusal))),
+            None => Err(refusal),
+        }
     }
 
     /// The `VkBuffer` of a no-copy buffer of `length` bytes at `pointer`, made for host
@@ -1333,7 +1341,9 @@ impl Device {
             Err(why) => {
                 discard(&memory);
                 return Err(match why {
-                    NotCopied::Unreadable => failed.unwrap_or_else(not_importable),
+                    NotCopied::Unreadable => failed
+                        .filter(|failed| !refused(failed))
+                        .unwrap_or_else(not_importable),
                     NotCopied::OutOfHostMemory => Error::OutOfMemory(MemoryKind::Host),
                 });
             }
@@ -1477,7 +1487,13 @@ impl Device {
     ) -> Result<Buffer, Error> {
         let shared = self.shared();
         let raw_device = shared.vk();
-        let unreadable = |failed: Option<Error>| failed.unwrap_or_else(not_importable);
+        // The pages' refusal where they cannot be copied: the import's failure, or a refusal of
+        // them.
+        let unreadable = |failed: Option<Error>| {
+            failed
+                .filter(|failed| !refused(failed))
+                .unwrap_or_else(not_importable)
+        };
         let bytes = usize::try_from(length).map_err(|_| Error::OutOfMemory(MemoryKind::Host))?;
         // Padded to 16 bytes, so a device fill clears every byte too, as a buffer of its own.
         let size = length
@@ -1668,6 +1684,9 @@ impl Device {
             false => None,
         };
         let imported = view.as_ref().map_or(start, ReadOnlyView::pointer);
+        // Pages the kernel cannot pin, never handed to a driver whose failed import of them
+        // breaks its later allocations.
+        self.refuse_unpinnable(imported, window.size)?;
         // SAFETY: the imported pages are host memory aligned to the import alignment (the
         // window's).
         let types =
@@ -1801,10 +1820,24 @@ fn writability_settled(
 }
 
 /// Whether `error`, an import's failure that is not the device's refusal of the pages, leaves the
-/// no-copy buffer a copy of them (`copied.rs`): out of memory, or another Vulkan error. A lost
-/// device does not, nor does misuse.
+/// no-copy buffer a copy of them (`copied.rs`): out of memory, another Vulkan error, or the
+/// runtime's refusal of pages the kernel cannot pin, made for a driver whose failed import of them
+/// breaks its later allocations ([`unpinnable`]), which no dma-buf of them served. A lost device
+/// does not, nor does misuse.
 fn copies_after(error: &Error) -> bool {
-    matches!(error, Error::OutOfMemory(_) | Error::Vulkan(_))
+    matches!(error, Error::OutOfMemory(_) | Error::Vulkan(_)) || *error == unpinnable()
+}
+
+/// What an import of the caller's dma-bufs (`dma_buf.rs`) that `failed` answers, made where the
+/// pages' pointer was refused with `refusal` ([`Device::import_by_pointer`]): the runtime's refusal
+/// of pages the kernel cannot pin ([`unpinnable`]) where the dma-bufs were refused too (no source
+/// answered, or the device refused them), so the object is a copy of the pages as where no source
+/// is given ([`copies_after`]); else `failed`, misuse and a lost device among it.
+fn source_failure(failed: Error, refusal: Error) -> Error {
+    match refused(&failed) && refusal == unpinnable() {
+        true => refusal,
+        false => failed,
+    }
 }
 
 /// The host pages a no-copy object of `length` bytes at `pointer` imports on the device of

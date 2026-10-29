@@ -1850,9 +1850,12 @@ degradations! {
         /// (`HostMemory::with_import_gate`) refused the pages' import, or the import the device
         /// and the gate admitted failed, of the pointer or of the caller's dma-bufs (out of
         /// memory, or another Vulkan error, such as a driver out of the mappings the host kernel
-        /// allows). A copy of pages the process maps read-only drops the GPU's writes, as Metal
-        /// drops them: never written to the pages (`WorkCounts::copied_dropped_bytes`; the detail
-        /// says so). A copy whose own allocation fails refuses the call (`OutOfMemory`).
+        /// allows), or the runtime kept pages the kernel cannot pin from a driver whose failed
+        /// import of them breaks it (`RuntimeDriverDefect::UnpinnablePagesBreakHostMemory`) and no
+        /// dma-buf of them served. A copy of pages the process maps read-only drops the GPU's
+        /// writes, as Metal drops them: never written to the pages
+        /// (`WorkCounts::copied_dropped_bytes`; the detail says so). A copy whose own allocation
+        /// fails refuses the call (`OutOfMemory`).
         /// Announced once per device, by the call that makes it, or at each such call where
         /// `DeviceOptions::announce_each` asks. Counted: `WorkCounts::copied_host_buffers_made`.
         CopiedHostPages = "copied-host-pages", Precision,

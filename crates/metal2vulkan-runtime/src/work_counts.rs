@@ -290,6 +290,7 @@ pub(crate) struct Counters {
     host_imports_remapped: AtomicU64,
     host_pointer_imports_made: AtomicU64,
     host_pointer_import_bytes_made: AtomicU64,
+    host_imports_unpinnable: AtomicU64,
     host_imports_refused_by_host: AtomicU64,
     copied_host_buffers_made: AtomicU64,
     copied_host_buffers_refused: AtomicU64,
@@ -2011,6 +2012,12 @@ impl Counters {
     pub(crate) fn host_pointer_import_made(&self, bytes: u64) {
         (self.host_pointer_imports_made).fetch_add(1, Ordering::Relaxed);
         (self.host_pointer_import_bytes_made).fetch_add(bytes, Ordering::Relaxed);
+    }
+
+    /// The runtime kept host pages the kernel cannot pin from the driver
+    /// (`Device::refuse_unpinnable`).
+    pub(crate) fn host_import_unpinnable(&self) {
+        (self.host_imports_unpinnable).fetch_add(1, Ordering::Relaxed);
     }
 
     /// The caller's import gate refused a no-copy buffer's import (`HostMemory::with_import_gate`).
@@ -4345,6 +4352,13 @@ pub struct WorkCounts {
     pub host_pointer_imports_made: u64,
     /// Their bytes: whole pages, rounded out to the import's unit.
     pub host_pointer_import_bytes_made: u64,
+    /// The imports of host pages by their pointer the runtime refused before the driver saw them,
+    /// because the kernel pins no page of a mapping over them (a mapping of a dma-buf), on a
+    /// driver whose failed import of such pages breaks its later allocations
+    /// (`RuntimeDriverDefect::UnpinnablePagesBreakHostMemory`): no-copy objects', rebinds' and
+    /// guest RAM's chunks'. Such an object takes the caller's dma-bufs of the pages, or else a
+    /// copy of them (`copied_host_buffers_degraded`). None on every other driver, and off Linux.
+    pub host_imports_unpinnable: u64,
     /// The no-copy buffers' imports the caller's gate refused (`HostMemory::with_import_gate`):
     /// each made a copied host buffer instead (`copied_host_buffers_refused`).
     pub host_imports_refused_by_host: u64,
@@ -4355,7 +4369,8 @@ pub struct WorkCounts {
     /// Of those, the ones made because the caller's gate refused the import.
     pub copied_host_buffers_refused: u64,
     /// Of those, the ones made because an import the device and the gate admitted failed (out
-    /// of memory, another Vulkan error).
+    /// of memory, another Vulkan error), or because the runtime refused the pages for the driver
+    /// and no dma-buf of them served (`host_imports_unpinnable`).
     pub copied_host_buffers_degraded: u64,
     /// Of those, the ones a rebind made because the new bytes lie at another offset in their
     /// page than the old, where a texture over the buffer was planned at the old offset
@@ -5457,6 +5472,7 @@ impl Device {
             host_pointer_import_bytes_made: counters
                 .host_pointer_import_bytes_made
                 .load(Ordering::Relaxed),
+            host_imports_unpinnable: counters.host_imports_unpinnable.load(Ordering::Relaxed),
             host_imports_refused_by_host: counters
                 .host_imports_refused_by_host
                 .load(Ordering::Relaxed),
