@@ -3,8 +3,8 @@
 //! and `error` reads wait for no GPU work and for no submission in progress.
 //!
 //! GPU busy work is committed first (`first_use::Busy`, released by the test), then on the same
-//! queue one blit encoder of fills of distinct words, whose submission replays its deferred command
-//! buffer (`recorder`) between its kernel start and its kernel end; its fills are doubled until
+//! queue one blit encoder of fills of distinct words, whose submission lies between its kernel
+//! start and its kernel end; its fills are doubled until
 //! that span is at least [`LONG_SUBMISSION`]. One thread reads the two kernel times over and over,
 //! from the commit until [`BEHIND_BUSY`] after the submission, while the fills wait behind the busy
 //! work, and another reads `status` and `error` over the same time, each between a read of the

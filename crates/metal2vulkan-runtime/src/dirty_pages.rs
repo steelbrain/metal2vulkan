@@ -8,9 +8,10 @@
 //!
 //! - **The stamps.** A [`DirtyStamp`] names one of the source's publications of its log. The
 //!   runtime asks for a stamp at a command buffer's commit ([`DirtyPages::request`]) where one of
-//!   its copies takes the pages again, and waits for that publication before the command
-//!   buffer's commands are recorded for the GPU ([`DirtyPages::wait`]). A copy then syncs to
-//!   that stamp: every write made after it is stamped later.
+//!   its copies takes the pages again, and waits for that publication as the batch that holds
+//!   the copy is submitted, which records the copy then (`shadow::GatedCopyIn`,
+//!   [`DirtyPages::wait`]). A copy then syncs to that stamp: every write made after it is stamped
+//!   later.
 //! - **The pages changed** ([`DirtyPages::changed_except`]) since the stamp a copy synced to, by
 //!   any writer but that copy's own, are the only bytes it may lack: they are copied in, the rest
 //!   skipped.
@@ -548,8 +549,8 @@ struct Decision {
     stamp: DirtyStamp,
 }
 
-/// A copy in of a shadow over logged host pages, its regions decided as its command buffer's
-/// commands are recorded for the GPU (`recorder`): every region where its commit found no hold
+/// A copy in of a shadow over logged host pages, its regions decided as its batch is submitted
+/// (`shadow::GatedCopyIn`): every region where its commit found no hold
 /// or its log cannot say, else the rows of the pages changed since the hold.
 pub(crate) struct CopyInGate {
     log: Arc<ShadowLog>,

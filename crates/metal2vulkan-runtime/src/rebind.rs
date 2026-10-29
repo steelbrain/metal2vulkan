@@ -831,16 +831,12 @@ impl Taken {
         self.dead
     }
 
-    /// Hold every pin weakly: its command buffer committed and waits for its first submission.
-    /// The pages it held go to `held`, which its deferred command buffers' replays hold until
-    /// they are replayed (`recorder`).
-    pub(super) fn wait(&mut self, held: &mut Vec<Arc<HostPages>>) {
+    /// Hold every pin weakly: its command buffer committed and waits for its first submission,
+    /// its commands recorded already.
+    pub(super) fn wait(&mut self) {
         for (_, pinned) in &mut self.pins {
             if let Pinned::Held(pages) = pinned {
-                let waiting = Pinned::Waiting(Arc::downgrade(pages));
-                if let Pinned::Held(pages) = std::mem::replace(pinned, waiting) {
-                    held.push(pages);
-                }
+                *pinned = Pinned::Waiting(Arc::downgrade(pages));
             }
         }
         for hold in &mut self.imports {

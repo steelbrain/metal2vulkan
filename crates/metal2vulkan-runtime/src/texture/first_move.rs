@@ -91,8 +91,7 @@
 //!   command buffer that binds them is pending (no `descriptorBindingUpdateUnusedWhilePending`)
 //!   holds no slots, as a write made after a command buffer committed misses the version it binds
 //!   (`heap_sets.rs`): there each registration waits for its place ([`FirstMoves::ordered`]), so
-//!   for no replay and no GPU work (a batch replays its encoders' deferred command buffers,
-//!   `recorder`, before its take), only for the recording of a submission's own barriers and its
+//!   for no GPU work, only for the recording of a submission's own barriers and its
 //!   `vkQueueSubmit`. An internal submission signals a timeline of its own, which a batch on
 //!   another `VkQueue` waits for while one that did first work may not have completed
 //!   ([`FirstMoves::internal_wait`]). Seen without it on RADV: a batch submitted with images in

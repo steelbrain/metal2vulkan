@@ -296,8 +296,7 @@ random on honest work. Each reason is written at its site in `cost.rs` with the 
 
 - one whose readings **moved** between the measurement's own rounds, which the record keeps as the
   range it was seen in;
-- one that says **which thread arrived first** — which thread replayed a deferred command buffer,
-  when one of our background threads ran, and everything on the asynchronous release path, whose
+- one that says **which thread arrived first** — when one of our background threads ran, and everything on the asynchronous release path, whose
   counts may land in a later case's window;
 - one that is a reading of **what was alive at that instant** rather than work a case did;
 - one that says an object was **found already made** rather than made, or that a making was

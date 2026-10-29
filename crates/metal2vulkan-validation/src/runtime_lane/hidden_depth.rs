@@ -50,7 +50,7 @@
 
 use super::render_state::{rows, stencil, validated, Pipe, Probe, EMPTY, FULL, PASS, WHITE};
 use metal2vulkan::metal::{CompareFunction, PixelFormat, PrimitiveType, StencilOperation};
-use metal2vulkan_runtime::{Buffer, Error, RenderCommandEncoder, RuntimeGap, Viewport, WorkCounts};
+use metal2vulkan_runtime::{Buffer, Error, RenderCommandEncoder, RuntimeGap, Viewport};
 
 /// A body of draws: the probe, the encoder, the depth buffers it keeps, and what makes a pipe
 /// fit the pass (the formats of the attachments the comparing pass has).
@@ -207,9 +207,7 @@ fn a_draw_without_its_depth_or_stencil_attachment_tests_metal_s_hidden_ones() {
 /// probe's color-only pass), it began none and none ends (`render/inline_first.rs`). Either way
 /// every command buffer the pass's pool handed out ended, the pool goes back to the device's
 /// spares unreset, and no spare is reset as it is taken again
-/// (`WorkCounts::spare_command_pools_reset`). The recorder replays every command buffer the
-/// passes' command buffers began but those unused ones, which nothing executes
-/// (`CommandBuffer::give_up_raw`, [`replayed_but_unrun`]).
+/// (`WorkCounts::spare_command_pools_reset`).
 #[test]
 fn a_first_draw_s_instance_ends_the_one_it_replaces() {
     const PASSES: u64 = 4;
@@ -231,11 +229,9 @@ fn a_first_draw_s_instance_ends_the_one_it_replaces() {
         let ended = after.unrun_instances_ended - before.unrun_instances_ended;
         let taken = after.spare_command_pools_taken - before.spare_command_pools_taken;
         let reset = after.spare_command_pools_reset - before.spare_command_pools_reset;
-        let (replayed, deferred) = replayed_but_unrun(&before, &after);
         eprintln!(
             "unrun instances on {}, visibility buffer {}: {PASSES} passes ended {ended} replaced \
-             instances; {taken} spare pools taken, {reset} of them reset; {replayed} of {deferred} \
-             deferred command buffers begun replayed",
+             instances; {taken} spare pools taken, {reset} of them reset",
             probe.device.name(),
             visibility.is_some(),
         );
@@ -244,33 +240,8 @@ fn a_first_draw_s_instance_ends_the_one_it_replaces() {
             "a replaced instance a pass whose first began its secondary"
         );
         assert_eq!(reset, 0, "spare pools reset as taken");
-        assert_eq!(
-            replayed,
-            deferred - ended,
-            "command buffers replayed of those begun deferred, the replaced instances' not"
-        );
     }
     super::render_state::quiet(probe, &messages);
-}
-
-/// The command buffers the recorder replayed between `before` and `after`, by its thread or by
-/// threads that submit, and those begun that record deferred where the device routes its commands
-/// to the recorder (`recorder`): every one an encoder began (its own, a segment's, one it went on
-/// in, a draws' secondary), not those a batch's submission records as it is submitted, the
-/// barrier command buffers kept, or the device's own submissions', which record straight into
-/// the driver's.
-pub(super) fn replayed_but_unrun(before: &WorkCounts, after: &WorkCounts) -> (u64, u64) {
-    let replayed = |c: &WorkCounts| c.command_buffers_replayed + c.command_buffers_replayed_inline;
-    let deferred = |c: &WorkCounts| {
-        c.command_buffers_begun_encoders
-            + c.command_buffers_begun_segments
-            + c.command_buffers_begun_continuations
-            + c.command_buffers_begun_secondaries
-    };
-    (
-        replayed(after) - replayed(before),
-        deferred(after) - deferred(before),
-    )
 }
 
 /// A pass with a depth attachment of its own whose draw uses the stencil it lacks, and one with a

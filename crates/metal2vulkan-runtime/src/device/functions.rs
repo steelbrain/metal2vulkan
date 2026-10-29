@@ -20,7 +20,7 @@
 //! every caller's stages and accesses hold as they are (`WorkCounts::copy_regions_split`). A
 //! driver's recording CPU for one region may grow with its size at some sizes and not at others:
 //! on ANV, Mesa 26.2.4, on the UHD 770 (`row_copies::span_copy_cost` in the validation crate's
-//! runtime lane, the recorder thread's CPU time a frame of one blit of one region) 8,294,411 bytes
+//! runtime lane, the recording thread's CPU time a frame of one blit of one region) 8,294,411 bytes
 //! (a prime) took 28-40 ms and 6.0 ms of GPU time, 8,294,576 (16 times a prime) 1.5-2.4 ms and
 //! 3,110,608 (16 times a prime) 0.74-0.91 ms, against 0.006-0.035 ms for 8,294,400 (2025 times
 //! 4 KiB); split so, 8,294,411 bytes took 0.018-0.060 ms and 0.64-0.76 ms of GPU time. RADV
@@ -42,7 +42,7 @@ use std::sync::Arc;
 
 /// The bytes past which a `vkCmdCopyBuffer` region whose size is no multiple of [`SPLIT_UNIT`] is
 /// two (the module docs). Measured no slower up to it: on ANV, Mesa 26.2.4, on the UHD 770 one
-/// region of 16,381 bytes (a prime) took 0.016-0.036 ms of the recorder's CPU, as 4,093 and 4,095
+/// region of 16,381 bytes (a prime) took 0.016-0.036 ms of the recording CPU, as 4,093 and 4,095
 /// bytes did.
 const SPLIT_ABOVE: u64 = 16 * 1024;
 

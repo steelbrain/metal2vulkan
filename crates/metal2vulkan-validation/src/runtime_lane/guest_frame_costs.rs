@@ -6,8 +6,7 @@
 //! the medians and 90th percentiles of the frame's commit to completion (from the first commit to
 //! the last command buffer's completion), its GPU time (each command buffer's `GPUEndTime` less
 //! `GPUStartTime`, summed) and the process's CPU time, each busy thread's CPU time per frame (the
-//! encoding thread, the recorder that replays its Vulkan commands, the scheduler, the queue's
-//! waiter), and the work counts per frame (the merges' kept images live at the end too).
+//! encoding thread, which records its Vulkan commands, the scheduler, the queue's waiter), and the work counts per frame (the merges' kept images live at the end too).
 
 use super::host_memory::Mapping;
 use super::no_copy_textures::{blending, floats, staged};

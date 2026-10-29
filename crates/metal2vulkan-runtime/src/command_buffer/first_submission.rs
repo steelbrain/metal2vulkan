@@ -69,7 +69,6 @@
 use super::checks::metal_submissions;
 use super::rebound_use::{ReboundAt, ReboundUse, Recording};
 use super::{write_fields, CommandBufferShared, Resident, State};
-use crate::buffer::HostPages;
 use crate::error::{internal, CommandBufferError, Error};
 use crate::live_buffers::LiveTable;
 use crate::rebind::{SubmittedHolds, Submitting};
@@ -183,11 +182,9 @@ impl Covered {
 impl State {
     /// As the command buffer commits (its segments recorded): what its commands took is held
     /// weakly until its first submission, which lists `listing` again where the list changed.
-    /// The pages its commands held go to `held`, which its deferred command buffers' replays
-    /// hold until they are replayed (`recorder`).
-    pub(super) fn wait_for_submission(&mut self, listing: Listing, held: &mut Vec<Arc<HostPages>>) {
+    pub(super) fn wait_for_submission(&mut self, listing: Listing) {
         for record in &mut self.ended {
-            record.taken.wait(held);
+            record.taken.wait();
         }
         let segments = self
             .recorded
@@ -195,7 +192,7 @@ impl State {
             .flat_map(|part| part.segments.iter_mut())
             .filter_map(|segment| segment.recorded.as_mut());
         for done in segments {
-            done.taken.wait(held);
+            done.taken.wait();
         }
         self.listing = Some(listing);
     }

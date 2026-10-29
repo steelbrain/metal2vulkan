@@ -94,7 +94,7 @@ use super::QueueSlot;
 /// primes: the release of a device, an instance and a messenger, the commands of a mesh draw
 /// and of an execution of commands the GPU generates, which take pipelines of their own kinds, and
 /// the layout of a linear image, of which a device need make none of any format. The first
-/// release of each in the process, the first replay of each command (`recorder`), and the first
+/// release of each in the process, the first call of each command in a section, and the first
 /// layout read in a section, registers the hook again as its section ends
 /// (`exit_guard::called`).
 pub(crate) const UNPRIMED: [Call; 9] = [
@@ -379,8 +379,8 @@ pub(crate) struct Has {
 }
 
 /// The commands a render encoder records that the device has where it has their feature or
-/// extension, which the priming's render host step makes (a deferred command buffer's replay
-/// records them inside a section, `recorder`).
+/// extension, which the priming's render host step makes (a host step records them inside a
+/// section).
 #[derive(Clone, Copy, Default)]
 pub(crate) struct PrimedDraws {
     pub(crate) dynamic: Option<ExtendedDynamicState>,
@@ -1334,8 +1334,8 @@ impl Primer<'_> {
             let zero = vk::ClearDepthStencilValue::default();
             device.cmd_clear_depth_stencil_image(recorded, depth, general, &zero, &[depth_whole]);
             self.made(Call::CmdClearDepthStencilImage);
-            // What an encoder records that no host step does, which a deferred command buffer's
-            // replay records (`recorder`): a buffer's fill and its inline update, each at bytes
+            // What an encoder records that no host step does: a buffer's fill and its inline
+            // update, each at bytes
             // of its own, a copy of the query's result, and a blit of the image's first texel to
             // its second after the clear.
             device.cmd_fill_buffer(recorded, buffer, 192, 4, 0);
@@ -1496,7 +1496,7 @@ impl Primer<'_> {
             device.cmd_set_stencil_reference(draws, faces, 0);
             self.made(Call::CmdSetStencilReference);
             // The extended dynamic states and the extension states the device has, set before
-            // the bind too (a deferred command buffer's replay records them, `recorder`).
+            // the bind too.
             let drawn = self.drawn;
             if let Some(dynamic) = drawn.dynamic {
                 (dynamic.cull_mode)(draws, vk::CullModeFlags::NONE);

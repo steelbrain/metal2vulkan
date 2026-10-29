@@ -1,12 +1,28 @@
 //! The routed commands' entry points, one per command and slot, and each slot's commands as its
-//! device's driver gave them (`recorder`): each entry point logs a deferred command buffer's
-//! command (`log.rs`), and calls the driver's with any other.
+//! device's driver gave them (`recorder`): each entry point counts its command for its slot and
+//! calls the driver's.
 
 use super::SLOTS;
 use crate::generated_commands::GeneratedCommandsInfo;
 use ash::vk;
 use std::ffi::{c_void, CStr};
 use std::sync::atomic::{AtomicPtr, AtomicU64, Ordering};
+
+/// Each slot's commands recorded so far, one count per command at its index.
+static COUNTS: [[AtomicU64; Command::COUNT]; SLOTS] =
+    [const { [const { AtomicU64::new(0) }; Command::COUNT] }; SLOTS];
+
+/// Slot `index`'s counts.
+pub(super) fn counts(index: usize) -> CommandsReplayed {
+    CommandsReplayed::read(&COUNTS[index])
+}
+
+/// Zero slot `index`'s counts, as a device takes it.
+pub(super) fn clear_counts(index: usize) {
+    for count in &COUNTS[index] {
+        count.store(0, Ordering::Relaxed);
+    }
+}
 
 /// A command whose driver's entry point was not stored for the slot whose entry point was called:
 /// a device's functions routed before its commands were (a defect of the runtime's). It ends the
@@ -55,29 +71,28 @@ macro_rules! commands {
             }
         }
 
-        /// The commands a device's replays called (`recorder`), by kind: each routed command's
-        /// calls made into the `VkCommandBuffer`s the deferred command buffers replay into, on
-        /// whichever thread replayed them. A field of `WorkCounts`, for the lanes: not part of
-        /// the API.
+        /// The commands a device recorded (`recorder`), by kind: each routed command's calls into
+        /// any of its `VkCommandBuffer`s, on whichever thread recorded them, counted at the call.
+        /// A field of `WorkCounts`, for the lanes: not part of the API.
         #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
         pub struct CommandsReplayed {
             $(
-                #[doc = concat!("The replays' calls of `", stringify!($v0), "`.")]
+                #[doc = concat!("The calls of `", stringify!($v0), "`.")]
                 pub $f0: u64,
             )*
             $(
-                #[doc = concat!("The replays' calls of `", stringify!($v3), "`.")]
+                #[doc = concat!("The calls of `", stringify!($v3), "`.")]
                 pub $f3: u64,
             )*
             $(
-                #[doc = concat!("The replays' calls of `", stringify!($ve), "`.")]
+                #[doc = concat!("The calls of `", stringify!($ve), "`.")]
                 pub $fe: u64,
             )*
         }
 
         impl CommandsReplayed {
             /// The counts `counts` holds, one per command at its index.
-            pub(crate) fn read(counts: &[AtomicU64; Command::COUNT]) -> CommandsReplayed {
+            fn read(counts: &[AtomicU64; Command::COUNT]) -> CommandsReplayed {
                 CommandsReplayed {
                     $($f0: counts[Command::$v0 as usize].load(Ordering::Relaxed),)*
                     $($f3: counts[Command::$v3 as usize].load(Ordering::Relaxed),)*
@@ -99,9 +114,9 @@ macro_rules! commands {
             $($fe: [const { AtomicPtr::new(std::ptr::null_mut()) }; SLOTS],)*
         };
 
-        commands!(@thunks $($f0 $n0 ($($a0: $t0),*) $(-> $r0)?;)*);
-        commands!(@thunks $($f3 $n3 ($($a3: $t3),*) $(-> $r3)?;)*);
-        commands!(@thunks $($fe $ne ($($ae: $te),*) $(-> $re)?;)*);
+        commands!(@thunks $($v0 $f0 $n0 ($($a0: $t0),*) $(-> $r0)?;)*);
+        commands!(@thunks $($v3 $f3 $n3 ($($a3: $t3),*) $(-> $r3)?;)*);
+        commands!(@thunks $($ve $fe $ne ($($ae: $te),*) $(-> $re)?;)*);
 
         /// Slot `S`'s entry point for `command`.
         pub(super) fn thunk<const S: usize>(command: Command) -> *const c_void {
@@ -120,24 +135,6 @@ macro_rules! commands {
                 $(Command::$v3 => REAL.$f3[index].store(real, Ordering::Release),)*
                 $(Command::$ve => REAL.$fe[index].store(real, Ordering::Release),)*
             }
-        }
-
-        /// Slot `index`'s `command` as its device's driver gave it.
-        ///
-        /// # Safety
-        ///
-        /// `F` is the function pointer type of `command`'s signature.
-        pub(super) unsafe fn real<F: Copy>(index: usize, command: Command) -> F {
-            let real = match command {
-                $(Command::$v0 => REAL.$f0[index].load(Ordering::Acquire),)*
-                $(Command::$v3 => REAL.$f3[index].load(Ordering::Acquire),)*
-                $(Command::$ve => REAL.$fe[index].load(Ordering::Acquire),)*
-            };
-            if real.is_null() {
-                missing(command.name());
-            }
-            // SAFETY: a function pointer of `F`'s signature (the caller's), not null.
-            unsafe { std::mem::transmute_copy::<*mut c_void, F>(&real) }
         }
 
         /// Forget slot `index`'s commands.
@@ -163,21 +160,14 @@ macro_rules! commands {
             )*
         }
     };
-    (@thunks $($f:ident $n:literal ($($a:ident: $t:ty),*) $(-> $r:ty)?;)*) => {
+    (@thunks $($v:ident $f:ident $n:literal ($($a:ident: $t:ty),*) $(-> $r:ty)?;)*) => {
         $(
             /// The command through slot `S` (the module docs).
             unsafe extern "system" fn $f<const S: usize>(
                 command_buffer: vk::CommandBuffer,
                 $($a: $t,)*
             ) $(-> $r)? {
-                // A deferred command buffer's command goes into its log (`recorder`).
-                // SAFETY: the caller records `command_buffer` alone (Vulkan's external
-                // synchronization); its arguments are as the command takes them.
-                let logged =
-                    unsafe { super::handles::record(command_buffer, |log| log.$f($($a,)*)) };
-                if let Some(logged) = logged {
-                    return logged;
-                }
+                COUNTS[S][Command::$v as usize].fetch_add(1, Ordering::Relaxed);
                 let real = REAL.$f[S].load(Ordering::Acquire);
                 if real.is_null() {
                     missing($n);

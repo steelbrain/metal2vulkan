@@ -459,8 +459,7 @@ calls! {
     // A batch's first work: the clear of a neutral depth image, which may be multisampled
     // (`texture/first_move.rs`, `neutral.rs`).
     CmdClearDepthStencilImage => c"vkCmdClearDepthStencilImage",
-    // An encoder's commands, which a deferred command buffer's replay records (`recorder`): those
-    // no host step records.
+    // An encoder's commands that no host step records, primed with the rest.
     CmdBlitImage => c"vkCmdBlitImage",
     CmdUpdateBuffer => c"vkCmdUpdateBuffer",
     CmdFillBuffer => c"vkCmdFillBuffer",
@@ -900,8 +899,7 @@ where
 /// with the utilization floor at its top on Linux, from its start ([`run_at_user_interactive`]):
 /// the scheduler's (`scheduler/`), each `VkQueue`'s waiter, which makes the completion turns
 /// (`command_buffer/completion.rs`), every thread of the handler
-/// pool (`contexts/`), the device's recorder and lowering threads (`recorder`,
-/// `render/lowering_worker.rs`), and a predicated loop's check's (`command_buffer/rerun.rs`),
+/// pool (`contexts/`), the device's lowering thread (`render/lowering_worker.rs`), and a predicated loop's check's (`command_buffer/rerun.rs`),
 /// whose work the program's command buffers wait for. A thread one
 /// of them starts (the reaper a pipeline state's last release
 /// starts on a handler thread, a program's thread made in a handler) does not take either: it

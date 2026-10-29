@@ -442,12 +442,8 @@ fn child(side: &str, options: &Options) {
                 c.batches_with_four_or_more_pending,
             );
             eprintln!(
-                "runtime replays: command_buffers_replayed {} command_buffers_replayed_inline {} \
-                 scheduler_sleeps {} scheduler_wakes_commit {}",
-                c.command_buffers_replayed,
-                c.command_buffers_replayed_inline,
-                c.scheduler_sleeps,
-                c.scheduler_wakes_commit,
+                "runtime scheduler: scheduler_sleeps {} scheduler_wakes_commit {}",
+                c.scheduler_sleeps, c.scheduler_wakes_commit,
             );
             eprintln!(
                 "runtime submit stalls: idle_submits {} submit_stalls_idle {} \
@@ -459,7 +455,7 @@ fn child(side: &str, options: &Options) {
                 c.submits_behind_idle_stalls,
                 c.wait_behind_idle_stall_longest_nanos,
             );
-            eprintln!("runtime commands replayed: {:?}", c.commands_replayed);
+            eprintln!("runtime commands recorded: {:?}", c.commands_replayed);
             eprintln!(
                 "runtime notices: {} (bound notices made {}), other messages heard {}",
                 runtime::NOTICES.load(std::sync::atomic::Ordering::Relaxed),

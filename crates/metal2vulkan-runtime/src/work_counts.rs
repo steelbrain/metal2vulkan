@@ -10,7 +10,7 @@ use super::command_buffer::GroupEnd;
 use super::degradation::Degradation;
 use super::device::lock;
 use super::memory::FreeCause;
-use super::recorder::{CommandsReplayed, ReplayCounts};
+use super::recorder::CommandsReplayed;
 use super::scheduler::HeldFor;
 use super::shadow::{Backing, CarryTally, CopyCause, Lost, ShadowCopy, ShadowSource};
 use super::Device;
@@ -38,7 +38,6 @@ pub(crate) struct Counters {
     /// Released objects and shadow keeps by kind (`churn_counts.rs`).
     pub(crate) churn: super::churn_counts::ChurnCounters,
     command_pools_made: AtomicU64,
-    command_buffers_deferred: AtomicU64,
     spare_command_pools_taken: AtomicU64,
     spare_command_pools_reset: AtomicU64,
     live_tables_uploaded: AtomicU64,
@@ -729,13 +728,6 @@ impl Counters {
     /// A `VkCommandPool` was made for a command buffer, none of the device's spares taken.
     pub(crate) fn command_pool_made(&self) {
         self.command_pools_made.fetch_add(1, Ordering::Relaxed);
-    }
-
-    /// An encoder took a deferred command buffer, which the device's recorder replays
-    /// (`recorder`).
-    pub(crate) fn command_buffer_deferred(&self) {
-        self.command_buffers_deferred
-            .fetch_add(1, Ordering::Relaxed);
     }
 
     /// A command buffer took one of the device's spare command pools (`spares.rs`).
@@ -1527,8 +1519,7 @@ impl Counters {
     }
 
     /// A render pass instance its pass replaced or gave up before running it had its draws
-    /// recording given up (`render.rs`, `RenderCommandEncoder::end_unrun`): never replayed where
-    /// deferred, else ended.
+    /// recording given up (`render.rs`, `RenderCommandEncoder::end_unrun`): ended.
     pub(crate) fn unrun_instance_ended(&self) {
         self.unrun_instances_ended.fetch_add(1, Ordering::Relaxed);
     }
@@ -2855,28 +2846,20 @@ pub struct MemoryFrees {
 pub struct WorkCounts {
     /// `VkCommandPool`s made for command buffers, where no spare one was free.
     pub command_pools_made: u64,
-    /// The command buffers encoders took that the program's thread logged and the device's
-    /// recorder replays into `VkCommandBuffer`s once their command buffer is committed
-    /// (`recorder`): every encoder's, on a device with a recorder.
-    pub command_buffers_deferred: u64,
-    /// Those the recorder's thread replayed.
-    pub command_buffers_replayed: u64,
-    /// Those another thread replayed itself where the recorder's had not yet reached them: one
-    /// that submits them, or that releases, rebinds or detaches host pages their commands name.
-    pub command_buffers_replayed_inline: u64,
-    /// The commands their replays called, by kind, on whichever thread replayed them
-    /// (`recorder`): one per call made into a `VkCommandBuffer`, the begins and ends among them.
-    pub commands_replayed: CommandsReplayed,
     /// Released objects MoltenVK commits its residency set for, by kind (`churn_counts.rs`).
     pub object_churn: super::churn_counts::ObjectChurn,
     /// Merged-back shadows' keeps by who planned them (`churn_counts.rs`).
     pub shadow_keeps: super::churn_counts::ShadowKeeps,
+    /// The commands recorded into the device's `VkCommandBuffer`s, by kind, as each was recorded
+    /// (`recorder`): one per call, the begins and ends among them, whatever the command buffer
+    /// (an encoder's, a batch's submission's, the device's own) and the thread; none on a device
+    /// past the slots.
+    pub commands_replayed: CommandsReplayed,
     /// The places in the runtime that recorded `vkCmdCopyBuffer`, `vkCmdCopyBufferToImage`,
     /// `vkCmdCopyImageToBuffer` and `vkCmdCopyImage` through the device's functions, as encoders
-    /// and the runtime's own work recorded them (whichever thread replays them later): the first
-    /// 32 places met, each with its calls, their regions and the most regions one had. What
-    /// names the copy behind a recorder's time on a driver that records each region as an
-    /// operation of its own (`row_copies.rs`).
+    /// and the runtime's own work recorded them: the first 32 places met, each with its calls,
+    /// their regions and the most regions one had. What names the copy behind a recording's time
+    /// on a driver that records each region as an operation of its own (`row_copies.rs`).
     pub copy_sites: [CopySite; 32],
     /// The `vkCmdCopyBuffer` regions over 16 KiB whose size is no multiple of 4 KiB that the
     /// device's functions recorded as two, the bytes up to the last whole multiple of 4 KiB and
@@ -3530,8 +3513,7 @@ pub struct WorkCounts {
     /// Of `encoder_command_buffers_begun`, the encoders' own `VkCommandBuffer`s begun ahead: a
     /// settled spare command pool's primary, begun by the thread that completed the command
     /// buffer that gave it back where no thread waited for that one, which the first encoder of
-    /// the command buffer that takes the pool records into, begun no more on its thread (on a
-    /// device with a recorder, the first encoder's replay, `recorder`).
+    /// the command buffer that takes the pool records into, begun no more on its thread.
     pub encoder_primaries_begun_ahead: u64,
     /// The spare command pools' primaries begun ahead (`encoder_primaries_begun_ahead`), taken
     /// by an encoder or not yet: not among `command_buffers_begun` until one is taken. Each is
@@ -3664,8 +3646,8 @@ pub struct WorkCounts {
     /// a submission holding its place in the submissions' order and waited until that submission
     /// was made: only on a device whose heap sets take no writes while a command buffer that binds
     /// them is pending (no `descriptorBindingUpdateUnusedWhilePending`), where a submission holds
-    /// the order from its take of the first work, after replaying its encoders' deferred command
-    /// buffers, to its `vkQueueSubmit` (`texture/first_move.rs`). Elsewhere a registration takes
+    /// the order from its take of the first work to its `vkQueueSubmit`
+    /// (`texture/first_move.rs`). Elsewhere a registration takes
     /// no place, and this stays 0.
     pub registrations_waited: u64,
     /// Submissions (a batch's, or one of the device's own) that found another holding its place in
@@ -3791,8 +3773,7 @@ pub struct WorkCounts {
     /// Render pass instances a pass replaced or gave up before running them (a draw that needed
     /// another shape before any draw recorded, a reroute's instance left behind, a first instance
     /// whose draws record inline instead), whose draws
-    /// recording the runtime gave up: never replayed where deferred (`recorder`), else ended, so
-    /// their command pool goes back to the device's spares unreset
+    /// recording the runtime gave up: ended, so their command pool goes back to the device's spares unreset
     /// (`WorkCounts::spare_command_pools_reset` counts the others). A pass's first instance that
     /// may record inline begins its draws' secondary only where a command records into it, so
     /// one replaced or recording inline before then began none, ended none, and is not counted.
@@ -4604,7 +4585,7 @@ pub struct WorkCounts {
     /// either way (`shadow.rs`).
     pub shadow_keeps_from_staging: u64,
     /// The copies in of shadows over host pages a consumer logs whose regions the log decided as
-    /// their command buffer replayed (`dirty_pages.rs`).
+    /// their batch was submitted (`dirty_pages.rs`).
     pub dirty_copies_in_gated: u64,
     /// Of those, the ones that copied every region: no hold to count on, a wait the log answered
     /// `false`, or half the rows or more changed.
@@ -4618,13 +4599,12 @@ pub struct WorkCounts {
     /// The stamps the commits of command buffers with a gated copy in asked of the logs: one per
     /// log and commit.
     pub dirty_stamps_asked: u64,
-    /// The waits the replays made for a log's publication (`DirtyPages::wait`): one per log
+    /// The waits the submissions made for a log's publication (`DirtyPages::wait`): one per log
     /// serves every stamp asked of it before the wait.
     pub dirty_waits: u64,
     /// Of the waits, those the log answered `false`.
     pub dirty_waits_unanswered: u64,
-    /// The nanoseconds the waits took, on the threads that replay command buffers before their
-    /// submission.
+    /// The nanoseconds the waits took, on the threads that submit command buffers.
     pub dirty_wait_nanos: u64,
     /// Of the keeps and merges among `shadow_copies`, those whose copy of the shadow's texels into
     /// the merge's scratch is the dispatch a copy back takes, where the device runs one faster
@@ -4931,16 +4911,10 @@ impl Device {
                 memory.frees(),
             )
         };
-        let replays = (self.shared().recorder())
-            .map_or_else(ReplayCounts::default, |recorder| recorder.counts());
         let dirty = self.shared().dirty.tally();
         WorkCounts {
-            command_pools_made: counters.command_pools_made.load(Ordering::Relaxed)
-                + replays.pools_made,
-            command_buffers_deferred: counters.command_buffers_deferred.load(Ordering::Relaxed),
-            command_buffers_replayed: replays.by_recorder,
-            command_buffers_replayed_inline: replays.by_submitter,
-            commands_replayed: replays.commands,
+            command_pools_made: counters.command_pools_made.load(Ordering::Relaxed),
+            commands_replayed: self.shared().commands_recorded(),
             object_churn: churn.0,
             shadow_keeps: churn.1,
             copy_sites: self.shared().vk().copy_sites(),
@@ -5151,8 +5125,7 @@ impl Device {
             encoder_command_buffers_begun: (counters.encoder_command_buffers_begun)
                 .load(Ordering::Relaxed),
             encoder_primaries_begun_ahead: (counters.encoder_primaries_begun_ahead)
-                .load(Ordering::Relaxed)
-                + replays.begun_ahead_taken,
+                .load(Ordering::Relaxed),
             primaries_begun_ahead: counters.primaries_begun_ahead.load(Ordering::Relaxed),
             barrier_buffers_kept: counters.barrier_buffers_kept.load(Ordering::Relaxed),
             stamped_buffers_kept: counters.stamped_buffers_kept.load(Ordering::Relaxed),

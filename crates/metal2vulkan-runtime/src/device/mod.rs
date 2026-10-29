@@ -83,7 +83,7 @@ use super::stencil_copy::StencilCopyObjects;
 use super::texture::TextureState;
 use super::unique_identifier::UniqueIdentifiers;
 use crate::image_barrier::MemoryReads;
-use crate::recorder::{Command, MeshDraws, Recorder, RecorderShared, Slot};
+use crate::recorder::{Command, MeshDraws, Slot};
 use crate::release;
 use ash::vk::{self, Handle};
 use functions::{Functions, Vk};
@@ -336,11 +336,9 @@ pub(super) struct DeviceShared {
     /// draw that reads its own pass's texture through a snapshot takes (`render/snapshot.rs`).
     pub(super) color_write_masks: Option<ColorWriteMasks>,
     /// The device's slot among those its commands go through (`recorder`), where it took one:
-    /// let go of after `vkDestroyDevice` (it drops after the teardown, `Drop`). Held, not read.
-    _recording: Option<Slot>,
-    /// The thread that replays its encoders' deferred command buffers, where it has a slot
-    /// (`recorder`).
-    recorder: Option<Recorder>,
+    /// let go of after `vkDestroyDevice` (it drops after the teardown, `Drop`). Its counts are
+    /// `WorkCounts::commands_replayed`.
+    recording: Option<Slot>,
     /// The reasons a draw that reads its pass's texture took the split that the device said
     /// already, where `METAL2VULKAN_LOG_PIPELINES` is set (`render/snapshot.rs`).
     pub(super) snapshot_fallbacks: Mutex<Vec<&'static str>>,
@@ -597,10 +595,12 @@ impl DeviceShared {
         Arc::clone(&self.functions)
     }
 
-    /// What its encoders' deferred command buffers' replays share, where it records them so
-    /// (`recorder`).
-    pub(crate) fn recorder(&self) -> Option<&Arc<RecorderShared>> {
-        self.recorder.as_ref().map(Recorder::shared)
+    /// The commands recorded through its slot so far, by kind (`recorder`); none where it took
+    /// no slot.
+    pub(crate) fn commands_recorded(&self) -> crate::CommandsReplayed {
+        self.recording
+            .as_ref()
+            .map_or_else(Default::default, Slot::counts)
     }
 
     /// `vkAllocateCommandBuffers` of `info`: the loader serves it and reads the device's loader
@@ -1706,13 +1706,6 @@ impl Device {
                 recording.as_ref(),
             )
         };
-        // Its encoders' commands replay on a thread of its own where it has a slot (`recorder`).
-        // SAFETY: the device's handle, live, its word the loader's (put back just now).
-        let recorder = recording.as_ref().and_then(|slot| {
-            Recorder::start(slot, &functions, unsafe {
-                LoaderWord::of_device(raw.handle())
-            })
-        });
         let shader_cache = match ShaderCache::start(
             cache,
             &physical_properties,
@@ -1832,8 +1825,7 @@ impl Device {
             push_descriptor,
             pushes_after_pipeline_binds,
             color_write_masks,
-            _recording: recording,
-            recorder,
+            recording,
             snapshot_fallbacks: Mutex::new(Vec::new()),
             reader_sizes: Mutex::new(Default::default()),
             gpu_pools,
@@ -1926,12 +1918,6 @@ impl Device {
             }
         }
         let device = Device(shared);
-        // The pages its replays held last go on its handler threads (`recorder`).
-        if let Some(recorder) = device.shared().recorder() {
-            recorder.set_elsewhere(device.elsewhere());
-            // Woken by the scheduler's thread for what a commit queued (`recorder`).
-            (device.shared().scheduler).wake_recorder(Arc::clone(recorder));
-        }
         // The verdicts of its check of textures over host pages, where a record holds them.
         device.recall_in_place_checks();
         device.degrade_argument_buffers_unread();

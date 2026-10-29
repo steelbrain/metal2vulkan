@@ -216,6 +216,8 @@ mod rebind_descriptor_slip;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod rebind_making_wait;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
+mod recorded_at_the_call;
+#[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod recycle;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod relay_facts;
@@ -230,7 +232,6 @@ mod render_directory_trips;
 mod render_sibling_work;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod render_stage_digests;
-mod replays;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod rerun_arenas;
 mod resource;

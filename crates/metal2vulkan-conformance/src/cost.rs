@@ -442,7 +442,7 @@ const POOLED: &str = "an object made because no spare was free, where a spare co
 /// replays of a larger case set — which reads like a regression and is not one. See [`BORROWED`].
 /// `slot_returns` beside it stays gated: it counts work items, one a command buffer, and has held
 /// still alone and in both case sets.
-const RACY: [(&str, &str); 33] = [
+const RACY: [(&str, &str); 32] = [
     ("fences_made", POOLED),
     // What is alive, parked or waiting at the instant the counts were read.
     ("memory_blocks_live", INSTANTANEOUS),
@@ -492,11 +492,6 @@ const RACY: [(&str, &str); 33] = [
         "wakes_",
         "whether a transition had to wake a thread or found one already running, which is a \
          question about timing rather than about the case's work",
-    ),
-    (
-        "command_buffers_replayed",
-        "which thread replayed a deferred command buffer: the recorder's, or one that reached it \
-         first. Their total is command_buffers_deferred, which is gated, so nothing is lost",
     ),
     (
         "object_churn.",

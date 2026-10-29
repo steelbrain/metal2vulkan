@@ -12,7 +12,7 @@
 //! - **Why.** A driver may record each region of a copy as an operation of its own: ANV records
 //!   one blit operation per region, a full 3D-pipeline draw with its own state. On the Iris Xe
 //!   the 1080 rows of a 1920-texel `BGRA8Unorm` texture took 3.1-3.3 ms of CPU, and one
-//!   `vkCmdCopyBuffer` a frame took about 15 of the recorder thread's 19 ms a frame of a
+//!   `vkCmdCopyBuffer` a frame took about 15 of the recording thread's 19 ms a frame of a
 //!   program's frames. One dispatch records the same rows as one command.
 //! - **When.** On a device measured to run the dispatch faster
 //!   (`DriverFact::RowCopiesDispatchFaster`: ANV, and NVIDIA's on the RTX 5080 Laptop GPU, from 2

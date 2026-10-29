@@ -35,9 +35,8 @@
 //!   command buffer completes over the new pages, as Metal's (`EncodedUseRebound` before). The
 //!   layer reports nothing: no Vulkan command takes the detached buffer's stand-in.
 //! - **Racing a commit.** A detach on one thread while another commits a command buffer whose
-//!   command names the buffer runs the old pages' deallocator in neither call, wherever the
-//!   device's recorder replays the commands, and the buffer's release runs it, on the releasing
-//!   thread; nothing is announced.
+//!   command names the buffer runs the old pages' deallocator in neither call, and the buffer's
+//!   release runs it, on the releasing thread; nothing is announced.
 //! - **No memory.** A detach places no memory of the bytes it detaches: once the device's
 //!   stand-in is made, detaching a large heap, and a large buffer, allocates no device memory.
 //! - **Textures**: `detach_textures.rs`.
@@ -1256,8 +1255,7 @@ fn spin_until(at: Instant) {
 
 /// A detach on one thread racing the commit, on another, of a command buffer whose blit names the
 /// buffer: the old pages' deallocator runs in neither call (the detach or the commit, whichever
-/// lets go of the pages last), wherever the device's recorder replays the command buffer's
-/// commands, and runs once at the buffer's release, on the releasing thread, as Metal runs it
+/// lets go of the pages last), and runs once at the buffer's release, on the releasing thread, as Metal runs it
 /// there; nothing is announced: with a keep-alive and without one. The command buffer, which an
 /// event holds back until both calls returned, then fails `DetachedBacking`. The races start the
 /// two calls up to 40 us apart, either first, swept in steps of 0.25 us, so that many land inside
@@ -1273,7 +1271,6 @@ fn a_detach_racing_a_commit_leaves_the_deallocator_to_the_release() {
                 false => member_over(device, A),
             };
             let (mut early, mut elsewhere) = (0, 0);
-            let before = device.work_counts();
             let span = RACE_SPAN.as_nanos() as i64;
             for round in 0..RACES {
                 let Some((buffer, seen)) = made() else {
@@ -1314,12 +1311,9 @@ fn a_detach_racing_a_commit_leaves_the_deallocator_to_the_release() {
                     _ => elsewhere += 1,
                 }
             }
-            let inline = device.work_counts().command_buffers_replayed_inline
-                - before.command_buffers_replayed_inline;
             eprintln!(
                 "DETACH race {} ({form}): {RACES} races, the deallocator ran before the release \
-                 {early}, not once in the release on its thread {elsewhere}; {inline} command \
-                 buffers replayed off the recorder's thread",
+                 {early}, not once in the release on its thread {elsewhere}",
                 device.name()
             );
             assert_eq!(

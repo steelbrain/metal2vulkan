@@ -1424,12 +1424,6 @@ impl Gpu for Runtime {
                 "replayed_cmd_draw_mesh_tasks_indirect",
                 replayed.cmd_draw_mesh_tasks_indirect,
             ),
-            ("command_buffers_deferred", c.command_buffers_deferred),
-            ("command_buffers_replayed", c.command_buffers_replayed),
-            (
-                "command_buffers_replayed_inline",
-                c.command_buffers_replayed_inline,
-            ),
             ("copy_regions_split", c.copy_regions_split),
             ("spare_command_pools_taken", c.spare_command_pools_taken),
             ("spare_command_pools_reset", c.spare_command_pools_reset),

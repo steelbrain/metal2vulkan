@@ -1,6 +1,6 @@
-//! Vulkan command recording off the program's encoding thread: the encoders record into deferred
-//! command buffers, whose commands a log keeps, and the device's recorder thread replays each log
-//! into a `VkCommandBuffer` once its command buffer committed, before its submission.
+//! The door every command a `VkCommandBuffer` takes goes through, counted by kind as it is
+//! recorded. The encoders record into the driver's command buffers at each call, on the program's
+//! thread, as the scheduler's thread records its batches' own; this module only counts.
 //!
 //! - **One door.** The device's functions hold this module's entry point in place of the driver's
 //!   for each command a `VkCommandBuffer` takes ([`Command`]), its begin and its end among them. A
@@ -10,65 +10,17 @@
 //!   device's command with one load, without a lock or a lookup by handle; a slot is let go of
 //!   with its device, after `vkDestroyDevice`. A source test fails when a file outside this module
 //!   names a command that is not routed.
-//! - **Deferred command buffers.** An encoder's command buffers (`CommandBuffer::allocate_raw`
-//!   and `allocate_secondary`) are handles of this module's (`handles.rs`), never a driver's: an
-//!   entry point called with one logs the command, its arguments copied at the call (`log.rs`), and
-//!   calls the driver's with any other. So everything Metal makes observable at encode time stays
-//!   at the call, on the program's thread: the checks, refusals and their errors, the copies of
-//!   inline bytes and of the commands' arguments, descriptor writes, object and pipeline making,
-//!   retention, notices, the tracker's uses. Only the driver's recording moves, and Metal reads
-//!   buffer contents as the GPU runs the commands, not as they are encoded, so what the commands
-//!   do is the same. A device without a slot, or once every handle is live, records into the
-//!   driver's command buffers as they are encoded.
-//! - **Replayed once committed** (`replays.rs`). A command buffer's ended logs replay, in the order
-//!   they ended (a secondary before the primary that executes it, Vulkan's executable state), into
-//!   command buffers of a pool of its own (a spare, `spares.rs`), never shared with the scheduler's
-//!   barrier command buffers: on the recorder thread, or on the thread that submits it where the
-//!   recorder has not yet reached it, which then replays it itself ([`resolve`]), so a submission
-//!   never waits for a wake. The scheduler's thread wakes the recorder's once a pass took the
-//!   commit in, after the pass's submissions ([`RecorderShared::kick`]): a commit wakes one
-//!   thread, the scheduler's, so the program's thread makes one system call for it. A log of a
-//!   command buffer never committed is never replayed, nor one never ended: a render pass
-//!   instance's secondary that nothing will execute is left unended
-//!   (`CommandBuffer::give_up_raw`).
-//! - **What the logs name lives through the replay.** Every object a command names stays live
-//!   until its command buffer completes, but for the host pages a command buffer holds only weakly
-//!   from its commit to its first submission (`rebind.rs`): its commit hands their holds to its
-//!   replays, which let go of them once every ended log replayed. A release, rebind or detach of
-//!   pages the replays hold replays first, on its own thread, what the recorder has yet to
-//!   ([`RecorderShared::settle_all`]), and a commit whose pages' buffer let go of them (released
-//!   or detached while an encoder took them, on any thread) replays its command buffer itself,
-//!   so the pages' deallocator runs in the call it runs in without a recorder. Each marks its
-//!   side, then reads the other's, so a let-go and a commit that race agree on which replays
-//!   (`HostPages::let_go_by_buffer`). Its release (completion, failure, drop) lets go of the
-//!   rest, after any replay in progress, replaying nothing more.
-//! - **Counted by kind.** Each command a replay calls counts once for its kind, one relaxed
-//!   increment into a fixed array of the device's indexed by the command
-//!   (`WorkCounts::commands_replayed`).
-//! - **A replay's failure** (`vkBeginCommandBuffer` or `vkEndCommandBuffer` out of memory) fails
-//!   the submission of what it replayed, as a recording error.
-//! - **In sections.** The recorder thread is one of the runtime's: each replay runs inside a
-//!   section of the exit guard, and every entry point it calls is the guard's table's, marked as
-//!   called as it is ([`exit_guard::called`]), so the first replay of a command the device's
-//!   priming could not make registers the exit hook again.
+//! - **Counted by kind.** Each command recorded through a slot counts once for its kind, one
+//!   relaxed increment into a fixed array of the slot's indexed by the command, whatever the
+//!   command buffer and the thread (`WorkCounts::commands_replayed`). A device past the slots
+//!   records with its driver's commands, uncounted.
 
-mod handles;
-mod log;
-mod replays;
 mod thunks;
 
-use crate::device::functions::Functions;
-use crate::exit_guard;
-use crate::loader_word::LoaderWord;
 use ash::vk;
 use std::ffi::{c_void, CStr};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
 
-pub(crate) use handles::is_deferred;
-#[cfg(test)]
-pub(crate) use replays::queue_room;
-pub(crate) use replays::{resolve, take_leaving_room, RecorderShared, ReplayCounts, Replays};
 pub(crate) use thunks::Command;
 pub use thunks::CommandsReplayed;
 
@@ -146,54 +98,16 @@ impl Slot {
         unsafe { std::mem::transmute_copy::<*const c_void, F>(&thunk) }
     }
 
+    /// The commands recorded through the slot so far, by kind (the module docs).
+    pub(crate) fn counts(&self) -> CommandsReplayed {
+        thunks::counts(self.index)
+    }
+
     /// The slot's entry point in place of the driver's `name`, if it routes that command: the exit
     /// guard's table (`device/functions.rs`) holds it too.
     pub(crate) fn entry(&self, name: &CStr) -> Option<*const c_void> {
         let command = Command::ALL.iter().find(|command| command.name() == name)?;
         Some(per_slot!(self.index, S => thunks::thunk::<S>(*command)))
-    }
-}
-
-/// A device's recorder thread and what its replays share (the module docs).
-pub(crate) struct Recorder {
-    shared: Arc<RecorderShared>,
-    thread: Option<std::thread::JoinHandle<()>>,
-}
-
-impl Recorder {
-    /// Start the recorder of the device of `slot`, whose functions are `functions` and loader
-    /// word `loader_word`; `None` where the host starts no thread (the device records as its
-    /// encoders encode). The thread holds the functions, which it ends before the device's
-    /// teardown goes on (its drop joins it); its replays borrow them.
-    pub(crate) fn start(
-        slot: &Slot,
-        functions: &Functions,
-        loader_word: LoaderWord,
-    ) -> Option<Recorder> {
-        let shared = RecorderShared::new(slot.index, loader_word);
-        let running = Arc::clone(&shared);
-        let functions = functions.clone();
-        let builder = std::thread::Builder::new().name("metal2vulkan-recorder".to_owned());
-        let thread =
-            exit_guard::spawn_user_interactive(builder, move || running.run(&functions)).ok()?;
-        Some(Recorder {
-            shared,
-            thread: Some(thread),
-        })
-    }
-
-    /// What its replays share.
-    pub(crate) fn shared(&self) -> &Arc<RecorderShared> {
-        &self.shared
-    }
-}
-
-impl Drop for Recorder {
-    fn drop(&mut self) {
-        self.shared.stop();
-        if let Some(thread) = self.thread.take() {
-            let _ = thread.join();
-        }
     }
 }
 
@@ -220,6 +134,7 @@ pub(crate) unsafe fn route(device: ash::Device) -> (ash::Device, Option<Slot>) {
         return (device, None);
     };
     let slot = Slot { index };
+    thunks::clear_counts(index);
     let mut v1_0 = device.fp_v1_0().clone();
     let mut v1_3 = device.fp_v1_3().clone();
     per_slot!(index, S => thunks::route_tables::<S>(&mut v1_0, &mut v1_3));
@@ -245,43 +160,6 @@ pub(crate) unsafe fn through<F: Copy>(slot: Option<&Slot>, command: Command, rea
         Some(slot) => unsafe { slot.route(command, real) },
         None => real,
     }
-}
-
-/// Log a shadow's copy in into `raw`, where it is a deferred command buffer, its regions decided
-/// by `gate` as it replays (`dirty_pages.rs`); `false` where `raw` is a driver's command buffer,
-/// into which the caller records every region itself.
-///
-/// # Safety
-///
-/// The caller records `raw` alone, and `raw` is recording; the command is valid with every one
-/// of `regions` (each region the gate keeps is one of them, or rows of one).
-pub(crate) unsafe fn copy_buffer_to_image_gated(
-    raw: vk::CommandBuffer,
-    gate: Arc<crate::dirty_pages::CopyInGate>,
-    copy: (vk::Buffer, vk::Image, vk::ImageLayout),
-    regions: &[vk::BufferImageCopy],
-) -> bool {
-    // SAFETY: the caller's.
-    unsafe {
-        handles::record(raw, |log| {
-            log.copy_buffer_to_image_gated(gate, copy, regions)
-        })
-    }
-    .is_some()
-}
-
-/// Room in `raw`'s log, where it is a deferred command buffer, for the end a commit may fold into
-/// it as its command buffer's tail (`CommandBufferShared::close_tail`): a barrier of one memory
-/// barrier, then a timestamp. A log made while no spare one was kept (its earlier replays'
-/// completions still to come) has no room in its lists until it takes it here, on the encoding
-/// thread as its encoder ends, so the commit's logging grows no list whenever completions come.
-///
-/// # Safety
-///
-/// The caller records `raw` alone, and `raw` is recording.
-pub(crate) unsafe fn reserve_end(raw: vk::CommandBuffer) {
-    // SAFETY: the caller's.
-    unsafe { handles::record(raw, |log| log.reserve_end()) };
 }
 
 /// The extension commands of `VK_EXT_mesh_shader` a draw records, routed (`render.rs`).

@@ -546,18 +546,6 @@ impl CommandBufferShared {
                 exit_uses.push(image.transition_use());
             }
         }
-        // Its encoders' deferred command buffers replayed now, where the recorder's thread has
-        // not yet (`recorder`), waiting for a replay in progress: before the first work's take,
-        // which holds the submissions' order until the submission is made, and which a new
-        // resource's registration waits for where registrations wait for their place
-        // (`texture/first_move.rs`). A texture made meanwhile so waits for no replay. Each keeps
-        // its handle as encoded until the submission (below), which finds it replayed.
-        for buffer in encoders.iter().flat_map(|recorded| &recorded.raws) {
-            // SAFETY: each ended, and its command buffer committed; inside the scheduler's
-            // section.
-            unsafe { crate::recorder::resolve(raw, *buffer) }
-                .map_err(|error| recording_error(device, crate::error::vulkan(error)))?;
-        }
         // The new resources' first work, before every command (`texture/first_move.rs`), given
         // back if the submission is not made. A batch's commands may reach every texture
         // unnamed, so it takes every move, those of images bound to host pages among them, whose
@@ -891,16 +879,6 @@ impl CommandBufferShared {
                 false => work.insert(0, lead),
             }
         }
-        // Its deferred command buffers go as their replays (`recorder`), after every check above
-        // that compares them as encoded: its encoders', replayed before the first work's take
-        // (above); the barriers recorded since, replayed here where the recorder's thread has
-        // not yet reached them.
-        for buffer in work.iter_mut() {
-            // SAFETY: each ended, and its command buffer committed; inside the scheduler's
-            // section.
-            *buffer = unsafe { crate::recorder::resolve(raw, *buffer) }
-                .map_err(|error| recording_error(device, crate::error::vulkan(error)))?;
-        }
         let mut work_timeline = vk::TimelineSemaphoreSubmitInfo::default()
             .wait_semaphore_values(wait_values)
             .signal_semaphore_values(work_signal_values);
@@ -1174,8 +1152,10 @@ impl CommandBufferShared {
         Ok(buffer)
     }
 
-    /// Record the scrub segments of encoders `range` (`Deferred::SparseScrub`), which their batch's
-    /// submission records with the mappings it applied.
+    /// Record the segments of encoders `range` that their batch's submission records: the
+    /// scrubs (`Deferred::SparseScrub`), with the mappings it applied, and the gated copies in
+    /// (`Deferred::GatedCopyIn`), with the regions their logs say changed since the commit's
+    /// stamp, published by now.
     fn record_scrubs(
         &self,
         state: &mut State,
@@ -1184,19 +1164,34 @@ impl CommandBufferShared {
         let mut scrubs = Vec::new();
         for (encoder, recorded) in state.recorded[range.clone()].iter().enumerate() {
             for (at, segment) in recorded.segments.iter().enumerate() {
-                if let (Deferred::SparseScrub(scrub), None) = (&segment.work, &segment.recorded) {
-                    scrubs.push((range.start + encoder, at, Arc::clone(scrub)));
+                let at_submission = matches!(
+                    segment.work,
+                    Deferred::SparseScrub(_) | Deferred::GatedCopyIn(_)
+                );
+                if at_submission && segment.recorded.is_none() {
+                    scrubs.push((range.start + encoder, at, segment.work.clone()));
                 }
             }
         }
         let device = &self.device;
-        for (encoder, at, scrub) in scrubs {
+        for (encoder, at, work) in scrubs {
             let raw = self.record_raw(state, |state, buffer| {
-                // SAFETY: the command buffer is recording; the texture is live (its encoder's
-                // command buffer holds it), in `GENERAL`, and its batch's updates applied.
-                let held = unsafe { scrub.record(device, buffer) }?;
-                if !held.is_empty() {
-                    state.retained.push(Box::new(held));
+                match &work {
+                    // SAFETY: the command buffer is recording; the texture is live (its encoder's
+                    // command buffer holds it), in `GENERAL`, and its batch's updates applied.
+                    Deferred::SparseScrub(scrub) => {
+                        let held = unsafe { scrub.record(device, buffer) }?;
+                        if !held.is_empty() {
+                            state.retained.push(Box::new(held));
+                        }
+                    }
+                    // SAFETY: the command buffer is recording, outside a render pass; the
+                    // shadowed texture is live (its encoder's command buffer holds it), its
+                    // image in `GENERAL`.
+                    Deferred::GatedCopyIn(copy) => unsafe {
+                        copy.record(device.shared().vk(), buffer)
+                    },
+                    _ => {}
                 }
                 Ok(())
             })?;

@@ -33,6 +33,7 @@ use super::churn_counts::KeepBy;
 use super::command_buffer::rebound_use::Unlogged;
 use super::command_buffer::{recording_error, CommandBuffer};
 use super::deferred::{Deferred, StepInputs};
+use super::dirty_pages::CopyInGate;
 use super::error::{internal, invalid, vulkan, CommandBufferError, Error, Problem};
 use super::execution::Execution;
 use super::fresh_unwritten::FreshRead;
@@ -51,7 +52,7 @@ use super::residency::{Residency, Used};
 use super::resource::ResourceKey;
 use super::retained::Retained;
 use super::row_copies::RowCopies;
-use super::shadow::{CopyCause, ShadowCopy, ShadowSync, ShadowUse, Step, Within};
+use super::shadow::{CopyCause, GatedCopyIn, ShadowCopy, ShadowSync, ShadowUse, Step, Within};
 use super::shadow_copy_in::CopyIn;
 use super::shadow_merge::ShadowMerge;
 use super::sparse::encoder::SparseUpdate;
@@ -1622,8 +1623,8 @@ impl EncoderCore {
                     copy.uses_with(rows.as_ref()),
                 ),
             };
-            // A copy in over host pages a consumer logs takes the regions its gate decides as the
-            // command buffer replays (`dirty_pages.rs`).
+            // A copy in over host pages a consumer logs takes the regions its gate decides as its
+            // batch is submitted (`dirty_pages.rs`, `shadow::GatedCopyIn`).
             let gate = match &dispatched {
                 Some(_) => None,
                 None => copy.gate_log(&device).map(|(log, texel)| {
@@ -1637,6 +1638,19 @@ impl EncoderCore {
                 staged.extend(staged_keep(copies, i));
             }
             let from_staging = staged.contains(&i);
+            if let Some(gate) = gate {
+                // Tracked here as the copy, recorded at its batch's submission.
+                let named = std::cell::Cell::new(false);
+                let tracked = |_: &Vk, _: vk::CommandBuffer| named.set(true);
+                self.shadow_command(&mut run, (stages, &uses, copy.writes_truth()), tracked);
+                if named.get() {
+                    self.defer_copy_in(copy, gate);
+                }
+                if let Some(sets) = rows.and_then(RowCopies::retained) {
+                    self.retain(sets);
+                }
+                continue;
+            }
             let kept = std::cell::Cell::new(false);
             let record = |device: &Vk, raw: vk::CommandBuffer| match &dispatched {
                 // SAFETY: the encoder's command buffer is recording outside a render pass; its
@@ -1651,7 +1665,7 @@ impl EncoderCore {
                     kept.set(true);
                 }
                 // SAFETY: as above; the rows are the copy's own, made just now.
-                None => unsafe { copy.record_gated(device, raw, rows.as_ref(), gate) },
+                None => unsafe { copy.record_gated(device, raw, rows.as_ref(), None) },
             };
             self.shadow_command(&mut run, (stages, &uses, copy.writes_truth()), record);
             if kept.get() {
@@ -1700,6 +1714,32 @@ impl EncoderCore {
         self.open.command_buffer.note_dirty(tracked);
         self.uses.record(stages, tracked, None);
         self.touch(uses);
+    }
+
+    /// Leave `copy`, a shadow's copy in over host pages a consumer logs that the encoder tracked
+    /// already ([`shadow_command`](Self::shadow_command)), to its batch's submission, its regions
+    /// decided by `gate` then (`shadow::GatedCopyIn`), the encoder going on in a new
+    /// `VkCommandBuffer`. Recorded whole here instead inside a predicated loop's laying, which
+    /// its check may submit again, or where no new `VkCommandBuffer` can be made.
+    fn defer_copy_in(&mut self, copy: &ShadowCopy, gate: Arc<CopyInGate>) {
+        let laying = (self.open.command_buffer.state().predication_mut()).laying();
+        let next = match laying {
+            true => None,
+            false => self.release_pass().and_then(|()| self.continuation()).ok(),
+        };
+        let Some(next) = next else {
+            if let Some(raw) = self.recording() {
+                // SAFETY: the encoder's command buffer is recording outside a render pass; its
+                // commands retain the shadowed texture until it completes, and its image rests in
+                // the `GENERAL` layout.
+                unsafe { copy.record(self.device().shared().vk(), raw, None) };
+            }
+            return;
+        };
+        let work = Deferred::GatedCopyIn(Arc::new(GatedCopyIn::new(copy.clone(), gate)));
+        // Refused only where the current `VkCommandBuffer` does not end, which abandons the
+        // command buffer.
+        let _abandoned = self.defer_into(next, work);
     }
 
     /// The `VkCommandBuffer` a render pass holds ([`hold_pass`](Self::hold_pass)), until its
@@ -2201,9 +2241,6 @@ impl EncoderCore {
                 },
             );
         }
-        // SAFETY: only this call records `raw`, under the state lock, and it records until the
-        // tail ends (at the next part's end or the commit, `close_tail`).
-        unsafe { crate::recorder::reserve_end(raw) };
         state.tail = Some(raw);
         state.retained.extend(retained.into_entry());
         state.executions.extend(executions);

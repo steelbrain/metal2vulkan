@@ -89,7 +89,6 @@ use super::predication::{Event, Predication};
 use super::program_objects;
 use super::queue::Slot;
 use super::rebind::{Holds, SubmittedHolds, Taken};
-use super::recorder::{self, Replays};
 use super::render::EndInFlight;
 use super::replay::Replay;
 use super::residency::Residency;
@@ -260,7 +259,7 @@ pub(super) struct CommandBufferShared {
     /// where they are every one the pool handed out and it completed, it gives the pool back
     /// with none recording (`spares.rs`).
     raws_ended: AtomicU64,
-    /// Its kernel times, apart from the state, which the scheduler holds while it replays and
+    /// Its kernel times, apart from the state, which the scheduler holds while it records and
     /// submits a batch: a read waits for neither (`gpu_time.rs`).
     kernel: KernelTimes,
     /// Its status as `status` answers it, apart from the state for the same reason: each
@@ -534,9 +533,6 @@ pub(super) struct State {
     /// The pool every `VkCommandBuffer` of this command buffer comes from, with those made from
     /// it; `None` until the first, and once given back to the device's spares.
     pool: Option<CommandPool>,
-    /// Its encoders' deferred command buffers and their replays, where the device records them
-    /// so (`recorder`): `None` until the first, and once let go of.
-    pub(super) replays: Option<Arc<Replays>>,
     /// The pool of a predicated loop's check while it records again the work its laying left
     /// apart (`rerun.rs`): every `VkCommandBuffer` the command buffer hands out meanwhile comes
     /// from it, and goes back to it for the next run again.
@@ -1764,16 +1760,8 @@ impl Drop for CommandBufferShared {
         // nothing of its pool is pending. The device's spares keep it (`spares.rs`), which
         // release it only with the device. A timestamp slot it still holds goes back with its
         // state.
-        let (pool, replays) = {
-            let mut state = lock(&self.state);
-            (state.pool.take(), state.replays.take())
-        };
+        let pool = lock(&self.state).pool.take();
         if let Some(pool) = pool {
-            let shared = self.device.shared();
-            shared.spares.give_command_pool(shared, pool, false);
-        }
-        // Its replays end likewise.
-        if let Some((pool, _)) = replays.and_then(|replays| replays.release(false)) {
             let shared = self.device.shared();
             shared.spares.give_command_pool(shared, pool, false);
         }
@@ -1810,7 +1798,6 @@ impl CommandBuffer {
                 called_over_mutable_map: false,
                 committing: false,
                 pool: None,
-                replays: None,
                 rerun_pool: None,
                 recorded: Vec::new(),
                 tail: None,
@@ -2091,12 +2078,12 @@ impl CommandBuffer {
         Ok(residency.with_live(live))
     }
 
-    /// An encoder's primary command buffer: a deferred one where the device records them so
-    /// (`recorder`), else one from this command buffer's pool, made on first use. The caller holds
+    /// An encoder's primary command buffer, from this command buffer's pool, made on first use:
+    /// the encoder records into it at each call, on the program's thread. The caller holds
     /// `state` (the pool is externally synchronized).
     pub(super) fn allocate_raw(&self, state: &mut State) -> Result<vk::CommandBuffer, Error> {
         self.0
-            .allocate_deferred(state, vk::CommandBufferLevel::PRIMARY)
+            .allocate_encoder(state, vk::CommandBufferLevel::PRIMARY)
     }
 
     /// An encoder's own primary `VkCommandBuffer` from this command buffer's pool, and whether it
@@ -2129,29 +2116,22 @@ impl CommandBuffer {
 
     /// Give up `raw`, a secondary command buffer recording that nothing will execute (a render
     /// pass instance its pass replaced or gave up before running it, or the one instance of a
-    /// pass that changes nothing): a deferred one (`recorder`) is left unended, so its log is
-    /// never replayed, and goes with the command buffer's release, as one never ended goes; one
-    /// of this command buffer's pool ends ([`end_raw`](Self::end_raw)), so the pool goes back to
-    /// the device's spares unreset (`spares.rs`). Nothing executes either, so the GPU does the
-    /// same work and every byte it writes is the same; a deferred one's replay only cost the
-    /// recorder's thread a `vkBeginCommandBuffer`, which ANV makes reset the command buffer's
-    /// whole state, and the commands' recording.
+    /// pass that changes nothing): it ends ([`end_raw`](Self::end_raw)), so its pool goes back
+    /// to the device's spares unreset (`spares.rs`). Nothing executes it, so the GPU does the
+    /// same work and every byte it writes is the same.
     ///
     /// # Safety
     /// As [`end_raw`](Self::end_raw)'s, and no command buffer executes `raw`.
     pub(super) unsafe fn give_up_raw(&self, raw: vk::CommandBuffer) -> Result<(), vk::Result> {
-        if recorder::is_deferred(raw) {
-            return Ok(());
-        }
         // SAFETY: the caller's.
         unsafe { self.end_raw(raw) }
     }
 
-    /// A secondary command buffer (a render encoder's draws), deferred or from this command
-    /// buffer's pool as [`allocate_raw`](Self::allocate_raw)'s. The caller holds `state`.
+    /// A secondary command buffer (a render encoder's draws), from this command buffer's pool as
+    /// [`allocate_raw`](Self::allocate_raw)'s. The caller holds `state`.
     pub(super) fn allocate_secondary(&self, state: &mut State) -> Result<vk::CommandBuffer, Error> {
         self.0
-            .allocate_deferred(state, vk::CommandBufferLevel::SECONDARY)
+            .allocate_encoder(state, vk::CommandBufferLevel::SECONDARY)
     }
 
     /// `addScheduledHandler:`: call `handler` once the command buffer is scheduled, on one of the
@@ -2881,18 +2861,10 @@ impl CommandBuffer {
             // its last command buffer ended: what lay in pages a detach replaced while an encoder
             // held them goes with them (`detach.rs`), and its tail's commands recorded above
             // name the views of an attachment recorded inline (`render/inline_first.rs`).
-            // Its deferred command buffers replay from now on, on the device's recorder thread,
-            // and hold the pages their commands name until they are replayed; such pages go here
-            // all the same, replayed first (`Replays::commit`).
-            match state.replays.clone() {
-                Some(replays) => drop(replays.commit(device.shared().vk(), |held| {
-                    state.wait_for_submission(listing, held)
-                })),
-                None => state.wait_for_submission(listing, &mut Vec::new()),
-            }
+            state.wait_for_submission(listing);
             // Committed, its commands recorded for good: a rebind of what they used takes
             // effect after them (`rebind.rs`); one a host step records holds until completion
-            // (`steps_hold`). Only once its replays hold the pages, so a rebind finds them held.
+            // (`steps_hold`).
             if steps_hold {
                 let held = &mut *state;
                 let kept = held
@@ -3893,8 +3865,7 @@ impl CommandBufferShared {
     unsafe fn end_raw(&self, raw: vk::CommandBuffer) -> Result<(), vk::Result> {
         // SAFETY: the caller's.
         let ended = unsafe { self.device.shared().vk().end_command_buffer(raw) };
-        // A deferred one is none of its pool's: its replay ends its own (`recorder`).
-        if ended.is_ok() && !recorder::is_deferred(raw) {
+        if ended.is_ok() {
             self.raws_ended.fetch_add(1, Ordering::Relaxed);
         }
         ended
@@ -3916,13 +3887,10 @@ impl CommandBufferShared {
         }
     }
 
-    /// An encoder's command buffer of `level`: where the device records them so, a deferred one
-    /// of its replays, which take a spare pool of the device's for their replays as the first is
-    /// made (outside a section, where a spare is taken; else the first replay makes one);
-    /// elsewhere, or once every deferred handle is live, one from this command buffer's pool
-    /// ([`allocate`](Self::allocate)). One of a predicated loop's check's pool while it records
-    /// again (`rerun.rs`).
-    fn allocate_deferred(
+    /// An encoder's command buffer of `level`, a driver's the encoder records into at each call:
+    /// one from this command buffer's pool ([`allocate`](Self::allocate)), or one of a
+    /// predicated loop's check's pool while it records again (`rerun.rs`).
+    fn allocate_encoder(
         &self,
         state: &mut State,
         level: vk::CommandBufferLevel,
@@ -3930,33 +3898,7 @@ impl CommandBufferShared {
         if let Some(pool) = &state.rerun_pool {
             return hand_out(&self.device, &mut lock(pool), level);
         }
-        match self.deferred(state, level)? {
-            Some(raw) => Ok(raw),
-            None => self.allocate(state, level),
-        }
-    }
-
-    /// A deferred command buffer of `level` of its replays, where the device records them so and
-    /// a handle is free (`recorder`); `None` elsewhere.
-    fn deferred(
-        &self,
-        state: &mut State,
-        level: vk::CommandBufferLevel,
-    ) -> Result<Option<vk::CommandBuffer>, Error> {
-        let shared = self.device.shared();
-        let Some(recorder) = shared.recorder() else {
-            return Ok(None);
-        };
-        if state.replays.is_none() {
-            let family = shared.queue_family_of(self.queue.vk_queue());
-            let spare = shared.spares.command_pool(shared, family)?;
-            state.replays = Some(recorder.replays(family, spare));
-        }
-        let raw = (state.replays.as_ref()).and_then(|replays| replays.make(level));
-        if raw.is_some() {
-            shared.counts.command_buffer_deferred();
-        }
-        Ok(raw)
+        self.allocate(state, level)
     }
 
     /// A `VkCommandBuffer` of `level` from this command buffer's pool, made on first use: a
@@ -3972,12 +3914,8 @@ impl CommandBufferShared {
         hand_out(&self.device, self.pool(state)?, level)
     }
 
-    /// [`CommandBuffer::encoder_primary`]: a deferred one where the device records them so, to
-    /// begin, whose replay takes the primary its replays' pool holds begun ahead (`recorder`).
+    /// [`CommandBuffer::encoder_primary`].
     fn encoder_primary(&self, state: &mut State) -> Result<(vk::CommandBuffer, bool), Error> {
-        if let Some(raw) = self.deferred(state, vk::CommandBufferLevel::PRIMARY)? {
-            return Ok((raw, false));
-        }
         if let Some(buffer) = self.pool(state)?.take_begun() {
             return Ok((buffer, true));
         }
@@ -4610,17 +4548,6 @@ impl CommandBufferShared {
                 settled_pool = settled.then_some(pool.raw);
                 let shared = self.device.shared();
                 shared.spares.give_command_pool(shared, pool, settled);
-            }
-            // Its replays end, any in progress first, and replay nothing more; their pool goes
-            // back as its own does, and holds the primary begun ahead in its place: its encoders'
-            // primaries came from it, and only their replays take that primary (`recorder`).
-            if let Some(replays) = state.replays.take() {
-                let completed = state.status == CommandBufferStatus::Completed;
-                if let Some((pool, settled)) = replays.release(completed) {
-                    settled_pool = settled.then_some(pool.raw);
-                    let shared = self.device.shared();
-                    shared.spares.give_command_pool(shared, pool, settled);
-                }
             }
             state.unplaced();
             parked = state.parked > 0;

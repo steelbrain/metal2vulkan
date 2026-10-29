@@ -384,8 +384,7 @@ impl LoopCheck {
         }
     }
 
-    /// Submit `raws` (ended, in order; deferred ones resolved) on `buffer`'s `VkQueue` and wait
-    /// for them to complete.
+    /// Submit `raws` (ended, in order) on `buffer`'s `VkQueue` and wait for them to complete.
     fn submit(&self, buffer: &CommandBufferShared, raws: &[vk::CommandBuffer]) -> Result<(), Stop> {
         let device = &buffer.device;
         let Some(busy) = exit_guard::enter() else {
@@ -393,24 +392,12 @@ impl LoopCheck {
         };
         let shared = device.shared();
         let raw = shared.vk();
-        let mut reals = Vec::with_capacity(raws.len());
-        for &handle in raws {
-            // SAFETY: each ended, its command buffer committed (the laying's, its batch submitted,
-            // which replayed it); inside a section.
-            match unsafe { crate::recorder::resolve(raw, handle) } {
-                Ok(real) => reals.push(real),
-                Err(error) => {
-                    let error = recording_error(device, crate::error::vulkan(error));
-                    return Err(Stop::Failed(error));
-                }
-            }
-        }
         // SAFETY: the device's fences, inside a section.
         let fence = unsafe { shared.fences.take(raw) }
             .map_err(|error| Stop::Failed(submission_error(device, error)))?;
         let queue = buffer.queue.vk_queue();
-        let submits = [vk::SubmitInfo::default().command_buffers(&reals)];
-        shared.counts.queue_submitted(1, reals.len());
+        let submits = [vk::SubmitInfo::default().command_buffers(raws)];
+        shared.counts.queue_submitted(1, raws.len());
         // SAFETY: the `VkQueue` is used under its lock; each command buffer was begun to be
         // submitted again (the laying's) or recorded for this submission alone (a run again's),
         // ended, and is in no pending submission: the laying's batch completed before the check's

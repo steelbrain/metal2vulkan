@@ -1,6 +1,6 @@
-//! Device tests of the commands the recorder's replays call, by kind (the runtime's `recorder`,
+//! Device tests of the commands recorded, by kind (the runtime's `recorder`,
 //! `WorkCounts::commands_replayed`), on the device the cfg selects, under the validation layer: a
-//! command buffer of one blit encoder of fills and copies replays each as one call of its own
+//! command buffer of one blit encoder of fills and copies records each as one call of its own
 //! kind, counted exactly: a fill of one word as `vkCmdFillBuffer`, or as `vkCmdUpdateBuffer` where
 //! the runtime records fills as transfers (`WorkCounts::fills_by_transfers`, MoltenVK 1.4.1).
 
@@ -26,13 +26,12 @@ fn added(before: &CommandsReplayed, after: &CommandsReplayed) -> [u64; 4] {
 }
 
 /// One blit encoder of [`FILLS`] fills of a buffer's words, then [`COPIES`] copies of its first
-/// words into another's, committed and completed: its replay called `vkCmdFillBuffer` once a fill
+/// words into another's, committed and completed: it recorded `vkCmdFillBuffer` once a fill
 /// recorded so and `vkCmdUpdateBuffer` once a fill recorded as transfers (one word: no copy),
 /// `vkCmdCopyBuffer` once a copy, and ended at least its encoder's command buffer. The bytes are
-/// what the fills and copies wrote. A device that records as it encodes (no recorder)
-/// replays nothing, printed.
+/// what the fills and copies wrote. A device past the runtime's slots counts nothing, printed.
 #[test]
-fn a_replay_counts_each_command_it_calls_by_kind() {
+fn each_command_recorded_counts_once_by_kind() {
     on_device(|device| {
         let name = device.name();
         let queue = device.new_command_queue().unwrap();
@@ -61,8 +60,8 @@ fn a_replay_counts_each_command_it_calls_by_kind() {
             read_buffer(&copied, 0, WORD * COPIES).unwrap(),
             expected[..(WORD * COPIES) as usize]
         );
-        if after.command_buffers_deferred == before.command_buffers_deferred {
-            eprintln!("COMMANDS-REPLAYED {name}: records as it encodes, so replays nothing");
+        if after.commands_replayed == before.commands_replayed {
+            eprintln!("COMMANDS-RECORDED {name}: took no slot, so counts nothing");
             return;
         }
         let [fills, updates, copies, ends] =
@@ -70,16 +69,16 @@ fn a_replay_counts_each_command_it_calls_by_kind() {
         let recorded = after.fills_recorded - before.fills_recorded;
         let by_transfers = after.fills_by_transfers - before.fills_by_transfers;
         eprintln!(
-            "COMMANDS-REPLAYED {name}: {fills} vkCmdFillBuffer, {updates} vkCmdUpdateBuffer, \
-             {copies} vkCmdCopyBuffer, {ends} vkEndCommandBuffer replayed; {recorded} fills \
+            "COMMANDS-RECORDED {name}: {fills} vkCmdFillBuffer, {updates} vkCmdUpdateBuffer, \
+             {copies} vkCmdCopyBuffer, {ends} vkEndCommandBuffer recorded; {recorded} fills \
              recorded so, {by_transfers} as transfers"
         );
         assert_eq!(recorded + by_transfers, FILLS, "the fills on {name}");
         assert_eq!(
             [fills, updates, copies],
             [recorded, by_transfers, COPIES],
-            "the fills' and copies' calls replayed on {name}"
+            "the fills' and copies' calls recorded on {name}"
         );
-        assert!(ends >= 1, "the replay ended no command buffer on {name}");
+        assert!(ends >= 1, "no command buffer ended on {name}");
     });
 }

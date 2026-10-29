@@ -1023,6 +1023,40 @@ pub(super) enum Step<M> {
     Merge(M),
 }
 
+/// A shadow's copy in over host pages a consumer logs (`dirty_pages.rs`), left by its encoder
+/// to its batch's submission (`Deferred::GatedCopyIn`): the commit asks the log for a stamp, and
+/// the copy's regions are those the log says changed once that stamp is published, which only a
+/// recording after the commit can know. Recorded in a command buffer of its own between the
+/// encoder's, behind a barrier from everything before it and before one to everything after it,
+/// so it keeps its place among the encoder's commands.
+pub(super) struct GatedCopyIn {
+    copy: ShadowCopy,
+    gate: Arc<CopyInGate>,
+}
+
+impl GatedCopyIn {
+    /// `copy`, its regions decided by `gate`.
+    pub(super) fn new(copy: ShadowCopy, gate: Arc<CopyInGate>) -> GatedCopyIn {
+        GatedCopyIn { copy, gate }
+    }
+
+    /// Record it into `command_buffer`, its regions decided now.
+    ///
+    /// # Safety
+    ///
+    /// `command_buffer` is recording, outside a render pass; the copy's texture is live (its
+    /// encoder's command buffer holds it), its image in the `GENERAL` layout.
+    pub(super) unsafe fn record(&self, device: &Vk, command_buffer: vk::CommandBuffer) {
+        // SAFETY: the caller's.
+        unsafe {
+            Barrier::everything().record(device, command_buffer);
+            let gate = Some(Arc::clone(&self.gate));
+            self.copy.record_gated(device, command_buffer, None, gate);
+            Barrier::everything().record(device, command_buffer);
+        }
+    }
+}
+
 /// One copy between a shadowed texture's buffer and its shadow.
 #[derive(Clone)]
 pub(super) struct ShadowCopy<M = Arc<ShadowMerge>> {
@@ -1184,7 +1218,8 @@ fn image_copy_texels(region: &vk::ImageCopy) -> u64 {
 impl ShadowCopy {
     /// The log of a copy in of every texel of a tracked 2D texture's image straight from a
     /// buffer over host pages a consumer logs (`dirty_pages.rs`), made or kept by `device`, and
-    /// the bytes of one texel: what may decide the copy's regions as its command buffer replays.
+    /// the bytes of one texel: what may decide the copy's regions as its batch is submitted
+    /// ([`GatedCopyIn`]).
     /// `None` for every other copy.
     pub(super) fn gate_log(&self, device: &Device) -> Option<(Arc<ShadowLog>, u64)> {
         let c = &self.copies;
@@ -1557,8 +1592,8 @@ impl ShadowCopy {
     }
 
     /// [`record`](Self::record), a copy in of a 2D texture's image straight from the buffer
-    /// recorded under `gate` where given: its regions decided as the command buffer replays
-    /// (`dirty_pages.rs`), every region where it records into a driver's command buffer.
+    /// recorded under `gate` where given: its regions decided now, as its batch is submitted
+    /// ([`GatedCopyIn`], `dirty_pages.rs`).
     ///
     /// # Safety
     ///
@@ -1813,16 +1848,18 @@ impl ShadowCopy {
                     device.cmd_copy_buffer(command_buffer, buffer, texels, &[staging.into]);
                     Barrier::everything().record(device, command_buffer);
                 }
-                let gated = (gate.filter(|_| staging.is_none())).is_some_and(|gate| {
-                    let copy = (texels, image, vk::ImageLayout::GENERAL);
-                    super::recorder::copy_buffer_to_image_gated(
-                        command_buffer,
-                        gate,
-                        copy,
-                        &regions,
-                    )
-                });
-                if gated {
+                if let Some(gate) = gate.filter(|_| staging.is_none()) {
+                    let mut chosen = Vec::new();
+                    gate.regions(&regions, &mut chosen);
+                    if !chosen.is_empty() {
+                        device.cmd_copy_buffer_to_image(
+                            command_buffer,
+                            texels,
+                            image,
+                            vk::ImageLayout::GENERAL,
+                            &chosen,
+                        );
+                    }
                     return;
                 }
                 device.cmd_copy_buffer_to_image(

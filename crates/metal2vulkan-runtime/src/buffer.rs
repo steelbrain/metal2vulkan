@@ -363,19 +363,6 @@ impl Detached {
     }
 }
 
-impl Drop for HostCell {
-    fn drop(&mut self) {
-        // As in `replace`: the buffer's release lets go of its pages last.
-        let lying = self
-            .pages
-            .get_mut()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        if let Lying::In(pages) = lying {
-            pages.let_go_by_buffer();
-        }
-    }
-}
-
 impl HostCell {
     /// Whether the GPU's writes to the buffer are dropped (`read_only_view.rs`).
     pub(super) fn drops_writes(&self) -> bool {
@@ -434,11 +421,6 @@ impl HostCell {
             HOST_CELLS_MOVED.fetch_add(1, Ordering::AcqRel);
             lay
         };
-        // The replays that hold the pages it lay in go first, so the caller lets go of them last,
-        // as it would without them (`HostPages::let_go_by_buffer`).
-        if let Lying::In(pages) = &lay {
-            pages.let_go_by_buffer();
-        }
         lay
     }
 
@@ -653,13 +635,6 @@ pub(super) struct HostPages {
     release: OnceLock<Release>,
     /// The live buffers' tables' holds on them ([`ListedPages`]).
     listed: AtomicUsize,
-    /// The holds on them of command buffers' replays (`recorder`): what a command buffer's
-    /// commands took, held from its commit until they are replayed, each counted until it is
-    /// gone ([`let_go_by_replay`](Self::let_go_by_replay)), so the count outlives them.
-    replay_holds: Arc<AtomicUsize>,
-    /// Their buffer let go of them: its release, rebind or detach (pages lie in one buffer,
-    /// once) ([`let_go_by_buffer`](Self::let_go_by_buffer)).
-    let_go: AtomicBool,
     /// The caller's log of the writes to them, where it gave one with their memory
     /// (`HostMemory::with_dirty_pages`, `dirty_pages.rs`).
     dirty: OnceLock<Arc<DirtySource>>,
@@ -677,8 +652,6 @@ impl HostPages {
             import,
             release: OnceLock::new(),
             listed: AtomicUsize::new(0),
-            replay_holds: Arc::new(AtomicUsize::new(0)),
-            let_go: AtomicBool::new(false),
             dirty: OnceLock::new(),
         }
     }
@@ -696,50 +669,6 @@ impl HostPages {
     /// The caller's log of the writes to them, where it gave one.
     pub(super) fn dirty(&self) -> Option<&Arc<DirtySource>> {
         self.dirty.get()
-    }
-
-    /// A command buffer's replays hold them from now on (`recorder`): counted before its commit
-    /// reads whether their buffer let go of them ([`let_go_by_buffer`](Self::let_go_by_buffer)).
-    pub(super) fn held_for_replay(&self) {
-        self.replay_holds.fetch_add(1, Ordering::SeqCst);
-    }
-
-    /// A command buffer's replays let go of `pages`: the pages, where that hold was their last.
-    /// Counted out only once the hold is gone, so their buffer's let-go that finds no hold
-    /// finds no replay letting go of one either ([`let_go_by_buffer`](Self::let_go_by_buffer)).
-    pub(super) fn let_go_by_replay(pages: Arc<HostPages>) -> Option<HostPages> {
-        let holds = Arc::clone(&pages.replay_holds);
-        let last = Arc::into_inner(pages);
-        holds.fetch_sub(1, Ordering::AcqRel);
-        last
-    }
-
-    /// Whether their buffer let go of them ([`let_go_by_buffer`](Self::let_go_by_buffer)): read
-    /// by a commit after its replays' holds on them are counted and its replays queued.
-    pub(super) fn buffer_let_go(&self) -> bool {
-        self.let_go.load(Ordering::SeqCst)
-    }
-
-    /// Their buffer lets go of them (its release, rebind or detach), the caller still holding
-    /// them: where command buffers' replays hold them, every replay waiting runs first, on this
-    /// thread, so the replays let go of them before the caller does, and their deallocator runs
-    /// at the call that lets go of them last, as it does with commands recorded as they are
-    /// encoded (`recorder`). Nothing where none holds them.
-    ///
-    /// Against a commit on another thread whose replays come to hold them, each marks its side
-    /// and then reads the other's, sequentially consistent, so at least one sees the other:
-    /// this finds the commit's hold, and its replays, queued before the commit read the mark,
-    /// and replays them here; or the commit finds the mark and replays them itself, letting go
-    /// of the pages where it lets go of them without a recorder (`Replays::commit`).
-    fn let_go_by_buffer(&self) {
-        self.let_go.store(true, Ordering::SeqCst);
-        if self.replay_holds.load(Ordering::SeqCst) == 0 {
-            return;
-        }
-        let shared = self.import.device.shared();
-        if let Some(recorder) = shared.recorder() {
-            recorder.settle_all(shared.vk());
-        }
     }
 
     /// Keep `objects`, over these pages, until they go.
@@ -826,33 +755,6 @@ impl HostPages {
                 "a command buffer that may reach its pages unnamed (a live buffers' table it \
                  holds lists them) holds them as it is released, and the caller gave no \
                  keep-alive"
-                    .to_owned(),
-            )
-        });
-    }
-
-    /// The replay of a command buffer's deferred command buffers held these pages last
-    /// (`recorder`, [`HeldByReplay`]): never as a rule, as their buffer's let-go and each commit
-    /// whose replays hold them agree on which replays them first
-    /// ([`let_go_by_buffer`](Self::let_go_by_buffer)). Were it to, they would have gone at that
-    /// let-go or at the commit, where their deallocator or keep-alive ran; they go now, after
-    /// the replay, announced once per device (`Degradation::HostDeallocatorDelayed`). Nothing
-    /// where neither is left to run.
-    fn held_by_replay(&self) {
-        let Some(release) = self.release.get() else {
-            return;
-        };
-        if !release.deallocates() && !release.keeps_alive() {
-            return;
-        }
-        let device = &self.import.device;
-        device.shared().counts.host_deallocator_delayed();
-        let length = release.length();
-        device.degrade_once(Degradation::HostDeallocatorDelayed, || {
-            (
-                format!("a no-copy buffer of {length} bytes"),
-                "a command buffer committed before its release or rebind names its pages, and \
-                 they stayed until its commands were recorded on the device's recorder thread"
                     .to_owned(),
             )
         });
@@ -1504,17 +1406,6 @@ impl Drop for AfterFree {
         for release in &self.releases {
             release.run();
         }
-    }
-}
-
-/// Host pages the replay of a command buffer's deferred command buffers held last (`recorder`),
-/// let go of on one of the device's handler threads: announced as they go
-/// ([`HostPages::held_by_replay`]), then dropped, which runs their deallocator.
-pub(super) struct HeldByReplay(pub(super) HostPages);
-
-impl Drop for HeldByReplay {
-    fn drop(&mut self) {
-        self.0.held_by_replay();
     }
 }
 

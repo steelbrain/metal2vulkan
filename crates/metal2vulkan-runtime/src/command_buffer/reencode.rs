@@ -54,9 +54,7 @@
 
 use super::rebound_use::Unlogged;
 use super::{lock, CommandBuffer, CommandBufferShared, State};
-use crate::buffer::HostPages;
 use crate::deferred::{Deferred, StepInputs};
-use crate::device::functions::Vk;
 use crate::encoder::{RecordedSegment, Replayed, ReplayedPart, Segment};
 use crate::pipeline::budget::Urgency;
 use crate::replay::Replay;
@@ -175,10 +173,9 @@ impl CommandBufferShared {
                 }
             };
             // What a refused splice held goes after the lock.
-            let vk = device.shared().vk();
             let spliced_now = {
                 let mut state = lock(&self.state);
-                let spliced = state.splice_replay(vk, at, replayed, residency);
+                let spliced = state.splice_replay(at, replayed, residency);
                 if let (Ok(()), Some(predication)) = (&spliced, predication) {
                     state.predication.take_checks(predication);
                 }
@@ -264,8 +261,7 @@ impl CommandBufferShared {
                 counts.reencode_refused();
                 continue;
             };
-            let vk = device.shared().vk();
-            let put = lock(&self.state).splice_segment(vk, place, recorded, inputs);
+            let put = lock(&self.state).splice_segment(place, recorded, inputs);
             match put {
                 Ok(()) => counts.segment_recorded_again(),
                 Err(unspliced) => {
@@ -314,12 +310,9 @@ impl State {
     /// `replayed` back, where its place holds other parts than the encoding again's, or a segment
     /// but one whose pipelines are being made (which goes, the encoding again having left one of
     /// its own in its place) or work its commit recorded on the GPU alone, or its group was
-    /// submitted, or the
-    /// command buffer completed. Its replays hold what its commands took with `device`, the
-    /// device's functions (`Replays::hold`).
+    /// submitted, or the command buffer completed.
     pub(super) fn splice_replay(
         &mut self,
-        device: &Vk,
         at: usize,
         replayed: Replayed,
         residency: Option<Residency>,
@@ -358,21 +351,13 @@ impl State {
             heaps,
         } = replayed;
         // Held weakly until its group's submission, as the commit held what the first recording
-        // and its segments took, and by its replays until they are replayed: what they held last
-        // goes here, as it does without them (`Replays::hold`, with `device`, the device's
-        // functions).
-        let mut wait = |pages: &mut Vec<Arc<HostPages>>| {
-            taken.wait(pages);
-            let segments = (replayed_parts.iter_mut())
-                .flat_map(|part| part.segments.iter_mut())
-                .filter_map(|segment| segment.recorded.as_mut());
-            for done in segments {
-                done.taken.wait(pages);
-            }
-        };
-        match self.replays.clone() {
-            Some(replays) => drop(replays.hold(device, wait)),
-            None => wait(&mut Vec::new()),
+        // and its segments took.
+        taken.wait();
+        let segments = (replayed_parts.iter_mut())
+            .flat_map(|part| part.segments.iter_mut())
+            .filter_map(|segment| segment.recorded.as_mut());
+        for done in segments {
+            done.taken.wait();
         }
         let first = self.ended[at].executions.clone();
         for (&part, replayed) in parts.iter().zip(replayed_parts) {
@@ -436,15 +421,13 @@ impl State {
 
     /// Put `recorded`, segment `at` of part `part` recorded again on the GPU alone, in its place
     /// before the first submission, with `inputs`, what its host step needs now: what its
-    /// commands took held weakly until the first submission, as the commit holds them (by its
-    /// replays too, with `device`, the device's functions: `Replays::hold`). What the first
+    /// commands took held weakly until the first submission, as the commit holds them. What the first
     /// recording retained, its executions and its host step's inputs stay retained; its
     /// `VkCommandBuffer`s go with the pool unsubmitted, and what its commands took, held weakly,
     /// goes. Refused, changing nothing and giving `recorded` and `inputs` back, where the place
     /// holds no such segment, or the command buffer was submitted.
     pub(super) fn splice_segment(
         &mut self,
-        device: &Vk,
         (part, at): (usize, usize),
         mut recorded: RecordedSegment,
         inputs: StepInputs,
@@ -456,10 +439,7 @@ impl State {
         if !fits {
             return Err(Box::new((recorded, inputs)));
         }
-        match self.replays.clone() {
-            Some(replays) => drop(replays.hold(device, |pages| recorded.taken.wait(pages))),
-            None => recorded.taken.wait(&mut Vec::new()),
-        }
+        recorded.taken.wait();
         let segment = &mut self.recorded[part].segments[at];
         let first = segment.recorded.replace(recorded);
         let before = segment.inputs.replace(inputs);

@@ -17,9 +17,9 @@
 //! `row_copies_cost` (ignored; run it with `--ignored --nocapture`) prints `ROW-COPIES` lines: a
 //! frame of one blit of `rows` rows of 1920 `BGRA8Unorm` texels from a tight buffer into a texture
 //! over a buffer whose rows lie 8192 bytes apart, for 1080 rows down to 2, timed over
-//! [`TIMED`] frames after [`WARM`]: the CPU time a frame of the threads that replay it (the
-//! recorder's and the scheduler's, from each thread's `schedstat`), of the encoding thread, the
-//! command buffer's GPU time (`GPUEndTime - GPUStartTime`), and the commands its replays called.
+//! [`TIMED`] frames after [`WARM`]: the CPU time a frame of the scheduler's thread (from its
+//! `schedstat`), of the encoding thread, which records it, the command buffer's GPU time
+//! (`GPUEndTime - GPUStartTime`), and the commands recorded.
 //!
 //! `long_copies_of_any_size_copy_metals_bytes` checks every byte of blits between buffers of one
 //! region each, of sizes a driver may record slowly as one region, which the runtime records as
@@ -567,8 +567,8 @@ fn thread_cpu() -> Duration {
 }
 
 /// The costs a frame of `frame` on `device`, timed over [`TIMED`] frames after [`WARM`]: the CPU
-/// time of the threads that replay it (the recorder's and the scheduler's) and of the encoding
-/// thread, and the command buffer's GPU time, as words; with `device`'s work counts before and
+/// time of the scheduler's thread and of the encoding thread, which records it, and the command
+/// buffer's GPU time, as words; with `device`'s work counts before and
 /// after the timed frames.
 fn frame_costs(
     device: &Device,
@@ -578,10 +578,7 @@ fn frame_costs(
         frame().wait_until_completed_for(WAIT).unwrap();
     }
     let counts = device.work_counts();
-    let (recorder, scheduler) = (
-        threads_cpu("metal2vulkan-re"),
-        threads_cpu("metal2vulkan-sc"),
-    );
+    let scheduler = threads_cpu("metal2vulkan-sc");
     let mut encoding = Duration::ZERO;
     let mut gpu = Vec::with_capacity(TIMED);
     for _ in 0..TIMED {
@@ -600,9 +597,7 @@ fn frame_costs(
     let per = |d: Duration| d.as_secs_f64() * 1e3 / TIMED as f64;
     gpu.sort_by(f64::total_cmp);
     let costs = format!(
-        "recorder {:.3} ms, scheduler {:.3} ms, encoding {:.3} ms a frame; GPU {:.1} us (p90 \
-         {:.1})",
-        per(threads_cpu("metal2vulkan-re") - recorder),
+        "scheduler {:.3} ms, encoding {:.3} ms a frame; GPU {:.1} us (p90 {:.1})",
         per(threads_cpu("metal2vulkan-sc") - scheduler),
         per(encoding),
         gpu[TIMED / 2],

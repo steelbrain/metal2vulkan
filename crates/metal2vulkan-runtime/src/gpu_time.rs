@@ -107,8 +107,8 @@
 //!   no slot free.
 //! - **Kernel times** are the host times at which the scheduler began submitting the command
 //!   buffer's first batch and finished submitting its last. They are kept apart from the command
-//!   buffer's state ([`KernelTimes`]), which the scheduler holds while it replays the batch's
-//!   deferred command buffers (`recorder`) and submits it: a read waits for no submission in
+//!   buffer's state ([`KernelTimes`]), which the scheduler holds while it records the batch's
+//!   own command buffers and submits it: a read waits for no submission in
 //!   progress and for no GPU work, as Metal's reads wait for none.
 //! - **No encoder, no timestamps**. A command buffer that encoded nothing and waits for no event or
 //!   semaphore takes no slot and writes no timestamps. Its GPU start and end are both where its

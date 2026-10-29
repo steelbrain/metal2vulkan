@@ -18,7 +18,6 @@
 
 use super::degrade_notices::shared_in_system_memory;
 use super::degrade_notices::{assert_made_once, forced, made_render_kinds};
-use super::hidden_depth::replayed_but_unrun;
 use super::{
     buffer_with, layer_reported_nothing_at_all, read_buffer, validated_device, Messages,
     ScratchCache, WAIT,
@@ -894,16 +893,9 @@ fn a_pass_that_changes_no_texel_records_nothing() {
     let after = lane.device.work_counts();
     let unrun = after.unrun_instances_ended - counted.unrun_instances_ended;
     assert_eq!(unrun, 1, "a depth beside: secondaries given up");
-    let (replayed, deferred) = replayed_but_unrun(&counted, &after);
     eprintln!(
-        "a pass beside a depth that changes nothing on {}: {unrun} secondaries given up, \
-         {replayed} of {deferred} deferred command buffers begun replayed",
+        "a pass beside a depth that changes nothing on {}: {unrun} secondaries given up",
         lane.device.name()
-    );
-    assert_eq!(
-        replayed,
-        deferred - unrun,
-        "a depth beside: command buffers replayed of those begun deferred"
     );
     assert_eq!(
         lane.read(&texture, (0, 0), 4, BlitOption::None),

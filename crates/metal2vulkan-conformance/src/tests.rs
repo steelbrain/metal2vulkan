@@ -4708,8 +4708,6 @@ fn re_recording_a_metal_answer_keeps_the_cost_record() {
 fn a_count_that_says_which_thread_arrived_first_is_never_gated() {
     use crate::cost::racy;
     for count in [
-        "command_buffers_replayed",
-        "command_buffers_replayed_inline",
         "object_churn.images_evicted",
         "object_churn.vk_images_destroyed",
         "object_churn.vk_images_made",
@@ -4745,7 +4743,6 @@ fn a_count_that_says_which_thread_arrived_first_is_never_gated() {
     // selection is a question only the contrast run answers, and
     // `a_count_the_selection_decides_is_reported_and_not_gated` holds that half.
     for count in [
-        "command_buffers_deferred",
         "command_buffers_submitted",
         "queue_submissions",
         "commands_replayed.cmd_draw",
@@ -4840,8 +4837,8 @@ fn a_count_that_says_which_thread_arrived_first_is_never_gated() {
         contrasted: None,
         degraded: Vec::new(),
         bounds: [
-            ("command_buffers_replayed_inline".to_owned(), 1),
-            ("command_buffers_deferred".to_owned(), 1),
+            ("wakes_spared".to_owned(), 1),
+            ("command_buffers_submitted".to_owned(), 1),
         ]
         .into_iter()
         .collect(),
@@ -4866,20 +4863,20 @@ fn a_count_that_says_which_thread_arrived_first_is_never_gated() {
     // The race going over its bound is not a failure.
     assert_eq!(
         judge(
-            "WorkCounts {\n    command_buffers_deferred: 1,\n    \
-             command_buffers_replayed_inline: 9,\n}"
+            "WorkCounts {\n    command_buffers_submitted: 1,\n    \
+             wakes_spared: 9,\n}"
         )
         .word(),
         "within"
     );
     // The total going over it is.
     let over = judge(
-        "WorkCounts {\n    command_buffers_deferred: 2,\n    \
-         command_buffers_replayed_inline: 1,\n}",
+        "WorkCounts {\n    command_buffers_submitted: 2,\n    \
+         wakes_spared: 1,\n}",
     );
     assert_eq!(over.word(), "over");
     assert!(
-        over.to_string().contains("command_buffers_deferred"),
+        over.to_string().contains("command_buffers_submitted"),
         "{over}"
     );
     // And a racy count the record never bounded at all is still not gated, which is the case that

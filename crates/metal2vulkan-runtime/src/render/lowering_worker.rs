@@ -33,7 +33,6 @@ use super::deferral::LoweringSlot;
 use super::queued_commits::QueuedCommits;
 use crate::device::lock;
 use crate::exit_guard;
-use crate::recorder::take_leaving_room;
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
@@ -156,6 +155,17 @@ impl LoweringWorker {
             let _ = thread.join();
         }
     }
+}
+
+/// The first of `queue`, taken off, and `queue` left room for twice as many as waited, made on
+/// the thread that takes, so a push grows the queue, an allocation on the pushing thread, only
+/// where more wait than twice as many as this thread ever found, as the scheduler's inbox leaves
+/// its commits room (`scheduler/inbox.rs`).
+fn take_leaving_room<T>(queue: &mut VecDeque<T>) -> Option<T> {
+    let waited = queue.len();
+    let first = queue.pop_front()?;
+    queue.reserve(waited + 1);
+    Some(first)
 }
 
 impl WorkerShared {

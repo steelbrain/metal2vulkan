@@ -176,6 +176,13 @@ fn a_hold_of_the_pool_lives_until_its_own_drop() {
 fn a_batch_waiting_for_a_pipeline_holds_only_the_batches_that_share_its_resources() {
     let scratch = Scratch::new();
     let device = device(&scratch.0);
+    // The device's check of images over host pages (`in_place_check.rs`), which the texture over
+    // the no-copy buffer would start, runs to its verdicts first: its rounds' internal
+    // submissions, in flight as the buffer goes, would hold its memory and so its deallocator
+    // (`freed_memory.rs` waits for the device's own submissions), which is not what this test
+    // asks about. The texture then takes the path the verdict gives, as a program's does once
+    // the device's verdicts are known.
+    let _ = device.settle_in_place_checks(WAIT);
     let state = state(&device);
     let mut target = TextureDescriptor::texture_2d(PixelFormat::RGBA8Unorm, SIDE, SIDE, false);
     target.usage = TextureUsage::RENDER_TARGET;
