@@ -43,13 +43,20 @@
 //! threads and a simdgroup's 32 put on the values (two threads of one simdgroup are 1 to 31
 //! apart), or through a loop counter that starts there and steps by more than the starts differ
 //! (every value is the start plus a multiple of the step, so two threads' values differ at
-//! whatever iterations); a counter whose back edge is never taken is its start.
-//! `thread_position_in_threadgroup` does not qualify, since two threads of a simdgroup share
-//! its `x` in a threadgroup narrower than 32. Two commutative updates of one class whose
+//! whatever iterations); a counter whose back edge is never taken is its start. A component of
+//! `thread_position_in_grid` or `thread_position_in_threadgroup` does not differ between every two
+//! threads (two threads of a simdgroup share its `x` in a threadgroup narrower than 32), but it is
+//! the simdgroup's threadgroup origin plus a position below 1024: two threads' are equal or 1 to
+//! 1023 apart, so through the same steps it clears a pair whose bytes are apart both at one anchor
+//! and at anchors that far apart (`out[12 * gid + k]` against `out[12 * gid + j]`, `j != k`), but
+//! never by itself makes one thread at most run an access. Two commutative updates of one class whose
 //! results are unused never conflict, and neither do two stores of one value every thread of the
 //! simdgroup stores alike (to locations equal or apart by their alignment), nor such a store at
 //! one address for the whole simdgroup and a read that follows it in every thread (the read
-//! finds that value whichever thread's store landed last), nor two accesses one thread of a
+//! finds that value whichever thread's store landed last), nor a plain store and itself in a later
+//! iteration at an address each thread keeps through the loops holding it, in a block every thread
+//! of the simdgroup runs as often (in every order the last store to a location is one thread's
+//! last there, as under lockstep; a read between is a pair of its own), nor two accesses one thread of a
 //! simdgroup at most runs: both run only where one value that differs between any two threads
 //! of the simdgroup, as an index above may, equals one value they share (`if (tid == 0)`), both
 //! computed outside every loop holding the pair. Any other pair may conflict, which is the sound
@@ -344,6 +351,23 @@ impl Shape<'_> {
             })
         };
         let settled = |homes: &[BlockId]| !cross || homes.iter().all(|&h| invariant(h));
+        // One plain store against itself in a later iteration, at an address that keeps one value
+        // in each thread through the loops holding it, in a block every thread of the simdgroup
+        // runs as often: whatever order the threads' iterations take, the last store to a location
+        // is one thread's last there, as under lockstep (which thread's is lockstep's residue of
+        // one instruction), and a read of it between is a pair of its own.
+        if cross
+            && a.at == b.at
+            && a.stored.is_some()
+            && !a.read
+            && self.sg(a.block)
+            && fa
+                .leaves
+                .as_ref()
+                .is_some_and(|l| l.iter().all(|&h| invariant(h)))
+        {
+            return false;
+        }
         // One thread of a simdgroup at most runs either access: each runs only where one value
         // that differs between the simdgroup's threads equals one value they share, both
         // computed outside every loop holding the pair, so each thread holds one value of each
@@ -467,9 +491,11 @@ fn apart(
     let (up, down) = (ca + sa - cb, ca - cb - sb);
     match (xa, xb) {
         (Some(Spread::Same), Some(Spread::Same)) => 0 >= up || 0 <= down,
-        (Some(Spread::Apart { min, max }), Some(t)) if xa == Some(t) => {
+        (Some(Spread::Apart { min, max, same }), Some(t)) if xa == Some(t) => {
             let (lo, hi) = (i128::from(min), i128::from(max));
-            (lo >= up || hi <= down) && (-lo <= down || -hi >= up)
+            (lo >= up || hi <= down)
+                && (-lo <= down || -hi >= up)
+                && (!same || 0 >= up || 0 <= down)
         }
         _ => false,
     }

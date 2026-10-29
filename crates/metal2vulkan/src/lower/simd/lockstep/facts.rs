@@ -96,8 +96,9 @@ pub(super) struct Access {
 pub(super) enum Spread {
     /// Both threads hold one anchor.
     Same,
-    /// The threads' anchors differ by `min` to `max` bytes, either way.
-    Apart { min: u64, max: u64 },
+    /// The threads' anchors differ by `min` to `max` bytes, either way, or, where `same`, are one
+    /// anchor.
+    Apart { min: u64, max: u64, same: bool },
 }
 
 /// How a GEP index extends its core to the pointer's index width.
@@ -174,6 +175,10 @@ pub(super) struct Addr {
     /// The equalities that leave one thread of a simdgroup at most to run the access
     /// ([`Lone`]): the conditions of the branch edges that dominate its block.
     pub lone: Vec<Lone>,
+    /// For a plain store: the blocks of the instructions its address is computed from through
+    /// arithmetic alone ([`AddrFacts::leaves`]); `None` for another access, or where the walk
+    /// does not end.
+    pub leaves: Option<Vec<BlockId>>,
 }
 
 /// A fact `x == c` wherever an access runs, where `x` differs between any two threads of a
@@ -597,11 +602,13 @@ fn int_width(e: &Entry, ty: Option<TypeId>) -> Option<u32> {
 
 /// Distinct threads of one simdgroup hold values whose difference, read as a signed number of
 /// the value's width, has a magnitude in `[step, spread]` (`spread` below half the width's
-/// range).
+/// range), or, where `same`, is 0: two threads may then hold one value, and the fact orders
+/// accesses apart only where one value keeps them apart too.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct Inj {
     step: u64,
     spread: u64,
+    same: bool,
 }
 
 impl Inj {
@@ -611,6 +618,7 @@ impl Inj {
         (c != 0 && w >= 2 && spread < 1u64 << (w.min(64) - 1)).then_some(Inj {
             step: self.step.checked_mul(c)?,
             spread,
+            same: self.same,
         })
     }
 
@@ -623,6 +631,7 @@ impl Inj {
         Some(Inj {
             step: self.step,
             spread: (1u64 << w1) - self.step,
+            same: self.same,
         })
     }
 
@@ -638,6 +647,7 @@ impl Inj {
         (spread >= self.step).then_some(Inj {
             step: self.step,
             spread,
+            same: self.same,
         })
     }
 }
@@ -751,6 +761,11 @@ impl<'a> AddrFacts<'a> {
             }
         }
         let Guards { below, lone } = self.guards(access.block, m)?;
+        let leaves = if access.stored.is_some() && !access.read {
+            self.leaves(ptr, m)?
+        } else {
+            None
+        };
         Ok(Addr {
             roots: self.roots(ptr, m)?,
             span: self.span(ptr, m)?,
@@ -762,7 +777,64 @@ impl<'a> AddrFacts<'a> {
             sum,
             below,
             lone,
+            leaves,
         })
+    }
+
+    /// The blocks of the instructions address `ptr` is computed from through arithmetic alone
+    /// (GEPs, casts, integer and bitwise operations, comparisons, selects, and freezes): every
+    /// other instruction it reaches is a leaf, and so are arguments and constants, which have no
+    /// block. Where every leaf keeps one value while the access runs, so does the address. `None`
+    /// when the walk reaches more than [`MAX_CHAIN`] instructions.
+    fn leaves(&self, ptr: Value, m: &mut Meter) -> Result<Option<Vec<BlockId>>, Error> {
+        let mut out: Vec<BlockId> = Vec::new();
+        let mut seen: BTreeSet<InstId> = BTreeSet::new();
+        let mut stack: Vec<Value> = Vec::new();
+        m.grow(&mut stack, 1)?;
+        stack.push(ptr);
+        let mut charged = 0usize;
+        let found = loop {
+            let Some(v) = stack.pop() else {
+                break true;
+            };
+            m.tick(1)?;
+            let Value::Inst(i) = v else {
+                continue;
+            };
+            if !seen.insert(i) {
+                continue;
+            }
+            if seen.len() > MAX_CHAIN as usize {
+                break false;
+            }
+            let entry = tree_bytes(1, std::mem::size_of::<InstId>());
+            m.charge(entry)?;
+            charged = charged.saturating_add(entry);
+            match self.kind(v) {
+                Some(
+                    kind @ (InstKind::Gep { .. }
+                    | InstKind::Cast { .. }
+                    | InstKind::BinOp { .. }
+                    | InstKind::ICmp { .. }
+                    | InstKind::Select { .. }
+                    | InstKind::Freeze(_)),
+                ) => {
+                    let mut n = 0usize;
+                    kind.for_each_value(|_| n += 1);
+                    m.grow(&mut stack, n)?;
+                    kind.for_each_value(|x| stack.push(x));
+                }
+                _ => {
+                    if let Some(h) = self.home_of(v).filter(|h| !out.contains(h)) {
+                        m.grow(&mut out, 1)?;
+                        out.push(h);
+                    }
+                }
+            }
+        };
+        m.release(charged);
+        m.release(crate::budget::vec_bytes(&stack));
+        Ok(found.then_some(out))
     }
 
     /// The operands of `core` it is at least, in the signed order when `signed` and else the
@@ -862,9 +934,10 @@ impl<'a> AddrFacts<'a> {
                 P::Sgt => (*b, *a, true),
                 P::Eq => {
                     let (a, b) = (*a, *b);
-                    let lone = if self.uniform(b) && self.inj_int(a, 0, m)?.is_some() {
+                    let apart = |i: Option<Inj>| i.is_some_and(|i| !i.same);
+                    let lone = if self.uniform(b) && apart(self.inj_int(a, 0, m)?) {
                         Some((a, b))
-                    } else if self.uniform(a) && self.inj_int(b, 0, m)?.is_some() {
+                    } else if self.uniform(a) && apart(self.inj_int(b, 0, m)?) {
                         Some((b, a))
                     } else {
                         None
@@ -1189,6 +1262,7 @@ impl<'a> AddrFacts<'a> {
                 .map(|i| Spread::Apart {
                     min: i.step,
                     max: i.spread,
+                    same: i.same,
                 })
         };
         let cbase = self.canon(base, 0, m)?;
@@ -2072,30 +2146,18 @@ impl<'a> AddrFacts<'a> {
         let Some(w) = width else {
             return Ok(None);
         };
-        let thread = |b: &Builtin| {
-            matches!(
-                b,
-                Builtin::ThreadIndexInSimdgroup | Builtin::ThreadIndexInThreadgroup
-            )
-        };
         Ok(match v {
-            // A simdgroup is 32 consecutive linear threads, so both indices differ by 1 to 31
-            // between its threads.
-            Value::Arg(a) => self
-                .e
-                .ep
-                .params
-                .iter()
-                .any(|p| {
-                    p.param == a.raw() && matches!(&p.role, ParamRole::Builtin(b) if thread(b))
-                })
-                .then_some(Inj {
-                    step: 1,
-                    spread: 31,
-                })
-                .and_then(|i| i.truncated(w)),
+            Value::Arg(a) => self.builtin_inj(a.raw()).and_then(|i| i.truncated(w)),
             Value::Const(_) => None,
             Value::Inst(_) => match self.kind(v) {
+                // A component of a position vector.
+                Some(InstKind::ExtractElement {
+                    vec: Value::Arg(a),
+                    idx: Value::Const(_),
+                }) => self
+                    .builtin_inj(a.raw())
+                    .filter(|i| i.same)
+                    .and_then(|i| i.truncated(w)),
                 Some(InstKind::BinOp {
                     op: op @ (BinOp::Add | BinOp::Sub | BinOp::Or),
                     flags,
@@ -2174,6 +2236,7 @@ impl<'a> AddrFacts<'a> {
                         (Some(k), Some(i)) if i.spread < k => Some(Inj {
                             step: i.step.min(k - i.spread),
                             spread: i.spread.max(k - i.step),
+                            same: i.same,
                         }),
                         _ => None,
                     }
@@ -2190,6 +2253,7 @@ impl<'a> AddrFacts<'a> {
                         .map(|i| Inj {
                             step: i.step.min(k.step - i.spread),
                             spread: k.hi - k.lo,
+                            same: i.same,
                         })
                         .filter(|i| i.step <= i.spread),
                     _ => None,
@@ -2197,6 +2261,34 @@ impl<'a> AddrFacts<'a> {
                 _ => None,
             },
         })
+    }
+
+    /// How parameter `param`'s values differ between two threads of a simdgroup, where it is a
+    /// thread's index or position builtin. A simdgroup is 32 consecutive linear threads of one
+    /// threadgroup, so both indices differ by 1 to 31 between its threads. Each component of a
+    /// position, in the grid or in the threadgroup, is the threadgroup's origin, one for the
+    /// simdgroup, plus the thread's position in the threadgroup, below 1024: two threads' differ by
+    /// at most 1023, and may be equal (in a threadgroup narrower than 32, threads of a simdgroup
+    /// share an `x`).
+    fn builtin_inj(&self, param: u32) -> Option<Inj> {
+        let role = &self.e.ep.params.iter().find(|p| p.param == param)?.role;
+        match role {
+            ParamRole::Builtin(
+                Builtin::ThreadIndexInSimdgroup | Builtin::ThreadIndexInThreadgroup,
+            ) => Some(Inj {
+                step: 1,
+                spread: 31,
+                same: false,
+            }),
+            ParamRole::Builtin(
+                Builtin::ThreadPositionInGrid | Builtin::ThreadPositionInThreadgroup,
+            ) => Some(Inj {
+                step: 1,
+                spread: 1023,
+                same: true,
+            }),
+            _ => None,
+        }
     }
 
     /// The pointer index width of address `v`'s space.
@@ -2267,6 +2359,7 @@ impl<'a> AddrFacts<'a> {
                     .map(|i| Spread::Apart {
                         min: i.step,
                         max: i.spread,
+                        same: i.same,
                     }))
             }
             _ => Ok(None),
