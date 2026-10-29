@@ -3472,11 +3472,14 @@ pub struct WorkCounts {
     /// (NVIDIA's; `device/submit_stalls.rs`): the calls left before the stall, where it was due
     /// within the queue's next burst of work.
     pub idle_submits: u64,
-    /// Of those, the ones that took the stall: 2.2 ms or more each on the RTX 5080 measured.
+    /// Of those, the ones that took the stall: 1.97 ms or more each on the RTX 5080 measured.
     pub submit_stalls_idle: u64,
-    /// Signalling submissions of work that took 2 ms or more in the driver (on a driver with
-    /// the stall above, the stall where none was taken idle: before the first was seen, or after
-    /// a use of the queue the runtime cannot count).
+    /// Signalling submissions of work the runtime took for the driver's stall: 1 ms or more in
+    /// the driver, where the count of the queue's calls puts the stall, or anywhere before that
+    /// place is confirmed (`device/submit_stalls.rs`). On a driver with the stall above, the stall
+    /// where none was taken idle (before the first was seen, or after a use of the queue the
+    /// runtime cannot count), and before the place is confirmed, another long call of the
+    /// driver's too (a device's first batches).
     pub submit_stalls_on_work: u64,
     /// Work that came while a stall taken idle ran: a submission that waited 10 us or more for
     /// its queue's lock behind it, and a commit that reached the scheduler meanwhile.

@@ -1,29 +1,34 @@
 //! A driver's stall in one of every so many signalling submissions to a `VkQueue`, taken while
 //! the device's scheduler is idle.
 //!
-//! **The driver.** NVIDIA's proprietary driver spends 2.2 to 3.7 ms in one `vkQueueSubmit` of
-//! every 1024 that signal a fence or a semaphore on a `VkQueue`, whatever the call submits
-//! (615.71.09, `driverVersion` 0x99d1c240, on an RTX 5080 Laptop GPU under Linux; 8192 calls a
-//! form, timed one by one): one command buffer and a timeline signal, no command buffer and a
-//! timeline signal, a fence alone, `vkQueueSubmit2`, and four signalling submit infos in one call
-//! each stall once in 1024 calls, 100 us apart or back to back; a call that signals nothing never
-//! stalls. The count is the `VkQueue`'s: two queues of one device, two devices of one process and
-//! two processes each stall once in 1024 of their own calls; `vkQueueWaitIdle` counts as one. The
-//! other calls take 1.6 us (p50). Vulkan states no such cost. Each batch the runtime submits
-//! signals its queue's timeline, so one command buffer in 1024 waited there, and every one
-//! committed behind it with it: `host_ab present` at 120 Hz (25 command buffers a frame) held a
-//! submission 2.3 to 5.1 ms every 341.6 ms, in 30 of 1200 frames.
+//! **The driver.** NVIDIA's proprietary driver spends 2 to 4 ms (1.97 to 4.06 ms measured) in one
+//! `vkQueueSubmit` of every 1024 that signal a fence or a semaphore on a `VkQueue`, whatever the
+//! call submits (615.71.09, `driverVersion` 0x99d1c240, on an RTX 5080 Laptop GPU under Linux;
+//! 8192 calls a form, timed one by one): one command buffer and a timeline signal, no command
+//! buffer and a timeline signal, a fence alone, `vkQueueSubmit2`, and four signalling submit infos
+//! in one call each stall once in 1024 calls, 100 us apart or back to back; a call that signals
+//! nothing never stalls. The count is the `VkQueue`'s: two queues of one device, two devices of
+//! one process and two processes each stall once in 1024 of their own calls; `vkQueueWaitIdle`
+//! counts as one. The other calls take 1.6 us (p50), though a few elsewhere take a millisecond or
+//! more (a device's 62nd submission 10 ms, its 162nd 1.2 to 1.4 ms). Vulkan states no such cost.
+//! Each batch the runtime submits signals its queue's timeline, so one command buffer in 1024
+//! waited there, and every one committed behind it with it: `host_ab present` at 120 Hz (25
+//! command buffers a frame) held a submission 2.3 to 5.1 ms every 341.6 ms, in 30 of 1200 frames.
 //!
 //! **Taken idle** ([`Period`], [`IdleStalls`]), where the driver has the cost fact
 //! (`DriverFact::SignallingSubmitsStallEvery1024`, the translator's `device/driver_facts.rs`):
 //!
 //! - **Learnt per queue.** Each signalling call the runtime makes under a queue's lock and times
 //!   (a batch's, a fence's with no work, the device's own submission, an empty one of the plan's)
-//!   is counted; one that took [`STALL_NANOS`] or more is the driver's stall, and the count starts
-//!   again from it. A use of the queue the runtime cannot count (the program's, a sparse binding,
-//!   a wait for its idle) forgets the count until the next stall, as does a due stall that did not
-//!   come: a release without the stall submits no empty submission after its first miss, and none
-//!   before a stall was seen.
+//!   is counted; one that took [`STALL_NANOS`] or more is taken as the driver's stall, and the
+//!   count starts again from it, unless the place is confirmed and the call is not where the
+//!   count puts the next stall (within [`MARGIN`] calls before it): there it is another of the
+//!   driver's costs. The place is confirmed once a stall came where the count put it, so a long
+//!   call elsewhere before then (a device's first submissions) gives way to the next stall, and
+//!   one after leaves the place. A use of the queue the runtime cannot count (the program's, a
+//!   sparse binding, a wait for its idle) forgets the count until the next stall, as does a due
+//!   stall that did not come: a release without the stall submits no empty submission after its
+//!   first miss, and none before a stall was seen.
 //! - **Taken while idle.** Once the scheduler's thread has had nothing to submit for
 //!   [`IDLE_NANOS`] and a queue's next stall is due within its next burst of work (the most
 //!   signalling calls it made between two such idles over its last [`BURSTS`], plus [`MARGIN`]),
@@ -50,9 +55,11 @@ use std::sync::{Arc, Mutex};
 /// The signalling calls to a `VkQueue` from one stall of the driver's to the next.
 pub(crate) const PERIOD: u32 = 1024;
 
-/// A signalling call that took this long or longer, in nanoseconds, is the driver's stall: the
-/// stalls measured took 2.2 ms or more, and no other signalling call 1.6 ms.
-pub(crate) const STALL_NANOS: u64 = 2_000_000;
+/// A signalling call that took this long or longer, in nanoseconds, is the driver's stall where
+/// the count puts it, or where the queue's place is not confirmed ([`Period::called`]): the
+/// stalls measured took 1.97 ms or more (3 of 15 under 2 ms in the device test on the RTX 5080),
+/// and other signalling calls up to 1.4 ms, a device's 62nd 10 ms.
+pub(crate) const STALL_NANOS: u64 = 1_000_000;
 
 /// How long the scheduler's thread has had nothing to submit before it takes a stall due, in
 /// nanoseconds: it begins a gap between bursts of work (a frame's), not one between two commits
@@ -102,6 +109,9 @@ pub(crate) struct Period {
     /// The signalling calls since the last stall seen, each counted: `None` before one is seen,
     /// once a use was not counted, or once a stall due did not come.
     since: Option<u32>,
+    /// The place `since` counts from is confirmed: that stall came where the count before it put
+    /// the stall. A long call elsewhere then is another of the driver's costs, and leaves it.
+    confirmed: bool,
     /// The signalling calls of work in the burst under way.
     burst: u32,
     /// The last bursts' calls, a ring.
@@ -118,6 +128,7 @@ impl Period {
     /// A use of the queue the runtime cannot count: no stall is due until one is seen.
     pub(crate) fn forget(&mut self) {
         self.since = None;
+        self.confirmed = false;
         self.idle_stall = false;
     }
 
@@ -130,10 +141,16 @@ impl Period {
     }
 
     /// A signalling call of `caller`'s that took `nanos` and ended at host time `end`, in
-    /// nanoseconds: whether it was the driver's stall. A call of work [`IDLE_NANOS`] or more
-    /// after the one before begins a burst.
+    /// nanoseconds: whether it was the driver's stall, a call of [`STALL_NANOS`] or more where
+    /// the count puts the next stall (the [`PERIOD`]th call since the last, or up to [`MARGIN`]
+    /// calls before it), which confirms the place, or anywhere while the place is not confirmed.
+    /// A call of work [`IDLE_NANOS`] or more after the one before begins a burst.
     pub(crate) fn called(&mut self, caller: Caller, nanos: u64, end: u64) -> bool {
-        let stalled = nanos >= STALL_NANOS;
+        let expected = (self.since).is_some_and(|since| since + 1 + MARGIN >= PERIOD);
+        let stalled = nanos >= STALL_NANOS && (expected || !self.confirmed);
+        if stalled {
+            self.confirmed = expected;
+        }
         if caller == Caller::Work {
             let gap = end.saturating_sub(nanos).saturating_sub(self.last_end);
             if gap >= IDLE_NANOS {
@@ -146,7 +163,10 @@ impl Period {
         self.since = match (stalled, self.since) {
             (true, _) => Some(0),
             // The stall due did not come: the count is wrong, or the driver stalls no more.
-            (false, Some(since)) if since + 1 >= PERIOD => None,
+            (false, Some(since)) if since + 1 >= PERIOD => {
+                self.confirmed = false;
+                None
+            }
             (false, since) => since.map(|since| since + 1),
         };
         stalled

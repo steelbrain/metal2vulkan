@@ -10,11 +10,15 @@ const STALL: u64 = 2_300_000;
 const CALL: u64 = 2_000;
 
 /// A driver whose every [`PERIOD`]th signalling call to the queue stalls, its first at call
-/// `first`, and every `early`th period `by` calls early; or none, where `stalls` is false.
+/// `first`, and every `early`th period `by` calls early; or none, where `stalls` is false. Its
+/// stalls take `stall`, and the calls of `costs` (each a call's number and its time) take long
+/// elsewhere.
 struct Driver {
     calls: u64,
     first: u64,
     stalls: bool,
+    stall: u64,
+    costs: Vec<(u64, u64)>,
     /// The call that last stalled, and the periods so far.
     last: Option<u64>,
     periods: u64,
@@ -27,14 +31,16 @@ impl Driver {
             calls: 0,
             first,
             stalls,
+            stall: STALL,
+            costs: Vec::new(),
             last: None,
             periods: 0,
             early: None,
         }
     }
 
-    /// One signalling call: its time.
-    fn call(&mut self) -> u64 {
+    /// One signalling call: its time, and whether it stalled.
+    fn call(&mut self) -> (u64, bool) {
         self.calls += 1;
         let period = match self.early {
             Some((every, by)) if (self.periods + 1).is_multiple_of(every) => u64::from(PERIOD) - by,
@@ -46,22 +52,25 @@ impl Driver {
                 Some(last) => self.calls - last >= period,
             };
         if !stalls {
-            return CALL;
+            let cost = self.costs.iter().find(|(call, _)| *call == self.calls);
+            return (cost.map_or(CALL, |(_, took)| *took), false);
         }
         if self.last.is_some() {
             self.periods += 1;
         }
         self.last = Some(self.calls);
-        STALL
+        (self.stall, true)
     }
 }
 
-/// What a run of frames did: the stalls on work, those taken idle, and the empty calls made.
+/// What a run of frames did: the stalls on work, those taken idle, and the empty calls made, as
+/// the plan counts them; and the driver's stalls that fell on work.
 #[derive(Debug, Default, PartialEq, Eq)]
 struct Run {
     on_work: u32,
     idle: u32,
     empty: u32,
+    driver_on_work: u32,
 }
 
 /// `frames` frames of `per_frame` submissions 15 us apart, each frame followed by an idle of 8 ms
@@ -70,16 +79,17 @@ fn frames(driver: &mut Driver, frames: u32, per_frame: u32, take: bool) -> Run {
     let (mut period, mut run, mut now) = (Period::default(), Run::default(), 0);
     for _ in 0..frames {
         for _ in 0..per_frame {
-            let took = driver.call();
+            let (took, stalled) = driver.call();
             now += took + 15_000;
             if period.called(Caller::Work, took, now) {
                 run.on_work += 1;
             }
+            run.driver_on_work += u32::from(stalled);
         }
         now += 8_000_000;
         if take && period.may_be_due() {
             for _ in 0..period.due_idle() {
-                let took = driver.call();
+                let (took, _) = driver.call();
                 now += took;
                 run.empty += 1;
                 if period.called(Caller::Empty, took, now) {
@@ -121,6 +131,56 @@ fn a_stall_that_comes_early_is_taken_idle() {
     assert!(driver.periods >= 9, "{}", driver.periods);
     assert_eq!(with.on_work, 1, "{with:?}");
     assert_eq!(u64::from(with.idle), driver.periods, "{with:?}");
+}
+
+/// As on the RTX 5080 (615.71.09) in the device test: stalls of 1.97 ms, the device's 62nd
+/// submission 10 ms and its 162nd 1.3 ms before the first stall, and a call of 1.26 ms well
+/// before a later one. The long calls before the first stall give way to it; the one after it is
+/// no stall; every stall after the first is taken idle, each by no more empty calls than a burst
+/// and the margin.
+#[test]
+fn long_calls_elsewhere_and_short_stalls_spend_no_empty_call() {
+    let mut driver = Driver::new(997, true);
+    driver.stall = 1_970_000;
+    driver.costs = vec![(62, 10_000_000), (162, 1_300_000), (5013, 1_260_000)];
+    let with = frames(&mut driver, 200, 25, true);
+    assert_eq!(driver.periods, 4, "{with:?}");
+    assert_eq!(with.driver_on_work, 1, "{with:?}");
+    assert_eq!(with.idle, 4, "{with:?}");
+    assert!(with.empty <= with.idle * (25 + MARGIN), "{with:?}");
+}
+
+/// Once a stall came where the count put it, a long call elsewhere is no stall and leaves the
+/// place: the next stall is still due where the count puts it.
+#[test]
+fn a_long_call_away_from_a_confirmed_place_leaves_it() {
+    let mut period = Period::default();
+    let mut now = 0;
+    let mut call = |period: &mut Period, took: u64| {
+        now += took + 15_000;
+        period.called(Caller::Work, took, now)
+    };
+    assert!(call(&mut period, STALL));
+    for _ in 0..PERIOD - 1 {
+        assert!(!call(&mut period, CALL));
+    }
+    // Where the count put it: the place is confirmed.
+    assert!(call(&mut period, STALL));
+    for _ in 0..500 {
+        assert!(!call(&mut period, CALL));
+    }
+    assert!(
+        !call(&mut period, 10_000_000),
+        "a long call away from the place"
+    );
+    for _ in 0..PERIOD - 502 {
+        assert!(!call(&mut period, CALL));
+    }
+    assert!(period.may_be_due());
+    assert!(
+        call(&mut period, STALL_NANOS),
+        "the stall where the count put it"
+    );
 }
 
 /// A driver that never stalls gets no empty call: no place is learnt.
