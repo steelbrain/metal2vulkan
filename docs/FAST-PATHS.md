@@ -316,13 +316,18 @@ recorded here.
 Open differences from Metal that no note announces yet, and runtime costs still above the
 driver's. Each is open work.
 
-- **A copied host buffer costs O(its size) at every commit and every batch's completion**
-  (`copied.rs`, `copied-host-pages`): each compares every byte of every live copy with the bytes
-  the copy and the pages last agreed on, whichever buffers the work names, where a page log or the
-  work's uses could bound it: a live 64 MiB copy added 45 to 68 ms to each empty command buffer's
-  commit and wait (0.2 ms without) on an RTX 5080 laptop (Intel Core Ultra 9 275HX). A copy is
-  made only where the caller's gate refuses an import or an admitted import fails, never by
-  default.
+- **A copied host buffer costs O(its size) at every batch's completion that may have written
+  it, and at every commit where its pages carry no log** (`copied.rs`, `copied-host-pages`): each
+  compares every byte of the copy with the bytes the copy and the pages last agreed on, a page at
+  a time, so 680 MiB of copies that agree take 28-30 ms at each commit without a log on an M3
+  Max (52-53 ms on the RTX 5080 laptop's Core Ultra 9 275HX), and as long at each completion of
+  a command buffer whose functions read addresses (which may write every copy) or that executes
+  an indirect command buffer (`tests/copied_bench.rs`). Where the pages' memory carries a log of
+  their writes (`HostMemory::with_dirty_pages`, `HostRam::with_dirty_pages`), the commit
+  compares only the pages it reports written: 0.15 ms where none changed, 4.6 ms where 1% did
+  (0.3 and 3.5 ms on the 275HX). A completion whose command buffers' uses name the
+  copies they write compares those alone. A copy is made only where the caller's gate refuses an
+  import or an admitted import fails, never by default.
 - **A copied host buffer's merge keeps the CPU's byte where the CPU and the GPU both wrote it**
   between a commit and the completion: bytes are merged one at a time, so a GPU write never
   rewrites a byte beside it, but a byte both wrote keeps the CPU's, where on Metal the later write

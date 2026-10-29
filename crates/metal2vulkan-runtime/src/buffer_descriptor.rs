@@ -16,6 +16,7 @@ use super::buffer::{usage, Buffer, BufferParts, HostCell, Lying, Modes, Owner, R
 use super::copied::NotCopied;
 use super::degradation::Degradation;
 use super::device::lock;
+use super::dirty_pages::{DirtySource, PagesLog};
 use super::error::MemoryKind;
 use super::error::{internal, invalid, nil, vulkan, Error, Problem, RuntimeGap};
 use super::heap::{Heap, HeapProblem};
@@ -25,7 +26,7 @@ use super::host_memory::{
     refuse_unwritable, refused, unpinnable, Deallocator, HostMemory, HostParts, HostRelease,
     ImportRequest, ImportWindow, Importer, KeepAlive, Source,
 };
-use super::host_ram::Routed;
+use super::host_ram::{RamOnDevice, Routed};
 #[cfg(unix)]
 use super::host_residency::Again;
 use super::memory::{ImportFailure, MemoryClass, Placement};
@@ -513,6 +514,11 @@ impl Device {
             let address = self.place_window(placement, &window, length)?;
             let buffer =
                 self.buffer_in_import(Arc::clone(&import), length, modes, address, release);
+            // The GPU's writes through it are reported to the import's logs, as through the
+            // buffer it was made for, over the same bytes (`dirty_pages.rs`).
+            if let Some(pages) = buffer.host_pages() {
+                pages.logged_as(buffer.identity().key);
+            }
             shared
                 .aliases
                 .join(buffer.identity().key, made_over, class, &import);
@@ -533,6 +539,14 @@ impl Device {
         let in_chunk = (routed.as_ref())
             .and_then(|routed| unsafe { self.bind_in_chunk(importer, routed, &window, length) });
         let kept_runs = routed.as_ref().map(Routed::kept);
+        // The logs of the writes to the pages, where their memory came with one or their guest
+        // RAM did (`dirty_pages::PagesLog`), kept with their import or copy.
+        let log = pages_log(
+            (pointer, length),
+            dirty.as_ref(),
+            kept_runs.as_ref(),
+            window.offset,
+        );
         let (buffer, memory, again, unwritable) = match in_chunk {
             Some((buffer, memory)) => (buffer, memory, None, false),
             None => {
@@ -557,7 +571,7 @@ impl Device {
                     shared.counts.host_import_refused_by_host();
                     // SAFETY: the caller's contract.
                     let copied = unsafe { self.copied_buffer(copy, release, dirty, None) };
-                    return copied.map(|buffer| kept_with(buffer, kept_runs));
+                    return copied.map(|buffer| kept_with(kept_log(buffer, log), kept_runs));
                 }
                 // Only a buffer that imports its pages pins them, and so has their writability
                 // asked: one that lies in a live import pins none, that import's making asked for
@@ -603,7 +617,7 @@ impl Device {
                         // SAFETY: the caller's contract.
                         let copied =
                             unsafe { self.copied_buffer(copy, release, dirty, Some(error)) };
-                        return copied.map(|buffer| kept_with(buffer, kept_runs));
+                        return copied.map(|buffer| kept_with(kept_log(buffer, log), kept_runs));
                     }
                     Err(error) => return Err(error),
                 };
@@ -644,7 +658,7 @@ impl Device {
                 pages.keep_dirty(dirty);
             }
         }
-        let buffer = kept_with(buffer, kept_runs);
+        let buffer = kept_with(kept_log(buffer, log), kept_runs);
         // A buffer over the bytes another no-copy buffer covers joins it (`host_aliases.rs`), and
         // a later one lies in its import; one whose GPU writes are dropped joins none.
         // A buffer just made lies in its pages (`HostCell::current`).
@@ -962,7 +976,17 @@ impl Device {
                     None if chunk_bound => {}
                     None => shared.counts.host_rebind_import_made(covered),
                 }
-                // The guest RAM and runs the caller resolved the pages to stay with them.
+                // The logs of the writes to them, and the guest RAM and runs the caller resolved
+                // them to, stay with them.
+                let log = pages_log(
+                    (pointer, length),
+                    dirty.as_ref(),
+                    kept_runs.as_ref(),
+                    window.offset,
+                );
+                if let Some(log) = log {
+                    pages.keep_log(log);
+                }
                 if let Some(runs) = kept_runs {
                     pages.keep_runs(runs);
                 }
@@ -985,6 +1009,10 @@ impl Device {
         if let Some(dirty) = dirty {
             pages.keep_dirty(dirty);
         }
+        // The GPU's writes through it from now on are reported to the new pages' logs, and
+        // merged back from a copy of them.
+        pages.logged_as(key);
+        pages.copied_as(key);
         let (old, again) = shared
             .rebinds
             .replace(key, cell, Arc::clone(&pages))
@@ -1758,6 +1786,35 @@ impl Device {
             }
         }
     }
+}
+
+/// `buffer`, the logs of the writes to its pages kept with them (`dirty_pages::PagesLog`), where
+/// there are any, which hear of the GPU's writes through it where it lies in them in place; and
+/// where its pages are a copy, its key named to the copy, whose merges back compare it where a
+/// batch wrote that key (`copied.rs`).
+fn kept_log(buffer: Buffer, log: Option<Arc<PagesLog>>) -> Buffer {
+    if let Some(pages) = buffer.host_pages() {
+        let key = buffer.identity().key;
+        if let Some(log) = log {
+            pages.keep_log(log);
+            pages.logged_as(key);
+        }
+        pages.copied_as(key);
+    }
+    buffer
+}
+
+/// The logs of the writes to the `length` bytes at `pointer` (`dirty_pages::PagesLog`): their
+/// memory's own `dirty`, and the guest RAM's of the `runs` of it their import window is, the
+/// bytes at its `offset`; `None` where neither has one.
+fn pages_log(
+    (pointer, length): (NonNull<u8>, u64),
+    dirty: Option<&Arc<DirtySource>>,
+    runs: Option<&(Arc<RamOnDevice>, Box<[std::ops::Range<u64>]>)>,
+    offset: u64,
+) -> Option<Arc<PagesLog>> {
+    let ram = runs.and_then(|(ram, runs)| Some((ram.dirty()?, &runs[..], offset)));
+    PagesLog::new((pointer.as_ptr() as u64, length), dirty, ram)
 }
 
 /// `buffer`, the guest RAM and runs its caller resolved its pages to (`host_ram.rs`) kept with

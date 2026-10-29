@@ -225,6 +225,12 @@ fn span_of(spans: &[Range<u64>], address: u64) -> Option<usize> {
 }
 
 impl RamOnDevice {
+    /// The RAM's log of the writes to its pages (`HostRam::with_dirty_pages`), where it came with
+    /// one: its offsets are host addresses.
+    pub(crate) fn dirty(&self) -> Option<&Arc<DirtySource>> {
+        self.ram.dirty.as_ref()
+    }
+
     /// `ram`, none of its chunks imported.
     fn new(ram: &Arc<HostRam>) -> RamOnDevice {
         let slots = (chunk_spans(&ram.ranges).into_iter())

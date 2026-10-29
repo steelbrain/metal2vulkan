@@ -26,7 +26,7 @@ use super::buffer_texture::TexelViews;
 use super::churn_counts::Recycled;
 use super::degradation::Degradation;
 use super::device::{lock, DeviceShared};
-use super::dirty_pages::DirtySource;
+use super::dirty_pages::{DirtySource, PagesLog};
 use super::error::{internal, invalid, nil, vulkan, Error, Problem};
 use super::exit_guard;
 use super::fresh_pages;
@@ -671,6 +671,38 @@ impl HostPages {
         let _kept = self.dirty.set(dirty);
     }
 
+    /// Keep the logs of the writes to them (`dirty_pages::PagesLog`), with their import.
+    pub(super) fn keep_log(&self, log: Arc<PagesLog>) {
+        self.import.keep_log(log);
+    }
+
+    /// The logs of the writes to them, where their memory came with one.
+    pub(super) fn log(&self) -> Option<&Arc<PagesLog>> {
+        self.import.log.get()
+    }
+
+    /// Name `key`, a buffer's (or a heap's bytes') lying in them, to their copy, where they are
+    /// one: its merges back compare the copy where a batch wrote that key (`copied.rs`).
+    pub(super) fn copied_as(&self, key: ResourceKey) {
+        if let Some(copied) = self.import.copied.get() {
+            copied.name(key);
+        }
+    }
+
+    /// Report the GPU's writes through the uses of `key`, a buffer's (or a heap's bytes') lying
+    /// in them, to their logs (`DirtyShadows::logged_in_place`), where they have one and lie in
+    /// an import the GPU writes in place: a copy reports its merges back instead (`copied.rs`),
+    /// and a read-only view takes no write.
+    pub(super) fn logged_as(&self, key: ResourceKey) {
+        let import = &self.import;
+        if import.copied.get().is_some() || import.drops_writes() {
+            return;
+        }
+        if let Some(log) = import.log.get() {
+            import.device.shared().dirty.logged_in_place(key, log);
+        }
+    }
+
     /// Keep the guest RAM and the runs of it their caller resolved them to (`host_ram.rs`).
     pub(super) fn keep_runs(&self, runs: (Arc<RamOnDevice>, Box<[Range<u64>]>)) {
         let _kept = self.ram_runs.set(runs);
@@ -860,6 +892,9 @@ pub(super) struct HostImport {
     /// Its place among its device's copied host buffers, where its memory is a copy of the
     /// caller's pages, not their import (`copied.rs`): unregistered as it goes, before its memory.
     copied: OnceLock<crate::copied::Copied>,
+    /// The logs of the writes to its pages, where their memory came with one
+    /// (`dirty_pages::PagesLog`): every buffer lying in it shares them.
+    log: OnceLock<Arc<PagesLog>>,
 }
 
 /// Where a host import's bytes lie in its `VkBuffer` and memory, which reading needs no
@@ -1037,6 +1072,7 @@ impl HostImport {
             kept: Mutex::new(None),
             after_free: Mutex::new(Vec::new()),
             copied: OnceLock::new(),
+            log: OnceLock::new(),
         }
     }
 
@@ -1062,6 +1098,7 @@ impl HostImport {
             kept: Mutex::new(None),
             after_free: Mutex::new(Vec::new()),
             copied: OnceLock::new(),
+            log: OnceLock::new(),
         }
     }
 
@@ -1083,6 +1120,16 @@ impl HostImport {
     /// Whether its memory is a copy of the caller's pages (`copied.rs`), not their import.
     pub(super) fn copied(&self) -> bool {
         self.copied.get().is_some()
+    }
+
+    /// Keep the logs of the writes to its pages (set once, as its first buffer is made), which
+    /// its copy, where it is one, reports its merges back to (`copied.rs`).
+    pub(super) fn keep_log(&self, log: Arc<PagesLog>) {
+        if let Some(copied) = self.copied.get() {
+            copied.set_log(&log);
+        }
+        self.device.shared().dirty.note_logged();
+        let _ = self.log.set(log);
     }
 
     /// Whether its pages were imported through a read-only view of them, which drops the GPU's
@@ -3237,6 +3284,20 @@ impl Buffer {
     /// while they are detached.
     pub(super) fn host_pages(&self) -> Option<Arc<HostPages>> {
         self.pages_cell()?.current()
+    }
+
+    /// The runtime wrote the host addresses `addresses` of the buffer's bytes through its
+    /// `contents` itself (a `replaceRegion`, an argument encoder's or a rasterization-rate map's
+    /// write): reported to the logs of the writes to its pages, where their memory came with one
+    /// (`dirty_pages::PagesLog`, writer 0), so every copy of the pages takes them. The pages are
+    /// looked at only on a device some of whose pages came with a log.
+    pub(super) fn wrote_host(&self, addresses: Range<u64>) {
+        if !self.0.device.shared().dirty.logged() {
+            return;
+        }
+        if let Some(log) = self.host_pages().as_ref().and_then(|pages| pages.log()) {
+            log.wrote_at(addresses);
+        }
     }
 
     /// The host imports `buffers` lie in now, each counted once however many lie in it

@@ -127,7 +127,7 @@ use own::{
 use std::any::Any;
 use std::collections::{BTreeMap, BTreeSet, HashSet, VecDeque};
 use std::ops::Range;
-use std::sync::atomic::{AtomicU64, AtomicU8, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicU8, Ordering};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, OnceLock};
 use std::time::{Duration, Instant};
 
@@ -252,9 +252,15 @@ pub(super) struct CommandBufferShared {
     /// synchronizes a pool's command buffers' recording externally.
     reencoding: Mutex<()>,
     /// What its commands did that the device's logs of host pages hear of at its commit
-    /// (`dirty_pages.rs`): collected only once the device copied a shadow over logged pages in.
-    /// Apart from the state, which no encoder holds while it records.
+    /// (`dirty_pages.rs`), and its copied host buffers' merges back (`copied.rs`): collected
+    /// only while the device copied a shadow over logged pages in, imports logged pages in place,
+    /// or keeps a copied host buffer. Apart from the state, which no encoder holds while it
+    /// records.
     pub(super) dirty: Mutex<DirtyCommit>,
+    /// A command's uses went unnoted, nothing collecting them then (no copied host buffer, and
+    /// no log of host pages, lived): the merge back of copied host buffers takes every copy as
+    /// written by it (`copied.rs`).
+    pub(super) unnoted: AtomicBool,
     /// The `VkCommandBuffer`s of its pool its recordings ended ([`CommandBuffer::end_raw`]):
     /// where they are every one the pool handed out and it completed, it gives the pool back
     /// with none recording (`spares.rs`).
@@ -726,6 +732,11 @@ pub(super) struct State {
     /// submission, which that submission points at the set as it lies then
     /// (`first_submission.rs`).
     replay_tables: Vec<ReplayTable>,
+    /// A command of it may write memory no use it noted names: a root table (a function that
+    /// reaches buffers through addresses), a root table of work on the GPU alone, or work its
+    /// host steps resolve from records (`Deferred::reaches_unnamed`). The merge back of copied
+    /// host buffers then takes every copy as written by it (`copied.rs`).
+    pub(super) reaches_unnamed: bool,
     /// The ended encoders whose submissions failed so: no part of one goes to a queue with work
     /// (`submit.rs` holds it to that).
     unrunnable: BTreeSet<usize>,
@@ -830,6 +841,7 @@ impl State {
     /// recorded after the first submission searches the set as it lay as it was recorded, which
     /// the submitted command buffer holds.
     pub(super) fn replay_table(&mut self, table: ReplayTable) {
+        self.reaches_unnamed = true;
         if !self.submitted {
             self.replay_tables.push(table);
         }
@@ -1002,6 +1014,7 @@ impl State {
         noted: NotedTable,
         ranges: Vec<ResidentRange>,
     ) -> Result<(), Error> {
+        self.reaches_unnamed = true;
         if self.status == CommandBufferStatus::NotEnqueued {
             self.root_ranges.extend(ranges);
             self.root_tables.push(noted);
@@ -1860,6 +1873,7 @@ impl CommandBuffer {
                 failing: Vec::new(),
                 rebound_use: None,
                 replay_tables: Vec::new(),
+                reaches_unnamed: false,
                 unrunnable: BTreeSet::new(),
                 submitted_holds: Vec::new(),
                 failed_at_commit: None,
@@ -1881,6 +1895,7 @@ impl CommandBuffer {
             reencode: AtomicU64::new(0),
             reencoding: Mutex::new(()),
             dirty: Mutex::new(DirtyCommit::default()),
+            unnoted: AtomicBool::new(false),
             raws_ended: AtomicU64::new(0),
             kernel: KernelTimes::default(),
             status: AtomicU8::new(status_word(CommandBufferStatus::NotEnqueued)),
@@ -1930,10 +1945,15 @@ impl CommandBuffer {
     }
 
     /// Note a command's `uses` for the device's logs of host pages, where it keeps any
-    /// (`dirty_pages.rs`): its writes let go, at the commit, of the holds of the shadows they meet.
+    /// (`dirty_pages.rs`): its writes let go, at the commit, of the holds of the shadows they meet,
+    /// and those into logged pages imported in place are reported to their logs; and for its
+    /// copied host buffers, where any lives, whose merges back compare those its writes reach
+    /// (`copied.rs`).
     pub(super) fn note_dirty(&self, uses: &[Use<ResourceKey>]) {
-        if self.0.device.shared().dirty.any() {
-            lock(&self.0.dirty).note(uses);
+        let shared = self.0.device.shared();
+        match shared.dirty.collects() || shared.copied.any() {
+            true => lock(&self.0.dirty).note(uses, &shared.dirty),
+            false => self.0.unnoted.store(true, Ordering::Relaxed),
         }
     }
 
@@ -2686,13 +2706,16 @@ impl CommandBuffer {
             if let Some(residency) = &mut state.residency {
                 residency.sync_heaps();
             }
-            let (segments, places) = state
+            let (segments, places): (Vec<(Deferred, bool)>, Vec<usize>) = state
                 .recorded
                 .iter()
                 .filter(|recorded| runs(recorded.encoder))
                 .flat_map(|recorded| (recorded.segments.iter()).map(|at| (at, recorded.encoder)))
                 .map(|(segment, encoder)| ((segment.work.clone(), segment.needs_step()), encoder))
                 .unzip();
+            if segments.iter().any(|(work, _)| work.reaches_unnamed()) {
+                state.reaches_unnamed = true;
+            }
             // What of it the live buffers list once used, held weakly: the device's registries'
             // locks, which take no other, inside this one.
             let reached = state.reached(device.shared(), runs);
@@ -2700,7 +2723,7 @@ impl CommandBuffer {
             // order, and of the shadows its end left holding their truth (`dirty_pages.rs`).
             // One that waits for an event or a semaphore may run after work committed later,
             // whose writes no commit before it noted: its copies in count on no hold.
-            if device.shared().dirty.any() {
+            if device.shared().dirty.collects() {
                 let held = match (&failure, &state.shadow_carry) {
                     (None, Some(carry)) => carry.held_whole(),
                     _ => Vec::new(),
@@ -2769,6 +2792,10 @@ impl CommandBuffer {
             .filter(|(_, prepared)| prepared.pipelines)
             .map(|((work, _), _)| work.clone())
             .collect();
+        // Every byte the CPU changed in a copied host buffer's pages is in its copy before any of
+        // this command buffer's work is submitted (`copied.rs`): copied in with no lock of the
+        // command buffer's held, as a copy over logged pages waits for the log's publication.
+        shared.copied.copy_in(&shared.counts, shared.dirty.tally());
         let (waits, away, reaches, unreplayable, reset) = {
             let mut state = self.state();
             state.committing = false;
@@ -2804,9 +2831,6 @@ impl CommandBuffer {
                 let ticket = state.heaps.commit(device);
                 state.retained.push(Box::new(ticket));
             }
-            // Every byte the CPU changed in a copied host buffer's pages is in its copy before any
-            // of this command buffer's work is submitted (`copied.rs`).
-            device.shared().copied.copy_in(&device.shared().counts);
             state.status = CommandBufferStatus::Committed;
             // Its set-0 cache is shut here, before anything records again: from the commit on it
             // holds what its commands took only weakly (below), so no handle a kept set holds is
@@ -4412,9 +4436,10 @@ impl CommandBufferShared {
                 }
                 (None, None) => result,
             };
-            // The logs of host pages hear of its shadows' copies back again, now they ran, and
-            // let go of the holds a failed one's copies in set (`dirty_pages.rs`).
-            if self.device.shared().dirty.any() {
+            // The logs of host pages hear of its shadows' copies back and its writes in place
+            // again, now they ran, and let go of the holds a failed one's copies in set
+            // (`dirty_pages.rs`).
+            if self.device.shared().dirty.collects() {
                 let dirty = lock(&self.dirty);
                 (self.device.shared().dirty).completed(&dirty, result.is_err());
             }

@@ -456,6 +456,21 @@ impl Deferred {
         }
     }
 
+    /// Whether its recording may write memory no use its command buffer noted names, so the merge
+    /// back of copied host buffers takes every copy as written by it (`copied.rs`): an indirect
+    /// command buffer's execution and a render pass that executes render commands, whose
+    /// commands its step resolves from records, an indirect dispatch and a scrub, which their
+    /// steps or submissions record. A dispatch whose pipelines were being made records the uses
+    /// its encoding noted, a gated copy in writes the shadow it names, and a loop's check records
+    /// nothing.
+    pub(super) fn reaches_unnamed(&self) -> bool {
+        match self {
+            Deferred::Execute(_) | Deferred::Dispatch(_) | Deferred::SparseScrub(_) => true,
+            Deferred::RenderPass(pass) => pass.executes(),
+            Deferred::GatedCopyIn(_) | Deferred::Pending(_) | Deferred::Loop(_) => false,
+        }
+    }
+
     /// Whether a host step records it from what its calls resolved alone, nothing of the buffers
     /// it names read again then: the buffers over host pages its commands used let their pages go
     /// at the commit instead of keeping them until it completes (`CommandBuffer::commit`'s

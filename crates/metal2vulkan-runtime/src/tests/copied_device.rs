@@ -1773,3 +1773,90 @@ fn copied_rebind_over_read_only_pages_whose_admitted_import_fails_drops_the_gpu_
     drops_the_gpu_s_writes(&device, (&buffer, 0), &second);
     eprintln!("COPIED-READ-ONLY-ADMITTED: the source's import failed, and the copy was made");
 }
+
+/// A batch that only reads a copied buffer leaves it uncompared at its merge back
+/// (`copied_merges_skipped`), and one that writes it merges it back.
+#[test]
+fn a_merge_back_skips_a_copy_its_batch_only_read() {
+    let Some((device, _)) = device() else {
+        return;
+    };
+    let host = Host::new(11);
+    let asked = Arc::default();
+    let buffer = host.buffer(&device, Some(gate(&asked, false)));
+    assert!(buffer.copied(), "the buffer is a copy");
+    blit(&device, |encoder| {
+        encoder.fill_buffer(&buffer, 0..256, 0x3C).unwrap();
+    });
+    assert_eq!(&host.bytes()[..256], &[0x3C; 256], "a write merged back");
+    let before = device.work_counts();
+    let read = gpu_bytes(&device, &buffer);
+    let after = device.work_counts();
+    assert_eq!(read, host.bytes(), "the GPU reads the pages");
+    let skipped = after.copied_merges_skipped - before.copied_merges_skipped;
+    let compared = after.copied_merges_compared - before.copied_merges_compared;
+    eprintln!("COPIED: a reading batch's merge back: {compared} compared, {skipped} skipped");
+    assert_eq!(
+        (compared, skipped),
+        (0, 1),
+        "the copy a batch only read is not compared"
+    );
+    drop(buffer);
+}
+
+/// A kernel's stores through a copied buffer's address loaded from memory, with no use of the
+/// buffer named (the buffer reached unnamed, as a command buffer's earlier use left it), still
+/// merge back into the pages: its command may write memory no use names, so every copy is
+/// compared.
+#[test]
+fn a_write_through_an_address_no_use_names_still_merges_back() {
+    let Some((device, _)) = device() else {
+        return;
+    };
+    let host = Host::new(13);
+    let asked = Arc::default();
+    let buffer = host.buffer(&device, Some(gate(&asked, false)));
+    assert!(buffer.copied(), "the buffer is a copy");
+    // A command buffer's use of it: the device's live buffers list it, reached unnamed from here.
+    let _ = gpu_bytes(&device, &buffer);
+    let function = super::encoder_holds::library(&device, "engine/ob2_loaded_pointer.ll")
+        .new_function_with_name("ob2_loaded_pointer")
+        .unwrap();
+    let state = device
+        .new_compute_pipeline_state_with_function(&function, &crate::PipelineOptions::default())
+        .unwrap();
+    let indices: Vec<u8> = (0..16u32).flat_map(u32::to_le_bytes).collect();
+    let out = device.new_buffer(32, ResourceOptions::shared()).unwrap();
+    let before = device.work_counts();
+    let queue = device.new_command_queue().unwrap();
+    let command_buffer = queue.command_buffer().unwrap();
+    let mut encoder = command_buffer.compute_command_encoder().unwrap();
+    encoder.set_compute_pipeline_state(&state).unwrap();
+    encoder.set_bytes(&indices, 0).unwrap();
+    encoder
+        .set_bytes(&buffer.gpu_address().0.to_le_bytes(), 1)
+        .unwrap();
+    encoder.set_buffer(Some(&out), 0, 2).unwrap();
+    encoder
+        .dispatch_threads(crate::Size::new(8, 1, 1), crate::Size::new(8, 1, 1))
+        .unwrap();
+    encoder.end_encoding().unwrap();
+    command_buffer.commit().unwrap();
+    command_buffer.wait_until_completed_for(WAIT).unwrap();
+    assert_eq!(command_buffer.status(), CommandBufferStatus::Completed);
+    let after = device.work_counts();
+    let words: Vec<u32> = (host.bytes()[32..64].as_chunks::<4>().0.iter())
+        .map(|word| u32::from_le_bytes(*word))
+        .collect();
+    let stored: Vec<u32> = (0..8).map(|t| 0xB000_0000 | t).collect();
+    eprintln!(
+        "COPIED: the unnamed write's merge back: {} compared, {} skipped",
+        after.copied_merges_compared - before.copied_merges_compared,
+        after.copied_merges_skipped - before.copied_merges_skipped,
+    );
+    assert_eq!(
+        words, stored,
+        "the stores through the address are in the pages"
+    );
+    drop((buffer, out, state, queue));
+}

@@ -90,6 +90,7 @@ use metal2vulkan::bind::{
 };
 use metal2vulkan::reflection::BufferBinding;
 use metal2vulkan::Budget;
+use std::ops::Range;
 use std::ptr::NonNull;
 use std::sync::Arc;
 
@@ -459,7 +460,11 @@ impl ArgumentEncoder {
                 })?;
             offsets.push(self.offset(call, index, ty)?);
         }
+        // The bytes written, from the mapping's first: reported once written.
+        let mut wrote: Option<Range<u64>> = None;
         for (offset, word) in offsets.into_iter().zip(words) {
+            let end = offset + ARGUMENT_HANDLE_BYTES;
+            wrote = Some(wrote.map_or(offset..end, |w| w.start.min(offset)..w.end.max(end)));
             let bytes = word.to_le_bytes();
             debug_assert_eq!(bytes.len() as u64, ARGUMENT_HANDLE_BYTES);
             // SAFETY: `mapped` is the argument buffer's mapping at the arguments' offset, whose
@@ -474,6 +479,12 @@ impl ArgumentEncoder {
                     bytes.len(),
                 )
             };
+        }
+        // A write of host pages a consumer logs is the runtime's own, which its log does not see:
+        // reported, so the copies of the pages take it (`dirty_pages.rs`).
+        if let (Some((buffer, _)), Some(wrote)) = (&self.target, wrote) {
+            let first = at.as_ptr() as u64;
+            buffer.wrote_host(first + wrote.start..first + wrote.end);
         }
         Ok(())
     }

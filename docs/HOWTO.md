@@ -352,8 +352,17 @@ handlers run or a waiter returns, keeping a byte the CPU changed since (`copied_
 `copied_merge_back_bytes`). An event signal submitted while a copy is live is seen at its batch's
 completion, after that write-back: no read of the event's value shows it earlier, and a wait for it
 on another queue (a plain `Event`'s too) is held until then rather than chained on the GPU
-(`event_signals_behind_merge`). Each compares every byte of every live copy, so keep copies few. A
-texture over a copied buffer is a shadow of its bytes. The copy reads the pages through the kernel
+(`event_signals_behind_merge`). Each completion compares every byte of each copy its command
+buffers may have written (`copied_merges_compared`, `copied_merges_skipped`): those their uses
+wrote, and every copy where a function reads addresses or an indirect command buffer runs, so keep
+copies few. Where the pages' memory carries a log of the writes to them
+(`HostMemory::with_dirty_pages`, `HostRam::with_dirty_pages`), each commit compares only the pages
+the log reports written since the copy's last commit, and the bytes no log keeps
+(`copied_copy_in_bytes_skipped`): it asks one stamp of each log for every copy and waits for its
+publication (bounded) on the committing thread, and every copy compares every byte at its first
+commit and where a log answers `false`. The runtime reports to the log what the log cannot see: a
+copy's merge back, as the copy's own write, the GPU's writes into the pages through imports in
+place, and its own CPU writes into them. A texture over a copied buffer is a shadow of its bytes. The copy reads the pages through the kernel
 first, and where the kernel cannot read them, with plain loads where the process maps every page
 with read permission: on Linux the kernel's read pins each page, which a mapping of a dma-buf
 (`VM_PFNMAP`) does not allow. Pages not mapped, or mapped

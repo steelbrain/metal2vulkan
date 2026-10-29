@@ -300,7 +300,10 @@ pub(crate) struct Counters {
     copied_rebind_images_made: AtomicU64,
     copied_heaps_made: AtomicU64,
     copied_copy_in_bytes: AtomicU64,
+    copied_copy_in_bytes_skipped: AtomicU64,
     copied_merge_back_bytes: AtomicU64,
+    copied_merges_compared: AtomicU64,
+    copied_merges_skipped: AtomicU64,
     copied_dropped_bytes: AtomicU64,
     host_ram_chunks_imported: AtomicU64,
     host_ram_chunk_bytes: AtomicU64,
@@ -2074,10 +2077,23 @@ impl Counters {
         (self.copied_copy_in_bytes).fetch_add(bytes, Ordering::Relaxed);
     }
 
+    /// A commit's copy in left `bytes` of copied host buffers uncompared: no log of their pages
+    /// reported them written since the copy last synced (`copied.rs`).
+    pub(crate) fn copied_copy_in_skipped(&self, bytes: u64) {
+        (self.copied_copy_in_bytes_skipped).fetch_add(bytes, Ordering::Relaxed);
+    }
+
     /// A batch's completion merged `bytes` the GPU changed back into the caller's pages
     /// (`copied.rs`).
     pub(crate) fn copied_merged_back(&self, bytes: u64) {
         (self.copied_merge_back_bytes).fetch_add(bytes, Ordering::Relaxed);
+    }
+
+    /// A completion turn's merge back compared `compared` copied host buffers and left `skipped`
+    /// uncompared, which no batch it finished could have written (`copied.rs`).
+    pub(crate) fn copied_merges(&self, compared: u64, skipped: u64) {
+        (self.copied_merges_compared).fetch_add(compared, Ordering::Relaxed);
+        (self.copied_merges_skipped).fetch_add(skipped, Ordering::Relaxed);
     }
 
     /// A batch's completion dropped `bytes` the GPU changed in copies of pages the process
@@ -4390,9 +4406,20 @@ pub struct WorkCounts {
     /// The bytes the CPU changed in copied host buffers' pages that commits copied into the
     /// copies.
     pub copied_copy_in_bytes: u64,
+    /// The bytes of copied host buffers that commits' copies in did not compare: their pages'
+    /// memory came with a log of the writes to them (`HostMemory::with_dirty_pages`,
+    /// `HostRam::with_dirty_pages`), which reported none of them written since the copy last
+    /// synced to it.
+    pub copied_copy_in_bytes_skipped: u64,
     /// The bytes the GPU changed in copied host buffers' copies that batches' completions merged
     /// back into the caller's pages.
     pub copied_merge_back_bytes: u64,
+    /// The copied host buffers completion turns' merges back compared, one per copy and turn.
+    pub copied_merges_compared: u64,
+    /// The copied host buffers completion turns' merges back left uncompared: no batch the turn
+    /// finished could have written them (no use of their command buffers' commands wrote one of
+    /// their keys, and none may have written memory its uses do not name).
+    pub copied_merges_skipped: u64,
     /// The bytes the GPU changed in copies of pages the process cannot write (read-only pages)
     /// that batches' completions dropped: taken out of the copies, the pages' bytes in their
     /// place, never written to the pages, as Metal drops the GPU's writes to read-only memory.
@@ -4699,14 +4726,15 @@ pub struct WorkCounts {
     /// The bytes the gated copies in moved.
     pub dirty_copy_in_bytes_copied: u64,
     /// The stamps the commits of command buffers with a gated copy in asked of the logs: one per
-    /// log and commit.
+    /// log and commit, and one per log and commit for copied host buffers over logged pages.
     pub dirty_stamps_asked: u64,
-    /// The waits the submissions made for a log's publication (`DirtyPages::wait`): one per log
-    /// serves every stamp asked of it before the wait.
+    /// The waits the submissions (and, for copied host buffers, the commits) made for a log's
+    /// publication (`DirtyPages::wait`): one per log serves every stamp asked of it before the
+    /// wait.
     pub dirty_waits: u64,
     /// Of the waits, those the log answered `false`.
     pub dirty_waits_unanswered: u64,
-    /// The nanoseconds the waits took, on the threads that submit command buffers.
+    /// The nanoseconds the waits took, on the threads that submit and commit command buffers.
     pub dirty_wait_nanos: u64,
     /// Of the keeps and merges among `shadow_copies`, those whose copy of the shadow's texels into
     /// the merge's scratch is the dispatch a copy back takes, where the device runs one faster
@@ -5488,7 +5516,11 @@ impl Device {
             copied_rebind_images_made: counters.copied_rebind_images_made.load(Ordering::Relaxed),
             copied_heaps_made: counters.copied_heaps_made.load(Ordering::Relaxed),
             copied_copy_in_bytes: counters.copied_copy_in_bytes.load(Ordering::Relaxed),
+            copied_copy_in_bytes_skipped: (counters.copied_copy_in_bytes_skipped)
+                .load(Ordering::Relaxed),
             copied_merge_back_bytes: counters.copied_merge_back_bytes.load(Ordering::Relaxed),
+            copied_merges_compared: counters.copied_merges_compared.load(Ordering::Relaxed),
+            copied_merges_skipped: counters.copied_merges_skipped.load(Ordering::Relaxed),
             copied_dropped_bytes: counters.copied_dropped_bytes.load(Ordering::Relaxed),
             host_ram_chunks_imported: counters.host_ram_chunks_imported.load(Ordering::Relaxed),
             host_ram_chunk_bytes: counters.host_ram_chunk_bytes.load(Ordering::Relaxed),

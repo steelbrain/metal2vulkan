@@ -5,7 +5,9 @@
 //! copied all the same and others refused; on Linux, a mapping of a dma-buf (`VM_PFNMAP`), which
 //! the kernel's read refuses, is copied (where `/dev/udmabuf` opens).
 
-use crate::copied::{read_caller, restore, sync, CopiedBuffers, NotCopied};
+use crate::copied::{read_caller, restore, sync, CopiedBuffers, NotCopied, Written};
+use crate::dirty_pages::DirtyTally;
+use crate::resource::ResourceKey;
 use crate::work_counts::Counters;
 use std::cell::Cell;
 use std::ptr::NonNull;
@@ -100,12 +102,12 @@ fn copied_merge_back_of_unwritable_pages_drops_the_gpu_s_writes() {
     assert!(copied.drops_writes());
     // The GPU writes 100 bytes of the copy; the completion drops them.
     copy[1000..1100].fill(0xEE);
-    buffers.merge_back(&counts);
+    buffers.merge_back(&counts, &Written::all());
     assert_eq!(pages, original, "nothing written to the pages");
     assert_eq!(copy, original, "the copy holds the pages' bytes again");
     // A CPU write to the pages reaches the copy at the next commit.
     pages[7] = !pages[7];
-    buffers.copy_in(&counts);
+    buffers.copy_in(&counts, &DirtyTally::default());
     assert_eq!(copy[7], pages[7]);
     drop(copied);
     // A copy of writable pages merges the GPU's writes back.
@@ -117,9 +119,109 @@ fn copied_merge_back_of_unwritable_pages_drops_the_gpu_s_writes() {
     let copied = copied.unwrap();
     assert!(!copied.drops_writes());
     other[0] = !other[0];
-    buffers.merge_back(&counts);
+    buffers.merge_back(&counts, &Written::all());
     assert_eq!(writable[0], other[0], "merged back");
     drop(copied);
+}
+
+/// The comparison as it was before it read a page at a time: 8 bytes at a time, each 8 that
+/// differ byte by byte. [`sync`] must answer exactly as it does.
+fn reference_sync(from: &[u8], to: &mut [u8], snapshot: &mut [u8], keep_to: bool) -> u64 {
+    let mut written = 0;
+    for at in (0..snapshot.len()).step_by(8) {
+        let span = (snapshot.len() - at).min(8);
+        if from[at..at + span] == snapshot[at..at + span] {
+            continue;
+        }
+        let there: Vec<u8> = to[at..at + span].to_vec();
+        for byte in at..at + span {
+            if from[byte] == snapshot[byte] {
+                continue;
+            }
+            if !keep_to || there[byte - at] == snapshot[byte] {
+                to[byte] = from[byte];
+                written += 1;
+            }
+            snapshot[byte] = from[byte];
+        }
+    }
+    written
+}
+
+/// A small deterministic generator (xorshift).
+struct Rng(u64);
+
+impl Rng {
+    fn next(&mut self) -> u64 {
+        self.0 ^= self.0 << 13;
+        self.0 ^= self.0 >> 7;
+        self.0 ^= self.0 << 17;
+        self.0
+    }
+
+    fn below(&mut self, n: usize) -> usize {
+        (self.next() % n as u64) as usize
+    }
+}
+
+/// The page-at-a-time comparison writes, keeps and takes into the snapshot exactly the bytes the
+/// byte-at-a-time one did, both ways: over lengths that end inside a block, inside an 8-byte
+/// span and on either edge, with bytes changed on one side, on the other, and on both (the same
+/// byte both changed, to the same and to different values), alone, in runs crossing a block's
+/// edge, and over whole blocks.
+#[test]
+fn copied_sync_by_pages_answers_as_byte_by_byte() {
+    let mut rng = Rng(0x2545_F491_4F6C_DD1D);
+    let lengths = [
+        1,
+        7,
+        8,
+        9,
+        4095,
+        4096,
+        4097,
+        8191,
+        3 * 4096 + 5,
+        64 * 1024 + 3,
+    ];
+    for round in 0..400 {
+        let length = lengths[round % lengths.len()];
+        let keep_to = round % 2 == 1;
+        let snapshot: Vec<u8> = (0..length).map(|_| rng.next() as u8).collect();
+        let (mut from, mut to) = (snapshot.clone(), snapshot.clone());
+        // Changes on each side: single bytes, runs that may cross a block's edge, a whole block.
+        for side in [&mut from, &mut to] {
+            for _ in 0..rng.below(12) {
+                let at = rng.below(length);
+                side[at] = side[at].wrapping_add(1 + rng.below(255) as u8);
+            }
+            if rng.below(3) == 0 {
+                let start = rng.below(length);
+                let end = (start + rng.below(9000)).min(length);
+                for byte in &mut side[start..end] {
+                    *byte = rng.next() as u8;
+                }
+            }
+        }
+        // The same bytes changed on both sides, to the same value and to another.
+        for _ in 0..rng.below(4) {
+            let at = rng.below(length);
+            let value = snapshot[at].wrapping_add(1);
+            from[at] = value;
+            to[at] = match rng.below(2) {
+                0 => value,
+                _ => value.wrapping_add(1),
+            };
+        }
+        let (mut want_to, mut want_snapshot) = (to.clone(), snapshot.clone());
+        let want = reference_sync(&from, &mut want_to, &mut want_snapshot, keep_to);
+        let mut got_snapshot = snapshot.clone();
+        // SAFETY: three buffers of the snapshot's length.
+        let got = unsafe { sync(at(&mut from), at(&mut to), &mut got_snapshot, keep_to) };
+        assert_eq!(got, want, "round {round}: bytes written");
+        assert!(to == want_to, "round {round}: the bytes written");
+        assert!(got_snapshot == want_snapshot, "round {round}: the snapshot");
+    }
 }
 
 /// Where the kernel's read of the pages fails (a mapping it cannot pin), pages the process maps
@@ -340,4 +442,61 @@ impl Drop for DmaBufMapping {
         let unmapped = unsafe { libc::munmap(self.pages.as_ptr().cast(), self.length) };
         assert_eq!(unmapped, 0);
     }
+}
+
+/// A merge back compares only the copies its batches may have written: those whose keys a use
+/// wrote, or every one where a command may have written memory no use names (`Written::all`),
+/// and every one after a batch finished with no merge (`CopiedBuffers::owe`). A copy no batch
+/// wrote keeps the GPU's change in the copy, unmerged, until a merge that takes it as written.
+#[test]
+fn a_merge_back_compares_only_the_copies_its_batches_wrote() {
+    let length = 4 * 4096;
+    let buffers = Arc::new(CopiedBuffers::default());
+    let counts = Counters::default();
+    let read = |pages: NonNull<u8>, into: &mut [u8]| {
+        // SAFETY: the test's pages, `into.len()` bytes.
+        unsafe { std::ptr::copy_nonoverlapping(pages.as_ptr(), into.as_mut_ptr(), into.len()) };
+        true
+    };
+    let (mut pages_x, mut pages_y) = (vec![1_u8; length], vec![2_u8; length]);
+    let (mut copy_x, mut copy_y) = (vec![0_u8; length], vec![0_u8; length]);
+    // SAFETY: the copies and the pages are the test's, of `length` bytes, live past the answers.
+    let x = unsafe { buffers.add_reading(at(&mut pages_x), at(&mut copy_x), length, read, false) };
+    // SAFETY: as above.
+    let y = unsafe { buffers.add_reading(at(&mut pages_y), at(&mut copy_y), length, read, false) };
+    let (x, y) = (x.unwrap(), y.unwrap());
+    let (key_x, key_y) = (ResourceKey::new(), ResourceKey::new());
+    x.name(key_x);
+    y.name(key_y);
+    let named = |keys: &[ResourceKey]| {
+        let mut written = Written::default();
+        for key in keys {
+            written.wrote(*key);
+        }
+        written
+    };
+    // The GPU writes both copies; the batch's uses wrote X alone.
+    copy_x[100] = 0xAA;
+    copy_y[100] = 0xBB;
+    buffers.merge_back(&counts, &named(&[key_x]));
+    assert_eq!(pages_x[100], 0xAA, "X merged back");
+    assert_eq!(pages_y[100], 2, "Y not compared");
+    buffers.merge_back(&counts, &named(&[key_y]));
+    assert_eq!(pages_y[100], 0xBB, "Y merged back once a batch wrote it");
+    // A command that may write memory no use names: every copy.
+    copy_y[200] = 0xCC;
+    buffers.merge_back(&counts, &Written::all());
+    assert_eq!(pages_y[200], 0xCC, "every copy compared");
+    // A batch finished with no merge: the next compares every copy, once.
+    copy_y[300] = 0xDD;
+    buffers.owe();
+    buffers.merge_back(&counts, &Written::default());
+    assert_eq!(
+        pages_y[300], 0xDD,
+        "every copy compared after a batch finished unmerged"
+    );
+    copy_y[400] = 0xEE;
+    buffers.merge_back(&counts, &Written::default());
+    assert_eq!(pages_y[400], 2, "and then none again");
+    drop((x, y));
 }

@@ -292,8 +292,10 @@ Calls Metal does not have, for a consumer that emulates a Metal device:
   device that refuses their pointer.
 - `HostMemory::with_dirty_pages` and its `DirtyPages` (with `DirtyStamp`): the consumer's log of
   the writes to a no-copy object's pages, by which every copy of them into memory of the device's
-  own (a shadow of a texture over them) copies in only the pages changed since its last copy, on
-  every device. The runtime's own writes into the pages are reported back, naming their writer.
+  own (a shadow of a texture over them, a copied buffer or heap over them) copies in only the
+  pages changed since its last copy, on every device. The runtime's own writes into the pages are reported back: a copy's (a shadow's
+  copy back, a copied buffer's merge back) naming the copy as their writer, and the GPU's writes
+  into pages imported in place and the runtime's CPU writes into them as the consumer's.
   A command that replaces every texel of such a shadow is merged back, as one that leaves some is:
   copied in (the changed pages), kept, and only the words it changed written into the pages.
 - `HostMemory::with_import_gate` and its `ImportGate` (with `ImportRequest`): the consumer's

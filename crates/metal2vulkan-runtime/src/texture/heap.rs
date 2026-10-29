@@ -240,6 +240,7 @@ use metal2vulkan::metal::{PixelFormat, TextureType, TextureUsage};
 use metal2vulkan::vk::{
     Format, FormatFeatureFlags2, ImageAspectFlags, ImageUsageFlags, SampleCountFlags,
 };
+use std::ops::Range;
 use std::ptr::NonNull;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
@@ -441,14 +442,31 @@ impl HeapShadow {
         let mut packed = vec![0u8; host.packed_len() as usize];
         host.pack(bytes, &mut packed);
         let contents = self.contents(call)?;
-        self.pieces(plan, region, host, |at, from, n| {
+        // The heap's bytes it wrote, from its first: reported once written.
+        let mut wrote: Option<Range<usize>> = None;
+        let written = self.pieces(plan, region, host, |at, from, n| {
+            wrote = Some(
+                wrote
+                    .take()
+                    .map_or(at..at + n, |w| w.start.min(at)..w.end.max(at + n)),
+            );
             // SAFETY: every piece lies in the texture's range of the heap's mapped bytes (its
             // planes or tiles fit the range: `host_heap_plan`, `heap_image`); a write racing the
             // GPU's use of them is the program's, as through `contents`.
             unsafe {
                 std::ptr::copy_nonoverlapping(packed[from..].as_ptr(), contents.as_ptr().add(at), n)
             };
-        })
+        });
+        // A write of host pages a consumer logs is the runtime's own, which its log does not see:
+        // reported, so the copies of the pages take it (`dirty_pages.rs`).
+        if let Some(wrote) = wrote.filter(|w| w.start < w.end) {
+            let heap = self.place.heap.upgrade();
+            if let Some(bytes) = heap.as_ref().and_then(Heap::bytes) {
+                let first = contents.as_ptr() as u64;
+                bytes.wrote_host(first + wrote.start as u64..first + wrote.end as u64);
+            }
+        }
+        written
     }
 
     /// `getBytes` of `region` of the shadowed image of `plan` into `bytes` laid out as `host`

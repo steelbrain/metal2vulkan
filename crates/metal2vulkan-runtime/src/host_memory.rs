@@ -357,10 +357,21 @@ impl HostMemory {
     /// The runtime reports its own writes into the pages back to the log: a shadow's copy back
     /// or merge ([`DirtyPages::wrote_as`], the shadow its writer, at the commit and again at the
     /// completion), which that shadow's own copies in leave out
-    /// ([`DirtyPages::changed_except`]), and a `replaceRegion` of a texture over them
-    /// ([`DirtyPages::wrote`]). A wait the log answers `false` makes the copy take every row, and
-    /// is not made again for a stamp at or below it. Such a shadow's copy in is never cut to the rectangle a pass's scissors bound, so its
-    /// image holds every texel for the next command buffer. Every other copy of the pages (a
+    /// ([`DirtyPages::changed_except`]), a copied host buffer's merge back of the GPU's writes
+    /// (`copied.rs`; [`DirtyPages::wrote_as`], the copy its writer, before the batch is seen
+    /// complete), the GPU's writes into them where they are imported in place
+    /// ([`DirtyPages::wrote`]: the bytes a command buffer's commands wrote through the buffers,
+    /// heaps and textures over them, at the commit, again before the batch is seen complete, and
+    /// at the completion), and its CPU writes into them ([`DirtyPages::wrote`]): a
+    /// `replaceRegion` of a texture over them or of a heap's texture held in them, an argument
+    /// encoder's writes, and `copyParameterDataToBuffer`. A wait the log answers `false` makes
+    /// the copy take every row, and is not made again for a stamp at or below it. Such a shadow's
+    /// copy in is never cut to the rectangle a pass's scissors bound, so its image holds every
+    /// texel for the next command buffer. A copied host buffer or heap over the pages
+    /// (`copied-host-pages`) compares at each commit only the pages the log reports written since
+    /// its last commit: a stamp asked of the log once per commit for every copy and waited for on
+    /// the committing thread, every byte compared at its first commit and where the wait answers
+    /// `false` (`WorkCounts::copied_copy_in_bytes_skipped`). Every other copy of the pages (a
     /// shadow copied through a staging buffer, of another kind, or untracked) takes every byte,
     /// as without a log. Counted:
     /// `WorkCounts::dirty_copies_in_gated` and kin.

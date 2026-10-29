@@ -2471,12 +2471,15 @@ field	metal2vulkan-runtime::WorkCounts.completion_arms_after_a_wake	pub completi
 field	metal2vulkan-runtime::WorkCounts.completion_reads_ran_ahead	pub completion_reads_ran_ahead: u64
 field	metal2vulkan-runtime::WorkCounts.compute_pipeline_create_nanos	pub compute_pipeline_create_nanos: u64
 field	metal2vulkan-runtime::WorkCounts.copied_copy_in_bytes	pub copied_copy_in_bytes: u64
+field	metal2vulkan-runtime::WorkCounts.copied_copy_in_bytes_skipped	pub copied_copy_in_bytes_skipped: u64
 field	metal2vulkan-runtime::WorkCounts.copied_dropped_bytes	pub copied_dropped_bytes: u64
 field	metal2vulkan-runtime::WorkCounts.copied_heaps_made	pub copied_heaps_made: u64
 field	metal2vulkan-runtime::WorkCounts.copied_host_buffers_degraded	pub copied_host_buffers_degraded: u64
 field	metal2vulkan-runtime::WorkCounts.copied_host_buffers_made	pub copied_host_buffers_made: u64
 field	metal2vulkan-runtime::WorkCounts.copied_host_buffers_refused	pub copied_host_buffers_refused: u64
 field	metal2vulkan-runtime::WorkCounts.copied_merge_back_bytes	pub copied_merge_back_bytes: u64
+field	metal2vulkan-runtime::WorkCounts.copied_merges_compared	pub copied_merges_compared: u64
+field	metal2vulkan-runtime::WorkCounts.copied_merges_skipped	pub copied_merges_skipped: u64
 field	metal2vulkan-runtime::WorkCounts.copied_rebind_images_made	pub copied_rebind_images_made: u64
 field	metal2vulkan-runtime::WorkCounts.copied_rebind_pages_made	pub copied_rebind_pages_made: u64
 field	metal2vulkan-runtime::WorkCounts.copied_rebind_pages_moved	pub copied_rebind_pages_moved: u64

@@ -125,6 +125,7 @@
 
 use super::gate::Hold;
 use super::CommandBufferShared;
+use crate::copied::Written;
 use crate::device::lock;
 use crate::error::{CommandBufferError, Error, MemoryKind, VkResultCode};
 use crate::event::EventShared;
@@ -406,8 +407,28 @@ fn finish(watch: &Watch, lists: &mut FenceLists, mut finished: Vec<(usize, Submi
     };
     // The GPU's writes into copied host buffers go back to the caller's pages before anything
     // sees the batches complete: their event signals, the scheduler, a waiter, their completed
-    // handlers (`copied.rs`).
-    device.shared().copied.merge_back(&device.shared().counts);
+    // handlers (`copied.rs`). Only the copies the batches' command buffers may have written are
+    // compared.
+    let copied = &device.shared().copied;
+    if copied.any() {
+        let mut written = Written::default();
+        for (_, batch) in &finished {
+            let buffer = &batch.buffer;
+            if buffer.unnoted.load(Ordering::Relaxed) || lock(&buffer.state).reaches_unnamed {
+                written = Written::all();
+                break;
+            }
+            lock(&buffer.dirty).copies_written(&mut written);
+        }
+        copied.merge_back(&device.shared().counts, &written);
+    }
+    // So do their writes into logged host pages imported in place, to the pages' logs, again now
+    // they ran (`dirty_pages.rs`, `DirtyCommit::report_host_writes`).
+    if device.shared().dirty.in_place() {
+        for (_, batch) in &finished {
+            lock(&batch.buffer.dirty).report_host_writes();
+        }
+    }
     // The holds of the batches that end no command buffer go first, their work completed: a
     // detach that sees one of their signals detaches what only they held (`detach.rs`).
     for (_, batch) in &mut finished {
@@ -488,6 +509,9 @@ fn fail(watch: &Watch, ending: Vec<Hold<CommandBufferShared>>, error: CommandBuf
     let held = (ending.first().map(|buffer| buffer.device()))
         .or_else(|| failed.first().map(|(_, batch)| batch.buffer.device()));
     if let Some(device) = held {
+        // Their writes into copied host buffers are merged back by the next turn, which compares
+        // every copy (`copied.rs`).
+        device.shared().copied.owe();
         device.drain_queues();
     }
     let failed = failed.into_iter().filter_map(|(queue, batch)| {

@@ -21,9 +21,28 @@
 //!   signaled, the scheduler is told, its handlers run or a waiter returns, every byte the GPU
 //!   changed in the copy is written back into the pages, where the CPU did not change that byte
 //!   since ([`CopiedBuffers::merge_back`]): a byte both changed keeps the CPU's, which the next
-//!   commit copies in. Bytes are compared 8 at a time and merged one at a time where they differ,
-//!   so a merge writes no byte the GPU did not change. Each batch ends with a barrier that makes
-//!   its writes visible to the host (`tracker::Barrier::to_host`).
+//!   commit copies in. The completion compares only the copies its batches may have written: one
+//!   whose buffer's (or heap's) key a use of their command buffers' commands wrote, and every
+//!   copy where one of those may have written memory no use names (a function's loaded
+//!   addresses, an indirect command buffer's executions; `Written`), or kept its writes not all
+//!   apart. Counted: `WorkCounts::copied_merges_compared`, `copied_merges_skipped`. Bytes are compared a page (4 KiB) at a time, and inside a page that
+//!   differs 8 at a time and then one at a time, so a merge writes no byte the GPU did not change
+//!   ([`sync`]). Each batch ends with a barrier that makes its writes visible to the host
+//!   (`tracker::Barrier::to_host`). Where the pages' memory came with a log of the writes to them
+//!   (`HostMemory::with_dirty_pages`, or its guest RAM's, `HostRam::with_dirty_pages`), each merge
+//!   back reports the blocks it wrote to the log as the copy's own writes
+//!   (`DirtyPages::wrote_as`, a writer of the copy's own) before it returns: the log sees no
+//!   write the runtime makes, and every other copy and shadow of the pages takes them.
+//! - **Copies in the log gates.** Where the pages' memory came with such a log, a commit's copy
+//!   in compares only the pages the log reports written since the copy's last copy in, and the
+//!   bytes no log keeps (a guest RAM's runs that miss some of them): a stamp of each log is asked
+//!   at the commit, once for every copy, its publication waited for (bounded) with no lock of
+//!   the copies' or the command buffer's held, and the copy synced to it
+//!   ([`CopiedBuffers::copy_in`]); every write made before the commit is in that publication,
+//!   the GPU's in place through other imports of the pages and the runtime's own CPU writes among
+//!   them, which the runtime reports (`dirty_pages.rs`). A copy compares every byte at its first
+//!   copy in after its watch began, and where a log cannot say. Counted:
+//!   `WorkCounts::copied_copy_in_bytes_skipped`.
 //! - **Pages the process cannot write** (read-only pages, as a consumer's alias of a read-only
 //!   replace, `replaceBackingWithRanges:readOnly:`, maps them), asked of the system as the copy is
 //!   made ([`mapped_writable`]): the GPU's writes to the copy are dropped, as Metal drops the GPU's
@@ -38,10 +57,16 @@
 //!   wait for them is held on the host until that turn (`event_timeline.rs`), so the GPU's writes
 //!   before a signal are in the pages once its value is seen, as Metal's are. No submission is
 //!   added; a reader sees the value a completion turn later than the semaphore's counter shows it.
-//! - **Cost.** Every live copy is compared whole at each commit and at each batch's completion,
-//!   whichever buffers the work names: O(bytes) per commit and per batch, a fallback's cost
-//!   (`docs/FAST-PATHS.md`, known gaps). Counted: `WorkCounts::copied_copy_in_bytes`,
-//!   `WorkCounts::copied_merge_back_bytes`, `WorkCounts::copied_dropped_bytes`.
+//! - **Cost.** A copy is compared whole at each batch's completion that may have written it, and
+//!   at each commit where its pages carry no log: O(bytes) per such batch, and per commit without
+//!   a log, a fallback's cost (`docs/FAST-PATHS.md`, known gaps). A command buffer whose
+//!   functions read addresses may write every copy. A page that agrees costs one read of each
+//!   side and a slice comparison: 680 MiB of copies that agree took 28-30 ms each way on an M3
+//!   Max, 52-53 ms on a Core Ultra 9 275HX; their logged copy in took 0.15 ms (0.3) where no page
+//!   changed, and 4.6 ms (3.5) where 1% of the pages changed on each side; a merge back of no
+//!   copy written, none (`tests/copied_bench.rs`). Counted:
+//!   `WorkCounts::copied_copy_in_bytes`, `WorkCounts::copied_merge_back_bytes`,
+//!   `WorkCounts::copied_dropped_bytes`.
 //! - **Heaps and rebinds.** A no-copy heap's own buffer is copied as a buffer is, where the heap's
 //!   textures could lie, with a heap's hazard identity; its buffers lie in the copy at their
 //!   offsets, and its textures are shadows of its bytes (`AliasRoute::MemoryShadow` or Metal's
@@ -55,10 +80,16 @@
 //!   before. A texture made over a copied buffer is a shadow of its bytes (`shadowed-texture`).
 
 use crate::device::lock;
+use crate::dirty_pages::{new_writer, DirtySource, DirtyTally, PagesLog};
 use crate::host_memory::{mapped_readable, mapped_writable};
+use crate::key_hash::KeyMap;
+use crate::resource::ResourceKey;
 use crate::work_counts::Counters;
+use crate::DirtyStamp;
+use std::num::NonZeroU64;
+use std::ops::Range;
 use std::ptr::NonNull;
-use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 /// A device's live copied host buffers, compared at each commit and each batch's completion.
@@ -69,6 +100,45 @@ pub(crate) struct CopiedBuffers {
     live: AtomicUsize,
     /// The next copy's id.
     next: AtomicU64,
+    /// A batch finished with no merge back (a failed wait): the next merge back compares every
+    /// copy, whatever its batches wrote.
+    owed: AtomicBool,
+}
+
+/// What the batches a completion turn finishes may have written ([`CopiedBuffers::merge_back`]):
+/// the keys their command buffers' commands wrote (`DirtyCommit::copies_written`), or every copy.
+#[derive(Default)]
+pub(crate) struct Written {
+    keys: KeyMap<ResourceKey, ()>,
+    all: bool,
+}
+
+impl Written {
+    /// Every copy may have been written.
+    pub(crate) fn all() -> Written {
+        Written {
+            keys: KeyMap::default(),
+            all: true,
+        }
+    }
+
+    /// A command wrote the bytes of `key`.
+    pub(crate) fn wrote(&mut self, key: ResourceKey) {
+        if !self.all {
+            self.keys.insert(key, ());
+        }
+    }
+
+    /// Some command may have written a copy no use of it names.
+    pub(crate) fn wrote_all(&mut self) {
+        self.all = true;
+        self.keys.clear();
+    }
+
+    /// Whether a command may have written the copy whose uses take `keys`.
+    fn meets(&self, keys: &[ResourceKey]) -> bool {
+        self.all || keys.iter().any(|key| self.keys.contains_key(key))
+    }
 }
 
 /// Why a copy was not made ([`CopiedBuffers::add`]).
@@ -92,7 +162,41 @@ struct Entry {
     /// The process cannot write the pages: the GPU's writes to the copy are dropped, never merged
     /// back.
     drops_writes: bool,
+    /// The logs of the writes to the pages, where their memory came with one, and the writer its
+    /// merges back are reported as ([`Copied::set_log`]).
+    log: Option<CopyLog>,
+    /// The keys whose uses' writes reach the copy: the buffer's, or the heap's bytes' (whose
+    /// buffers' and textures' uses carry it), the buffer's again after a rebind
+    /// ([`Copied::name`]).
+    keys: Vec<ResourceKey>,
 }
+
+/// A copy's logs of its pages, and its writer in them.
+struct CopyLog {
+    pages: Arc<PagesLog>,
+    writer: NonZeroU64,
+    /// Its watches of the pages in each log, held while the copy lives.
+    _watches: Vec<Box<dyn Send + Sync>>,
+    /// The copy's bytes no log keeps the writes to: every copy in compares them.
+    unlogged: Arc<[Range<u64>]>,
+    /// The stamps, one of each log in [`PagesLog::sources`]' order, as of which the copy holds
+    /// every byte the CPU wrote in the pages: a copy in compares only the pages the logs report
+    /// written since. `None` until a copy in compared every byte after the watches began, and
+    /// after one some log could not answer for.
+    since: Option<Arc<[DirtyStamp]>>,
+    /// The bytes its merges back wrote into the pages since `since`: at [`ASKS_APART`] or more,
+    /// its copy in asks the logs for the pages any writer but it wrote
+    /// ([`DirtyPages::changed_except`](crate::DirtyPages)), where a copy otherwise takes the
+    /// pages every writer wrote, asked once per log and stamp for every copy, and compares again
+    /// the pages it merged.
+    merged: u64,
+}
+
+/// The bytes a copy's merges back wrote since its last copy in from which its copy in asks the
+/// logs apart, for every writer's pages but its own (one more question of each log, which a
+/// consumer answers by a pass over its watches), rather than compare its own writes again
+/// (about 40 µs a MiB on an M3 Max). Both are exact.
+const ASKS_APART: u64 = 1 << 20;
 
 // SAFETY: the pointers name the caller's pages, which stay mapped while the buffer's import lives
 // (`HostMemory::new`), and the copy's mapped memory, which the import holds; both are reached only
@@ -112,15 +216,67 @@ impl Copied {
     pub(crate) fn drops_writes(&self) -> bool {
         self.drops_writes
     }
+
+    /// Keep `log`, the logs of the writes to the copy's pages (`dirty_pages::PagesLog`), with a
+    /// writer of its own: each merge back reports the bytes it wrote to them as that writer's
+    /// ([`CopiedBuffers::merge_back`]). Set once.
+    ///
+    /// Its pages are watched in each log from here on ([`DirtyPages::watch`](crate::DirtyPages)),
+    /// asked with no lock of the copies' held: its copies in compare every byte until one did
+    /// after the watches began ([`CopiedBuffers::copy_in`]).
+    pub(crate) fn set_log(&self, log: &Arc<PagesLog>) {
+        let Some(writer) = new_writer() else {
+            return;
+        };
+        let watches = log.watch();
+        let unlogged: Arc<[Range<u64>]> = log.unlogged().into();
+        let mut entries = lock(&self.buffers.entries);
+        let entry = entries.iter_mut().find(|entry| entry.id == self.id);
+        let unkept = match entry {
+            Some(entry) if entry.log.is_none() => {
+                entry.log = Some(CopyLog {
+                    pages: Arc::clone(log),
+                    writer,
+                    _watches: watches,
+                    unlogged,
+                    since: None,
+                    merged: 0,
+                });
+                None
+            }
+            _ => Some(watches),
+        };
+        // A watch's end is the consumer's call: made with no lock of the copies' held.
+        drop(entries);
+        drop(unkept);
+    }
+
+    /// The uses of `key` (a buffer's or a heap's bytes' lying in the copy) write the copy: a
+    /// completion turn merges it back only where a batch it finishes wrote one of its keys, or
+    /// may have written memory its uses do not name ([`CopiedBuffers::merge_back`]).
+    pub(crate) fn name(&self, key: ResourceKey) {
+        let mut entries = lock(&self.buffers.entries);
+        if let Some(entry) = entries.iter_mut().find(|entry| entry.id == self.id) {
+            if !entry.keys.contains(&key) {
+                entry.keys.push(key);
+            }
+        }
+    }
 }
 
 impl Drop for Copied {
     fn drop(&mut self) {
         let mut entries = lock(&self.buffers.entries);
-        if let Some(index) = entries.iter().position(|entry| entry.id == self.id) {
-            entries.swap_remove(index);
-            self.buffers.live.fetch_sub(1, Ordering::Relaxed);
-        }
+        let removed = match entries.iter().position(|entry| entry.id == self.id) {
+            Some(index) => {
+                self.buffers.live.fetch_sub(1, Ordering::Relaxed);
+                Some(entries.swap_remove(index))
+            }
+            None => None,
+        };
+        // Its watches end with no lock of the copies' held: a watch's end is the consumer's call.
+        drop(entries);
+        drop(removed);
     }
 }
 
@@ -193,6 +349,8 @@ impl CopiedBuffers {
             copy,
             snapshot,
             drops_writes,
+            log: None,
+            keys: Vec::new(),
         });
         self.live.fetch_add(1, Ordering::Relaxed);
         Ok(Copied {
@@ -204,16 +362,75 @@ impl CopiedBuffers {
 
     /// At a commit: write into each copy the bytes the CPU changed in its pages since they last
     /// agreed, before any of the command buffer's work is submitted.
-    pub(crate) fn copy_in(&self, counts: &Counters) {
+    ///
+    /// A copy whose pages' memory came with a log of the writes to them ([`Copied::set_log`])
+    /// compares only the pages the log reports written since the stamp its last copy in synced
+    /// to, and the bytes no log keeps: a stamp of each log is asked now, once for every copy
+    /// (`DirtyPages::request`), and its publication waited for (`DirtyPages::wait`, bounded),
+    /// with no lock of the copies' held; the pages written since are asked once per log and
+    /// stamp for every copy (`DirtyPages::changed`), but by a copy whose merges back wrote
+    /// [`ASKS_APART`] bytes or more of the pages since, which asks for every writer's but its
+    /// own (`DirtyPages::changed_except`).
+    /// Every write made before this call is in a publication the wait found, so the copy takes
+    /// each. Every byte is compared where the copy has no earlier copy in to count on, or a log
+    /// answered `false`. `tally` counts the stamps and waits (`WorkCounts::dirty_stamps_asked`
+    /// and kin).
+    pub(crate) fn copy_in(&self, counts: &Counters, tally: &DirtyTally) {
         if self.live.load(Ordering::Relaxed) == 0 {
             return;
         }
-        let mut moved = 0u64;
+        let asked: Vec<Asked> = (lock(&self.entries).iter())
+            .filter_map(|entry| {
+                let log = entry.log.as_ref()?;
+                Some(Asked {
+                    id: entry.id,
+                    length: entry.snapshot.len() as u64,
+                    pages: Arc::clone(&log.pages),
+                    writer: log.writer,
+                    unlogged: Arc::clone(&log.unlogged),
+                    since: log.since.clone(),
+                    merged: log.merged,
+                })
+            })
+            .collect();
+        let plans = planned(asked, tally);
+        let (mut moved, mut skipped) = (0u64, 0u64);
         for entry in lock(&self.entries).iter_mut() {
-            // SAFETY: the entry's pointers are live while it is registered (`Entry`).
-            moved += unsafe { sync(entry.pages, entry.copy, &mut entry.snapshot, false) };
+            let plan = match &entry.log {
+                Some(_) => (plans.binary_search_by_key(&entry.id, |(id, _)| *id).ok())
+                    .map(|at| &plans[at].1),
+                None => None,
+            };
+            let (pages, copy, length) = (entry.pages, entry.copy, entry.snapshot.len());
+            match plan.and_then(|plan| plan.bytes.as_ref()) {
+                Some(bytes) => {
+                    let mut compared = 0u64;
+                    for range in bytes {
+                        let (start, end) = (range.start as usize, range.end as usize);
+                        // SAFETY: the entry's pointers are live while it is registered
+                        // (`Entry`), and `start..end` lies in its bytes (`blocks`).
+                        moved += unsafe {
+                            sync(
+                                NonNull::new_unchecked(pages.as_ptr().add(start)),
+                                NonNull::new_unchecked(copy.as_ptr().add(start)),
+                                &mut entry.snapshot[start..end],
+                                false,
+                            )
+                        };
+                        compared += range.end - range.start;
+                    }
+                    skipped += length as u64 - compared;
+                }
+                // SAFETY: the entry's pointers are live while it is registered (`Entry`).
+                None => moved += unsafe { sync(pages, copy, &mut entry.snapshot, false) },
+            }
+            if let (Some(log), Some(plan)) = (&mut entry.log, plan) {
+                log.since = plan.stamps.clone();
+                log.merged = 0;
+            }
         }
         counts.copied_copied_in(moved);
+        counts.copied_copy_in_skipped(skipped);
     }
 
     /// At a batch's completion: write back into each copy's pages the bytes the GPU changed in the
@@ -221,30 +438,214 @@ impl CopiedBuffers {
     /// the batch complete. A copy of pages the process cannot write takes back instead the bytes
     /// they last agreed on wherever the GPU changed it: the GPU's writes are dropped, and nothing
     /// is written to the pages.
-    pub(crate) fn merge_back(&self, counts: &Counters) {
+    ///
+    /// Only the copies the finished batches may have written are compared (`written`): one a
+    /// use of their command buffers' commands wrote by one of its keys ([`Copied::name`]), and
+    /// every copy where a command may have written memory no use names (its function's loaded
+    /// addresses, an indirect command buffer's executions), or where its command buffer's writes
+    /// were not all kept apart. Each batch's writes are done by its own completion turn, which
+    /// compares what they reach; a copy no batch wrote since its last comparison holds what its
+    /// pages do, but for the CPU's writes, which the next commit copies in. After a batch finished
+    /// with no merge (a failed wait, [`CopiedBuffers::owe`]), the next compares every copy.
+    /// Counted: `WorkCounts::copied_merges_compared`, `copied_merges_skipped`.
+    ///
+    /// The bytes written into pages whose memory came with a log are reported to it, as the
+    /// copy's own writes ([`DirtyPages::wrote_as`](crate::DirtyPages::wrote_as)), a block of
+    /// [`SYNC_BLOCK`] bytes at a time, before this returns: the log sees no write the runtime
+    /// makes, and every other copy and shadow of those pages must take them, while the copy's
+    /// own copies in need not.
+    pub(crate) fn merge_back(&self, counts: &Counters, written: &Written) {
         if self.live.load(Ordering::Relaxed) == 0 {
             return;
         }
+        let owed = self.owed.swap(false, Ordering::AcqRel);
         let (mut moved, mut dropped) = (0u64, 0u64);
+        let (mut compared, mut skipped) = (0u64, 0u64);
+        let mut reports = Vec::new();
         for entry in lock(&self.entries).iter_mut() {
-            match entry.drops_writes {
+            if !owed && !written.meets(&entry.keys) {
+                skipped += 1;
+                continue;
+            }
+            compared += 1;
+            let (copy, pages) = (entry.copy, entry.pages);
+            match (entry.drops_writes, &mut entry.log) {
                 // SAFETY: the entry's copy is live while it is registered (`Entry`).
-                true => dropped += unsafe { restore(entry.copy, &entry.snapshot) },
-                // SAFETY: the entry's pointers are live while it is registered (`Entry`).
-                false => {
-                    moved += unsafe { sync(entry.copy, entry.pages, &mut entry.snapshot, true) }
+                (true, _) => dropped += unsafe { restore(copy, &entry.snapshot) },
+                (false, Some(log)) => {
+                    let mut blocks = Vec::new();
+                    // SAFETY: the entry's pointers are live while it is registered (`Entry`).
+                    moved +=
+                        unsafe { sync_noting(copy, pages, &mut entry.snapshot, true, &mut blocks) };
+                    if !blocks.is_empty() {
+                        let wrote: u64 = blocks.iter().map(|bytes| bytes.end - bytes.start).sum();
+                        log.merged = log.merged.saturating_add(wrote);
+                        reports.push((Arc::clone(&log.pages), log.writer, blocks));
+                    }
                 }
+                // SAFETY: as above.
+                (false, None) => moved += unsafe { sync(copy, pages, &mut entry.snapshot, true) },
+            }
+        }
+        // Reported with no lock of the copies' held.
+        for (log, writer, blocks) in reports {
+            for bytes in blocks {
+                log.wrote_as(bytes, writer);
             }
         }
         counts.copied_merged_back(moved);
         counts.copied_dropped(dropped);
+        counts.copied_merges(compared, skipped);
+    }
+
+    /// A batch finished with no merge back (its queue's wait failed): the next merge back
+    /// compares every copy.
+    pub(crate) fn owe(&self) {
+        self.owed.store(true, Ordering::Release);
     }
 }
+
+/// What a logged copy asks its logs at a copy in ([`CopiedBuffers::copy_in`]).
+struct Asked {
+    id: u64,
+    length: u64,
+    pages: Arc<PagesLog>,
+    writer: NonZeroU64,
+    unlogged: Arc<[Range<u64>]>,
+    since: Option<Arc<[DirtyStamp]>>,
+    merged: u64,
+}
+
+/// A logged copy's copy in, as its logs answered: the bytes it compares (`None`: every byte),
+/// and the stamps it syncs to (`None`: a log could not say).
+struct Plan {
+    bytes: Option<Vec<Range<u64>>>,
+    stamps: Option<Arc<[DirtyStamp]>>,
+}
+
+/// One stamp of a log at a copy in, and whether its publication was found.
+struct Stamped {
+    source: Arc<DirtySource>,
+    stamp: DirtyStamp,
+    published: bool,
+}
+
+/// The copies in of the copies `asked`, by their ids, in order: a stamp of each log asked, then
+/// waited for (counted in `tally`); the pages each log reports written since a copy's stamp
+/// asked once per log and stamp (or for one copy, of a copy whose merge back wrote its pages),
+/// with no lock of the copies' held.
+fn planned(asked: Vec<Asked>, tally: &DirtyTally) -> Vec<(u64, Plan)> {
+    let mut stamped: Vec<Stamped> = Vec::new();
+    for source in asked.iter().flat_map(|asked| asked.pages.sources()) {
+        if !stamped.iter().any(|s| Arc::ptr_eq(&s.source, source)) {
+            stamped.push(Stamped {
+                source: Arc::clone(source),
+                stamp: source.request(tally),
+                published: false,
+            });
+        }
+    }
+    for stamp in &mut stamped {
+        stamp.published = stamp.source.wait(stamp.stamp, tally);
+    }
+    // The pages each log reports written since a stamp, by every writer: asked once per log and
+    // stamp.
+    let mut written: Vec<(*const DirtySource, DirtyStamp, Vec<Range<u64>>)> = Vec::new();
+    let mut plans: Vec<(u64, Plan)> = Vec::with_capacity(asked.len());
+    for asked in asked {
+        let of: Vec<&Stamped> = (asked.pages.sources())
+            .filter_map(|source| stamped.iter().find(|s| Arc::ptr_eq(&s.source, source)))
+            .collect();
+        let now: Option<Vec<DirtyStamp>> = (of.iter())
+            .map(|stamped| stamped.published.then_some(stamped.stamp))
+            .collect();
+        // Copies over the same logs sync to one set of stamps.
+        let stamps: Option<Arc<[DirtyStamp]>> =
+            now.map(
+                |now| match plans.last().and_then(|(_, plan)| plan.stamps.as_ref()) {
+                    Some(last) if last[..] == now[..] => Arc::clone(last),
+                    _ => now.into(),
+                },
+            );
+        let bytes = match (&asked.since, &stamps) {
+            (Some(since), Some(_)) if since.len() == of.len() => {
+                let mut bytes: Vec<Range<u64>> = asked.unlogged.to_vec();
+                let mut own = Vec::new();
+                for (index, (stamped, since)) in of.iter().zip(since.iter()).enumerate() {
+                    let changed: &[Range<u64>] = match asked.merged >= ASKS_APART {
+                        true => {
+                            own.clear();
+                            let writer = Some(asked.writer);
+                            stamped.source.changed(*since, writer, &mut own);
+                            joined(&mut own);
+                            &own
+                        }
+                        false => {
+                            let key = (Arc::as_ptr(&stamped.source), *since);
+                            let at = match (written.iter()).position(|w| (w.0, w.1) == key) {
+                                Some(at) => at,
+                                None => {
+                                    let mut runs = Vec::new();
+                                    stamped.source.changed(*since, None, &mut runs);
+                                    joined(&mut runs);
+                                    written.push((key.0, key.1, runs));
+                                    written.len() - 1
+                                }
+                            };
+                            &written[at].2
+                        }
+                    };
+                    asked.pages.bytes_of(index, changed, |run| bytes.push(run));
+                }
+                Some(blocks(bytes, asked.length))
+            }
+            _ => None,
+        };
+        plans.push((asked.id, Plan { bytes, stamps }));
+    }
+    plans.sort_by_key(|(id, _)| *id);
+    plans
+}
+
+/// `runs` sorted by start, those that meet or touch joined.
+fn joined(runs: &mut Vec<Range<u64>>) {
+    runs.retain(|run| run.start < run.end);
+    runs.sort_by_key(|run| run.start);
+    let mut kept: Vec<Range<u64>> = Vec::with_capacity(runs.len());
+    for run in runs.drain(..) {
+        match kept.last_mut() {
+            Some(last) if run.start <= last.end => last.end = last.end.max(run.end),
+            _ => kept.push(run),
+        }
+    }
+    *runs = kept;
+}
+
+/// `bytes` of a copy of `length` bytes, each widened to the [`SYNC_BLOCK`]s it meets (counted
+/// from the copy's first byte) and cut to the copy, sorted and joined.
+fn blocks(mut bytes: Vec<Range<u64>>, length: u64) -> Vec<Range<u64>> {
+    let block = SYNC_BLOCK as u64;
+    for run in &mut bytes {
+        let start = run.start / block * block;
+        let end = run.end.div_ceil(block).saturating_mul(block).min(length);
+        *run = start.min(end)..end;
+    }
+    joined(&mut bytes);
+    bytes
+}
+
+/// The bytes [`sync`] reads of `from` at once and compares whole with the snapshot's: a host page.
+pub(crate) const SYNC_BLOCK: usize = 4096;
 
 /// Write into `to` each byte of `from` that differs from `snapshot`, and take it into `snapshot`;
 /// where `keep_to`, a byte of `to` that differs from `snapshot` already (written since they last
 /// agreed) is kept, though `snapshot` takes `from`'s, so the next copy the other way carries it.
 /// The bytes written.
+///
+/// Read a block of [`SYNC_BLOCK`] bytes at a time, each read of `from` once and compared whole
+/// with the snapshot's (slice equality, which the compiler vectorizes); only a block that differs
+/// is looked into, 8 bytes at a time and then byte by byte, so no byte the comparison found equal
+/// is written ([`merge_block`]).
 ///
 /// # Safety
 ///
@@ -255,21 +656,99 @@ pub(crate) unsafe fn sync(
     snapshot: &mut [u8],
     keep_to: bool,
 ) -> u64 {
+    // SAFETY: the caller's.
+    unsafe { sync_blocks(from, to, snapshot, keep_to, |_| {}) }
+}
+
+/// [`sync`], noting in `blocks` the bytes of each block it wrote a byte of, adjacent blocks
+/// joined, in order.
+///
+/// # Safety
+///
+/// As [`sync`]'s.
+pub(crate) unsafe fn sync_noting(
+    from: NonNull<u8>,
+    to: NonNull<u8>,
+    snapshot: &mut [u8],
+    keep_to: bool,
+    blocks: &mut Vec<Range<u64>>,
+) -> u64 {
+    let note = |block: Range<u64>| match blocks.last_mut() {
+        Some(last) if last.end == block.start => last.end = block.end,
+        _ => blocks.push(block),
+    };
+    // SAFETY: the caller's.
+    unsafe { sync_blocks(from, to, snapshot, keep_to, note) }
+}
+
+/// [`sync`], telling `wrote` the bytes of each block it wrote a byte of.
+///
+/// # Safety
+///
+/// As [`sync`]'s.
+unsafe fn sync_blocks(
+    from: NonNull<u8>,
+    to: NonNull<u8>,
+    snapshot: &mut [u8],
+    keep_to: bool,
+    mut wrote: impl FnMut(Range<u64>),
+) -> u64 {
     let (from, to) = (from.as_ptr(), to.as_ptr());
     let mut written = 0u64;
+    let mut block = [0u8; SYNC_BLOCK];
     let mut at = 0;
     while at < snapshot.len() {
-        let span = (snapshot.len() - at).min(8);
-        let mut was = [0u8; 8];
-        was[..span].copy_from_slice(&snapshot[at..at + span]);
-        let mut now = [0u8; 8];
-        // SAFETY: `span` bytes at `at` lie in `from` (the caller's).
+        let span = (snapshot.len() - at).min(SYNC_BLOCK);
+        let now = &mut block[..span];
+        // SAFETY: `span` bytes at `at` lie in `from` (the caller's); `block` is this call's own.
         unsafe { std::ptr::copy_nonoverlapping(from.add(at), now.as_mut_ptr(), span) };
+        let was = &mut snapshot[at..at + span];
+        if now != was {
+            // SAFETY: `span` bytes at `at` lie in `to` (the caller's).
+            let merged = unsafe { merge_block(now, to.add(at), was, keep_to) };
+            if merged > 0 {
+                wrote(at as u64..(at + span) as u64);
+            }
+            written += merged;
+        }
+        at += span;
+    }
+    written
+}
+
+/// [`sync`] inside one block whose bytes `now` (read of `from`) differ from the snapshot's `was`:
+/// 8 bytes at a time, and in each 8 that differ, byte by byte, each byte of `now` that differs
+/// from `was` written into `to` (where `keep_to`, unless `to`'s byte differs from `was` already)
+/// and taken into `was`: eight in one store where all eight differ (and, where `keep_to`, none
+/// of `to`'s does), so no byte that did not change is written. The bytes written.
+///
+/// # Safety
+///
+/// `to` is `now.len()` bytes of mapped memory, `was` as long.
+unsafe fn merge_block(now: &[u8], to: *mut u8, was: &mut [u8], keep_to: bool) -> u64 {
+    let mut written = 0u64;
+    let mut at = 0;
+    while at < now.len() {
+        let span = (now.len() - at).min(8);
+        let (now, was) = (&now[at..at + span], &mut was[at..at + span]);
         if now != was {
             let mut there = [0u8; 8];
             if keep_to {
-                // SAFETY: as above, in `to`.
+                // SAFETY: `span` bytes at `at` lie in `to` (the caller's).
                 unsafe { std::ptr::copy_nonoverlapping(to.add(at), there.as_mut_ptr(), span) };
+            }
+            // Eight bytes that all changed, none of them written in `to` since: the same bytes
+            // the loop below writes, in one store.
+            let every = now.iter().zip(was.iter()).all(|(now, was)| now != was);
+            if let (Ok(word), true) = (<[u8; 8]>::try_from(now), every) {
+                if !keep_to || there[..] == was[..] {
+                    // SAFETY: as above; `[u8; 8]` is aligned to 1.
+                    unsafe { to.add(at).cast::<[u8; 8]>().write_volatile(word) };
+                    written += 8;
+                    was.copy_from_slice(now);
+                    at += span;
+                    continue;
+                }
             }
             for byte in 0..span {
                 if now[byte] == was[byte] {
@@ -280,7 +759,7 @@ pub(crate) unsafe fn sync(
                     unsafe { to.add(at + byte).write_volatile(now[byte]) };
                     written += 1;
                 }
-                snapshot[at + byte] = now[byte];
+                was[byte] = now[byte];
             }
         }
         at += span;

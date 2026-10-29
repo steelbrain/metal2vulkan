@@ -635,6 +635,10 @@ impl RasterizationRateMap {
                 bytes.len(),
             )
         };
+        // A write of host pages a consumer logs is the runtime's own, which its log does not see:
+        // reported, so the copies of the pages take it (`dirty_pages.rs`).
+        let first = contents.as_ptr() as u64 + offset;
+        buffer.wrote_host(first..first + bytes.len() as u64);
         Ok(())
     }
 
