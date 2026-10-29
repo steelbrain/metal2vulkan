@@ -323,9 +323,9 @@ pub(crate) struct Live {
     /// Whether the cache was made from the record's data: only then does a making whose driver
     /// reports the pipeline found in it read no data back (the module docs).
     loaded: bool,
-    /// The SHA-256 of the data the cache was made from, or of what a making last wrote as the
-    /// record; `None` until one of the two happened.
-    kept: Mutex<Option<Hash256>>,
+    /// The SHA-256 and the length of the data the cache was made from, or of what a making last
+    /// wrote as the record; `None` until one of the two happened.
+    kept: Mutex<Option<(Hash256, u64)>>,
 }
 
 impl Live {
@@ -419,7 +419,7 @@ fn make_live(store: &Store, identity: &Identity, raw: &ash::Device, name: String
         match made {
             Ok(cache) => {
                 count(&store.counters.driver_loads);
-                Some((cache, Sha256::digest(data).into()))
+                Some((cache, (Sha256::digest(data).into(), data.len() as u64)))
             }
             Err(_) => {
                 // The driver refused data that passed the checks; a making's save replaces it.
@@ -507,7 +507,8 @@ pub(crate) fn make<T, E>(
 /// Write `cache`'s data as its record unless it is what the cache was loaded with or last wrote,
 /// by its SHA-256 (counted), or the checks refuse it (counted). The read is a section of the exit
 /// guard ([`exit_guard`]): on the program's own thread, once the process is exiting, nothing is
-/// read or written.
+/// read or written. On a warm pass's threads, the bytes the data grew by since the cache was
+/// loaded or last written count against the pass's budget (`warm::added_pipeline_bytes`).
 ///
 /// `vkGetPipelineCacheData` names no externally synchronized parameter, and the Vulkan
 /// specification's pipeline cache chapter states that the use of a pipeline cache object in the
@@ -529,8 +530,9 @@ fn keep(store: &Store, identity: &Identity, raw: &ash::Device, live: &Live) {
         return;
     };
     let digest: Hash256 = Sha256::digest(&data).into();
+    let length = data.len() as u64;
     let mut kept = lock(&live.kept);
-    if *kept == Some(digest) {
+    if kept.is_some_and(|(kept, _)| kept == digest) {
         count(&store.counters.driver_data_unchanged);
         return;
     }
@@ -538,9 +540,11 @@ fn keep(store: &Store, identity: &Identity, raw: &ash::Device, live: &Live) {
         store.counters.refused(refusal);
         return;
     }
+    let before = kept.map_or(0, |(_, length)| length);
+    crate::warm::added_pipeline_bytes(length.saturating_sub(before));
     match store.write_record_soon(&live.name, seal(identity, &data)) {
         Ok(_) => {
-            *kept = Some(digest);
+            *kept = Some((digest, length));
             count(&store.counters.driver_saves);
         }
         Err(_) => store.write_failed(),

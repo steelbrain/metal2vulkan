@@ -520,6 +520,10 @@ pub(super) struct DeviceShared {
     /// rebind's or a storage form's new `VkImage`, a detach's stand-in, a reattach): a view kept
     /// by what it was made of (`binding::BindMemo`) is current while this holds.
     pub(crate) views_epoch: AtomicU64,
+    /// Its pipeline records: the hook they go to, and the counts (`warm/record.rs`).
+    pub(crate) pipeline_recording: crate::warm::Recording,
+    /// Its warm calls: the records queued, its warm thread, and the counts (`warm/pass.rs`).
+    pub(crate) warmer: crate::warm::Warmer,
 }
 
 impl DeviceShared {
@@ -1159,6 +1163,8 @@ pub(super) struct Parts {
     pub(super) lowering_refuses: BTreeSet<Degradation>,
     /// Its command buffers keep execution records (`DeviceOptions::record_executions`).
     pub(super) record_executions: bool,
+    /// Where its pipeline records go (`DeviceOptions::pipeline_records`, `warm/record.rs`).
+    pub(super) pipeline_records: Option<crate::warm::RecordHook>,
     /// Its check of the first move over host pages fails whatever the moves did
     /// (`DeviceOptions::fail_in_place_check`).
     pub(super) fail_in_place_check: bool,
@@ -1236,6 +1242,7 @@ impl Device {
             announce_each,
             lowering_refuses,
             record_executions,
+            pipeline_records,
             fail_in_place_check,
             view_reinterpretation,
             generated_commands,
@@ -1783,6 +1790,8 @@ impl Device {
             deferred: crate::render::DeferredEncoders::default(),
             record_executions,
             views_epoch: AtomicU64::new(0),
+            pipeline_recording: crate::warm::Recording::new(pipeline_records),
+            warmer: crate::warm::Warmer::default(),
             device_address,
             upload_alignment,
             dynamic_buffers: [

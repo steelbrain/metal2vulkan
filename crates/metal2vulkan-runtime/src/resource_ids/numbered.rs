@@ -222,11 +222,15 @@ pub(crate) struct NumberedStage<'a> {
 
 /// Number the samplers of `stages`, a pipeline state's functions in Metal's order, on `ids`'
 /// device (the module docs): the keys the state holds, each once. Each function's holds take
-/// its keys.
+/// its keys. None on a warm pass's threads, whose states the program never sees: the numbers
+/// are the program's creations' to take, in its order (`warm/pass.rs`).
 pub(crate) fn number(
     ids: &Arc<Mutex<ResourceIds>>,
     stages: &[NumberedStage<'_>],
 ) -> Vec<Arc<Numbered>> {
+    if crate::warm::warming() {
+        return Vec::new();
+    }
     // What a lock-holding step upgrades leaves the step: a holder's last handle must not go while
     // the lock is held, since its drop takes the lock.
     let per_stage: Vec<(Option<Arc<FunctionHolds>>, Vec<Arc<Numbered>>)> = {

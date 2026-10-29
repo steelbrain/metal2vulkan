@@ -1266,6 +1266,7 @@ impl GraphicsState {
         reflect: bool,
     ) -> Result<(GraphicsState, Option<Reflected>), Error> {
         let _noted = NoteEntries(device);
+        let requested = descriptor;
         let mut loaded = descriptor.clone();
         loaded.vertex = crate::dynamic_library::stage_with_dependencies(&loaded.vertex);
         loaded.fragment = loaded
@@ -1389,7 +1390,7 @@ impl GraphicsState {
         let kept = reflection_key
             .as_ref()
             .map(|key| cache.kept_render_reflection(compile, key));
-        std::thread::scope(|scope| {
+        let made = std::thread::scope(|scope| {
             // A thread that cannot be made leaves the reflection to the caller, as before.
             let making = match (&kept, &reflection_key) {
                 (Some(None), Some(key)) => {
@@ -1420,8 +1421,16 @@ impl GraphicsState {
                 )),
                 _ => None,
             };
-            Ok((state, reflected))
-        })
+            Ok::<_, Error>((state, reflected))
+        })?;
+        // The creation's record, as the program asked for it (`warm/record.rs`); a binary
+        // archive's add makes none.
+        if used.is_none() {
+            device.record_pipeline(|| {
+                crate::warm::Pipeline::Render(requested.clone(), added_unsupported)
+            });
+        }
+        Ok(made)
     }
 
     /// The state of `descriptor`, the rasterized descriptor of a render creation whose checks
@@ -1595,6 +1604,7 @@ impl GraphicsState {
     ) -> Result<GraphicsState, Error> {
         const CALL: &str = "new_mesh_render_pipeline_state";
         let _noted = NoteEntries(device);
+        let requested = descriptor;
         // Metal's descriptor validation stops an attachment in a format Metal describes none
         // of, first (`attachment_formats.rs`).
         super::attachment_formats::check(
@@ -1678,6 +1688,8 @@ impl GraphicsState {
             None,
         )?;
         state.make_neutrals();
+        // The creation's record, as the program asked for it (`warm/record.rs`).
+        device.record_pipeline(|| crate::warm::Pipeline::Mesh(requested.clone()));
         Ok(state)
     }
 
@@ -1699,7 +1711,8 @@ impl GraphicsState {
     /// that fails is left to the draw that binds it, which meets it as it is then. Then room kept
     /// in the memory the encodings place their own resources in (`Device::keep_room`).
     fn make_neutrals(&self) {
-        if crate::exit_guard::in_host_step() {
+        // A warm pass makes none either: they take memory and addresses (`warm/pass.rs`).
+        if crate::exit_guard::in_host_step() || crate::warm::warming() {
             return;
         }
         let device = &self.0.device;
@@ -1731,26 +1744,40 @@ impl GraphicsState {
         added_unsupported: [usize; 2],
         key: Option<PipelineKey>,
     ) -> Result<GraphicsState, Error> {
-        let identifier = UniqueIdentifier::state(
-            &device.shared().identifiers,
-            StateKind::Render,
-            descriptor.support_indirect_command_buffers(),
-        )?;
+        // A warm pass's state takes no identifier, no ID and no sampler number, and the creation
+        // log numbers no line of it (`warm/pass.rs`): each is numbered in the program's order.
+        let warming = crate::warm::warming();
+        let indirect = descriptor.support_indirect_command_buffers();
+        let identifier = match warming {
+            true => None,
+            false => Some(UniqueIdentifier::state(
+                &device.shared().identifiers,
+                StateKind::Render,
+                indirect,
+            )?),
+        };
         let samplers = descriptor.number_samplers(device, &base.shared_pipeline().interface);
         let at_bind_views = AtBindViews::new(device, &base.shared_pipeline().interface);
-        let log = StateLog::new(label.as_deref(), &descriptor.function_names());
+        let log = match warming {
+            true => None,
+            false => StateLog::new(label.as_deref(), &descriptor.function_names()),
+        };
         Ok(GraphicsState(Arc::new_cyclic(|state| {
             // The state holds its ID's slot, which lists it among the states an indirect render
             // command's record can name (`indirect_states`).
-            let id = descriptor.support_indirect_command_buffers().then(|| {
-                let id = IdHold::take(&device.shared().resource_ids, IdSpace::Pipeline, placement);
-                id.hold_state(
-                    Holder::RenderPipeline(Weak::clone(state)),
-                    StateKind::Render,
-                    identifier.value(),
-                );
-                id
-            });
+            let id = match (&identifier, indirect) {
+                (Some(identifier), true) => {
+                    let ids = &device.shared().resource_ids;
+                    let id = IdHold::take(ids, IdSpace::Pipeline, placement);
+                    id.hold_state(
+                        Holder::RenderPipeline(Weak::clone(state)),
+                        StateKind::Render,
+                        identifier.value(),
+                    );
+                    Some(id)
+                }
+                _ => None,
+            };
             let program = Program {
                 device: device.clone(),
                 descriptor,
@@ -1776,7 +1803,7 @@ impl GraphicsState {
             };
             StateShared {
                 id,
-                identifier: Some(identifier),
+                identifier,
                 _samplers: samplers,
                 program: Arc::new(program),
             }
@@ -2157,6 +2184,10 @@ impl GraphicsState {
     /// draw (`predicted.rs`); the copies' pipelines depend only on the depth attachment's format
     /// and samples, so its creation makes them, where Metal compiles.
     pub(crate) fn make_stand_in_copies(&self) {
+        // A warm pass makes none: a copy may take memory of its own (`warm/pass.rs`).
+        if crate::warm::warming() {
+            return;
+        }
         let graphics = &self.base().graphics;
         let Some(format) = graphics.depth_format else {
             return;
@@ -2610,7 +2641,10 @@ impl RenderVariant {
                 variant.pipelines.seed(*graphics, made);
             }
         }
-        device.shared().shader_cache.memo.live_render(&variant);
+        // As a compute variant's: a warm pass's is not handed out (`warm/pass.rs`).
+        if !crate::warm::warming() {
+            device.shared().shader_cache.memo.live_render(&variant);
+        }
         Ok(variant)
     }
 

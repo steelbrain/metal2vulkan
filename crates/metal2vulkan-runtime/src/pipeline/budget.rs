@@ -30,14 +30,18 @@
 //!      ([`Urgency::Ahead`]). These take idle turns, but hold at most the budget's `ahead`
 //!      turns (by default all but one) at once, so a waited making that comes
 //!      finds a turn free: the turns past the `ahead` ones are only for makings a thread, a
-//!      commit or a host step waits for, which take them whatever waits ahead of them.
+//!      commit or a host step waits for, which take them whatever waits ahead of them;
+//!   6. a warm pass's making (`warm/pass.rs`), which nothing in the process asked for: its own
+//!      thread's and the pieces it hands the pool ([`Urgency::Warm`]). These take the `ahead`
+//!      turns alone, after every other making, and never age.
 //!
 //!   A piece's rank rises where something comes to wait for it (`Place::hasten`; a wait or a commit before the piece was handed to the pool is applied
 //!   as it is handed), never falls. Within a rank the earlier ticket goes first. No turn is
 //!   taken back (no preemption).
 //! - **Aging** (the consumer's reviews). A making that has waited [`AGE`] is ordered as a committed
 //!   command buffer's (rank 3) by its ticket, so a steady stream of other makings cannot starve a
-//!   draw's piece of the ahead turns. Aging moves a making nothing waits for up the order only: it
+//!   draw's piece of the ahead turns; a warm pass's making never ages, so the program's makings
+//!   always go before it. Aging moves a making nothing waits for up the order only: it
 //!   still takes only an ahead turn, so it never takes the turn a waited making finds free, and a
 //!   host step's making, or a queue's first held batch's, goes before it always.
 //! - **Nothing seen is decided here.** The budget orders driver calls in time and decides nothing
@@ -252,6 +256,9 @@ pub(crate) enum Urgency {
     Program,
     /// Nothing waits for it yet: a draw's piece before its commit.
     Ahead,
+    /// A warm pass makes it (`warm/pass.rs`): nothing in the process asked for it. It takes an
+    /// ahead turn after every other making, and never ages ([`aged`]).
+    Warm,
 }
 
 impl Urgency {
@@ -263,6 +270,7 @@ impl Urgency {
             Urgency::Committed => 2,
             Urgency::Program => 3,
             Urgency::Ahead => 4,
+            Urgency::Warm => 5,
         }
     }
 
@@ -274,6 +282,7 @@ impl Urgency {
             2 => Some(Urgency::Committed),
             3 => Some(Urgency::Program),
             4 => Some(Urgency::Ahead),
+            5 => Some(Urgency::Warm),
             _ => None,
         }
     }
@@ -323,7 +332,7 @@ impl Asker {
     fn rank(&self, age: Duration, ahead_free: bool) -> Option<Option<Candidate>> {
         match self {
             Asker::Thread(urgency, ticket, since) => {
-                let ahead = *urgency == Urgency::Ahead;
+                let ahead = *urgency >= Urgency::Ahead;
                 Some(
                     (ahead_free || !ahead).then(|| ((aged(*urgency, *since, age), *ticket), ahead)),
                 )
@@ -334,10 +343,11 @@ impl Asker {
 }
 
 /// The order of a making of `urgency` waiting since `since`: a committed one's once it waited
-/// `age`, where it ranked lower (the module docs). Which turns it may take follow its own
-/// `urgency`, never this.
+/// `age`, where it ranked lower, but a warm pass's, which keeps its rank (the module docs). Which
+/// turns it may take follow its own `urgency`, never this.
 pub(crate) fn aged(urgency: Urgency, since: Instant, age: Duration) -> Urgency {
-    match urgency > Urgency::Committed && since.elapsed() >= age {
+    let ages = urgency > Urgency::Committed && urgency != Urgency::Warm;
+    match ages && since.elapsed() >= age {
         true => Urgency::Committed,
         false => urgency,
     }
@@ -519,11 +529,15 @@ pub(crate) fn program_turn() -> Option<Turn> {
     thread_turn_in(process(), ticket())
 }
 
-/// A turn of `budget` for this thread's making with `ticket`, at the thread's rank now.
+/// A turn of `budget` for this thread's making with `ticket`, at the thread's rank now: a host
+/// step's, a warm pass's, else the program's.
 fn thread_turn_in(budget: &Arc<Budget>, ticket: u64) -> Option<Turn> {
-    let urgency = match exit_guard::in_host_step() {
-        true => Urgency::HostStep,
-        false => Urgency::Program,
+    let urgency = if exit_guard::in_host_step() {
+        Urgency::HostStep
+    } else if crate::warm::warming() {
+        Urgency::Warm
+    } else {
+        Urgency::Program
     };
     let asked = Instant::now();
     let (turn, _) = budget.take(Asker::Thread(urgency, ticket, asked))?;
@@ -815,6 +829,59 @@ mod tests {
         assert_eq!(
             *order.lock().unwrap(),
             ["host step", "head", "committed", "program", "ahead"]
+        );
+        until(|| budget.census() == (0, 0));
+    }
+
+    /// A warm pass's makings go after every other making, an aged one included, by their
+    /// tickets, and never age themselves (`warm/pass.rs`): a warm piece handed first and a warm
+    /// thread's making asked for next both wait out a piece nothing waits for, which ages past a
+    /// program's making asked for last, and that program's making, though they waited past the
+    /// age too. A warm piece runs as part of its pass.
+    #[test]
+    fn a_warm_pass_s_makings_go_last_and_never_age() {
+        let budget = Arc::new(Budget::aging(1, 1, Duration::from_millis(20)));
+        let held = waited_turn(&budget, ticket());
+        let pool = Pool::within(Arc::clone(&budget));
+        let order = Arc::new(Mutex::new(Vec::new()));
+        let pass = Arc::new(crate::warm::Pass::default());
+        let noted = Arc::clone(&order);
+        crate::warm::within(&pass, || {
+            pool.run(Box::new(move || {
+                assert!(
+                    crate::warm::warming(),
+                    "a warm piece runs as part of its pass"
+                );
+                noted.lock().unwrap().push("warm piece");
+            }))
+        });
+        assert!(!crate::warm::warming(), "the pass ends with its call");
+        until(|| budget.census() == (1, 1));
+        let warm_thread = {
+            let (budget, order) = (Arc::clone(&budget), Arc::clone(&order));
+            let pass = Arc::clone(&pass);
+            let asked = ticket();
+            crate::exit_guard::spawn(std::thread::Builder::new(), move || {
+                let _turn = crate::warm::within(&pass, || waited_turn(&budget, asked));
+                order.lock().unwrap().push("warm thread");
+            })
+            .unwrap()
+        };
+        until(|| budget.census() == (1, 2));
+        pool.run(noting(&order, "ahead"));
+        until(|| budget.census() == (1, 3));
+        let program = ask(&budget, &order, ("program", false));
+        until(|| budget.census() == (1, 4));
+        // Past the age for every one of them: only the piece nothing waits for ages.
+        std::thread::sleep(Duration::from_millis(100));
+        drop(held);
+        for thread in [program, warm_thread] {
+            thread.join().unwrap();
+        }
+        until(|| order.lock().unwrap().len() == 4);
+        assert_eq!(
+            *order.lock().unwrap(),
+            ["ahead", "program", "warm piece", "warm thread"]
         );
         until(|| budget.census() == (0, 0));
     }

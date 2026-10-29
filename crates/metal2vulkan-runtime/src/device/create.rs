@@ -57,7 +57,7 @@ use std::sync::{Arc, Mutex, Weak};
 /// How the runtime creates its instance and devices. No Metal counterpart: these choose the
 /// Vulkan side (`MTLCreateSystemDefaultDevice` takes nothing).
 #[non_exhaustive]
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Default)]
 pub struct DeviceOptions {
     /// The policy each device's compile device is made with, and whose
     /// `recommended_enables` each device enables.
@@ -184,6 +184,76 @@ pub struct DeviceOptions {
     /// lanes that hold the shadow to a failed check. No Metal counterpart.
     #[doc(hidden)]
     pub fail_in_place_check: bool,
+    /// Where each device hands its pipeline records: one [`PipelineRecord`](crate::PipelineRecord)
+    /// per pipeline state creation that made its state (compute, render, mesh render and tile
+    /// render, and the additional-binary-functions forms; and the one-sample or factor-scaling
+    /// twin the runtime makes of a render state where a draw first needs it), on the creating
+    /// thread before the call returns, as the program's own code (a panic in it is caught). A
+    /// creation that fails, a binary archive's add and a warm pass's make none. A consumer keeps
+    /// them, in the order they came, and hands a later process's device them
+    /// ([`Device::warm`](crate::Device::warm)) to make the same translations and `VkPipeline`s
+    /// before its program asks. `None` by default: no record is made. Devices of one hook are
+    /// devices of one option (it is compared by identity, as [`messages`](Self::messages) is).
+    /// No Metal counterpart: Metal keeps its own compiled pipelines in the OS's caches.
+    pub pipeline_records: Option<Arc<dyn Fn(crate::PipelineRecord) + Send + Sync>>,
+}
+
+impl std::fmt::Debug for DeviceOptions {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // Every field is named, so a field added later is written here or this fails to compile.
+        let DeviceOptions {
+            policy,
+            layers,
+            layer_settings,
+            instance_extensions,
+            device_extensions,
+            optional_device_extensions,
+            withheld_features,
+            withheld_extensions,
+            messages,
+            loader,
+            kinds,
+            shader_cache,
+            withhold_generated_commands,
+            withhold_view_reinterpretation,
+            instance_api_version,
+            gpu_times_from_host,
+            announce_each,
+            lowering_refuses,
+            record_executions,
+            fail_in_place_check,
+            pipeline_records,
+        } = self;
+        f.debug_struct("DeviceOptions")
+            .field("policy", policy)
+            .field("layers", layers)
+            .field("layer_settings", layer_settings)
+            .field("instance_extensions", instance_extensions)
+            .field("device_extensions", device_extensions)
+            .field("optional_device_extensions", optional_device_extensions)
+            .field("withheld_features", withheld_features)
+            .field("withheld_extensions", withheld_extensions)
+            .field("messages", messages)
+            .field("loader", loader)
+            .field("kinds", kinds)
+            .field("shader_cache", shader_cache)
+            .field("withhold_generated_commands", withhold_generated_commands)
+            .field(
+                "withhold_view_reinterpretation",
+                withhold_view_reinterpretation,
+            )
+            .field("instance_api_version", instance_api_version)
+            .field("gpu_times_from_host", gpu_times_from_host)
+            .field("announce_each", announce_each)
+            .field("lowering_refuses", lowering_refuses)
+            .field("record_executions", record_executions)
+            .field("fail_in_place_check", fail_in_place_check)
+            .field(
+                "pipeline_records",
+                &pipeline_records.as_ref().map(|_| "hook"),
+            )
+            .finish()
+    }
 }
 
 /// One setting of an instance layer (`VkLayerSettingEXT`).
@@ -1473,6 +1543,7 @@ fn create_on(
         announce_each: options.announce_each.clone(),
         lowering_refuses: options.lowering_refuses.clone(),
         record_executions: options.record_executions,
+        pipeline_records: options.pipeline_records.clone(),
         fail_in_place_check: options.fail_in_place_check,
         view_reinterpretation,
         generated_commands,
@@ -1535,9 +1606,12 @@ static MADE: Mutex<Vec<Made>> = Mutex::new(Vec::new());
 
 /// One group of `MADE`: the devices made with equal options.
 struct Made {
-    /// The options, less the message sink, which the instance holds (`InstanceShared::sink`):
-    /// the group keeps no sink alive past its devices.
+    /// The options, less the message sink, which the instance holds (`InstanceShared::sink`),
+    /// and the pipeline records' hook, which `records` names: the group keeps neither alive past
+    /// its devices.
     options: DeviceOptions,
+    /// The options' pipeline records' hook, which each of the group's devices holds.
+    records: Option<std::sync::Weak<dyn Fn(crate::PipelineRecord) + Send + Sync>>,
     instance: Weak<InstanceShared>,
     devices: Vec<(vk::PhysicalDevice, Weak<DeviceShared>)>,
 }
@@ -1551,7 +1625,12 @@ impl Made {
             (Some(asked), Some(made)) => asked.same(made),
             _ => false,
         };
-        (sinks && same_options(&self.options, options)).then_some(instance)
+        let records = match (&options.pipeline_records, &self.records) {
+            (None, None) => true,
+            (Some(asked), Some(made)) => std::sync::Weak::ptr_eq(&Arc::downgrade(asked), made),
+            _ => false,
+        };
+        (sinks && records && same_options(&self.options, options)).then_some(instance)
     }
 
     /// The live device of `physical`, if the group has one.
@@ -1580,7 +1659,8 @@ pub(crate) fn live_devices_with(options: &DeviceOptions) -> usize {
     })
 }
 
-/// Whether `a` and `b` are equal options, but for their message sinks (compared by `Made`).
+/// Whether `a` and `b` are equal options, but for their message sinks and pipeline records'
+/// hooks (compared by `Made`).
 fn same_options(a: &DeviceOptions, b: &DeviceOptions) -> bool {
     // Every field is named, so a field added later is compared or this fails to compile.
     let DeviceOptions {
@@ -1604,6 +1684,7 @@ fn same_options(a: &DeviceOptions, b: &DeviceOptions) -> bool {
         lowering_refuses,
         record_executions,
         fail_in_place_check,
+        pipeline_records: _,
     } = a;
     *policy == b.policy
         && *layers == b.layers
@@ -1643,8 +1724,10 @@ fn group(
     made.push(Made {
         options: DeviceOptions {
             messages: None,
+            pipeline_records: None,
             ..options.clone()
         },
+        records: options.pipeline_records.as_ref().map(Arc::downgrade),
         instance: Arc::downgrade(&instance),
         devices: Vec::new(),
     });

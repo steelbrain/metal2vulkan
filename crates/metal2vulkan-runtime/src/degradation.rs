@@ -2520,7 +2520,12 @@ impl Announced {
 
     /// Whether `degradation` is announced now: at each occurrence of a kind the device announces
     /// at each (met at every occurrence, [`EachWatch`]), else for the first time, once per kind.
+    /// Never on a warm pass's threads, which count nothing announced (`warm/pass.rs`): what it
+    /// makes is no program's, and the creation it makes ahead announces as its own.
     pub(super) fn now(&self, degradation: Degradation) -> bool {
+        if crate::warm::warming() {
+            return false;
+        }
         let (word, bit) = degradation.bit();
         if self.each[word] & bit != 0 {
             met_each();
@@ -2532,8 +2537,12 @@ impl Announced {
 
     /// Whether `degradation` is announced now for the first time, once per kind, whether or not
     /// the device announces it at each occurrence: a kind met where no program call or host step
-    /// is (`Device::degrade_encoded_use_rebound`).
+    /// is (`Device::degrade_encoded_use_rebound`). Never on a warm pass's threads, as
+    /// [`now`](Self::now).
     fn once(&self, degradation: Degradation) -> bool {
+        if crate::warm::warming() {
+            return false;
+        }
         let (word, bit) = degradation.bit();
         let seen = &self.seen[word];
         seen.load(Ordering::Relaxed) & bit == 0 && seen.fetch_or(bit, Ordering::Relaxed) & bit == 0
@@ -2541,7 +2550,11 @@ impl Announced {
 
     /// Whether `degradation` would be announced now ([`Announced::now`]), without counting it
     /// announced: a kind the device announces at every occurrence, or one not announced yet.
+    /// Never on a warm pass's threads, as [`now`](Self::now).
     fn pending(&self, degradation: Degradation) -> bool {
+        if crate::warm::warming() {
+            return false;
+        }
         let (word, bit) = degradation.bit();
         self.each[word] & bit != 0 || self.seen[word].load(Ordering::Relaxed) & bit == 0
     }
@@ -3077,6 +3090,10 @@ impl Device {
     /// thread, each as [`degrade`](Self::degrade) announces a kind the device announces at every
     /// occurrence: through the device's message sink, else on stderr.
     pub(crate) fn announce_bound(&self, notices: &[BoundNotice]) {
+        // A warm pass announces nothing ([`Announced::now`]).
+        if crate::warm::warming() {
+            return;
+        }
         for (degradation, message) in notices {
             met_each();
             match check_announcement(*degradation, true) {

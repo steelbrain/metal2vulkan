@@ -219,7 +219,7 @@ impl State {
             .filter(|q| ahead_free || q.urgency < Urgency::Ahead)
             .map(|q| {
                 let rank = (budget::aged(q.urgency, q.handed, age), q.number);
-                (rank, q.urgency == Urgency::Ahead)
+                (rank, q.urgency >= Urgency::Ahead)
             })
             .min();
         Some(rank)
@@ -302,19 +302,28 @@ impl Pool {
 
     /// Run `work` on one of the pool's threads, a new one where none is free and fewer than
     /// [`PoolQueue::makers`] run; on this thread where the host starts none and none runs. Nothing waits for
-    /// it yet ([`Urgency::Ahead`]); where it waits, to hasten it.
+    /// it yet ([`Urgency::Ahead`]; a warm pass's piece ranks [`Urgency::Warm`] and runs as part
+    /// of its pass, `warm::within`); where it waits, to hasten it.
     pub(crate) fn run(&self, work: Work) -> Place {
         let number = budget::ticket();
         // Its wait here and for its turn, for the creation log: noted as it starts.
         let handed = Instant::now();
+        let pass = crate::warm::pass();
+        let urgency = match pass {
+            Some(_) => Urgency::Warm,
+            None => Urgency::Ahead,
+        };
         let work: Work = Box::new(move || {
             budget::waited_in_pool(handed.elapsed());
-            work();
+            match pass {
+                Some(pass) => crate::warm::within(&pass, work),
+                None => work(),
+            }
         });
         let mut state = lock(&self.shared.state);
         state.work.push_back(Queued {
             number,
-            urgency: Urgency::Ahead,
+            urgency,
             handed,
             work,
         });

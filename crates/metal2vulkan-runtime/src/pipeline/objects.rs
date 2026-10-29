@@ -125,6 +125,11 @@ pub(crate) fn sampler_set(
         };
         return Ok((Arc::new(empty), false));
     }
+    // A warm pass makes no sampler, nor holds the device's (`warm/pass.rs`): either would count
+    // against the device's limit at a moment the program's order does not decide.
+    if crate::warm::warming() {
+        return Err(crate::warm::translation_only());
+    }
     let shared = device.shared();
     // The device's Y′CbCr conversion of each sampler of a planes image (`texture/ycbcr_planes.rs`),
     // the one its view is made with, so the two are identically defined: made before the sets'
@@ -682,7 +687,13 @@ impl VariantObjects {
         let dynamic = dynamic_bindings(device, layout, push_set_zero);
         let set_needs = needs_of(device, layout, push_set_zero, &dynamic)?;
         let shared = device.shared();
-        let back = lock(&shared.kept).take(shared, compiled);
+        // A warm pass takes nothing back and keeps nothing (`warm/pass.rs`): the kept variants'
+        // order is the program's (the owner's HITCH rule 1), and its objects go as it lets them.
+        let warming = crate::warm::warming();
+        let back = match warming {
+            true => None,
+            false => lock(&shared.kept).take(shared, compiled),
+        };
         // The kept variants' queue applied (an evicted instance's modules let go): the device's
         // modules nothing holds now go, in the program's order.
         settle_modules(device);
@@ -694,7 +705,7 @@ impl VariantObjects {
         settle_libraries(device);
         let Some(back) = back else {
             let mut objects = VariantObjects::create(device, layout, stages, pipeline, digests)?;
-            objects.keep = Some(Instance::new(compiled));
+            objects.keep = (!warming).then(|| Instance::new(compiled));
             return Ok((objects, Vec::new()));
         };
         device.shared().counts.variant_taken_back();

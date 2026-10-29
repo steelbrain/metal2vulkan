@@ -26,7 +26,7 @@
 //!   versioned by its own tag and magic.
 //! - **Records of content, every build's**. Beside the builds', one directory holds records named
 //!   by the content they describe, which hold no translation: the driver's data of each family of
-//!   makings (above).
+//!   makings (above), and the libraries pipeline records name (`libraries.rs`).
 //! - **A wrong entry is never used.** An entry's name is the SHA-256 of its build, kind, key and
 //!   profile fingerprint, and a read is a hit only if the envelope's versions, kind, key and
 //!   profile equal the request's and its checksum holds (`from_bytes_for_key`). Anything else is
@@ -59,6 +59,7 @@
 //!   so a sweep of pipeline states over one function pair asks it once rather than once a state.
 
 mod creation;
+mod libraries;
 /// The name of a creation's record under a runtime version, which `tests::shader_cache` reads.
 #[cfg(test)]
 pub(crate) use creation::record_name;
@@ -299,6 +300,8 @@ pub(crate) enum EntryKind {
     RenderReflection = 9,
     /// The pipeline key of a render descriptor under a variant key (`creation.rs`).
     VariantPipeline = 10,
+    /// A library a pipeline record names, in the content directory (`libraries.rs`).
+    Library = 11,
 }
 
 /// The translations this build reads and writes: the SHA-256 of the crate's version, both artifact
@@ -393,6 +396,9 @@ pub(super) struct ShaderCache {
     held: held::HeldFunctions,
     store: Arc<Store>,
     worker: Worker,
+    /// The libraries pipeline records name that this device knows the directory holds
+    /// (`libraries.rs`).
+    libraries: libraries::KeptLibraries,
     /// What names the makings' records (`driver.rs`).
     records: Records,
     /// The `VkPipelineCache` the device keeps for each record name, one per family of makings
@@ -431,6 +437,7 @@ impl ShaderCache {
             held: held::HeldFunctions::new(),
             store,
             worker,
+            libraries: libraries::KeptLibraries::new(),
             records: Records {
                 identity: driver::Identity::of(properties),
                 settings,

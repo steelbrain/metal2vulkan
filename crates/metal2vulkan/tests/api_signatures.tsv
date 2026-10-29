@@ -1993,6 +1993,7 @@ field	metal2vulkan-runtime::DeviceOptions.loader	pub loader: Option<PathBuf>
 field	metal2vulkan-runtime::DeviceOptions.lowering_refuses	pub lowering_refuses: BTreeSet<crate::Degradation>
 field	metal2vulkan-runtime::DeviceOptions.messages	pub messages: Option<MessageSink>
 field	metal2vulkan-runtime::DeviceOptions.optional_device_extensions	pub optional_device_extensions: Vec<CString>
+field	metal2vulkan-runtime::DeviceOptions.pipeline_records	pub pipeline_records: Option<Arc<dyn Fn(crate::PipelineRecord) + Send + Sync>>
 field	metal2vulkan-runtime::DeviceOptions.policy	pub policy: DevicePolicy
 field	metal2vulkan-runtime::DeviceOptions.record_executions	pub record_executions: bool
 field	metal2vulkan-runtime::DeviceOptions.shader_cache	pub shader_cache: ShaderCacheOptions
@@ -2214,6 +2215,7 @@ field	metal2vulkan-runtime::RawDevice.instance	pub instance: vk::Instance
 field	metal2vulkan-runtime::RawDevice.instance_api_version	pub instance_api_version: metal2vulkan::vk::ApiVersion
 field	metal2vulkan-runtime::RawDevice.lowering_refuses	pub lowering_refuses: BTreeSet<crate::Degradation>
 field	metal2vulkan-runtime::RawDevice.physical_device	pub physical_device: vk::PhysicalDevice
+field	metal2vulkan-runtime::RawDevice.pipeline_records	pub pipeline_records: Option<Arc<dyn Fn(crate::PipelineRecord) + Send + Sync>>
 field	metal2vulkan-runtime::RawDevice.queue_family	pub queue_family: u32
 field	metal2vulkan-runtime::RawDevice.queue_index	pub queue_index: u32
 field	metal2vulkan-runtime::RawDevice.shader_cache	pub shader_cache: ShaderCacheOptions
@@ -2409,6 +2411,16 @@ field	metal2vulkan-runtime::VkBufferMemory.offset	pub offset: u64
 field	metal2vulkan-runtime::VkBufferMemory.type_index	pub type_index: u32
 field	metal2vulkan-runtime::VkImageLayouts.home	pub home: ImageLayout
 field	metal2vulkan-runtime::VkImageLayouts.initial	pub initial: ImageLayout
+field	metal2vulkan-runtime::WarmStatistics.libraries_kept	pub libraries_kept: u64
+field	metal2vulkan-runtime::WarmStatistics.pipeline_bytes	pub pipeline_bytes: u64
+field	metal2vulkan-runtime::WarmStatistics.records_failed	pub records_failed: u64
+field	metal2vulkan-runtime::WarmStatistics.records_made	pub records_made: u64
+field	metal2vulkan-runtime::WarmStatistics.records_not_run	pub records_not_run: u64
+field	metal2vulkan-runtime::WarmStatistics.records_not_warmable	pub records_not_warmable: u64
+field	metal2vulkan-runtime::WarmStatistics.records_translated	pub records_translated: u64
+field	metal2vulkan-runtime::WarmStatistics.records_unmade	pub records_unmade: u64
+field	metal2vulkan-runtime::WarmStatistics.records_unread	pub records_unread: u64
+field	metal2vulkan-runtime::WarmStatistics.records_warmed	pub records_warmed: u64
 field	metal2vulkan-runtime::WorkCounts.addressable_buffers_made	pub addressable_buffers_made: u64
 field	metal2vulkan-runtime::WorkCounts.ahead_framebuffers_made	pub ahead_framebuffers_made: u64
 field	metal2vulkan-runtime::WorkCounts.ahead_nanos	pub ahead_nanos: u64
@@ -7699,6 +7711,8 @@ method	metal2vulkan-runtime::Device::system_default_with	pub fn system_default_w
 method	metal2vulkan-runtime::Device::texture_level_info	pub fn texture_level_info(&self, query: &TextureLevelQuery) -> TextureLevelInfo
 method	metal2vulkan-runtime::Device::use_host_ram	pub fn use_host_ram(&self, ram: &Arc<HostRam>) -> Result<HostRamUse, Error>
 method	metal2vulkan-runtime::Device::vk_buffer_usage	pub fn vk_buffer_usage(&self) -> BufferUsageFlags
+method	metal2vulkan-runtime::Device::warm	pub fn warm(&self, records: Vec<PipelineRecord>, byte_budget: u64)
+method	metal2vulkan-runtime::Device::warm_statistics	pub fn warm_statistics(&self) -> WarmStatistics
 method	metal2vulkan-runtime::Device::with_loader_word	pub fn with_loader_word<R>(&self, call: impl FnOnce() -> R) -> R
 method	metal2vulkan-runtime::Device::with_registry_id	pub fn with_registry_id(registry_id: u64, options: &DeviceOptions) -> Result<Device, Error>
 method	metal2vulkan-runtime::Device::work_counts	pub fn work_counts(&self) -> WorkCounts
@@ -7917,6 +7931,8 @@ method	metal2vulkan-runtime::PipelineOption::contains	pub const fn contains(self
 method	metal2vulkan-runtime::PipelineOption::from_raw	pub const fn from_raw(raw: u64) -> PipelineOption
 method	metal2vulkan-runtime::PipelineOption::raw	pub const fn raw(self) -> u64
 method	metal2vulkan-runtime::PipelineOptions::new	pub fn new(options: PipelineOption) -> PipelineOptions
+method	metal2vulkan-runtime::PipelineRecord::from_bytes	pub fn from_bytes(bytes: &[u8]) -> Option<PipelineRecord>
+method	metal2vulkan-runtime::PipelineRecord::to_bytes	pub fn to_bytes(&self) -> Vec<u8>
 method	metal2vulkan-runtime::PixelFormatInfo::describes_a_format	pub fn describes_a_format(&self) -> bool
 method	metal2vulkan-runtime::PrivateAnswer::metal	pub fn metal(self) -> T
 method	metal2vulkan-runtime::PrivateAnswer::value	pub fn value(self) -> Option<T>
@@ -9241,7 +9257,7 @@ struct	metal2vulkan-runtime::DegradeNotice	#[derive(Clone, Debug, PartialEq, Eq)
 struct	metal2vulkan-runtime::DepthStencilState	#[derive(Clone)] pub struct DepthStencilState(Arc<Shared>)
 struct	metal2vulkan-runtime::Device	#[derive(Clone)] pub struct Device(Arc<DeviceShared>)
 struct	metal2vulkan-runtime::DeviceHandles	#[derive(Clone, Copy)] #[non_exhaustive] pub struct DeviceHandles<'a>
-struct	metal2vulkan-runtime::DeviceOptions	#[derive(Clone, Debug, Default)] #[non_exhaustive] pub struct DeviceOptions
+struct	metal2vulkan-runtime::DeviceOptions	#[derive(Clone, Default)] #[non_exhaustive] pub struct DeviceOptions
 struct	metal2vulkan-runtime::DeviceProperties	#[derive(Clone, Debug, PartialEq, Eq)] #[non_exhaustive] pub struct DeviceProperties
 struct	metal2vulkan-runtime::DirtyStamp	#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] pub struct DirtyStamp(pub u64)
 struct	metal2vulkan-runtime::DmaBufChunk	#[derive(Debug)] pub struct DmaBufChunk
@@ -9295,10 +9311,11 @@ struct	metal2vulkan-runtime::Origin	#[derive(Clone, Copy, Debug, Default, Partia
 struct	metal2vulkan-runtime::PhysicalDeviceIdentity	#[derive(Clone, Debug, PartialEq, Eq)] #[non_exhaustive] pub struct PhysicalDeviceIdentity
 struct	metal2vulkan-runtime::PipelineOption	#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)] pub struct PipelineOption(u64)
 struct	metal2vulkan-runtime::PipelineOptions	#[derive(Clone, Debug, Default)] #[non_exhaustive] pub struct PipelineOptions
+struct	metal2vulkan-runtime::PipelineRecord	#[derive(Clone)] pub struct PipelineRecord
 struct	metal2vulkan-runtime::PixelFormatInfo	#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub struct PixelFormatInfo
 struct	metal2vulkan-runtime::PrivateProperties	#[derive(Clone, Debug, PartialEq, Eq)] pub struct PrivateProperties
 struct	metal2vulkan-runtime::RasterizationRateMap	#[derive(Clone)] pub struct RasterizationRateMap(Arc<MapShared>)
-struct	metal2vulkan-runtime::RawDevice	#[derive(Clone, Debug)] #[non_exhaustive] pub struct RawDevice
+struct	metal2vulkan-runtime::RawDevice	#[derive(Clone)] #[non_exhaustive] pub struct RawDevice
 struct	metal2vulkan-runtime::Region	#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)] pub struct Region
 struct	metal2vulkan-runtime::RenderCommandEncoder	pub struct RenderCommandEncoder
 struct	metal2vulkan-runtime::RenderPassColorAttachmentDescriptor	#[derive(Clone, Debug)] #[non_exhaustive] pub struct RenderPassColorAttachmentDescriptor
@@ -9346,6 +9363,7 @@ struct	metal2vulkan-runtime::VisibleFunctionTableDescriptor	#[derive(Clone, Copy
 struct	metal2vulkan-runtime::VkBufferMemory	#[derive(Clone, Copy, Debug, PartialEq, Eq)] #[non_exhaustive] pub struct VkBufferMemory
 struct	metal2vulkan-runtime::VkImageLayouts	#[derive(Clone, Copy, Debug, PartialEq, Eq)] #[non_exhaustive] pub struct VkImageLayouts
 struct	metal2vulkan-runtime::VkResultCode	#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] pub struct VkResultCode(pub i32)
+struct	metal2vulkan-runtime::WarmStatistics	#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)] #[non_exhaustive] pub struct WarmStatistics
 struct	metal2vulkan-runtime::WorkCounts	#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)] pub struct WorkCounts
 struct	metal2vulkan::Budget	#[derive(Clone, Debug, Default)] #[non_exhaustive] pub struct Budget
 struct	metal2vulkan::CancelToken	#[derive(Clone, Debug, Default)] pub struct CancelToken(Arc<AtomicBool>)
@@ -9748,6 +9766,7 @@ trait-impl	metal2vulkan-runtime::DepthStencilState impl std::fmt::Debug	impl std
 trait-impl	metal2vulkan-runtime::Device impl ImageMaker	impl ImageMaker for Device
 trait-impl	metal2vulkan-runtime::Device impl std::fmt::Debug	impl std::fmt::Debug for Device
 trait-impl	metal2vulkan-runtime::DeviceHandles impl std::fmt::Debug	impl std::fmt::Debug for DeviceHandles<'_>
+trait-impl	metal2vulkan-runtime::DeviceOptions impl std::fmt::Debug	impl std::fmt::Debug for DeviceOptions
 trait-impl	metal2vulkan-runtime::DmaBufRequest impl fe impl Send	unsafe impl Send for DmaBufRequest
 trait-impl	metal2vulkan-runtime::DmaBufRequest impl fe impl Sync	unsafe impl Sync for DmaBufRequest
 trait-impl	metal2vulkan-runtime::DrawPrimitiveType impl From<PrimitiveType>	impl From<PrimitiveType> for DrawPrimitiveType
@@ -9791,9 +9810,14 @@ trait-impl	metal2vulkan-runtime::Library impl Owned<DeviceShared>	impl Owned<Dev
 trait-impl	metal2vulkan-runtime::LoaderNotFound impl fmt::Display	impl fmt::Display for LoaderNotFound
 trait-impl	metal2vulkan-runtime::MessageSink impl std::fmt::Debug	impl std::fmt::Debug for MessageSink
 trait-impl	metal2vulkan-runtime::PipelineOption impl std::ops::BitOr	impl std::ops::BitOr for PipelineOption
+trait-impl	metal2vulkan-runtime::PipelineRecord impl Eq	impl Eq for PipelineRecord
+trait-impl	metal2vulkan-runtime::PipelineRecord impl PartialEq	impl PartialEq for PipelineRecord
+trait-impl	metal2vulkan-runtime::PipelineRecord impl std::fmt::Debug	impl std::fmt::Debug for PipelineRecord
+trait-impl	metal2vulkan-runtime::PipelineRecord impl std::hash::Hash	impl std::hash::Hash for PipelineRecord
 trait-impl	metal2vulkan-runtime::RasterizationRateMap impl Eq	impl Eq for RasterizationRateMap
 trait-impl	metal2vulkan-runtime::RasterizationRateMap impl PartialEq	impl PartialEq for RasterizationRateMap
 trait-impl	metal2vulkan-runtime::RasterizationRateMap impl std::fmt::Debug	impl std::fmt::Debug for RasterizationRateMap
+trait-impl	metal2vulkan-runtime::RawDevice impl std::fmt::Debug	impl std::fmt::Debug for RawDevice
 trait-impl	metal2vulkan-runtime::RenderCommandEncoder impl std::fmt::Debug	impl std::fmt::Debug for RenderCommandEncoder
 trait-impl	metal2vulkan-runtime::RenderPassColorAttachmentDescriptor impl Default	impl Default for RenderPassColorAttachmentDescriptor
 trait-impl	metal2vulkan-runtime::RenderPassDepthAttachmentDescriptor impl Default	impl Default for RenderPassDepthAttachmentDescriptor

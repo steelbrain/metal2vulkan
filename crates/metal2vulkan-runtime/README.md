@@ -309,6 +309,29 @@ Calls Metal does not have, for a consumer that emulates a Metal device:
 - `HostBytes`: bytes at a pointer that may change while a call reads them (a guest's memory),
   which `Texture::replace_region_with_host_bytes` and `BufferContents::CopyHost` copy once through
   the pointer, where the slice forms would need the caller's own copy first.
+- `DeviceOptions::pipeline_records` (and `RawDevice::pipeline_records`) is called once per
+  pipeline state creation (compute, render, mesh and tile, and each
+  `*_with_additional_binary_functions`) with a `PipelineRecord`: the creation's descriptor, every
+  field, its libraries named by content hash and kept once in the shader cache directory.
+  `PipelineRecord::to_bytes` and `from_bytes` carry it to a later process; `from_bytes` answers
+  `None` for a record of another format, so a consumer keeps records across updates and drops
+  those. Equal creations make equal records.
+- `Device::warm(records, byte_budget)` stands in for Metal's own pipeline caches across
+  processes. It returns at once and, on one background thread of the device's (the utility class
+  on macOS, its pipeline makings ranked after every other making of the process), makes what each
+  record's creation makes, in order: its translations into the shader cache and its predicted
+  `VkPipeline`s' data into the driver's records, so the program's later creation of the same
+  descriptor finds them. It stops once the driver's pipeline cache data its makings added reaches
+  `byte_budget` bytes. It takes no identifier, resource ID or sampler number, makes no neutral,
+  announces no degradation and keeps nothing for the program's kept variants, and it reads no
+  translation of another translator and no creation record of another `RUNTIME_VERSION` (a record
+  holds a descriptor, never a translation), so no answer the program gets changes. Nothing fails:
+  a record it cannot read (another format, damaged, or a library the directory no longer holds)
+  is counted and dropped, the device's first announced as the warning
+  `metal2vulkan-warm-record-unread`, and a failed creation is counted and dropped. A mesh render
+  pipeline's record is not made (its creation keeps nothing past the state), and a layout that
+  bakes an immutable sampler is translated only. `Device::warm_statistics` counts the records
+  made, each record's outcome and the driver bytes added.
 
 [docs/API.md section 10](../../docs/API.md#10-accepted-differences) lists where the runtime
 answers otherwise than Metal on purpose.

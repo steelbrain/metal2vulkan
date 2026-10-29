@@ -336,9 +336,16 @@ impl PipelineMemo {
     }
 }
 
-/// The live variant `live` names, or else `pipeline`.
+/// The live variant `live` names, or else `pipeline`. On a warm pass's threads always `pipeline`
+/// (`warm/pass.rs`): a warm state holding a variant of the program's could be the last to let it
+/// go, and so hand its objects to the kept variants at a moment the program's order does not
+/// decide.
 fn remembered<P, V>(pipeline: &Arc<P>, live: &Weak<V>) -> Remembered<P, V> {
-    match live.upgrade() {
+    let live = match crate::warm::warming() {
+        true => None,
+        false => live.upgrade(),
+    };
+    match live {
         Some(variant) => Remembered::Live(variant),
         None => Remembered::Compiled(Arc::clone(pipeline)),
     }

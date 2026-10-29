@@ -969,6 +969,21 @@ pub(crate) fn raise_to_user_initiated() {
 #[cfg(not(target_os = "macos"))]
 pub(crate) fn raise_to_user_initiated() {}
 
+/// Lower this thread to the utility quality of service: a warm pass's thread (`warm/pass.rs`),
+/// whose translations nothing waits for. Its pipeline makings still compile at the
+/// user-initiated class, on a thread of their own (`device/compiles.rs`), and a thread it starts
+/// starts at the default class ([`spawn`]).
+#[cfg(target_os = "macos")]
+pub(crate) fn lower_to_utility() {
+    // SAFETY: sets the calling thread's own class; no pointer.
+    unsafe { libc::pthread_set_qos_class_self_np(libc::qos_class_t::QOS_CLASS_UTILITY, 0) };
+}
+
+/// Nothing elsewhere: a Linux thread's nice value passes to the threads it starts, and the warm
+/// pass starts the pipeline pool's, which serve the program ([`lower_to_utility`] on macOS).
+#[cfg(not(target_os = "macos"))]
+pub(crate) fn lower_to_utility() {}
+
 /// Run this thread at the user-interactive quality of service, whatever its class: a thread of
 /// the runtime's own that takes command buffers to their handlers ([`spawn_user_interactive`]).
 #[cfg(target_os = "macos")]

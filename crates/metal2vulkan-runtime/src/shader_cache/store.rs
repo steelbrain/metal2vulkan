@@ -9,7 +9,8 @@
 //! - One directory beside the builds', the content directory ([`content`]), holds records no build
 //!   owns, named by the content they describe: the driver's pipeline cache data (It was the
 //!   build's; one record per pipeline making), named by what each making reads and read as an entry
-//!   is, with its counts (`driver.rs`); the scans bound them with the rest.
+//!   is, with its counts (`driver.rs`), and the libraries pipeline records name, by their content
+//!   hash (`libraries.rs`); the scans bound them with the rest.
 //! - An entry's name is the SHA-256 of a domain tag, the build, the entry's kind, its key and the
 //!   profile fingerprint ([`entry_name`]). The decoder the caller hands to [`Store::load`] checks
 //!   the contents against the request byte for byte; contents it refuses are removed.
@@ -203,6 +204,9 @@ pub(crate) struct Counters {
     pub(crate) hits_by: [AtomicU64; Looked::COUNT],
     /// Of `misses`, likewise.
     pub(crate) misses_by: [AtomicU64; Looked::COUNT],
+    /// Libraries pipeline records name that this device wrote to the content directory
+    /// (`libraries.rs`): `WarmStatistics::libraries_kept`.
+    pub(crate) libraries_kept: AtomicU64,
     pub(crate) rejected: AtomicU64,
     pub(crate) read_failures: AtomicU64,
     pub(crate) writes: AtomicU64,
@@ -438,13 +442,23 @@ impl Store {
     /// happened yet. Reads no contents and counts in no hit or miss -- it is a question about the
     /// directory, not a lookup of an entry -- but its `stat` is in [`Counters::read_nanos`].
     pub(crate) fn holds(&self, name: &str) -> bool {
-        let path = self.directory.entry_path(name);
-        if self.asked.as_ref().is_some_and(|asked| asked.holds(&path)) {
+        self.holds_at(&self.directory.entry_path(name))
+    }
+
+    /// [`Store::holds`] of the record named `name` in the content directory: a library a pipeline
+    /// record names (`shader_cache/libraries.rs`).
+    pub(crate) fn holds_record(&self, name: &str) -> bool {
+        self.holds_at(&self.directory.record_path(name))
+    }
+
+    /// [`Store::holds`] of the file at `path`.
+    fn holds_at(&self, path: &Path) -> bool {
+        if self.asked.as_ref().is_some_and(|asked| asked.holds(path)) {
             return true;
         }
         count(&self.counters.holds_questions);
         timed(&self.counters.read_nanos, || {
-            fs::metadata(&path).is_ok_and(|metadata| metadata.len() <= self.entry_limit())
+            fs::metadata(path).is_ok_and(|metadata| metadata.len() <= self.entry_limit())
         })
     }
 

@@ -310,6 +310,9 @@ mod vertex_conversion_notices;
 mod view_plan;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod waiter_submits;
+#[cfg(any(m2v_gpu, m2v_cpu_icd))]
+mod warm;
+mod warm_record;
 mod word_fill;
 mod wrapped;
 mod written_commands;

@@ -651,16 +651,25 @@ impl ComputePipelineState {
         used: Option<&Used>,
         added_unsupported: usize,
     ) -> Result<ComputePipelineState, Error> {
+        let requested = descriptor;
         let mut descriptor = descriptor.clone();
         descriptor.kernel = crate::dynamic_library::stage_with_dependencies(&descriptor.kernel);
-        ComputePipelineState::of_kernel(
+        let state = ComputePipelineState::of_kernel(
             device,
             Kernel::Compute(descriptor),
             options,
             used,
             "new_compute_pipeline_state",
             added_unsupported,
-        )
+        )?;
+        // The creation's record, as the program asked for it (`warm/record.rs`); a binary
+        // archive's add makes none.
+        if used.is_none() {
+            device.record_pipeline(|| {
+                crate::warm::Pipeline::Compute(requested.clone(), added_unsupported)
+            });
+        }
+        Ok(state)
     }
 
     /// The state of `kernel`, a compute or tile descriptor, made on `device` under `options` in
@@ -743,8 +752,10 @@ impl ComputePipelineState {
         // sampler or texel slot's), made here, where the creation may wait, so that no dispatch's
         // encoding makes one (`neutral.rs`; `RenderPipelineState::make_neutrals`). One that fails
         // is left to the dispatch that binds it. And room kept in the memory the encodings place
-        // their own resources in (`Device::keep_room`).
-        if !crate::exit_guard::in_host_step() {
+        // their own resources in (`Device::keep_room`). A warm pass makes neither: they take
+        // memory and addresses, which the program's creation makes in its own order
+        // (`warm/pass.rs`).
+        if !crate::exit_guard::in_host_step() && !crate::warm::warming() {
             if let Ok(plan) = base.plan(device, &BindShape::default()) {
                 let _ = crate::binding::make_neutrals(device, &plan);
             }
@@ -772,21 +783,33 @@ impl ComputePipelineState {
                     .map_or(&[][..], |(_, samplers)| samplers.as_slice()),
             }],
         );
-        let identifier =
-            UniqueIdentifier::state(&device.shared().identifiers, StateKind::Compute, indirect)?;
+        // A warm pass's state takes no identifier and no ID (`warm/pass.rs`): both are numbered
+        // in the program's order, and its samplers took none above (`numbered.rs`).
+        let identifier = match crate::warm::warming() {
+            true => None,
+            false => Some(UniqueIdentifier::state(
+                &device.shared().identifiers,
+                StateKind::Compute,
+                indirect,
+            )?),
+        };
         let at_bind_views = AtBindViews::new(device, &base.shared_pipeline().interface);
         Ok(ComputePipelineState(Arc::new_cyclic(|state| {
             // The state holds its ID's slot, which lists it among the states an indirect
             // command's record can name (`indirect_states`).
-            let id = indirect.then(|| {
-                let id = IdHold::take(&device.shared().resource_ids, IdSpace::Pipeline, placement);
-                id.hold_state(
-                    Holder::Pipeline(Weak::clone(state)),
-                    StateKind::Compute,
-                    identifier.value(),
-                );
-                id
-            });
+            let id = match (&identifier, indirect) {
+                (Some(identifier), true) => {
+                    let ids = &device.shared().resource_ids;
+                    let id = IdHold::take(ids, IdSpace::Pipeline, placement);
+                    id.hold_state(
+                        Holder::Pipeline(Weak::clone(state)),
+                        StateKind::Compute,
+                        identifier.value(),
+                    );
+                    Some(id)
+                }
+                _ => None,
+            };
             let program = Program {
                 device: device.clone(),
                 function: function.clone(),
@@ -806,12 +829,38 @@ impl ComputePipelineState {
             };
             StateShared {
                 id,
-                identifier: Some(identifier),
+                identifier,
                 _samplers: samplers,
                 program: Arc::new(program),
             }
         })))
     }
+}
+
+/// Make on `device` what a creation of `pipeline`, a pipeline record's, makes: the same creation,
+/// on a warm pass's thread (`warm/pass.rs`), under the default options, its state let go at once.
+/// So its translations reach the shader cache and its `VkPipeline`s the driver's caches under the
+/// very keys and records the program's creation of the same descriptor asks for; what the program
+/// would see of it (an ID, an identifier, sampler numbers, notices, the kept variants' order, a
+/// neutral's memory) each of those paths leaves out on a warm pass's threads. `false` for a mesh
+/// render pipeline, which it does not make: that creation keeps no translation on disk and makes
+/// no `VkPipeline` (`GraphicsState::create_mesh`), so nothing of it outlives the state.
+pub(crate) fn warm(device: &Device, pipeline: &crate::warm::Pipeline) -> Result<bool, Error> {
+    use crate::warm::Pipeline;
+    let options = PipelineOptions::default();
+    match pipeline {
+        Pipeline::Compute(descriptor, added) => {
+            ComputePipelineState::create_adding(device, descriptor, &options, None, *added)?;
+        }
+        Pipeline::Render(descriptor, added) => {
+            GraphicsState::create_adding(device, descriptor, &options, None, *added)?;
+        }
+        Pipeline::Tile(descriptor, added) => {
+            TileState::create_adding(device, descriptor, &options, None, *added)?;
+        }
+        Pipeline::Mesh(_) => return Ok(false),
+    }
+    Ok(true)
 }
 
 /// The first name `linked` repeats where Metal's pipeline creation fails or was not measured: a
@@ -1624,7 +1673,11 @@ impl Variant {
                 variant.pipelines.seed(region, made);
             }
         }
-        device.shared().shader_cache.memo.live_compute(&variant);
+        // A warm pass's variant is no state's the program holds: the memo does not hand it out
+        // (`warm/pass.rs`).
+        if !crate::warm::warming() {
+            device.shared().shader_cache.memo.live_compute(&variant);
+        }
         Ok(variant)
     }
 

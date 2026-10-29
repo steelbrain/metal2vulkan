@@ -18,10 +18,10 @@ use metal2vulkan_runtime::{
     ArgumentEncoder, BinaryArchive, BlitCommandEncoder, Buffer, CommandBuffer, CommandBufferError,
     CommandQueue, ComputeCommandEncoder, ComputePipelineState, DegradeNotice, DepthStencilState,
     Device, DynamicLibrary, Error, Event, Fence, Function, Heap, IndirectCommandBuffer,
-    IndirectComputeCommand, IndirectRenderCommand, Library, MessageSink, RasterizationRateMap,
-    RenderCommandEncoder, RenderPassDescriptor, RenderPipelineState, ResourceStateCommandEncoder,
-    SamplerState, SharedEvent, SharedEventHandle, SharedEventListener, SharedTextureHandle,
-    Texture, VisibleFunctionTable, WorkCounts,
+    IndirectComputeCommand, IndirectRenderCommand, Library, MessageSink, PipelineRecord,
+    RasterizationRateMap, RenderCommandEncoder, RenderPassDescriptor, RenderPipelineState,
+    ResourceStateCommandEncoder, SamplerState, SharedEvent, SharedEventHandle, SharedEventListener,
+    SharedTextureHandle, Texture, VisibleFunctionTable, WorkCounts,
 };
 
 /// `T` held as a program's crate holds it: the bound of reims-vgpu's `platform::Obj<T>`, one
@@ -81,6 +81,7 @@ held! {
     argument_encoder: ArgumentEncoder;
     visible_function_table: VisibleFunctionTable;
     rasterization_rate_map: RasterizationRateMap;
+    pipeline_record: PipelineRecord;
     message_sink: MessageSink;
     error: Error;
     command_buffer_error: CommandBufferError;

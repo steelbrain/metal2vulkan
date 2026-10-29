@@ -119,6 +119,7 @@ impl TileState {
             "new_tile_render_pipeline_state",
             descriptor.raster_sample_count,
         )?;
+        let requested = descriptor;
         let mut descriptor = descriptor.clone();
         descriptor.tile = crate::dynamic_library::stage_with_dependencies(&descriptor.tile);
         let kernel = ComputePipelineState::of_kernel(
@@ -129,6 +130,13 @@ impl TileState {
             "new_tile_render_pipeline_state",
             added_unsupported,
         )?;
+        // The creation's record, as the program asked for it (`warm/record.rs`); a binary
+        // archive's add makes none.
+        if used.is_none() {
+            device.record_pipeline(|| {
+                crate::warm::Pipeline::Tile(requested.clone(), added_unsupported)
+            });
+        }
         Ok(TileState(Arc::new(TileShared {
             kernel,
             descriptor,

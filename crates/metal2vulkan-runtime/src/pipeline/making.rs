@@ -117,8 +117,8 @@ impl<V> Turn<V> {
         }
     }
 
-    /// Wait until the making finished, made or failed, hastened meanwhile: as a host step's
-    /// making in a host step, else as a program's thread's.
+    /// Wait until the making finished, made or failed, hastened meanwhile as this thread's own
+    /// making would rank ([`waiter`]).
     fn wait(&self) -> Outcome<V> {
         // A turn's holder waiting for another making could, with every turn so held, stop all
         // of them (`budget.rs`'s module docs).
@@ -126,10 +126,7 @@ impl<V> Turn<V> {
             !super::budget::holds_turn(),
             "a making waited for another while holding a budget turn"
         );
-        self.hasten(match crate::exit_guard::in_host_step() {
-            true => Urgency::HostStep,
-            false => Urgency::Program,
-        });
+        self.hasten(waiter());
         let mut state = lock(&self.state);
         loop {
             if let TurnState::Finished(outcome) = &*state {
@@ -149,10 +146,7 @@ impl<V> Turn<V> {
             !super::budget::holds_turn(),
             "a making waited for another while holding a budget turn"
         );
-        self.hasten(match crate::exit_guard::in_host_step() {
-            true => Urgency::HostStep,
-            false => Urgency::Program,
-        });
+        self.hasten(waiter());
         let mut state = lock(&self.state);
         loop {
             if let TurnState::Finished(outcome) = &*state {
@@ -188,6 +182,19 @@ impl<V> Turn<V> {
                 waker(&outcome);
             }
         }
+    }
+}
+
+/// The rank a making this thread waits for rises to: a host step's in a host step, a warm
+/// pass's on its threads (which asks nothing ahead of the program's makings, `warm/pass.rs`),
+/// else a program's thread's.
+fn waiter() -> Urgency {
+    if crate::exit_guard::in_host_step() {
+        Urgency::HostStep
+    } else if crate::warm::warming() {
+        Urgency::Warm
+    } else {
+        Urgency::Program
     }
 }
 

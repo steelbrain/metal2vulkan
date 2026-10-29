@@ -220,6 +220,7 @@ mod values;
 mod versioned;
 mod view_plan;
 mod visibility;
+mod warm;
 mod word_fill;
 mod work_counts;
 mod wrapped_buffer;
@@ -353,6 +354,7 @@ pub use values::{
 };
 pub use view_plan::ViewProblem;
 pub use visibility::{VisibilityProblem, VisibilityResultMode};
+pub use warm::{PipelineRecord, WarmStatistics};
 pub use work_counts::{CopySite, MemoryFrees, WorkCounts};
 pub use wrapped_buffer::{VkBufferMemory, WrappedBufferProblem};
 pub use ycbcr::{IoSurfaceYCbCr, SurfaceYCbCrMatrix};
