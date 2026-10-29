@@ -300,6 +300,7 @@ pub(crate) struct Counters {
     copied_heaps_made: AtomicU64,
     copied_copy_in_bytes: AtomicU64,
     copied_merge_back_bytes: AtomicU64,
+    copied_dropped_bytes: AtomicU64,
     host_ram_chunks_imported: AtomicU64,
     host_ram_chunk_bytes: AtomicU64,
     host_ram_chunks_live: AtomicU64,
@@ -2070,6 +2071,12 @@ impl Counters {
     /// (`copied.rs`).
     pub(crate) fn copied_merged_back(&self, bytes: u64) {
         (self.copied_merge_back_bytes).fetch_add(bytes, Ordering::Relaxed);
+    }
+
+    /// A batch's completion dropped `bytes` the GPU changed in copies of pages the process
+    /// cannot write, taking them out of the copies (`copied.rs`).
+    pub(crate) fn copied_dropped(&self, bytes: u64) {
+        (self.copied_dropped_bytes).fetch_add(bytes, Ordering::Relaxed);
     }
 
     /// A host import the device never releases while idle, for `because`, was made (`kept`), or
@@ -4371,6 +4378,10 @@ pub struct WorkCounts {
     /// The bytes the GPU changed in copied host buffers' copies that batches' completions merged
     /// back into the caller's pages.
     pub copied_merge_back_bytes: u64,
+    /// The bytes the GPU changed in copies of pages the process cannot write (read-only pages)
+    /// that batches' completions dropped: taken out of the copies, the pages' bytes in their
+    /// place, never written to the pages, as Metal drops the GPU's writes to read-only memory.
+    pub copied_dropped_bytes: u64,
     /// The chunks of guest RAM the device imported (`Device::use_host_ram`): 64 MiB of a RAM's
     /// range each (its last fewer), imported the first time a no-copy object over it was made.
     pub host_ram_chunks_imported: u64,
@@ -5462,6 +5473,7 @@ impl Device {
             copied_heaps_made: counters.copied_heaps_made.load(Ordering::Relaxed),
             copied_copy_in_bytes: counters.copied_copy_in_bytes.load(Ordering::Relaxed),
             copied_merge_back_bytes: counters.copied_merge_back_bytes.load(Ordering::Relaxed),
+            copied_dropped_bytes: counters.copied_dropped_bytes.load(Ordering::Relaxed),
             host_ram_chunks_imported: counters.host_ram_chunks_imported.load(Ordering::Relaxed),
             host_ram_chunk_bytes: counters.host_ram_chunk_bytes.load(Ordering::Relaxed),
             host_ram_chunks_live: counters.host_ram_chunks_live.load(Ordering::Relaxed),

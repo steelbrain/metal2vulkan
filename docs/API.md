@@ -2499,15 +2499,20 @@ bound.
   buffer, heap or rebind was made over host pages the process maps read-only, from the caller's
   dma-buf source (`HostMemory::with_dma_buf`): on Linux, where drivers pin a pointer's imported
   pages for writing, such pages are imported only as dma-bufs of their pages, whose memory the GPU
-  writes. Cost: the GPU's writes through it reach the pages, and the CPU then reads them there,
+  writes. Where the caller's gate refuses their import, or that import fails, they are a copy whose
+  GPU writes are dropped instead (`copied-host-pages`). Cost: the GPU's writes through it reach the pages, and the CPU then reads them there,
   where after Metal's GPU writes into pages the process maps read-only the CPU reads them as they
   were (an M3 Max under macOS 27.0.1, private and shared memory alike).
 - `metal2vulkan-degrade-copied-host-pages` (precision). `CopiedHostPages`: A no-copy buffer, a
   no-copy heap or a buffer's rebind was made over a copy of the caller's host pages in memory of
   the device's own, which no import maps (a heap's textures shadows of its bytes):
   the caller's gate (`HostMemory::with_import_gate`) refused the pages' import, or the import the
-  device and the gate admitted failed (out of memory, or another Vulkan error, such as a driver out
-  of the mappings the host kernel allows). The copy reads the pages through the kernel, and
+  device and the gate admitted failed, of the pointer or of the caller's dma-bufs (out of memory, or
+  another Vulkan error, such as a driver out of the mappings the host kernel allows). The gate is
+  asked before the pages' write permission: pages the process maps read-only (a VMM's alias of a
+  read-only replace) are copied as any, and the copy drops the GPU's writes, as Metal drops them:
+  each batch's completion takes them back out of the copy and writes nothing to the pages
+  (`copied_dropped_bytes`; the detail says so). The copy reads the pages through the kernel, and
   where the kernel cannot (on Linux it pins each page, which a dma-buf's mapping does not allow),
   with plain loads where the process maps every page readable. Pages not mapped, or mapped
   without read permission, are never copied: the buffer is refused, as their import is. A copy

@@ -907,7 +907,9 @@ impl Buffer {
     /// device and the gate admitted fails (out of memory, another Vulkan error), the buffer is
     /// given a copy of the new pages in memory of the device's own instead, its `contents` the new
     /// pointer, announced (`copied-host-pages`, `copied.rs`), an image in place over its bytes made
-    /// again over the copy. New memory at another offset in its page than the old, where a texture
+    /// again over the copy. New pages the process maps read-only (Metal's
+    /// `replaceBackingWithRanges:readOnly:`) are copied so too, and the copy drops the GPU's
+    /// writes, as Metal drops them. New memory at another offset in its page than the old, where a texture
     /// over the buffer lives, is given such a copy laid out at the old offset, the gate unasked.
     /// Metal rebinds over any memory; the copy is the difference.
     ///

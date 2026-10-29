@@ -89,7 +89,7 @@ fn udmabuf_openable(test: &str) -> bool {
 }
 
 /// A dma-buf of `memfd`'s `size` bytes from `offset`.
-fn udmabuf(memfd: &OwnedFd, offset: u64, size: u64) -> std::io::Result<OwnedFd> {
+pub(super) fn udmabuf(memfd: &OwnedFd, offset: u64, size: u64) -> std::io::Result<OwnedFd> {
     let device = std::fs::OpenOptions::new()
         .read(true)
         .write(true)

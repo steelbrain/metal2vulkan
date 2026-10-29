@@ -5,7 +5,8 @@
 //! copied all the same and others refused; on Linux, a mapping of a dma-buf (`VM_PFNMAP`), which
 //! the kernel's read refuses, is copied (where `/dev/udmabuf` opens).
 
-use crate::copied::{read_caller, sync, CopiedBuffers, NotCopied};
+use crate::copied::{read_caller, restore, sync, CopiedBuffers, NotCopied};
+use crate::work_counts::Counters;
 use std::cell::Cell;
 use std::ptr::NonNull;
 use std::sync::Arc;
@@ -63,6 +64,64 @@ fn copied_merge_back_keeps_a_byte_the_cpu_changed_since() {
     assert_eq!(copy, pages);
 }
 
+#[test]
+fn copied_restore_takes_the_gpu_s_bytes_out_of_the_copy_alone() {
+    let snapshot: Vec<u8> = (0..21).collect();
+    let mut copy = snapshot.clone();
+    // The GPU wrote bytes 2, 3 and 20 (the last, short span).
+    copy[2] = 0x22;
+    copy[3] = 0x33;
+    copy[20] = 0x44;
+    // SAFETY: the copy is the snapshot's length.
+    let written = unsafe { restore(at(&mut copy), &snapshot) };
+    assert_eq!(written, 3);
+    assert_eq!(copy, snapshot, "the copy holds the agreed bytes again");
+}
+
+/// A copy of pages the process cannot write drops the GPU's writes: a completion takes them out
+/// of the copy and writes nothing to the pages; a CPU write to the pages is copied in at the next
+/// commit as for any copy. A copy of writable pages merges them back.
+#[test]
+fn copied_merge_back_of_unwritable_pages_drops_the_gpu_s_writes() {
+    let length = 4099;
+    let mut pages: Vec<u8> = (0..length as u32).map(|i| (i * 5 + 1) as u8).collect();
+    let original = pages.clone();
+    let mut copy = vec![0_u8; length];
+    let buffers = Arc::new(CopiedBuffers::default());
+    let counts = Counters::default();
+    let read = |from: NonNull<u8>, into: &mut [u8]| {
+        // SAFETY: the pages are `into.len()` bytes of plain memory.
+        unsafe { std::ptr::copy_nonoverlapping(from.as_ptr(), into.as_mut_ptr(), into.len()) };
+        true
+    };
+    // SAFETY: the copy and the pages are the test's, of `length` bytes, live past the answer.
+    let copied = unsafe { buffers.add_reading(at(&mut pages), at(&mut copy), length, read, true) };
+    let copied = copied.unwrap();
+    assert!(copied.drops_writes());
+    // The GPU writes 100 bytes of the copy; the completion drops them.
+    copy[1000..1100].fill(0xEE);
+    buffers.merge_back(&counts);
+    assert_eq!(pages, original, "nothing written to the pages");
+    assert_eq!(copy, original, "the copy holds the pages' bytes again");
+    // A CPU write to the pages reaches the copy at the next commit.
+    pages[7] = !pages[7];
+    buffers.copy_in(&counts);
+    assert_eq!(copy[7], pages[7]);
+    drop(copied);
+    // A copy of writable pages merges the GPU's writes back.
+    let mut writable = original.clone();
+    let mut other = vec![0_u8; length];
+    // SAFETY: as above.
+    let copied =
+        unsafe { buffers.add_reading(at(&mut writable), at(&mut other), length, read, false) };
+    let copied = copied.unwrap();
+    assert!(!copied.drops_writes());
+    other[0] = !other[0];
+    buffers.merge_back(&counts);
+    assert_eq!(writable[0], other[0], "merged back");
+    drop(copied);
+}
+
 /// Where the kernel's read of the pages fails (a mapping it cannot pin), pages the process maps
 /// readable are read with plain loads and copied; where a page is not mapped readable, the copy
 /// is refused and nothing written; where the kernel reads them, no mapping is asked about.
@@ -84,7 +143,7 @@ fn copied_pages_the_kernel_cannot_read_are_copied_where_mapped_readable() {
     };
     // SAFETY: the copy and the pages are the test's, of `length` bytes, live past the answer.
     let copied =
-        unsafe { buffers.add_reading(at(&mut pages), at(&mut copy), length, read_readable) };
+        unsafe { buffers.add_reading(at(&mut pages), at(&mut copy), length, read_readable, false) };
     assert!(copied.is_ok(), "copied");
     assert_eq!(copy, pages, "the copy holds the pages' bytes");
     assert_eq!(asked.get(), Some((start, start + length as u64)), "asked");
@@ -100,6 +159,7 @@ fn copied_pages_the_kernel_cannot_read_are_copied_where_mapped_readable() {
             at(&mut refused_copy),
             length,
             read_unreadable,
+            false,
         )
     };
     assert_eq!(refused.err(), Some(NotCopied::Unreadable));

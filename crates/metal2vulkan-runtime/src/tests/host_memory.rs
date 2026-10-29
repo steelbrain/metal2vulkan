@@ -302,6 +302,53 @@ fn the_mapping_queries_keep_one_file_open() {
     assert!(std::sync::Arc::ptr_eq(&first, &again));
 }
 
+/// The system's answer to whether the process can write its pages (`mapped_writable`), which a
+/// copy of them asks to know whether it drops the GPU's writes (`copied.rs`): pages mapped
+/// writable can be written, until one of them is made read-only; a range past a mapping's end, or
+/// pages no longer mapped, cannot.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[test]
+fn only_pages_mapped_writable_without_a_gap_can_be_written() {
+    use crate::host_memory::mapped_writable;
+    let page = host_page().unwrap();
+    let len = 3 * page as usize;
+    // SAFETY: a fresh private mapping, unmapped below.
+    let at = unsafe {
+        libc::mmap(
+            std::ptr::null_mut(),
+            len,
+            libc::PROT_READ | libc::PROT_WRITE,
+            libc::MAP_PRIVATE | libc::MAP_ANON,
+            -1,
+            0,
+        )
+    };
+    assert_ne!(at, libc::MAP_FAILED);
+    let start = at as u64;
+    let end = start + len as u64;
+    assert!(mapped_writable(start, end), "mapped writable");
+    assert!(
+        mapped_writable(start + page, start + page + 1),
+        "a byte of it"
+    );
+    // SAFETY: the middle page of the mapping made above, which nothing uses.
+    let middle = unsafe { at.cast::<u8>().add(page as usize) };
+    // SAFETY: as above.
+    assert_eq!(
+        unsafe { libc::mprotect(middle.cast(), page as usize, libc::PROT_READ) },
+        0
+    );
+    assert!(!mapped_writable(start, end), "a read-only page among them");
+    assert!(mapped_writable(start, start + page), "the first page alone");
+    assert!(
+        !mapped_writable(start + page, start + 2 * page),
+        "the read-only page"
+    );
+    // SAFETY: the mapping made above, which nothing uses.
+    assert_eq!(unsafe { libc::munmap(at, len) }, 0);
+    assert!(!mapped_writable(start, end), "no longer mapped");
+}
+
 /// The check reads this process's own mappings: a fresh page is importable until it is made
 /// read-only, and a page no longer mapped is not, through the kept file's queries as they are now.
 #[cfg(target_os = "linux")]

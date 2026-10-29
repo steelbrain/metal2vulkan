@@ -1836,9 +1836,10 @@ degradations! {
         /// A no-copy buffer, heap or rebind was made over host pages the process maps
         /// read-only, from the caller's dma-buf source (`HostMemory::with_dma_buf`): on Linux,
         /// where drivers pin a pointer's imported pages for writing, such pages are imported only
-        /// as dma-bufs of their pages, whose memory the GPU writes. Announced once per device, by
-        /// the call that makes it, or at each such call where `DeviceOptions::announce_each`
-        /// asks.
+        /// as dma-bufs of their pages, whose memory the GPU writes. Where the caller's gate
+        /// refuses their import, or that import fails, they are a copy whose GPU writes are
+        /// dropped instead (`CopiedHostPages`). Announced once per device, by the call that makes
+        /// it, or at each such call where `DeviceOptions::announce_each` asks.
         ReadOnlyPagesWritten = "read-only-pages-written", Precision,
             "the GPU's writes through it reach the pages, and the CPU then reads them there, \
              where after Metal's GPU writes into pages the process maps read-only the CPU reads \
@@ -1847,11 +1848,13 @@ degradations! {
         /// caller's host pages in memory of the device's own, which no import maps (`copied.rs`;
         /// a heap's textures shadows of its bytes): the caller's gate
         /// (`HostMemory::with_import_gate`) refused the pages' import, or the import the device
-        /// and the gate admitted failed (out of memory, or another Vulkan error, such as a
-        /// driver out of the mappings the host kernel allows). A copy whose own allocation fails
-        /// refuses the call (`OutOfMemory`). Announced once per device, by the call that makes
-        /// it, or at each such call where `DeviceOptions::announce_each` asks. Counted:
-        /// `WorkCounts::copied_host_buffers_made`.
+        /// and the gate admitted failed, of the pointer or of the caller's dma-bufs (out of
+        /// memory, or another Vulkan error, such as a driver out of the mappings the host kernel
+        /// allows). A copy of pages the process maps read-only drops the GPU's writes, as Metal
+        /// drops them: never written to the pages (`WorkCounts::copied_dropped_bytes`; the detail
+        /// says so). A copy whose own allocation fails refuses the call (`OutOfMemory`).
+        /// Announced once per device, by the call that makes it, or at each such call where
+        /// `DeviceOptions::announce_each` asks. Counted: `WorkCounts::copied_host_buffers_made`.
         CopiedHostPages = "copied-host-pages", Precision,
             "the GPU uses a copy of the bytes, into which each commit writes every byte the CPU \
              changed in the pages since, and from which each batch's completion writes back \

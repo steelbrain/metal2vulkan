@@ -22,6 +22,15 @@
 //!   commit copies in. Bytes are compared 8 at a time and merged one at a time where they differ,
 //!   so a merge writes no byte the GPU did not change. Each batch ends with a barrier that makes
 //!   its writes visible to the host (`tracker::Barrier::to_host`).
+//! - **Pages the process cannot write** (read-only pages, as a consumer's alias of a read-only
+//!   replace, `replaceBackingWithRanges:readOnly:`, maps them), asked of the system as the copy is
+//!   made ([`mapped_writable`]): the GPU's writes to the copy are dropped, as Metal drops the GPU's
+//!   writes to read-only memory (`read_only_view.rs`). At each batch's completion every byte the
+//!   GPU changed in the copy takes back the byte the pages and the copy last agreed on
+//!   ([`CopiedBuffers::merge_back`]), and nothing is written to the pages: later commands of the
+//!   same batch read the write back, and a later command buffer the pages' bytes. The CPU's writes
+//!   to the pages through another mapping are copied in at each commit, as above. Counted:
+//!   `WorkCounts::copied_dropped_bytes`.
 //! - **Event signals.** A batch's event signals, submitted while a copy is live, are seen at its
 //!   completion turn alone, after the merge: no read of the value observes them earlier, and a
 //!   wait for them is held on the host until that turn (`event_timeline.rs`), so the GPU's writes
@@ -30,7 +39,7 @@
 //! - **Cost.** Every live copy is compared whole at each commit and at each batch's completion,
 //!   whichever buffers the work names: O(bytes) per commit and per batch, a fallback's cost
 //!   (`docs/FAST-PATHS.md`, known gaps). Counted: `WorkCounts::copied_copy_in_bytes`,
-//!   `WorkCounts::copied_merge_back_bytes`.
+//!   `WorkCounts::copied_merge_back_bytes`, `WorkCounts::copied_dropped_bytes`.
 //! - **Heaps and rebinds.** A no-copy heap's own buffer is copied as a buffer is, where the heap's
 //!   textures could lie, with a heap's hazard identity; its buffers lie in the copy at their
 //!   offsets, and its textures are shadows of its bytes (`AliasRoute::MemoryShadow` or Metal's
@@ -44,7 +53,7 @@
 //!   before. A texture made over a copied buffer is a shadow of its bytes (`shadowed-texture`).
 
 use crate::device::lock;
-use crate::host_memory::mapped_readable;
+use crate::host_memory::{mapped_readable, mapped_writable};
 use crate::work_counts::Counters;
 use std::ptr::NonNull;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
@@ -78,6 +87,9 @@ struct Entry {
     copy: NonNull<u8>,
     /// The bytes the pages and the copy last agreed on.
     snapshot: Box<[u8]>,
+    /// The process cannot write the pages: the GPU's writes to the copy are dropped, never merged
+    /// back.
+    drops_writes: bool,
 }
 
 // SAFETY: the pointers name the caller's pages, which stay mapped while the buffer's import lives
@@ -90,6 +102,14 @@ unsafe impl Send for Entry {}
 pub(crate) struct Copied {
     buffers: Arc<CopiedBuffers>,
     id: u64,
+    drops_writes: bool,
+}
+
+impl Copied {
+    /// Whether the GPU's writes to the copy are dropped: the process cannot write the pages.
+    pub(crate) fn drops_writes(&self) -> bool {
+        self.drops_writes
+    }
 }
 
 impl Drop for Copied {
@@ -111,8 +131,10 @@ impl CopiedBuffers {
 
     /// Register the copy at `copy` of the `length` bytes at `pages`, its bytes read from the pages
     /// now ([`read_caller`]: through the kernel, or where it fails, with plain loads of pages
-    /// mapped readable). Refused, registering nothing, where the process cannot read every page,
-    /// or the host has no memory for the bytes the copy and the pages last agreed on.
+    /// mapped readable). Where the process cannot write every page ([`mapped_writable`]), the
+    /// GPU's writes to the copy are dropped (the module docs). Refused, registering nothing, where
+    /// the process cannot read every page, or the host has no memory for the bytes the copy and
+    /// the pages last agreed on.
     ///
     /// # Safety
     ///
@@ -131,12 +153,14 @@ impl CopiedBuffers {
             // readable (the caller's contract).
             unsafe { read_caller(pages, into, read_pages, mapped_readable) }
         };
+        let start = pages.as_ptr() as u64;
+        let drops_writes = !mapped_writable(start, start.saturating_add(length as u64));
         // SAFETY: the caller's.
-        unsafe { self.add_reading(pages, copy, length, read) }
+        unsafe { self.add_reading(pages, copy, length, read, drops_writes) }
     }
 
     /// [`CopiedBuffers::add`], the first bytes of the pages read by `read`, which answers whether
-    /// it read every one.
+    /// it read every one; the GPU's writes to the copy dropped where `drops_writes`.
     ///
     /// # Safety
     ///
@@ -147,6 +171,7 @@ impl CopiedBuffers {
         copy: NonNull<u8>,
         length: usize,
         read: impl FnOnce(NonNull<u8>, &mut [u8]) -> bool,
+        drops_writes: bool,
     ) -> Result<Copied, NotCopied> {
         let mut snapshot = Vec::new();
         if snapshot.try_reserve_exact(length).is_err() {
@@ -165,11 +190,13 @@ impl CopiedBuffers {
             pages,
             copy,
             snapshot,
+            drops_writes,
         });
         self.live.fetch_add(1, Ordering::Relaxed);
         Ok(Copied {
             buffers: Arc::clone(self),
             id,
+            drops_writes,
         })
     }
 
@@ -189,17 +216,26 @@ impl CopiedBuffers {
 
     /// At a batch's completion: write back into each copy's pages the bytes the GPU changed in the
     /// copy since they last agreed, where the CPU did not change them since, before anything sees
-    /// the batch complete.
+    /// the batch complete. A copy of pages the process cannot write takes back instead the bytes
+    /// they last agreed on wherever the GPU changed it: the GPU's writes are dropped, and nothing
+    /// is written to the pages.
     pub(crate) fn merge_back(&self, counts: &Counters) {
         if self.live.load(Ordering::Relaxed) == 0 {
             return;
         }
-        let mut moved = 0u64;
+        let (mut moved, mut dropped) = (0u64, 0u64);
         for entry in lock(&self.entries).iter_mut() {
-            // SAFETY: the entry's pointers are live while it is registered (`Entry`).
-            moved += unsafe { sync(entry.copy, entry.pages, &mut entry.snapshot, true) };
+            match entry.drops_writes {
+                // SAFETY: the entry's copy is live while it is registered (`Entry`).
+                true => dropped += unsafe { restore(entry.copy, &entry.snapshot) },
+                // SAFETY: the entry's pointers are live while it is registered (`Entry`).
+                false => {
+                    moved += unsafe { sync(entry.copy, entry.pages, &mut entry.snapshot, true) }
+                }
+            }
         }
         counts.copied_merged_back(moved);
+        counts.copied_dropped(dropped);
     }
 }
 
@@ -243,6 +279,35 @@ pub(crate) unsafe fn sync(
                     written += 1;
                 }
                 snapshot[at + byte] = now[byte];
+            }
+        }
+        at += span;
+    }
+    written
+}
+
+/// Write into `copy` each byte of `snapshot` that `copy` differs from: the GPU's writes to a copy
+/// of pages the process cannot write, dropped. The bytes written.
+///
+/// # Safety
+///
+/// `copy` is `snapshot.len()` bytes of mapped memory.
+pub(crate) unsafe fn restore(copy: NonNull<u8>, snapshot: &[u8]) -> u64 {
+    let copy = copy.as_ptr();
+    let mut written = 0u64;
+    let mut at = 0;
+    while at < snapshot.len() {
+        let span = (snapshot.len() - at).min(8);
+        let mut now = [0u8; 8];
+        // SAFETY: `span` bytes at `at` lie in `copy` (the caller's).
+        unsafe { std::ptr::copy_nonoverlapping(copy.add(at), now.as_mut_ptr(), span) };
+        if now[..span] != snapshot[at..at + span] {
+            for byte in 0..span {
+                if now[byte] != snapshot[at + byte] {
+                    // SAFETY: as above.
+                    unsafe { copy.add(at + byte).write_volatile(snapshot[at + byte]) };
+                    written += 1;
+                }
             }
         }
         at += span;

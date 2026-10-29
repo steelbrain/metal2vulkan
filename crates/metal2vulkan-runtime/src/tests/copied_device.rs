@@ -1339,3 +1339,437 @@ fn copied_rebind_keeps_metal_s_order_around_command_buffers() {
     assert_eq!(texels(&device, &texture), rows(&expected));
     drop((texture, buffer));
 }
+
+/// Pages the process maps read-only, as a consumer maps its alias of a read-only replace
+/// (`replaceBackingWithRanges:readOnly:`, its maximum protection lowered to read), over shared
+/// memory a writable mapping also maps (the guest's own): `LENGTH` bytes in a pattern of `seed`,
+/// the read-only view at a multiple of 64 KiB.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+struct ReadOnlyHost {
+    /// The read-only view's first byte.
+    pointer: NonNull<u8>,
+    /// The writable mapping of the same memory.
+    writable: NonNull<u8>,
+    /// The address space the view was placed in (`2 * LENGTH` bytes), unmapped with it.
+    reserved: NonNull<u8>,
+    /// The shared memory, a `memfd`, which udmabuf takes for the source's dma-bufs.
+    #[cfg(target_os = "linux")]
+    memory: Arc<std::os::fd::OwnedFd>,
+    seed: u8,
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+impl ReadOnlyHost {
+    fn new(seed: u8) -> ReadOnlyHost {
+        use std::os::fd::AsRawFd;
+        let memory = Arc::new(shared_memory());
+        let fd = memory.as_raw_fd();
+        // SAFETY: a new shared mapping of the memory, at an address the kernel chooses.
+        let writable = unsafe {
+            libc::mmap(
+                std::ptr::null_mut(),
+                LENGTH,
+                libc::PROT_READ | libc::PROT_WRITE,
+                libc::MAP_SHARED,
+                fd,
+                0,
+            )
+        };
+        assert_ne!(
+            writable,
+            libc::MAP_FAILED,
+            "{}",
+            std::io::Error::last_os_error()
+        );
+        // SAFETY: a new private reservation without access, at an address the kernel chooses.
+        let reserved = unsafe {
+            libc::mmap(
+                std::ptr::null_mut(),
+                2 * LENGTH,
+                libc::PROT_NONE,
+                libc::MAP_PRIVATE | libc::MAP_ANON,
+                -1,
+                0,
+            )
+        };
+        assert_ne!(
+            reserved,
+            libc::MAP_FAILED,
+            "{}",
+            std::io::Error::last_os_error()
+        );
+        let at = (reserved as usize).next_multiple_of(1 << 16);
+        // SAFETY: a read-only shared mapping of the memory over the reservation's own pages.
+        let view = unsafe {
+            libc::mmap(
+                at as *mut libc::c_void,
+                LENGTH,
+                libc::PROT_READ,
+                libc::MAP_SHARED | libc::MAP_FIXED,
+                fd,
+                0,
+            )
+        };
+        assert_eq!(view as usize, at, "{}", std::io::Error::last_os_error());
+        let host = ReadOnlyHost {
+            pointer: NonNull::new(view.cast()).unwrap(),
+            writable: NonNull::new(writable.cast()).unwrap(),
+            reserved: NonNull::new(reserved.cast()).unwrap(),
+            #[cfg(target_os = "linux")]
+            memory,
+            seed,
+        };
+        host.write(0, &pattern(seed));
+        host
+    }
+
+    /// The pattern it was made with.
+    fn pattern(&self) -> Vec<u8> {
+        pattern(self.seed)
+    }
+
+    /// Its bytes, read through the read-only view while no command buffer runs.
+    fn bytes(&self) -> Vec<u8> {
+        // SAFETY: the view's bytes, readable, which no command buffer writes now.
+        unsafe { std::slice::from_raw_parts(self.pointer.as_ptr(), LENGTH) }.to_vec()
+    }
+
+    /// Write `bytes` at `at` through the writable mapping, while no command buffer runs.
+    fn write(&self, at: usize, bytes: &[u8]) {
+        assert!(at + bytes.len() <= LENGTH);
+        // SAFETY: the writable mapping's bytes, which no command buffer uses now.
+        unsafe {
+            std::ptr::copy_nonoverlapping(
+                bytes.as_ptr(),
+                self.writable.as_ptr().add(at),
+                bytes.len(),
+            )
+        };
+    }
+
+    /// The view as the consumer hands it to the runtime, under `gate`: on Linux with a source of
+    /// dma-bufs of its pages (one chunk of the `memfd`'s pages behind each request, through
+    /// `/dev/udmabuf`), counting its calls in `calls`.
+    ///
+    /// # Safety
+    ///
+    /// The view outlives every buffer, heap and rebind over it and the device.
+    unsafe fn memory(
+        &self,
+        gate: ImportGate,
+        calls: &Arc<std::sync::atomic::AtomicUsize>,
+    ) -> HostMemory {
+        #[cfg(target_os = "linux")]
+        let memory = {
+            use std::sync::atomic::Ordering;
+            let fd = Arc::clone(&self.memory);
+            let base = self.pointer.as_ptr() as usize;
+            let calls = Arc::clone(calls);
+            let source: crate::DmaBufSource = Arc::new(move |request: crate::DmaBufRequest| {
+                calls.fetch_add(1, Ordering::AcqRel);
+                let offset = (request.start.as_ptr() as usize)
+                    .checked_sub(base)
+                    .ok_or_else(|| std::io::Error::other("pages before the view"))?;
+                Ok(vec![crate::DmaBufChunk {
+                    fd: super::host_residency::udmabuf(&fd, offset as u64, request.length)?,
+                    length: request.length,
+                }])
+            });
+            // SAFETY: the caller's; the source's chunks hold exactly the view's pages.
+            unsafe { HostMemory::with_dma_buf(self.pointer, source) }
+        };
+        #[cfg(target_os = "macos")]
+        let memory = {
+            let _ = calls;
+            // SAFETY: the caller's.
+            unsafe { HostMemory::new(self.pointer) }
+        };
+        memory.with_import_gate(gate)
+    }
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+impl Drop for ReadOnlyHost {
+    fn drop(&mut self) {
+        // SAFETY: the mappings made by `new`, which nothing uses now: the reservation holds the
+        // view.
+        unsafe {
+            assert_eq!(libc::munmap(self.writable.as_ptr().cast(), LENGTH), 0);
+            assert_eq!(libc::munmap(self.reserved.as_ptr().cast(), 2 * LENGTH), 0);
+        }
+    }
+}
+
+/// `LENGTH` bytes of new shared memory, zero.
+#[cfg(target_os = "linux")]
+fn shared_memory() -> std::os::fd::OwnedFd {
+    use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
+    // SAFETY: a NUL-terminated name.
+    let fd = unsafe {
+        libc::memfd_create(
+            c"m2v-read-only-pages".as_ptr(),
+            libc::MFD_CLOEXEC | libc::MFD_ALLOW_SEALING,
+        )
+    };
+    assert!(fd >= 0, "memfd: {}", std::io::Error::last_os_error());
+    // SAFETY: a new descriptor, owned at once.
+    let fd = unsafe { OwnedFd::from_raw_fd(fd) };
+    // SAFETY: sizes and seals the memfd made above, against shrinking, as udmabuf requires.
+    unsafe {
+        assert_eq!(libc::ftruncate(fd.as_raw_fd(), LENGTH as libc::off_t), 0);
+        assert_eq!(
+            libc::fcntl(fd.as_raw_fd(), libc::F_ADD_SEALS, libc::F_SEAL_SHRINK),
+            0
+        );
+    }
+    fd
+}
+
+/// `LENGTH` bytes of new shared memory, zero: a POSIX shared memory object, unlinked at once.
+#[cfg(target_os = "macos")]
+fn shared_memory() -> std::os::fd::OwnedFd {
+    use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    static NEXT: AtomicUsize = AtomicUsize::new(0);
+    let name = format!(
+        "/m2v-ro-{}-{}",
+        std::process::id(),
+        NEXT.fetch_add(1, Ordering::Relaxed)
+    );
+    let name = std::ffi::CString::new(name).unwrap();
+    // SAFETY: a NUL-terminated name; a new object, owned at once and unlinked.
+    let fd = unsafe {
+        let fd = libc::shm_open(
+            name.as_ptr(),
+            libc::O_RDWR | libc::O_CREAT | libc::O_EXCL,
+            0o600 as libc::c_uint,
+        );
+        assert!(fd >= 0, "shm_open: {}", std::io::Error::last_os_error());
+        libc::shm_unlink(name.as_ptr());
+        OwnedFd::from_raw_fd(fd)
+    };
+    // SAFETY: sizes the object made above.
+    assert_eq!(
+        unsafe { libc::ftruncate(fd.as_raw_fd(), LENGTH as libc::off_t) },
+        0
+    );
+    fd
+}
+
+/// `buffer`, whose bytes are those of `host` from `at`, lies in a copy of the read-only pages
+/// whose GPU writes are dropped: the GPU reads their bytes; a CPU write through the writable
+/// mapping before a commit reaches the GPU; a fill completes, the pages keep their bytes, nothing
+/// is merged back, the fill's bytes are dropped (counted), and a later command buffer reads the
+/// pages' bytes, not the fill's.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn drops_the_gpu_s_writes(device: &Device, (buffer, at): (&Buffer, usize), host: &ReadOnlyHost) {
+    let length = LENGTH - at;
+    assert!(buffer.copied(), "the buffer is a copy");
+    let pattern = host.pattern();
+    assert_eq!(
+        gpu_bytes_of(device, buffer, length),
+        pattern[at..],
+        "the GPU reads the bytes"
+    );
+    host.write(at, &[0xC3; 4096]);
+    let mut expected = pattern.clone();
+    expected[at..at + 4096].fill(0xC3);
+    assert_eq!(
+        gpu_bytes_of(device, buffer, length),
+        expected[at..],
+        "the GPU reads the CPU's write"
+    );
+    let dropped = expected[at + 4096..at + 8192]
+        .iter()
+        .filter(|&&byte| byte != 0x5A)
+        .count() as u64;
+    let before = device.work_counts();
+    blit(device, |encoder| {
+        encoder.fill_buffer(buffer, 4096..8192, 0x5A).unwrap();
+    });
+    let after = device.work_counts();
+    assert_eq!(host.bytes(), expected, "the pages keep their bytes");
+    assert_eq!(
+        after.copied_merge_back_bytes - before.copied_merge_back_bytes,
+        0,
+        "nothing is merged back"
+    );
+    assert_eq!(
+        after.copied_dropped_bytes - before.copied_dropped_bytes,
+        dropped,
+        "the fill's bytes are dropped"
+    );
+    assert_eq!(
+        gpu_bytes_of(device, buffer, length),
+        expected[at..],
+        "a later command buffer reads the pages' bytes"
+    );
+    eprintln!("COPIED-READ-ONLY: dropped {dropped} bytes the GPU wrote");
+}
+
+/// A no-copy buffer over read-only pages (the consumer's no-copy object over its read-only alias)
+/// whose import the gate refuses is a copy of them, the source never called, whose GPU writes are
+/// dropped.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[test]
+fn copied_buffer_over_read_only_pages_drops_the_gpu_s_writes() {
+    let host = ReadOnlyHost::new(28);
+    let Some((device, heard)) = device() else {
+        return;
+    };
+    let asked: Arc<Mutex<Vec<ImportRequest>>> = Arc::default();
+    let calls: Arc<std::sync::atomic::AtomicUsize> = Arc::default();
+    let before = device.work_counts();
+    // SAFETY: the view outlives the buffer and the device (dropped after both).
+    let buffer = unsafe {
+        device.new_buffer_with_bytes_no_copy(
+            host.memory(gate(&asked, false), &calls),
+            LENGTH as u64,
+            ResourceOptions::default(),
+            None,
+        )
+    }
+    .expect("a buffer over read-only pages the gate refuses is a copy");
+    let after = device.work_counts();
+    assert_eq!(moved(&before, &after), [1, 1, 1, 0, 0]);
+    let requests = asked.lock().unwrap().clone();
+    assert_eq!(requests.len(), 1, "the gate was asked once");
+    assert_eq!(requests[0].start, host.pointer, "with the pages");
+    assert_eq!(requests[0].length, LENGTH as u64);
+    assert_eq!(
+        calls.load(std::sync::atomic::Ordering::Acquire),
+        0,
+        "the source unasked"
+    );
+    assert_eq!(announced(&heard), 1, "announced once");
+    drops_the_gpu_s_writes(&device, (&buffer, 0), &host);
+    drop(buffer);
+}
+
+/// A buffer's rebind to read-only pages (the consumer's `replaceBackingWithRanges:readOnly:`)
+/// whose import the gate refuses gives it a copy of them, the source never called, whose GPU
+/// writes are dropped; the old pages stay as they were.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[test]
+fn copied_rebind_over_read_only_pages_drops_the_gpu_s_writes() {
+    let (first, second) = (Host::new(29), ReadOnlyHost::new(30));
+    let Some((device, heard)) = device() else {
+        return;
+    };
+    let buffer = first.buffer(&device, None);
+    assert!(!buffer.copied(), "imported first");
+    let asked: Arc<Mutex<Vec<ImportRequest>>> = Arc::default();
+    let calls: Arc<std::sync::atomic::AtomicUsize> = Arc::default();
+    let before = device.work_counts();
+    // SAFETY: the view outlives the buffer and the device (dropped after both), and no command
+    // that uses the buffer is encoded or pending.
+    let rebound = unsafe {
+        buffer.rebind_bytes_no_copy(second.memory(gate(&asked, false), &calls), None, None)
+    };
+    let after = device.work_counts();
+    rebound.expect("a rebind to read-only pages the gate refuses is a copy");
+    assert_eq!(moved(&before, &after), [1, 1, 1, 0, 0]);
+    assert_eq!(
+        after.copied_rebind_pages_made - before.copied_rebind_pages_made,
+        1
+    );
+    let requests = asked.lock().unwrap().clone();
+    assert_eq!(requests.len(), 1, "the gate was asked once");
+    assert_eq!(requests[0].start, second.pointer, "with the new pages");
+    assert_eq!(requests[0].length, LENGTH as u64);
+    assert_eq!(
+        calls.load(std::sync::atomic::Ordering::Acquire),
+        0,
+        "the source unasked"
+    );
+    assert_eq!(announced(&heard), 1, "announced once");
+    drops_the_gpu_s_writes(&device, (&buffer, 0), &second);
+    assert_eq!(first.bytes(), first.pattern(), "the old pages stay");
+}
+
+/// A heap's rebind to read-only pages whose import the gate refuses gives it a copy of them, the
+/// source never called, whose GPU writes through a buffer placed in it are dropped.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[test]
+fn copied_heap_rebind_over_read_only_pages_drops_the_gpu_s_writes() {
+    let (first, second) = (Host::new(31), ReadOnlyHost::new(32));
+    let Some((device, heard)) = device() else {
+        return;
+    };
+    let imported = heap(&device, &first, None);
+    let at = 32 * 1024;
+    let buffer = imported
+        .new_buffer_at_offset((LENGTH - at) as u64, ResourceOptions::default(), at as u64)
+        .unwrap();
+    let asked: Arc<Mutex<Vec<ImportRequest>>> = Arc::default();
+    let calls: Arc<std::sync::atomic::AtomicUsize> = Arc::default();
+    let before = device.work_counts();
+    // SAFETY: the view outlives the heap and the device (dropped after both), and no command
+    // that uses the heap is encoded or pending.
+    let rebound = unsafe {
+        imported.rebind_bytes_no_copy(second.memory(gate(&asked, false), &calls), None, None)
+    };
+    let after = device.work_counts();
+    rebound.expect("a heap's rebind to read-only pages the gate refuses is a copy");
+    assert_eq!(moved(&before, &after), [1, 1, 1, 0, 0]);
+    assert_eq!(
+        after.copied_rebind_pages_made - before.copied_rebind_pages_made,
+        1
+    );
+    let requests = asked.lock().unwrap().clone();
+    assert_eq!(requests.len(), 1, "the gate was asked once");
+    assert_eq!(requests[0].start, second.pointer, "with the new pages");
+    assert_eq!(
+        calls.load(std::sync::atomic::Ordering::Acquire),
+        0,
+        "the source unasked"
+    );
+    assert_eq!(announced(&heard), 1, "announced once");
+    drops_the_gpu_s_writes(&device, (&buffer, at), &second);
+    assert_eq!(first.bytes(), first.pattern(), "the old pages stay");
+    drop((buffer, imported));
+}
+
+/// A buffer's rebind to read-only pages whose import the gate admits goes to the caller's source
+/// (Linux drivers pin a pointer's pages for writing); where the device's import of those dma-bufs
+/// then fails (the RTX 5080's, out of device memory), the buffer is a copy of them all the same,
+/// counted as degraded, whose GPU writes are dropped. Where the device imports them, or none, the
+/// test says what it took and passes.
+#[cfg(target_os = "linux")]
+#[test]
+fn copied_rebind_over_read_only_pages_whose_admitted_import_fails_drops_the_gpu_s_writes() {
+    let (first, second) = (Host::new(33), ReadOnlyHost::new(34));
+    let Some((device, heard)) = device() else {
+        return;
+    };
+    let buffer = first.buffer(&device, None);
+    let asked: Arc<Mutex<Vec<ImportRequest>>> = Arc::default();
+    let calls: Arc<std::sync::atomic::AtomicUsize> = Arc::default();
+    let before = device.work_counts();
+    // SAFETY: the view outlives the buffer and the device (dropped after both), and no command
+    // that uses the buffer is encoded or pending.
+    let rebound = unsafe {
+        buffer.rebind_bytes_no_copy(second.memory(gate(&asked, true), &calls), None, None)
+    };
+    let after = device.work_counts();
+    let called = calls.load(std::sync::atomic::Ordering::Acquire);
+    assert_eq!(asked.lock().unwrap().len(), 1, "the gate was asked once");
+    // An import that failed is never the answer: the copy is.
+    if let Err(error @ (crate::Error::OutOfMemory(_) | crate::Error::Vulkan(_))) = &rebound {
+        panic!("the admitted import failed and no copy was made: {error:?}");
+    }
+    if !buffer.copied() {
+        eprintln!(
+            "COPIED-READ-ONLY-ADMITTED: not a copy here ({rebound:?}, the source called {called} \
+             times, {} dma-buf imports made): nothing to test",
+            after.dma_buf_imports - before.dma_buf_imports
+        );
+        return;
+    }
+    rebound.unwrap();
+    assert_eq!(moved(&before, &after), [0, 1, 0, 1, 0]);
+    assert_eq!(called, 1, "the source was asked once");
+    assert_eq!(announced(&heard), 1, "announced once");
+    drops_the_gpu_s_writes(&device, (&buffer, 0), &second);
+    eprintln!("COPIED-READ-ONLY-ADMITTED: the source's import failed, and the copy was made");
+}

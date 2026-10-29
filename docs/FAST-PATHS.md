@@ -380,8 +380,9 @@ driver's. Each is open work.
   `loadAction = Load` complete; resolving *into* such memory is unknown (no page fault in 520
   processes, almost all of them recovery victims). On macOS the runtime imports such pages through a
   read-only view of them (`read_only_view.rs`), which takes the GPU's writes nowhere as Metal's
-  memory does. Elsewhere the import is of the caller's own pages and the GPU's writes reach them:
-  honouring bit 24 there means a read-only import (`Device::no_copy_options`, `host_lie`'s
+  memory does. Elsewhere the import is of the caller's own pages and the GPU's writes reach them
+  (a copy of pages the process maps read-only, where the caller's gate refused their import or it
+  failed, drops them as Metal does, `copied.rs`): honouring bit 24 there means a read-only import (`Device::no_copy_options`, `host_lie`'s
   `drops_writes`) and measuring what the drivers then do, since ANV lost the device and RADV failed
   every submission over read-only imported pages. Announced meanwhile as `private-resource-option`
   and `read-only-pages-written`.

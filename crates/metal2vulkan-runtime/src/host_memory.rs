@@ -163,15 +163,19 @@ pub type RunResolver = Arc<dyn Fn(u64, u64) -> Option<Vec<Range<u64>>> + Send + 
 /// go on; `false` refuses it, and the buffer is a copied host buffer instead (the heap's own
 /// buffer too, the rebind's new pages a copy of them), whose bytes the GPU uses in memory of the
 /// device's own, kept coherent with the pages at each commit and each completion, so the pages
-/// take no kernel mapping (`copied.rs`, docs/HOWTO.md, "Copied host buffers"). Called on the
+/// take no kernel mapping (`copied.rs`, docs/HOWTO.md, "Copied host buffers"). Asked before the
+/// runtime asks the kernel whether the process may write the pages (Linux): pages it refuses are a
+/// copy whatever their permission, and a copy of pages the process maps read-only drops the GPU's
+/// writes, as Metal drops them. Called on the
 /// thread that makes the buffer, heap or rebind, holding no lock of the runtime's. Not asked for a
 /// buffer or rebind that lies in a live import (one made over the same bytes), nor where the device
 /// refused the import before it (no host-pointer import, an import alignment the range cannot
 /// meet), nor for memory whose GPU writes Metal's private option bit 24 drops, nor for a buffer's
 /// rebind to bytes at another offset in their page under a texture planned at the old one, which
 /// is a copy without asking. A heap's rebind asks it as a heap's making does. An import it lets go
-/// on that then fails (out of memory, another Vulkan error) makes the copy all the same. Every copy
-/// is announced (`copied-host-pages`). No Metal counterpart.
+/// on that then fails (out of memory, another Vulkan error), of the pointer or of the dma-bufs of
+/// the caller's source, makes the copy all the same. Every copy is announced
+/// (`copied-host-pages`). No Metal counterpart.
 pub type ImportGate = Arc<dyn Fn(ImportRequest) -> bool + Send + Sync + 'static>;
 
 /// The pages an [`ImportGate`] is asked about: those an import would map for the buffer, from the
@@ -246,10 +250,12 @@ impl HostMemory {
     /// failed every command buffer submitted after a page of an import was made read-only
     /// (`mprotect`). With a dma-buf source ([`HostMemory::with_dma_buf`]) pages the process maps
     /// read-only are instead imported from the source alone, announced
-    /// (`read-only-pages-written`). Some drivers also refuse shared memory (RADV refused anonymous
-    /// shared memory and mappings of shared memory objects, `memfd` mappings among them); private
-    /// memory imports everywhere measured. [`HostMemory::with_dma_buf`] imports such memory where
-    /// the device imports dma-bufs.
+    /// (`read-only-pages-written`). Under a gate that refuses their import
+    /// ([`HostMemory::with_import_gate`]), or where the source's import fails, they are a copy
+    /// whose GPU writes are dropped, as Metal drops them (`copied-host-pages`). Some drivers also
+    /// refuse shared memory (RADV refused anonymous shared memory and mappings of shared memory
+    /// objects, `memfd` mappings among them); private memory imports everywhere measured.
+    /// [`HostMemory::with_dma_buf`] imports such memory where the device imports dma-bufs.
     pub unsafe fn new(pointer: NonNull<u8>) -> HostMemory {
         HostMemory {
             pointer,
@@ -662,6 +668,75 @@ pub(super) fn mapped_readable(start: u64, end: u64) -> bool {
 /// [`mapped_readable`] where the runtime does not ask the system for its mappings: `false`.
 #[cfg(not(target_os = "linux"))]
 pub(super) fn mapped_readable(_start: u64, _end: u64) -> bool {
+    false
+}
+
+/// Whether the process maps every page of `[start, end)` with write permission, as the kernel
+/// answers now ([`mappings_permitted`]): where it does not, a copied host buffer of the pages drops
+/// the GPU's writes rather than write them back (`copied.rs`). `false` where the mappings cannot be
+/// read (`/proc/self/maps` does not open), so that no write back faults.
+#[cfg(target_os = "linux")]
+pub(super) fn mapped_writable(start: u64, end: u64) -> bool {
+    mappings_permitted(start, end, Access::Write, &mut 0) == Some(true)
+}
+
+/// [`mapped_writable`] on macOS: the regions of this task over `[start, end)`, without a gap,
+/// each with write protection now (`mach_vm_region`, `VM_REGION_BASIC_INFO_64`); `false` where the
+/// kernel answers no region.
+#[cfg(target_os = "macos")]
+pub(super) fn mapped_writable(start: u64, end: u64) -> bool {
+    unsafe extern "C" {
+        /// `<mach/mach_init.h>`: the port of this process's task.
+        static mach_task_self_: libc::mach_port_t;
+        fn mach_vm_region(
+            target_task: libc::vm_map_t,
+            address: *mut libc::mach_vm_address_t,
+            size: *mut libc::mach_vm_size_t,
+            flavor: libc::c_int,
+            info: *mut libc::c_int,
+            count: *mut libc::mach_msg_type_number_t,
+            object_name: *mut libc::mach_port_t,
+        ) -> libc::kern_return_t;
+    }
+    // `<mach/vm_region.h>`: `VM_REGION_BASIC_INFO_64`, whose `struct vm_region_basic_info_64`
+    // (packed to 4 bytes) is 9 words, the current protection its first.
+    const VM_REGION_BASIC_INFO_64: libc::c_int = 9;
+    const WORDS: usize = 9;
+    let mut covered = start;
+    while covered < end {
+        let (mut address, mut size) = (covered, 0);
+        let mut info = [0 as libc::c_int; WORDS];
+        let mut count = WORDS as libc::mach_msg_type_number_t;
+        let mut object = 0;
+        // SAFETY: the call writes the region's address and size, at most `count` words of `info`,
+        // and a port name (none for this flavour) into the values given.
+        let answer = unsafe {
+            mach_vm_region(
+                mach_task_self_,
+                &mut address,
+                &mut size,
+                VM_REGION_BASIC_INFO_64,
+                info.as_mut_ptr(),
+                &mut count,
+                &mut object,
+            )
+        };
+        // The region answered is the first at or past the address: past it is a gap.
+        if answer != libc::KERN_SUCCESS || address > covered || size == 0 {
+            return false;
+        }
+        if info[0] & libc::VM_PROT_WRITE == 0 {
+            return false;
+        }
+        covered = address.saturating_add(size);
+    }
+    true
+}
+
+/// [`mapped_writable`] where the runtime does not ask the system for its mappings: `false` (and no
+/// copy is made here: the runtime reads no caller's page, [`mapped_readable`]).
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+pub(super) fn mapped_writable(_start: u64, _end: u64) -> bool {
     false
 }
 
