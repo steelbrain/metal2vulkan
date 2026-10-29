@@ -134,11 +134,13 @@ fn the_runtime_sources_are_the_committed_ones() {
     let compile = "compile-time translation, reached only from the compile-time parts of mixed runtime files; what it produces is in the pipeline the artifact digests";
     let values = "the compiled pipeline's value types; the artifact digests their values";
     let spirv = "the SPIR-V builder: at run time it builds the device replay's preprocess module, whose words the artifact digests, the indirect clamp, which the executor refuses to run, and the visibility resolve, which the executor never runs";
+    let packed = "compile-time translation, reached only through lower/arith/pack.rs's pack and unpack intrinsics, which the compile emits; the runtime's mipmap kernel takes that file's sRGB transfers (srgb_decode, srgb_encode), which reach none of it";
     let not_runtime = BTreeMap::from([
         ("metal2vulkan-air/src/abi/mod.rs", compile),
         ("metal2vulkan-air/src/budget/mod.rs", "the work budget and its meters: a run it stops ends in a refusal, and it changes no answer"),
         ("metal2vulkan-air/src/container/mod.rs", "the AIR container; the device profile reads its version constants at compile time"),
         ("metal2vulkan-air/src/error.rs", compile),
+        ("metal2vulkan-air/src/intrinsics/mod.rs", packed),
         ("metal2vulkan-air/src/ir/mod.rs", compile),
         ("metal2vulkan-air/src/lib.rs", compile),
         ("metal2vulkan/src/cache/digest.rs", "the content digest, which defines the artifact rather than acting on it"),
@@ -150,12 +152,13 @@ fn the_runtime_sources_are_the_committed_ones() {
         ("metal2vulkan/src/lower/access/tile.rs", "compile-time translation, reached only from the compile-time parts of mixed runtime files; what it produces is in the pipeline the artifact digests; the tile staging format reaches a run through the plan"),
         ("metal2vulkan/src/lower/arith/aggregate.rs", compile),
         ("metal2vulkan/src/lower/arith/extended_range.rs", "the extended-range arithmetic, compile-time translation: the runtime reaches it only through the half shadow's load (bind/extended_shadow.rs), which emits tile_value, the fetch's own decode that every pipeline reading such an attachment compiles, so a change to it is a translation change (SEMANTICS_VERSION) that moves the artifact digests"),
-        // Reached from `lower/arith/srgb.rs` only through its colour write's `encode`, which the
-        // compile emits; the runtime's mipmap kernel takes the file's tables, `declare`, `step`
-        // and `search`, which reach neither. The block decode (`bind/block_decode.rs`) and its
-        // exact division (`lower/arith/exact_division.rs`) reach both at run time.
+        // The block decode (`bind/block_decode.rs`) and its exact division
+        // (`lower/arith/exact_division.rs`) reach the numeric forms and the constant emission at
+        // run time.
         ("metal2vulkan/src/lower/arith/legal.rs", "the numeric forms (`Form`, `Held`, `FloatFmt`) every compiled pipeline's arithmetic is emitted in; the runtime's block decode and its exact division name their forms with them, so a change to what a form is is a translation change (SEMANTICS_VERSION) that moves the artifact digests"),
+        ("metal2vulkan/src/lower/arith/math.rs", packed),
         ("metal2vulkan/src/lower/arith/mod.rs", compile),
+        ("metal2vulkan/src/lower/arith/narrow.rs", packed),
         ("metal2vulkan/src/lower/arith/ops.rs", "the constant and type emission (`splat`, `ty`, `elem_ty`, `ones`) every compiled pipeline's arithmetic is made through; the runtime's exact division makes its constants with it, so a change to what it emits is a translation change (SEMANTICS_VERSION) that moves the artifact digests"),
         ("metal2vulkan/src/lower/emit.rs", compile),
         ("metal2vulkan/src/lower/fragment/fetch.rs", compile),

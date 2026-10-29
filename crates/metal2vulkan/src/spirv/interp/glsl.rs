@@ -70,6 +70,9 @@ pub(super) fn eval(p: &Prog<'_>, op: GlslOp, args: &[Value], vals: &[Val]) -> IR
             float::sub(w, a, r(f(a)?.floor())?)
         }),
         GlslOp::Sqrt => lanes(1, &|x| r(f(at(x, 0)?)?.sqrt())),
+        // The `f64` power rounded once: one of the answers Vulkan's bound on `Pow` allows (a test
+        // that runs it bounds the device's answer, not this one).
+        GlslOp::Pow => lanes(2, &|x| r(f(at(x, 0)?)?.powf(f(at(x, 1)?)?))),
         // The root of the components' squares summed in order, each step rounded once.
         GlslOp::Length => {
             let mut sum = r(0.0)?;

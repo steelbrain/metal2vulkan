@@ -1,8 +1,7 @@
 //! The module code that declares and searches the tables of the extended-range `_sRGB` formats
 //! (`super`'s docs), Metal's own decode steps and encode thresholds, which are the format's data
 //! (`metal::format::extended_srgb`), and those of the padded `_sRGB` formats
-//! (`metal::format::padded_srgb`). A module of its own so that what reaches only the tables (the
-//! runtime's mipmap filter, `bind::mipmap_filter`) reaches no more of the arithmetic.
+//! (`metal::format::padded_srgb`).
 
 use crate::metal::format::extended_srgb::{SRGB_DECODE_STEPS, SRGB_ENCODE_FIRST};
 use crate::metal::format::padded_srgb::{

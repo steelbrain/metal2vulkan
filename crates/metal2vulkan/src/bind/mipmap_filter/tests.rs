@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use super::cpu::{small_float_bits, small_float_value};
 use super::fetch::{components, fits, Recover};
 use super::kernel::typed_module;
-use super::layout::{axis_tap, layout};
+use super::layout::{axis_tap, layout, Rule, Texel};
 use super::{
     FetchView, MipmapFilterChain, MipmapFilterKernel, MipmapFilterModule, DESTINATION, PARAMS,
     SOURCE, SOURCE_IMAGE,
@@ -351,8 +351,38 @@ const SHAPES: [([u32; 3], u32, u32, bool); 9] = [
     ([5, 4, 1], 1, 2, true),
 ];
 
+/// Each later level of `got` (the interpreter's chain, the first level included) within the
+/// filter's bound of the CPU's filter of the level above as the interpreter wrote it, and, where
+/// the format has no float field, byte for byte that filter: the interpreter rounds each
+/// operation as IEEE does and takes `Pow` as the model does, so only a NaN's bits may differ.
+fn assert_within(chain: &MipmapFilterChain, got: &[Vec<u8>], what: &str) {
+    let floats = !matches!(
+        layout(chain.pixel_format).expect("a layout").texel,
+        Texel::Fields(fields) if fields.iter().all(|f| !matches!(f.rule, Rule::Float { .. }))
+    );
+    for level in 1..got.len() {
+        let outside = chain
+            .outside_bound(level, &got[level - 1], &got[level])
+            .expect("a level");
+        assert!(
+            outside.is_empty(),
+            "{what} level {level}: texels {outside:?}"
+        );
+        if !floats {
+            let one = MipmapFilterChain {
+                levels: chain.levels[level - 1..=level].to_vec(),
+                fetch: None,
+                ..chain.clone()
+            };
+            let want = one.expected_levels(&got[level - 1]).expect("levels");
+            assert_eq!(got[level], want[1], "{what} level {level}");
+        }
+    }
+}
+
 /// Every format the filter computes, over every shape of [`SHAPES`], from random bytes (every bit
-/// pattern: NaNs, infinities, subnormals, out-of-range codes): the kernel's chain is the CPU's.
+/// pattern: NaNs, infinities, subnormals, out-of-range codes): each level of the kernel's chain
+/// is within the bound of the CPU's filter of the level above (`assert_within`).
 #[test]
 fn the_kernel_is_the_chain_on_the_cpu() {
     let mut modules = Modules::default();
@@ -365,17 +395,15 @@ fn the_kernel_is_the_chain_on_the_cpu() {
                 (texels * l.bytes) as usize,
                 0x9e37_79b9 ^ (seed * 31 + s) as u64,
             );
-            let want = chain.expected_levels(&first).expect("levels");
             let got = run_chain(&mut modules, &chain, volume, &first);
-            for (level, (g, w)) in got.iter().zip(&want).enumerate() {
-                assert_eq!(g, w, "{pf:?} {extent:?} x{layers} level {level}");
-            }
+            assert_within(&chain, &got, &format!("{pf:?} {extent:?} x{layers}"));
         }
     }
 }
 
 /// Every view a fetch reads a first level through, over the shapes of [`SHAPES`]: the chain reads
-/// the level in place (no copy of it in the scratch buffer) and is the CPU's.
+/// the level in place (no copy of it in the scratch buffer), each level within the bound of the
+/// CPU's filter of the level above (`assert_within`).
 #[test]
 fn a_first_level_fetched_from_its_view_is_the_chain_on_the_cpu() {
     let mut modules = Modules::default();
@@ -399,14 +427,12 @@ fn a_first_level_fetched_from_its_view_is_the_chain_on_the_cpu() {
                     (texels * l.bytes) as usize,
                     0x51f1_5eed ^ (seed * 31 + s) as u64,
                 );
-                let want = chain.expected_levels(&first).expect("levels");
                 let got = run_chain(&mut modules, &chain, volume, &first);
-                for (level, (g, w)) in got.iter().zip(&want).enumerate() {
-                    assert_eq!(
-                        g, w,
-                        "{pf:?} through {view:?} {extent:?} x{layers} level {level}"
-                    );
-                }
+                assert_within(
+                    &chain,
+                    &got,
+                    &format!("{pf:?} through {view:?} {extent:?} x{layers}"),
+                );
             }
         }
     }
@@ -472,7 +498,7 @@ fn a_halving_box_is_the_mean_of_its_texels() {
         level(PixelFormat::R32Float, [2, 2, 2], true, &floats),
         4.5f32.to_le_bytes()
     );
-    // A NaN tap makes the quiet NaN; an infinity stays one.
+    // A NaN tap makes a NaN (the CPU's here, the device's on a device); an infinity stays one.
     let special: Vec<u8> = [
         f32::from_bits(0x7f80_0001),
         1.0,
@@ -486,10 +512,9 @@ fn a_halving_box_is_the_mean_of_its_texels() {
     .iter()
     .flat_map(|v| v.to_le_bytes())
     .collect();
-    assert_eq!(
-        level(PixelFormat::R32Float, [4, 2, 1], false, &special),
-        [0x7fc0_0000u32.to_le_bytes(), f32::INFINITY.to_le_bytes()].concat()
-    );
+    let got = level(PixelFormat::R32Float, [4, 2, 1], false, &special);
+    assert!(f32::from_le_bytes(got[..4].try_into().unwrap()).is_nan());
+    assert_eq!(got[4..], f32::INFINITY.to_le_bytes());
     // A half, rounded to nearest even: (1 + 1 + 1 + 1 + 2^-10) / 4 rounds back to 1.
     let one = 0x3c00u16.to_le_bytes();
     let next = 0x3c01u16.to_le_bytes();
@@ -529,6 +554,52 @@ fn a_halving_box_is_the_mean_of_its_texels() {
         level(PixelFormat::BGR10XR, [2, 2, 1], false, &first),
         xr(639, 639, 384)
     );
+}
+
+/// The bound a device's level keeps to the CPU's filter: off a rounding boundary the CPU's code
+/// alone, at one either neighbour and no further; a float within `2^-17` of its terms'
+/// magnitudes; an 8-bit sRGB code of a box of one code that code alone; a NaN any NaN.
+#[test]
+fn the_bound_takes_a_boundary_s_neighbours_and_nothing_further() {
+    let outside = |pf, above: &[u8], got: &[u8]| {
+        let chain = plan_of(pf, [2, 2, 1], 1, 2, false, None);
+        !chain
+            .outside_bound(1, above, got)
+            .expect("a level")
+            .is_empty()
+    };
+    let r8 = PixelFormat::R8Unorm;
+    // (0 + 0 + 1 + 1) / 4 = 0.5 of a code: 0 or 1, never 2.
+    assert!(!outside(r8, &[0, 0, 1, 1], &[0]));
+    assert!(!outside(r8, &[0, 0, 1, 1], &[1]));
+    assert!(outside(r8, &[0, 0, 1, 1], &[2]));
+    // (0 + 0 + 0 + 1) / 4 = 0.25 of a code: 0 alone.
+    assert!(!outside(r8, &[0, 0, 0, 1], &[0]));
+    assert!(outside(r8, &[0, 0, 0, 1], &[1]));
+    // A box of one 8-bit sRGB code is that code alone, through the transfer both ways.
+    for c in 0..=255u8 {
+        let srgb = PixelFormat::R8UnormSRGB;
+        assert!(!outside(srgb, &[c; 4], &[c]), "{c}");
+        assert!(outside(srgb, &[c; 4], &[c.wrapping_add(1)]), "{c}");
+    }
+    let floats = |v: [f32; 4]| -> Vec<u8> { v.iter().flat_map(|v| v.to_le_bytes()).collect() };
+    let r32 = PixelFormat::R32Float;
+    let above = floats([1.0, 2.0, 3.0, 4.0]);
+    let next = f32::from_bits(2.5f32.to_bits() + 1);
+    assert!(!outside(r32, &above, &2.5f32.to_le_bytes()));
+    assert!(!outside(r32, &above, &next.to_le_bytes()));
+    assert!(outside(
+        r32,
+        &above,
+        &(2.5f32 * (1.0 + 2f32.powi(-14))).to_le_bytes()
+    ));
+    let nan = floats([f32::NAN, 1.0, 1.0, 1.0]);
+    assert!(!outside(
+        r32,
+        &nan,
+        &f32::from_bits(0xffc0_0001).to_le_bytes()
+    ));
+    assert!(outside(r32, &nan, &0.0f32.to_le_bytes()));
 }
 
 /// The packed float conversions are exact both ways where the value is a float of the format,

@@ -8393,6 +8393,7 @@ method	metal2vulkan::bind::MetalInstance::new	pub fn new() -> MetalInstance
 method	metal2vulkan::bind::MipmapFilterChain::expected_levels	pub fn expected_levels(&self, first: &[u8]) -> Option<Vec<Vec<u8>>>
 method	metal2vulkan::bind::MipmapFilterChain::fetch_converts	pub fn fetch_converts(format: Format) -> bool
 method	metal2vulkan::bind::MipmapFilterChain::fetch_format	pub fn fetch_format(image: Format) -> Option<Format>
+method	metal2vulkan::bind::MipmapFilterChain::outside_bound	pub fn outside_bound(&self, level: usize, above: &[u8], got: &[u8]) -> Option<Vec<u64>>
 method	metal2vulkan::bind::MipmapFilterChain::plan	pub fn plan(pixel_format: PixelFormat, extent: [u32; 3], layers: u32, levels: u32, volume: bool, alignment: u64, max_range: u32, max_groups: [u32; 2], fetch: Option<Format>) -> Option<MipmapFilterChain>
 method	metal2vulkan::bind::MipmapFilterChain::texel_bytes	pub fn texel_bytes(pixel_format: PixelFormat) -> Option<u32>
 method	metal2vulkan::bind::MipmapFilterKernel::fetches	pub fn fetches(&self) -> bool

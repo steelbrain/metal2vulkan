@@ -10,8 +10,10 @@
 //! - **The compute filter** of every format it computes that the device's blits cannot filter
 //!   (the extended-range formats on every device; on lavapipe also `RGB9E5Float`, which it blits
 //!   into no image, and the 8-bit sRGB formats it holds as their UNORM twins): every level the
-//!   device wrote is `bind::MipmapFilterChain::expected_levels` from the first level as the
-//!   device read it back, byte for byte, from random bytes; announced as the blit chain is.
+//!   device wrote is within `bind::MipmapFilterChain::outside_bound` of the filter on the CPU of
+//!   the level above as the device read it back (the device's own arithmetic: a code at a
+//!   rounding boundary, a float within `2^-17` of its terms' magnitudes, a NaN any NaN), from
+//!   random bytes; announced as the blit chain is.
 //! - **The picks** of the integer formats: plain Metal's texel picks exactly, announced never.
 //! - **The first level read in place** by the compute filter recovers every code.
 
@@ -285,9 +287,10 @@ fn the_device_s_blit_chain_filters_each_level_and_is_announced() {
 /// infinities, subnormals, out-of-range codes), in 2D textures (one texel high, a square of a
 /// power of two, one past 65 texels, halving and not), a 2D array, a cube and a 3D
 /// texture: a format the device's blits filter takes its blit chain, and every other takes the
-/// compute filter, each level the device wrote `MipmapFilterChain::expected_levels` from the
-/// first level as the device read it back. The extended-range formats, which no blit filters,
-/// take the filter on every device. `device-filtered-mipmaps` is announced once.
+/// compute filter, each level the device wrote within `MipmapFilterChain::outside_bound` of the
+/// filter on the CPU of the level above as the device read it back. The extended-range formats,
+/// which no blit filters, take the filter on every device. `device-filtered-mipmaps` is
+/// announced once.
 #[test]
 fn formats_the_blits_cannot_filter_take_the_compute_filter_level_by_level() {
     let cache = ScratchCache::new().unwrap();
@@ -306,7 +309,7 @@ fn formats_the_blits_cannot_filter_take_the_compute_filter_level_by_level() {
             (TextureType::Type3D, [5, 4, 3], 1, 3),
         ];
         let mut seed = 0x51f1_5eed_cafe_f00du64;
-        let mut checked = 0usize;
+        let (mut checked, mut off_model) = (0usize, 0usize);
         let (mut by_filter, mut by_blits) = (Vec::new(), Vec::new());
         for &pf in PixelFormat::ALL {
             let Some(texel) = MipmapFilterChain::texel_bytes(pf) else {
@@ -338,10 +341,19 @@ fn formats_the_blits_cannot_filter_take_the_compute_filter_level_by_level() {
                         .collect()
                 };
                 let chain = chain_of(pf, ty, extent, levels, slices).expect("a chain");
-                let want = chain.expected_levels(&read(0)).expect("the levels");
-                for (l, want) in want.iter().enumerate().skip(1) {
-                    let got = read(l);
-                    assert_eq!(&got, want, "{pf:?} {ty:?} {extent:?} level {l}");
+                for l in 1..levels {
+                    let (above, got) = (read(l - 1), read(l));
+                    let outside = chain.outside_bound(l, &above, &got).expect("a level");
+                    assert!(
+                        outside.is_empty(),
+                        "{pf:?} {ty:?} {extent:?} level {l}: texels {outside:?} of {got:02x?}"
+                    );
+                    let model = filtered(pf, ty, level_extent(extent, l - 1), slices, &above);
+                    off_model += got
+                        .chunks_exact(texel)
+                        .zip(model.chunks_exact(texel))
+                        .filter(|(g, m)| g != m)
+                        .count();
                     checked += got.len();
                 }
             }
@@ -357,8 +369,9 @@ fn formats_the_blits_cannot_filter_take_the_compute_filter_level_by_level() {
             }
         }
         eprintln!(
-            "the compute filter on {}: {} formats, {checked} bytes, every one the filter's: \
-             {by_filter:?}; the device's blits filter the other {}",
+            "the compute filter on {}: {} formats, {checked} bytes, every one within the filter's \
+             bound ({off_model} texels not the IEEE model's bytes): {by_filter:?}; the device's \
+             blits filter the other {}",
             device.name(),
             by_filter.len(),
             by_blits.len()
@@ -399,9 +412,11 @@ fn an_extended_range_texture_takes_the_compute_filter_and_is_announced() {
         assert_eq!(generate(&device, &queue, &t), Made::Filter);
         let read = |l: usize| get(&t, 0, l, level_extent([8, 8, 1], l), 4);
         let chain = chain_of(pf, TextureType::Type2D, [8, 8, 1], 4, 1).expect("a chain");
-        let want = chain.expected_levels(&read(0)).expect("the levels");
-        for (l, want) in want.iter().enumerate().skip(1) {
-            assert_eq!(&read(l), want, "level {l}");
+        for l in 1..4 {
+            let outside = chain
+                .outside_bound(l, &read(l - 1), &read(l))
+                .expect("a level");
+            assert!(outside.is_empty(), "level {l}: texels {outside:?}");
         }
         let notices = messages.take_notices();
         assert_once(&notices, &MIPMAPS);
@@ -627,8 +642,9 @@ fn integer_mipmaps_pick_the_texels_plain_metal_picks() {
 /// each 8-, 10-, 16- or 32-bit field, every 4-, 5-, 1- and 2-bit one, every half's bits, the
 /// extended-range codes), mipmapped once. Where the device read the first level in place (the
 /// work count says so), each texel of the second level is the filter of one probe's four equal
-/// taps, so it is the CPU's only if the fetch read back that probe's codes, up to what the filter
-/// reads alike; where the level was copied in, it checks the copy. The run prints, per format,
+/// taps, so it is within the bound of the CPU's (a box of equal taps has no rounding boundary:
+/// the CPU's code) only if the fetch read back that probe's codes, up to what the filter reads
+/// alike; where the level was copied in, it checks the copy. The run prints, per format,
 /// which path ran and how many of its distinct probe texels the filter's answers tell apart (all
 /// of them but the ones it reads alike: an snorm field's two codes of -1.0, a half's NaNs), the
 /// measurement of `DriverFact::SampledFetchRecoversCodes` for the formats the device sends to the
@@ -676,11 +692,11 @@ fn a_first_level_read_in_place_recovers_every_code() {
             let first = read(0, [w, h, 1]);
             let chain =
                 chain_of(pf, TextureType::Type2DArray, [w, h, 1], 2, layers).expect("a chain");
-            let want = chain.expected_levels(&first).expect("the levels");
-            assert_eq!(
-                read(1, [w / 2, h / 2, 1]),
-                want[1],
-                "{pf:?}: the second level, its first {}",
+            let second = read(1, [w / 2, h / 2, 1]);
+            let outside = chain.outside_bound(1, &first, &second).expect("a level");
+            assert!(
+                outside.is_empty(),
+                "{pf:?}: the second level, its first {}: texels {outside:?}",
                 if fetched == 1 {
                     "read in place"
                 } else {
@@ -689,7 +705,7 @@ fn a_first_level_read_in_place_recovers_every_code() {
             );
             // How many distinct probe texels the filter's answers tell apart.
             let probes: std::collections::BTreeSet<&[u8]> = first.chunks_exact(texel).collect();
-            let answers: std::collections::BTreeSet<&[u8]> = want[1].chunks_exact(texel).collect();
+            let answers: std::collections::BTreeSet<&[u8]> = second.chunks_exact(texel).collect();
             let row = format!("{pf:?} {}/{}", answers.len(), probes.len());
             if fetched == 1 {
                 in_place.push(row);

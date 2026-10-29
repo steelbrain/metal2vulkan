@@ -1828,9 +1828,13 @@ bound.
   centres, its blit chain (`vkCmdBlitImage` with `VK_FILTER_LINEAR`) where its blits filter the
   image's format, else the runtime's bilinear (trilinear in 3D) compute filter in `float`: an
   extended-range format, an 8-bit sRGB texture held as its UNORM twin, or a format without blits or
-  linear filtering. Neither is Apple's datapath, whose answers also differ between Apple's GPUs (an
-  M3 Max's and an M4's by up to a unit in the last place). Announced once per device; no bound
-  against Metal's answer is measured. Cost: each level is the device's linear filter of the one
+  linear filtering. The compute filter's arithmetic is the device's: its products and sums as it
+  contracts them, an 8-bit or extended-range sRGB code decoded and encoded through the MSL transfer
+  by its `Pow` (as a shader's read of the UNORM twin decodes it, `srgb-texel-decode`), a half by
+  its widening and narrowing, and a NaN its own; `bind::MipmapFilterChain::outside_bound` states
+  the bound its levels keep to the filter in IEEE `f32`. Neither is Apple's datapath, whose answers
+  also differ between Apple's GPUs (an M3 Max's and an M4's by up to a unit in the last place).
+  Announced once per device; no bound against Metal's answer is measured. Cost: each level is the device's linear filter of the one
   above (its blit, or a bilinear filter in float where its blits cannot filter the format), not
   Apple's: a channel can differ from Metal's where the filtered value lies near a rounding boundary,
   and wholly where a box averages infinities, NaNs or a float format's extremes.

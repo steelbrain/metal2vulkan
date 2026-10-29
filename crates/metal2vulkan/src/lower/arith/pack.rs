@@ -245,7 +245,7 @@ fn srgb_colour(
 /// The MSL linear-to-sRGB transfer of `c` (`float` lanes of form `s`): `12.92 c` below
 /// `0.0031308`, `1.055 c^(1/2.4) - 0.055` elsewhere, by the device's `Pow`. A lane outside
 /// `[0, 1]` is the 8-bit instruction's clamp's.
-fn srgb_encode(fb: &mut FunctionBuilder<'_>, s: Form, c: Value) -> BResult<Value> {
+pub(crate) fn srgb_encode(fb: &mut FunctionBuilder<'_>, s: Form, c: Value) -> BResult<Value> {
     let k = |fb: &mut FunctionBuilder<'_>, v: f64| fsplat(fb, s, v);
     let slope = k(fb, 12.92)?;
     let low = fb.binary(BinOp::FMul, c, slope)?;
@@ -262,7 +262,7 @@ fn srgb_encode(fb: &mut FunctionBuilder<'_>, s: Form, c: Value) -> BResult<Value
 
 /// The MSL sRGB-to-linear transfer of `c` (`float` lanes of form `s`, in `[0, 1]`): `c / 12.92`
 /// up to `0.04045`, `((c + 0.055) / 1.055)^2.4` above, by the device's division and `Pow`.
-fn srgb_decode(fb: &mut FunctionBuilder<'_>, s: Form, c: Value) -> BResult<Value> {
+pub(crate) fn srgb_decode(fb: &mut FunctionBuilder<'_>, s: Form, c: Value) -> BResult<Value> {
     let k = |fb: &mut FunctionBuilder<'_>, v: f64| fsplat(fb, s, v);
     let slope = k(fb, 12.92)?;
     let low = fb.binary(BinOp::FDiv, c, slope)?;

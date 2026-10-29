@@ -21,9 +21,9 @@
 //! `a1_srgb_decode_all_bytes` (every byte in every channel, `float` and `half` results) and
 //! `a1_srgb_encode_sweep` (every multiple of 2⁻¹⁴ in `[0, 1.0078]` and every `half` up to 2.25)
 //! compile on every profile above, take the MSL transfer functions by the device's `Pow` around
-//! the 8-bit instruction, declare no table, and note `DevicePackConversion`. The interpreter models
-//! no `Pow`, so their values are the device lanes' (the validation crate's authored cases of the
-//! same fixtures).
+//! the 8-bit instruction, declare no table, and note `DevicePackConversion`. The interpreter's `Pow`
+//! is one answer of Vulkan's bound (the `f64` power rounded once), not the device's, so their
+//! values are the device lanes' (the validation crate's authored cases of the same fixtures).
 //!
 //! `llvm-as` assembles the modules; without it the tests skip visibly.
 

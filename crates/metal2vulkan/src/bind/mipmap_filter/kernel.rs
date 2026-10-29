@@ -2,17 +2,16 @@
 //! invocation per destination texel, its taps from the level's tap tables (eight in 3D, four where
 //! the level above is one texel deep), each source texel's words read once and decoded to its
 //! `float` channels by its format's layout, each channel the weighted sum of its taps (a tap of
-//! weight 0 left out), and the sums encoded back (`layout.rs`). Every `float` sum and product is
-//! rounded on its own (`NoContraction`), as `cpu.rs` computes them. The kernel is built with its
-//! format's layout, so that no branch on a format is left to the GPU.
+//! weight 0 left out), and the sums encoded back (`layout.rs`). The products and sums are the
+//! device's `float` arithmetic in the kernel's order, which it may contract (`cpu.rs` bounds the
+//! answer). The kernel is built with its format's layout, so that no branch on a format is left
+//! to the GPU.
 
 use super::fetch::{self, Component, Recover};
-use super::layout::{
-    header, Field, Layout, Rule, Texel, EXTENDED_SCALE, SRGB_STEP_SCALE, TAP_WORDS,
-};
+use super::layout::{header, Field, Layout, Rule, Texel, EXTENDED_SCALE, SRGB_SCALE, TAP_WORDS};
 use super::{DESTINATION, PARAMS, SOURCE, SOURCE_IMAGE};
-use crate::lower::arith::extended_range::table as extended_range;
-use crate::lower::arith::srgb;
+use crate::lower::arith::legal::{FloatFmt, Form, Held};
+use crate::lower::arith::pack;
 use crate::pipeline::sym::ResourceSlot;
 use crate::spirv::builder::constructs::{ArmEnd, ArmFn};
 use crate::spirv::builder::{FunctionBuilder, ModuleBuilder};
@@ -59,8 +58,8 @@ fn words_buffer(b: &mut ModuleBuilder, sym: ResourceSlot, u32_: TypeId) -> BResu
     b.resource(sym, StorageClass::StorageBuffer, block)
 }
 
-/// What every part of the kernel takes: the types, the buffers, the tables, and what the kernel
-/// is built with.
+/// What every part of the kernel takes: the types, the buffers, and what the kernel is built
+/// with.
 #[derive(Clone, Copy)]
 struct K<'s> {
     u32_: TypeId,
@@ -71,18 +70,7 @@ struct K<'s> {
     source: Value,
     destination: Value,
     params: Value,
-    srgb: Option<GlobalId>,
-    xr: Option<GlobalId>,
     spec: &'s Spec,
-}
-
-/// A table a field's rule reads that its layout does not declare (`typed_module` declares each
-/// one its layout's fields read).
-fn missing_table() -> BuildError {
-    BuildError::Operand {
-        op: crate::spv::Op::AccessChain,
-        rule: OperandRule::NotPointer,
-    }
 }
 
 /// A field without its channel's value (`encode` takes one per channel the layout decodes).
@@ -116,16 +104,17 @@ fn bink(f: &mut FunctionBuilder<'_>, op: BinOp, a: Value, v: u32) -> BResult<Val
     f.binary(op, a, c)
 }
 
-/// A `float` operation rounded on its own (`NoContraction`).
-fn fop(f: &mut FunctionBuilder<'_>, op: BinOp, a: Value, b: Value) -> BResult<Value> {
-    f.binary_no_contraction(op, a, b)
-}
-
-/// `a op v` for an `f32` constant `v`, rounded on its own.
+/// `a op v` for an `f32` constant `v`.
 fn fopk(f: &mut FunctionBuilder<'_>, k: &K<'_>, op: BinOp, a: Value, v: f32) -> BResult<Value> {
     let c = cf(f, k, v)?;
-    fop(f, op, a, c)
+    f.binary(op, a, c)
 }
+
+/// The scalar `float` form `lower::arith::pack`'s transfers take.
+const SCALAR: Form = Form {
+    held: Held::Float(FloatFmt::F32),
+    lanes: 1,
+};
 
 fn select(f: &mut FunctionBuilder<'_>, c: Value, t: Value, e: Value) -> BResult<Value> {
     f.select(c, t, e)
@@ -213,52 +202,36 @@ fn signed_float(f: &mut FunctionBuilder<'_>, k: &K<'_>, v: Value) -> BResult<Val
     f.convert(ConvOp::ConvertSToF, s, k.f32_)
 }
 
-/// The value of float bits `b` of a 5-bit exponent and `mantissa` mantissa bits
-/// (`cpu::small_float_value`).
-fn small_float_value(
-    f: &mut FunctionBuilder<'_>,
-    k: &K<'_>,
-    b: Value,
-    mantissa: u32,
-    signed: bool,
-) -> BResult<Value> {
-    let e = bink(f, BinOp::ShiftRightLogical, b, mantissa)?;
-    let e = bink(f, BinOp::BitwiseAnd, e, 31)?;
-    let m = bink(f, BinOp::BitwiseAnd, b, (1 << mantissa) - 1)?;
-    let wide = bink(f, BinOp::ShiftLeftLogical, m, 23 - mantissa)?;
-    let special = bink(f, BinOp::BitwiseOr, wide, 0x7f80_0000)?;
-    let biased = bink(f, BinOp::IAdd, e, 112)?;
-    let biased = bink(f, BinOp::ShiftLeftLogical, biased, 23)?;
-    let normal = bin(f, BinOp::BitwiseOr, biased, wide)?;
-    let mf = f.convert(ConvOp::ConvertUToF, m, k.f32_)?;
-    let scale = 2f32.powi(-14 - mantissa as i32);
-    let sub = fopk(f, k, BinOp::FMul, mf, scale)?;
-    let sub = f.convert(ConvOp::Bitcast, sub, k.u32_)?;
-    let zero = c32(f, 0)?;
-    let is_sub = bin(f, BinOp::IEqual, e, zero)?;
-    let magnitude = select(f, is_sub, sub, normal)?;
-    let top = c32(f, 31)?;
-    let is_special = bin(f, BinOp::IEqual, e, top)?;
-    let magnitude = select(f, is_special, special, magnitude)?;
-    let magnitude = if signed {
-        let sign = bink(f, BinOp::ShiftRightLogical, b, mantissa + 5)?;
-        let sign = bink(f, BinOp::BitwiseAnd, sign, 1)?;
-        let sign = bink(f, BinOp::ShiftLeftLogical, sign, 31)?;
-        bin(f, BinOp::BitwiseOr, magnitude, sign)?
-    } else {
-        magnitude
+/// The value of float bits `b` of a 5-bit exponent and `mantissa` mantissa bits (a half's, or an
+/// unsigned field of `RG11B10Float`, placed as the half of the same bits) by the device's widening
+/// (`UnpackHalf2x16`).
+fn small_float_value(f: &mut FunctionBuilder<'_>, b: Value, mantissa: u32) -> BResult<Value> {
+    let h = match 10 - mantissa {
+        0 => b,
+        shift => bink(f, BinOp::ShiftLeftLogical, b, shift)?,
     };
-    f.convert(ConvOp::Bitcast, magnitude, k.f32_)
+    let pair = f.glsl(GlslOp::UnpackHalf2x16, &[h])?;
+    f.composite_extract(pair, &[0])
 }
 
-/// The bits of `v` as a float of a 5-bit exponent and `mantissa` mantissa bits
-/// (`cpu::small_float_bits`).
+/// The bits of `v` as a half by the device's narrowing (`PackHalf2x16`, the high half 0).
+fn half_bits_of(f: &mut FunctionBuilder<'_>, k: &K<'_>, v: Value) -> BResult<Value> {
+    let vec2 = f.module().ty(Type::Vector {
+        elem: k.f32_,
+        len: 2,
+    })?;
+    let zero = cf(f, k, 0.0)?;
+    let pair = f.composite_construct(vec2, &[v, zero])?;
+    f.glsl(GlslOp::PackHalf2x16, &[pair])
+}
+
+/// The bits of `v` as an unsigned float of a 5-bit exponent and `mantissa` mantissa bits
+/// (`RG11B10Float`'s, which no device instruction narrows to; `cpu::small_float_bits`).
 fn small_float_bits(
     f: &mut FunctionBuilder<'_>,
     k: &K<'_>,
     v: Value,
     mantissa: u32,
-    signed: bool,
 ) -> BResult<Value> {
     let kk = 23 - mantissa;
     let inf = 31 << mantissa;
@@ -297,32 +270,56 @@ fn small_float_bits(
     let rs = select(f, gone, zero, rs)?;
     let is_normal = bink(f, BinOp::UGreaterThanEqual, e, 113)?;
     let r = select(f, is_normal, rn, rs)?;
-    let r = if signed {
-        let s = bink(f, BinOp::ShiftLeftLogical, sign, mantissa + 5)?;
-        bin(f, BinOp::BitwiseOr, r, s)?
-    } else {
-        let negative = bin(f, BinOp::INotEqual, sign, zero)?;
-        select(f, negative, zero, r)?
-    };
+    let negative = bin(f, BinOp::INotEqual, sign, zero)?;
+    let r = select(f, negative, zero, r)?;
     let quiet = c32(f, inf | (1 << (mantissa - 1)))?;
     select(f, nan, quiet, r)
 }
 
-/// The signed linear step of extended-range `_sRGB` code `c` about code 384, as its value `±s /
-/// 8192` (`lower::arith::extended_range::table`).
-fn extended_srgb_value(f: &mut FunctionBuilder<'_>, k: &K<'_>, c: Value) -> BResult<Value> {
-    let table = k.xr.ok_or_else(missing_table)?;
-    let o = bink(f, BinOp::ISub, c, 384)?;
-    let n = f.glsl(GlslOp::SAbs, &[o])?;
-    let base = f.module().global_value(table)?;
-    let p = f.access_chain(base, &[n])?;
-    let w = f.load(p, MemAccess::default())?;
-    let s = bink(f, BinOp::BitwiseAnd, w, 0xffff)?;
-    let s = f.convert(ConvOp::ConvertUToF, s, k.f32_)?;
-    let v = fopk(f, k, BinOp::FMul, s, 2f32.powi(-13))?;
-    let minus = f.unary(UnOp::FNegate, v)?;
-    let below = bink(f, BinOp::ULessThan, c, 384)?;
-    select(f, below, minus, v)
+/// `t` of `v`'s magnitude with `v`'s sign: `transfer(|v|)`, negated where `v < 0`.
+fn signed_transfer(
+    f: &mut FunctionBuilder<'_>,
+    k: &K<'_>,
+    v: Value,
+    transfer: fn(&mut FunctionBuilder<'_>, Form, Value) -> BResult<Value>,
+) -> BResult<Value> {
+    let a = f.glsl(GlslOp::FAbs, &[v])?;
+    let t = transfer(f, SCALAR, a)?;
+    let minus = f.unary(UnOp::FNegate, t)?;
+    let zero = cf(f, k, 0.0)?;
+    let below = bin(f, BinOp::FOrdLessThan, v, zero)?;
+    select(f, below, minus, t)
+}
+
+/// The extended-range colour code of value `v` (`Rule::Extended`): `RoundEven(clamp(v, lo, hi)
+/// 510) + 384`, the code clamped to `[0, 1023]`, a NaN 0.
+fn extended_code(
+    f: &mut FunctionBuilder<'_>,
+    k: &K<'_>,
+    v: Value,
+    lo: f32,
+    hi: f32,
+) -> BResult<Value> {
+    let v = number(f, k, v)?;
+    let v = clamp(f, k, v, lo, hi)?;
+    let v = fopk(f, k, BinOp::FMul, v, 510.0)?;
+    let v = f.glsl(GlslOp::RoundEven, &[v])?;
+    let c = f.convert(ConvOp::ConvertFToS, v, k.i32_)?;
+    let c = f.convert(ConvOp::Bitcast, c, k.u32_)?;
+    let c = bink(f, BinOp::IAdd, c, 384)?;
+    let c = f.convert(ConvOp::Bitcast, c, k.i32_)?;
+    let zero = f.module().constant(Constant::Scalar {
+        ty: k.i32_,
+        bits: ConstBits(0),
+    })?;
+    let zero = f.module().const_value(zero)?;
+    let top = f.module().constant(Constant::Scalar {
+        ty: k.i32_,
+        bits: ConstBits(1023),
+    })?;
+    let top = f.module().const_value(top)?;
+    let c = f.glsl(GlslOp::SClamp, &[c, zero, top])?;
+    f.convert(ConvOp::Bitcast, c, k.u32_)
 }
 
 /// The value of field `fl` of a texel's `words` (`layout::Rule`).
@@ -343,15 +340,12 @@ fn value(f: &mut FunctionBuilder<'_>, k: &K<'_>, words: &[Value], fl: &Field) ->
             f.glsl(GlslOp::FMax, &[v, minus_one])
         }
         Rule::Srgb8 => {
-            let table = k.srgb.ok_or_else(missing_table)?;
-            let step = srgb::step(f, table, b)?;
-            let v = f.convert(ConvOp::ConvertUToF, step, k.f32_)?;
-            fopk(f, k, BinOp::FMul, v, SRGB_STEP_SCALE)
+            let v = f.convert(ConvOp::ConvertUToF, b, k.f32_)?;
+            let v = fopk(f, k, BinOp::FMul, v, SRGB_SCALE)?;
+            pack::srgb_decode(f, SCALAR, v)
         }
         Rule::Float { exponent: 8, .. } => f.convert(ConvOp::Bitcast, b, k.f32_),
-        Rule::Float {
-            mantissa, signed, ..
-        } => small_float_value(f, k, b, mantissa, signed),
+        Rule::Float { mantissa, .. } => small_float_value(f, b, mantissa),
         Rule::Extended { alpha } => {
             let c = if alpha {
                 let lo = c32(f, 384)?;
@@ -364,7 +358,12 @@ fn value(f: &mut FunctionBuilder<'_>, k: &K<'_>, words: &[Value], fl: &Field) ->
             let v = signed_float(f, k, o)?;
             fopk(f, k, BinOp::FMul, v, EXTENDED_SCALE)
         }
-        Rule::ExtendedSrgb => extended_srgb_value(f, k, b),
+        Rule::ExtendedSrgb => {
+            let o = bink(f, BinOp::ISub, b, 384)?;
+            let v = signed_float(f, k, o)?;
+            let v = fopk(f, k, BinOp::FMul, v, EXTENDED_SCALE)?;
+            signed_transfer(f, k, v, pack::srgb_decode)
+        }
         Rule::Padding(_) => cf(f, k, 0.0),
     }
 }
@@ -389,63 +388,24 @@ fn code(f: &mut FunctionBuilder<'_>, k: &K<'_>, fl: &Field, v: Value) -> BResult
             bink(f, BinOp::BitwiseAnd, c, fl.mask())
         }
         Rule::Srgb8 => {
-            let table = k.srgb.ok_or_else(missing_table)?;
             let v = number(f, k, v)?;
             let v = clamp(f, k, v, 0.0, 1.0)?;
-            let v = fopk(f, k, BinOp::FMul, v, 4095.0)?;
+            let v = pack::srgb_encode(f, SCALAR, v)?;
+            let v = fopk(f, k, BinOp::FMul, v, 255.0)?;
             let v = f.glsl(GlslOp::RoundEven, &[v])?;
-            let i = f.convert(ConvOp::ConvertFToU, v, k.u32_)?;
-            srgb::search(f, table, i)
+            f.convert(ConvOp::ConvertFToU, v, k.u32_)
         }
-        Rule::Float { exponent: 8, .. } => {
-            let nan = f.unary(UnOp::IsNan, v)?;
-            let quiet = c32(f, 0x7fc0_0000)?;
-            let b = f.convert(ConvOp::Bitcast, v, k.u32_)?;
-            select(f, nan, quiet, b)
-        }
-        Rule::Float {
-            mantissa, signed, ..
-        } => small_float_bits(f, k, v, mantissa, signed),
+        Rule::Float { exponent: 8, .. } => f.convert(ConvOp::Bitcast, v, k.u32_),
+        Rule::Float { signed: true, .. } => half_bits_of(f, k, v),
+        Rule::Float { mantissa, .. } => small_float_bits(f, k, v, mantissa),
         Rule::Extended { alpha } => {
             let (lo, hi) = if alpha { (0.0, 1.0) } else { (-1.0, 1.5) };
-            let v = number(f, k, v)?;
-            let v = clamp(f, k, v, lo, hi)?;
-            let v = fopk(f, k, BinOp::FMul, v, 510.0)?;
-            let v = f.glsl(GlslOp::RoundEven, &[v])?;
-            let c = f.convert(ConvOp::ConvertFToS, v, k.i32_)?;
-            let c = f.convert(ConvOp::Bitcast, c, k.u32_)?;
-            let c = bink(f, BinOp::IAdd, c, 384)?;
-            let c = f.convert(ConvOp::Bitcast, c, k.i32_)?;
-            let zero = f.module().constant(Constant::Scalar {
-                ty: k.i32_,
-                bits: ConstBits(0),
-            })?;
-            let zero = f.module().const_value(zero)?;
-            let top = f.module().constant(Constant::Scalar {
-                ty: k.i32_,
-                bits: ConstBits(1023),
-            })?;
-            let top = f.module().const_value(top)?;
-            let c = f.glsl(GlslOp::SClamp, &[c, zero, top])?;
-            f.convert(ConvOp::Bitcast, c, k.u32_)
+            extended_code(f, k, v, lo, hi)
         }
         Rule::ExtendedSrgb => {
-            let table = k.xr.ok_or_else(missing_table)?;
             let v = number(f, k, v)?;
-            let a = f.glsl(GlslOp::FAbs, &[v])?;
-            let two = cf(f, k, 2.0)?;
-            let a = f.glsl(GlslOp::FMin, &[a, two])?;
-            let a = fopk(f, k, BinOp::FMul, a, 8192.0)?;
-            let a = f.glsl(GlslOp::RoundEven, &[a])?;
-            let i = f.convert(ConvOp::ConvertFToU, a, k.u32_)?;
-            let n = extended_range::search(f, table, i)?;
-            let zero = cf(f, k, 0.0)?;
-            let negative = bin(f, BinOp::FOrdLessThan, v, zero)?;
-            let k384 = c32(f, 384)?;
-            let n_down = f.glsl(GlslOp::UMin, &[n, k384])?;
-            let down = bin(f, BinOp::ISub, k384, n_down)?;
-            let up = bin(f, BinOp::IAdd, k384, n)?;
-            select(f, negative, down, up)
+            let t = signed_transfer(f, k, v, pack::srgb_encode)?;
+            extended_code(f, k, t, -1.0, 1.5)
         }
         Rule::Padding(p) => c32(f, p & fl.mask()),
     }
@@ -468,7 +428,7 @@ fn decode(f: &mut FunctionBuilder<'_>, k: &K<'_>, words: &[Value]) -> BResult<Ve
             for c in 0..3 {
                 let m = bits(f, words, 9 * c, 511)?;
                 let m = f.convert(ConvOp::ConvertUToF, m, k.f32_)?;
-                out.push(fop(f, BinOp::FMul, m, scale)?);
+                out.push(bin(f, BinOp::FMul, m, scale)?);
             }
             Ok(out)
         }
@@ -533,7 +493,7 @@ fn encode(f: &mut FunctionBuilder<'_>, k: &K<'_>, v: &[Value]) -> BResult<[Value
             let e = f.glsl(GlslOp::UMax, &[eb, least])?;
             let e = bink(f, BinOp::ISub, e, 111)?;
             let scale = rgb9e5_scale(f, k, e)?;
-            let s = fop(f, BinOp::FMul, most, scale)?;
+            let s = bin(f, BinOp::FMul, most, scale)?;
             let s = fopk(f, k, BinOp::FAdd, s, 0.5)?;
             let s = f.glsl(GlslOp::Floor, &[s])?;
             let full = cf(f, k, 512.0)?;
@@ -545,7 +505,7 @@ fn encode(f: &mut FunctionBuilder<'_>, k: &K<'_>, v: &[Value]) -> BResult<[Value
             let mut w = bink(f, BinOp::ShiftLeftLogical, e, 27)?;
             let top = c32(f, 511)?;
             for (i, x) in c.into_iter().enumerate() {
-                let m = fop(f, BinOp::FMul, x, scale)?;
+                let m = bin(f, BinOp::FMul, x, scale)?;
                 let m = fopk(f, k, BinOp::FAdd, m, 0.5)?;
                 let m = f.glsl(GlslOp::Floor, &[m])?;
                 let m = f.convert(ConvOp::ConvertFToU, m, k.u32_)?;
@@ -581,7 +541,7 @@ fn axis(
     let last = bink(f, BinOp::ISub, big, 1)?;
     let x1 = f.glsl(GlslOp::UMin, &[next, last])?;
     let one = cf(f, k, 1.0)?;
-    let w0 = fop(f, BinOp::FSub, one, t)?;
+    let w0 = bin(f, BinOp::FSub, one, t)?;
     Ok([x0, x1, w0, t])
 }
 
@@ -746,7 +706,7 @@ fn filtered(f: &mut FunctionBuilder<'_>, k: &K<'_>, i: Value) -> BResult<[Value;
         } else {
             (ay[0], ay[2])
         };
-        let wxy = fop(f, BinOp::FMul, wx, wy)?;
+        let wxy = bin(f, BinOp::FMul, wx, wy)?;
         // The image: the layer's (`r`, one slice each), or the layer's depth tap's.
         let (image, w) = match depth {
             Some((first, az)) => {
@@ -757,7 +717,7 @@ fn filtered(f: &mut FunctionBuilder<'_>, k: &K<'_>, i: Value) -> BResult<[Value;
                 };
                 (
                     bin(f, BinOp::IAdd, first, sz)?,
-                    fop(f, BinOp::FMul, wxy, wz)?,
+                    bin(f, BinOp::FMul, wxy, wz)?,
                 )
             }
             None => (r, wxy),
@@ -776,10 +736,10 @@ fn filtered(f: &mut FunctionBuilder<'_>, k: &K<'_>, i: Value) -> BResult<[Value;
         let values = decode(f, k, &words)?;
         let weightless = bin(f, BinOp::FOrdEqual, w, zero)?;
         for (c, v) in values.into_iter().enumerate() {
-            let term = fop(f, BinOp::FMul, w, v)?;
+            let term = bin(f, BinOp::FMul, w, v)?;
             let term = select(f, weightless, zero, term)?;
             match sums.get_mut(c) {
-                Some(sum) => *sum = fop(f, BinOp::FAdd, *sum, term)?,
+                Some(sum) => *sum = bin(f, BinOp::FAdd, *sum, term)?,
                 None => sums.push(term),
             }
         }
@@ -858,14 +818,6 @@ pub(super) fn typed_module(spec: &Spec) -> BResult<TypedModule> {
     };
     let destination = words_buffer(&mut b, DESTINATION, u32_)?;
     let params = words_buffer(&mut b, PARAMS, u32_)?;
-    let srgb_table = match spec.layout.srgb8() {
-        true => Some(srgb::declare(&mut b)?),
-        false => None,
-    };
-    let xr_table = match spec.layout.extended_srgb() {
-        true => Some(extended_range::declare(&mut b)?),
-        false => None,
-    };
     let invocation = b.builtin(crate::spv::BuiltIn::GlobalInvocationId, IoDir::Input, uvec3)?;
     let void = b.ty(Type::Void)?;
     let mut f = b.function(void)?;
@@ -884,8 +836,6 @@ pub(super) fn typed_module(spec: &Spec) -> BResult<TypedModule> {
         source,
         destination,
         params,
-        srgb: srgb_table,
-        xr: xr_table,
         spec,
     };
     let texels = paramk(&mut f, &k, header::TEXELS)?;

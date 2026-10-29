@@ -877,8 +877,11 @@ degradations! {
         /// `mipmap_plan.rs`) where its blits filter the image's format, else the runtime's
         /// bilinear (trilinear in 3D) filter in `float` (`mipmap_filter.rs`): an extended-range
         /// format, an 8-bit sRGB texture held as its UNORM twin, or a format without blits or
-        /// linear filtering. Neither is Apple's datapath, whose answers also differ between
-        /// Apple's GPUs (an M3 Max's and an M4's by up to a unit in the last place, and wholly
+        /// linear filtering, by the device's arithmetic: its products and sums as it contracts
+        /// them, an 8-bit or extended-range sRGB code through the MSL transfer by its `Pow` (as
+        /// `srgb-texel-decode` reads the twin), a half by its widening and narrowing, a NaN its
+        /// own (`metal2vulkan::bind::MipmapFilterChain::outside_bound` states the bound). Neither
+        /// is Apple's datapath, whose answers also differ between Apple's GPUs (an M3 Max's and an M4's by up to a unit in the last place, and wholly
         /// where a box averages a float format's largest and smallest values). Announced once per
         /// device; no bound against Metal's answer is measured.
         DeviceFilteredMipmaps = "device-filtered-mipmaps", Precision,

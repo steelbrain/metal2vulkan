@@ -10,9 +10,8 @@
 //! - Decoding byte `b` loads its step `k` ([`step`]), and `math::unpack` answers `k / 4095`
 //!   correctly rounded ([`div_exact`](crate::lower::arith::exact_division::div_exact)), as
 //!   Metal does.
-//! - Encoding `x` rounds the exact product `x * 4095` to the index `i`
-//!   ([`round_exact_product_lanes`](crate::lower::arith::math::round_exact_product_lanes)), and
-//!   [`search`] finds the byte in the thresholds: eight dependent loads, branch-free.
+//! - The high halves are Metal's encode thresholds: byte `b` encodes the indices from
+//!   `SRGB_ENCODE_FIRST[b]` of the exact product `x * 4095` rounded to nearest even.
 //!
 //! The quotients run once per vector in `math::unpack`, with a per-lane scale; only the table
 //! reads are per channel, since a `Private` array is indexed by a scalar.
@@ -119,29 +118,4 @@ pub fn step(fb: &mut FunctionBuilder<'_>, table: GlobalId, b: Value) -> BResult<
     let low = fb.u32_const(0xFFFF)?;
     let low = fb.module().const_value(low)?;
     fb.binary(BinOp::BitwiseAnd, w, low)
-}
-
-/// The sRGB byte of encode index `i` (a `u32` scalar below 4096: the exact product of the
-/// clamped linear channel and 4095, rounded to nearest even): the largest byte whose first
-/// index is at most `i`.
-pub fn search(fb: &mut FunctionBuilder<'_>, table: GlobalId, i: Value) -> BResult<Value> {
-    let k = |fb: &mut FunctionBuilder<'_>, v: u32| -> BResult<Value> {
-        let c = fb.u32_const(v)?;
-        fb.module().const_value(c)
-    };
-    let k16 = k(fb, 16)?;
-    let mut b = None;
-    for step in [128u32, 64, 32, 16, 8, 4, 2, 1] {
-        let s = k(fb, step)?;
-        // The first step's candidate is the constant 128.
-        let (j, below) = match b {
-            None => (s, k(fb, 0)?),
-            Some(b) => (fb.binary(BinOp::IAdd, b, s)?, b),
-        };
-        let w = word(fb, table, j)?;
-        let first = fb.binary(BinOp::ShiftRightLogical, w, k16)?;
-        let at_least = fb.binary(BinOp::UGreaterThanEqual, i, first)?;
-        b = Some(fb.select(at_least, j, below)?);
-    }
-    b.map_or_else(|| k(fb, 0), Ok)
 }

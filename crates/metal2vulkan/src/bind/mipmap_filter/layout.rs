@@ -15,16 +15,19 @@ pub(super) enum Rule {
     /// `1 / (2^(b-1) - 1), -1)`; a value encodes as `RoundEven(clamp(v, -1, 1) (2^(b-1) - 1))`, a NaN
     /// 0.
     Snorm,
-    /// An 8-bit sRGB colour code, through Metal's twelve-bit tables (`lower::arith::srgb`): the
-    /// code's step `k` reads `k` times `1 / 4095` ([`SRGB_STEP_SCALE`]), and a value encodes as the byte whose encode range holds
-    /// `RoundEven(clamp(v, 0, 1) 4095)`, a NaN 0. A texture held as its UNORM twin takes this
-    /// rule, as a shader's read of it does.
+    /// An 8-bit sRGB colour code `c`: `c` times `1 / 255`, as a read of its UNORM twin gives it,
+    /// through the MSL sRGB-to-linear transfer by the device's division and `Pow`
+    /// (`lower::arith::pack`'s, as a shader's read of the twin decodes it); a value encodes by
+    /// the MSL linear-to-sRGB transfer by the device's `Pow` of `clamp(v, 0, 1)` (a NaN 0), then
+    /// as an 8-bit unorm: `RoundEven(t 255)`, as `unorm4x8_srgb` does.
     Srgb8,
     /// A float of `exponent` exponent bits (5 or 8) and `mantissa` mantissa bits, with a sign bit
-    /// where `signed`: a 32-bit float as it is, a half and `RG11B10Float`'s fields widened
-    /// exactly. A value encodes to nearest even, an overflow to infinity, a NaN as the format's
-    /// quiet NaN (`0x7fc00000` for a 32-bit float, `0x7e00` for a half), and in an unsigned field
-    /// a negative value as 0.
+    /// where `signed`. A 32-bit float is its bits both ways (a NaN as the device computes it). A
+    /// half decodes by the device's widening (`UnpackHalf2x16`) and encodes by its narrowing
+    /// (`PackHalf2x16`). `RG11B10Float`'s unsigned fields decode as the half of the same exponent
+    /// and mantissa bits, by the same widening; no device instruction narrows to them, so a value
+    /// encodes to nearest even by integer steps, an overflow to infinity, a NaN as the field's
+    /// quiet NaN and a negative value as 0.
     Float {
         exponent: u32,
         mantissa: u32,
@@ -35,21 +38,21 @@ pub(super) enum Rule {
     /// 894]` first (`[0, 1]`); a value encodes as `RoundEven(v 510) + 384`, `v` clamped to `[-1,
     /// 1.5]` (alpha to `[0, 1]`) and the code to `[0, 1023]`, a NaN 0.
     Extended { alpha: bool },
-    /// An extended-range sRGB colour code `c`, through Metal's tables
-    /// (`lower::arith::extended_range::table`, symmetric about code 384): the step `s` of `|c -
-    /// 384|` reads `±s / 8192`, and a value encodes as the offset from 384, toward its sign, whose
-    /// encode range holds `RoundEven(min(|v|, 2) 8192)` (at most 384 below), a NaN 0.
+    /// An extended-range sRGB colour code `c`: its encoded value `s`, `c - 384` times `1 / 510`,
+    /// decodes by the MSL sRGB-to-linear transfer of `|s|` by the device's division and `Pow`,
+    /// the sign kept; a value `v` (a NaN 0) encodes by the MSL linear-to-sRGB transfer of `|v|`
+    /// by the device's `Pow`, the sign kept, then as [`Rule::Extended`]'s colour code.
     ExtendedSrgb,
     /// Bits written as this constant, which no channel reads (`BGR10_XR`'s top two bits: 3).
     Padding(u32),
 }
 
-/// The `f32` reciprocal of 4095, rounded once: an 8-bit sRGB code's value is its 12-bit decode
-/// step times it (`Rule::Srgb8`).
-pub(super) const SRGB_STEP_SCALE: f32 = 1.0 / 4095.0;
+/// The `f32` reciprocal of 255, rounded once: an 8-bit sRGB code's encoded value is the code
+/// times it (`Rule::Srgb8`).
+pub(super) const SRGB_SCALE: f32 = 1.0 / 255.0;
 
 /// The `f32` reciprocal of 510, rounded once: an extended-range code's value is its offset from
-/// 384 times it (`Rule::Extended`).
+/// 384 times it (`Rule::Extended`, and `Rule::ExtendedSrgb`'s encoded value).
 pub(super) const EXTENDED_SCALE: f32 = 1.0 / 510.0;
 
 /// One field of a texel: `width` bits at bit `offset` of the texel's little-endian bytes, never
@@ -113,30 +116,12 @@ pub(super) struct Layout {
 }
 
 impl Layout {
-    /// The fields of the texel (none for `RGB9E5Float`'s word).
-    pub(super) fn fields(&self) -> &'static [Field] {
-        match self.texel {
-            Texel::Fields(fields) => fields,
-            Texel::Rgb9e5 => &[],
-        }
-    }
-
     /// The `float` channels a texel decodes to.
     pub(super) fn channels(&self) -> usize {
         match self.texel {
             Texel::Fields(fields) => fields.iter().filter(|f| f.channel()).count(),
             Texel::Rgb9e5 => 3,
         }
-    }
-
-    /// Whether a field converts through Metal's 8-bit sRGB tables.
-    pub(super) fn srgb8(&self) -> bool {
-        self.fields().iter().any(|f| f.rule == Rule::Srgb8)
-    }
-
-    /// Whether a field converts through the extended-range `_sRGB` tables.
-    pub(super) fn extended_srgb(&self) -> bool {
-        self.fields().iter().any(|f| f.rule == Rule::ExtendedSrgb)
     }
 }
 

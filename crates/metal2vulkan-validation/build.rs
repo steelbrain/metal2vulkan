@@ -102,7 +102,9 @@ fn main() {
     // emulated mesh draw's work buffer layout (`src/lower/mesh/work.rs`), an emulated tessellation
     // draw's work buffer layout, factor reads and tessellator, which its scan runs
     // (`src/lower/tessellation/{work,factors,tessellator}.rs`),
-    // the sRGB tables Metal's mipmap filter reads (`src/lower/arith/srgb.rs`), the blend color an
+    // the sRGB steps the ASTC and PVRTC decoders read (`src/lower/arith/srgb.rs`), the sRGB
+    // transfer and half conversions the mipmap filter takes from `air.pack`'s lowering
+    // (`src/lower/arith/pack.rs`), the blend color an
     // extended-range blend reads (`src/lower/arith/extended_range/blend_color.rs`), half-float
     // conversion, and the Metal-like runtime (`metal2vulkan-runtime/src`, with the measured answers
     // it reads), through which the executor runs the families that have moved onto it. The
@@ -146,6 +148,7 @@ fn main() {
         "metal2vulkan/src/lower/arith/exact_division.rs",
         "metal2vulkan/src/lower/arith/extended_range/blend_color.rs",
         "metal2vulkan/src/lower/arith/extended_range/table.rs",
+        "metal2vulkan/src/lower/arith/pack.rs",
         "metal2vulkan/src/lower/arith/srgb.rs",
         "metal2vulkan/src/lower/mesh/work.rs",
         "metal2vulkan/src/lower/tessellation/factors.rs",

@@ -14,19 +14,22 @@
 //! of eight (four where the level above is one texel deep). Each layer of an array or cube is
 //! filtered alone.
 //!
-//! **The value.** Each tap's texel decodes to its `float` channels by its format's rule: a
-//! normalized code `c` times `1 / (2^b - 1)` (snorm `max(c` times `1 / (2^(b-1) - 1), -1)`), an
-//! 8-bit sRGB code through Metal's twelve-bit tables (`lower::arith::srgb`), a float as it is (a
-//! half and a packed float widened exactly, `RGB9E5Float`'s mantissas at their shared exponent),
-//! an extended-range code `c - 384` times `1 / 510` or its sRGB twin's table step, each
-//! reciprocal an `f32` constant. Each channel is the sum of its taps' weighted values in tap
-//! order (x fastest, then y, then z), a tap of weight 0 left out, every product and sum rounded
-//! to `f32` on its own: operations Vulkan's precision rules have a device round correctly (no
-//! division, whose precision is the device's), so they leave a device that keeps `f32`
-//! subnormals no other bytes than the CPU's. The sum encodes back by the format's rule: a
-//! normalized code rounded to nearest even from the clamped value, a float to nearest even (a NaN
-//! the format's quiet NaN), `RGB9E5Float` by Vulkan's shared-exponent conversion. `layout.rs`
-//! states each rule; [`MipmapFilterChain::expected_levels`] is the same chain on the CPU.
+//! **The value** is the device's arithmetic throughout. Each tap's texel decodes to its `float`
+//! channels by its format's rule: a normalized code `c` times `1 / (2^b - 1)` (snorm `max(c`
+//! times `1 / (2^(b-1) - 1), -1)`), each reciprocal an `f32` constant; an 8-bit sRGB code as a
+//! shader's read of its UNORM twin decodes it, `c / 255` through the MSL transfer by the device's
+//! division and `Pow`; a float as it is (a half and a packed float by the device's widening,
+//! `RGB9E5Float`'s mantissas at their shared exponent); an extended-range code `c - 384` times
+//! `1 / 510`, its sRGB twin's through the same transfer on the magnitude. Each channel is the sum
+//! of its taps' weighted values in tap order (x fastest, then y, then z), a tap of weight 0 left
+//! out, the device's products and sums, which it may contract. The sum encodes back by the
+//! format's rule: a normalized code rounded to nearest even from the clamped value, an sRGB one
+//! from its transfer by the device's `Pow`, a 32-bit float as it is and a half by the device's
+//! narrowing (a NaN as the device computes it), `RG11B10Float`'s fields to nearest even and
+//! `RGB9E5Float` by Vulkan's shared-exponent conversion, which no device instruction gives.
+//! `layout.rs` states each rule. [`MipmapFilterChain::expected_levels`] is the chain on the CPU
+//! in IEEE `f32`, and [`MipmapFilterChain::outside_bound`] the bound a device's levels keep to
+//! it. The runtime announces the filter as `DeviceFilteredMipmaps`.
 //!
 //! **The consumer** computes the levels on the device in one scratch buffer laid out by
 //! [`MipmapFilterChain::plan`]: it copies the first level of every layer in (unless it reads it in
@@ -370,9 +373,23 @@ impl MipmapFilterChain {
     }
 
     /// The levels of this chain on the CPU, from the bytes of the first level (every layer, as
-    /// the scratch buffer holds them): what the copy in and the dispatches leave in the scratch
-    /// buffer on a device that rounds each `f32` operation as IEEE does, every level in order,
-    /// the first included. `None` for too few bytes.
+    /// the scratch buffer holds them), every level in order, the first included: the kernel's
+    /// operations in its order, each `f32` operation rounded once as IEEE does (none
+    /// contracted), the sRGB transfers' `Pow` the `f64` power rounded once, a half's narrowing to
+    /// nearest even, and a NaN the CPU's. `None` for too few bytes.
+    ///
+    /// A device's levels are its own arithmetic, so they keep to these within a bound, not
+    /// byte for byte ([`outside_bound`](Self::outside_bound)): each channel of a level, filtered
+    /// from the level above as the device wrote it, lies within `2^-17` of the sum of its terms'
+    /// magnitudes (and `2^-140`) of this chain's sum from those bytes, which holds a contracted
+    /// product and sum and Vulkan's division and `Pow`. Each field then holds the code of a value
+    /// in that range, an sRGB field's transfer taken within `2^-17` of its value (and `2^-20`)
+    /// before its rounding: off a rounding boundary the code here, at one either neighbour (a
+    /// code of a normalized, sRGB or extended-range field, a unit in the last place of a float
+    /// field, one mantissa step at the device's shared exponent of an `RGB9E5Float` channel).
+    /// A NaN channel is any NaN where the format keeps one, an infinite one the same infinity.
+    /// Errors compound along a chain, so a device's level is held to the filter of the level
+    /// above as the device wrote it, not to this chain's from the first.
     pub fn expected_levels(&self, first: &[u8]) -> Option<Vec<Vec<u8>>> {
         let layout: Layout = layout::layout(self.pixel_format)?;
         let bytes = usize::try_from(self.levels[0].bytes).ok()?;
@@ -383,6 +400,30 @@ impl MipmapFilterChain {
             out.push(next);
         }
         Some(out)
+    }
+
+    /// The texels of `got`, level `level` of this chain as a device wrote it (every layer, as the
+    /// scratch buffer holds it), outside the filter's bound (stated on
+    /// [`expected_levels`](Self::expected_levels)) of the filter on the CPU of `above`, level
+    /// `level - 1` as the device wrote it: their indexes in the level, every layer's texels in
+    /// turn. Empty where every texel is within it. `None` for the first level, a level past the
+    /// chain's, or too few bytes.
+    pub fn outside_bound(&self, level: usize, above: &[u8], got: &[u8]) -> Option<Vec<u64>> {
+        let layout: Layout = layout::layout(self.pixel_format)?;
+        let (big, small) = (
+            self.levels.get(level.checked_sub(1)?)?,
+            self.levels.get(level)?,
+        );
+        let above = above.get(..usize::try_from(big.bytes).ok()?)?;
+        let got = got.get(..usize::try_from(small.bytes).ok()?)?;
+        Some(cpu::outside(
+            &layout,
+            above,
+            got,
+            big.extent,
+            small.extent,
+            self.layers,
+        ))
     }
 }
 
