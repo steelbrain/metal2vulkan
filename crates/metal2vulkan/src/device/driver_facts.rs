@@ -1812,11 +1812,10 @@ const DYNAMIC_RESTART_WARNING: DriverDiagnostic = DriverDiagnostic {
 /// build of the commit that adds it), by `runtime_lane::interlocked_draw_order` (passes of 84
 /// draws, fullscreen and held to bands, of two read-modify-writes of an `R32Uint` color that do
 /// not commute, at one sample over 1920x1080 and 64x36 and at four over 960x540 and 64x36, every
-/// texel read back) and by `runtime_lane::extended_range_blend_table`'s
-/// `a_memoryless_color_2_blends_as_a_stored_color_does` (99 banded blends into a memoryless
-/// extended-range color in the interlock, then a fetching copy of it): ANV, Mesa 26.2.4 on the
-/// Iris Xe (RPL-P), every texel of every pass right in three runs of the first, every band right
-/// in the second, and the `extended_range_blend_table` and `framebuffer_fetch` lanes passing.
+/// texel read back) and by 99 banded blends into a memoryless extended-range color in the
+/// interlock, then a fetching copy of it: ANV, Mesa 26.2.4 on the Iris Xe (RPL-P), every texel of
+/// every pass right in three runs of the first, every band right in the second, and the
+/// `framebuffer_fetch` lanes passing.
 /// Measured not to have it: RADV, Mesa 26.2.4 on the Radeon 780M, which passes the first but
 /// leaves 19 of the second's 495 bands wrong. Every other driver is unmeasured, and takes the
 /// barrier.

@@ -413,6 +413,10 @@ pub fn set_past_layout_notice() -> crate::allowance::Allowance {
 ///   generated mipmap chain (`device-filtered-mipmaps`), and Metal's own sampler filtering a
 ///   two-plane texture on MoltenVK (`half-sample-filter`, `float-sample-filter`,
 ///   `ycbcr-filter-not-exact`);
+/// - **blending**: the device's arithmetic of the blend a function computes into an extended-range
+///   attachment, whose raw codes no blend unit reads (`extended-range-blend-source`,
+///   `extended-range-float-blend-source`: `S·Fs op D·Fd` in `float`, where Metal's compiler rounds
+///   each step to `half`);
 /// - **resolves**: `device-rounded-resolve`;
 /// - **coverage**: the device's own conversion of a fragment's alpha to its coverage under
 ///   alpha-to-coverage (`device-alpha-coverage`).
@@ -464,6 +468,8 @@ pub const NATIVE_NOTES: &[metal2vulkan_runtime::Degradation] = {
         D::HalfSampleFilter,
         D::FloatSampleFilter,
         D::YCbCrFilterNotExact,
+        D::ExtendedRangeBlendSource,
+        D::ExtendedRangeFloatBlendSource,
         D::DeviceRoundedResolve,
         D::DeviceAlphaCoverage,
     ]

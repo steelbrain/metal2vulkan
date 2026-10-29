@@ -1,5 +1,5 @@
-//! Metal's blend into an extended-range attachment on a device that orders framebuffer fetch
-//! through rasterization-order input attachments.
+//! The blend into an extended-range attachment on a device that orders framebuffer fetch through
+//! rasterization-order input attachments.
 //!
 //! Such an attachment holds Metal's raw texels in its raw unsigned format, which no device blends.
 //! On a device that fetches in the pixel interlock the storage form computes the blend in the
@@ -7,8 +7,9 @@
 //! (lavapipe) the function computes it over the attachment's input attachment instead: its first
 //! output's write reads the pixel's raw texel there (at the invocation's sample in a multisampled
 //! pipeline), decodes it to Metal's tile value (`extended_range::tile_value`, as a fetch reads it),
-//! blends the output over that by Metal's model (`extended_range::blend::blend`, the sources and
-//! blend color as the storage form reads them, `fetch::blend_sources`, `fetch::blend_constant`),
+//! blends the output over that by the device's arithmetic (`extended_range::blend::native`, the
+//! second source and blend color as the storage form reads them, `fetch::blend_second`,
+//! `fetch::blend_constant`),
 //! and writes the kernel write's encode of the result as the raw texel through the output variable
 //! (`extended_range::encode`), the channels a write mask keeps taken from the texel read
 //! (`extended_range::encode_keeping`). The attachment then takes no Vulkan blend and every raw
@@ -18,12 +19,11 @@
 //! `half` shadow does (the announcement, `extended-range-blends-stored-codes`, stays the runtime's
 //! there).
 //!
-//! The blend is Metal's model's alone, its gap refused by name (`Feature::ExtendedRangeBlend`,
-//! as the storage form refuses it): a `half4` output under every factor and operation, a
-//! `float4` one under the blends that take it, without fast math the rounded model, whose second
-//! source is the function's index-1 output, read from the returned value and stored nowhere else
-//! ([`select_second_output`]). A write of none of the format's channels stores nothing and blends
-//! nothing. A padded or bfloat attachment's blend has no model, and stays refused
+//! The blend takes a `half4` or `float4` output under every factor, operation and write mask, as
+//! the storage form does (another output is refused, `Feature::ExtendedRangeBlend` `Output`); its
+//! second source is the function's index-1 output, read from the returned value and stored nowhere
+//! else ([`select_second_output`]). A write of none of the format's channels stores nothing and
+//! blends nothing. A padded or bfloat attachment's blend is not built, and stays refused
 //! `NotImplemented(Format)` (`stage_io::extended_color`).
 
 use std::collections::BTreeMap;
@@ -54,9 +54,9 @@ pub struct InputBlend {
     pub form: ExtendedRange,
     /// The pipeline's blend at the attachment.
     pub equation: BlendEquation,
-    /// Metal's blend of the write, as the shader computes it; `None` where the write stores
-    /// none of the format's channels, and blends nothing.
-    pub blend: Option<extended_range::Blend>,
+    /// The blend of the write, as the shader computes it; `None` where the write stores none of
+    /// the format's channels, and blends nothing.
+    pub blend: Option<extended_range::blend::NativeBlend>,
     /// The format's channels the write keeps from the texel (those the descriptor's write mask
     /// leaves out); empty where it stores every one, all four where it stores none.
     pub kept: vk::ColorComponentFlags,
@@ -93,7 +93,6 @@ pub(super) fn plan(cx: &mut SelectCx<'_>) -> Result<(), Error> {
     let Some(inputs) = cx.inputs.framebuffer_fetch.clone() else {
         return Err(Error::NeedsInput(RuntimeInput::FramebufferFetch));
     };
-    let math = fetch::blend_math(cx);
     let mut planned = BTreeMap::new();
     for (color, ty) in blended {
         let tied = |e: Error| e.at_attachment(Attachment::Color(color));
@@ -104,7 +103,7 @@ pub(super) fn plan(cx: &mut SelectCx<'_>) -> Result<(), Error> {
             .map(|e| e.form)
             .filter(|f| !f.padded() && !f.bfloat())
         else {
-            // A padded or bfloat attachment's blend has no model (`extended_color`).
+            // A padded or bfloat attachment's blend is not built (`extended_color`).
             continue;
         };
         // Compiled under the state of a pipeline for another function.
@@ -140,9 +139,9 @@ pub(super) fn plan(cx: &mut SelectCx<'_>) -> Result<(), Error> {
         }
         let f = super::color::form(cx, ty).map_err(tied)?;
         let output = (f.lanes == 4).then(|| f.float_fmt()).flatten();
+        fetch::extended_range_output(output).map_err(tied)?;
         let blend =
-            extended_range::Blend::for_output(&eq, form, fetch::written(kept), (output, math))
-                .map_err(tied)?;
+            extended_range::blend::NativeBlend::of(&eq, fetch::written(kept)).map_err(tied)?;
         // A blend of the second source reads the function's index-1 output, four `half` or
         // `float` lanes as the first's. Without one, Metal refuses the pipeline ("Fragment shader
         // does not write to render target color(0), index(1) that is required for blending").
@@ -160,7 +159,7 @@ pub(super) fn plan(cx: &mut SelectCx<'_>) -> Result<(), Error> {
             }
         }
         if blend.reads_constant() {
-            cx.push.insert(PushField::BlendColor);
+            cx.push.insert(PushField::HalfBlendColor);
         }
         // The attachment's input attachment, which a `[[color(n)]]` read of it shares (`color`).
         cx.descriptors.input_attachments = cx.descriptors.input_attachments.saturating_add(1);
@@ -192,13 +191,13 @@ pub(super) fn blends_second(cx: &SelectCx<'_>, color: u32) -> bool {
         .input_blends
         .get(&color)
         .and_then(|ib| ib.blend.as_ref())
-        .is_some_and(extended_range::Blend::reads_second)
+        .is_some_and(extended_range::blend::NativeBlend::reads_second)
 }
 
 /// Plan the second (index-1) output of AIR type `ty` held in field `field` of the returned value
 /// to attachment `color`, whose blend the function computes over its input attachment and reads
-/// the second source ([`blends_second`]): the blend reads it, rounded to `half` and clamped as
-/// the first output; no interface variable holds it.
+/// the second source ([`blends_second`]): the blend reads it, clamped as the first output; no
+/// interface variable holds it.
 pub fn select_second_output(
     cx: &mut SelectCx<'_>,
     field: u32,
@@ -227,12 +226,13 @@ pub(crate) fn texel(
     let Some(b) = &ib.blend else {
         return crate::lower::stage_io::extended_color::texel(cx, fb, ib.form, form, part);
     };
-    let (part, s1) = fetch::blend_sources(cx, fb, b, (form, part), second)?;
+    let s1 = fetch::blend_second(cx, b, second)?;
     let table = crate::lower::texture::extended_table(cx, ib.form)?;
     let codes = super::color::input_texel(cx, fb, color)?;
     let d = extended_range::tile_value(fb, ib.form, codes, table)?;
     let constant = fetch::blend_constant(cx, fb, b)?;
-    let v = extended_range::blend::blend(fb, ib.form, b, (part, s1, d), constant)?;
+    let ranges = Some(extended_range::blend::extended_ranges(ib.form));
+    let v = extended_range::blend::native(fb, b, ranges, (part, s1, d), constant)?;
     if ib.kept.is_empty() {
         return extended_range::encode(fb, ib.form, v, table);
     }

@@ -151,13 +151,18 @@
 //! (`extended_range::tile_value`: each code as the tile holds it, rounded to `half`, a `float` read
 //! alike). Such an attachment the function writes under blending takes
 //! this form whether or not the function reads it, since no device blends the raw texels: the write
-//! reads the texel's tile value, blends the output over it as Metal does, and stores the kernel
-//! write's encode of the result ([`StorageView::blend`]), the channels a write mask keeps as Metal
-//! keeps them (`extended_range::encode_keeping`). Metal's model (`extended_range::Blend`) holds a
-//! `half4` output under every factor and operation, the blend color read as push data
-//! (`PushField::BlendColor`), and a `float4` output under the blends whose color lanes take one
-//! term alone, rounded to `half` first; the rest is refused by name
-//! (`Feature::ExtendedRangeBlend`). A write of every channel with blending disabled stores the
+//! reads the texel's tile value, blends the output over it by the device's arithmetic, and stores
+//! the kernel write's encode of the result ([`StorageView::blend`]), the channels a write mask
+//! keeps as Metal keeps them (`extended_range::encode_keeping`). The blend
+//! (`extended_range::blend::native`) takes a `half4` or `float4` output under every factor,
+//! operation and write mask, the second source the function's index-1 output and the blend color
+//! read as push data (`PushField::HalfBlendColor`): the source, the second source and the blend
+//! color clamped to the form's range (its color lanes to the source range, alpha to `[0, 1]`, a
+//! NaN to the low end), then `S·Fs op D·Fd` in `f32` in the equation's order, where Metal's
+//! compiler folds the blend into the function in forms of its own; the function notes
+//! `PrecisionNote::ExtendedRangeBlendSource` (`ExtendedRangeFloatBlendSource` for a `float4`
+//! output). Another output is refused (`Feature::ExtendedRangeBlend` `Output`). A write of every
+//! channel with blending disabled stores the
 //! texel Metal's unblended write stores, a `float` output rounded to `half` and encoded as a
 //! kernel's write (`stage_io::extended_color::texel`). An unblended write that stores some of its
 //! channels is not built; one whose mask covers none of them stores nothing, as above.
@@ -250,39 +255,17 @@
 //! (Metal sums those in forms of their own) and an output of fewer lanes take the generic blend
 //! (below), as do a factor of the second source and a second (index 1) output.
 //!
-//! **A 32-bit float attachment's blend** (`R32Float`, `RG32Float`, `RGBA32Float`) of a `half4` or
-//! `float4` output of a module with fast math (or naming no math mode), which the shader computes
-//! as Metal does ([`float32_blended`], `extended_range::Blend::float32`): the write reads the texel
-//! at the pixel inside the interlock and blends the output over it in `float` throughout, in the
-//! forms Metal's compiler folds into the function -- the 16-bit float family's fast forms,
-//! every rounding to `float` -- and stores the `f32` the blend gives, the channels its write mask
-//! keeps taken back from the texel. Nothing is clamped, as nothing is for a 16-bit float
-//! attachment. Measured against the committed recordings of plain Metal on the M3 Max under macOS
-//! 27.0.1 of `half-output-blends-r32f`, `-rg32f` and `-rgba32f`, each case 256 pixels of a `half4`
-//! output over destinations its own generator draws, every word of all twenty-one of their blend
-//! states: of the seventeen states whose factors read no blend color, every word of the two- and
-//! four-channel formats is Metal's under these forms, ten of them in forms
-//! `extended_range::Blend::fitted` holds without a measurement and two by one
-//! (`extended_range::blend::MEASURED_THIRTY_TWO`). A state the measurement does not fit stays with
-//! the device's blend and its note, as a 16-bit float one's does: a one-channel attachment's
-//! `SourceColor` over `DestinationColor` (Metal rounds the destination's product first there, and
-//! the device's blend is Metal's), every state whose factors read the blend color, an output of
-//! fewer than four lanes, and a module without fast math, all of which take the generic blend
-//! below: both forms are near-equivalents at an unfitted state, and the generic blend's are
-//! measured the closer at the one-channel state above. The blend is Metal's only where no lane of
-//! the output folds into it ([`folds_into_blend`]) and the module states its math, as a 16-bit
-//! float one's is; where a lane folds, the forms stay and the function notes
-//! `PrecisionNote::HalfOutputFastMathBlend`. An attachment the function does not read takes the
-//! form on the same terms a 16-bit float one does: only where a draw moved it into the storage
-//! form (`VariantKey::interlocked_colors`) and its blend is exact.
+//! **A 32-bit float attachment's blend** (`R32Float`, `RG32Float`, `RGBA32Float`) takes the generic
+//! blend below where the function reads the attachment. Every device the translation targets blends
+//! those formats itself (`VK_FORMAT_FEATURE_COLOR_ATTACHMENT_BLEND_BIT`), so an attachment the
+//! function does not read takes the device's own blend: a draw that moved it into the storage form
+//! (`VariantKey::interlocked_colors`) is refused that variant and the render pass splits around it.
 //!
 //! **Another format's blend** (a format held directly whose channels read as floats, but a 16-bit
-//! float, a 32-bit float, an sRGB, a word or an extended-range one: a 16-bit normalized, 8-bit
-//! signed normalized, 10-bit, packed float or `A8Unorm` format, among others; and an 8-bit unorm
-//! one of an output of fewer than four lanes, or under a blend Metal's model there does not hold),
-//! one of an output of fewer than four lanes, and a 32-bit float one under a state the
-//! measurement above does not fit), whose Metal arithmetic is not built, of an attachment the
-//! function reads: no Vulkan blend
+//! float, an sRGB, a word or an extended-range one: a 32-bit float, 16-bit normalized, 8-bit signed
+//! normalized, 10-bit, packed float or `A8Unorm` format, among others; and an 8-bit unorm one of an
+//! output of fewer than four lanes, or under a blend Metal's model there does not hold), whose
+//! Metal arithmetic is not built, of an attachment the function reads: no Vulkan blend
 //! applies to the storage write, so the shader computes the pipeline's blend itself, the generic
 //! float blend ([`generic_blended`], `extended_range::Blend::generic`): the write reads the texel
 //! inside the interlock, blends the output's four lanes (a missing one zero) over it in `float`,
@@ -297,8 +280,7 @@
 //! function's second (index 1) output, four `half` or `float` lanes, clamped as the first (Metal
 //! makes and draws a pipeline that fetches and blends so; one whose function writes no second
 //! output Metal refuses, and so is it refused, `DescriptorError::ColorAttachment`). The generic
-//! blend also takes a 16-bit float, 32-bit float or 8-bit unorm attachment's blend of the second
-//! source, or
+//! blend also takes a 16-bit float or 8-bit unorm attachment's blend of the second source, or
 //! beside a second output, whose Metal arithmetic is not measured.
 //!
 //! A blocked attachment is refused with the blocker's reason (what the device lacks, or
@@ -367,14 +349,6 @@ pub(crate) fn half_float_format(pf: crate::metal::PixelFormat) -> bool {
     matches!(pf, P::R16Float | P::RG16Float | P::RGBA16Float)
 }
 
-/// Whether `pf` is a 32-bit float color format, whose blend of an output of a module with fast
-/// math Metal computes in `float` in the fast forms it folds into the function
-/// ([`extended_range::Blend::float32`]); without fast math its arithmetic there is not measured.
-pub(crate) fn float32_format(pf: crate::metal::PixelFormat) -> bool {
-    use crate::metal::PixelFormat as P;
-    matches!(pf, P::R32Float | P::RG32Float | P::RGBA32Float)
-}
-
 /// Whether `pf` is an 8-bit unorm color format held directly, whose blend Metal computes in the
 /// arithmetic of the output's type over the clamped output ([`extended_range::Blend::unorm8`]).
 pub(crate) fn unorm8_format(pf: crate::metal::PixelFormat) -> bool {
@@ -423,16 +397,6 @@ fn direct_blend(
     }
     if srgb8_format(pf) {
         return extended_range::Blend::srgb8(eq, pf, written, (math, arith)).map(|(b, _)| b);
-    }
-    if float32_format(pf) {
-        return match math {
-            extended_range::blend::BlendMath::Fast => {
-                extended_range::Blend::float32(eq, pf, written)
-            }
-            // Metal's arithmetic for the format without fast math is measured in no state, so
-            // the planner leaves it to the generic blend, whose rounded forms these are.
-            extended_range::blend::BlendMath::Rounded => generic(eq, pf, written),
-        };
     }
     match unorm8_format(pf) {
         true => extended_range::Blend::unorm8(eq, pf, written, (math, arith)),
@@ -755,9 +719,9 @@ pub struct StorageView {
     /// decodes Metal's tile value. `None` for a format held directly.
     pub extended: Option<ExtendedRange>,
     /// The blend a write computes in the shader, from the texel it reads first: the pipeline's,
-    /// where it enables blending there, of an extended-range attachment
-    /// (`extended_range::blend::blend`), Metal's of a 16-bit float, 32-bit float, 8-bit unorm or
-    /// packed 16-bit one, or the generic one of another format
+    /// where it enables blending there, of an extended-range attachment by the device's arithmetic
+    /// (`extended_range::blend::native`), Metal's of a 16-bit float, 8-bit unorm or packed 16-bit
+    /// one, or the generic one of another format
     /// ([`generic_blend`](Self::generic_blend)).
     /// `None` for an unblended write or no write.
     pub blend: Option<BlendEquation>,
@@ -1050,23 +1014,6 @@ pub(crate) fn storage_form(
         && attachment.equation.is_some_and(|eq| {
             extended_range::Blend::half_float(&eq, pf, written_of_four, use_.math).is_ok()
         });
-    // And the blend of a 32-bit float attachment of a module with fast math (or naming no math
-    // mode) at a state whose forms are Metal's (`extended_range::Blend::float32`, whose
-    // `Blend::fitted` is the one sweep that measured the family). Elsewhere -- a state the sweep
-    // does not fit, a module without fast math, an output of fewer than four lanes (below) -- the
-    // generic blend keeps the attachment: both are near-equivalents there, and the generic one is
-    // measured the closer at a one-channel attachment's `SourceColor` over `DestinationColor`
-    // (`half-output-blends-r32f`'s `sc-dc`, where Metal rounds the destination's product first and
-    // the generic blend's mirror forms are Metal's at every word). A 16-bit float attachment's
-    // blend takes the in-shader form at an unfitted state instead, its forms having been swept
-    // over hundreds of states rather than one.
-    let float_blend = float32_format(pf)
-        && attachment.blending_enabled
-        && !attachment.replaces
-        && use_.math == extended_range::blend::BlendMath::Fast
-        && attachment.equation.is_some_and(|eq| {
-            extended_range::Blend::float32(&eq, pf, written_of_four).is_ok_and(|b| b.fitted())
-        });
     // And the blend of an 8-bit unorm attachment where Metal's measured model holds it
     // (`extended_range::Blend::unorm8`: every factor and operation but the second source's, any
     // write mask); its other blends take the generic blend below.
@@ -1109,11 +1056,10 @@ pub(crate) fn storage_form(
         && !srgb
         && extended.is_none()
         && word.is_none()
-        && !(half_blend || unorm8_blend || float_blend);
+        && !(half_blend || unorm8_blend);
     let blend = attachment.equation.filter(|_| {
         (extended.is_some_and(|e| !e.padded())
             || half_blend
-            || float_blend
             || unorm8_blend
             || word_blend
             || srgb_blend
@@ -1122,12 +1068,12 @@ pub(crate) fn storage_form(
     });
     if let Some(eq) = blend {
         let planned = match extended {
-            Some(form) => {
+            Some(_) => {
                 let written = all.intersection(attachment.write_mask);
-                extended_range::Blend::of(&eq, form, written, use_.math)
+                extended_range::blend::NativeBlend::of(&eq, written).map(drop)
             }
-            None if generic_blend => generic(&eq, pf, written_of_four),
-            None => direct_blend(&eq, pf, written_of_four, (use_.math, half)),
+            None if generic_blend => generic(&eq, pf, written_of_four).map(drop),
+            None => direct_blend(&eq, pf, written_of_four, (use_.math, half)).map(drop),
         };
         match planned {
             Ok(_) => {}
@@ -1318,8 +1264,7 @@ pub(crate) fn extended_range_blend(
             Err(Error::Unsupported(gap)) => return Err(gap),
             Err(_) => return Err(Unsupported::not_representable(Feature::Format)),
         }
-        let math = extended_range::blend::BlendMath::Fast;
-        return match extended_range::Blend::of(&equation, form, channels(pf), math) {
+        return match extended_range::blend::NativeBlend::of(&equation, channels(pf)) {
             Ok(_) => Ok(()),
             Err(Error::Unsupported(gap)) => Err(gap),
             Err(_) => Err(Unsupported::not_representable(Feature::Format)),
@@ -1740,13 +1685,6 @@ pub(super) fn plan(cx: &mut SelectCx<'_>) -> Result<(), Error> {
                         sixteen_exact = false;
                         Ok((view, None))
                     }
-                    // A 32-bit float attachment's blend of an output of fewer than four lanes is
-                    // not measured (the recordings' output is a `half4`): the generic blend.
-                    (Some(Ok(_)), Some((_, lanes)))
-                        if float32_format(view.pixel_format) && lanes < 4 =>
-                    {
-                        generic_of(view, &mut sixteen_exact)
-                    }
                     (Some(Ok(b)), Some((_, lanes))) => {
                         let stated = cx.entry.compile.fast_math.is_some();
                         // An output of fewer lanes whose color blend reads the source alpha stores
@@ -1774,7 +1712,7 @@ pub(super) fn plan(cx: &mut SelectCx<'_>) -> Result<(), Error> {
                     _ => Err(not_implemented()),
                 }
             }
-            Ok(view) => match blend_of(&view, (outputs4.get(&color).copied(), blend_math(cx))) {
+            Ok(view) => match blend_of(&view, outputs4.get(&color).copied()) {
                 // A blend of the second source reads the function's index-1 output (which it
                 // writes: Metal refuses the pipeline otherwise, above), four `half` or `float`
                 // lanes as the first's.
@@ -1811,9 +1749,9 @@ pub(super) fn plan(cx: &mut SelectCx<'_>) -> Result<(), Error> {
             Ok((view, b)) => {
                 // The blend color, as push data, where the blend reads it.
                 if b.as_ref()
-                    .is_some_and(extended_range::Blend::reads_constant)
+                    .is_some_and(extended_range::blend::NativeBlend::reads_constant)
                 {
-                    cx.push.insert(PushField::BlendColor);
+                    cx.push.insert(PushField::HalfBlendColor);
                 }
                 // The blend color as the encoder set it, where Metal's 16-bit float blend reads
                 // it. Where that blend is not Metal's exactly, the function notes it.
@@ -2094,7 +2032,7 @@ pub fn select_output(
     // An extended-range attachment's blend is of a `half4` output, or of a `float4` one where
     // the blend takes it ([`plan`]), and an `_sRGB` one's encodes through Metal's table.
     let output4 = (form.lanes == 4).then(|| form.float_fmt()).flatten();
-    if blend_of(&sc.view, (output4, blend_math(cx))).is_err() {
+    if blend_of(&sc.view, output4).is_err() {
         return Err(cx.invariant("an extended-range blend of an output outside its model"));
     }
     if let Some(e) = sc.view.extended {
@@ -2233,7 +2171,7 @@ pub(super) fn words(cx: &SelectCx<'_>, uses: u64, rets: u64) -> u64 {
         .filter_map(|sc| {
             [FloatFmt::Half, FloatFmt::F32]
                 .into_iter()
-                .filter_map(|o| match blend_of(&sc.view, (Some(o), blend_math(cx))) {
+                .filter_map(|o| match blend_of(&sc.view, Some(o)) {
                     Ok(Some(b)) => Some(u64::from(b.words())),
                     _ => None,
                 })
@@ -2705,9 +2643,6 @@ pub(super) fn emit_return(
                     Some(eq) if unorm8_format(sc.view.pixel_format) => {
                         unorm8_blended(cx, fb, color, &sc, eq, (form, part))?
                     }
-                    Some(eq) if float32_format(sc.view.pixel_format) => {
-                        float32_blended(cx, fb, color, &sc, eq, (form, part))?
-                    }
                     Some(eq) => half_blended(cx, fb, color, &sc, eq, (form, part))?,
                     None => part,
                 };
@@ -2871,42 +2806,6 @@ fn unorm8_blended(
         false => None,
     };
     extended_range::blend::blend_unorm8(fb, &b, arith, (part, texel), constant)
-}
-
-/// The four-lane output `part` of `form` (a `half4` output's `half`s, or a `float4` one's)
-/// blended into 32-bit float attachment `color` by Metal's blend `eq`
-/// (`extended_range::Blend::float32`, of a module with fast math): the texel read first at the
-/// invocation's pixel (and sample), inside the interlock, as [`merge`] reads it, and Metal's
-/// arithmetic of the output over it in `float` throughout
-/// (`extended_range::blend::blend_float32`; the blend color from `PushField::HalfBlendColor`
-/// where the blend reads it), the `float` the attachment stores. Nothing is clamped and nothing is
-/// converted after: the storage image's store holds the `f32` the blend gives. The channels a
-/// write mask keeps are [`merge`]'s to take back from the texel.
-fn float32_blended(
-    cx: &mut EmitCx<'_>,
-    fb: &mut FunctionBuilder<'_>,
-    color: u32,
-    sc: &StorageColor,
-    eq: BlendEquation,
-    (form, part): (Form, SValue),
-) -> BResult<SValue> {
-    let (pf, written) = (sc.view.pixel_format, written(sc.view.kept));
-    if !matches!(form.float_fmt(), Some(FloatFmt::Half | FloatFmt::F32)) || form.lanes != 4 {
-        return Err(cx.fail("a 32-bit float blend of another output"));
-    }
-    let Ok(b) = extended_range::Blend::float32(&eq, pf, written) else {
-        return Err(cx.fail("a 32-bit float blend outside Metal's model"));
-    };
-    let texel = read_texel(cx, fb, color, sc)?;
-    let d = as_held(fb, texel, sc.view.numeric)?;
-    let constant = match b.reads_constant() {
-        true => {
-            let field = cx.push_field(fb, PushField::HalfBlendColor)?;
-            Some(fb.composite_extract(field, &[0])?)
-        }
-        false => None,
-    };
-    extended_range::blend::blend_float32(fb, &b, (part, d), constant)
 }
 
 /// The output `part` of `form` (one to four `f32` lanes: a `half` output's `half`s, or a `float`
@@ -3089,47 +2988,32 @@ fn merge(
     fb.vector_shuffle(part, texel, &lanes)
 }
 
-/// The sources Metal's blend `b` of an extended-range attachment reads, from the function's
-/// output `part` (of `form`) and its second (index-1) output `second` where the blend reads the
-/// second source: a `float4` output rounded to `half`, nearest even, first, but where the blend's
-/// own model reads it unrounded, and the second source, a `float4` one rounded to `half` first, as
-/// the first under the rounded model.
-pub(super) fn blend_sources(
+/// The second source the blend `b` of an extended-range attachment reads, where it reads one:
+/// the function's second (index-1) output `second`, as it computed it.
+pub(super) fn blend_second(
     cx: &mut EmitCx<'_>,
-    fb: &mut FunctionBuilder<'_>,
-    b: &extended_range::Blend,
-    (form, part): (Form, SValue),
+    b: &extended_range::blend::NativeBlend,
     second: Option<(Form, SValue)>,
-) -> BResult<(SValue, Option<SValue>)> {
-    let part = match form.float_fmt() {
-        Some(FloatFmt::F32) if !b.float => extended_range::blend::half_of(fb, form, part)?,
-        _ => part,
-    };
-    let s1 = match (b.reads_second(), second) {
-        (true, Some((form, s1))) => Some(match form.float_fmt() {
-            Some(FloatFmt::F32) => extended_range::blend::half_of(fb, form, s1)?,
-            _ => s1,
-        }),
-        (true, None) => return Err(cx.fail("a blend of the second source without its output")),
-        (false, _) => None,
-    };
-    Ok((part, s1))
+) -> BResult<Option<SValue>> {
+    match (b.reads_second(), second) {
+        (true, Some((_, s1))) => Ok(Some(s1)),
+        (true, None) => Err(cx.fail("a blend of the second source without its output")),
+        (false, _) => Ok(None),
+    }
 }
 
-/// The blend color words Metal's blend `b` reads (`PushField::BlendColor`, the clamped color
-/// and its row, `blend_color::constant_words`), where it reads the blend color.
+/// The blend color words the blend `b` reads (`PushField::HalfBlendColor`, the encoder's color's
+/// `f32` bits), where it reads the blend color.
 pub(super) fn blend_constant(
     cx: &mut EmitCx<'_>,
     fb: &mut FunctionBuilder<'_>,
-    b: &extended_range::Blend,
-) -> BResult<Option<[SValue; 2]>> {
+    b: &extended_range::blend::NativeBlend,
+) -> BResult<Option<SValue>> {
     if !b.reads_constant() {
         return Ok(None);
     }
-    let field = cx.push_field(fb, PushField::BlendColor)?;
-    let c = fb.composite_extract(field, &[0])?;
-    let m = fb.composite_extract(field, &[1])?;
-    Ok(Some([c, m]))
+    let field = cx.push_field(fb, PushField::HalfBlendColor)?;
+    Ok(Some(fb.composite_extract(field, &[0])?))
 }
 
 /// The raw texel a write of output `part` (of `form`: `half4`, or `float4` under a blend that
@@ -3155,11 +3039,10 @@ fn blended(
     second: Option<(Form, SValue)>,
 ) -> BResult<(SValue, Option<SValue>)> {
     let output = (form.lanes == 4).then(|| form.float_fmt()).flatten();
-    let mode = extended_range::blend::BlendMath::of(cx.entry.compile.fast_math);
-    let Ok(Some(b)) = blend_of(&sc.view, (output, mode)) else {
-        return Err(cx.fail("an extended-range blend outside Metal's model"));
+    let Ok(Some(b)) = blend_of(&sc.view, output) else {
+        return Err(cx.fail("an extended-range blend of another output"));
     };
-    let (part, s1) = blend_sources(cx, fb, &b, (form, part), second)?;
+    let s1 = blend_second(cx, &b, second)?;
     let table = crate::lower::texture::extended_table(cx, range)?;
     let mut codes = None;
     let mut read_codes = |cx: &mut EmitCx<'_>, fb: &mut FunctionBuilder<'_>| -> BResult<SValue> {
@@ -3182,7 +3065,8 @@ fn blended(
         }
     };
     let constant = blend_constant(cx, fb, &b)?;
-    let v = extended_range::blend::blend(fb, range, &b, (part, s1, d), constant)?;
+    let ranges = Some(extended_range::blend::extended_ranges(range));
+    let v = extended_range::blend::native(fb, &b, ranges, (part, s1, d), constant)?;
     if !sc.view.merges() {
         let texel = extended_range::encode(fb, range, v, table)?;
         return Ok((texel, shadow.map(|_| v)));
@@ -3511,17 +3395,30 @@ fn word_texel(
 }
 
 /// The blend an extended-range attachment's write computes in the shader
-/// (`StorageView::blend`) of an output of four lanes of `output` (`None` for another output)
-/// of a function of math `math`, as Metal's model holds it: `None` for no blend; `Err` with the gap
-/// (`Feature::ExtendedRangeBlend`) where the model does not hold it ([`extended_range::Blend`]).
+/// (`StorageView::blend`) of an output of four lanes of `output` (`None` for another output),
+/// by the device's arithmetic (`extended_range::blend::NativeBlend`): `None` for no blend; `Err`
+/// (`Feature::ExtendedRangeBlend` `Output`) for an output other than four `half` or `float` lanes.
 fn blend_of(
     view: &StorageView,
-    (output, math): (Option<FloatFmt>, extended_range::blend::BlendMath),
-) -> Result<Option<extended_range::Blend>, Error> {
-    let (Some(eq), Some(form)) = (view.blend, view.extended) else {
+    output: Option<FloatFmt>,
+) -> Result<Option<extended_range::blend::NativeBlend>, Error> {
+    let (Some(eq), Some(_)) = (view.blend, view.extended) else {
         return Ok(None);
     };
-    extended_range::Blend::for_output(&eq, form, written(view.kept), (output, math)).map(Some)
+    extended_range_output(output)?;
+    extended_range::blend::NativeBlend::of(&eq, written(view.kept)).map(Some)
+}
+
+/// `Ok` for an output of four `half` or `float` lanes (`output`, `None` for another), the outputs
+/// an extended-range blend takes; else `Feature::ExtendedRangeBlend` `Output`.
+pub(super) fn extended_range_output(output: Option<FloatFmt>) -> Result<(), Error> {
+    match output {
+        Some(FloatFmt::Half | FloatFmt::F32) => Ok(()),
+        _ => Err(Unsupported::not_implemented(Feature::ExtendedRangeBlend(
+            ExtendedRangeBlend::Output,
+        ))
+        .into()),
+    }
 }
 
 /// The blend math of the function `cx` selects ([`extended_range::blend::BlendMath`]).

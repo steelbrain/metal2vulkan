@@ -639,10 +639,9 @@ fn an_a8_unorm_attachment_is_fetched_without_a_format_by_its_own_bit() {
 /// A blend of one and zero, added, for color and alpha stores the source as no blend does, so a
 /// written attachment under it takes the storage form unblended, but for a signed normalized format
 /// (its NaN stores another code under the blend), whose blend the shader computes, the generic
-/// one; one and zero for color alone is a blend, and of `R32Float` under fast math it is Metal's
-/// own (`extended_range::Blend::float32`: a lone term, which the measurement fits), where a state
-/// it does not fit -- a one-channel `SourceColor` over `DestinationColor`, whose destination
-/// product Metal rounds first -- keeps the generic blend. A write whose
+/// one; one and zero for color alone is a blend, and a 32-bit float attachment's blend is the
+/// generic one under every state and math: the shader computes `S*Fs op D*Fd` in `float`, as the
+/// device's blend unit would. A write whose
 /// mask covers none of the format's channels stores nothing: no blend, alpha to coverage, one
 /// sample's returned mask, or late depth test bears on it, but an `Unspecialized` mask stays
 /// refused.
@@ -665,24 +664,15 @@ fn a_replacing_blend_and_a_write_that_stores_nothing_take_the_storage_form() {
     };
     assert!(generic(&replacing(PixelFormat::RG8Snorm)));
     assert!(!generic(&replacing(PixelFormat::R32Float)));
-    // Metal's own blend of a 32-bit float attachment, which the shader computes where the
-    // measurement fits the state and no write mask keeps a channel.
-    let metals = |inputs: &FramebufferFetchInputs| {
-        let view = form(inputs, false, WRITES, &p).expect("the storage form");
-        !view.generic_blend && view.blend.is_some()
-    };
+    // A 32-bit float attachment's blend is the generic one, whatever its state or math.
     let alpha_adds = state(PixelFormat::R32Float, |c| {
         c.blending_enabled = true;
         c.destination_alpha_blend_factor = BlendFactor::One;
     });
-    assert!(metals(&alpha_adds));
     let subtracts = state(PixelFormat::R32Float, |c| {
         c.blending_enabled = true;
         c.rgb_blend_operation = BlendOperation::Subtract;
     });
-    assert!(metals(&subtracts));
-    // The one-channel state the measurement does not fit keeps the generic blend, as does any
-    // state of a module without fast math.
     let source_by_destination = |pf| {
         state(pf, |c| {
             c.blending_enabled = true;
@@ -692,8 +682,14 @@ fn a_replacing_blend_and_a_write_that_stores_nothing_take_the_storage_form() {
             c.destination_alpha_blend_factor = BlendFactor::DestinationColor;
         })
     };
-    assert!(generic(&source_by_destination(PixelFormat::R32Float)));
-    assert!(metals(&source_by_destination(PixelFormat::RG32Float)));
+    for blended in [
+        &alpha_adds,
+        &subtracts,
+        &source_by_destination(PixelFormat::R32Float),
+        &source_by_destination(PixelFormat::RG32Float),
+    ] {
+        assert!(generic(blended));
+    }
     let safe = ColorUse {
         math: BlendMath::Rounded,
         ..WRITES

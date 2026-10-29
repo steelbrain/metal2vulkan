@@ -28,7 +28,6 @@ use crate::spirv::ir::{BinOp, ConstBits, Constant, ConvOp, GlslOp, Type};
 
 pub mod blend;
 pub(crate) mod blend_color;
-pub(crate) mod computed;
 pub use blend::Blend;
 pub(crate) mod table;
 pub use table::{declare, declare_padded, search};

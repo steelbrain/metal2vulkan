@@ -228,7 +228,7 @@ gap	PrivatePrimitives	none	a draw of an Apple-private primitive type (OpenGL on 
 gap	PrimitiveIdIndices	rare	an indexed draw of a primitive_id pipeline, on a device without geometry or tessellation shaders, whose indices the encoder wrote since its last barrier
 feature	PrivateRenderState	none	Apple-private pipeline fields of OpenGL on Metal (no public header)
 gap	SurfaceDepthStencil	rare	a blit of the stencil of a Depth32Float_Stencil8 texture over a plane of an IOSurface with planes, or a pass on an X32_Stencil8 one's view as Depth32Float_Stencil8
-feature	ExtendedRangeBlend	system	the parts of a blend into an extended-range (XR10) attachment the measured model does not hold (second-source factors, the color blend color difference, a one-color-channel mask, float4 and sRGB outside the measured forms); the consumer's guests blend RGB10A8_2P_XR10 attachments
+feature	ExtendedRangeBlend	system	an extended-range (XR10) attachment blended from an output other than four half or float lanes; a 16-bit float attachment's storage-form blend of a second-source factor or a one-color-channel mask under fast math; the consumer's guests blend RGB10A8_2P_XR10 attachments
 feature	CommandPredication	none	Apple-private command predication on a device without buffer device addresses
 feature	ProgramScopeBinding	app	MSL 3.2 program-scope buffer bindings (macOS 15 and later)
 feature	SeqCstFence	rare	a seq_cst fence in a vertex or fragment stage without its stores and atomics

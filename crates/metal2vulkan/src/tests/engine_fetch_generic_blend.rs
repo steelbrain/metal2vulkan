@@ -7,21 +7,15 @@
 //! On every committed profile that orders fetch through the pixel interlock alone, each such
 //! attachment the device can view as a storage image takes the storage form with the generic
 //! float blend (`StorageView::generic_blend`): a 16-bit normalized, 8-bit signed normalized,
-//! 10-bit, packed float and `A8Unorm` attachment of a four-lane output, an 8-bit unorm or 32-bit
-//! float one of fewer lanes, and a 32-bit float one of four lanes under a module without fast
-//! math or a blend state Metal's own measured arithmetic there does not fit, under several
-//! blends. Each names the blend in its `RuntimeFact::InterlockedFramebufferFetch`, records
+//! 10-bit, packed float, 32-bit float and `A8Unorm` attachment of a four-lane output, and an 8-bit
+//! unorm or 32-bit float one of fewer lanes, under several blends and either math. Each names the blend in its `RuntimeFact::InterlockedFramebufferFetch`, records
 //! `PrecisionNote::UnmeasuredFetchBlend`, pushes the blend color as `PushField::HalfBlendColor`
 //! exactly where the blend reads it, and its module passes L3. Before, each was refused
 //! `NotImplemented(FramebufferFetch)` at its color.
 //!
-//! A 32-bit float attachment of a four-lane output under fast math and a state the measurement
-//! fits (`extended_range::Blend::float32`, `Blend::fitted`: here the fused multiply-add of one
-//! over one minus the source alpha, and the minimum and maximum) takes Metal's own blend instead
-//! and records **no** blend note at all, which is what says the generic blend is the fallback and
-//! not the route. The whole pipeline is made for `RGBA32Float` there, color 0 a written storage
-//! attachment and no color attachment of the subpass, its stages passing L3 and its fragment
-//! stage carrying no blend note.
+//! The whole pipeline is made for `RGBA32Float` there, color 0 a written storage attachment and
+//! no color attachment of the subpass, its stages passing L3 and its fragment stage carrying the
+//! generic blend's note.
 //! A blend that reads the second source, or any blend beside a second (index 1) output (the owned
 //! fixture `engine/fbl_fetch_dual`), takes the generic blend too, a 16-bit float and an 8-bit
 //! unorm attachment's among them; one of a function that writes no second output is refused as
@@ -82,17 +76,12 @@ const OVER: BlendEquation = BlendEquation {
     alpha_operation: BlendOperation::Add,
 };
 
-/// Blends of several factors and operations: each with whether it reads the blend color, and
-/// whether a 32-bit float attachment's blend of it in a module with fast math is Metal's own
-/// measured arithmetic of four lanes rather than the generic blend
-/// (`extended_range::Blend::float32`, `Blend::fitted`).
-fn equations() -> [(BlendEquation, bool, bool); 4] {
+/// Blends of several factors and operations, each with whether it reads the blend color.
+fn equations() -> [(BlendEquation, bool); 4] {
     use BlendFactor as F;
     use BlendOperation as O;
     [
-        // One fused multiply-add, which the measurement fits at every word of the three cases'
-        // `one-1msa` sites.
-        (OVER, false, true),
+        (OVER, false),
         (
             BlendEquation {
                 source_rgb: F::BlendColor,
@@ -103,8 +92,6 @@ fn equations() -> [(BlendEquation, bool, bool); 4] {
                 alpha_operation: O::Subtract,
             },
             true,
-            // A blend color beside another factor, which is no fitted form at this width.
-            false,
         ),
         // The minimum and the maximum, which read no factor.
         (
@@ -114,7 +101,6 @@ fn equations() -> [(BlendEquation, bool, bool); 4] {
                 ..OVER
             },
             false,
-            true,
         ),
         (
             BlendEquation {
@@ -122,8 +108,6 @@ fn equations() -> [(BlendEquation, bool, bool); 4] {
                 destination_rgb: F::DestinationColor,
                 ..OVER
             },
-            false,
-            // A contracted pair of a state the measurement does not fit.
             false,
         ),
     ]
@@ -223,39 +207,6 @@ fn check_generic(
     );
     let pushes = |field: PushField| a.interface.push.fields.iter().any(|x| x.field == field);
     assert_eq!(pushes(PushField::HalfBlendColor), reads_color, "{what}");
-    assert!(!pushes(PushField::BlendColor), "{what}");
-    link_and_validate(a, p).unwrap_or_else(|e| panic!("{what}: L3: {e}"));
-}
-
-/// Check `a`, compiled for a 32-bit float attachment's blend of color `color` by `eq` under fast
-/// math at a state the measurement fits (reading the blend color where `reads_color`): Metal's
-/// own blend in the storage form (`extended_range::Blend::float32`), with no blend note of any
-/// kind, its module valid.
-fn check_metals_float32(
-    a: &FunctionArtifact,
-    p: &DeviceProfile,
-    (color, eq, reads_color): (u32, BlendEquation, bool),
-    what: &str,
-) {
-    assert_eq!(
-        fetched(a, color),
-        Some((true, Some(eq))),
-        "{what}: {:?}",
-        a.facts
-    );
-    // The blend is Metal's and the store is the `f32` it gives, so neither the unmeasured note,
-    // nor the fast-math blend's, nor the device's conversion is recorded.
-    for note in [
-        PrecisionNote::UnmeasuredFetchBlend,
-        PrecisionNote::HalfOutputFastMathBlend,
-        PrecisionNote::HalfOutputPrecision,
-        PrecisionNote::DeviceColorConversion,
-    ] {
-        assert!(!a.precision.contains(&note), "{what}: {:?}", a.precision);
-    }
-    let pushes = |field: PushField| a.interface.push.fields.iter().any(|x| x.field == field);
-    assert_eq!(pushes(PushField::HalfBlendColor), reads_color, "{what}");
-    assert!(!pushes(PushField::BlendColor), "{what}");
     link_and_validate(a, p).unwrap_or_else(|e| panic!("{what}: L3: {e}"));
 }
 
@@ -287,15 +238,13 @@ fn a_blended_fetch_of_another_format_computes_the_generic_blend() {
         PixelFormat::RG11B10Float,
         PixelFormat::A8Unorm,
     ];
-    // Each module, its entry, and whether it states fast math (a safe-math module's 32-bit float
-    // blend is not measured in any state: the generic blend).
+    // Each module and its entry, under fast math and not.
     let entries = [
-        (&fast, "fbl8_over_loaded", true),
-        (&fast, "fbl8_over_loaded_float", true),
-        (&safe, "fbl8_over_product", false),
+        (&fast, "fbl8_over_loaded"),
+        (&fast, "fbl8_over_loaded_float"),
+        (&safe, "fbl8_over_product"),
     ];
     let mut checked = 0;
-    let mut metals = 0;
     // Profiles on which `RGBA32Float` took the form.
     let mut float32 = Vec::new();
     for (stem, p) in committed_profiles().expect("profiles") {
@@ -303,27 +252,16 @@ fn a_blended_fetch_of_another_format_computes_the_generic_blend() {
             continue;
         }
         for pf in formats {
-            for (eq, reads_color, wide_measured) in equations() {
+            for (eq, reads_color) in equations() {
                 let r = attachments(0, pf, eq, ColorWriteMask::ALL);
                 let inputs = state(0, &r, &p);
-                for &(bc, entry, fast_math) in &entries {
+                for &(bc, entry) in &entries {
                     let what = format!("{stem} {pf:?} {entry} {eq:?}");
                     let Some(a) = compiled(bc, entry, &p, &inputs, &what) else {
                         continue;
                     };
-                    // Metal's own blend of a 32-bit float attachment, where the module states
-                    // fast math and the measurement fits the state; the generic blend elsewhere.
-                    let own = pf == PixelFormat::RGBA32Float && fast_math && wide_measured;
-                    match own {
-                        true => {
-                            check_metals_float32(&a, &p, (0, eq, reads_color), &what);
-                            metals += 1;
-                        }
-                        false => {
-                            check_generic(&a, &p, (0, eq, reads_color), &what);
-                            checked += 1;
-                        }
-                    }
+                    check_generic(&a, &p, (0, eq, reads_color), &what);
+                    checked += 1;
                     if pf == PixelFormat::RGBA32Float && !float32.contains(&stem) {
                         float32.push(stem.clone());
                     }
@@ -332,7 +270,6 @@ fn a_blended_fetch_of_another_format_computes_the_generic_blend() {
         }
     }
     assert!(checked > 0, "no interlock profile took the generic blend");
-    assert!(metals > 0, "no interlock profile took Metal's own blend");
     assert!(
         float32.iter().any(|s| s.starts_with("moltenvk")),
         "no MoltenVK profile took RGBA32Float's form: {float32:?}"
@@ -365,20 +302,14 @@ fn a_blended_fetch_of_another_format_computes_the_generic_blend() {
         let fragment = (pipe.stages.iter())
             .find(|s| s.stage == vk::ShaderStage::FRAGMENT)
             .expect("a fragment stage");
-        // `OVER` is a fused multiply-add, a form the measurement fits, so the pipeline's fragment
-        // stage carries no blend note: the attachment stores Metal's own value.
-        for note in [
-            PrecisionNote::UnmeasuredFetchBlend,
-            PrecisionNote::HalfOutputFastMathBlend,
-            PrecisionNote::HalfOutputPrecision,
-            PrecisionNote::DeviceColorConversion,
-        ] {
-            assert!(
-                !fragment.precision_notes.contains(&note),
-                "{what}: {:?}",
-                fragment.precision_notes
-            );
-        }
+        // The shader computes the blend, as the device's blend unit would, and says so.
+        assert!(
+            fragment
+                .precision_notes
+                .contains(&PrecisionNote::UnmeasuredFetchBlend),
+            "{what}: {:?}",
+            fragment.precision_notes
+        );
         for s in &pipe.stages {
             check_words_valid(&s.spirv, &pipe.requirements, dev.profile())
                 .unwrap_or_else(|e| panic!("{what}: L3: {e}"));
@@ -428,9 +359,7 @@ fn a_narrow_output_takes_the_generic_blend() {
         }
         for (pf, entries, masks) in &cases {
             for mask in masks {
-                // Every output here is fewer than four lanes, so a 32-bit float attachment's
-                // blend is not measured whatever the state: the generic blend.
-                for (eq, reads_color, _) in equations() {
+                for (eq, reads_color) in equations() {
                     let r = attachments(1, *pf, eq, *mask);
                     let inputs = state(1, &r, &p);
                     for bc in [&fast, &safe] {

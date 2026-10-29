@@ -44,7 +44,7 @@ Its limits, measured rather than asserted:
 | committed recordings | 1122 |
 | distinct SDK items the Metal leg reaches, of any status | 800 |
 | of those, reached only where this cannot name the family | 2 |
-| ledger rows (a case whose gap is recorded) | 1066 |
+| ledger rows (a case whose gap is recorded) | 1082 |
 | declared crossings of the option space (pairs put to Metal at once) | 26 |
 | declared crossings that are no pair of it (a boolean or numeric field, or one type in two slots) | 30 |
 
@@ -3268,4 +3268,20 @@ A case whose difference from Metal is recorded rather than compared away. The le
 | `texture-fills-81` | Metal's plain colour fill (`fillTexture:...color:` with no pixel format; the case's c0, c4, c5 and c7) packs the colour by its fill's own rules, a tie rounded h… |
 | `texture-fills-110` | Metal's plain colour fill (`fillTexture:...color:` with no pixel format; the case's c0, c4, c5 and c7) packs the colour by its fill's own rules, a tie rounded h… |
 | `texture-fills-115` | Metal's plain colour fill (`fillTexture:...color:` with no pixel format; the case's c0, c4, c5 and c7) packs the colour by its fill's own rules, a tie rounded h… |
+| `xr-blend-bgr10xr-add` | A `half4` fill blended into an extended-range attachment (one over the destination, added): the function blends in the shader, inside the pixel interlock, in th… |
+| `xr-blend-bgr10xr-premul` | A `half4` fill blended into an extended-range attachment (premultiplied over: one over one minus the source alpha, added): the function blends in the shader, in… |
+| `xr-blend-bgr10xr-srgb-add` | A `half4` fill blended into an extended-range attachment (one over the destination, added): the function blends in the shader, inside the pixel interlock, in th… |
+| `xr-blend-bgr10xr-srgb-premul` | A `half4` fill blended into an extended-range attachment (premultiplied over: one over one minus the source alpha, added): the function blends in the shader, in… |
+| `xr-blend-bgra10xr-add` | A `half4` fill blended into an extended-range attachment (one over the destination, added): the function blends in the shader, inside the pixel interlock, in th… |
+| `xr-blend-bgra10xr-premul` | A `half4` fill blended into an extended-range attachment (premultiplied over: one over one minus the source alpha, added): the function blends in the shader, in… |
+| `xr-blend-bgra10xr-srgb-add` | A `half4` fill blended into an extended-range attachment (one over the destination, added): the function blends in the shader, inside the pixel interlock, in th… |
+| `xr-blend-bgra10xr-srgb-premul` | A `half4` fill blended into an extended-range attachment (premultiplied over: one over one minus the source alpha, added): the function blends in the shader, in… |
+| `xr-blend-planes-add` | A `half4` fill blended into an extended-range attachment (one over the destination, added): the function blends in the shader, inside the pixel interlock, in th… |
+| `xr-blend-planes-add` | A `half4` fill blended into an extended-range attachment (one over the destination, added): the function blends in the shader, inside the pixel interlock, in th… |
+| `xr-blend-planes-premul` | A `half4` fill blended into an extended-range attachment (premultiplied over: one over one minus the source alpha, added): the function blends in the shader, in… |
+| `xr-blend-planes-premul` | A `half4` fill blended into an extended-range attachment (premultiplied over: one over one minus the source alpha, added): the function blends in the shader, in… |
+| `xr-blend-planes-srgb-add` | A `half4` fill blended into an extended-range attachment (one over the destination, added): the function blends in the shader, inside the pixel interlock, in th… |
+| `xr-blend-planes-srgb-add` | A `half4` fill blended into an extended-range attachment (one over the destination, added): the function blends in the shader, inside the pixel interlock, in th… |
+| `xr-blend-planes-srgb-premul` | A `half4` fill blended into an extended-range attachment (premultiplied over: one over one minus the source alpha, added): the function blends in the shader, in… |
+| `xr-blend-planes-srgb-premul` | A `half4` fill blended into an extended-range attachment (premultiplied over: one over one minus the source alpha, added): the function blends in the shader, in… |
 

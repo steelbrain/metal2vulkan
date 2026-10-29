@@ -12988,12 +12988,9 @@ variant	metal2vulkan::error::ErrorClass::InvalidRequest	InvalidRequest
 variant	metal2vulkan::error::ErrorClass::LimitExceeded	LimitExceeded
 variant	metal2vulkan::error::ErrorClass::Malformed	Malformed
 variant	metal2vulkan::error::ErrorClass::Unsupported	Unsupported
-variant	metal2vulkan::error::ExtendedRangeBlend::ConstantColorDifference	ConstantColorDifference
 variant	metal2vulkan::error::ExtendedRangeBlend::DualSource	DualSource
-variant	metal2vulkan::error::ExtendedRangeBlend::FloatOutput	FloatOutput
 variant	metal2vulkan::error::ExtendedRangeBlend::OneColorChannel	OneColorChannel
 variant	metal2vulkan::error::ExtendedRangeBlend::Output	Output
-variant	metal2vulkan::error::ExtendedRangeBlend::SrgbForm	SrgbForm
 variant	metal2vulkan::error::Feature::AddressSpace	AddressSpace(u32)
 variant	metal2vulkan::error::Feature::AgxUnmodeled	AgxUnmodeled
 variant	metal2vulkan::error::Feature::AlphaToOne	AlphaToOne
@@ -13487,7 +13484,6 @@ variant	metal2vulkan::pipeline::PushField::AmplificationId	AmplificationId
 variant	metal2vulkan::pipeline::PushField::AmplificationLayerOffset	AmplificationLayerOffset
 variant	metal2vulkan::pipeline::PushField::AmplificationViewportOffset	AmplificationViewportOffset
 variant	metal2vulkan::pipeline::PushField::BaseVertexInstance	BaseVertexInstance
-variant	metal2vulkan::pipeline::PushField::BlendColor	BlendColor
 variant	metal2vulkan::pipeline::PushField::CaptureIndexAddress	CaptureIndexAddress
 variant	metal2vulkan::pipeline::PushField::CaptureLayout	CaptureLayout
 variant	metal2vulkan::pipeline::PushField::CommandRecordsAddress	CommandRecordsAddress

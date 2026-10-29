@@ -255,9 +255,9 @@ pub struct BindState {
     #[cfg_attr(feature = "serde", serde(default))]
     pub fragment_tests: FragmentTests,
     /// The render encoder's blend color (`setBlendColorRed:green:blue:alpha:`; Metal's default
-    /// `[0, 0, 0, 0]` where the encoder never set it), red first: a fragment function that blends
-    /// an extended-range attachment in the shader under a blend that reads it takes it as push
-    /// data (`PushField::BlendColor`). Only a draw's bytes depend on it, so it is not part of the
+    /// `[0, 0, 0, 0]` where the encoder never set it), red first: a fragment function that
+    /// computes a blend in the shader under a blend that reads it takes it as push data
+    /// (`PushField::HalfBlendColor`). Only a draw's bytes depend on it, so it is not part of the
     /// shape.
     #[cfg_attr(feature = "serde", serde(default))]
     pub blend_color: [f32; 4],

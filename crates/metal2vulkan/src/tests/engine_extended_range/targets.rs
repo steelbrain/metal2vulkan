@@ -15,9 +15,8 @@
 //! - Refused, typed: a blended attachment (`NotImplemented(Format)`, by the lowering and, where
 //!   the function does not write it, by link's format table; where the device orders fetch only
 //!   through the pixel interlock, or through rasterization-order input attachments, the shader
-//!   blends a `half4` output (the module tests of `engine_fragment`), a `float4` one into a
-//!   linear form under its own model, and a `float4` one into an `_sRGB` form outside the blends is
-//!   `NotImplemented(ExtendedRangeBlend(FloatOutput))`), a mask of some of the format's channels
+//!   blends a `half4` or `float4` output into every form by the device's arithmetic, noted
+//!   `ExtendedRangeBlendSource` or `ExtendedRangeFloatBlendSource`), a mask of some of the format's channels
 //!   (`NotImplemented(Format)`; a padded format's are its raw words, so its mask is theirs), an
 //!   integer or a `float` output (Metal's pipeline errors, `ColorAttachment`), a fragment compiled
 //!   without the pipeline's attachments (`NeedsInput(ColorWrites)`).
@@ -197,10 +196,6 @@ fn render(r: &RenderLinkInputs) -> LinkInputs {
 
 fn is_format_refusal(e: &Error) -> bool {
     matches!(e, Error::Unsupported(u) if u.feature == Feature::Format && u.needs == Needs::NotImplemented)
-}
-
-fn is_float_blend_refusal(e: &Error) -> bool {
-    matches!(e, Error::Unsupported(u) if u.feature == Feature::ExtendedRangeBlend(crate::error::ExtendedRangeBlend::FloatOutput) && u.needs == Needs::NotImplemented)
 }
 
 /// [`fragment_inputs`] with the framebuffer-fetch state the pipeline compile gives a function
@@ -505,26 +500,25 @@ fn unmodelled_extended_range_targets_are_refused() {
     for stem in ["lavapipe", "moltenvk-m3"] {
         let p = venue(stem);
         let v = compile(&bc, "rt6_fill_vertex", &p).expect("vertex");
-        for (pf, form) in FORMATS {
+        for (pf, _) in FORMATS {
             let what = format!("{stem} {pf:?}");
-            // Blended: the lowering refuses the function's `float4` output. Where the device
-            // orders fetch only through the interlock, or through rasterization-order input
-            // attachments, the shader blends a `half4` output, and a `float4` one under the blends
-            // whose color lanes take one term alone, and into a linear form, `BGR10_XR_sRGB` or
-            // `RGB10A8_2P_XR10_sRGB` under its own model: the `float4` one under one and one into
-            // `BGRA10_XR_sRGB` is refused by the blend's gap.
+            // Blended: where the device orders fetch only through the interlock, or through
+            // rasterization-order input attachments, the shader blends the `float4` output by the
+            // device's arithmetic, into every form; elsewhere the lowering refuses it.
             let r = pipeline_of(pf, ColorWriteMask::ALL, true);
             let blended = compile_with(&bc, "rt6_fill_rgba32float", &p, &blended_inputs(&r, &p));
-            let narrow_only = form == ExtendedRange::Bgra10 { srgb: true };
-            match (blends_in_shader(&p), narrow_only) {
-                (true, false) => {
-                    blended.unwrap_or_else(|e| panic!("{what} blended: {e}"));
+            match blends_in_shader(&p) {
+                true => {
+                    let a = blended.unwrap_or_else(|e| panic!("{what} blended: {e}"));
+                    assert!(
+                        a.precision.contains(
+                            &crate::pipeline::artifact::PrecisionNote::ExtendedRangeFloatBlendSource
+                        ),
+                        "{what} blended: {:?}",
+                        a.precision
+                    );
                 }
-                (true, true) => {
-                    let e = blended.expect_err(&what);
-                    assert!(is_float_blend_refusal(&e), "{what} blended: {e}");
-                }
-                (false, _) => {
+                false => {
                     let e = blended.expect_err(&what);
                     assert!(is_format_refusal(&e), "{what} blended: {e}");
                 }
@@ -561,7 +555,6 @@ fn unmodelled_extended_range_targets_are_refused() {
                 matches!(e, Error::NeedsInput(RuntimeInput::ColorWrites)),
                 "{what} standalone: {e}"
             );
-            let _ = form;
         }
     }
     // A framebuffer fetch of such an attachment (`exf_fetch_blend` reads `float4 [[color(0)]]`

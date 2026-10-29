@@ -2,8 +2,8 @@
 //! assemblers (`llvm-as`, `xcrun metal-as`, `spirv-as`), the committed fixture directories, a
 //! synthetic metallib writer ([`metallib`]), a tool's identity, the MoltenVK toolchain the MSL
 //! checks reproduce, and the generated-program fuzzers ([`fuzz`]) the product's CPU-interpreter
-//! tests and validation's device tests both run, the extended-range blend and bicubic tables both
-//! check ([`xr_blends`], [`xr_bicubic`]), and the store-buffering litmus kernel both compile
+//! tests and validation's device tests both run, the extended-range bicubic table both check
+//! ([`xr_bicubic`]), and the store-buffering litmus kernel both compile
 //! ([`litmus`]).
 //!
 //! Scratch directories every suite's temporaries go in ([`scratch`]): one root under the OS temp
@@ -30,7 +30,6 @@ pub mod scratch;
 pub mod spirv;
 pub mod tools;
 pub mod xr_bicubic;
-pub mod xr_blends;
 
 /// The validation crate's `fixtures/public` beside this crate
 /// (`crates/metal2vulkan-validation/fixtures/public`, read-only).

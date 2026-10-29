@@ -3088,9 +3088,11 @@ bound.
 - `metal2vulkan-degrade-extended-range-blend-source` (precision).
   `PrecisionNote::ExtendedRangeBlendSource`: A fragment function's `half` color output (a scalar or
   vector of AIR's `half`) is blended into an extended-range attachment (`BGR10_XR`, `BGRA10_XR`,
-  `RGB10A8_2P_XR10`, or an `_sRGB` twin) where Metal may round the blend's source otherwise than the
-  function's computed blend: under fast math a lane of the output is not a load; or the module names
-  no math mode.
+  `RGB10A8_2P_XR10`, or an `_sRGB` twin), whose raw codes no device's blend unit reads, so the
+  function blends in the shader in the device's arithmetic: `S·Fs op D·Fd` in `float`, in the blend
+  equation's order, the source, second source and blend color clamped to the format's range first.
+  Metal's compiler rounds each step to `half`, so a blended channel may store another code than
+  Metal's.
 - `metal2vulkan-degrade-discard-drops-simdgroup-stores` (precision).
   `PrecisionNote::DiscardDropsSimdgroupStores`: A fragment function meets the store-dropping defect
   of `DriverWorkaround::DiscardDropsSimdgroupStores` (MoltenVK on an Apple GPU: Apple's compiler
@@ -3111,8 +3113,8 @@ bound.
 - `metal2vulkan-degrade-extended-range-float-blend-source` (precision).
   `PrecisionNote::ExtendedRangeFloatBlendSource`: `PrecisionNote::ExtendedRangeBlendSource` for a
   `float` color output (a scalar or vector of AIR's `float`): blended into an extended-range
-  attachment where Metal may round the blend's source otherwise than the function's computed blend,
-  under fast math a lane of the output that is not a load, or in a module that names no math mode.
+  attachment in the shader in the device's arithmetic, where Metal's compiler rounds the output and
+  each step of the blend to `half`.
 - `metal2vulkan-degrade-anisotropic-filter` (precision). `PrecisionNote::AnisotropicFilter`: The
   module samples a texture through an anisotropic sampler with Metal's anisotropic filter emulated
   by the device's samples at explicit levels (`lower::sampler::anisotropic`), on a device without
@@ -3157,7 +3159,7 @@ bound.
   that stores some channel (its write mask names one of its format's channels;
   `StageIo::half_fast_colors`, which the pipeline's stage reads, or the interlocked storage form's
   write), where `PrecisionNote::HalfOutputPrecision`'s conditions hold; or
-  computes the blend of a 16-bit or 32-bit float attachment it fetches in the interlocked storage
+  computes the blend of a 16-bit float attachment it fetches in the interlocked storage
   form (no Vulkan blend applies to a storage write) where Metal's compiler may fold the output's
   own arithmetic into that blend or regroup a sum of it: within 2 `half` units in the last place of
   Metal's at the operands' magnitude, 16 at the stored value's under cancellation. Where the output

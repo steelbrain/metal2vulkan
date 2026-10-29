@@ -110,12 +110,10 @@ macro_rules! notes {
 
 fn notes() -> Vec<(&'static str, Ledger)> {
     notes! {
-        NotBuilt: [
+        NotBuilt: [BicubicFilterArithmetic],
+        DeviceGap: [
             ExtendedRangeBlendSource,
             ExtendedRangeFloatBlendSource,
-            BicubicFilterArithmetic,
-        ],
-        DeviceGap: [
             NativeTranscendentals,
             NativeDivision,
             NativeFma,

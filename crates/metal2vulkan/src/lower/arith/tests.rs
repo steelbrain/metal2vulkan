@@ -3807,7 +3807,6 @@ fn aggregate_leaf_total_is_capped_before_expansion() {
 mod atan2;
 mod bicubic;
 mod blend16;
-mod blend32;
 mod blend8;
 mod blend_packed;
 mod color_write;

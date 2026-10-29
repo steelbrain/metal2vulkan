@@ -1432,10 +1432,10 @@ pub enum Feature {
     /// Metal's) set to a value whose effect the translation has not built: the property it names
     /// ([`PrivateRenderField`]). Metal's answer for each was measured; building it is open work.
     PrivateRenderState(PrivateRenderField),
-    /// Metal's blend into an extended-range attachment (`BGRA10_XR`, `BGR10_XR`,
-    /// `RGB10A8_2P_XR10` and their `_sRGB` twins), which the function computes in the shader in
-    /// the interlocked storage form, where Metal's measured model does not hold the part it names
-    /// ([`ExtendedRangeBlend`]). Every other such blend is Metal's arithmetic, bit for bit.
+    /// A blend the function computes in the shader, into an extended-range attachment
+    /// (`BGRA10_XR`, `BGR10_XR`, `RGB10A8_2P_XR10` and their `_sRGB` twins) or into a 16-bit
+    /// float attachment in the interlocked storage form, of the part it names
+    /// ([`ExtendedRangeBlend`]).
     ExtendedRangeBlend(ExtendedRangeBlend),
     /// A program-scope buffer binding of MSL 3.2 (macOS 15 and later), `constant T* constant p
     /// [[buffer(n)]];` in Apple's `!air.global_bindings` list, valid AIR this version does not
@@ -1451,38 +1451,25 @@ pub enum Feature {
     PostDepthCoverage,
 }
 
-/// The part of a blend into an extended-range attachment that [`Feature::ExtendedRangeBlend`]
-/// refuses: what the measured model of Metal's blend does not hold.
+/// The part of a blend the shader computes that [`Feature::ExtendedRangeBlend`] refuses. An
+/// extended-range attachment's blend, which the shader computes by the device's arithmetic, is
+/// built for every factor, operation and write mask, and refuses only [`Output`](Self::Output);
+/// a 16-bit float attachment's blend in the interlocked storage form refuses the other two, the
+/// generic blend taking their place where the function reads the attachment.
 #[non_exhaustive]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum ExtendedRangeBlend {
-    /// Under fast math, a factor of the second source (`Source1Color`, `Source1Alpha` and their
-    /// one-minus forms): dual-source blending into such an attachment is not built. (Without fast
-    /// math it is. A function that writes no second output to the attachment Metal refuses:
+    /// Into a 16-bit float attachment in the storage form, a factor of the second source
+    /// (`Source1Color`, `Source1Alpha` and their one-minus forms): Metal's blend is not built.
+    /// (A function that writes no second output to the attachment Metal refuses:
     /// [`DescriptorError::ColorAttachment`].)
     DualSource,
-    /// Under fast math, the color channels' `BlendColor` with `OneMinusBlendColor` (either as
-    /// the source factor) under `Subtract` or `ReverseSubtract`: Metal's result there follows
-    /// none of the model's forms for every blend color the sweeps drew, so no rule is known.
-    /// (Without fast math it is built; into a 16-bit float attachment, whose blend the storage
-    /// form computes, it is built under fast math too, Metal's exactly there: the minuend's
-    /// product fused, the subtrahend's rounded first.)
-    ConstantColorDifference,
-    /// Under fast math, a write mask of exactly one color channel: Metal blends that channel
-    /// otherwise than the two or three it blends as one vector, by a rule not known. (Without
-    /// fast math it is built.)
+    /// Into a 16-bit float attachment in the storage form under fast math, a write mask of exactly
+    /// one color channel: Metal blends that channel otherwise than the two or three it blends as
+    /// one vector, by a rule not known. (Without fast math it is built.)
     OneColorChannel,
-    /// Under fast math, a `float4` output into `BGRA10_XR_sRGB` under a blend other than those
-    /// whose color channels take one term alone, or under a write mask: measured to differ from
-    /// the models. (Into a linear form, `BGR10_XR_sRGB` or `RGB10A8_2P_XR10_sRGB` it takes its own
-    /// model; without fast math it is rounded to `half` first.)
-    FloatOutput,
-    /// Under fast math, a `BGRA10_XR_sRGB` blend other than the narrow ones, or under a write mask:
-    /// measured to differ from the models (the other `_sRGB` forms take the linear forms' models).
-    /// Without fast math every one is built.
-    SrgbForm,
     /// An output other than four `half` or `float` lanes, or a second output other than those the
-    /// blend reads: not measured.
+    /// blend reads: not built.
     Output,
 }
 

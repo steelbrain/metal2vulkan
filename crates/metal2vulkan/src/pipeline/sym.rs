@@ -1000,11 +1000,6 @@ pub enum PushField {
     /// `[lo, hi]`, which the function clamps its compensated depth's `z / w`, the Vulkan
     /// viewport's normalized depth, to before the interpolation (`CompensatedViewport::vertex_clamp`).
     VertexDepthClamp,
-    /// The render encoder's blend color (`setBlendColorRed:green:blue:alpha:`) for a fragment
-    /// function that blends an extended-range attachment in the shader under a blend that reads
-    /// it: two `uvec4`s holding `f32`s' bits, the color as Metal's blend reads it and one minus
-    /// it (`arith::extended_range::blend_color::constant_words` of `BindState::blend_color`).
-    BlendColor,
     /// The draw's depth state for a fragment function that runs the draw's depth test itself
     /// (`RuntimeFact::ShaderTests`), a `uvec4`: word 0 holds the depth `MTLCompareFunction` in
     /// bits 0 to 2, whether depth writes are enabled in bit 3, and whether the encoder's depth
@@ -1040,9 +1035,9 @@ pub enum PushField {
     /// storage choice declares no format).
     TextureIntegerChannels(SlotRef),
     /// The render encoder's blend color (`setBlendColorRed:green:blue:alpha:`) for a fragment
-    /// function that blends a 16-bit float attachment in the shader under a blend that reads it
-    /// (a fetched attachment's blend): one `uvec4` holding the four `f32`s' bits as the encoder
-    /// set them (`BindState::blend_color`), which the function rounds to `half`.
+    /// function that computes a blend in the shader under a blend that reads it (an
+    /// extended-range attachment's, or a fetched attachment's in the storage form): one `uvec4`
+    /// holding the four `f32`s' bits as the encoder set them (`BindState::blend_color`).
     HalfBlendColor,
     /// The render encoder's alpha test reference (`setAlphaTestReferenceValue:`) for a fragment
     /// function compiled under `LoweringInputs::alpha_test`: one `u32`, the reference's 8-bit

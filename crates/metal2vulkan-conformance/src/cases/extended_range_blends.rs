@@ -249,10 +249,13 @@ impl Case for ExtendedRangeBlend {
         // stored code compares exactly. So this is a declaration of what our side announced and
         // not a tolerance -- no code is loosened.
         //
-        // The two extended-range blend kinds (`extended-range-blend-source` and
-        // `extended-range-blends-stored-codes`) are deliberately **not** named here: neither fired
-        // on either venue of this round, and an allowance no run justified is a claim without
-        // evidence. A venue that needs one adds it with the run that shows it.
+        // The function blends the `half4` fill into the extended-range target in the shader, in
+        // the device's arithmetic, so every row announces `extended-range-blend-source`, a native
+        // note the suite declares for every case (`crate::replay::NATIVE_NOTES`); the codes still
+        // compare exactly, and a site the device's arithmetic moves is a known gap.
+        // `extended-range-blends-stored-codes` is deliberately **not** named here: it fired on no
+        // venue, and an allowance no run justified is a claim without evidence. A venue that
+        // needs it adds it with the run that shows it.
         // Every row reads its answer back through a `Shared` buffer, so on a device without
         // unified memory the runtime announces `shared-in-system-memory`
         // (`crate::replay::shared_memory_notice` holds the whole reason). It declares the

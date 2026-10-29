@@ -1358,8 +1358,9 @@ fn select_body(
     select_params(cx, &used)?;
     // The member-wise phis' representations, before any use of one is selected.
     arith::aggregate::plan_phis(cx, m)?;
-    // A blended extended-range output whose source Metal may round otherwise than the model.
-    arith::output_precision::note_extended_range_sources(cx, m)?;
+    // A blended extended-range output, whose blend the function computes by the device's
+    // arithmetic.
+    arith::output_precision::note_extended_range_sources(cx)?;
     // The `half` chains' operations held at `float` precision, before any of them is selected.
     cx.families.arith.held_at_float = arith::half_chain::plan(cx, m)?;
 

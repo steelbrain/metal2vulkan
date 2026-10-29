@@ -1323,18 +1323,18 @@ pub enum PrecisionNote {
     HalfOutputPrecision,
     /// A fragment function's `half` color output (a scalar or vector of AIR's `half`) is blended
     /// into an extended-range attachment (`BGR10_XR`, `BGRA10_XR`, `RGB10A8_2P_XR10`, or an
-    /// `_sRGB` twin) where Metal may round the blend's source otherwise than the function's
-    /// computed blend: under fast math a lane of the output is not a load; or the module names no
-    /// math mode (a module without fast math, safe or relaxed math, too previously, which computes
-    /// the blend Metal rounds there). Metal's compiler folds the blend into the function, so how it
-    /// rounds the source follows how the function computed it
-    /// (`lower::arith::output_precision::note_extended_range_sources`): a blended channel may store
-    /// a value one code apart from Metal's. A `float` output records
-    /// [`PrecisionNote::ExtendedRangeFloatBlendSource`] instead (this note covered both before), so
-    /// a function of both records both.
+    /// `_sRGB` twin), whose raw codes no device's blend unit reads, so the function blends in the
+    /// shader (`lower::arith::extended_range::blend::native`), in the device's arithmetic: a blend
+    /// unit's `S·Fs op D·Fd` in `float`, in the blend equation's order, the source, the second
+    /// source and the blend color clamped to the format's range first. Metal's compiler folds the
+    /// blend into the function and fuses, regroups and rounds each step to `half` instead, so a
+    /// blended channel may store another code than Metal's; the bound is not measured. Recorded
+    /// for every blended output that stores a channel, under either math. A `float` output
+    /// records [`PrecisionNote::ExtendedRangeFloatBlendSource`] instead, so a function of both
+    /// records both.
     ///
     /// Validation derives no tolerance and no explanation from it: a difference stays a
-    /// mismatch for review, deferred in C3 until an exact path exists.
+    /// mismatch for review.
     ExtendedRangeBlendSource,
     /// A fragment function meets the store-dropping defect of
     /// [`DriverWorkaround::DiscardDropsSimdgroupStores`] (MoltenVK on an Apple GPU: Apple's
@@ -1373,18 +1373,13 @@ pub enum PrecisionNote {
     /// [`DriverWorkaround::DiscardDropsSimdgroupStores`]: crate::device::DriverWorkaround::DiscardDropsSimdgroupStores
     HelperBranchDropsSimdgroupStores,
     /// [`PrecisionNote::ExtendedRangeBlendSource`] for a `float` color output (a scalar or vector
-    /// of AIR's `float`): blended into an extended-range attachment where Metal may round the
-    /// blend's source otherwise than the function's computed blend, under fast math a lane of the
-    /// output that is not a load, or in a module that names no math mode. A blended channel may
-    /// store a value one code apart from Metal's. Measured on an Apple M4 under macOS 27.0.1
-    /// under fast math: a product of loads differs by a code under six of 21 blends (on 35 to 432
-    /// of 4,096 texels), and of 26 computed `float4` shapes Metal's compiler rounds a third
-    /// otherwise again; the consumer's measurement of computed `float4` outputs under fast math
-    /// found a one-code difference under 17 of 66 blends. Its own note, apart from the `half`
-    /// output's, so a consumer can tell the two apart.
+    /// of AIR's `float`): blended into an extended-range attachment in the shader in the device's
+    /// arithmetic, where Metal's compiler rounds the output and each step of the blend to `half`.
+    /// A blended channel may store another code than Metal's; the bound is not measured. Its own
+    /// note, apart from the `half` output's, so a consumer can tell the two apart.
     ///
     /// Validation derives no tolerance and no explanation from it: a difference stays a
-    /// mismatch for review, deferred in C3 until an exact path exists.
+    /// mismatch for review.
     ExtendedRangeFloatBlendSource,
     /// The module samples a texture through an anisotropic sampler with Metal's anisotropic
     /// filter emulated by the device's samples at explicit levels (`lower::sampler::anisotropic`),

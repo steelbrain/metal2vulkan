@@ -1730,10 +1730,9 @@ fn plan(p: &RenderPipeline, device: &Device, shape: &BindShape) -> Result<Bindin
                 PushField::VertexDepthClamp if stage == Stage::Vertex => {}
                 // The draw's depth clamp range, which instantiation reads from the state.
                 PushField::DepthClampRange if stage == Stage::Fragment => {}
-                // The encoder's blend color, which instantiation reads from the state.
-                PushField::BlendColor if stage == Stage::Fragment => {}
                 // The encoder's alpha test reference, which instantiation reads from the state.
                 PushField::AlphaTestReference if stage == Stage::Fragment => {}
+                // The encoder's blend color, which instantiation reads from the state.
                 PushField::HalfBlendColor if stage == Stage::Fragment => {}
                 // The storage form's kept channels, which instantiation reads from the template.
                 PushField::StorageKeptChannels if stage == Stage::Fragment => {}
@@ -4386,17 +4385,11 @@ fn instantiate(
                     .flat_map(|v| v.to_le_bytes())
                     .collect(),
                 PushField::StorageKeptChannels => FieldBytes::of(&t.storage_kept.to_le_bytes()),
-                // The blend color as an extended-range blend reads it, and one minus it.
-                PushField::BlendColor => FieldBytes::words(
-                    crate::lower::arith::extended_range::blend_color::constant_words(
-                        state.blend_color,
-                    ),
-                ),
                 // The alpha test reference's code, Metal's 1 where the encoder never set it.
                 PushField::AlphaTestReference => FieldBytes::of(
                     &alpha_test_code(state.alpha_test_reference.unwrap_or(1.0)).to_le_bytes(),
                 ),
-                // The blend color as the encoder set it, which a 16-bit float blend rounds.
+                // The blend color as the encoder set it, which a blend the shader computes reads.
                 PushField::HalfBlendColor => state
                     .blend_color
                     .iter()

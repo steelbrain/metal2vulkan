@@ -9,7 +9,7 @@
 //! `extended_range_targets`) under the load action `Load` and a blend of source factor one, added,
 //! for color and alpha, with destination factor zero (`one_zero`), one (`add`), or one minus the
 //! source's alpha (`premul`, the consumer's). The runtime blends such an attachment in the shader,
-//! inside the pixel interlock, from the texel's tile value (`extended_range::blend::blend`), or on
+//! inside the pixel interlock, from the texel's tile value (`extended_range::blend::native`), or on
 //! a device with raster-order attachment access (lavapipe) over the attachment's input attachment;
 //! any refusal fails.
 //!
@@ -385,16 +385,21 @@ fn first_texels(got: &[u8], size: usize) -> String {
 }
 
 /// Each format's blends of the probe's `half` outputs over its random texels, of source factor
-/// one, added, with destination factor zero, one, and one minus the source's alpha, store
-/// Metal's bytes.
+/// one, added, with destination factor zero, one, and one minus the source's alpha. Where the
+/// blend computes nothing (one and zero) every format stores Metal's bytes, which is asserted.
+/// Under one and one minus the source's alpha the function blends in the device's arithmetic,
+/// where Metal's compiler rounds each step to `half` (`extended-range-blend-source`): how many
+/// outputs differ from Metal's is printed, not asserted; the conformance suite's `xr-blend-*`
+/// cases hold Metal's bytes and each site the device's arithmetic moves.
 #[test]
-fn blends_of_half_outputs_store_metals_extended_range_texels() {
+fn blends_of_half_outputs_into_extended_range_texels() {
     let (messages, _cache, lane) = lane();
     let name = lane.device.name().to_owned();
     let halves = halves();
     let read = kernel(&lane, "xr2p_read_float");
     let size = (WIDTH as u64, HEIGHT as u64);
     let mut wrong = Vec::new();
+    let mut moved = Vec::new();
     let mut checked = 0;
     for (pf, probe) in FORMATS {
         let form = ExtendedRange::of(pf).expect("an extended-range format");
@@ -410,8 +415,13 @@ fn blends_of_half_outputs_store_metals_extended_range_texels() {
             draw(&lane, &t, &halves, color).unwrap_or_else(|e| panic!("{case}: the pipeline: {e}"));
             let got = lane.read(&t, (0, 0), texel as u64, BlitOption::None);
             checked += 1;
+            // The device's arithmetic answers a blend that computes something.
+            let differs = match dst {
+                BlendFactor::Zero => &mut wrong,
+                _ => &mut moved,
+            };
             if digest(&got) != metal(&format!("{case}.out0")) {
-                wrong.push(format!(
+                differs.push(format!(
                     "{case}.out0: the first texels {}",
                     first_texels(&got, texel)
                 ));
@@ -427,20 +437,21 @@ fn blends_of_half_outputs_store_metals_extended_range_texels() {
                 })
                 .collect();
             if digest(&bytes) != metal(&format!("{case}.outa")) {
-                wrong.push(format!(
+                differs.push(format!(
                     "{case}.outa: the first alpha bytes {:02x?}",
                     &bytes[..8]
                 ));
             }
         }
     }
-    for line in &wrong {
+    for line in wrong.iter().chain(&moved) {
         println!("XR-BLENDS-DIFFERS {name}: {line}");
     }
     println!(
-        "XR-BLENDS {name}: {checked} blends of {COUNT} texels checked, {} outputs differ from \
-         Metal",
-        wrong.len()
+        "XR-BLENDS {name}: {checked} blends of {COUNT} texels checked, {} outputs of one and zero \
+         and {} of the device's arithmetic differ from Metal",
+        wrong.len(),
+        moved.len()
     );
     assert!(
         wrong.is_empty(),
@@ -598,95 +609,53 @@ fn a_blend_onto_a_clear_between_two_codes_reads_the_clears_half() {
     }
 }
 
-/// A pipeline blending (premultiplied over) a `float4` output into a two-plane extended-range
-/// color announces `extended-range-blend-source` once where the output's lanes are not loads
-/// (`rt6_resolves`' `rt6_resolve_white`, a constant), and none where each is a load from a buffer
-/// (`rt6_samples`' `rt6_fill_rgba32float` and `rt6_fill_rgba16float`, fast math): Metal's
-/// compiler folds the blend into the function and rounds the source by how it was computed. A
-/// device with raster-order attachment access (lavapipe) blends over the color's input attachment
-/// and announces alike. So does a `half4` computed under fast math (`rt6_fill_rgba16float`'s load
-/// multiplied by ones), on a device of its own. The `float4` output announces
-/// `extended-range-float-blend-source`, and the `half4` one `extended-range-blend-source`, each
-/// never the other's.
+/// A pipeline blending (premultiplied over) an output into a two-plane extended-range color
+/// announces its blend's note once, whatever the output computes: the function blends in the
+/// shader in the device's arithmetic, where Metal's compiler rounds each step to `half`. The
+/// `float4` output (`rt6_samples`' `rt6_fill_rgba32float`) announces
+/// `extended-range-float-blend-source`, and the `half4` one (`rt6_fill_rgba16float`)
+/// `extended-range-blend-source`, each never the other's; the same color unblended announces
+/// neither. A device with raster-order attachment access (lavapipe) blends over the color's input
+/// attachment and announces alike.
 #[test]
-fn a_blend_of_a_computed_float4_into_extended_range_announces_its_source() {
-    use crate::air_library::AirLibrary;
-    use metal2vulkan_devtools::{engine_dir, llvm_assemble, llvm_assemble_text};
+fn a_blend_into_extended_range_announces_its_source_note() {
     let (messages, _cache, lane) = lane();
     let pf = PixelFormat::RGB10A82PXR10;
     let source = Degradation::ExtendedRangeBlendSource;
     let float_source = Degradation::ExtendedRangeFloatBlendSource;
     let fills = library(&lane.device).unwrap();
-    let bitcode = llvm_assemble(&engine_dir().join("rt6_resolves.ll")).unwrap();
-    let resolves = lane.device.new_library_with_air(&bitcode).unwrap();
-    let function = |library: &metal2vulkan_runtime::Library, name: &str| {
+    let function = |name: &str| {
         StageSource::Function(
-            library
+            fills
                 .new_function_with_name(name)
                 .unwrap()
                 .function_descriptor(),
         )
     };
-    let made = |library: &metal2vulkan_runtime::Library, vertex: &str, name: &str| {
-        let vertex_library = match vertex {
-            "rt6_fill_vertex" => &fills,
-            _ => &resolves,
-        };
-        let mut pipeline = RenderPipelineDescriptor::new(function(vertex_library, vertex));
-        pipeline.fragment = Some(function(library, name));
+    let made = |name: &str, blended: bool| {
+        let mut pipeline = RenderPipelineDescriptor::new(function("rt6_fill_vertex"));
+        pipeline.fragment = Some(function(name));
         let mut color = ColorAttachmentDescriptor::new(pf);
-        color.blending_enabled = true;
+        color.blending_enabled = blended;
         color.destination_rgb_blend_factor = BlendFactor::OneMinusSourceAlpha;
         color.destination_alpha_blend_factor = BlendFactor::OneMinusSourceAlpha;
         pipeline.color_attachments[0] = Some(color);
         lane.device
             .new_render_pipeline_state(&pipeline, &PipelineOptions::default())
-            .map(|_| ())
+            .unwrap_or_else(|e| panic!("{name}: {e}"));
+        counts(&messages.take_notices())
     };
     for name in ["rt6_fill_rgba32float", "rt6_fill_rgba16float"] {
-        made(&fills, "rt6_fill_vertex", name).unwrap_or_else(|e| panic!("{name}: {e}"));
-        let notices = counts(&messages.take_notices());
+        let notices = made(name, false);
         assert!(!notices.contains_key(&source), "{name}: {notices:?}");
         assert!(!notices.contains_key(&float_source), "{name}: {notices:?}");
     }
-    made(&resolves, "rt6_resolve_full", "rt6_resolve_white")
-        .unwrap_or_else(|e| panic!("rt6_resolve_white: {e}"));
-    let notices = messages.take_notices();
-    assert_eq!(counts(&notices).get(&float_source), Some(&1), "{notices:?}");
-    assert_eq!(counts(&notices).get(&source), None, "{notices:?}");
-    // A `half4` computed under fast math (the fill's load multiplied by ones) announces it too,
-    // on a device of its own (each kind is announced once per device).
-    let (messages, _cache, lane) = super::resolves::lane();
-    let fills = library(&lane.device).unwrap();
-    let made = |library: &metal2vulkan_runtime::Library, name: &str| {
-        let mut pipeline = RenderPipelineDescriptor::new(function(&fills, "rt6_fill_vertex"));
-        pipeline.fragment = Some(function(library, name));
-        let mut color = ColorAttachmentDescriptor::new(pf);
-        color.blending_enabled = true;
-        color.destination_rgb_blend_factor = BlendFactor::OneMinusSourceAlpha;
-        color.destination_alpha_blend_factor = BlendFactor::OneMinusSourceAlpha;
-        pipeline.color_attachments[0] = Some(color);
-        lane.device
-            .new_render_pipeline_state(&pipeline, &PipelineOptions::default())
-            .map(|_| ())
-    };
-    let text = std::fs::read_to_string(engine_dir().join("rt6_samples.ll")).unwrap();
-    let load = "  ret <4 x half> %19\n";
-    assert_eq!(text.matches(load).count(), 1);
-    let text = text.replace(
-        load,
-        "  %computed = fmul fast <4 x half> %19, <half 0xH3C00, half 0xH3C00, half 0xH3C00, \
-         half 0xH3C00>\n  ret <4 x half> %computed\n",
-    );
-    let computed = lane
-        .device
-        .new_library_with_air(&llvm_assemble_text(&text).unwrap())
-        .unwrap();
-    made(&computed, "rt6_fill_rgba16float")
-        .unwrap_or_else(|e| panic!("a computed rt6_fill_rgba16float: {e}"));
-    let notices = messages.take_notices();
-    assert_eq!(counts(&notices).get(&source), Some(&1), "{notices:?}");
-    assert_eq!(counts(&notices).get(&float_source), None, "{notices:?}");
+    let notices = made("rt6_fill_rgba32float", true);
+    assert_eq!(notices.get(&float_source), Some(&1), "{notices:?}");
+    assert_eq!(notices.get(&source), None, "{notices:?}");
+    let notices = made("rt6_fill_rgba16float", true);
+    assert_eq!(notices.get(&source), Some(&1), "{notices:?}");
+    assert_eq!(notices.get(&float_source), None, "{notices:?}");
 }
 
 /// The kind a draw in a pass that loads an extended-range, padded or bfloat color announces.

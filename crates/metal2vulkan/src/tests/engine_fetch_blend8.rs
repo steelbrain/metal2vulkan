@@ -452,7 +452,6 @@ fn another_eight_bit_unorm_blend_or_mask_computes_metals_blend() {
                 let pushes =
                     |field: PushField| a.interface.push.fields.iter().any(|x| x.field == field);
                 assert_eq!(pushes(PushField::HalfBlendColor), reads_color, "{what}");
-                assert!(!pushes(PushField::BlendColor), "{what}");
                 link_and_validate(&a, &p).unwrap_or_else(|e| panic!("{what}: L3: {e}"));
                 checked += 1;
             }

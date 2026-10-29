@@ -2093,20 +2093,18 @@ fn a_replacing_blend_or_a_write_that_stores_nothing_takes_the_storage_form() {
 /// (no vertex descriptor), color 0 a written storage attachment of the raw format, as are its
 /// pipelines blending one plus one, one and zero, and source alpha over, and a stage compiled under
 /// its state links into no pipeline of another blend there. The `float4` fill
-/// (`rt6_fill_rgba32float`) under the premultiplied blend takes its own model; source alpha over
-/// compiles, and so does the `half4` fill. The function is built without fast math, where the color
-/// channels' blend color difference is built and makes the whole pipeline; the same function
-/// switched to fast math refuses it by its gap (`ExtendedRangeBlend`). The consumer's mask blend
-/// (G345: color source factor zero over one minus the source's alpha) is computed in the shader
-/// too, for the `half4` output and for the `float4` fill (rounded to `half` first), and makes the
+/// (`rt6_fill_rgba32float`) under the premultiplied blend compiles; so do source alpha over and the
+/// `half4` fill. The function is built without fast math; the color channels' blend color
+/// difference makes the whole pipeline in it and in the same function switched to fast math. The
+/// consumer's mask blend (G345: color source factor zero over one minus the source's alpha) is
+/// computed in the shader too, for the `half4` output and for the `float4` fill, and makes the
 /// whole pipeline on the MoltenVK profile.
 /// A fast-math function's source-alpha-over blend (source alpha and one minus it, added, for
-/// color and alpha, every channel written) into color 0 of `BGR10_XR_sRGB` or
-/// `RGB10A8_2P_XR10_sRGB`, beside an `R8Unorm` color 1 under the same blend (a consumer's
-/// pipeline): on every committed profile that orders fetch through the interlock, the shader
-/// blends color 0, a `half4` output's and a `float4` one's, and the module passes L3. Into
-/// `BGRA10_XR_sRGB`, whose fast blends beyond the narrow ones Metal computes otherwise, the same
-/// blend stays refused by name (`ExtendedRangeBlend::SrgbForm`).
+/// color and alpha, every channel written) into color 0 of `BGR10_XR_sRGB`,
+/// `RGB10A8_2P_XR10_sRGB` or `BGRA10_XR_sRGB`, beside an `R8Unorm` color 1 under the same blend (a
+/// consumer's pipeline): on every committed profile that orders fetch through the interlock, the
+/// shader blends color 0 by the device's arithmetic, a `half4` output's and a `float4` one's, and
+/// the module passes L3.
 #[test]
 fn a_fast_source_alpha_over_blend_into_an_srgb_extended_range_attachment_is_made() {
     use crate::metal::BlendFactor;
@@ -2143,7 +2141,11 @@ fn a_fast_source_alpha_over_blend_into_an_srgb_extended_range_attachment_is_made
         if !crate::lower::fragment::interlock_orders(&p) {
             continue;
         }
-        for pf in [PixelFormat::BGR10XRSRGB, PixelFormat::RGB10A82PXR10SRGB] {
+        for pf in [
+            PixelFormat::BGR10XRSRGB,
+            PixelFormat::RGB10A82PXR10SRGB,
+            PixelFormat::BGRA10XRSRGB,
+        ] {
             let inputs = state(&colors(pf), &p);
             for entry in ["rt6_fill_rgba16float", "rt6_fill_rgba32float"] {
                 let a = match compile_with(&fills, entry, &p, &inputs) {
@@ -2157,16 +2159,6 @@ fn a_fast_source_alpha_over_blend_into_an_srgb_extended_range_attachment_is_made
                     .unwrap_or_else(|e| panic!("{stem}: {pf:?} {entry}: L3: {e}"));
                 checked += 1;
             }
-        }
-        let inputs = state(&colors(PixelFormat::BGRA10XRSRGB), &p);
-        match compile_with(&fills, "rt6_fill_rgba16float", &p, &inputs) {
-            Err(Error::Unsupported(u)) if u.needs != Needs::NotImplemented => {}
-            Err(Error::Unsupported(u)) => assert_eq!(
-                u.feature,
-                Feature::ExtendedRangeBlend(crate::error::ExtendedRangeBlend::SrgbForm),
-                "{stem}"
-            ),
-            other => panic!("{stem}: BGRA10_XR_sRGB: {:?}", other.map(|_| ())),
         }
     }
     assert!(
@@ -2214,8 +2206,7 @@ fn a_premultiplied_blend_into_an_extended_range_attachment_is_computed_in_the_sh
         vec![Some(blended), Some(read), Some(unwritten)]
     };
     let premul = || colors(BlendFactor::One, BlendFactor::OneMinusSourceAlpha);
-    // The color channels' blend color difference, which the fast model refuses by name and the
-    // rounded model builds.
+    // The color channels' blend color difference, which the shader blends under either math.
     let difference = || {
         let mut c = colors(BlendFactor::BlendColor, BlendFactor::OneMinusBlendColor);
         if let Some(a) = c[0].as_mut() {
@@ -2243,13 +2234,6 @@ fn a_premultiplied_blend_into_an_extended_range_attachment_is_computed_in_the_sh
             1,
         ));
         inputs
-    };
-    let ni = |r: Result<std::sync::Arc<crate::library::FunctionArtifact>, Error>,
-              gap: crate::error::ExtendedRangeBlend| match r {
-        Err(Error::Unsupported(u)) => {
-            (u.feature, u.needs) == (Feature::ExtendedRangeBlend(gap), Needs::NotImplemented)
-        }
-        _ => false,
     };
     let fetched = |a: &crate::library::FunctionArtifact, color: u32| {
         a.facts.iter().find_map(|f| match f {
@@ -2330,13 +2314,10 @@ fn a_premultiplied_blend_into_an_extended_range_attachment_is_computed_in_the_sh
             .unwrap_or_else(|e| panic!("{stem}: the blend color difference: {e}"));
         link_and_validate(&made, &p)
             .unwrap_or_else(|e| panic!("{stem}: the blend color difference: L3: {e}"));
-        assert!(
-            ni(
-                compile_with(&fast_coverage, "con_fetch_coverage", &p, &differs),
-                crate::error::ExtendedRangeBlend::ConstantColorDifference
-            ),
-            "{stem}: the blend color difference under fast math"
-        );
+        let made = compile_with(&fast_coverage, "con_fetch_coverage", &p, &differs)
+            .unwrap_or_else(|e| panic!("{stem}: the blend color difference, fast: {e}"));
+        link_and_validate(&made, &p)
+            .unwrap_or_else(|e| panic!("{stem}: the blend color difference, fast: L3: {e}"));
         let fill = state(&[0], &premul(), &p);
         let float = compile_with(&fills, "rt6_fill_rgba32float", &p, &fill)
             .unwrap_or_else(|e| panic!("{stem}: float4: {e}"));
@@ -2433,8 +2414,8 @@ fn a_premultiplied_blend_into_an_extended_range_attachment_is_computed_in_the_sh
             Error::NeedsInput(RuntimeInput::FramebufferFetch),
             "{stem}"
         );
-        // Each blend the shader computes makes the whole pipeline; the color channels' blend
-        // color difference is refused by its gap under fast math.
+        // Each blend the shader computes makes the whole pipeline, the color channels' blend color
+        // difference under either math.
         for (src, dst) in [
             (BlendFactor::One, BlendFactor::One),
             (BlendFactor::One, BlendFactor::Zero),
@@ -2449,19 +2430,8 @@ fn a_premultiplied_blend_into_an_extended_range_attachment_is_computed_in_the_sh
         pipeline(source, difference())
             .unwrap_or_else(|e| panic!("{stem}: the blend color difference: {e}"));
         let source = StageSource::Function(function(&fast_coverage, "con_fetch_coverage"));
-        match pipeline(source, difference()) {
-            Err(Error::Unsupported(u)) => assert_eq!(
-                (u.feature, u.needs),
-                (
-                    Feature::ExtendedRangeBlend(
-                        crate::error::ExtendedRangeBlend::ConstantColorDifference
-                    ),
-                    Needs::NotImplemented
-                ),
-                "{stem}"
-            ),
-            r => panic!("{stem}: the blend color difference: {:?}", r.map(|_| ())),
-        }
+        pipeline(source, difference())
+            .unwrap_or_else(|e| panic!("{stem}: the blend color difference, fast: {e}"));
     }
 }
 
@@ -2471,9 +2441,9 @@ fn a_premultiplied_blend_into_an_extended_range_attachment_is_computed_in_the_sh
 /// into an `RGB10A8_2P_XR10` color 0 blended with the second source's factors in
 /// color and alpha: color 0 a written storage attachment, the fact naming the blend and its rounded
 /// math, and no dual-source output (`dualSrcBlend` not required); under a write mask of no channel
-/// it is made too, the second output stored nowhere. Under fast math the same pipeline is refused
-/// `DualSource`; the blend of a function that writes no second output is refused as Metal refuses
-/// its pipeline, `InvalidDescriptor(ColorAttachment)`.
+/// it is made too, the second output stored nowhere. Under fast math the same pipeline is made too;
+/// the blend of a function that writes no second output is refused as Metal refuses its pipeline,
+/// `InvalidDescriptor(ColorAttachment)`.
 /// Into each of the six extended-range formats, unblended (the raw texel through the interface) or
 /// blended premultiplied over (the storage form's blend, which reads no second source), with and
 /// without fast math, the function's two outputs make the pipeline, the second stored nowhere: no
@@ -2521,10 +2491,6 @@ fn a_second_source_blend_without_fast_math_reads_the_second_output() {
     blended.destination_rgb_blend_factor = equation.destination_rgb;
     blended.source_alpha_blend_factor = equation.source_alpha;
     blended.destination_alpha_blend_factor = equation.destination_alpha;
-    let dual_source = |u: &crate::error::Unsupported| {
-        u.feature == Feature::ExtendedRangeBlend(crate::error::ExtendedRangeBlend::DualSource)
-            && u.needs == Needs::NotImplemented
-    };
     {
         let stem = "moltenvk-m3";
         let path = Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -2601,13 +2567,15 @@ fn a_second_source_blend_without_fast_math_reads_the_second_output() {
                 .contains(&VkFeature::DualSrcBlend),
             "{stem}: no channel"
         );
-        match pipeline(&fast, "stage_io_fragment_dual_source") {
-            Err(Error::Unsupported(u)) if dual_source(&u) => {}
-            r => panic!(
-                "{stem}: the second source under fast math: {:?}",
-                r.map(|_| ())
-            ),
-        }
+        let fast_pipe = pipeline(&fast, "stage_io_fragment_dual_source")
+            .unwrap_or_else(|e| panic!("{stem}: the second source under fast math: {e}"));
+        assert!(
+            !fast_pipe
+                .requirements
+                .features
+                .contains(&VkFeature::DualSrcBlend),
+            "{stem}: fast math"
+        );
         match pipeline(&safe, "stage_io_fragment_point") {
             Err(Error::InvalidDescriptor(crate::error::DescriptorError::ColorAttachment {
                 index: 0,
@@ -2633,19 +2601,9 @@ fn a_second_source_blend_without_fast_math_reads_the_second_output() {
                     )));
                     d.color_attachments[0] = Some(color);
                     let what = format!("{stem}: {pf:?} {math} blended {blending}");
-                    // Under fast math a blend of the `float4` output outside its model is
-                    // refused by name, whatever the second output.
-                    let pipe = match dev.compile_render_pipeline(&d, &Budget::standard()) {
-                        Ok(p) => p,
-                        Err(Error::Unsupported(u))
-                            if math == "fast"
-                                && blending
-                                && matches!(u.feature, Feature::ExtendedRangeBlend(_)) =>
-                        {
-                            continue
-                        }
-                        Err(e) => panic!("{what}: {e}"),
-                    };
+                    let pipe = dev
+                        .compile_render_pipeline(&d, &Budget::standard())
+                        .unwrap_or_else(|e| panic!("{what}: {e}"));
                     assert!(
                         !pipe
                             .requirements
@@ -2672,10 +2630,10 @@ fn a_second_source_blend_without_fast_math_reads_the_second_output() {
 /// its emission. A write mask of the color channels alone keeps alpha: made, the fact naming it,
 /// every raw component written. A mask of no channel stores nothing: made, written nowhere and read
 /// through no input attachment. A function compiled under one blend links into no pipeline of
-/// another (`NeedsInput(FramebufferFetch)`). Without fast math the second source's blend reads
-/// `stage_io`'s index-1 output: made, with no dual-source output; under fast math refused
-/// `DualSource`, as in the interlock. Every made pipeline records the blend-source notes the
-/// interlock's records, `xrb_computed`'s whole-vector `float4` among them.
+/// another (`NeedsInput(FramebufferFetch)`). With and without fast math the second source's blend
+/// reads `stage_io`'s index-1 output: made, with no dual-source output. Every made pipeline records
+/// the blend-source notes the interlock's records, `xrb_computed`'s whole-vector `float4` among
+/// them.
 #[test]
 fn an_extended_range_blend_through_input_attachments_is_computed_in_the_shader() {
     use crate::metal::format::ExtendedRange;
@@ -2984,18 +2942,9 @@ fn an_extended_range_blend_through_input_attachments_is_computed_in_the_shader()
             "stage_io_vertex_position",
             "stage_io_fragment_dual_source",
         );
-        match pipeline(&dev, fragment, dual) {
-            Err(Error::Unsupported(u))
-                if u.feature
-                    == Feature::ExtendedRangeBlend(
-                        crate::error::ExtendedRangeBlend::DualSource,
-                    )
-                    && u.needs == Needs::NotImplemented => {}
-            r => panic!(
-                "{stem}: the second source under fast math: {:?}",
-                r.map(|_| ())
-            ),
-        }
+        let a = pipeline(&dev, fragment, dual)
+            .unwrap_or_else(|e| panic!("{stem}: the second source under fast math: {e}"));
+        assert_eq!(blend_of(&a).len(), 1, "{stem}: fast math");
     }
     assert!(checked > 0, "no profile fetches through input attachments");
 }
@@ -3007,7 +2956,7 @@ fn an_extended_range_blend_through_input_attachments_is_computed_in_the_shader()
 /// takes color 0: the write stores Metal's unblended write of the output (`exf_fetch_blend`'s
 /// `float4`, and `exf_fetch_three`'s `float4` and `half4` to two such attachments, the `_sRGB` twin
 /// among them), the fact names no blend, and the module passes L3. A mask of some of the channels
-/// is refused `NotImplemented`; a blend of the `float4` output takes its own model. The whole
+/// is refused `NotImplemented`; a blend of the `float4` output is the device's arithmetic. The whole
 /// pipeline is made on `moltenvk-m3` (no vertex descriptor), color 0 a written
 /// storage attachment of the raw format, and a stage compiled under it links into no pipeline that
 /// blends color 0.
@@ -4823,24 +4772,18 @@ fn an_operation_over_the_active_lanes_records_the_split_quads_note() {
     }
 }
 
-/// A fragment function blended into an `RGB10A8_2P_XR10` attachment (premultiplied over) records
-/// `PrecisionNote::ExtendedRangeBlendSource` exactly where Metal may round the blend's source
-/// otherwise than the computed blend: a `float4` output whose lanes are not each a load
-/// (`rt6_resolve_white`'s constant), or a module built without fast math (`rt6_samples` with its
-/// `air.compile.fast_math_enable` switched to `_disable`, its `half4` and `float4` fills). The
-/// fills under fast math, each lane a load from a buffer, record none, and neither does the
-/// constant output unblended. Every interlock profile that makes the storage form. A `half4` output
-/// computed under fast math records it too (the `half4` fill's load multiplied by ones). Without
-/// fast math the blend is computed as Metal rounds it, so the fills, the computed one too, record
-/// none, into the `_sRGB` form too; a module that names no math mode records it. A `float4`
-/// computed by whole-vector arithmetic over loads (the fill's load times ones) records none under
-/// premultiplied over, but does under a blend whose color key is one of
-/// `extended_range::computed`'s (`One` and `SourceAlpha`, added), and so does one whose alpha is
-/// the load's beside its computed color lanes (a lane moved alone). A `float4` output records
-/// `PrecisionNote::ExtendedRangeFloatBlendSource` in its place, never the `half4` output's note,
-/// and a `half4` output never the `float4`'s.
+/// A fragment function blended into an `RGB10A8_2P_XR10` attachment (premultiplied over, and a
+/// blend of source alpha into the color channels) records its output's blend note on every
+/// interlock profile that makes the storage form, whatever the module's math and however it
+/// computes the output: the shader blends it by the device's arithmetic, where Metal's compiler
+/// folds the blend into the function in forms of its own. A `half4` output records
+/// `PrecisionNote::ExtendedRangeBlendSource` and a `float4` one
+/// `PrecisionNote::ExtendedRangeFloatBlendSource`, never the other's: the fills loaded from a
+/// buffer, `rt6_resolve_white`'s constant, a computed `half4`, a `float4` computed by whole-vector
+/// arithmetic or with a lane moved alone, under fast math, without it (into the `_sRGB` form too)
+/// and naming no math mode. Unblended, the constant output records none.
 #[test]
-fn extended_range_blend_sources_metal_may_round_otherwise_are_noted() {
+fn a_blended_extended_range_output_records_its_blend_note() {
     use crate::metal::BlendFactor;
     let (Some(fills), Some(resolves)) = (fixture("rt6_samples"), fixture("rt6_resolves")) else {
         return;
@@ -4964,10 +4907,10 @@ fn extended_range_blend_sources_metal_may_round_otherwise_are_noted() {
             Err(e) => panic!("{stem}: {e}"),
         };
         checked += 1;
-        assert_eq!(float_fill, None, "{stem}: a loaded float4 under fast math");
+        assert_eq!(float_fill, float, "{stem}: a loaded float4 under fast math");
         assert_eq!(
             noted(&fills, "rt6_fill_rgba16float", &blended),
-            Ok(None),
+            Ok(half),
             "{stem}: a loaded half4 under fast math"
         );
         assert_eq!(
@@ -4980,13 +4923,10 @@ fn extended_range_blend_sources_metal_may_round_otherwise_are_noted() {
             Ok(half),
             "{stem}: a computed half4 under fast math"
         );
-        // A computed `float4` blends as a loaded one under premultiplied over, but not under a
-        // key of the computed class's tables (color `One` and `SourceAlpha`, added), nor with a
-        // lane moved alone.
         let fill = "rt6_fill_rgba32float";
         assert_eq!(
             noted(&float_computed, fill, &blended),
-            Ok(None),
+            Ok(float),
             "{stem}: a computed float4 under fast math"
         );
         let keyed = {
@@ -4998,13 +4938,13 @@ fn extended_range_blend_sources_metal_may_round_otherwise_are_noted() {
         };
         assert_eq!(
             noted(&fills, fill, &keyed),
-            Ok(None),
+            Ok(float),
             "{stem}: keyed, loaded"
         );
         assert_eq!(
             noted(&float_computed, fill, &keyed),
             Ok(float),
-            "{stem}: a computed float4 under a key of the computed class's"
+            "{stem}: keyed, computed"
         );
         assert_eq!(
             noted(&float_mixed, fill, &blended),
@@ -5024,7 +4964,7 @@ fn extended_range_blend_sources_metal_may_round_otherwise_are_noted() {
         ] {
             assert_eq!(
                 noted(&safe, name, &blended),
-                Ok(None),
+                Ok(note),
                 "{stem}: {name} without fast math"
             );
             assert_eq!(
@@ -5032,17 +4972,15 @@ fn extended_range_blend_sources_metal_may_round_otherwise_are_noted() {
                 Ok(note),
                 "{stem}: {name} of no math mode"
             );
-        }
-        for name in ["rt6_fill_rgba32float", "rt6_fill_rgba16float"] {
             assert_eq!(
                 noted(&safe, name, &srgb),
-                Ok(None),
+                Ok(note),
                 "{stem}: {name} without fast math into the sRGB form"
             );
         }
         assert_eq!(
             noted(&safe_computed, "rt6_fill_rgba16float", &blended),
-            Ok(None),
+            Ok(half),
             "{stem}: a computed half4 without fast math"
         );
     }

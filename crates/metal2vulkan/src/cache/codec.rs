@@ -877,7 +877,6 @@ codec_enum! {
         DepthClampRange,
         ViewportMirrors,
         VertexDepthClamp,
-        BlendColor,
         ShaderTestsState,
         CaptureLayout,
         CaptureIndexAddress,

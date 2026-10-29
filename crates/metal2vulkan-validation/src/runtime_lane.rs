@@ -403,8 +403,6 @@ mod exits;
 #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
 mod extended_range_bicubic;
 #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
-mod extended_range_blend_table;
-#[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
 mod extended_range_blends;
 #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
 mod extended_range_planes;
