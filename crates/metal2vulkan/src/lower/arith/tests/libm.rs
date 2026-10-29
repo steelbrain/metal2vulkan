@@ -64,7 +64,7 @@ fn fmod_module(f: Form) -> TypedModule {
                 f,
                 Contraction::Forbidden,
                 x,
-                &Lib::new(None, funcs.first().copied()),
+                &Lib::new(funcs.first().copied()),
             )
         },
         true,
@@ -258,6 +258,8 @@ mod half_fmod_takes_the_routine {
 /// over a composition that answered `1`, as the RTX 5080 did without `SignedZeroInfNanPreserve`):
 /// Metal's word at case f6524207's special pairs and case 32931370's `half`
 /// ones, and the composition's own value where the product is finite, a NaN, or an operand is one.
+/// An `f32` denormal base is a zero only where the device's comparison reads it so (the
+/// interpreter does not, where Metal does): there the product is finite, the composition's.
 #[test]
 fn an_infinite_product_answers_ieee_whatever_the_composition_gave() {
     let (f, h) = (float(32), float(16));
@@ -267,9 +269,9 @@ fn an_infinite_product_answers_ieee_whatever_the_composition_gave() {
     let words: [(u64, u64, Option<u64>); 15] = [
         (0x0000_0000, 0x3F80_0000, Some(0)),
         (0x8000_0000, 0x4000_0000, Some(0)),
-        (0x0000_0001, 0xBF80_0000, Some(0x7F80_0000)),
-        (0x8000_0001, 0x3F00_0000, Some(0)),
-        (0x0040_0000, 0x4100_0000, Some(0)),
+        (0x0000_0001, 0xBF80_0000, None),
+        (0x8000_0001, 0x3F00_0000, None),
+        (0x0040_0000, 0x4100_0000, None),
         (0x7F80_0000, 0xC000_0000, Some(0)),
         (0x7F80_0000, 0x4100_0000, Some(0x7F80_0000)),
         (0x3F00_0000, 0x7F80_0000, Some(0)),

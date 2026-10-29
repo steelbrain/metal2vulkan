@@ -299,11 +299,12 @@ fn every_operation_is_metals_air_and_the_product_lowers_it() {
 /// The near-equivalents are the product's own, as its lowering records them: its fast `float`
 /// division (Metal's precise division and every `half` division are a shared routine's correctly
 /// rounded quotient, which records nothing), fast `fmod`, and a function it computes with a
-/// division of its own (fast `float` `tanh` and `atan2`). Its transcendentals are the device's,
-/// fast `float` `sqrt` is Metal's `x * rsqrt(x)` on the device's `rsqrt`, a narrow or precise
-/// `tanh` is the device's `tanh`, and precise `sqrt` and `fmod`, `float` and `half`, are the one
-/// right value, which records nothing. On a device whose `float` functions are Metal's own, a fast
-/// division and those functions are Metal's own under fast math and record nothing there either.
+/// division of its own (fast `float` `atan2`). Its transcendentals are the device's: `tanh`, fast
+/// or precise, `float` or `half`, is the device's `Tanh`, a transcendental, not a near-equivalent;
+/// fast `float` `sqrt` is Metal's `x * rsqrt(x)` on the device's `rsqrt`, and precise `sqrt` and
+/// `fmod`, `float` and `half`, are the one right value, which records nothing. On a device whose
+/// `float` functions are Metal's own, a fast division and those functions are Metal's own under
+/// fast math and record nothing there either.
 #[test]
 fn the_products_own_approximations_are_its_near_equivalents() {
     use msl::Prim;
@@ -340,11 +341,20 @@ fn the_products_own_approximations_are_its_near_equivalents() {
             assert_eq!(note(Prim::Sqrt, format, math), None, "{format:?} {math:?}");
         }
     }
-    for prim in [Prim::Tanh, Prim::Atan2] {
-        assert_eq!(note(prim, F32, Math::Fast), arithmetic, "{prim:?}");
-        assert_eq!(note(prim, F32, Math::Precise), None, "{prim:?}");
-        assert_eq!(note(prim, F16, Math::Fast), None, "{prim:?}");
-        assert_eq!(note_on(prim, F32, Math::Fast, moltenvk()), None, "{prim:?}");
+    assert_eq!(note(Prim::Atan2, F32, Math::Fast), arithmetic);
+    assert_eq!(note(Prim::Atan2, F32, Math::Precise), None);
+    assert_eq!(note(Prim::Atan2, F16, Math::Fast), None);
+    assert_eq!(note_on(Prim::Atan2, F32, Math::Fast, moltenvk()), None);
+    for format in [F32, F16] {
+        for math in [Math::Precise, Math::Fast] {
+            for profile in [lavapipe(), moltenvk()] {
+                assert_eq!(
+                    note_on(Prim::Tanh, format, math, profile),
+                    None,
+                    "{format:?} {math:?}"
+                );
+            }
+        }
     }
     for prim in [
         Prim::Sin,
@@ -359,7 +369,9 @@ fn the_products_own_approximations_are_its_near_equivalents() {
     }
 
     // Fast tanh(44): t + 1 is past 2^126, where Table 8.2 states no accuracy for the division.
-    // Metal answers 0, the device 1. With the product's division recorded, the word stays open.
+    // Metal answers 0, the device 1. The product's fast tanh is the device's `Tanh`, which records
+    // no division of its own, so the word stays Apple's unstated one even where the row records
+    // the device's arithmetic for another operation.
     let lanes = vec![BoundedLane {
         words: words(0, 1, 1),
         result: Part::F32,
@@ -388,12 +400,12 @@ fn the_products_own_approximations_are_its_near_equivalents() {
         panic!("tanh(44) is stated");
     };
     assert!(why.contains("div"), "{why}");
-    let open = judge(&[
+    let device = judge(&[
         PrecisionNote::DeviceArithmetic,
         PrecisionNote::DeviceTranscendentals,
     ]);
-    assert_eq!(open.label(), "near_equivalent");
-    assert!(open.keeps_open(UnstatedWords::WithinPromise));
+    assert_eq!(device.label(), "unstated", "{device:?}");
+    assert!(!device.keeps_open(UnstatedWords::WithinPromise));
 }
 
 /// Fast `atan2` with a divisor past `2^126` (case f6524207's lanes 351 and 26): Table 8.2's formula
@@ -544,12 +556,15 @@ const EVERY_ARITHMETIC_NOTE: [PrecisionNote; 4] = [
 
 /// Metal answers the canonical NaN reproducibly, so where both answers are NaNs of an operation
 /// whose lowering leaves the encoding to the device, and the row records `DeviceNanEncoding`, the
-/// value stays open with the exact path. The product answers Metal's NaN for every operation this
-/// check reads on `float`, in either math mode (its calls carry no flags, or every flag, the
-/// measured states): none records the note, so a differing NaN of `div` or `mul` is not the note's
-/// even where the row records it (another operation of the module may), and the verdict is Apple's
-/// bound's; Metal's precise and fast divisions answer `0x7fc00000` themselves. Fast `sin` answers
-/// Metal's NaN itself. Two different answers, not both NaNs, are not the encoding's.
+/// value stays open with the exact path. On lavapipe, which is not measured to answer Metal's NaN,
+/// the product's `float` lowerings that leave a NaN's encoding to the device record the note:
+/// precise `pow`, and fast `sin` and `cos` (the device's instructions, whose NaN over an infinity
+/// is the device's). Every other operation this check reads answers a NaN whose encoding the
+/// product states (`NativeNanEncoding`) or none, so a differing NaN of `div` or `mul` is not the
+/// note's even where the row records it (another operation of the module may), and the verdict is
+/// Apple's bound's; Metal's precise and fast divisions answer `0x7fc00000` themselves. A differing
+/// NaN of fast `sin` is the note's; of precise `sin`, which does not record it, it is not. Two
+/// different answers, not both NaNs, are not the encoding's.
 #[test]
 fn a_nan_encoding_the_product_answers_is_not_a_near_equivalent() {
     let (metal, device) = (0x7fc0_0000, 0xffc0_0000);
@@ -557,10 +572,15 @@ fn a_nan_encoding_the_product_answers_is_not_a_near_equivalent() {
     let infinity = f32::INFINITY.to_bits();
     let nan = [PrecisionNote::DeviceNanEncoding];
     for math in [Math::Precise, Math::Fast] {
+        let device_nans: &[msl::Prim] = match math {
+            Math::Precise => &[msl::Prim::Pow],
+            Math::Fast => &[msl::Prim::Sin, msl::Prim::Cos],
+        };
         for prim in msl::Prim::ALL {
             let (op, notes) = lowering_notes(prim, F32, math, lavapipe()).unwrap();
-            assert!(
-                !notes.contains(&PrecisionNote::DeviceNanEncoding),
+            assert_eq!(
+                notes.contains(&PrecisionNote::DeviceNanEncoding),
+                device_nans.contains(&prim),
                 "{op} under {math:?}: {notes:?}"
             );
         }
@@ -585,12 +605,23 @@ fn a_nan_encoding_the_product_answers_is_not_a_near_equivalent() {
         &nan,
     );
     assert_ne!(mul.label(), "near_equivalent", "{mul:?}");
-    // Fast `sin` answers Metal's NaN itself: a row recording the note for another operation does
-    // not make this value the note's.
-    let (_, sin) = lowering_notes(msl::Prim::Sin, F32, Math::Fast, lavapipe()).unwrap();
-    assert!(!sin.contains(&PrecisionNote::DeviceNanEncoding), "{sin:?}");
+    // Fast `sin` is the device's `Sin`, whose NaN of an infinity is the device's: the note's, open.
     let sin = verdict_of("sin(a)", Math::Fast, &[infinity], (metal, device), &nan);
-    assert_eq!(sin.label(), "unstated", "{sin:?}");
+    assert_eq!(sin.label(), "near_equivalent", "{sin:?}");
+    assert!(sin.keeps_open(UnstatedWords::WithinPromise), "{sin:?}");
+    // Precise `sin` records no `DeviceNanEncoding`: a row recording the note for another
+    // operation does not make this value the note's.
+    let sin = verdict_of("sin(a)", Math::Precise, &[infinity], (metal, device), &nan);
+    assert_ne!(sin.label(), "near_equivalent", "{sin:?}");
+    // Precise `pow` of a negative base and a non-integer exponent: a NaN the device encodes.
+    let pow = verdict_of(
+        "pow(a, b)",
+        Math::Precise,
+        &[(-1.0f32).to_bits(), 0.5f32.to_bits()],
+        (metal, device),
+        &nan,
+    );
+    assert_eq!(pow.label(), "near_equivalent", "{pow:?}");
     let one = 1.0f32.to_bits();
     let finite = verdict_of("div(a, b)", Math::Fast, &[one, one], (one, one + 1), &nan);
     assert_ne!(finite.label(), "near_equivalent", "{finite:?}");

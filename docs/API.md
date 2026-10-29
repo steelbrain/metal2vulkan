@@ -242,8 +242,9 @@ measured takes the route each deviation's docs name for it: the device's own ans
 precision note, or, where the answer decides a capability, its emulation or a refusal.
 
 Metal semantics the translation keeps on every device, beyond Vulkan's: Metal's 32-lane
-simdgroups (including lockstep races on threadgroup memory within a barrier interval), and the
-bit-exact `fneg` and `fabs` of a `float`, its NaNs and denormals included. A NaN's bits, the
+simdgroups (including lockstep races on threadgroup memory within a barrier interval). `fneg` and
+`fabs` are the device's `OpFNegate` and `FAbs`, so a NaN's payload and a denormal are the
+device's (`native-nan-encoding`, `device-denormals`). A NaN's bits, the
 operand `fmin`, `fmax`, `min3`, `max3`, `clamp` and `saturate` pick beside a NaN or between two
 zeros, a `half` read from its bits, which is the device's widening on every device (a NaN's
 bits, and a denormal on a device that may flush 16-bit ones), and a `half` rounded from a value
@@ -3170,11 +3171,17 @@ bound.
   Native device maths: the module computes a `float` or `half` math-library function by the device's
   own `GLSL.std.450` instruction (`exp`, `log`, `pow`, `sinh`, `cosh` and `tanh` among them; a
   composition of the device's `Exp2` and `Log2` only for `exp10` and `log10`, which no instruction
-  is) where Metal's function is not the device's own; `fast::sqrt` the device's `Sqrt`; `fabs`,
-  `sign` and `fract` the device's `FAbs`, `FSign` and `Fract`, their special operands the
-  instruction's (Metal's `sign` of a NaN, a zero and an `f32` denormal is `+0`, its `fract` of an
-  infinity `+0`); and `round` C99's from the device's `Trunc` on every device (`round(-0.3)` is
-  `-0`, where Metal answers `+0`).
+  is) where Metal's function is not the device's own; `fast::sqrt` the device's `Sqrt`; the fast
+  `sin`, `cos`, `tan`, `sinh`, `cosh`, `tanh` and `atanh` the device's instructions, not MSL's
+  fast-math formulas (`fast::sin` of `1e7` is the device's sine, where Metal answers `+0`;
+  `fast::tanh(45)` is `1`, where Metal answers NaN); `fabs`, `sign` and `fract` the device's
+  `FAbs`, `FSign` and `Fract`, their special operands the instruction's (Metal's `sign` of a NaN,
+  a zero and an `f32` denormal is `+0`, its `fract` of an infinity `+0`); a `half` function's
+  signed zeros and NaN signs its `float` instruction's (`half` `sin(-0)` is `-0`, where Metal
+  answers `+0`); `pow`, `powr` and `atan2` C99's special values by the device's comparisons
+  around its instruction (`pow(x, 1)` the device's `Pow`, where Metal answers `x`; an `f32`
+  denormal operand as the device reads it); and `round` C99's from the device's `Trunc` on every
+  device (`round(-0.3)` is `-0`, where Metal answers `+0`).
 - `metal2vulkan-degrade-native-division` (precision). `PrecisionNote::NativeDivision`: Native device
   maths: a precise `float` or `half` division, or Metal's fast division or reciprocal, is the
   device's `OpFDiv` where the device's division is not Metal's own: within Vulkan's 2.5 ulp, where

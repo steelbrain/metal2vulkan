@@ -1766,25 +1766,22 @@ fn llvm_math(op: &LlvmIntrinsic) -> Result<Fun, Error> {
 /// are their own functions; the fast-math accuracy table is single precision, so a narrow `fast_`
 /// call keeps the precise function:
 ///
-/// - `air.fast_tanh` is the MSL fast-math formula ([`FloatFn::FastTanh`]), divided by the
-///   device's division;
+/// - `air.fast_tanh`, `air.fast_sinh`, `air.fast_cosh`, `air.fast_atanh`, `air.fast_sin`,
+///   `air.fast_cos` and `air.fast_tan` are the device's instructions, which a device whose
+///   functions are Metal's answers as Metal's fast functions only in a fast-math module (and its
+///   `Tanh` as Metal's precise `tanh` in every module): their own variants for their notes
+///   ([`FloatFn::FastTanh`], [`FloatFn::FastSinh`], [`FloatFn::FastCosh`],
+///   [`FloatFn::FastAtanh`], [`FloatFn::FastSin`], [`FloatFn::FastCos`], [`FloatFn::FastTan`]);
 /// - `air.fast_asinh` with every flag is MSL Table 8.2's formula, the canonical NaN at `-inf`
 ///   ([`FloatFn::FastAsinh`]);
-/// - `air.fast_sinh`, `air.fast_cosh`, `air.fast_acosh`, and `air.fast_atanh` are MSL Table
-///   8.2's formulas of Metal's fast `exp`, `log`, `sqrt`, and division ([`FloatFn::FastSinh`],
-///   [`FloatFn::FastCosh`], [`FloatFn::FastAcosh`], [`FloatFn::FastAtanh`]), the last divided by
-///   the device's division, where the device's instruction is not Metal's fast function;
+/// - `air.fast_acosh` is MSL Table 8.2's formula of Metal's fast `log` and `sqrt`
+///   ([`FloatFn::FastAcosh`]), the device's `Acosh`;
 /// - `air.fast_fract` is not bounded below one, and with every flag is the canonical NaN at an
 ///   infinity ([`FloatFn::FastFract`]);
 /// - `air.fast_fmedian3` answers `b` for two NaN first operands ([`FloatFn::FastMedian3`]);
-/// - `air.fast_pow` answers the canonical NaN for a NaN base to the exponent one
-///   ([`FloatFn::FastPow`]);
+/// - `air.fast_pow`'s magnitude is `exp2(y · log2|x|)` ([`FloatFn::FastPow`]);
 /// - `air.fast_atan2` is `atan(y / x)` turned by `±π`, NaN at `0 / 0` and `inf / inf`
 ///   ([`FloatFn::FastAtan2`]);
-/// - `air.fast_sin` and `air.fast_cos` answer `+0` past `float(π/2) · 2^22` and for an infinity
-///   or NaN ([`FloatFn::FastSin`], [`FloatFn::FastCos`]);
-/// - `air.fast_tan` is Metal's fast `tan` ([`FloatFn::FastTan`]), Apple's formula divided by the
-///   device's division where the device's `Tan` is not it;
 /// - `air.fast_asin`, `air.fast_acos`, and `air.fast_atan` are Metal's fast functions, which a
 ///   device that is Metal's own answers only in a fast-math module and which answer `fast::asin`
 ///   of a zero and of a denormal as `+0` and `fast::atan` of one as its signed zero
@@ -2792,8 +2789,7 @@ pub fn emit(
 
 /// What the entry being emitted's float function calls take ([`libm::Lib`]).
 pub(crate) fn lib(cx: &EmitCx<'_>) -> libm::Lib {
-    let arith = &cx.plan.families.arith;
-    libm::Lib::new(arith.metal_functions, cx.decl.families.arith.fmod)
+    libm::Lib::new(cx.decl.families.arith.fmod)
 }
 
 /// The operands strategy `s` reads (a prefix of the instruction's; all when `None`).

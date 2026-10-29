@@ -3,8 +3,10 @@
 //! of both signs, denormals, the smallest normal, ordinary values, the largest finite values,
 //! infinities, and NaNs. The interpreter does not model `GLSL.std.450 Atan2` or `Atan`, so `atan2`
 //! takes its generic value as an input and `fast::atan2` a stand-in `atan`; every lane a special
-//! value decides must equal Metal's answer bit for bit, and every other lane must be the generic
-//! value (or the stand-in's), so the special values read neither.
+//! value decides must equal Metal's answer bit for bit (a NaN any NaN, its bits the device's), and
+//! every other lane must be the generic value (or the stand-in's), so the special values read
+//! neither. An `f32` denormal operand is a value, as the interpreter reads it, where Metal reads a
+//! zero (`PrecisionNote::DeviceDenormals` off a device measured to read it as Metal does).
 
 use super::*;
 
@@ -356,9 +358,14 @@ const ATAN2_HALF: [[u16; 16]; 16] = [
 const MARKER_F32: u32 = 0x3E00_0000;
 const MARKER_HALF: u16 = 0x3000;
 
-/// Whether an `f32` operand is a zero to Metal (its exponent field is zero), infinite, or NaN.
+/// Whether an `f32` operand is a zero, infinite, or NaN (its denormals are values).
 fn f32_special(b: u32) -> bool {
-    b & 0x7F80_0000 == 0 || b & 0x7F80_0000 == 0x7F80_0000
+    b & 0x7FFF_FFFF == 0 || b & 0x7F80_0000 == 0x7F80_0000
+}
+
+/// Whether an `f32` operand is a denormal, which Metal reads as a zero.
+fn f32_denormal(b: u32) -> bool {
+    b & 0x7F80_0000 == 0 && b & 0x007F_FFFF != 0
 }
 
 /// Whether a `half` operand is a zero, infinite, or NaN (its denormals are values).
@@ -368,19 +375,22 @@ fn half_special(b: u16) -> bool {
 
 /// `atan2` (`math::atan2_special` around its generic input, then the format's rounding): a lane
 /// with a zero, infinite, or NaN operand is Metal's answer whatever the generic value; any other
-/// lane is the generic value, `+0` when it is an `f32` denormal. The generic input is the host's
-/// correctly rounded `atan2` there and [`MARKER_F32`] elsewhere. Metal's own generic answers are
-/// within one ulp of it (five `float` lanes differ by one, the device's precision); its `+0` for
-/// a denormal `float` result is asserted on the lanes that have one.
+/// lane is the generic value, a denormal one included (the device's `Atan2`, where Metal answers
+/// `+0`). The generic input is the host's correctly rounded `atan2` there and [`MARKER_F32`]
+/// elsewhere. Metal's own generic answers are within one ulp of it (five `float` lanes differ by
+/// one, the device's precision). The `float` lanes with a denormal operand, which Metal reads as a
+/// zero, are the device's reading and left out.
 #[test]
-fn atan2_answers_as_metal_at_every_special_operand() {
+fn atan2_answers_as_c99_at_every_special_operand() {
     for bits in [32u8, 16] {
         let f = float(bits);
         let mut cases: Vec<Case> = Vec::new();
         let mut want = Vec::new();
-        let mut flushed = 0;
         for j in 0..16 {
             for k in 0..16 {
+                if bits == 32 && (f32_denormal(F32_OPERANDS[j]) || f32_denormal(F32_OPERANDS[k])) {
+                    continue;
+                }
                 let (y, x, metal, special) = if bits == 32 {
                     let (y, x) = (F32_OPERANDS[j], F32_OPERANDS[k]);
                     let special = f32_special(y) || f32_special(x);
@@ -415,19 +425,11 @@ fn atan2_answers_as_metal_at_every_special_operand() {
                         let r = f16_to_f64(y as u16).atan2(f16_to_f64(x as u16));
                         u64::from(f64_to_f16(r))
                     };
-                    let tiny = bits == 32 && g & 0x7F80_0000 == 0;
-                    if tiny {
-                        flushed += 1;
-                        assert_eq!(metal, 0, "Metal's tiny atan2({y:#x}, {x:#x})");
-                    }
-                    (g, if tiny { 0 } else { g })
+                    (g, g)
                 };
                 cases.push(vec![vec![y], vec![x], vec![generic]]);
                 want.push(((y, x), expect));
             }
-        }
-        if bits == 32 {
-            assert_eq!(flushed, 6, "the float lanes with a denormal answer");
         }
         check_accept(
             &format!("atan2 f{bits} against Metal"),
@@ -442,7 +444,7 @@ fn atan2_answers_as_metal_at_every_special_operand() {
                 let key = (arg(c, 0), arg(c, 1));
                 want.iter().find(|(k, _)| *k == key).map(|(_, w)| vec![*w])
             },
-            &|g, w| g == w,
+            &|g, w| g == w || (is_nan(f, g) && is_nan(f, w)),
         );
     }
 }
@@ -456,9 +458,9 @@ fn metal_read(b: u32) -> f32 {
     }
 }
 
-/// `fast::atan2(y, x)` with the stand-in `atan(q) = q + 1/8`, where Metal's special values do not
-/// decide it (`None` where they do): the quotient (divided over the whole range, or `y` times the
-/// flushed reciprocal), the stand-in, and the turn.
+/// `fast::atan2(y, x)` with the stand-in `atan(q) = q + 1/8`, where the formula's special values do
+/// not decide it (`None` where they do): the quotient (divided over the whole range, or `y` times
+/// the flushed reciprocal), the stand-in, and the turn. A denormal operand or quotient is a value.
 fn fast_generic(y: u32, x: u32, reciprocal_flushed: bool) -> Option<u32> {
     if f32_special(y) || f32_special(x) {
         return None;
@@ -468,7 +470,7 @@ fn fast_generic(y: u32, x: u32, reciprocal_flushed: bool) -> Option<u32> {
         return None;
     }
     let q = (f64::from(yv) / f64::from(xv)) as f32;
-    if f32_special(q.to_bits()) {
+    if !q.is_finite() {
         return None;
     }
     let a = q + 0.125;
@@ -482,11 +484,12 @@ fn fast_generic(y: u32, x: u32, reciprocal_flushed: bool) -> Option<u32> {
 }
 
 /// `fast::atan2` (`math::fast_atan2`) with a stand-in `atan(q) = q + 1/8` the interpreter runs:
-/// every lane of the grid that Metal's special values decide is Metal's answer for the call's
-/// flags (the quotient's sign, the flushed operands and quotient, `0 / 0` and `inf / inf`, the
-/// turn's comparisons, and the flushed reciprocal beyond `2^126` of a call without every flag),
-/// and every other lane is the stand-in of the correctly rounded quotient, turned; operands
-/// beyond the grid check the scaled division near `2^126` and `FLT_MAX`.
+/// every lane of the grid that the formula's special values decide is Metal's answer for the
+/// call's flags (the quotient's sign, `0 / 0` and `inf / inf`, the turn's comparisons, and the
+/// flushed reciprocal beyond `2^126` of a call without every flag), a NaN any NaN, and every other
+/// lane is the stand-in of the correctly rounded quotient, turned, a denormal quotient's included;
+/// operands beyond the grid check the scaled division near `2^126` and `FLT_MAX`. The lanes with
+/// a denormal operand, which Metal reads as a zero, are the device's reading and left out.
 #[test]
 fn fast_atan2_answers_as_metal_at_every_special_operand() {
     let f = float(32);
@@ -511,6 +514,9 @@ fn fast_atan2_answers_as_metal_at_every_special_operand() {
         for j in 0..16 {
             for k in 0..16 {
                 let (y, x) = (F32_OPERANDS[j], F32_OPERANDS[k]);
+                if f32_denormal(y) || f32_denormal(x) {
+                    continue;
+                }
                 let w = match fast_generic(y, x, reciprocal_flushed) {
                     Some(g) => g,
                     None => {
@@ -521,15 +527,16 @@ fn fast_atan2_answers_as_metal_at_every_special_operand() {
                 want.push(((u64::from(y), u64::from(x)), u64::from(w)));
             }
         }
-        // The lanes with a finite normal quotient of finite normal operands, less the lanes a
-        // flushed reciprocal decides.
+        // The 196 lanes of operands that are not denormals, less those with a finite quotient of
+        // finite nonzero operands (and, with a flushed reciprocal, less beyond `2^126`).
         assert_eq!(
             decided,
             if reciprocal_flushed {
-                256 - 30
+                196 - 31
             } else {
-                256 - 34
-            }
+                196 - 45
+            },
+            "reciprocal flushed {reciprocal_flushed}"
         );
         if !reciprocal_flushed {
             for (y, x) in extra {
@@ -574,13 +581,13 @@ fn fast_atan2_answers_as_metal_at_every_special_operand() {
                 let key = (arg(c, 0), arg(c, 1));
                 want.iter().find(|(k, _)| *k == key).map(|(_, w)| vec![*w])
             },
-            &|g, w| g == w,
+            &|g, w| g == w || (is_nan(f, g) && is_nan(f, w)),
         );
     }
 }
 
-/// [`FloatFn::words`] bounds what `atan2`, `fast::atan2`, `fast::sin`, and `fast::cos` emit on
-/// every form they take (`fast::sin` and `fast::cos` on `float`), and is not more than twice it.
+/// [`FloatFn::words`] bounds what `atan2` and `fast::atan2` emit on every form they take, and is
+/// not more than twice it.
 /// The module's growth over an identity kernel is charged in full, its constants and the
 /// `GLSL.std.450` import included.
 #[test]
@@ -600,17 +607,11 @@ fn special_value_functions_stay_within_their_word_estimate() {
         FloatFn::FastAtan2 {
             reciprocal_flushed: true,
         },
-        FloatFn::FastSin,
-        FloatFn::FastCos,
     ];
     let mut out = Vec::new();
     for f in [float(32), vec(float(32), 4), float(16), vec(float(16), 4)] {
         let bare = module_words(f, &|_, x| Ok(x[0]));
         for g in fns {
-            // `fast::sin` and `fast::cos` are refined from `float` calls only.
-            if matches!(g, FloatFn::FastSin | FloatFn::FastCos) && f.is_narrow() {
-                continue;
-            }
             let used = module_words(f, &|fb, x| {
                 math::float_fn(fb, g, f, Contraction::Allowed, x, &Lib::instructions())
             });

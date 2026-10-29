@@ -6,11 +6,16 @@
 //! `2^-11` absolute, about what Metal's fast-math table allows, while Metal's precise functions are
 //! bounded at 4 to 6 ulp (MSL Table 8.1). Every call, on `float` and on a `half` held as `float`,
 //! takes the device's instruction where one is the function (`exp`, `log`, `pow`, `sinh`, `cosh`
-//! and `tanh` among them), and a composition of the device's instructions only where none is
-//! (`exp10`, `log10`, `sinpi`, `cospi`, `tanpi`, and the fast functions' formulas of MSL Table
-//! 8.2), and records the device's precision where its functions are not Metal's own
+//! and `tanh` among them, and the fast `sin`, `cos`, `tan`, `sinh`, `cosh`, `tanh` and `atanh`,
+//! whatever formula MSL Table 8.2 gives them), and a composition of the device's instructions only
+//! where none is (`exp10`, `log10`, `sinpi`, `cospi`, `tanpi`, and the fast `exp`, `log`, `powr`
+//! and `atan2`, which MSL Table 8.2 defines as compositions of `exp2`, `log2`, `atan` and a
+//! division), and records the device's precision where its functions are not Metal's own
 //! (`PrecisionNote::NativeTranscendentals`). No routine computes Metal's answer where the device
-//! has an instruction. Where the device is Metal's own
+//! has an instruction, and no select reads a special operand as Metal does where the device's
+//! instruction answers it: the selects around `pow`, `powr` and `atan2` give only the C99 and MSL
+//! values `GLSL.std.450` leaves undefined, by the device's comparisons. Where the device is
+//! Metal's own
 //! (`FloatFunctions::Metal`: MoltenVK on an Apple GPU), its instruction is Metal's function in the
 //! math mode Metal compiles the module with ([`module_mode`]), so a call in that mode is Metal's
 //! own answer there ([`Fun::device_answers`]), which the notes read.
@@ -73,11 +78,21 @@ pub enum Fun {
     Cos,
     /// Metal's precise `tan` (within 6 ulp).
     Tan,
-    /// Metal's fast `sin` below its flush point, which is its precise `sin` inside `[-π, π]`
-    /// (Apple's `2^-13` bound, MSL Table 8.2).
+    /// Metal's fast `sin`, which is its precise `sin` inside `[-π, π]` (Apple's `2^-13` bound, MSL
+    /// Table 8.2) and `+0` past its flush point and for an infinity or NaN.
     FastSin,
-    /// Metal's fast `cos` below its flush point; as [`Fun::FastSin`].
+    /// Metal's fast `cos`; as [`Fun::FastSin`].
     FastCos,
+    /// Metal's fast `tan`, MSL Table 8.2's `sin(x) · (1 / cos(x))` of its fast `sin` and `cos`.
+    FastTan,
+    /// Metal's fast `sinh`, MSL Table 8.2's `(exp(x) - exp(-x)) · 0.5`.
+    FastSinh,
+    /// Metal's fast `cosh`, MSL Table 8.2's `(exp(x) + exp(-x)) · 0.5`.
+    FastCosh,
+    /// Metal's fast `tanh`, MSL Table 8.2's `(t - 1) / (t + 1)` of `t = exp(2x)`.
+    FastTanh,
+    /// Metal's fast `atanh`, MSL Table 8.2's `0.5 · log((1 + x) / (1 - x))`.
+    FastAtanh,
     /// Metal's `sinpi`, for a precise call (`air.sinpi`) or a fast one (`air.fast_sinpi`): Metal's
     /// fast function is its precise one, and only a device whose functions are Metal's tells them
     /// apart ([`Fun::device_answers`]).
@@ -164,9 +179,11 @@ impl Fun {
     /// `module`: the instruction is Metal's function in that mode, and `atan2` is always the
     /// precise one (SPIRV-Cross emits `precise::atan2` whatever the flags). The precise-only
     /// functions (`sin`, `cos`, `tan`, `sqrt`, `rsqrt`, and `fmod`, whose fast calls are their own
-    /// functions) are Metal's only in a precise module. Metal's fast `sin` and `cos` are the
-    /// device's in either: its fast functions in a fast-math module, and in a precise one its
-    /// precise functions, which are the fast ones below the flush point. Metal's `sinpi`, `cospi`,
+    /// functions) are Metal's only in a precise module. Metal's fast `sin`, `cos`, `tan`, `sinh`,
+    /// `cosh` and `atanh` are the device's `Sin`, `Cos`, `Tan`, `Sinh`, `Cosh` and `Atanh` in a
+    /// fast-math module only (in a precise one those are Metal's precise functions, which differ:
+    /// `fast::sin` is `+0` past its flush point), and its fast `tanh` in none (SPIRV-Cross emits
+    /// `precise::tanh`, below). Metal's `sinpi`, `cospi`,
     /// and `tanpi` are none of the instructions SPIRV-Cross emits (it emits no `sinpi`), so the
     /// device's `Sin` and `Cos` of `float(π) r` answer a precise call otherwise than Metal (849,
     /// 922 and 637 of case 087758cb's 1,024 lanes matched); a fast call is that composition, in
@@ -184,7 +201,13 @@ impl Fun {
     /// function, never Metal's `half` form.
     pub fn device_answers(self, module: Mode) -> bool {
         match self {
-            Fun::FastSin | Fun::FastCos => true,
+            Fun::FastSin
+            | Fun::FastCos
+            | Fun::FastTan
+            | Fun::FastSinh
+            | Fun::FastCosh
+            | Fun::FastAtanh => module == Mode::Fast,
+            Fun::FastTanh => false,
             Fun::SinPi(m) | Fun::CosPi(m) | Fun::TanPi(m) => m == Mode::Fast,
             Fun::Atan(m) | Fun::Asin(m) | Fun::Acos(m) => m == module,
             Fun::Sin
@@ -303,8 +326,7 @@ pub fn uses(op: FloatFn, f: Form) -> &'static [Fun] {
         FloatFn::Tan => &[Fun::Tan],
         FloatFn::FastSin => &[Fun::FastSin],
         FloatFn::FastCos => &[Fun::FastCos],
-        // Apple's formula `sin(x) · (1 / cos(x))` of Metal's fast functions.
-        FloatFn::FastTan => &[Fun::FastSin, Fun::FastCos],
+        FloatFn::FastTan => &[Fun::FastTan],
         FloatFn::SinPi => &[Fun::SinPi(Mode::Precise)],
         FloatFn::CosPi => &[Fun::CosPi(Mode::Precise)],
         FloatFn::TanPi => &[Fun::TanPi(Mode::Precise)],
@@ -314,8 +336,8 @@ pub fn uses(op: FloatFn, f: Form) -> &'static [Fun] {
         FloatFn::Sqrt => &[Fun::Sqrt],
         FloatFn::Rsqrt => &[Fun::Rsqrt],
         FloatFn::Fmod => &[Fun::Fmod],
-        // The precise functions, and the fast ones' formulas of Metal's `exp2` and `log2` (MSL
-        // Table 8.2).
+        // The precise functions, the fast ones the device's instructions, and the fast ones'
+        // compositions of Metal's `exp2` and `log2` (MSL Table 8.2).
         FloatFn::Exp2 => &[Fun::Exp2],
         FloatFn::Exp => &[Fun::Exp],
         FloatFn::Exp10 => &[Fun::Exp10],
@@ -329,12 +351,12 @@ pub fn uses(op: FloatFn, f: Form) -> &'static [Fun] {
         FloatFn::Asinh => &[Fun::Asinh],
         FloatFn::Acosh => &[Fun::Acosh],
         FloatFn::Atanh => &[Fun::Atanh],
-        FloatFn::FastExp
-        | FloatFn::FastExp10
-        | FloatFn::FastSinh
-        | FloatFn::FastCosh
-        | FloatFn::FastTanh => &[Fun::Exp2],
-        FloatFn::FastLog | FloatFn::FastLog10 | FloatFn::FastAtanh => &[Fun::Log2],
+        FloatFn::FastSinh => &[Fun::FastSinh],
+        FloatFn::FastCosh => &[Fun::FastCosh],
+        FloatFn::FastTanh => &[Fun::FastTanh],
+        FloatFn::FastAtanh => &[Fun::FastAtanh],
+        FloatFn::FastExp | FloatFn::FastExp10 => &[Fun::Exp2],
+        FloatFn::FastLog | FloatFn::FastLog10 => &[Fun::Log2],
         FloatFn::FastAsinh => &[Fun::FastAsinh],
         FloatFn::FastAcosh => &[Fun::FastAcosh],
         FloatFn::FastPow | FloatFn::FastPowr => &[Fun::Exp2, Fun::Log2],
@@ -360,40 +382,26 @@ pub fn use_words(lanes: u8, arity: usize) -> u32 {
         .saturating_add(8)
 }
 
-/// What an entry's calls take, as emission reads them: the mode Metal compiles the entry's
-/// functions in where the device's are Metal's, and the routine of precise `fmod` where the module
-/// defines one.
+/// What an entry's calls take, as emission reads them: the routine of precise `fmod` where the
+/// module defines one. Every other function is the device's instruction, whichever mode Metal
+/// compiles the entry in.
 #[derive(Clone, Copy, Debug)]
 pub struct Lib {
-    metal: Option<Mode>,
     fmod: Option<FuncId>,
 }
 
 impl Lib {
-    /// The library of an entry whose `float` functions are Metal's in mode `metal` (`None`: the
-    /// device's), whose module defines precise `fmod`'s routine as `fmod` where it takes one.
-    pub fn new(metal: Option<Mode>, fmod: Option<FuncId>) -> Lib {
-        Lib { metal, fmod }
+    /// The library of an entry whose module defines precise `fmod`'s routine as `fmod` where it
+    /// takes one.
+    pub fn new(fmod: Option<FuncId>) -> Lib {
+        Lib { fmod }
     }
 
     /// A library that leaves every function to its instruction (a unit test's view of the
     /// sequences around one).
     #[cfg(test)]
     pub fn instructions() -> Lib {
-        Lib::new(None, None)
-    }
-
-    /// Whether the device's instructions are Metal's own functions in mode `mode`: MoltenVK in a
-    /// module Metal compiles in that mode ([`module_mode`]).
-    pub fn metal_in(&self, mode: Mode) -> bool {
-        self.metal == Some(mode)
-    }
-
-    /// Whether the device's instructions are Metal's own functions in its fast mode: MoltenVK in a
-    /// module Metal compiles with fast math ([`module_mode`]), whose `Sin` and `Cos` are Metal's
-    /// `fast::sin` and `fast::cos` themselves, past their flush point too.
-    pub fn metal_fast(&self) -> bool {
-        self.metal_in(Mode::Fast)
+        Lib::new(None)
     }
 
     /// Metal's precise `fmod` of `x` and `y` (`float` lanes of form `f`) by its routine, one call

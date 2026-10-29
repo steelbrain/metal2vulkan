@@ -7,14 +7,7 @@
 
 use crate::device::DeviceProfile;
 use crate::error::DriverDeviation;
-use crate::lower::arith::legal::Form;
 use crate::lower::arith::math::FloatFn;
-use crate::lower::arith::narrow::u32_form;
-use crate::lower::arith::ops::{splat, ty};
-use crate::spirv::builder::FunctionBuilder;
-use crate::spirv::error::BResult;
-use crate::spirv::ids::Value;
-use crate::spirv::ir::{BinOp, ConvOp};
 
 /// Whether profile `p`'s device reads the denormals of the operations [`Covered::Deviation`]
 /// names as Metal does: an `f32` denormal operand as the zero of its sign, a denormal result
@@ -74,26 +67,4 @@ pub fn coverage(op: FloatFn) -> Option<Covered> {
         | F::FastAtan2 { .. } => Covered::Deviation,
         _ => return None,
     })
-}
-
-/// An upper estimate of the SPIR-V words of one [`flush`] on form `f`: six instructions of at most
-/// six words, and the three masks' share (a vector's constants carry their lanes).
-pub fn flush_words(f: Form) -> u32 {
-    36 + 4 * u32::from(f.lanes)
-}
-
-/// `x` (`float` lanes of form `f`) with each denormal lane replaced by the zero of its sign,
-/// decided on the exponent field, so the same on every device and in every float mode.
-pub fn flush(fb: &mut FunctionBuilder<'_>, f: Form, x: Value) -> BResult<Value> {
-    let u = u32_form(f);
-    let (ut, ft) = (ty(fb, u)?, ty(fb, f)?);
-    let bits = fb.convert(ConvOp::Bitcast, x, ut)?;
-    let exponent = splat(fb, u, 0x7F80_0000)?;
-    let sign = splat(fb, u, 0x8000_0000)?;
-    let zero = splat(fb, u, 0)?;
-    let e = fb.binary(BinOp::BitwiseAnd, bits, exponent)?;
-    let denormal = fb.binary(BinOp::IEqual, e, zero)?;
-    let signed_zero = fb.binary(BinOp::BitwiseAnd, bits, sign)?;
-    let r = fb.select(denormal, signed_zero, bits)?;
-    fb.convert(ConvOp::Bitcast, r, ft)
 }

@@ -3,14 +3,11 @@
 //! device's instructions where none is. On every committed M1 profile each kernel compiles, links,
 //! and passes L3, and its module holds the instructions of the form it takes:
 //!
-//! - `air.fast_tanh` on `float` is the MSL fast-math formula `(t - 1) / (t + 1)`,
-//!   `t = exp2(x * 2 log2 e)` of the device's `Exp2` (no `Tanh`), every step of it
-//!   `NoContraction`, its quotient the device's division (`OpFDiv`); the precise `air.tanh` is the
-//!   device's `Tanh`. A `half` `fast_tanh` is Metal's `half` `tanh` (Metal's `half` functions are
-//!   the same in both math modes, and MSL's fast-math formulas are its `float` ones), so it is the
-//!   device's `Tanh` too (no `Exp2`, no division), noted `NativeTranscendentals` wherever the
-//!   device's functions are not Metal's own, and on MoltenVK MSL's `float` `tanh` rounded to
-//!   `half` (`DeviceTranscendentals`);
+//! - `air.fast_tanh` is the device's `Tanh` (no `Exp2`, no division) on `float` and `half`, as
+//!   the precise `air.tanh` is, where MSL Table 8.2 defines Metal's `float` one as the formula
+//!   `(t - 1) / (t + 1)` of `t = exp(2x)`: noted `NativeTranscendentals` wherever the device's
+//!   functions are not Metal's own, and on MoltenVK, whose `Tanh` is MSL's precise `tanh` (and a
+//!   `half` one that rounded to `half`), `DeviceTranscendentals`;
 //! - `air.sign` is the device's `FSign` with and without fast math (it keeps the sign of a zero
 //!   where Metal answers `+0`), noted `NativeTranscendentals` wherever the device's functions are
 //!   not Metal's own (on MoltenVK it is MSL's own `sign`), and both answer `-1` for `-3` on the
@@ -63,33 +60,25 @@ struct Kernel {
     /// `GLSL.std.450` instructions the module must and must not contain.
     has: &'static [u32],
     lacks: &'static [u32],
-    /// Whether the module divides (`OpFDiv`): `fast::tanh`'s quotient.
-    divides: bool,
     /// Whether the module takes the device's instruction for a function Metal defines otherwise,
     /// recording `NativeTranscendentals` wherever the device's functions are not Metal's own.
     native: bool,
+    /// Whether the instruction on MoltenVK is not Metal's own function for the call
+    /// (`DeviceTranscendentals` there): MSL's precise `tanh` for `fast::tanh`, its `float` one
+    /// rounded for a `half` one.
+    off_metal: bool,
     /// The stored word on the interpreter, when it models the kernel.
     want: Option<u32>,
 }
 
-const KERNELS: [Kernel; 8] = [
+const KERNELS: [Kernel; 7] = [
     Kernel {
         name: "fast_tanh_float",
         body: "  %a = fadd fast float 0x4046000000000000, -0.0\n  %r = call fast float @air.fast_tanh.f32(float %a)\n",
-        has: &[EXP2],
-        lacks: &[TANH],
-        divides: true,
-        native: false,
-        want: None,
-    },
-    // RC3 cases e72f550f and 2d5f3949's GELU tail at x = -8: 0.5 * x * (1 + tanh(...)).
-    Kernel {
-        name: FAST_TANH_IN_GELU,
-        body: "  %a = fadd fast float 0xC038A66660000000, -0.0\n  %x = fadd fast float 0xC020000000000000, -0.0\n  %t = call fast float @air.fast_tanh.f32(float %a)\n  %s = fadd fast float %t, 1.000000e+00\n  %h = fmul fast float %x, 5.000000e-01\n  %r = fmul fast float %h, %s\n",
-        has: &[EXP2],
-        lacks: &[TANH],
-        divides: true,
-        native: false,
+        has: &[TANH],
+        lacks: &[EXP2],
+        native: true,
+        off_metal: true,
         want: None,
     },
     Kernel {
@@ -97,8 +86,8 @@ const KERNELS: [Kernel; 8] = [
         body: "  %a = fadd fast float 0x4046000000000000, -0.0\n  %r = call fast float @air.tanh.f32(float %a)\n",
         has: &[TANH],
         lacks: &[EXP2],
-        divides: false,
         native: false,
+        off_metal: false,
         want: None,
     },
     Kernel {
@@ -106,8 +95,8 @@ const KERNELS: [Kernel; 8] = [
         body: "  %a = fadd fast float 0x4000000000000000, -0.0\n  %h = fptrunc float %a to half\n  %t = call fast half @air.fast_tanh.f16(half %h)\n  %r = fpext half %t to float\n",
         has: &[TANH],
         lacks: &[EXP2],
-        divides: false,
         native: true,
+        off_metal: true,
         want: None,
     },
     Kernel {
@@ -115,8 +104,8 @@ const KERNELS: [Kernel; 8] = [
         body: "  %a = fadd fast float 0xC008000000000000, -0.0\n  %r = call fast float @air.sign.f32(float %a)\n",
         has: &[FSIGN],
         lacks: &[],
-        divides: false,
         native: true,
+        off_metal: false,
         want: Some(0xBF80_0000),
     },
     Kernel {
@@ -124,8 +113,8 @@ const KERNELS: [Kernel; 8] = [
         body: "  %a = fadd float 0xC008000000000000, -0.0\n  %r = call float @air.sign.f32(float %a)\n",
         has: &[FSIGN],
         lacks: &[],
-        divides: false,
         native: true,
+        off_metal: false,
         want: Some(0xBF80_0000),
     },
     Kernel {
@@ -133,8 +122,8 @@ const KERNELS: [Kernel; 8] = [
         body: "  %a = fadd fast float 0x3FF0000000000000, -0.0\n  %r = call fast float @air.sinpi.f32(float %a)\n",
         has: &[SIN, ROUND_EVEN],
         lacks: &[],
-        divides: false,
         native: false,
+        off_metal: false,
         want: None,
     },
     Kernel {
@@ -142,17 +131,11 @@ const KERNELS: [Kernel; 8] = [
         body: "  %a = fadd fast float 0x3FF0000000000000, -0.0\n  %r = call fast float @air.fast_sinpi.f32(float %a)\n",
         has: &[SIN, ROUND_EVEN],
         lacks: &[],
-        divides: false,
         native: false,
+        off_metal: false,
         want: None,
     },
 ];
-
-/// The kernel whose `fast::tanh` feeds the caller's `1 + tanh` ([`fast_tanh_is_one_operation`]).
-const FAST_TANH_IN_GELU: &str = "fast_tanh_in_gelu";
-
-/// The `GLSL.std.450 Fma` instruction number.
-const FMA: u32 = 50;
 
 fn module() -> String {
     let mut s = String::from(
@@ -269,22 +252,10 @@ fn metal_math_variants_select_their_forms() {
                 );
             }
             let metal = p.fields().float_functions == FloatFunctions::Metal;
-            assert_eq!(div, k.divides, "{what}: OpFDiv");
-            // The fast-math entry's `fast_tanh` notes its steps' precision (the device's
-            // `Exp2` and division), except where every step is Metal's own function on the device
-            // (`FloatFunctions::Metal`), which notes nothing in such an entry.
-            if k.divides {
-                assert_eq!(
-                    a.precision.contains(&PrecisionNote::DeviceArithmetic)
-                        && a.precision.contains(&PrecisionNote::NativeTranscendentals),
-                    !metal,
-                    "{what}: {:?}",
-                    a.precision
-                );
-            }
+            assert!(!div, "{what}: OpFDiv");
             // The device's instruction: noted `NativeTranscendentals` wherever the device's
-            // functions are not Metal's own. On MoltenVK `sign` is MSL's own; a `half` `tanh` is
-            // MSL's `float` one rounded to `half`, within Apple's bound.
+            // functions are not Metal's own. On MoltenVK `sign` is MSL's own; `fast::tanh` is
+            // MSL's precise `tanh`, and a `half` `tanh` MSL's `float` one rounded to `half`.
             if k.native {
                 assert_eq!(
                     a.precision.contains(&PrecisionNote::NativeTranscendentals),
@@ -292,10 +263,9 @@ fn metal_math_variants_select_their_forms() {
                     "{what}: {:?}",
                     a.precision
                 );
-                let half = k.name.ends_with("_half");
                 assert_eq!(
                     a.precision.contains(&PrecisionNote::DeviceTranscendentals),
-                    metal && half,
+                    metal && k.off_metal,
                     "{what}: {:?}",
                     a.precision
                 );
@@ -305,96 +275,6 @@ fn metal_math_variants_select_their_forms() {
                 assert_eq!(got, want, "{what}: {got:#x} != {want:#x}");
             }
         }
-    }
-}
-
-/// Each float arithmetic result of `words` (`OpFAdd`, `OpFSub`, `OpFMul`, `OpFDiv`, and
-/// `GLSL.std.450 Fma`), as its opcode and whether it is decorated `NoContraction`.
-fn float_arithmetic(words: &[u32]) -> Vec<(u32, bool)> {
-    let (mut results, mut exact) = (Vec::new(), Vec::new());
-    let arith = [
-        crate::spv::Op::FAdd,
-        crate::spv::Op::FSub,
-        crate::spv::Op::FMul,
-        crate::spv::Op::FDiv,
-    ]
-    .map(|op| op as u32);
-    let mut i = 5;
-    while i < words.len() {
-        let (len, op) = ((words[i] >> 16) as usize, words[i] & 0xFFFF);
-        assert!(len > 0 && i + len <= words.len(), "malformed module");
-        if op == crate::spv::Op::Decorate as u32
-            && words[i + 2] == crate::spv::Decoration::NoContraction as u32
-        {
-            exact.push(words[i + 1]);
-        }
-        if arith.contains(&op) || (op == crate::spv::Op::ExtInst as u32 && words[i + 4] == FMA) {
-            results.push((op, words[i + 2]));
-        }
-        i += len;
-    }
-    results
-        .into_iter()
-        .map(|(op, id)| (op, exact.contains(&id)))
-        .collect()
-}
-
-/// `air.fast_tanh` is one operation to Metal, so the device may not fuse or regroup any of its
-/// steps with the caller's arithmetic. Every step is `NoContraction` whatever the call's flags:
-/// `x · 2 log2 e` (in the profile's form: `GLSL.std.450 Fma(a, b, -0.0)` where its `float`
-/// functions are Metal's, an `OpFMul` elsewhere), `t - 1`, `t + 1`, and the quotient. The caller's
-/// `fast` arithmetic stays undecorated. Without the decorations, Mesa's `lower_flrp` rule turned
-/// GELU's `1 + tanh` into `t` on RADV and x86 lavapipe (RC3 cases e72f550f and 2d5f3949,
-/// `gelu(-8)`).
-#[test]
-fn fast_tanh_is_one_operation() {
-    let Some(bitcode) = assemble() else {
-        return;
-    };
-    for stem in PROFILES.into_iter().chain(["amd-rdna3-radv", "lavapipe"]) {
-        let p = profile(stem, exact_maths()).expect("profile");
-        let what = format!("{FAST_TANH_IN_GELU} on {stem}");
-        let a =
-            compile(&bitcode, FAST_TANH_IN_GELU, &p).unwrap_or_else(|e| panic!("{what}: {e:?}"));
-        let (_, words) = link_and_validate(&a, &p).unwrap_or_else(|e| panic!("{what}: L3: {e}"));
-        let ops = float_arithmetic(&words);
-        let count = |op: crate::spv::Op, exact: bool| {
-            ops.iter()
-                .filter(|(o, e)| *o == op as u32 && *e == exact)
-                .count()
-        };
-        let fma = |exact: bool| {
-            ops.iter()
-                .filter(|(o, e)| *o == crate::spv::Op::ExtInst as u32 && *e == exact)
-                .count()
-        };
-        // The tanh's product is in the profile's form.
-        let metal = usize::from(p.fields().float_functions == FloatFunctions::Metal);
-        assert_eq!(
-            (
-                count(crate::spv::Op::FMul, true),
-                count(crate::spv::Op::FSub, true),
-                count(crate::spv::Op::FAdd, true),
-                count(crate::spv::Op::FDiv, true),
-                fma(true)
-            ),
-            (1 - metal, 1, 1, 1, metal),
-            "{what}: the tanh's steps, NoContraction: {ops:?}"
-        );
-        assert_eq!(
-            (
-                fma(false),
-                count(crate::spv::Op::FSub, false),
-                count(crate::spv::Op::FDiv, false),
-                count(crate::spv::Op::FMul, false),
-            ),
-            (0, 0, 0, 2),
-            "{what}: only the caller's multiplies are left free: {ops:?}"
-        );
-        assert!(
-            count(crate::spv::Op::FAdd, false) >= 1,
-            "{what}: the caller's 1 + tanh stays free: {ops:?}"
-        );
     }
 }
 

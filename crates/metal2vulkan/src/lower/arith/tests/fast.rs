@@ -5,7 +5,7 @@
 
 use super::*;
 use crate::lower::arith::fma::{self, Fma, Route};
-use crate::lower::arith::libm::{Lib, Mode};
+use crate::lower::arith::libm::Lib;
 
 /// `(x, y, fast::fmod(x, y))`: the lanes of case 08bc6611 whose fast reciprocal of `y` is the
 /// correctly rounded `1 / y` (917 of 1,024; these are its special lanes and 44 others drawn at
@@ -226,18 +226,12 @@ fn fast_functions_are_metals_compositions() {
     assert_eq!(ext, [0, 0, 0, 1, 1, 0, 0]);
     let (ext, _, _) = read(FloatFn::Pow);
     assert_eq!(ext, [1, 0, 0, 0, 0, 0, 0]);
-    for lib in [
-        Lib::instructions(),
-        Lib::new(Some(Mode::Fast), None),
-        Lib::new(Some(Mode::Precise), None),
+    let (ext, _, _) = read(FloatFn::FastSqrt);
+    assert_eq!(ext, [0, 0, 0, 0, 0, 1, 0]);
+    for (op, want) in [
+        (FloatFn::Exp, [0, 1, 0, 0, 0, 0, 0]),
+        (FloatFn::Log, [0, 0, 1, 0, 0, 0, 0]),
     ] {
-        let (ext, _, _) = read_in(FloatFn::FastSqrt, lib);
-        assert_eq!(ext, [0, 0, 0, 0, 0, 1, 0]);
-        for (op, want) in [
-            (FloatFn::Exp, [0, 1, 0, 0, 0, 0, 0]),
-            (FloatFn::Log, [0, 0, 1, 0, 0, 0, 0]),
-        ] {
-            assert_eq!(read_in(op, lib).0, want, "{op:?}");
-        }
+        assert_eq!(read(op).0, want, "{op:?}");
     }
 }

@@ -2057,14 +2057,15 @@ fn exact_float_functions_answer_their_instructions() {
 }
 
 /// The functions the device has an instruction for are that instruction, on `float` and on a
-/// `half` held in `float`, in every math mode of every library: `exp`, `log`, `pow` and `powr`'s
-/// magnitude, `sinh`, `cosh`, `tanh` (`Exp`, `Log`, `Pow`, `Sinh`, `Cosh`, `Tanh`, with no `Exp2`
-/// or `Log2` composition of Metal's), `fabs`, `sign`, `fract` and `fast::fract` (`FAbs`, `FSign`,
-/// `Fract`, with no bit operation), `median3` (`NMin` and `NMax` alone), `mix` (`FMix`) and
-/// `fast::sqrt` (`Sqrt`). `round` is C99's from the device's `Trunc`.
+/// `half` held in `float`: `exp`, `log`, `pow` and `powr`'s magnitude, `sinh`, `cosh`, `tanh`
+/// (`Exp`, `Log`, `Pow`, `Sinh`, `Cosh`, `Tanh`, with no `Exp2` or `Log2` composition of Metal's),
+/// the fast `sin`, `cos`, `tan`, `sinh`, `cosh`, `tanh` and `atanh` (the instruction alone, with no
+/// flush past Metal's last evaluated quadrant and no MSL Table 8.2 formula), `fabs`, `sign`,
+/// `fract` and `fast::fract` (`FAbs`, `FSign`, `Fract`, with no bit operation), `median3` (`NMin`
+/// and `NMax` alone), `mix` (`FMix`) and `fast::sqrt` (`Sqrt`). `round` is C99's from the device's
+/// `Trunc`.
 #[test]
 fn functions_with_an_instruction_are_that_instruction() {
-    use super::libm::Mode;
     use crate::spv::GlslStd450Op as G;
     const OP_EXT_INST: u32 = 12;
     const OP_BITCAST: u32 = 124;
@@ -2086,7 +2087,14 @@ fn functions_with_an_instruction_are_that_instruction() {
         }
         (ext, bitcasts)
     };
-    let cases: [(FloatFn, &[G]); 15] = [
+    let cases: [(FloatFn, &[G]); 22] = [
+        (FloatFn::FastSin, &[G::Sin]),
+        (FloatFn::FastCos, &[G::Cos]),
+        (FloatFn::FastTan, &[G::Tan]),
+        (FloatFn::FastSinh, &[G::Sinh]),
+        (FloatFn::FastCosh, &[G::Cosh]),
+        (FloatFn::FastTanh, &[G::Tanh]),
+        (FloatFn::FastAtanh, &[G::Atanh]),
         (FloatFn::Exp, &[G::Exp]),
         (FloatFn::Log, &[G::Log]),
         (FloatFn::Sinh, &[G::Sinh]),
@@ -2103,16 +2111,25 @@ fn functions_with_an_instruction_are_that_instruction() {
         (FloatFn::FastSqrt, &[G::Sqrt]),
         (FloatFn::Round, &[G::Trunc]),
     ];
-    for lib in [
-        Lib::instructions(),
-        Lib::new(Some(Mode::Fast), None),
-        Lib::new(Some(Mode::Precise), None),
-    ] {
+    {
+        let lib = Lib::instructions();
         for lane in [float(32), float(16)] {
             for lanes in [1u8, 3] {
                 let f = vec(lane, lanes);
                 for (op, want) in cases {
-                    if op == FloatFn::FastSqrt && lane.float_fmt() == Some(FloatFmt::Half) {
+                    // `refine_float` gives a narrow call no fast function.
+                    let fast = matches!(
+                        op,
+                        FloatFn::FastSqrt
+                            | FloatFn::FastSin
+                            | FloatFn::FastCos
+                            | FloatFn::FastTan
+                            | FloatFn::FastSinh
+                            | FloatFn::FastCosh
+                            | FloatFn::FastTanh
+                            | FloatFn::FastAtanh
+                    );
+                    if fast && lane.float_fmt() == Some(FloatFmt::Half) {
                         continue;
                     }
                     let what = format!("{op:?} on {f:?} ({lib:?})");
@@ -2130,6 +2147,13 @@ fn functions_with_an_instruction_are_that_instruction() {
                             | FloatFn::Sinh
                             | FloatFn::Cosh
                             | FloatFn::Tanh
+                            | FloatFn::FastSin
+                            | FloatFn::FastCos
+                            | FloatFn::FastTan
+                            | FloatFn::FastSinh
+                            | FloatFn::FastCosh
+                            | FloatFn::FastTanh
+                            | FloatFn::FastAtanh
                             | FloatFn::Abs
                             | FloatFn::Sign
                             | FloatFn::FastFract
@@ -2622,16 +2646,15 @@ fn nan_answers_follow_the_measured_flag_states() {
     }
 }
 
-/// `powr(x, y)` is Metal's canonical NaN where Metal's `exp2(y * log2(x))` is a NaN for operands
-/// that are not: `x < 0` (`-0` is not), `y = ±0` with `x = ±0` or `+inf`,
-/// and `y = ±inf` with `x = 1`, an `f32` denormal read as a zero by the zero tests and, in
-/// `fast::powr` only, by the sign test; every other lane keeps the device's result, which the
-/// kernel's third input stands for, except that `fast::powr` answers IEEE's value where `y ·
-/// log2(x)` is infinite (`math::infinite_product`'s rule, on the same classification of the
-/// operands). `half`'s NaN lanes are the same rule's (`nan_half`, `nan_half_fast`, every lane,
-/// class K).
+/// `powr(x, y)` is a NaN where MSL's `exp2(y * log2(x))` is a NaN for operands that are not: `x <
+/// 0` (`-0` is not), `y = ±0` with `x = ±0` or `+inf`, and `y = ±inf` with `x = 1`, each by the
+/// device's comparisons (the interpreter reads an `f32` denormal as a value, where Metal reads a
+/// zero); every other lane keeps the device's result, which the kernel's third input stands for,
+/// except that `fast::powr` answers IEEE's value where `y · log2(x)` is infinite
+/// (`math::infinite_product`'s rule, on the same classification of the operands). `half`'s NaN
+/// lanes are the same rule's (`nan_half`, `nan_half_fast`, every lane, class K).
 #[test]
-fn powr_answers_metals_nan_at_its_special_operands() {
+fn powr_answers_c99_nan_at_its_special_operands() {
     // The answer where `y · log2(x)` is infinite (`log2(x)` read as `-inf` at a zero), for
     // operands that are not NaNs nor in the NaN rule's lanes; `None` where it is finite.
     fn infinite(x: f64, y: f64, y_negative: bool) -> Option<f64> {
@@ -2709,7 +2732,7 @@ fn powr_answers_metals_nan_at_its_special_operands() {
         -f32::NAN,
         f32::MIN_POSITIVE,
         -f32::MIN_POSITIVE,
-        // Denormals, which Metal reads as zeros.
+        // Denormals, which Metal reads as zeros and the device's comparisons as it reads them.
         f32::from_bits(1),
         -f32::from_bits(0x007F_FFFF),
     ]
@@ -2738,17 +2761,8 @@ fn powr_answers_metals_nan_at_its_special_operands() {
             },
             &cases,
             &|c| {
-                // A denormal is a zero to Metal's zero tests, and to `fast::powr`'s sign test;
-                // the precise sign is the bit's, a NaN's included.
-                let read = |v: f32| if v.is_subnormal() { 0.0 } else { v };
-                let raw = f32v(arg(c, 0));
-                let (x, y) = (read(raw), read(f32v(arg(c, 1))));
-                let below = if fast {
-                    x < 0.0
-                } else {
-                    raw.is_sign_negative() && raw != 0.0
-                };
-                let nan = below
+                let (x, y) = (f32v(arg(c, 0)), f32v(arg(c, 1)));
+                let nan = x < 0.0
                     || (y == 0.0 && (x == 0.0 || x == f32::INFINITY))
                     || (y.is_infinite() && x == 1.0);
                 if nan {
@@ -2763,7 +2777,7 @@ fn powr_answers_metals_nan_at_its_special_operands() {
                     _ => device,
                 }])
             },
-            &|g, w| g == w,
+            &|g, w| g == w || (is_nan(f, g) && is_nan(f, w)),
         );
     }
 }
@@ -2795,20 +2809,18 @@ fn pow_special_cases_match_c99() {
             );
         }
     }
-    for precise in [true, false] {
-        check(
-            &format!("pow special cases f32 (precise {precise})"),
-            &[f, f, f],
-            f,
-            &|fb, a| math::pow_special(fb, f, a[0], a[1], a[2], precise),
-            &cases,
-            &|c| {
-                let r = f32v(arg(c, 0)).powf(f32v(arg(c, 1)));
-                Some(vec![u64::from(r.to_bits())])
-            },
-            false,
-        );
-    }
+    check(
+        "pow special cases f32",
+        &[f, f, f],
+        f,
+        &|fb, a| math::pow_special(fb, f, a[0], a[1], a[2]),
+        &cases,
+        &|c| {
+            let r = f32v(arg(c, 0)).powf(f32v(arg(c, 1)));
+            Some(vec![u64::from(r.to_bits())])
+        },
+        false,
+    );
 }
 
 /// The inputs of the authored case `pi-scaled-sine-and-cosine-are-exact-at-every-half-integer`
@@ -3009,7 +3021,6 @@ fn pi_scaled_functions_reduce_exactly_to_metal_answers() {
 /// identity kernel is charged in full, its constants and the `GLSL.std.450` import included.
 #[test]
 fn pi_scaled_functions_stay_within_their_word_estimate() {
-    use super::libm::Mode;
     let module_words = |f: Form, body: Body<'_>| {
         let m = kernel(&[f], f, body).expect("kernel");
         crate::spirv::serialize::serialize(m)
@@ -3035,75 +3046,16 @@ fn pi_scaled_functions_stay_within_their_word_estimate() {
             precise.to_vec()
         };
         for g in calls {
-            for metal in [None, Some(Mode::Fast), Some(Mode::Precise)] {
-                let used = module_words(f, &|fb, x| {
-                    math::float_fn(fb, g, f, Contraction::Allowed, x, &Lib::new(metal, None))
-                });
-                let (emitted, bound) = (used - bare, g.words(f) as usize);
-                assert!(
-                    emitted <= bound,
-                    "{g:?} {f:?} with Metal's functions {metal:?}: {emitted} words over {bound}"
-                );
-            }
+            let used = module_words(f, &|fb, x| {
+                math::float_fn(fb, g, f, Contraction::Allowed, x, &Lib::instructions())
+            });
+            let (emitted, bound) = (used - bare, g.words(f) as usize);
+            assert!(
+                emitted <= bound,
+                "{g:?} {f:?}: {emitted} words over {bound}"
+            );
         }
     }
-}
-
-/// `air.fast_tanh` on `float` is the MSL fast-math formula `(t - 1) / (t + 1)` of `t = exp(2x)`,
-/// its quotient the device's division. The interpreter does not model `Exp2`, so the kernel takes
-/// `t` as an input (`exp2(x * 2 log2 e)` in `f32` on the host) and runs the quotient. Where the
-/// quotient does not depend on the last place of `t` it gives the Metal observation of the
-/// authored case `fast-tanh-through-all-three-of-its-regimes` (M3 Max, ORACLE_ABI v32): `x = 0` is
-/// 0, `x = 43` is 1, `x = 44.4` (where `t` overflows) is NaN, and `x = -100` (where `t` is 0) is
-/// -1. At `x = 44`, where `t + 1` is above `2^126`, Metal's fast reciprocal flushes and answers 0;
-/// the device's quotient answers 1 (`PrecisionNote::NativeDivision`).
-#[test]
-fn fast_tanh_is_the_fast_math_formula() {
-    let f = float(32);
-    let two_log2e = (2.0 * std::f64::consts::LOG2_E) as f32;
-    let t_of = |x: f32| (x * two_log2e).exp2();
-    // (x, Metal's fast::tanh(x)).
-    let metal: [(f32, u32); 4] = [
-        (0.0, 0x0000_0000),
-        (43.0, 0x3F80_0000),
-        (44.4, 0x7FC0_0000),
-        (-100.0, 0xBF80_0000),
-    ];
-    let quotient = |t: f32| (t - 1.0) / (t + 1.0);
-    let mut xs: Vec<f32> = metal.iter().map(|m| m.0).collect();
-    xs.extend([44.0, 0.5, -3.75, 5.0, 1e-3, -1e-3, 20.0, -44.4, 43.7]);
-    let cases: Vec<Case> = xs
-        .iter()
-        .map(|x| vec![vec![u64::from(t_of(*x).to_bits())]])
-        .collect();
-    check(
-        "fast tanh quotient f32",
-        &[f],
-        f,
-        &|fb, t| {
-            let divide = |fb: &mut FunctionBuilder<'_>, x: Value, y: Value| {
-                fb.binary_with(BinOp::FDiv, x, y, Contraction::Forbidden)
-            };
-            math::tanh_of_exp(fb, f, &divide, t[0])
-        },
-        &cases,
-        &|c| {
-            let t = f32v(arg(c, 0));
-            Some(vec![u64::from(quotient(t).to_bits())])
-        },
-        false,
-    );
-    for (x, want) in metal {
-        let got = quotient(t_of(x));
-        assert!(
-            got.to_bits() == want || (got.is_nan() && f32::from_bits(want).is_nan()),
-            "fast::tanh({x}) = {got} ({:#010x}), Metal {want:#010x}",
-            got.to_bits()
-        );
-    }
-    // x = 44: t + 1 > 2^126, where Metal's reciprocal flushes and the device's quotient is 1.
-    assert!(t_of(44.0) + 1.0 > 2f32.powi(126));
-    assert_eq!(quotient(t_of(44.0)), 1.0);
 }
 
 /// The function a call computes follows its `air` symbol's `fast_` variant, never a name: on
@@ -3184,8 +3136,11 @@ fn fast_variants_refine_float_functions() {
             assert_eq!(refine(op, false, fmf, bfloat()), op);
         }
     }
-    assert!(FloatFn::FastTanh.divides() && !FloatFn::Tanh.divides());
-    assert!(FloatFn::FastTan.divides());
+    // The fast `tanh`, `tan` and `atanh` are the device's instructions, which divide by nothing.
+    for op in [FloatFn::FastTanh, FloatFn::FastTan, FloatFn::FastAtanh] {
+        assert!(!op.divides(), "{op:?}");
+    }
+    assert!(!FloatFn::Tanh.divides());
     for reciprocal_flushed in [false, true] {
         assert!(FloatFn::FastAtan2 { reciprocal_flushed }.divides());
     }

@@ -1318,10 +1318,11 @@ fn content_digests_name_what_a_pipeline_says_not_its_build() {
 /// The precision contract is public: a fast `float` division records the device's arithmetic,
 /// Metal's precise division records the device's division, its denormals and its NaN
 /// (`NativeDivision`, `DeviceDenormals`, `NativeNanEncoding`), an integer operator has no notes, and
-/// a fast `float` `tanh`, which the crate computes with a division of its own, records the device's
-/// arithmetic, on a profile whose `float` functions are the device's (lavapipe's); on one whose
-/// functions are Metal's own (MoltenVK's), both are Metal's own in a fast-math entry and record
-/// nothing there, and the division records its note in an entry that keeps NaNs.
+/// a fast `float` `tanh`, the device's `Tanh`, records the device's transcendental, on a profile
+/// whose `float` functions are the device's (lavapipe's); on one whose functions are Metal's own
+/// (MoltenVK's), a fast-math division is Metal's own and records nothing, the division records its
+/// note in an entry that keeps NaNs, and a fast `tanh` records that its `Tanh` is Metal's precise
+/// function, not the fast one (`DeviceTranscendentals`).
 #[test]
 fn the_precision_contract_names_each_float_operations_notes() {
     use metal2vulkan_air::intrinsics::AirIntrinsic;
@@ -1372,10 +1373,16 @@ fn the_precision_contract_names_each_float_operations_notes() {
     };
     let notes = PrecisionNote::of_math_call(tanh, fast, lavapipe, EntryMath::Fast)
         .expect("a float function");
-    assert!(notes.contains(&PrecisionNote::DeviceArithmetic));
+    assert!(
+        notes.contains(&PrecisionNote::NativeTranscendentals),
+        "{notes:?}"
+    );
     let notes = PrecisionNote::of_math_call(tanh, fast, moltenvk, EntryMath::Fast)
         .expect("a float function");
-    assert!(notes.is_empty(), "{notes:?}");
+    assert!(
+        notes.contains(&PrecisionNote::DeviceTranscendentals),
+        "{notes:?}"
+    );
 }
 
 /// A render pipeline with a signed-integer color attachment compiles its fragment function with the

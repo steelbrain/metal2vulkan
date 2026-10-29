@@ -620,8 +620,8 @@ pub enum PrecisionNote {
     /// by `Sqrt`, `dot` of vectors of other than two to four lanes, whose chunks' products the
     /// device sums where Metal flushes each one below `2^-126`, beside their own notes, and a
     /// conversion to or from `double`, whose reading Metal's is not measured. The operations that
-    /// read a denormal on its bits answer Metal on every device: `ldexp`, `copysign` and `atan2`;
-    /// and so do the functions the device answers as Metal's own. Where the minimum and maximum functions
+    /// read a denormal on its bits answer Metal on every device: `ldexp` and `copysign`; and so do
+    /// the functions the device answers as Metal's own. Where the minimum and maximum functions
     /// (`llvm.minnum` and `llvm.maxnum` among them, with any flags) and `saturate` are the device's
     /// `NMin`, `NMax` and `NClamp`, their pick of a denormal is
     /// [`PrecisionNote::NativeMinMax`]'s. Validation derives no tolerance and no explanation from
@@ -1575,11 +1575,19 @@ pub enum PrecisionNote {
     /// device's own `GLSL.std.450` instruction (`Exp`, `Log`, `Pow`, `Sinh`, `Cosh` and `Tanh`
     /// among them; a composition of the device's `Exp2` and `Log2` only for `exp10` and `log10`,
     /// which no instruction is) where Metal's function is not the device's own; `fast::sqrt` the
-    /// device's `Sqrt`; `fabs`, `sign` and `fract` the device's `FAbs`, `FSign` and `Fract`, their
-    /// special operands the instruction's (Metal's `sign` of a NaN, a zero and an `f32` denormal is
-    /// `+0`, its `fract` of an infinity `+0`, where `FSign` keeps a zero's sign and leaves a NaN's
-    /// answer undefined and `Fract` of an infinity is a NaN); and `round` C99's, from the
-    /// device's `Trunc`, on every device (`round(-0.3)` is `-0`, where Metal answers `+0`).
+    /// device's `Sqrt`; the fast `sin`, `cos`, `tan`, `sinh`, `cosh`, `tanh` and `atanh` the
+    /// device's instructions, where MSL Table 8.2 defines Metal's by formulas (`fast::sin` and
+    /// `fast::cos` are `+0` past `float(π/2) · 2^22` and at an infinity or NaN, `fast::tanh` a NaN
+    /// once `exp(2x)` overflows); `fabs`, `sign` and `fract` the device's `FAbs`, `FSign` and
+    /// `Fract`, their special operands the instruction's (Metal's `sign` of a NaN, a zero and an
+    /// `f32` denormal is `+0`, its `fract` of an infinity `+0`, where `FSign` keeps a zero's sign
+    /// and leaves a NaN's answer undefined and `Fract` of an infinity is a NaN); a `half`
+    /// function's zeros' and NaNs' signs its `float` instruction's (Metal's `half` `sin`, `tan`
+    /// and `asin` of `-0` are `+0`, its `half` `asin` NaN takes the operand's sign); `pow`,
+    /// `powr` and `atan2` C99's special values around the device's instruction, decided by the
+    /// device's comparisons, so `pow(x, 1)` is the device's `Pow` (Metal answers `x`) and an
+    /// `f32` denormal operand reads as the device reads it; and `round` C99's, from the device's
+    /// `Trunc`, on every device (`round(-0.3)` is `-0`, where Metal answers `+0`).
     /// **Recorded bound:** Vulkan's precision table for the instruction, where Metal promises 4 to
     /// 6 ulp precise and its fast-math table fast (MSL Tables 8.1, 8.2): `Exp2` and `Exp` 3 + 2·|x|
     /// ulp; `Log2` and `Log` 3 ulp outside `[0.5, 2]` and `2^-21` absolute inside; `Pow` inherited

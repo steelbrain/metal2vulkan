@@ -1817,10 +1817,11 @@ fn a_signed_off_apple_reading_holds_only_while_every_differing_word_is_within_ap
 /// Where Apple states no accuracy, the device's answer is within Apple's promise, but not the
 /// product's approximation. A row whose modules record the product's lowering as a near-equivalent
 /// of Metal's (`DeviceArithmetic`) keeps the word open, so the report refuses the sign-off,
-/// whatever the unstated-words flag says: fast `fmod` ("Undefined"), and fast `float` `tanh`,
-/// which the product computes as `(t - 1) / (t + 1)` with its own division (its lowering of
-/// `air.fast_tanh.f32` records `DeviceArithmetic`), whose divisor at `tanh(44)` is past the
-/// `2^126` where Table 8.2 bounds the fast division.
+/// whatever the unstated-words flag says: fast `fmod` ("Undefined"). Fast `float` `tanh` at
+/// `tanh(44)`, whose formula's divisor is past the `2^126` where Table 8.2 bounds the fast
+/// division, is unstated too, but the product's fast `tanh` is the device's `Tanh` (its lowering
+/// of `air.fast_tanh.f32` records no `DeviceArithmetic`): the device's own answer, within the
+/// promise, so the sign-off stands even where the row records the note for another operation.
 #[test]
 fn an_unstated_word_the_product_approximates_keeps_its_reading_open() {
     /// A one-word fast-math reading: the case's AIR tag, what the word computes of which bit
@@ -1885,33 +1886,36 @@ fn an_unstated_word_the_product_approximates_keeps_its_reading_open() {
         let check = report.readings[0].bound.as_ref().unwrap();
         assert_eq!(check.count("unstated"), 1, "{}", word.computes);
         assert!(report.refused.is_empty());
-
-        // The product's remainder or division, recorded as a near-equivalent: open, and the
-        // sign-off refused.
-        let report = report_of(
-            word,
-            &[
-                PrecisionNote::DeviceArithmetic,
-                PrecisionNote::DeviceTranscendentals,
-            ],
-        );
-        let check = report.readings[0].bound.as_ref().unwrap();
-        assert_eq!(check.count("near_equivalent"), 1, "{}", word.computes);
-        assert_eq!(report.refused.len(), 1);
-        assert!(
-            report.refused[0].words[0].contains("near_equivalent")
-                && report.refused[0].words[0].contains("DeviceArithmetic"),
-            "{:?}",
-            report.refused
-        );
-        assert!(!report.holds());
     }
-    let report = report_of(&tanh, &[PrecisionNote::DeviceArithmetic]);
+    let recorded = [
+        PrecisionNote::DeviceArithmetic,
+        PrecisionNote::DeviceTranscendentals,
+    ];
+    // The product's remainder, recorded as a near-equivalent: open, and the sign-off refused.
+    let report = report_of(&fmod, &recorded);
+    let check = report.readings[0].bound.as_ref().unwrap();
+    assert_eq!(check.count("near_equivalent"), 1);
+    assert_eq!(report.refused.len(), 1);
     assert!(
-        report.refused[0].words[0].contains("its lowering of air.fast_tanh.f32 (Metal's tanh)"),
+        report.refused[0].words[0].contains("near_equivalent")
+            && report.refused[0].words[0].contains("DeviceArithmetic"),
         "{:?}",
         report.refused
     );
+    assert!(!report.holds());
+    let report = report_of(&fmod, &[PrecisionNote::DeviceArithmetic]);
+    assert!(
+        report.refused[0].words[0].contains("its lowering of air.fast_fmod.f32 (Metal's fmod)"),
+        "{:?}",
+        report.refused
+    );
+    // The device's `Tanh`: no near-equivalent of the product's, so the word stays unstated and
+    // the sign-off stands, whatever arithmetic notes the row records.
+    let report = report_of(&tanh, &recorded);
+    let check = report.readings[0].bound.as_ref().unwrap();
+    assert_eq!(check.count("unstated"), 1);
+    assert_eq!(check.count("near_equivalent"), 0);
+    assert!(report.refused.is_empty(), "{:?}", report.refused);
 }
 
 /// A word within Apple's bound that shows a recorded near-equivalent's difference keeps its reading
