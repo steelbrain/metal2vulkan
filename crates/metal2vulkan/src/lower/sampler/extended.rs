@@ -7,8 +7,9 @@
 //! the taps and filters them itself, on a device that samples through Metal's own sampler too.
 //!
 //! **Metal's answers** (an Apple M3 Max on macOS 26.7 and an Apple M4 on macOS 27.0.1,
-//! byte-identical): a nearest sample is the read of the texel at Metal's position, decoded
-//! (`extended_range::decode`, its `half` rounded with ties away from zero). A linear sample's
+//! byte-identical): a nearest sample is the read of the texel at Metal's position, decoded (its
+//! `half` rounded with ties away from zero; here `extended_range::decode`, the device's
+//! arithmetic). A linear sample's
 //! footprint is the other formats' (`linear`, the position quantized to 1/256 of a texel, each tap
 //! addressed on its own, a border tap the sampler's border color through the format's channels).
 //! Its sum is the device's: the four taps' decoded values blended by its `FMix` at the fractions
@@ -162,7 +163,7 @@ use crate::metal::{PixelFormat, SamplerMipFilter, TextureSwizzleChannels};
 use crate::spirv::builder::constructs::{ArmEnd, ArmFn, Merged};
 use crate::spirv::builder::{FunctionBuilder, ModuleBuilder};
 use crate::spirv::error::BResult;
-use crate::spirv::ids::{DemoteTy, FuncId, GlobalId, TypeId, Value as SValue};
+use crate::spirv::ids::{DemoteTy, FuncId, TypeId, Value as SValue};
 use crate::spirv::ir::{BinOp, ConstBits, Constant, ConvOp, GlslOp, ImageQuery};
 
 use super::bicubic::{
@@ -498,14 +499,12 @@ pub(super) struct Texture {
     pub size: Option<SValue>,
 }
 
-/// How a sample's raw texels decode: by one form, a slot's variant's, through the form's sRGB
-/// table; or by the form a heap handle's class index names (`sampler::heap_raw`), through the
+/// How a sample's raw texels decode: by one form, a slot's variant's; or by the form a heap handle's class index names (`sampler::heap_raw`), through the
 /// heap's decode routine of each result type (`texture::heap_raw::define`).
 #[derive(Clone, Copy)]
 pub(super) enum Decode {
     Form {
         form: ExtendedRange,
-        table: Option<GlobalId>,
     },
     Heap {
         /// The form's index in `ExtendedRange::HEAP_READ` (a `u32`).
@@ -669,7 +668,6 @@ fn sampled(
     (offset, passed): (Option<&[i32]>, Option<(SValue, u8)>),
 ) -> BResult<SValue> {
     let (decl, img) = crate::lower::texture::slot_image(cx, fb, r.texture)?;
-    let table = crate::lower::texture::extended_table(cx, r.form)?;
     let t = Tys::new(fb)?;
     let flags = scalar(fb, t.u32_, u64::from(flags(r.form)))?;
     let swizzle = match r.swizzle {
@@ -710,10 +708,7 @@ fn sampled(
             arrayed: r.layer,
             texel: decl.texel,
         },
-        decode: Decode::Form {
-            form: r.form,
-            table,
-        },
+        decode: Decode::Form { form: r.form },
         flags: value(fb, flags)?,
         swizzle,
         parent,
@@ -1413,9 +1408,7 @@ fn decoded(
     half: bool,
 ) -> BResult<SValue> {
     match tex.decode {
-        Decode::Form { form, table } => {
-            crate::lower::arith::extended_range::decode(fb, form, raw, table, half)
-        }
+        Decode::Form { form } => crate::lower::arith::extended_range::decode(fb, form, raw, half),
         Decode::Heap { form, routines, .. } => {
             let routine = match (half, routines) {
                 (false, (f, _)) => f,

@@ -113,11 +113,6 @@ fn build(form: ExtendedRange, declared: crate::spv::ImageFormat) -> BResult<Type
     let shadow_ty = image(&mut b, f32_, crate::spv::ImageFormat::Rgba16f)?;
     let codes = b.resource(CODES, StorageClass::UniformConstant, codes_ty)?;
     let shadow = b.resource(SHADOW, StorageClass::UniformConstant, shadow_ty)?;
-    // An `_sRGB` form's color channels decode through Metal's table.
-    let table = match form.srgb() {
-        true => Some(extended_range::declare(&mut b)?),
-        false => None,
-    };
     let invocation = b.builtin(crate::spv::BuiltIn::GlobalInvocationId, IoDir::Input, uvec3)?;
     let void = b.ty(Type::Void)?;
     let mut f = b.function(void)?;
@@ -140,7 +135,7 @@ fn build(form: ExtendedRange, declared: crate::spv::ImageFormat) -> BResult<Type
         let pixel = f.composite_construct(uvec2, &[x, y])?;
         let plain = ImageOperands::default();
         let raw = f.read(codes, pixel, &plain, TexelMemory::default())?;
-        let value = extended_range::tile_value(f, form, raw, table)?;
+        let value = extended_range::tile_value(f, form, raw)?;
         f.write(shadow, pixel, value, &plain, TexelMemory::default())?;
         Ok(ArmEnd::FallThrough(Vec::new()))
     });

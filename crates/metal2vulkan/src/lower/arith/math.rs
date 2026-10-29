@@ -24,7 +24,6 @@
 //! selection, and so is every function whose Vulkan precision is looser than Metal's.
 
 use crate::air::intrinsics::PackFormat;
-use crate::lower::arith::exact_division::per_lane;
 use crate::lower::arith::legal::{FloatFmt, Form, Held};
 use crate::lower::arith::libm::{self, Lib};
 use crate::lower::arith::nan::{self, NanTest};
@@ -2525,103 +2524,6 @@ pub fn packed_bits(format: PackFormat) -> u8 {
     } else {
         32
     }
-}
-
-/// [`round_exact_product_lanes`] with one scale `m` for every lane.
-#[cfg(test)]
-pub fn round_exact_product(
-    fb: &mut FunctionBuilder<'_>,
-    s: Form,
-    v: Value,
-    m: u32,
-    snorm: bool,
-) -> BResult<Value> {
-    round_exact_product_lanes(fb, s, v, &[m], snorm)
-}
-
-/// `v` (`f32` lanes of form `s`, in `[0, 1]`, or `[-1, 1]` when `snorm`) times `m[i]` for lane
-/// `i` (one scale for every lane when `m` has one; each below `2^16`), rounded to the nearest
-/// integer, ties to even, **from the exact product**, as `u32` lanes (two's complement for a
-/// negative `snorm` result). The sequence is lane-wise.
-///
-/// Rounding `fl(v * m)` differs where the multiply itself rounds onto a half-integer; Metal
-/// rounds the exact product (measured for `rgb10a2` by the old engine's device case
-/// `round-the-exact-product-into-ten-ten-ten-two`). The product is formed exactly in integers,
-/// independent of the device's rounding mode and of whether it fuses: with `v = mant * 2^(e -
-/// 150)` (`e` the biased exponent, `mant` the significand with its leading one), `v * m =
-/// (mant * m) / 2^s` for `s = 150 - e >= 23`. `mant * m < 2^40` is the `UMulExtended` pair;
-/// shifted right by 9 with a sticky bit it fits 31 bits, and `s >= 41` (which includes every
-/// denormal and zero) gives a product below one half, so 0.
-pub fn round_exact_product_lanes(
-    fb: &mut FunctionBuilder<'_>,
-    s: Form,
-    v: Value,
-    m: &[u32],
-    snorm: bool,
-) -> BResult<Value> {
-    let u = narrow::u32_form(s);
-    let c = |fb: &mut FunctionBuilder<'_>, k: u64| splat(fb, u, k);
-    let a = if snorm {
-        glsl(fb, GlslOp::FAbs, &[v])?
-    } else {
-        v
-    };
-    let ut = ty(fb, u)?;
-    let bits = fb.convert(ConvOp::Bitcast, a, ut)?;
-    let k23 = c(fb, 23)?;
-    let e = bin(fb, BinOp::ShiftRightLogical, bits, k23)?;
-    let man = c(fb, 0x7F_FFFF)?;
-    let mant = bin(fb, BinOp::BitwiseAnd, bits, man)?;
-    let lead = c(fb, 0x80_0000)?;
-    let mant = bin(fb, BinOp::BitwiseOr, mant, lead)?;
-    let m: Vec<u64> = m.iter().map(|m| u64::from(*m)).collect();
-    let mk = per_lane(fb, u, &m)?;
-    let p = bin(fb, BinOp::UMulExtended, mant, mk)?;
-    let lo = fb.composite_extract(p, &[0])?;
-    let hi = fb.composite_extract(p, &[1])?;
-    // s = 150 - e; zero when s >= 41; t = min(s, 40) - 9 in [14, 31].
-    let k150 = c(fb, 150)?;
-    let sh = bin(fb, BinOp::ISub, k150, e)?;
-    let k41 = c(fb, 41)?;
-    let zero = bin(fb, BinOp::UGreaterThanEqual, sh, k41)?;
-    let k40 = c(fb, 40)?;
-    let sh = glsl(fb, GlslOp::UMin, &[sh, k40])?;
-    let k9 = c(fb, 9)?;
-    let t = bin(fb, BinOp::ISub, sh, k9)?;
-    // x = (mant * m) >> 9 with the dropped bits as a sticky lowest bit.
-    let low9 = c(fb, 0x1FF)?;
-    let dropped = bin(fb, BinOp::BitwiseAnd, lo, low9)?;
-    let z = c(fb, 0)?;
-    let one = c(fb, 1)?;
-    let lost = bin(fb, BinOp::INotEqual, dropped, z)?;
-    let sticky = fb.select(lost, one, z)?;
-    let x = bin(fb, BinOp::ShiftRightLogical, lo, k9)?;
-    let up = bin(fb, BinOp::ShiftLeftLogical, hi, k23)?;
-    let x = bin(fb, BinOp::BitwiseOr, x, up)?;
-    let x = bin(fb, BinOp::BitwiseOr, x, sticky)?;
-    // Round x / 2^t to nearest even.
-    let q = bin(fb, BinOp::ShiftRightLogical, x, t)?;
-    let unit = bin(fb, BinOp::ShiftLeftLogical, one, t)?;
-    let below = bin(fb, BinOp::ISub, unit, one)?;
-    let rem = bin(fb, BinOp::BitwiseAnd, x, below)?;
-    let t1 = bin(fb, BinOp::ISub, t, one)?;
-    let half = bin(fb, BinOp::ShiftLeftLogical, one, t1)?;
-    let gt = bin(fb, BinOp::UGreaterThan, rem, half)?;
-    let eq = bin(fb, BinOp::IEqual, rem, half)?;
-    let lsb = bin(fb, BinOp::BitwiseAnd, q, one)?;
-    let odd = bin(fb, BinOp::INotEqual, lsb, z)?;
-    let tie_up = bin(fb, BinOp::LogicalAnd, eq, odd)?;
-    let round_up = bin(fb, BinOp::LogicalOr, gt, tie_up)?;
-    let inc = fb.select(round_up, one, z)?;
-    let r = bin(fb, BinOp::IAdd, q, inc)?;
-    let r = fb.select(zero, z, r)?;
-    if !snorm {
-        return Ok(r);
-    }
-    let fz = fsplat(fb, s, 0.0)?;
-    let neg = bin(fb, BinOp::FOrdLessThan, v, fz)?;
-    let nr = bin(fb, BinOp::ISub, z, r)?;
-    fb.select(neg, nr, r)
 }
 
 /// `air.unpack` of a packed float format (the field layouts are the old engine's, device-measured

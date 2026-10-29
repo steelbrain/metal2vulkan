@@ -78,7 +78,9 @@ fn each_texel_of_the_shadow_takes_its_codes_tile_value() {
         height.div_ceil(ExtendedShadowModule::LOCAL_SIZE),
         1,
     ];
-    for form in EVERY_FORM {
+    // The `_sRGB` forms' decode takes the transfer by the device's `Pow`, which the interpreter
+    // does not model: their tile values are the device's.
+    for form in EVERY_FORM.into_iter().filter(|f| !f.srgb()) {
         let m = extended_shadow_typed_module(form)
             .expect("a measured form")
             .expect("built");

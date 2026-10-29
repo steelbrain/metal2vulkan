@@ -2495,9 +2495,8 @@ fn read(cx: &mut EmitCx<'_>, fb: &mut FunctionBuilder<'_>, r: &Read) -> BResult<
     // texel is selected.
     let texel = match r.extended {
         Some(form) => {
-            let table = extended_table(cx, form)?;
             let half = r.texel.conv == TexelConv::F16;
-            crate::lower::arith::extended_range::decode(fb, form, texel, table, half)?
+            crate::lower::arith::extended_range::decode(fb, form, texel, half)?
         }
         None => texel,
     };
@@ -2793,25 +2792,6 @@ pub(crate) fn heap_raw_image(
     fb.load(p, MemAccess::default())
 }
 
-/// The table an extended-range texel of `form` converts through: the module's for an `_sRGB`
-/// form (`ArithPlan::extended_range_srgb`), the form's own for a padded `_sRGB` one
-/// (`ArithPlan::padded_srgb`), none for a linear one.
-pub(crate) fn extended_table(
-    cx: &mut EmitCx<'_>,
-    form: crate::metal::format::ExtendedRange,
-) -> BResult<Option<crate::spirv::ids::GlobalId>> {
-    let arith = &cx.decl.families.arith;
-    let table = match form.padded_srgb() {
-        true => arith.padded_srgb.get(&form).copied(),
-        false => arith.extended_range_srgb,
-    };
-    match (form.srgb() || form.padded_srgb(), table) {
-        (false, _) => Ok(None),
-        (true, Some(table)) => Ok(Some(table)),
-        (true, None) => Err(cx.fail("an sRGB extended-range texel without Metal's table")),
-    }
-}
-
 fn write(cx: &mut EmitCx<'_>, fb: &mut FunctionBuilder<'_>, w: &Write) -> BResult<()> {
     let Loaded {
         decl,
@@ -2846,10 +2826,7 @@ fn write(cx: &mut EmitCx<'_>, fb: &mut FunctionBuilder<'_>, w: &Write) -> BResul
     };
     // An extended-range texel's raw code, encoded as Metal writes it.
     let texel = match w.extended {
-        Some(form) => {
-            let table = extended_table(cx, form)?;
-            crate::lower::arith::extended_range::encode(fb, form, v, table)?
-        }
+        Some(form) => crate::lower::arith::extended_range::encode(fb, form, v)?,
         None => to_image(fb, &decl, w.texel, v)?,
     };
     // An integer texel's lanes, saturated to the format's channels as Metal stores them.

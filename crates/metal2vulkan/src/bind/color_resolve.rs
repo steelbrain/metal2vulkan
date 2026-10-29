@@ -1033,11 +1033,6 @@ fn extended_fragment(
     }
     let mut b = ModuleBuilder::new();
     let t = Types::new(&mut b)?;
-    let table = match form {
-        ExtendedRange::Rgb10A2Srgb => xr::declare_padded(&mut b, form)?,
-        _ if form.srgb() => Some(xr::declare(&mut b)?),
-        _ => None,
-    };
     let uvec4 = b.ty(Type::Vector {
         elem: t.u32_,
         len: 4,
@@ -1050,7 +1045,7 @@ fn extended_fragment(
     for texel in read_samples(&mut f, t, read, samples)? {
         raws.push(extended_texel(&mut f, t, form, texel, source)?);
     }
-    let value = resolve_extended(&mut f, t, form, table, &raws)?;
+    let value = resolve_extended(&mut f, t, form, &raws)?;
     let output = f.module().global_value(output)?;
     f.store(output, value, MemAccess::default())?;
     f.ret(None)?;
@@ -1149,12 +1144,11 @@ fn averaged_codes(
 }
 
 /// The raw texel the resolve of `form` writes from each sample's raw texel `raws` (the module
-/// docs), `table` the form's sRGB table where it has one.
+/// docs).
 fn resolve_extended(
     f: &mut FunctionBuilder<'_>,
     t: Types,
     form: ExtendedRange,
-    table: Option<GlobalId>,
     raws: &[Value],
 ) -> BResult<Value> {
     let n = raws.len() as u32;
@@ -1186,7 +1180,7 @@ fn resolve_extended(
     let average: ArmFn<'_, ()> = Box::new(|f, _| {
         let mut sum: Option<Value> = None;
         for &raw in raws {
-            let v = xr::decode(f, form, raw, table, false)?;
+            let v = xr::decode(f, form, raw, false)?;
             sum = Some(match sum {
                 None => v,
                 Some(s) => f.binary_no_contraction(BinOp::FAdd, s, v)?,
@@ -1198,7 +1192,7 @@ fn resolve_extended(
         let scale = f.composite_construct(t.vec4, &[scale; 4])?;
         let mean = f.binary_no_contraction(BinOp::FMul, sum, scale)?;
         let alpha_code = averaged_codes(f, t, &codes, bias)?;
-        let colors = xr::write_codes(f, form, mean, table)?;
+        let colors = xr::write_codes(f, form, mean)?;
         // Within the samples' codes, where Metal's encode of an average of values that encode to
         // them lies: a decoded code's encode can fall below it where codes share a decode step
         // (`RGB10A2Unorm_sRGB`'s darkest).

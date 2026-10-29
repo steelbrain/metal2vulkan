@@ -134,11 +134,11 @@ pub(crate) use absent::absent_arm;
 pub use absent::ABSENT_ARM;
 pub use atomic::TexAtomic;
 pub(crate) use emit::{
-    constant_lanes, dispatch, extended_table, half_class, heap_element, heap_half_class,
-    heap_raw_form, heap_raw_image, live_or_zero, reinterpret, resident_access, rgb9e5_word,
-    slot_image, sparse_spec, srgb_raw_tap, srgb_texel, swizzled_float, swizzled_gather,
-    swizzled_held, tile_map, tiled_word, with_word, NullLeaf, TileLevel, RGB9E5_WORDS,
-    SRGB_DECODE_WORDS, SRGB_TAP_WORDS, SRGB_TEXEL,
+    constant_lanes, dispatch, half_class, heap_element, heap_half_class, heap_raw_form,
+    heap_raw_image, live_or_zero, reinterpret, resident_access, rgb9e5_word, slot_image,
+    sparse_spec, srgb_raw_tap, srgb_texel, swizzled_float, swizzled_gather, swizzled_held,
+    tile_map, tiled_word, with_word, NullLeaf, TileLevel, RGB9E5_WORDS, SRGB_DECODE_WORDS,
+    SRGB_TAP_WORDS, SRGB_TEXEL,
 };
 pub use emit::{emit, held_texel, to_image};
 pub(crate) use slot::depth_comparison;

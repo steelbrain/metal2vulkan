@@ -109,7 +109,7 @@ use crate::lower::strategy::FamilyStrategy;
 use crate::pipeline::artifact::{EntryMath, PrecisionNote};
 use crate::spirv::builder::{FunctionBuilder, MaskForm, ModuleBuilder, ProductForm, QuantizeForm};
 use crate::spirv::error::BResult;
-use crate::spirv::ids::{DemoteTy, FuncId, GlobalId, TypeId, Value as SValue};
+use crate::spirv::ids::{DemoteTy, FuncId, TypeId, Value as SValue};
 use crate::spirv::ir::{Contraction, ExecMode, UnOp};
 use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
@@ -677,14 +677,10 @@ pub struct ArithPlan {
     /// `OpBitFieldUExtract` on a driver whose compiler drops the mask after a signed clamp
     /// (`DriverWorkaround::NarrowMaskAfterSignedClamp`), else the mask.
     pub mask: MaskForm,
-    /// Whether a function reads or writes a texture slot bound in an `_sRGB` extended-range
-    /// format (`LoweringInputs::extended_range`), through Metal's tables, which [`declare`] then
-    /// declares once ([`extended_range::declare`]).
-    pub extended_range_srgb: bool,
-    /// The padded `_sRGB` forms whose texels a function reads or writes
-    /// ([`ArithPlan::converts`]), through Metal's tables: [`declare`] declares each form's once
-    /// ([`extended_range::declare_padded`]).
-    pub padded_srgb: BTreeSet<crate::metal::format::ExtendedRange>,
+    /// Whether a function converts the texels of a slot or attachment bound in an extended-range,
+    /// padded or bfloat form ([`ArithPlan::converts`]) by the device's arithmetic
+    /// ([`extended_range`]): [`finish`] then records `PrecisionNote::DevicePackConversion`.
+    pub extended_range: bool,
     /// Whether a `half` fused multiply-add takes the device's 16-bit `Fma` ([`fma::Route::F16`]),
     /// recorded at selection: the module then requires `VkProperty::MetalHalfFma`.
     pub f16_fma: bool,
@@ -726,14 +722,9 @@ pub struct ArithPlan {
 
 impl ArithPlan {
     /// Record that a function reads or writes the texels of a slot or attachment bound in
-    /// `form`, which then convert through Metal's tables: an `_sRGB` extended-range form's
-    /// ([`ArithPlan::extended_range_srgb`]) or a padded `_sRGB` form's
-    /// ([`ArithPlan::padded_srgb`]).
-    pub fn converts(&mut self, form: crate::metal::format::ExtendedRange) {
-        self.extended_range_srgb |= form.srgb();
-        if form.padded_srgb() {
-            self.padded_srgb.insert(form);
-        }
+    /// `form`, which convert by the device's arithmetic ([`ArithPlan::extended_range`]).
+    pub fn converts(&mut self, _form: crate::metal::format::ExtendedRange) {
+        self.extended_range = true;
     }
 
     /// Record fused multiply-add `fma`, selected: the device's 16-bit `Fma`
@@ -747,17 +738,6 @@ impl ArithPlan {
 /// The words of the module-scope routines the plan's strategies call, each with the census name
 /// of the strategies that call it: counted once per module, not per use.
 pub fn routine_words(plan: &ArithPlan) -> impl Iterator<Item = (&'static str, u64)> + '_ {
-    // The extended-range sRGB table, once, and each padded `_sRGB` form's.
-    let extended = plan.extended_range_srgb.then_some((
-        extended_range::CENSUS_NAME,
-        u64::from(extended_range::TABLE_WORDS),
-    ));
-    let padded = plan.padded_srgb.iter().map(|_| {
-        (
-            extended_range::PADDED_CENSUS_NAME,
-            u64::from(extended_range::PADDED_TABLE_WORDS),
-        )
-    });
     let fmod = plan
         .fmod
         .then_some((libm::FMOD_NAME, u64::from(libm::FMOD_WORDS)));
@@ -765,8 +745,6 @@ pub fn routine_words(plan: &ArithPlan) -> impl Iterator<Item = (&'static str, u6
         .iter()
         .map(|d| (wide::DIVIDE, u64::from(d.words())))
         .chain(fmod)
-        .chain(extended)
-        .chain(padded)
 }
 
 /// The census name of `air.fast_fmod` on `float` ([`ArithStrategy::FastFmod`]).
@@ -790,6 +768,10 @@ pub fn finish(cx: &mut SelectCx<'_>) -> Result<(), Error> {
     cx.families.arith.native_half = narrow::native_rounding(cx.families.arith.quantize).is_some();
     // Under the float controls a `half`'s NaN is the device's conversion's.
     cx.families.arith.native_half_nans = cx.families.arith.quantize == QuantizeForm::Controlled;
+    // An extended-range, padded or bfloat texel's conversion is the device's arithmetic.
+    if cx.families.arith.extended_range {
+        cx.precision.insert(PrecisionNote::DevicePackConversion);
+    }
     cx.families.arith.mask = if cx
         .profile
         .fields()
@@ -839,17 +821,13 @@ pub fn finish(cx: &mut SelectCx<'_>) -> Result<(), Error> {
     Ok(())
 }
 
-/// The arith family's module-scope objects: the shared wide division routines, precise `fmod`'s
-/// routine, and the tables (the `GLSL.std.450` import is the serializer's, and constants are
+/// The arith family's module-scope objects: the shared wide division routines and precise
+/// `fmod`'s routine (the `GLSL.std.450` import is the serializer's, and constants are
 /// interned where they are used).
 #[derive(Clone, Debug, Default)]
 pub struct Declared {
     /// The function of each of the plan's [`ArithPlan::divides`].
     pub divides: BTreeMap<wide::Divide, FuncId>,
-    /// The extended-range sRGB table, when [`ArithPlan::extended_range_srgb`].
-    pub extended_range_srgb: Option<GlobalId>,
-    /// The table of each of the plan's [`ArithPlan::padded_srgb`].
-    pub padded_srgb: BTreeMap<crate::metal::format::ExtendedRange, GlobalId>,
     /// Precise `fmod`'s routine, when [`ArithPlan::fmod`].
     pub fmod: Option<FuncId>,
 }
@@ -871,14 +849,6 @@ pub fn declare(
     }
     if plan.families.arith.fmod {
         decl.fmod = Some(libm::define_fmod(mb)?);
-    }
-    if plan.families.arith.extended_range_srgb {
-        decl.extended_range_srgb = Some(extended_range::declare(mb)?);
-    }
-    for &form in &plan.families.arith.padded_srgb {
-        if let Some(table) = extended_range::declare_padded(mb, form)? {
-            decl.padded_srgb.insert(form, table);
-        }
     }
     Ok(decl)
 }

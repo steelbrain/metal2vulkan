@@ -1,62 +1,52 @@
-//! Apple's extended-range texels (`metal::format::ExtendedRange`): Metal's value of each raw code a
-//! slot reads, and the code of each value it writes, exact on every device.
+//! Apple's extended-range texels (`metal::format::ExtendedRange`): the value of each raw code a
+//! slot reads, and the code of each value it writes, by the device's arithmetic.
 //!
-//! A channel's 10-bit code `c` holds `(c - 384) / 510`: a read answers it correctly rounded
-//! ([`texel_round::ratio_to_f32`](super::texel_round::ratio_to_f32) of `|c - 384|` over 1020,
-//! doubled), alpha clamped to `[0, 1]` first, and a `half` result rounds that value with ties away
-//! from zero ([`decode`]); a write rounds the exact product of the value with 510 to nearest even
-//! ([`math::round_exact_product_lanes`](super::math::round_exact_product_lanes), the magnitude
-//! below 1.5 first) and clamps the code (alpha to `[384, 894]`), a NaN 0. An `_sRGB` format's color
-//! channel goes through Metal's own tables, symmetric about code 384 ([`declare`]): a read answers
-//! `s / 8192` for the step `s` of `|c - 384|`, signed; a write rounds the magnitude (below 2 first)
-//! to `2^-13`, nearest even (an exact product and `RoundEven`), and the offset is the largest whose
-//! first index is at most that ([`search`]), at most 384 below the zero code. Both tables were read
-//! from an Apple M3 Max and an Apple M4 (byte-identical): every code read, and every threshold
-//! between two adjacent codes found by bisection over the `f32`s, every half, and a dense grid
-//! written. The MSL transfer `((x + 0.055) / 1.055)^2.4` rounded to `2^-13` gives every decode
-//! step; it misses 32 of the 639 encode thresholds, which Metal places by its own arithmetic.
+//! A channel's 10-bit code `c` holds `(c - 384) / 510`: a read answers `float(c - 384)` times the
+//! `f32` nearest `1 / 510` (alpha's code clamped to `[384, 894]` first, a two-plane texel's alpha
+//! byte `b` times the `f32` nearest `1 / 255`); a write takes the value, a NaN as 0, clamped to the
+//! codes' range (alpha to `[0, 1]`), times 510, `RoundEven`, plus 384 ([`encode`]), as
+//! `arith::pack` encodes `rgb10a2`. A padded format's code `c` reads `float(c)` times the `f32`
+//! nearest `1 / 1023` (`RGB10A2Unorm_sRGB`'s alpha `1 / 3`) and writes `RoundEven(clamp(v, 0, 1) ·
+//! 1023)`. An `_sRGB` color channel goes through the MSL transfer by the device's `Pow`
+//! (`arith::pack`'s): a read decodes the magnitude of the linear value of its code, signed, and a
+//! write encodes the magnitude of the value, signed, before the code's rounding;
+//! `RG10Unorm_X12_sRGB` reads its codes linearly and writes the 8-bit sRGB code of its linear code
+//! `m` over 4092 (`RoundEven(255 · srgb(m / 4092))`), as Metal does. A `half` result is the
+//! device's narrowing of the `float` value (`narrow::round_texel`).
+//!
+//! Metal answers the correctly rounded quotient, rounds its `half` with ties away from zero,
+//! encodes by the exact product, and converts the `_sRGB` forms through its own tables, which
+//! the transfer meets: within half a `2^-13` step of each extended-range decode step, a code of
+//! each encode (32 of the 16,385 values on the `2^-13` grid up to 2 a code apart), within 1.64
+//! steps of `R10Unorm_X6_sRGB`'s decode steps and a code of its encode (381 of 8,193), and a code
+//! of `RG10Unorm_X12_sRGB`'s write (36 of the 1,024 linear codes). Every function that converts
+//! such a texel records `PrecisionNote::DevicePackConversion` (`ArithPlan::converts`).
+//!
+//! A bfloat form's texel is each code shifted up 16 bits as a `float`, a NaN as it is; a write
+//! keeps a value's top 16 bits, a NaN kept a NaN by its quiet bit.
 
 use crate::lower::arith::legal::{FloatFmt, Form, Held};
-use crate::lower::arith::math::round_exact_product_lanes;
+use crate::lower::arith::narrow;
 use crate::lower::arith::ops::{fsplat, splat};
-use crate::lower::arith::texel_round::{f32_to_half, ratio_to_f32, HalfRounding};
+use crate::lower::arith::pack::{srgb_decode, srgb_encode};
 use crate::metal::format::ExtendedRange;
 use crate::spirv::builder::FunctionBuilder;
 use crate::spirv::error::BResult;
-use crate::spirv::ids::{GlobalId, Value};
-use crate::spirv::ir::{BinOp, ConstBits, Constant, ConvOp, GlslOp, Type};
+use crate::spirv::ids::Value;
+use crate::spirv::ir::{BinOp, ConstBits, Constant, ConvOp, GlslOp, Type, UnOp};
 
 pub mod blend;
 pub(crate) mod blend_color;
 pub use blend::Blend;
-pub(crate) mod table;
-pub use table::{declare, declare_padded, search};
-use table::{word, TABLE_LEN};
 
-/// The census name the table is charged to ([`TABLE_WORDS`]), once per module that declares it
-/// ([`ArithPlan::extended_range_srgb`](super::ArithPlan::extended_range_srgb)).
-pub const CENSUS_NAME: &str = "texture.extended_range_srgb";
+/// An upper estimate of the SPIR-V words of one texel's [`decode`]: the codes, the conversion
+/// and product, an `_sRGB` form's transfer (its steps and constants) and sign, and the `half`
+/// narrowing.
+pub const DECODE_WORDS: u32 = 40 * 6 + 9 * 6 + 5 * 8 + 64 + 16;
 
-/// An upper estimate of the SPIR-V words of the table ([`declare`]): its distinct constants,
-/// the composite, and the variable, charged once per module.
-pub const TABLE_WORDS: u32 = 641 * 4 + TABLE_LEN + 3 + 8;
-
-/// The census name a padded `_sRGB` form's table is charged to ([`PADDED_TABLE_WORDS`]), once
-/// per module and form that declares it
-/// ([`ArithPlan::padded_srgb`](super::ArithPlan::padded_srgb)).
-pub const PADDED_CENSUS_NAME: &str = "texture.padded_srgb";
-
-/// An upper estimate of the SPIR-V words of a padded `_sRGB` form's table ([`declare_padded`]):
-/// at most one distinct constant per code, the composite, and the variable.
-pub const PADDED_TABLE_WORDS: u32 = TABLE_LEN * 4 + TABLE_LEN + 3 + 8;
-
-/// An upper estimate of the SPIR-V words of one texel's [`decode`]: the codes, the quotients'
-/// exact sequence on four lanes, the signs, and three table reads.
-pub const DECODE_WORDS: u32 = 140 * 6;
-
-/// An upper estimate of the SPIR-V words of one texel's [`encode`]: the clean value, the exact
-/// products on four lanes, the codes, three searches of ten steps, and the packing.
-pub const ENCODE_WORDS: u32 = 220 * 6;
+/// An upper estimate of the SPIR-V words of one texel's [`encode`]: the clean value, an `_sRGB`
+/// form's transfer and sign, the clamp, product, rounding and conversion, and the packing.
+pub const ENCODE_WORDS: u32 = 48 * 6 + 9 * 6 + 5 * 8;
 
 /// Four `u32` lanes.
 fn words() -> Form {
@@ -72,6 +62,16 @@ fn words() -> Form {
 /// Four `f32` lanes.
 fn floats() -> Form {
     words().with(Held::Float(FloatFmt::F32))
+}
+
+/// Four `half` lanes, held as `f32`.
+fn halves() -> Form {
+    words().with(Held::Float(FloatFmt::Half))
+}
+
+/// Four `bfloat` lanes, held as `f32`.
+fn bfloats() -> Form {
+    words().with(Held::Float(FloatFmt::BFloat))
 }
 
 /// The four codes of raw texel `raw` (the raw format's `uvec4` as a read gives it) in Metal's
@@ -118,7 +118,7 @@ pub(crate) fn codes(
             fb.glsl(GlslOp::UClamp, &[c, lo, hi])
         }
         // A padded format's words hold each code in their top 10 bits; blue is 0 and alpha the
-        // code of 1 (`value_of_codes` divides every lane by 1023).
+        // code of 1 (`value_of_codes` scales every lane by `1 / 1023`).
         ExtendedRange::R10X6
         | ExtendedRange::Rg10X12
         | ExtendedRange::R10X6Srgb
@@ -155,15 +155,6 @@ fn padded_lanes(form: ExtendedRange) -> &'static [u32] {
     }
 }
 
-/// A padded `_sRGB` form's conversion without its table ([`declare_padded`]), which its
-/// selection declares (`ArithPlan::converts`).
-fn missing_table() -> crate::spirv::error::BuildError {
-    crate::spirv::error::BuildError::Operand {
-        op: crate::spv::Op::AccessChain,
-        rule: crate::spirv::error::OperandRule::NotPointer,
-    }
-}
-
 /// A `uvec4` constant of the four lanes `v`.
 fn per_lane(fb: &mut FunctionBuilder<'_>, v: [u32; 4]) -> BResult<Value> {
     let ut = crate::lower::arith::ops::ty(fb, words())?;
@@ -185,41 +176,30 @@ fn per_lane(fb: &mut FunctionBuilder<'_>, v: [u32; 4]) -> BResult<Value> {
     fb.module().const_value(c)
 }
 
-/// Metal's value of raw texel `raw` of a slot bound in `form` (the raw format's `uvec4`), a
-/// `vec4` of `f32`, red first. `table` is the module's ([`declare`]) for an `_sRGB` form, whose
-/// color channels then read through it, and `None` for a linear one. For a `half` result
-/// (`half`) each lane is rounded to `half` with ties away from zero, held as the `f32` of that
-/// value: Metal rounds every tie so (an `_sRGB` color step `s / 8192` of an odd multiple of half
-/// a `half` ulp: each of the 13,458 ties of `BGRA10_XR_sRGB`'s and 25,502 of `BGR10_XR_sRGB`'s
-/// reads), and a linear lane's `(c - 384) / 510` is never a tie.
+/// The value of raw texel `raw` of a slot bound in `form` (the raw format's `uvec4`), a `vec4` of
+/// `f32`, red first (the module docs). For a `half` result (`half`) each lane is the device's
+/// narrowing of that value to `half`, held as the `f32` of it.
 pub fn decode(
     fb: &mut FunctionBuilder<'_>,
     form: ExtendedRange,
     raw: Value,
-    table: Option<GlobalId>,
     half: bool,
 ) -> BResult<Value> {
     if form.bfloat() {
         return bfloat_value(fb, form, raw, half);
     }
     let c = codes(fb, form, raw)?;
-    value_of_codes(fb, form, c, table, half)
+    value_of_codes(fb, form, c, half)
 }
 
-/// Metal's tile value of raw texel `raw` of a color attachment of `form` (a framebuffer fetch's
-/// read; byte-identical, a `float` and a `half` read alike): a `vec4` of
-/// `f32`, red first, each lane a `half` value. The tile holds no color code above 1022: a linear
-/// form's code and `BGRA10_XR_sRGB`'s are clamped to 1022 and decoded ([`decode`]),
-/// `BGR10_XR_sRGB`'s and the two-plane twin's decoded and then clamped to the linear values of
-/// codes 0 and 1022, `[-384 / 510, 638 / 510]`; each lane is rounded to `half` with ties away from
-/// zero (only an `_sRGB` step can tie). Alpha is [`decode`]'s.
-pub fn tile_value(
-    fb: &mut FunctionBuilder<'_>,
-    form: ExtendedRange,
-    raw: Value,
-    table: Option<GlobalId>,
-) -> BResult<Value> {
-    let f = floats();
+/// The tile value of raw texel `raw` of a color attachment of `form` (a framebuffer fetch's
+/// read, a `float` and a `half` read alike): a `vec4` of `f32`, red first, each lane a `half`
+/// value. Metal's tile holds no color code above 1022: a linear form's code and
+/// `BGRA10_XR_sRGB`'s are clamped to 1022 and decoded ([`decode`]), `BGR10_XR_sRGB`'s and the
+/// two-plane twin's decoded and then clamped to the linear values of codes 0 and 1022,
+/// `[-384 / 510, 638 / 510]`; each lane is the device's narrowing of that value to `half`.
+/// Alpha is [`decode`]'s.
+pub fn tile_value(fb: &mut FunctionBuilder<'_>, form: ExtendedRange, raw: Value) -> BResult<Value> {
     let c = codes(fb, form, raw)?;
     let by_code = !form.srgb() || matches!(form, ExtendedRange::Bgra10 { .. });
     let c = match by_code {
@@ -229,7 +209,7 @@ pub fn tile_value(
         }
         false => c,
     };
-    let v = value_of_codes(fb, form, c, table, false)?;
+    let v = value_of_codes(fb, form, c, false)?;
     let v = match by_code {
         true => v,
         false => {
@@ -240,7 +220,7 @@ pub fn tile_value(
             fb.glsl(GlslOp::FClamp, &[v, lo, hi])?
         }
     };
-    f32_to_half(fb, f, v, HalfRounding::NearestAway)
+    narrow::round(fb, halves(), v)
 }
 
 /// Metal's read of the tile memory of an attachment of `form` that holds `held` (a `vec4` of
@@ -276,123 +256,107 @@ fn source_range(form: ExtendedRange) -> (f32, f32) {
     }
 }
 
+/// The `ivec4` type.
+fn ivec4(fb: &mut FunctionBuilder<'_>) -> BResult<crate::spirv::ids::TypeId> {
+    let i32_ = fb.module().ty(Type::Int {
+        width: 32,
+        signed: true,
+    })?;
+    fb.module().ty(Type::Vector { elem: i32_, len: 4 })
+}
+
+/// The lanes of `x` where `colour` holds and of `t` elsewhere (a shuffle of the two).
+fn colour_lanes(
+    fb: &mut FunctionBuilder<'_>,
+    x: Value,
+    t: Value,
+    colour: [bool; 4],
+) -> BResult<Value> {
+    let pick: Vec<u32> = (0u32..)
+        .zip(colour)
+        .map(|(i, c)| if c { i } else { 4 + i })
+        .collect();
+    fb.vector_shuffle(x, t, &pick)
+}
+
+/// The lanes, red first, an `_sRGB` form's transfer converts: its color channels.
+/// `RG10Unorm_X12_sRGB`'s reads are linear and its writes take their own transfer
+/// ([`padded_codes`]).
+fn srgb_lanes(form: ExtendedRange) -> [bool; 4] {
+    match form {
+        ExtendedRange::Bgr10 { srgb: true }
+        | ExtendedRange::Bgra10 { srgb: true }
+        | ExtendedRange::Planes { srgb: true }
+        | ExtendedRange::Rgb10A2Srgb => [true, true, true, false],
+        ExtendedRange::R10X6Srgb => [true, false, false, false],
+        _ => [false; 4],
+    }
+}
+
 /// [`decode`]'s value of the codes `c` ([`codes`]) of `form`.
 fn value_of_codes(
     fb: &mut FunctionBuilder<'_>,
     form: ExtendedRange,
     c: Value,
-    table: Option<GlobalId>,
     half: bool,
 ) -> BResult<Value> {
-    let (u, f) = (words(), floats());
-    // A padded format's lane reads `c / 1023` correctly rounded, its `half` to nearest even
-    // (every code; `c / 1023` is never a `half` tie), `RG10Unorm_X12_sRGB`'s too.
-    // `R10Unorm_X6_sRGB`'s red reads its code's decode step `s / 8192` (every code), its `half`
-    // with ties away from zero (every code); so do `RGB10A2Unorm_sRGB`'s red, green and blue,
-    // and its alpha `a / 3` correctly rounded, never a `half` tie (an Apple M3 Max, every code).
-    if form.padded() {
-        let d = match form {
-            ExtendedRange::Rgb10A2Srgb => per_lane(fb, [1023, 1023, 1023, 3])?,
-            _ => splat(fb, u, 1023)?,
-        };
-        let v = ratio_to_f32(fb, u, c, d)?;
-        let (v, rounding) = match form {
-            ExtendedRange::R10X6Srgb | ExtendedRange::Rgb10A2Srgb => {
-                let table = table.ok_or_else(missing_table)?;
-                let colors = srgb_channels(form);
-                let ft = crate::lower::arith::ops::ty(fb, f)?;
-                let mut lanes = Vec::with_capacity(4);
-                for lane in 0..4u32 {
-                    lanes.push(match lane < colors {
-                        true => {
-                            let code = fb.composite_extract(c, &[lane])?;
-                            table_step(fb, table, code)?
-                        }
-                        false => fb.composite_extract(v, &[lane])?,
-                    });
-                }
-                let v = fb.composite_construct(ft, &lanes)?;
-                (v, HalfRounding::NearestAway)
-            }
-            _ => (v, HalfRounding::NearestEven),
-        };
-        return match half {
-            true => f32_to_half(fb, f, v, rounding),
-            false => Ok(v),
-        };
-    }
-    // A two-plane texel's alpha byte `b` reads `b / 255`: its zero code is 0, and its quotient
-    // is over 255, not doubled.
-    let planes = matches!(form, ExtendedRange::Planes { .. });
-    let zero_code = match planes {
-        true => per_lane(fb, [384, 384, 384, 0])?,
-        false => splat(fb, u, 384)?,
-    };
-    let neg = fb.binary(BinOp::ULessThan, c, zero_code)?;
-    let up = fb.binary(BinOp::ISub, c, zero_code)?;
-    let down = fb.binary(BinOp::ISub, zero_code, c)?;
-    let n = fb.select(neg, down, up)?;
-    // |c - 384| / 510, correctly rounded: the quotient over 1020 (its operands within the
-    // routine's `k <= d`), doubled exactly.
-    let (d, two) = match planes {
-        true => (
-            per_lane(fb, [1020, 1020, 1020, 255])?,
-            per_lane_f(fb, [2.0, 2.0, 2.0, 1.0])?,
-        ),
-        false => (splat(fb, u, 1020)?, fsplat(fb, f, 2.0)?),
-    };
-    let q = ratio_to_f32(fb, u, n, d)?;
-    let mut v = fb.binary(BinOp::FMul, q, two)?;
-    if let Some(table) = table {
-        let ft = crate::lower::arith::ops::ty(fb, f)?;
-        let mut lanes = Vec::with_capacity(4);
-        for lane in 0..3u32 {
-            let i = fb.composite_extract(n, &[lane])?;
-            lanes.push(table_step(fb, table, i)?);
+    let f = floats();
+    let ft = crate::lower::arith::ops::ty(fb, f)?;
+    let (n, scale) = match form.padded() {
+        // A padded format's lane: its code; `RGB10A2Unorm_sRGB`'s alpha over 3.
+        true => {
+            let n = fb.convert(ConvOp::ConvertUToF, c, ft)?;
+            let a = match form {
+                ExtendedRange::Rgb10A2Srgb => 3.0,
+                _ => 1023.0,
+            };
+            (n, [1023.0, 1023.0, 1023.0, a])
         }
-        lanes.push(fb.composite_extract(v, &[3])?);
-        v = fb.composite_construct(ft, &lanes)?;
-    }
-    let minus = fb.unary(crate::spirv::ir::UnOp::FNegate, v)?;
-    let v = fb.select(neg, minus, v)?;
+        // A code less the zero code, signed; a two-plane texel's alpha byte over 255.
+        false => {
+            let planes = matches!(form, ExtendedRange::Planes { .. });
+            let (zero, a) = match planes {
+                true => (per_lane(fb, [384, 384, 384, 0])?, 255.0),
+                false => (per_lane(fb, [384; 4])?, 510.0),
+            };
+            let d = fb.binary(BinOp::ISub, c, zero)?;
+            let it = ivec4(fb)?;
+            let d = fb.convert(ConvOp::Bitcast, d, it)?;
+            (
+                fb.convert(ConvOp::ConvertSToF, d, ft)?,
+                [510.0, 510.0, 510.0, a],
+            )
+        }
+    };
+    let r = per_lane_f(fb, scale.map(|d: f32| 1.0 / d))?;
+    let v = fb.binary(BinOp::FMul, n, r)?;
+    let colour = srgb_lanes(form);
+    let v = match colour.contains(&true) {
+        // The transfer of the magnitude, signed.
+        true => {
+            let m = fb.glsl(GlslOp::FAbs, &[v])?;
+            let t = srgb_decode(fb, f, m)?;
+            let minus = fb.unary(UnOp::FNegate, t)?;
+            let zero = fsplat(fb, f, 0.0)?;
+            let neg = fb.binary(BinOp::FOrdLessThan, v, zero)?;
+            let t = fb.select(neg, minus, t)?;
+            colour_lanes(fb, t, v, colour)?
+        }
+        false => v,
+    };
     match half {
-        true => f32_to_half(fb, f, v, HalfRounding::NearestAway),
+        true => narrow::round_texel(fb, halves(), v),
         false => Ok(v),
     }
 }
 
-/// The value `s / 8192` of the decode step `s` in the low half of word `i` (a `u32` scalar) of
-/// `table`, exact.
-fn table_step(fb: &mut FunctionBuilder<'_>, table: GlobalId, i: Value) -> BResult<Value> {
-    let f1 = fb.module().ty(Type::Float { width: 32 })?;
-    let mask = fb.u32_const(0xFFFF)?;
-    let mask = fb.module().const_value(mask)?;
-    let scale = fb.module().constant(Constant::Scalar {
-        ty: f1,
-        bits: ConstBits(u64::from((1.0f32 / 8192.0).to_bits())),
-    })?;
-    let scale = fb.module().const_value(scale)?;
-    let w = word(fb, table, i)?;
-    let s = fb.binary(BinOp::BitwiseAnd, w, mask)?;
-    let s = fb.convert(ConvOp::ConvertUToF, s, f1)?;
-    fb.binary(BinOp::FMul, s, scale)
-}
-
 /// The raw texel (the raw format's `uvec4`) a write of `v` (a `vec4` of `f32`, red first) to a
-/// slot bound in `form` stores, as Metal writes it. `table` is the module's ([`declare`]) for an
-/// `_sRGB` form, whose color channels then encode through it, and `None` for a linear one.
-pub fn encode(
-    fb: &mut FunctionBuilder<'_>,
-    form: ExtendedRange,
-    v: Value,
-    table: Option<GlobalId>,
-) -> BResult<Value> {
-    // A padded format's code is the exact product of the value clamped to [0, 1] with 1023,
-    // rounded to nearest (every value of a grid and around every midpoint), in
-    // its word's top 10 bits, the low 6 bits zero.
+/// slot bound in `form` stores (the module docs).
+pub fn encode(fb: &mut FunctionBuilder<'_>, form: ExtendedRange, v: Value) -> BResult<Value> {
+    // A padded format's code in its word's top 10 bits, the low 6 bits zero.
     if form.padded() {
         let u = words();
-        let k = padded_codes(fb, form, v, table)?;
+        let k = padded_codes(fb, form, v)?;
         if form == ExtendedRange::Rgb10A2Srgb {
             return pack(fb, form, k);
         }
@@ -404,51 +368,85 @@ pub fn encode(
     if form.bfloat() {
         return bfloat_texel(fb, form, v);
     }
-    let code = linear_codes(fb, form, v, table)?;
+    let code = linear_codes(fb, form, v)?;
     pack(fb, form, code)
 }
 
-/// The codes a write of `v` (a `vec4` of `f32`, red first) to a slot of a padded form stores
-/// ([`encode`]): the exact product of the value, clamped to `[0, 1]` (a NaN 0), with 1023 (alpha's
-/// with 3), rounded to nearest, an `_sRGB` form's color codes through its `table`.
-fn padded_codes(
+/// `v` (a `vec4` of `f32`) with a NaN lane 0.
+fn clean(fb: &mut FunctionBuilder<'_>, v: Value) -> BResult<Value> {
+    let zero = fsplat(fb, floats(), 0.0)?;
+    let nan = fb.unary(UnOp::IsNan, v)?;
+    fb.select(nan, zero, v)
+}
+
+/// `v` (a `vec4` of `f32` within the codes' range) times `scale` per lane, `RoundEven`, plus
+/// `bias` per lane, as `u32` codes.
+fn rounded_codes(
     fb: &mut FunctionBuilder<'_>,
-    form: ExtendedRange,
     v: Value,
-    table: Option<GlobalId>,
+    scale: [f32; 4],
+    bias: [f32; 4],
 ) -> BResult<Value> {
+    let scale = per_lane_f(fb, scale)?;
+    let x = fb.binary(BinOp::FMul, v, scale)?;
+    let x = fb.glsl(GlslOp::RoundEven, &[x])?;
+    let x = match bias.iter().any(|&b| b != 0.0) {
+        true => {
+            let bias = per_lane_f(fb, bias)?;
+            fb.binary(BinOp::FAdd, x, bias)?
+        }
+        false => x,
+    };
+    let ut = crate::lower::arith::ops::ty(fb, words())?;
+    fb.convert(ConvOp::ConvertFToU, x, ut)
+}
+
+/// The codes a write of `v` (a `vec4` of `f32`, red first) to a slot of a padded form stores
+/// ([`encode`]): the value, a NaN 0, clamped to `[0, 1]`, an `_sRGB` color channel through the
+/// transfer, times 1023 (`RGB10A2Unorm_sRGB`'s alpha 3), `RoundEven`. `RG10Unorm_X12_sRGB`'s
+/// red and green are the 8-bit sRGB codes of their linear codes `m` over 4092,
+/// `RoundEven(255 · srgb(m / 4092))`, as Metal writes them.
+fn padded_codes(fb: &mut FunctionBuilder<'_>, form: ExtendedRange, v: Value) -> BResult<Value> {
     let f = floats();
+    let v = clean(fb, v)?;
     let zero = fsplat(fb, f, 0.0)?;
-    let nan = fb.unary(crate::spirv::ir::UnOp::IsNan, v)?;
-    let v = fb.select(nan, zero, v)?;
     let one = fsplat(fb, f, 1.0)?;
     let v = fb.glsl(GlslOp::FClamp, &[v, zero, one])?;
-    let scales: &[u32] = match form {
-        ExtendedRange::Rgb10A2Srgb => &[1023, 1023, 1023, 3],
-        _ => &[1023],
-    };
-    let k = round_exact_product_lanes(fb, f, v, scales, false)?;
-    match form {
-        ExtendedRange::R10X6Srgb | ExtendedRange::Rg10X12Srgb | ExtendedRange::Rgb10A2Srgb => {
-            let table = table.ok_or_else(missing_table)?;
-            padded_srgb_codes(fb, form, table, v, k)
+    let colour = srgb_lanes(form);
+    let v = match colour.contains(&true) {
+        true => {
+            let t = srgb_encode(fb, f, v)?;
+            colour_lanes(fb, t, v, colour)?
         }
-        _ => Ok(k),
+        false => v,
+    };
+    let alpha = match form {
+        ExtendedRange::Rgb10A2Srgb => 3.0,
+        _ => 1023.0,
+    };
+    let k = rounded_codes(fb, v, [1023.0, 1023.0, 1023.0, alpha], [0.0; 4])?;
+    if form != ExtendedRange::Rg10X12Srgb {
+        return Ok(k);
     }
+    let ft = crate::lower::arith::ops::ty(fb, f)?;
+    let m = fb.convert(ConvOp::ConvertUToF, k, ft)?;
+    let r = fsplat(fb, f, f64::from(1.0f32 / 4092.0))?;
+    let m = fb.binary(BinOp::FMul, m, r)?;
+    let t = srgb_encode(fb, f, m)?;
+    rounded_codes(fb, t, [255.0; 4], [0.0; 4])
 }
 
 /// The codes (red first) a write of `v` (a `vec4` of `f32`, red first) to a slot of `form` stores,
 /// as [`encode`] packs them: a linear or `_sRGB` form's color codes and alpha's, or a padded
-/// form's. `table` is the form's ([`declare`], [`declare_padded`]) where it has one.
+/// form's.
 pub(crate) fn write_codes(
     fb: &mut FunctionBuilder<'_>,
     form: ExtendedRange,
     v: Value,
-    table: Option<GlobalId>,
 ) -> BResult<Value> {
     match form.padded() {
-        true => padded_codes(fb, form, v, table),
-        false => linear_codes(fb, form, v, table),
+        true => padded_codes(fb, form, v),
+        false => linear_codes(fb, form, v),
     }
 }
 
@@ -462,13 +460,10 @@ fn bfloat_lanes(form: ExtendedRange) -> &'static [u32] {
     }
 }
 
-/// Metal's value of raw texel `raw` of a bfloat form ([`decode`]; `metal::format::ExtendedRange`'s
-/// `R16Bfloat`): each channel's code shifted up 16 bits as a `float`, any NaN code (its magnitude
-/// past `0x7f80`) the quiet NaN `0x7fc00000`; a channel the form lacks 0 and alpha 1; a `half`
-/// result of a read or a gather each lane rounded to nearest even (an Apple M4: every code of each
-/// bfloat format, `float` and `half` reads, `read_write`, nearest and linear samples alike;
-/// gathers); a sample's `half` result rounds toward zero instead ([`bfloat_sample_half`]). Integer
-/// operations on the bits alone, so no float mode changes the answer.
+/// The value of raw texel `raw` of a bfloat form ([`decode`]; `metal::format::ExtendedRange`'s
+/// `R16Bfloat`): each channel's code shifted up 16 bits as a `float`, a NaN code's NaN as it is
+/// (Metal answers `0x7fc00000`); a channel the form lacks 0 and alpha 1; a `half` result the
+/// device's narrowing of each lane.
 fn bfloat_value(
     fb: &mut FunctionBuilder<'_>,
     form: ExtendedRange,
@@ -477,39 +472,28 @@ fn bfloat_value(
 ) -> BResult<Value> {
     let (u, f) = (words(), floats());
     let ft = crate::lower::arith::ops::ty(fb, f)?;
-    let low = splat(fb, u, 0x7FFF)?;
-    let mag = fb.binary(BinOp::BitwiseAnd, raw, low)?;
-    let inf = splat(fb, u, 0x7F80)?;
-    let nan = fb.binary(BinOp::UGreaterThan, mag, inf)?;
     let sixteen = splat(fb, u, 16)?;
     let bits = fb.binary(BinOp::ShiftLeftLogical, raw, sixteen)?;
-    let quiet = splat(fb, u, 0x7FC0_0000)?;
-    let bits = fb.select(nan, quiet, bits)?;
     let fill = per_lane(fb, [0, 0, 0, 1.0f32.to_bits()])?;
     let bits = fb.vector_shuffle(bits, fill, bfloat_lanes(form))?;
     let v = fb.convert(ConvOp::Bitcast, bits, ft)?;
     match half {
-        true => f32_to_half(fb, f, v, HalfRounding::NearestEven),
+        true => narrow::round_texel(fb, halves(), v),
         false => Ok(v),
     }
 }
 
 /// `v`, a bfloat sample's `vec4` of `float` values ([`decode`] without `half`, or the border
-/// texel), as the sample's `half` result: each lane rounded toward zero, a finite value past
-/// `65504` saturating there, an infinity and a NaN kept (an Apple M4 under macOS
-/// 27.0.1: 18,432 positions of an 8 x 4 texture of each bfloat format holding NaN, infinite,
-/// overflowing and `half`-denormal codes, nearest and linear filters under every address mode,
-/// each `half` result the `float` result's toward zero, where a read's and a gather's round to
-/// nearest even). Integer operations on the bits alone.
+/// texel), as the sample's `half` result: the device's narrowing of each lane, where Metal's
+/// rounds toward zero and saturates a finite value past `65504` there.
 pub(crate) fn bfloat_sample_half(fb: &mut FunctionBuilder<'_>, v: Value) -> BResult<Value> {
-    f32_to_half(fb, floats(), v, HalfRounding::TowardZeroSaturating)
+    narrow::round_texel(fb, halves(), v)
 }
 
 /// The raw texel a kernel's write of `v` (a `vec4` of `f32`; a `half` value held widened)
-/// stores to a bfloat form ([`encode`]): each lane's top 16 bits (toward zero), a NaN the quiet
-/// NaN `0x7fc0`, the components past the form's zero (an Apple M4: per bfloat code
-/// the `float`s of its bits and three neighbours of each tie, and every `half` code, into each
-/// bfloat format). Integer operations on the bits alone.
+/// stores to a bfloat form ([`encode`]): each lane's top 16 bits (toward zero, as Metal writes
+/// them), a NaN's with its quiet bit set so that it stays a NaN (Metal writes `0x7fc0`), the
+/// components past the form's zero.
 fn bfloat_texel(fb: &mut FunctionBuilder<'_>, form: ExtendedRange, v: Value) -> BResult<Value> {
     let u = words();
     let ut = crate::lower::arith::ops::ty(fb, u)?;
@@ -518,21 +502,20 @@ fn bfloat_texel(fb: &mut FunctionBuilder<'_>, form: ExtendedRange, v: Value) -> 
     let mag = fb.binary(BinOp::BitwiseAnd, bits, abs)?;
     let inf = splat(fb, u, 0x7F80_0000)?;
     let nan = fb.binary(BinOp::UGreaterThan, mag, inf)?;
+    let quiet = splat(fb, u, 0x0040_0000)?;
+    let q = fb.binary(BinOp::BitwiseOr, bits, quiet)?;
+    let bits = fb.select(nan, q, bits)?;
     let sixteen = splat(fb, u, 16)?;
     let code = fb.binary(BinOp::ShiftRightLogical, bits, sixteen)?;
-    let quiet = splat(fb, u, 0x7FC0)?;
-    let code = fb.select(nan, quiet, code)?;
     let zero = splat(fb, u, 0)?;
     fb.vector_shuffle(code, zero, bfloat_lanes(form))
 }
 
 /// The raw texel a render pass stores to an attachment of the bfloat form `form` whose tile holds
 /// `v` (a `vec4` of `half` values held as `f32`; `stage_io::extended_color::bfloat_output`): each
-/// lane's bfloat code nearest, ties to even, a NaN `0x7fc0`, the components past the form's zero
-/// (an Apple M4 under macOS 27.0.1: every `half` code output into each bfloat
-/// format). Not a kernel write's code, which drops the low 16 bits ([`bfloat_texel`]). Integer
-/// operations on the bits alone; no sum wraps (the largest magnitude below a NaN's is the
-/// infinity's).
+/// lane rounded to `bfloat` to nearest even (`narrow::round`, a NaN kept a NaN by its quiet bit
+/// where Metal stores `0x7fc0`), its top 16 bits, the components past the form's zero. Not a
+/// kernel write's code, which drops the low 16 bits ([`bfloat_texel`]).
 pub(crate) fn bfloat_stored(
     fb: &mut FunctionBuilder<'_>,
     form: ExtendedRange,
@@ -540,21 +523,10 @@ pub(crate) fn bfloat_stored(
 ) -> BResult<Value> {
     let u = words();
     let ut = crate::lower::arith::ops::ty(fb, u)?;
-    let bits = fb.convert(ConvOp::Bitcast, v, ut)?;
-    let abs = splat(fb, u, 0x7FFF_FFFF)?;
-    let mag = fb.binary(BinOp::BitwiseAnd, bits, abs)?;
-    let inf = splat(fb, u, 0x7F80_0000)?;
-    let nan = fb.binary(BinOp::UGreaterThan, mag, inf)?;
+    let r = narrow::round(fb, bfloats(), v)?;
+    let bits = fb.convert(ConvOp::Bitcast, r, ut)?;
     let sixteen = splat(fb, u, 16)?;
-    let one = splat(fb, u, 1)?;
-    let kept = fb.binary(BinOp::ShiftRightLogical, bits, sixteen)?;
-    let odd = fb.binary(BinOp::BitwiseAnd, kept, one)?;
-    let half_step = splat(fb, u, 0x7FFF)?;
-    let biased = fb.binary(BinOp::IAdd, bits, half_step)?;
-    let biased = fb.binary(BinOp::IAdd, biased, odd)?;
-    let code = fb.binary(BinOp::ShiftRightLogical, biased, sixteen)?;
-    let quiet = splat(fb, u, 0x7FC0)?;
-    let code = fb.select(nan, quiet, code)?;
+    let code = fb.binary(BinOp::ShiftRightLogical, bits, sixteen)?;
     let zero = splat(fb, u, 0)?;
     fb.vector_shuffle(code, zero, bfloat_lanes(form))
 }
@@ -570,10 +542,9 @@ pub fn encode_keeping(
     fb: &mut FunctionBuilder<'_>,
     form: ExtendedRange,
     v: Value,
-    table: Option<GlobalId>,
     (old, kept): (Value, [bool; 4]),
 ) -> BResult<Value> {
-    let new = linear_codes(fb, form, v, table)?;
+    let new = linear_codes(fb, form, v)?;
     let old = codes(fb, form, old)?;
     let lanes: Vec<u32> = kept
         .iter()
@@ -588,85 +559,39 @@ pub fn encode_keeping(
 }
 
 /// The codes a write of `v` (a `vec4` of `f32`, red first) to a slot of a linear or `_sRGB` form
-/// stores ([`encode`]): each color code, and alpha's (a two-plane form's alpha byte).
-fn linear_codes(
-    fb: &mut FunctionBuilder<'_>,
-    form: ExtendedRange,
-    v: Value,
-    table: Option<GlobalId>,
-) -> BResult<Value> {
-    let (u, f) = (words(), floats());
-    let ut = crate::lower::arith::ops::ty(fb, u)?;
-    let zero = fsplat(fb, f, 0.0)?;
-    let nan = fb.unary(crate::spirv::ir::UnOp::IsNan, v)?;
-    let v = fb.select(nan, zero, v)?;
-    // Alpha's value clamped to [0, 1], whose codes are [384, 894].
-    let lo = per_lane_f(fb, [-2.0, -2.0, -2.0, 0.0])?;
-    let hi = per_lane_f(fb, [2.0, 2.0, 2.0, 1.0])?;
-    let v = fb.glsl(GlslOp::FClamp, &[v, lo, hi])?;
-    let neg = fb.binary(BinOp::FOrdLessThan, v, zero)?;
-    let a = fb.glsl(GlslOp::FAbs, &[v])?;
-    let cap = fsplat(fb, f, 1.5)?;
-    let m = fb.glsl(GlslOp::FMin, &[a, cap])?;
-    // A two-plane texel's alpha byte is the exact product with 255, rounded to nearest even.
-    let planes = matches!(form, ExtendedRange::Planes { .. });
-    let scales: &[u32] = match planes {
-        true => &[510, 510, 510, 255],
-        false => &[510],
-    };
-    let k = round_exact_product_lanes(fb, f, m, scales, false)?;
-    let zero_code = splat(fb, u, 384)?;
-    let up = fb.binary(BinOp::IAdd, zero_code, k)?;
-    let down = fb.binary(BinOp::ISub, zero_code, k)?;
-    // A negative code wraps past 2^31: clamp the down codes as signed.
-    let i32_ = fb.module().ty(Type::Int {
-        width: 32,
-        signed: true,
-    })?;
-    let it = fb.module().ty(Type::Vector { elem: i32_, len: 4 })?;
-    let down = fb.convert(ConvOp::Bitcast, down, it)?;
-    let iz = fb.module().constant(Constant::Null { ty: it })?;
-    let iz = fb.module().const_value(iz)?;
-    let down = fb.glsl(GlslOp::SMax, &[down, iz])?;
-    let down = fb.convert(ConvOp::Bitcast, down, ut)?;
-    let top = splat(fb, u, 1023)?;
-    let up = fb.glsl(GlslOp::UMin, &[up, top])?;
-    let mut code = fb.select(neg, down, up)?;
-    // A two-plane texel's alpha lane holds its byte.
-    if planes {
-        code = fb.vector_shuffle(code, k, &[0, 1, 2, 7])?;
-    }
-    if let Some(table) = table {
-        let f1 = fb.module().ty(Type::Float { width: 32 })?;
-        let u1 = fb.module().ty(Type::Int {
-            width: 32,
-            signed: false,
-        })?;
-        let grid = fb.module().constant(Constant::Scalar {
-            ty: f1,
-            bits: ConstBits(u64::from(8192.0f32.to_bits())),
-        })?;
-        let grid = fb.module().const_value(grid)?;
-        let k384 = fb.u32_const(384)?;
-        let k384 = fb.module().const_value(k384)?;
-        let mut lanes = Vec::with_capacity(4);
-        for lane in 0..3u32 {
-            // |x| below 2 times 2^13 is exact; RoundEven is exact.
-            let x = fb.composite_extract(a, &[lane])?;
-            let x = fb.binary(BinOp::FMul, x, grid)?;
-            let x = fb.glsl(GlslOp::RoundEven, &[x])?;
-            let i = fb.convert(ConvOp::ConvertFToU, x, u1)?;
-            let n = search(fb, table, i)?;
-            let n_down = fb.glsl(GlslOp::UMin, &[n, k384])?;
-            let up = fb.binary(BinOp::IAdd, k384, n)?;
-            let down = fb.binary(BinOp::ISub, k384, n_down)?;
-            let is_neg = fb.composite_extract(neg, &[lane])?;
-            lanes.push(fb.select(is_neg, down, up)?);
+/// stores ([`encode`]): the value, a NaN 0, an `_sRGB` color channel's magnitude through the
+/// transfer, signed, clamped to the linear values of codes 0 and 1023 (alpha to `[0, 1]`), times
+/// 510, `RoundEven`, plus 384; a two-plane form's alpha byte `RoundEven(255 a)`.
+fn linear_codes(fb: &mut FunctionBuilder<'_>, form: ExtendedRange, v: Value) -> BResult<Value> {
+    let f = floats();
+    let v = clean(fb, v)?;
+    let colour = srgb_lanes(form);
+    let v = match colour.contains(&true) {
+        true => {
+            let m = fb.glsl(GlslOp::FAbs, &[v])?;
+            let t = srgb_encode(fb, f, m)?;
+            let minus = fb.unary(UnOp::FNegate, t)?;
+            let zero = fsplat(fb, f, 0.0)?;
+            let neg = fb.binary(BinOp::FOrdLessThan, v, zero)?;
+            let t = fb.select(neg, minus, t)?;
+            colour_lanes(fb, t, v, colour)?
         }
-        lanes.push(fb.composite_extract(code, &[3])?);
-        code = fb.composite_construct(ut, &lanes)?;
+        false => v,
+    };
+    let lo = (-384.0f64 / 510.0) as f32;
+    let hi = (639.0f64 / 510.0) as f32;
+    let lo = per_lane_f(fb, [lo, lo, lo, 0.0])?;
+    let hi = per_lane_f(fb, [hi, hi, hi, 1.0])?;
+    let v = fb.glsl(GlslOp::FClamp, &[v, lo, hi])?;
+    match matches!(form, ExtendedRange::Planes { .. }) {
+        true => rounded_codes(
+            fb,
+            v,
+            [510.0, 510.0, 510.0, 255.0],
+            [384.0, 384.0, 384.0, 0.0],
+        ),
+        false => rounded_codes(fb, v, [510.0; 4], [384.0; 4]),
     }
-    Ok(code)
 }
 
 /// The raw texel (the raw format's `uvec4`) of the codes `code` (red first; a two-plane form's
@@ -732,62 +657,6 @@ pub(crate) fn pack(
         | ExtendedRange::Rgba16Bfloat => Err(crate::spirv::error::BuildError::Type(
             crate::spirv::error::TypeRule::FunctionSignature,
         )),
-    }
-}
-
-/// The codes a write of `v` (clamped to `[0, 1]`, a NaN 0) to a padded `_sRGB` form stores
-/// through its `table` ([`declare_padded`]), `k` the linear codes `RG10Unorm_X12` would store
-/// (an Apple M4 and an Apple M3 Max, byte-identical: values next to every threshold, every `half`,
-/// and a grid). `R10Unorm_X6_sRGB`'s red is the largest code whose first encode index is at most
-/// `RoundEven(v · 8192)` (exact: `v` below 1 times `2^13`), as an extended-range `_sRGB` channel's
-/// offset is ([`search`]); `RG10Unorm_X12_sRGB`'s red and green are the table's code of each linear
-/// code. `RGB10A2Unorm_sRGB`'s red, green and blue are `R10Unorm_X6_sRGB`'s red's (an Apple M3
-/// Max, 16,385 values). The other lanes stay `k`'s.
-fn padded_srgb_codes(
-    fb: &mut FunctionBuilder<'_>,
-    form: ExtendedRange,
-    table: GlobalId,
-    v: Value,
-    k: Value,
-) -> BResult<Value> {
-    let ut = crate::lower::arith::ops::ty(fb, words())?;
-    let u1 = fb.module().ty(Type::Int {
-        width: 32,
-        signed: false,
-    })?;
-    let f1 = fb.module().ty(Type::Float { width: 32 })?;
-    let channels = srgb_channels(form);
-    let mut lanes = Vec::with_capacity(4);
-    for lane in 0..4u32 {
-        let code = match (lane < channels, form) {
-            (false, _) => fb.composite_extract(k, &[lane])?,
-            (true, ExtendedRange::R10X6Srgb | ExtendedRange::Rgb10A2Srgb) => {
-                let grid = fb.module().constant(Constant::Scalar {
-                    ty: f1,
-                    bits: ConstBits(u64::from(8192.0f32.to_bits())),
-                })?;
-                let grid = fb.module().const_value(grid)?;
-                let x = fb.composite_extract(v, &[lane])?;
-                let x = fb.binary(BinOp::FMul, x, grid)?;
-                let x = fb.glsl(GlslOp::RoundEven, &[x])?;
-                let i = fb.convert(ConvOp::ConvertFToU, x, u1)?;
-                search(fb, table, i)?
-            }
-            (true, _) => {
-                let i = fb.composite_extract(k, &[lane])?;
-                word(fb, table, i)?
-            }
-        };
-        lanes.push(code);
-    }
-    fb.composite_construct(ut, &lanes)
-}
-
-/// The lanes, from red, a padded `_sRGB` form's table converts: its color channels.
-fn srgb_channels(form: ExtendedRange) -> u32 {
-    match form {
-        ExtendedRange::Rgb10A2Srgb => 3,
-        _ => form.raw_components(),
     }
 }
 

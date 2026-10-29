@@ -1940,7 +1940,7 @@ pub(super) fn select_read(cx: &mut SelectCx<'_>, c: ColorInput) -> Result<(), Er
         return Err(refused.at_attachment(Attachment::Color(c.color)).into());
     }
     class_of(c.form, sc.view.read_class(), c.color, false)?;
-    // An `_sRGB` extended-range texel decodes through Metal's table.
+    // An extended-range texel converts by the device's arithmetic.
     if let Some(e) = sc.view.extended {
         cx.families.arith.converts(e);
     }
@@ -2030,7 +2030,7 @@ pub fn select_output(
     };
     class_of(form, sc.view.read_class(), color, true)?;
     // An extended-range attachment's blend is of a `half4` output, or of a `float4` one where
-    // the blend takes it ([`plan`]), and an `_sRGB` one's encodes through Metal's table.
+    // the blend takes it ([`plan`]), and an `_sRGB` one's encodes by the device's `Pow`.
     let output4 = (form.lanes == 4).then(|| form.float_fmt()).flatten();
     if blend_of(&sc.view, output4).is_err() {
         return Err(cx.invariant("an extended-range blend of an output outside its model"));
@@ -2540,10 +2540,7 @@ pub(super) fn value(
     };
     let texel = match (sc.view.extended, sc.view.uint_view) {
         (Some(_), _) if sc.shadowed => texel,
-        (Some(form), _) => {
-            let table = crate::lower::texture::extended_table(cx, form)?;
-            extended_range::tile_value(fb, form, texel, table)?
-        }
+        (Some(form), _) => extended_range::tile_value(fb, form, texel)?,
         (None, Some(_)) => {
             let word = fb.composite_extract(texel, &[0])?;
             srgb_decode(fb, sc.view.format, word)?
@@ -2620,14 +2617,13 @@ pub(super) fn emit_return(
                 texel
             }
             (Some(range), None) if !sc.shadowed => {
-                stage_io::extended_color::texel(cx, fb, range, form, part)?
+                stage_io::extended_color::texel(fb, range, form, part)?
             }
             // The output's `half`, which the tile holds and the codes encode.
             (Some(range), None) => {
                 let v = stage_io::extended_color::held(fb, range, form, part)?;
                 held = Some(v);
-                let table = crate::lower::texture::extended_table(cx, range)?;
-                extended_range::encode(fb, range, v, table)?
+                extended_range::encode(fb, range, v)?
             }
             (None, _) if sc.view.uint_view.is_some() => {
                 srgb_texel(cx, fb, color, &sc, (form, part), second)?
@@ -3043,7 +3039,6 @@ fn blended(
         return Err(cx.fail("an extended-range blend of another output"));
     };
     let s1 = blend_second(cx, &b, second)?;
-    let table = crate::lower::texture::extended_table(cx, range)?;
     let mut codes = None;
     let mut read_codes = |cx: &mut EmitCx<'_>, fb: &mut FunctionBuilder<'_>| -> BResult<SValue> {
         if let Some(texel) = codes {
@@ -3061,14 +3056,14 @@ fn blended(
         Some(held) => held,
         None => {
             let texel = read_codes(cx, fb)?;
-            extended_range::tile_value(fb, range, texel, table)?
+            extended_range::tile_value(fb, range, texel)?
         }
     };
     let constant = blend_constant(cx, fb, &b)?;
     let ranges = Some(extended_range::blend::extended_ranges(range));
     let v = extended_range::blend::native(fb, &b, ranges, (part, s1, d), constant)?;
     if !sc.view.merges() {
-        let texel = extended_range::encode(fb, range, v, table)?;
+        let texel = extended_range::encode(fb, range, v)?;
         return Ok((texel, shadow.map(|_| v)));
     }
     let kept = [
@@ -3079,7 +3074,7 @@ fn blended(
     ]
     .map(|c| sc.view.kept.contains(c));
     let texel = read_codes(cx, fb)?;
-    let stored = extended_range::encode_keeping(fb, range, v, table, (texel, kept))?;
+    let stored = extended_range::encode_keeping(fb, range, v, (texel, kept))?;
     let held = match shadow {
         // The shadow keeps the channels the codes keep, as the tile held them.
         Some(held) => {

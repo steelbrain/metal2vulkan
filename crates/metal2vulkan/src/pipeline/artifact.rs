@@ -1827,7 +1827,19 @@ pub enum PrecisionNote {
     /// Metal rounds `c / D` once), a fragment function's read and write of an 8-bit sRGB attachment
     /// in the interlocked storage form or through its word view, and a snapshot read's decode of a
     /// normalized code (`c` times the `f32` nearest `1 / D`, where Metal reads `c / D` correctly
-    /// rounded). Validation derives no tolerance from it.
+    /// rounded). So does every conversion of an extended-range, padded 10-bit or bfloat texel
+    /// (`lower::arith::extended_range`; `ArithPlan::converts` records it), on every device, no
+    /// Vulkan format holding them: a read `float(c - 384)` (a padded code's `float(c)`) times the
+    /// `f32` nearest `1 / 510` (`1 / 1023`), a write `RoundEven` of the clamped value's `f32`
+    /// product plus 384, an sRGB twin's colour the MSL transfer by the device's `Pow` on the
+    /// magnitude, a `half` result the device's narrowing, a bfloat NaN as it is (a write's kept a
+    /// NaN by its quiet bit), where Metal divides correctly rounded, rounds the exact product,
+    /// rounds a `half` with ties away from zero, converts the sRGB twins through its own tables,
+    /// makes a bfloat NaN `0x7fc00000` or `0x7fc0` and rounds a bfloat sample's `half` toward zero:
+    /// a linear value within one `f32` ulp of Metal's, a code within one, an sRGB twin's decoded
+    /// value within half a `2^-13` step of Metal's table (`R10Unorm_X6_sRGB`'s within 1.64 steps)
+    /// beyond the `Pow`'s bound, a `half` result within one `half` ulp. Validation derives no
+    /// tolerance from it.
     DevicePackConversion,
     /// A render pipeline whose color attachments the device draws in more than one group
     /// (`GraphicsState::color_group`, the module docs of `pipeline::compile::color_group`): a

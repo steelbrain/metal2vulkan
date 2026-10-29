@@ -119,9 +119,8 @@ fn unorm_bits(bits: u8) -> BResult<u32> {
 /// Every step is decorated `NoContraction`, so no device fuses or reassociates the split, and
 /// none relies on the rounding mode: an exhaustive check of every `f32` in `[0, 1]` for every
 /// `k` matched the exact product rounded to nearest even under rounding to nearest and toward zero,
-/// with and without denormals flushed. About fourteen instructions, where
-/// [`round_exact_product_lanes`](crate::lower::arith::math::round_exact_product_lanes) takes about
-/// forty and a conversion back.
+/// with and without denormals flushed. About fourteen instructions, where an exact product formed
+/// in integers takes about forty and a conversion back.
 fn round_mersenne_product(
     fb: &mut FunctionBuilder<'_>,
     s: Form,

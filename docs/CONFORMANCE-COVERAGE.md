@@ -44,7 +44,7 @@ Its limits, measured rather than asserted:
 | committed recordings | 1122 |
 | distinct SDK items the Metal leg reaches, of any status | 800 |
 | of those, reached only where this cannot name the family | 2 |
-| ledger rows (a case whose gap is recorded) | 1130 |
+| ledger rows (a case whose gap is recorded) | 1327 |
 | declared crossings of the option space (pairs put to Metal at once) | 26 |
 | declared crossings that are no pair of it (a boolean or numeric field, or one type in two slots) | 30 |
 
@@ -3268,42 +3268,235 @@ A case whose difference from Metal is recorded rather than compared away. The le
 | `texture-fills-81` | Metal's plain colour fill (`fillTexture:...color:` with no pixel format; the case's c0, c4, c5 and c7) packs the colour by its fill's own rules, a tie rounded h… |
 | `texture-fills-110` | Metal's plain colour fill (`fillTexture:...color:` with no pixel format; the case's c0, c4, c5 and c7) packs the colour by its fill's own rules, a tie rounded h… |
 | `texture-fills-115` | Metal's plain colour fill (`fillTexture:...color:` with no pixel format; the case's c0, c4, c5 and c7) packs the colour by its fill's own rules, a tie rounded h… |
-| `xr-blend-bgr10xr-add` | A `half4` fill blended into an extended-range attachment (one over the destination, added): the function blends in the shader, inside the pixel interlock, in th… |
-| `xr-blend-bgr10xr-premul` | A `half4` fill blended into an extended-range attachment (premultiplied over: one over one minus the source alpha, added): the function blends in the shader, in… |
-| `xr-blend-bgr10xr-srgb-add` | A `half4` fill blended into an extended-range attachment (one over the destination, added): the function blends in the shader, inside the pixel interlock, in th… |
-| `xr-blend-bgr10xr-srgb-premul` | A `half4` fill blended into an extended-range attachment (premultiplied over: one over one minus the source alpha, added): the function blends in the shader, in… |
-| `xr-blend-bgra10xr-add` | A `half4` fill blended into an extended-range attachment (one over the destination, added): the function blends in the shader, inside the pixel interlock, in th… |
-| `xr-blend-bgra10xr-premul` | A `half4` fill blended into an extended-range attachment (premultiplied over: one over one minus the source alpha, added): the function blends in the shader, in… |
-| `xr-blend-bgra10xr-srgb-add` | A `half4` fill blended into an extended-range attachment (one over the destination, added): the function blends in the shader, inside the pixel interlock, in th… |
-| `xr-blend-bgra10xr-srgb-premul` | A `half4` fill blended into an extended-range attachment (premultiplied over: one over one minus the source alpha, added): the function blends in the shader, in… |
-| `xr-blend-planes-add` | A `half4` fill blended into an extended-range attachment (one over the destination, added): the function blends in the shader, inside the pixel interlock, in th… |
-| `xr-blend-planes-add` | A `half4` fill blended into an extended-range attachment (one over the destination, added): the function blends in the shader, inside the pixel interlock, in th… |
-| `xr-blend-planes-premul` | A `half4` fill blended into an extended-range attachment (premultiplied over: one over one minus the source alpha, added): the function blends in the shader, in… |
-| `xr-blend-planes-premul` | A `half4` fill blended into an extended-range attachment (premultiplied over: one over one minus the source alpha, added): the function blends in the shader, in… |
-| `xr-blend-planes-srgb-add` | A `half4` fill blended into an extended-range attachment (one over the destination, added): the function blends in the shader, inside the pixel interlock, in th… |
-| `xr-blend-planes-srgb-add` | A `half4` fill blended into an extended-range attachment (one over the destination, added): the function blends in the shader, inside the pixel interlock, in th… |
-| `xr-blend-planes-srgb-premul` | A `half4` fill blended into an extended-range attachment (premultiplied over: one over one minus the source alpha, added): the function blends in the shader, in… |
-| `xr-blend-planes-srgb-premul` | A `half4` fill blended into an extended-range attachment (premultiplied over: one over one minus the source alpha, added): the function blends in the shader, in… |
-| `extended-swizzles-bgr10xr` | An extended-range format's linear sample (`sl`) blends its four decoded taps by the device's `FMix` at the `f32` fractions (crates/metal2vulkan/src/lower/sample… |
-| `extended-swizzles-bgr10xr` | An extended-range format's linear sample (`sl`) blends its four decoded taps by the device's `FMix` at the `f32` fractions (crates/metal2vulkan/src/lower/sample… |
-| `extended-swizzles-bgr10xr` | An extended-range format's linear sample (`sl`) blends its four decoded taps by the device's `FMix` at the `f32` fractions (crates/metal2vulkan/src/lower/sample… |
-| `extended-swizzles-bgr10xr` | An extended-range format's linear sample (`sl`) blends its four decoded taps by the device's `FMix` at the `f32` fractions (crates/metal2vulkan/src/lower/sample… |
-| `extended-swizzles-bgr10xr` | An extended-range format's linear sample (`sl`) blends its four decoded taps by the device's `FMix` at the `f32` fractions (crates/metal2vulkan/src/lower/sample… |
-| `extended-swizzles-bgr10xr-srgb` | An extended-range format's linear sample (`sl`) blends its four decoded taps by the device's `FMix` at the `f32` fractions (crates/metal2vulkan/src/lower/sample… |
-| `extended-swizzles-bgr10xr-srgb` | An extended-range format's linear sample (`sl`) blends its four decoded taps by the device's `FMix` at the `f32` fractions (crates/metal2vulkan/src/lower/sample… |
-| `extended-swizzles-bgr10xr-srgb` | An extended-range format's linear sample (`sl`) blends its four decoded taps by the device's `FMix` at the `f32` fractions (crates/metal2vulkan/src/lower/sample… |
-| `extended-swizzles-bgr10xr-srgb` | An extended-range format's linear sample (`sl`) blends its four decoded taps by the device's `FMix` at the `f32` fractions (crates/metal2vulkan/src/lower/sample… |
-| `extended-swizzles-bgr10xr-srgb` | An extended-range format's linear sample (`sl`) blends its four decoded taps by the device's `FMix` at the `f32` fractions (crates/metal2vulkan/src/lower/sample… |
+| `extended-swizzles-rg10unormx12` | A padded 10-bit format's linear sample (`sl`: `R10Unorm_X6`, `RG10Unorm_X12` and their sRGB twins, filtered in the module) blends its four decoded taps by the d… |
+| `extended-swizzles-rg10unormx12` | A padded 10-bit format's linear sample (`sl`: `R10Unorm_X6`, `RG10Unorm_X12` and their sRGB twins, filtered in the module) blends its four decoded taps by the d… |
+| `extended-swizzles-rg10unormx12-srgb` | A padded 10-bit format's linear sample (`sl`: `R10Unorm_X6`, `RG10Unorm_X12` and their sRGB twins, filtered in the module) blends its four decoded taps by the d… |
+| `extended-swizzles-rg10unormx12-srgb` | A padded 10-bit format's linear sample (`sl`: `R10Unorm_X6`, `RG10Unorm_X12` and their sRGB twins, filtered in the module) blends its four decoded taps by the d… |
+| `extended-swizzles-rg10unormx12-srgb` | A padded 10-bit format's linear sample (`sl`: `R10Unorm_X6`, `RG10Unorm_X12` and their sRGB twins, filtered in the module) blends its four decoded taps by the d… |
+| `extended-swizzles-rg10unormx12-srgb` | A padded 10-bit format's linear sample (`sl`: `R10Unorm_X6`, `RG10Unorm_X12` and their sRGB twins, filtered in the module) blends its four decoded taps by the d… |
+| `extended-swizzles-rg10unormx12-srgb` | A padded 10-bit format's linear sample (`sl`: `R10Unorm_X6`, `RG10Unorm_X12` and their sRGB twins, filtered in the module) blends its four decoded taps by the d… |
+| `xr-planes-bgr10xr-bgra10xr-srgb` | An extended-range sRGB twin's colour read, written or blended over (`BGR10_XR_sRGB`, `BGRA10_XR_sRGB`, `RGB10A8_2P_XR10_sRGB`): the function decodes and encodes… |
+| `xr-planes-bgr10xr-bgra10xr-srgb` | An extended-range sRGB twin's colour read, written or blended over (`BGR10_XR_sRGB`, `BGRA10_XR_sRGB`, `RGB10A8_2P_XR10_sRGB`): the function decodes and encodes… |
+| `xr-planes-bgr10xr-srgb-bgra10xr` | An extended-range sRGB twin's colour read, written or blended over (`BGR10_XR_sRGB`, `BGRA10_XR_sRGB`, `RGB10A8_2P_XR10_sRGB`): the function decodes and encodes… |
+| `xr-planes-bgr10xr-srgb-bgra10xr` | An extended-range sRGB twin's colour read, written or blended over (`BGR10_XR_sRGB`, `BGRA10_XR_sRGB`, `RGB10A8_2P_XR10_sRGB`): the function decodes and encodes… |
+| `xr-two-planes-rgb10a8-2p-xr10` | An extended-range texel read, written or blended over (`BGR10_XR`, `BGRA10_XR`, `RGB10A8_2P_XR10`): the function decodes a code `c` as `float(c - 384)` times th… |
+| `xr-two-planes-rgb10a8-2p-xr10` | An extended-range texel read, written or blended over (`BGR10_XR`, `BGRA10_XR`, `RGB10A8_2P_XR10`): the function decodes a code `c` as `float(c - 384)` times th… |
+| `xr-two-planes-rgb10a8-2p-xr10` | An extended-range texel read, written or blended over (`BGR10_XR`, `BGRA10_XR`, `RGB10A8_2P_XR10`): the function decodes a code `c` as `float(c - 384)` times th… |
+| `xr-two-planes-rgb10a8-2p-xr10` | An extended-range texel read, written or blended over (`BGR10_XR`, `BGRA10_XR`, `RGB10A8_2P_XR10`): the function decodes a code `c` as `float(c - 384)` times th… |
+| `xr-two-planes-rgb10a8-2p-xr10` | An extended-range texel read, written or blended over (`BGR10_XR`, `BGRA10_XR`, `RGB10A8_2P_XR10`): the function decodes a code `c` as `float(c - 384)` times th… |
+| `xr-two-planes-rgb10a8-2p-xr10` | An extended-range texel read, written or blended over (`BGR10_XR`, `BGRA10_XR`, `RGB10A8_2P_XR10`): the function decodes a code `c` as `float(c - 384)` times th… |
+| `xr-two-planes-rgb10a8-2p-xr10` | An extended-range texel read, written or blended over (`BGR10_XR`, `BGRA10_XR`, `RGB10A8_2P_XR10`): the function decodes a code `c` as `float(c - 384)` times th… |
+| `xr-two-planes-rgb10a8-2p-xr10-srgb` | An extended-range sRGB twin's colour read, written or blended over (`BGR10_XR_sRGB`, `BGRA10_XR_sRGB`, `RGB10A8_2P_XR10_sRGB`): the function decodes and encodes… |
+| `xr-two-planes-rgb10a8-2p-xr10-srgb` | An extended-range sRGB twin's colour read, written or blended over (`BGR10_XR_sRGB`, `BGRA10_XR_sRGB`, `RGB10A8_2P_XR10_sRGB`): the function decodes and encodes… |
+| `xr-two-planes-rgb10a8-2p-xr10-srgb` | An extended-range sRGB twin's colour read, written or blended over (`BGR10_XR_sRGB`, `BGRA10_XR_sRGB`, `RGB10A8_2P_XR10_sRGB`): the function decodes and encodes… |
+| `xr-two-planes-rgb10a8-2p-xr10-srgb` | An extended-range sRGB twin's colour read, written or blended over (`BGR10_XR_sRGB`, `BGRA10_XR_sRGB`, `RGB10A8_2P_XR10_sRGB`): the function decodes and encodes… |
+| `xr-two-planes-rgb10a8-2p-xr10-srgb` | An extended-range sRGB twin's colour read, written or blended over (`BGR10_XR_sRGB`, `BGRA10_XR_sRGB`, `RGB10A8_2P_XR10_sRGB`): the function decodes and encodes… |
+| `xr-two-planes-rgb10a8-2p-xr10-srgb` | An extended-range sRGB twin's colour read, written or blended over (`BGR10_XR_sRGB`, `BGRA10_XR_sRGB`, `RGB10A8_2P_XR10_sRGB`): the function decodes and encodes… |
+| `xr-two-planes-rgb10a8-2p-xr10-srgb` | An extended-range sRGB twin's colour read, written or blended over (`BGR10_XR_sRGB`, `BGRA10_XR_sRGB`, `RGB10A8_2P_XR10_sRGB`): the function decodes and encodes… |
+| `xr-two-planes-rgb10a8-2p-xr10-srgb` | An extended-range sRGB twin's colour read, written or blended over (`BGR10_XR_sRGB`, `BGRA10_XR_sRGB`, `RGB10A8_2P_XR10_sRGB`): the function decodes and encodes… |
+| `xr-two-planes-rgb10a8-2p-xr10-srgb` | An extended-range sRGB twin's colour read, written or blended over (`BGR10_XR_sRGB`, `BGRA10_XR_sRGB`, `RGB10A8_2P_XR10_sRGB`): the function decodes and encodes… |
+| `xr-two-planes-rgb10a8-2p-xr10-srgb` | An extended-range sRGB twin's colour read, written or blended over (`BGR10_XR_sRGB`, `BGRA10_XR_sRGB`, `RGB10A8_2P_XR10_sRGB`): the function decodes and encodes… |
+| `xr-two-planes-rgb10a8-2p-xr10-srgb` | An extended-range sRGB twin's colour read, written or blended over (`BGR10_XR_sRGB`, `BGRA10_XR_sRGB`, `RGB10A8_2P_XR10_sRGB`): the function decodes and encodes… |
+| `xr-two-planes-rgb10a8-2p-xr10-srgb` | An extended-range sRGB twin's colour read, written or blended over (`BGR10_XR_sRGB`, `BGRA10_XR_sRGB`, `RGB10A8_2P_XR10_sRGB`): the function decodes and encodes… |
+| `xr-two-plane-samples-p2-nc-f` | An extended-range texel read, written or blended over (`BGR10_XR`, `BGRA10_XR`, `RGB10A8_2P_XR10`): the function decodes a code `c` as `float(c - 384)` times th… |
+| `xr-two-plane-samples-p2-nr-f` | An extended-range texel read, written or blended over (`BGR10_XR`, `BGRA10_XR`, `RGB10A8_2P_XR10`): the function decodes a code `c` as `float(c - 384)` times th… |
+| `xr-two-plane-samples-p2s-nc-f` | An extended-range texel read, written or blended over (`BGR10_XR`, `BGRA10_XR`, `RGB10A8_2P_XR10`): the function decodes a code `c` as `float(c - 384)` times th… |
+| `xr-two-plane-samples-p2s-nc-h` | An extended-range texel read, written or blended over (`BGR10_XR`, `BGRA10_XR`, `RGB10A8_2P_XR10`): the function decodes a code `c` as `float(c - 384)` times th… |
+| `xr-two-plane-samples-p2s-nr-f` | An extended-range texel read, written or blended over (`BGR10_XR`, `BGRA10_XR`, `RGB10A8_2P_XR10`): the function decodes a code `c` as `float(c - 384)` times th… |
+| `xr-two-plane-samples-p2s-nr-h` | An extended-range texel read, written or blended over (`BGR10_XR`, `BGRA10_XR`, `RGB10A8_2P_XR10`): the function decodes a code `c` as `float(c - 384)` times th… |
+| `rgb10a2-srgb-reads` | `RGB10A2Unorm_sRGB`'s colour read, sampled, written or stored: the function decodes a code `c` as `c` times the `f32` nearest `1 / 1023` through the MSL transfe… |
+| `rgb10a2-srgb-writes` | `RGB10A2Unorm_sRGB`'s colour read, sampled, written or stored: the function decodes a code `c` as `c` times the `f32` nearest `1 / 1023` through the MSL transfe… |
+| `rgb10a2-srgb-samples-nearest-f` | `RGB10A2Unorm_sRGB`'s colour read, sampled, written or stored: the function decodes a code `c` as `c` times the `f32` nearest `1 / 1023` through the MSL transfe… |
+| `rgb10a2-srgb-samples-nearest-f` | `RGB10A2Unorm_sRGB`'s colour read, sampled, written or stored: the function decodes a code `c` as `c` times the `f32` nearest `1 / 1023` through the MSL transfe… |
+| `rgb10a2-srgb-samples-nearest-h` | `RGB10A2Unorm_sRGB`'s colour read, sampled, written or stored: the function decodes a code `c` as `c` times the `f32` nearest `1 / 1023` through the MSL transfe… |
+| `rgb10a2-srgb-samples-nearest-h` | `RGB10A2Unorm_sRGB`'s colour read, sampled, written or stored: the function decodes a code `c` as `c` times the `f32` nearest `1 / 1023` through the MSL transfe… |
+| `rgb10a2-srgb-stores-f` | `RGB10A2Unorm_sRGB`'s colour read, sampled, written or stored: the function decodes a code `c` as `c` times the `f32` nearest `1 / 1023` through the MSL transfe… |
+| `rgb10a2-srgb-stores-h` | `RGB10A2Unorm_sRGB`'s colour read, sampled, written or stored: the function decodes a code `c` as `c` times the `f32` nearest `1 / 1023` through the MSL transfe… |
+| `xr-draw-bgra10xr-srgb-half` | An extended-range sRGB twin's colour read, written or blended over (`BGR10_XR_sRGB`, `BGRA10_XR_sRGB`, `RGB10A8_2P_XR10_sRGB`): the function decodes and encodes… |
+| `xr-draw-bgra10xr-srgb-float` | An extended-range sRGB twin's colour read, written or blended over (`BGR10_XR_sRGB`, `BGRA10_XR_sRGB`, `RGB10A8_2P_XR10_sRGB`): the function decodes and encodes… |
+| `xr-draw-bgr10xr-srgb-half` | An extended-range sRGB twin's colour read, written or blended over (`BGR10_XR_sRGB`, `BGRA10_XR_sRGB`, `RGB10A8_2P_XR10_sRGB`): the function decodes and encodes… |
+| `xr-draw-bgr10xr-srgb-float` | An extended-range sRGB twin's colour read, written or blended over (`BGR10_XR_sRGB`, `BGRA10_XR_sRGB`, `RGB10A8_2P_XR10_sRGB`): the function decodes and encodes… |
+| `xr-draw-planes-half` | An extended-range texel read, written or blended over (`BGR10_XR`, `BGRA10_XR`, `RGB10A8_2P_XR10`): the function decodes a code `c` as `float(c - 384)` times th… |
+| `xr-draw-planes-float` | An extended-range texel read, written or blended over (`BGR10_XR`, `BGRA10_XR`, `RGB10A8_2P_XR10`): the function decodes a code `c` as `float(c - 384)` times th… |
+| `xr-draw-planes-srgb-half` | An extended-range sRGB twin's colour read, written or blended over (`BGR10_XR_sRGB`, `BGRA10_XR_sRGB`, `RGB10A8_2P_XR10_sRGB`): the function decodes and encodes… |
+| `xr-draw-planes-srgb-float` | An extended-range sRGB twin's colour read, written or blended over (`BGR10_XR_sRGB`, `BGRA10_XR_sRGB`, `RGB10A8_2P_XR10_sRGB`): the function decodes and encodes… |
+| `xr-clears-bgra10xr` | An extended-range texel read, written or blended over (`BGR10_XR`, `BGRA10_XR`, `RGB10A8_2P_XR10`): the function decodes a code `c` as `float(c - 384)` times th… |
+| `xr-clears-bgra10xr-srgb` | An extended-range sRGB twin's colour read, written or blended over (`BGR10_XR_sRGB`, `BGRA10_XR_sRGB`, `RGB10A8_2P_XR10_sRGB`): the function decodes and encodes… |
+| `xr-clears-bgr10xr` | An extended-range texel read, written or blended over (`BGR10_XR`, `BGRA10_XR`, `RGB10A8_2P_XR10`): the function decodes a code `c` as `float(c - 384)` times th… |
+| `xr-clears-bgr10xr-srgb` | An extended-range sRGB twin's colour read, written or blended over (`BGR10_XR_sRGB`, `BGRA10_XR_sRGB`, `RGB10A8_2P_XR10_sRGB`): the function decodes and encodes… |
+| `xr-clears-planes` | An extended-range texel read, written or blended over (`BGR10_XR`, `BGRA10_XR`, `RGB10A8_2P_XR10`): the function decodes a code `c` as `float(c - 384)` times th… |
+| `xr-clears-planes-srgb` | An extended-range sRGB twin's colour read, written or blended over (`BGR10_XR_sRGB`, `BGRA10_XR_sRGB`, `RGB10A8_2P_XR10_sRGB`): the function decodes and encodes… |
+| `xr-blend-bgra10xr-srgb-one-zero` | An extended-range sRGB twin's colour read, written or blended over (`BGR10_XR_sRGB`, `BGRA10_XR_sRGB`, `RGB10A8_2P_XR10_sRGB`): the function decodes and encodes… |
+| `xr-blend-bgr10xr-srgb-one-zero` | An extended-range sRGB twin's colour read, written or blended over (`BGR10_XR_sRGB`, `BGRA10_XR_sRGB`, `RGB10A8_2P_XR10_sRGB`): the function decodes and encodes… |
+| `xr-blend-planes-one-zero` | An extended-range texel read, written or blended over (`BGR10_XR`, `BGRA10_XR`, `RGB10A8_2P_XR10`): the function decodes a code `c` as `float(c - 384)` times th… |
+| `xr-blend-planes-srgb-one-zero` | An extended-range sRGB twin's colour read, written or blended over (`BGR10_XR_sRGB`, `BGRA10_XR_sRGB`, `RGB10A8_2P_XR10_sRGB`): the function decodes and encodes… |
+| `xr-blend-planes-srgb-one-zero` | An extended-range sRGB twin's colour read, written or blended over (`BGR10_XR_sRGB`, `BGRA10_XR_sRGB`, `RGB10A8_2P_XR10_sRGB`): the function decodes and encodes… |
+| `extended-swizzles-bgra10xr` | An extended-range texel read, written or blended over (`BGR10_XR`, `BGRA10_XR`, `RGB10A8_2P_XR10`): the function decodes a code `c` as `float(c - 384)` times th… |
+| `extended-swizzles-bgra10xr` | An extended-range texel read, written or blended over (`BGR10_XR`, `BGRA10_XR`, `RGB10A8_2P_XR10`): the function decodes a code `c` as `float(c - 384)` times th… |
+| `extended-swizzles-bgra10xr` | An extended-range texel read, written or blended over (`BGR10_XR`, `BGRA10_XR`, `RGB10A8_2P_XR10`): the function decodes a code `c` as `float(c - 384)` times th… |
+| `extended-swizzles-bgra10xr` | An extended-range texel read, written or blended over (`BGR10_XR`, `BGRA10_XR`, `RGB10A8_2P_XR10`): the function decodes a code `c` as `float(c - 384)` times th… |
+| `extended-swizzles-bgra10xr` | An extended-range texel read, written or blended over (`BGR10_XR`, `BGRA10_XR`, `RGB10A8_2P_XR10`): the function decodes a code `c` as `float(c - 384)` times th… |
+| `extended-swizzles-bgra10xr` | An extended-range texel read, written or blended over (`BGR10_XR`, `BGRA10_XR`, `RGB10A8_2P_XR10`): the function decodes a code `c` as `float(c - 384)` times th… |
+| `extended-swizzles-bgra10xr` | An extended-range texel read, written or blended over (`BGR10_XR`, `BGRA10_XR`, `RGB10A8_2P_XR10`): the function decodes a code `c` as `float(c - 384)` times th… |
+| `extended-swizzles-bgra10xr` | An extended-range texel read, written or blended over (`BGR10_XR`, `BGRA10_XR`, `RGB10A8_2P_XR10`): the function decodes a code `c` as `float(c - 384)` times th… |
+| `extended-swizzles-bgra10xr` | An extended-range texel read, written or blended over (`BGR10_XR`, `BGRA10_XR`, `RGB10A8_2P_XR10`): the function decodes a code `c` as `float(c - 384)` times th… |
+| `extended-swizzles-bgra10xr` | An extended-range texel read, written or blended over (`BGR10_XR`, `BGRA10_XR`, `RGB10A8_2P_XR10`): the function decodes a code `c` as `float(c - 384)` times th… |
+| `extended-swizzles-bgra10xr` | An extended-range texel read, written or blended over (`BGR10_XR`, `BGRA10_XR`, `RGB10A8_2P_XR10`): the function decodes a code `c` as `float(c - 384)` times th… |
+| `extended-swizzles-bgra10xr` | An extended-range texel read, written or blended over (`BGR10_XR`, `BGRA10_XR`, `RGB10A8_2P_XR10`): the function decodes a code `c` as `float(c - 384)` times th… |
+| `extended-swizzles-bgra10xr` | An extended-range texel read, written or blended over (`BGR10_XR`, `BGRA10_XR`, `RGB10A8_2P_XR10`): the function decodes a code `c` as `float(c - 384)` times th… |
+| `extended-swizzles-bgra10xr` | An extended-range texel read, written or blended over (`BGR10_XR`, `BGRA10_XR`, `RGB10A8_2P_XR10`): the function decodes a code `c` as `float(c - 384)` times th… |
+| `extended-swizzles-bgra10xr` | An extended-range texel read, written or blended over (`BGR10_XR`, `BGRA10_XR`, `RGB10A8_2P_XR10`): the function decodes a code `c` as `float(c - 384)` times th… |
+| `extended-swizzles-bgra10xr` | An extended-range texel read, written or blended over (`BGR10_XR`, `BGRA10_XR`, `RGB10A8_2P_XR10`): the function decodes a code `c` as `float(c - 384)` times th… |
+| `extended-swizzles-bgra10xr` | An extended-range texel read, written or blended over (`BGR10_XR`, `BGRA10_XR`, `RGB10A8_2P_XR10`): the function decodes a code `c` as `float(c - 384)` times th… |
+| `extended-swizzles-bgra10xr` | An extended-range texel read, written or blended over (`BGR10_XR`, `BGRA10_XR`, `RGB10A8_2P_XR10`): the function decodes a code `c` as `float(c - 384)` times th… |
+| `extended-swizzles-bgra10xr` | An extended-range texel read, written or blended over (`BGR10_XR`, `BGRA10_XR`, `RGB10A8_2P_XR10`): the function decodes a code `c` as `float(c - 384)` times th… |
+| `extended-swizzles-bgra10xr` | An extended-range texel read, written or blended over (`BGR10_XR`, `BGRA10_XR`, `RGB10A8_2P_XR10`): the function decodes a code `c` as `float(c - 384)` times th… |
+| `extended-swizzles-bgra10xr` | An extended-range texel read, written or blended over (`BGR10_XR`, `BGRA10_XR`, `RGB10A8_2P_XR10`): the function decodes a code `c` as `float(c - 384)` times th… |
+| `extended-swizzles-bgra10xr` | An extended-range texel read, written or blended over (`BGR10_XR`, `BGRA10_XR`, `RGB10A8_2P_XR10`): the function decodes a code `c` as `float(c - 384)` times th… |
+| `extended-swizzles-bgra10xr` | An extended-range texel read, written or blended over (`BGR10_XR`, `BGRA10_XR`, `RGB10A8_2P_XR10`): the function decodes a code `c` as `float(c - 384)` times th… |
+| `extended-swizzles-bgra10xr` | An extended-range texel read, written or blended over (`BGR10_XR`, `BGRA10_XR`, `RGB10A8_2P_XR10`): the function decodes a code `c` as `float(c - 384)` times th… |
+| `extended-swizzles-bgra10xr` | An extended-range texel read, written or blended over (`BGR10_XR`, `BGRA10_XR`, `RGB10A8_2P_XR10`): the function decodes a code `c` as `float(c - 384)` times th… |
+| `extended-swizzles-bgra10xr` | An extended-range texel read, written or blended over (`BGR10_XR`, `BGRA10_XR`, `RGB10A8_2P_XR10`): the function decodes a code `c` as `float(c - 384)` times th… |
 | `extended-swizzles-bgra10xr` | An extended-range format's linear sample (`sl`) blends its four decoded taps by the device's `FMix` at the `f32` fractions (crates/metal2vulkan/src/lower/sample… |
 | `extended-swizzles-bgra10xr` | An extended-range format's linear sample (`sl`) blends its four decoded taps by the device's `FMix` at the `f32` fractions (crates/metal2vulkan/src/lower/sample… |
 | `extended-swizzles-bgra10xr` | An extended-range format's linear sample (`sl`) blends its four decoded taps by the device's `FMix` at the `f32` fractions (crates/metal2vulkan/src/lower/sample… |
 | `extended-swizzles-bgra10xr` | An extended-range format's linear sample (`sl`) blends its four decoded taps by the device's `FMix` at the `f32` fractions (crates/metal2vulkan/src/lower/sample… |
 | `extended-swizzles-bgra10xr` | An extended-range format's linear sample (`sl`) blends its four decoded taps by the device's `FMix` at the `f32` fractions (crates/metal2vulkan/src/lower/sample… |
+| `extended-swizzles-bgra10xr-srgb` | An extended-range sRGB twin's colour read, written or blended over (`BGR10_XR_sRGB`, `BGRA10_XR_sRGB`, `RGB10A8_2P_XR10_sRGB`): the function decodes and encodes… |
+| `extended-swizzles-bgra10xr-srgb` | An extended-range sRGB twin's colour read, written or blended over (`BGR10_XR_sRGB`, `BGRA10_XR_sRGB`, `RGB10A8_2P_XR10_sRGB`): the function decodes and encodes… |
+| `extended-swizzles-bgra10xr-srgb` | An extended-range sRGB twin's colour read, written or blended over (`BGR10_XR_sRGB`, `BGRA10_XR_sRGB`, `RGB10A8_2P_XR10_sRGB`): the function decodes and encodes… |
+| `extended-swizzles-bgra10xr-srgb` | An extended-range sRGB twin's colour read, written or blended over (`BGR10_XR_sRGB`, `BGRA10_XR_sRGB`, `RGB10A8_2P_XR10_sRGB`): the function decodes and encodes… |
+| `extended-swizzles-bgra10xr-srgb` | An extended-range sRGB twin's colour read, written or blended over (`BGR10_XR_sRGB`, `BGRA10_XR_sRGB`, `RGB10A8_2P_XR10_sRGB`): the function decodes and encodes… |
+| `extended-swizzles-bgra10xr-srgb` | An extended-range sRGB twin's colour read, written or blended over (`BGR10_XR_sRGB`, `BGRA10_XR_sRGB`, `RGB10A8_2P_XR10_sRGB`): the function decodes and encodes… |
+| `extended-swizzles-bgra10xr-srgb` | An extended-range sRGB twin's colour read, written or blended over (`BGR10_XR_sRGB`, `BGRA10_XR_sRGB`, `RGB10A8_2P_XR10_sRGB`): the function decodes and encodes… |
+| `extended-swizzles-bgra10xr-srgb` | An extended-range sRGB twin's colour read, written or blended over (`BGR10_XR_sRGB`, `BGRA10_XR_sRGB`, `RGB10A8_2P_XR10_sRGB`): the function decodes and encodes… |
+| `extended-swizzles-bgra10xr-srgb` | An extended-range sRGB twin's colour read, written or blended over (`BGR10_XR_sRGB`, `BGRA10_XR_sRGB`, `RGB10A8_2P_XR10_sRGB`): the function decodes and encodes… |
+| `extended-swizzles-bgra10xr-srgb` | An extended-range sRGB twin's colour read, written or blended over (`BGR10_XR_sRGB`, `BGRA10_XR_sRGB`, `RGB10A8_2P_XR10_sRGB`): the function decodes and encodes… |
+| `extended-swizzles-bgra10xr-srgb` | An extended-range sRGB twin's colour read, written or blended over (`BGR10_XR_sRGB`, `BGRA10_XR_sRGB`, `RGB10A8_2P_XR10_sRGB`): the function decodes and encodes… |
+| `extended-swizzles-bgra10xr-srgb` | An extended-range sRGB twin's colour read, written or blended over (`BGR10_XR_sRGB`, `BGRA10_XR_sRGB`, `RGB10A8_2P_XR10_sRGB`): the function decodes and encodes… |
+| `extended-swizzles-bgra10xr-srgb` | An extended-range sRGB twin's colour read, written or blended over (`BGR10_XR_sRGB`, `BGRA10_XR_sRGB`, `RGB10A8_2P_XR10_sRGB`): the function decodes and encodes… |
+| `extended-swizzles-bgra10xr-srgb` | An extended-range sRGB twin's colour read, written or blended over (`BGR10_XR_sRGB`, `BGRA10_XR_sRGB`, `RGB10A8_2P_XR10_sRGB`): the function decodes and encodes… |
+| `extended-swizzles-bgra10xr-srgb` | An extended-range sRGB twin's colour read, written or blended over (`BGR10_XR_sRGB`, `BGRA10_XR_sRGB`, `RGB10A8_2P_XR10_sRGB`): the function decodes and encodes… |
+| `extended-swizzles-bgra10xr-srgb` | An extended-range sRGB twin's colour read, written or blended over (`BGR10_XR_sRGB`, `BGRA10_XR_sRGB`, `RGB10A8_2P_XR10_sRGB`): the function decodes and encodes… |
+| `extended-swizzles-bgra10xr-srgb` | An extended-range sRGB twin's colour read, written or blended over (`BGR10_XR_sRGB`, `BGRA10_XR_sRGB`, `RGB10A8_2P_XR10_sRGB`): the function decodes and encodes… |
+| `extended-swizzles-bgra10xr-srgb` | An extended-range sRGB twin's colour read, written or blended over (`BGR10_XR_sRGB`, `BGRA10_XR_sRGB`, `RGB10A8_2P_XR10_sRGB`): the function decodes and encodes… |
+| `extended-swizzles-bgra10xr-srgb` | An extended-range sRGB twin's colour read, written or blended over (`BGR10_XR_sRGB`, `BGRA10_XR_sRGB`, `RGB10A8_2P_XR10_sRGB`): the function decodes and encodes… |
+| `extended-swizzles-bgra10xr-srgb` | An extended-range sRGB twin's colour read, written or blended over (`BGR10_XR_sRGB`, `BGRA10_XR_sRGB`, `RGB10A8_2P_XR10_sRGB`): the function decodes and encodes… |
+| `extended-swizzles-bgra10xr-srgb` | An extended-range sRGB twin's colour read, written or blended over (`BGR10_XR_sRGB`, `BGRA10_XR_sRGB`, `RGB10A8_2P_XR10_sRGB`): the function decodes and encodes… |
+| `extended-swizzles-bgra10xr-srgb` | An extended-range sRGB twin's colour read, written or blended over (`BGR10_XR_sRGB`, `BGRA10_XR_sRGB`, `RGB10A8_2P_XR10_sRGB`): the function decodes and encodes… |
+| `extended-swizzles-bgra10xr-srgb` | An extended-range sRGB twin's colour read, written or blended over (`BGR10_XR_sRGB`, `BGRA10_XR_sRGB`, `RGB10A8_2P_XR10_sRGB`): the function decodes and encodes… |
+| `extended-swizzles-bgra10xr-srgb` | An extended-range sRGB twin's colour read, written or blended over (`BGR10_XR_sRGB`, `BGRA10_XR_sRGB`, `RGB10A8_2P_XR10_sRGB`): the function decodes and encodes… |
+| `extended-swizzles-bgra10xr-srgb` | An extended-range sRGB twin's colour read, written or blended over (`BGR10_XR_sRGB`, `BGRA10_XR_sRGB`, `RGB10A8_2P_XR10_sRGB`): the function decodes and encodes… |
+| `extended-swizzles-bgra10xr-srgb` | An extended-range sRGB twin's colour read, written or blended over (`BGR10_XR_sRGB`, `BGRA10_XR_sRGB`, `RGB10A8_2P_XR10_sRGB`): the function decodes and encodes… |
 | `extended-swizzles-bgra10xr-srgb` | An extended-range format's linear sample (`sl`) blends its four decoded taps by the device's `FMix` at the `f32` fractions (crates/metal2vulkan/src/lower/sample… |
 | `extended-swizzles-bgra10xr-srgb` | An extended-range format's linear sample (`sl`) blends its four decoded taps by the device's `FMix` at the `f32` fractions (crates/metal2vulkan/src/lower/sample… |
 | `extended-swizzles-bgra10xr-srgb` | An extended-range format's linear sample (`sl`) blends its four decoded taps by the device's `FMix` at the `f32` fractions (crates/metal2vulkan/src/lower/sample… |
 | `extended-swizzles-bgra10xr-srgb` | An extended-range format's linear sample (`sl`) blends its four decoded taps by the device's `FMix` at the `f32` fractions (crates/metal2vulkan/src/lower/sample… |
 | `extended-swizzles-bgra10xr-srgb` | An extended-range format's linear sample (`sl`) blends its four decoded taps by the device's `FMix` at the `f32` fractions (crates/metal2vulkan/src/lower/sample… |
+| `extended-swizzles-bgr10xr` | An extended-range texel read, written or blended over (`BGR10_XR`, `BGRA10_XR`, `RGB10A8_2P_XR10`): the function decodes a code `c` as `float(c - 384)` times th… |
+| `extended-swizzles-bgr10xr` | An extended-range texel read, written or blended over (`BGR10_XR`, `BGRA10_XR`, `RGB10A8_2P_XR10`): the function decodes a code `c` as `float(c - 384)` times th… |
+| `extended-swizzles-bgr10xr` | An extended-range texel read, written or blended over (`BGR10_XR`, `BGRA10_XR`, `RGB10A8_2P_XR10`): the function decodes a code `c` as `float(c - 384)` times th… |
+| `extended-swizzles-bgr10xr` | An extended-range texel read, written or blended over (`BGR10_XR`, `BGRA10_XR`, `RGB10A8_2P_XR10`): the function decodes a code `c` as `float(c - 384)` times th… |
+| `extended-swizzles-bgr10xr` | An extended-range texel read, written or blended over (`BGR10_XR`, `BGRA10_XR`, `RGB10A8_2P_XR10`): the function decodes a code `c` as `float(c - 384)` times th… |
+| `extended-swizzles-bgr10xr` | An extended-range texel read, written or blended over (`BGR10_XR`, `BGRA10_XR`, `RGB10A8_2P_XR10`): the function decodes a code `c` as `float(c - 384)` times th… |
+| `extended-swizzles-bgr10xr` | An extended-range texel read, written or blended over (`BGR10_XR`, `BGRA10_XR`, `RGB10A8_2P_XR10`): the function decodes a code `c` as `float(c - 384)` times th… |
+| `extended-swizzles-bgr10xr` | An extended-range texel read, written or blended over (`BGR10_XR`, `BGRA10_XR`, `RGB10A8_2P_XR10`): the function decodes a code `c` as `float(c - 384)` times th… |
+| `extended-swizzles-bgr10xr` | An extended-range texel read, written or blended over (`BGR10_XR`, `BGRA10_XR`, `RGB10A8_2P_XR10`): the function decodes a code `c` as `float(c - 384)` times th… |
+| `extended-swizzles-bgr10xr` | An extended-range texel read, written or blended over (`BGR10_XR`, `BGRA10_XR`, `RGB10A8_2P_XR10`): the function decodes a code `c` as `float(c - 384)` times th… |
+| `extended-swizzles-bgr10xr` | An extended-range texel read, written or blended over (`BGR10_XR`, `BGRA10_XR`, `RGB10A8_2P_XR10`): the function decodes a code `c` as `float(c - 384)` times th… |
+| `extended-swizzles-bgr10xr` | An extended-range texel read, written or blended over (`BGR10_XR`, `BGRA10_XR`, `RGB10A8_2P_XR10`): the function decodes a code `c` as `float(c - 384)` times th… |
+| `extended-swizzles-bgr10xr` | An extended-range texel read, written or blended over (`BGR10_XR`, `BGRA10_XR`, `RGB10A8_2P_XR10`): the function decodes a code `c` as `float(c - 384)` times th… |
+| `extended-swizzles-bgr10xr` | An extended-range texel read, written or blended over (`BGR10_XR`, `BGRA10_XR`, `RGB10A8_2P_XR10`): the function decodes a code `c` as `float(c - 384)` times th… |
+| `extended-swizzles-bgr10xr` | An extended-range texel read, written or blended over (`BGR10_XR`, `BGRA10_XR`, `RGB10A8_2P_XR10`): the function decodes a code `c` as `float(c - 384)` times th… |
+| `extended-swizzles-bgr10xr` | An extended-range texel read, written or blended over (`BGR10_XR`, `BGRA10_XR`, `RGB10A8_2P_XR10`): the function decodes a code `c` as `float(c - 384)` times th… |
+| `extended-swizzles-bgr10xr` | An extended-range texel read, written or blended over (`BGR10_XR`, `BGRA10_XR`, `RGB10A8_2P_XR10`): the function decodes a code `c` as `float(c - 384)` times th… |
+| `extended-swizzles-bgr10xr` | An extended-range texel read, written or blended over (`BGR10_XR`, `BGRA10_XR`, `RGB10A8_2P_XR10`): the function decodes a code `c` as `float(c - 384)` times th… |
+| `extended-swizzles-bgr10xr` | An extended-range texel read, written or blended over (`BGR10_XR`, `BGRA10_XR`, `RGB10A8_2P_XR10`): the function decodes a code `c` as `float(c - 384)` times th… |
+| `extended-swizzles-bgr10xr` | An extended-range texel read, written or blended over (`BGR10_XR`, `BGRA10_XR`, `RGB10A8_2P_XR10`): the function decodes a code `c` as `float(c - 384)` times th… |
+| `extended-swizzles-bgr10xr` | An extended-range texel read, written or blended over (`BGR10_XR`, `BGRA10_XR`, `RGB10A8_2P_XR10`): the function decodes a code `c` as `float(c - 384)` times th… |
+| `extended-swizzles-bgr10xr` | An extended-range texel read, written or blended over (`BGR10_XR`, `BGRA10_XR`, `RGB10A8_2P_XR10`): the function decodes a code `c` as `float(c - 384)` times th… |
+| `extended-swizzles-bgr10xr` | An extended-range format's linear sample (`sl`) blends its four decoded taps by the device's `FMix` at the `f32` fractions (crates/metal2vulkan/src/lower/sample… |
+| `extended-swizzles-bgr10xr` | An extended-range format's linear sample (`sl`) blends its four decoded taps by the device's `FMix` at the `f32` fractions (crates/metal2vulkan/src/lower/sample… |
+| `extended-swizzles-bgr10xr` | An extended-range format's linear sample (`sl`) blends its four decoded taps by the device's `FMix` at the `f32` fractions (crates/metal2vulkan/src/lower/sample… |
+| `extended-swizzles-bgr10xr` | An extended-range format's linear sample (`sl`) blends its four decoded taps by the device's `FMix` at the `f32` fractions (crates/metal2vulkan/src/lower/sample… |
+| `extended-swizzles-bgr10xr` | An extended-range format's linear sample (`sl`) blends its four decoded taps by the device's `FMix` at the `f32` fractions (crates/metal2vulkan/src/lower/sample… |
+| `extended-swizzles-bgr10xr-srgb` | An extended-range sRGB twin's colour read, written or blended over (`BGR10_XR_sRGB`, `BGRA10_XR_sRGB`, `RGB10A8_2P_XR10_sRGB`): the function decodes and encodes… |
+| `extended-swizzles-bgr10xr-srgb` | An extended-range sRGB twin's colour read, written or blended over (`BGR10_XR_sRGB`, `BGRA10_XR_sRGB`, `RGB10A8_2P_XR10_sRGB`): the function decodes and encodes… |
+| `extended-swizzles-bgr10xr-srgb` | An extended-range sRGB twin's colour read, written or blended over (`BGR10_XR_sRGB`, `BGRA10_XR_sRGB`, `RGB10A8_2P_XR10_sRGB`): the function decodes and encodes… |
+| `extended-swizzles-bgr10xr-srgb` | An extended-range sRGB twin's colour read, written or blended over (`BGR10_XR_sRGB`, `BGRA10_XR_sRGB`, `RGB10A8_2P_XR10_sRGB`): the function decodes and encodes… |
+| `extended-swizzles-bgr10xr-srgb` | An extended-range sRGB twin's colour read, written or blended over (`BGR10_XR_sRGB`, `BGRA10_XR_sRGB`, `RGB10A8_2P_XR10_sRGB`): the function decodes and encodes… |
+| `extended-swizzles-bgr10xr-srgb` | An extended-range sRGB twin's colour read, written or blended over (`BGR10_XR_sRGB`, `BGRA10_XR_sRGB`, `RGB10A8_2P_XR10_sRGB`): the function decodes and encodes… |
+| `extended-swizzles-bgr10xr-srgb` | An extended-range sRGB twin's colour read, written or blended over (`BGR10_XR_sRGB`, `BGRA10_XR_sRGB`, `RGB10A8_2P_XR10_sRGB`): the function decodes and encodes… |
+| `extended-swizzles-bgr10xr-srgb` | An extended-range sRGB twin's colour read, written or blended over (`BGR10_XR_sRGB`, `BGRA10_XR_sRGB`, `RGB10A8_2P_XR10_sRGB`): the function decodes and encodes… |
+| `extended-swizzles-bgr10xr-srgb` | An extended-range sRGB twin's colour read, written or blended over (`BGR10_XR_sRGB`, `BGRA10_XR_sRGB`, `RGB10A8_2P_XR10_sRGB`): the function decodes and encodes… |
+| `extended-swizzles-bgr10xr-srgb` | An extended-range sRGB twin's colour read, written or blended over (`BGR10_XR_sRGB`, `BGRA10_XR_sRGB`, `RGB10A8_2P_XR10_sRGB`): the function decodes and encodes… |
+| `extended-swizzles-bgr10xr-srgb` | An extended-range sRGB twin's colour read, written or blended over (`BGR10_XR_sRGB`, `BGRA10_XR_sRGB`, `RGB10A8_2P_XR10_sRGB`): the function decodes and encodes… |
+| `extended-swizzles-bgr10xr-srgb` | An extended-range sRGB twin's colour read, written or blended over (`BGR10_XR_sRGB`, `BGRA10_XR_sRGB`, `RGB10A8_2P_XR10_sRGB`): the function decodes and encodes… |
+| `extended-swizzles-bgr10xr-srgb` | An extended-range sRGB twin's colour read, written or blended over (`BGR10_XR_sRGB`, `BGRA10_XR_sRGB`, `RGB10A8_2P_XR10_sRGB`): the function decodes and encodes… |
+| `extended-swizzles-bgr10xr-srgb` | An extended-range sRGB twin's colour read, written or blended over (`BGR10_XR_sRGB`, `BGRA10_XR_sRGB`, `RGB10A8_2P_XR10_sRGB`): the function decodes and encodes… |
+| `extended-swizzles-bgr10xr-srgb` | An extended-range sRGB twin's colour read, written or blended over (`BGR10_XR_sRGB`, `BGRA10_XR_sRGB`, `RGB10A8_2P_XR10_sRGB`): the function decodes and encodes… |
+| `extended-swizzles-bgr10xr-srgb` | An extended-range sRGB twin's colour read, written or blended over (`BGR10_XR_sRGB`, `BGRA10_XR_sRGB`, `RGB10A8_2P_XR10_sRGB`): the function decodes and encodes… |
+| `extended-swizzles-bgr10xr-srgb` | An extended-range sRGB twin's colour read, written or blended over (`BGR10_XR_sRGB`, `BGRA10_XR_sRGB`, `RGB10A8_2P_XR10_sRGB`): the function decodes and encodes… |
+| `extended-swizzles-bgr10xr-srgb` | An extended-range sRGB twin's colour read, written or blended over (`BGR10_XR_sRGB`, `BGRA10_XR_sRGB`, `RGB10A8_2P_XR10_sRGB`): the function decodes and encodes… |
+| `extended-swizzles-bgr10xr-srgb` | An extended-range sRGB twin's colour read, written or blended over (`BGR10_XR_sRGB`, `BGRA10_XR_sRGB`, `RGB10A8_2P_XR10_sRGB`): the function decodes and encodes… |
+| `extended-swizzles-bgr10xr-srgb` | An extended-range sRGB twin's colour read, written or blended over (`BGR10_XR_sRGB`, `BGRA10_XR_sRGB`, `RGB10A8_2P_XR10_sRGB`): the function decodes and encodes… |
+| `extended-swizzles-bgr10xr-srgb` | An extended-range sRGB twin's colour read, written or blended over (`BGR10_XR_sRGB`, `BGRA10_XR_sRGB`, `RGB10A8_2P_XR10_sRGB`): the function decodes and encodes… |
+| `extended-swizzles-bgr10xr-srgb` | An extended-range sRGB twin's colour read, written or blended over (`BGR10_XR_sRGB`, `BGRA10_XR_sRGB`, `RGB10A8_2P_XR10_sRGB`): the function decodes and encodes… |
+| `extended-swizzles-bgr10xr-srgb` | An extended-range format's linear sample (`sl`) blends its four decoded taps by the device's `FMix` at the `f32` fractions (crates/metal2vulkan/src/lower/sample… |
+| `extended-swizzles-bgr10xr-srgb` | An extended-range format's linear sample (`sl`) blends its four decoded taps by the device's `FMix` at the `f32` fractions (crates/metal2vulkan/src/lower/sample… |
+| `extended-swizzles-bgr10xr-srgb` | An extended-range format's linear sample (`sl`) blends its four decoded taps by the device's `FMix` at the `f32` fractions (crates/metal2vulkan/src/lower/sample… |
+| `extended-swizzles-bgr10xr-srgb` | An extended-range format's linear sample (`sl`) blends its four decoded taps by the device's `FMix` at the `f32` fractions (crates/metal2vulkan/src/lower/sample… |
+| `extended-swizzles-bgr10xr-srgb` | An extended-range format's linear sample (`sl`) blends its four decoded taps by the device's `FMix` at the `f32` fractions (crates/metal2vulkan/src/lower/sample… |
+| `extended-swizzles-r10unormx6` | A padded 10-bit texel read or sampled (`R10Unorm_X6`, `RG10Unorm_X12`): the function decodes a code `c` as `c` times the `f32` nearest `1 / 1023`, where Metal a… |
+| `extended-swizzles-r10unormx6` | A padded 10-bit texel read or sampled (`R10Unorm_X6`, `RG10Unorm_X12`): the function decodes a code `c` as `c` times the `f32` nearest `1 / 1023`, where Metal a… |
+| `extended-swizzles-r10unormx6` | A padded 10-bit texel read or sampled (`R10Unorm_X6`, `RG10Unorm_X12`): the function decodes a code `c` as `c` times the `f32` nearest `1 / 1023`, where Metal a… |
+| `extended-swizzles-r10unormx6` | A padded 10-bit texel read or sampled (`R10Unorm_X6`, `RG10Unorm_X12`): the function decodes a code `c` as `c` times the `f32` nearest `1 / 1023`, where Metal a… |
+| `extended-swizzles-r10unormx6` | A padded 10-bit texel read or sampled (`R10Unorm_X6`, `RG10Unorm_X12`): the function decodes a code `c` as `c` times the `f32` nearest `1 / 1023`, where Metal a… |
+| `extended-swizzles-r10unormx6` | A padded 10-bit texel read or sampled (`R10Unorm_X6`, `RG10Unorm_X12`): the function decodes a code `c` as `c` times the `f32` nearest `1 / 1023`, where Metal a… |
+| `extended-swizzles-r10unormx6` | A padded 10-bit texel read or sampled (`R10Unorm_X6`, `RG10Unorm_X12`): the function decodes a code `c` as `c` times the `f32` nearest `1 / 1023`, where Metal a… |
+| `extended-swizzles-r10unormx6` | A padded 10-bit texel read or sampled (`R10Unorm_X6`, `RG10Unorm_X12`): the function decodes a code `c` as `c` times the `f32` nearest `1 / 1023`, where Metal a… |
+| `extended-swizzles-r10unormx6` | A padded 10-bit texel read or sampled (`R10Unorm_X6`, `RG10Unorm_X12`): the function decodes a code `c` as `c` times the `f32` nearest `1 / 1023`, where Metal a… |
+| `extended-swizzles-r10unormx6` | A padded 10-bit format's linear sample (`sl`: `R10Unorm_X6`, `RG10Unorm_X12` and their sRGB twins, filtered in the module) blends its four decoded taps by the d… |
+| `extended-swizzles-r10unormx6` | A padded 10-bit format's linear sample (`sl`: `R10Unorm_X6`, `RG10Unorm_X12` and their sRGB twins, filtered in the module) blends its four decoded taps by the d… |
+| `extended-swizzles-r10unormx6` | A padded 10-bit format's linear sample (`sl`: `R10Unorm_X6`, `RG10Unorm_X12` and their sRGB twins, filtered in the module) blends its four decoded taps by the d… |
+| `extended-swizzles-r10unormx6-srgb` | `R10Unorm_X6_sRGB`'s red read or sampled: the function decodes a code `c` as `c` times the `f32` nearest `1 / 1023` through the MSL transfer by the device's `Po… |
+| `extended-swizzles-r10unormx6-srgb` | `R10Unorm_X6_sRGB`'s red read or sampled: the function decodes a code `c` as `c` times the `f32` nearest `1 / 1023` through the MSL transfer by the device's `Po… |
+| `extended-swizzles-r10unormx6-srgb` | `R10Unorm_X6_sRGB`'s red read or sampled: the function decodes a code `c` as `c` times the `f32` nearest `1 / 1023` through the MSL transfer by the device's `Po… |
+| `extended-swizzles-r10unormx6-srgb` | `R10Unorm_X6_sRGB`'s red read or sampled: the function decodes a code `c` as `c` times the `f32` nearest `1 / 1023` through the MSL transfer by the device's `Po… |
+| `extended-swizzles-r10unormx6-srgb` | `R10Unorm_X6_sRGB`'s red read or sampled: the function decodes a code `c` as `c` times the `f32` nearest `1 / 1023` through the MSL transfer by the device's `Po… |
+| `extended-swizzles-r10unormx6-srgb` | `R10Unorm_X6_sRGB`'s red read or sampled: the function decodes a code `c` as `c` times the `f32` nearest `1 / 1023` through the MSL transfer by the device's `Po… |
+| `extended-swizzles-r10unormx6-srgb` | `R10Unorm_X6_sRGB`'s red read or sampled: the function decodes a code `c` as `c` times the `f32` nearest `1 / 1023` through the MSL transfer by the device's `Po… |
+| `extended-swizzles-r10unormx6-srgb` | `R10Unorm_X6_sRGB`'s red read or sampled: the function decodes a code `c` as `c` times the `f32` nearest `1 / 1023` through the MSL transfer by the device's `Po… |
+| `extended-swizzles-r10unormx6-srgb` | `R10Unorm_X6_sRGB`'s red read or sampled: the function decodes a code `c` as `c` times the `f32` nearest `1 / 1023` through the MSL transfer by the device's `Po… |
+| `extended-swizzles-r10unormx6-srgb` | A padded 10-bit format's linear sample (`sl`: `R10Unorm_X6`, `RG10Unorm_X12` and their sRGB twins, filtered in the module) blends its four decoded taps by the d… |
+| `extended-swizzles-r10unormx6-srgb` | A padded 10-bit format's linear sample (`sl`: `R10Unorm_X6`, `RG10Unorm_X12` and their sRGB twins, filtered in the module) blends its four decoded taps by the d… |
+| `extended-swizzles-r10unormx6-srgb` | A padded 10-bit format's linear sample (`sl`: `R10Unorm_X6`, `RG10Unorm_X12` and their sRGB twins, filtered in the module) blends its four decoded taps by the d… |
+| `extended-swizzles-rg10unormx12` | A padded 10-bit texel read or sampled (`R10Unorm_X6`, `RG10Unorm_X12`): the function decodes a code `c` as `c` times the `f32` nearest `1 / 1023`, where Metal a… |
+| `extended-swizzles-rg10unormx12` | A padded 10-bit texel read or sampled (`R10Unorm_X6`, `RG10Unorm_X12`): the function decodes a code `c` as `c` times the `f32` nearest `1 / 1023`, where Metal a… |
+| `extended-swizzles-rg10unormx12` | A padded 10-bit texel read or sampled (`R10Unorm_X6`, `RG10Unorm_X12`): the function decodes a code `c` as `c` times the `f32` nearest `1 / 1023`, where Metal a… |
+| `extended-swizzles-rg10unormx12` | A padded 10-bit texel read or sampled (`R10Unorm_X6`, `RG10Unorm_X12`): the function decodes a code `c` as `c` times the `f32` nearest `1 / 1023`, where Metal a… |
+| `extended-swizzles-rg10unormx12` | A padded 10-bit texel read or sampled (`R10Unorm_X6`, `RG10Unorm_X12`): the function decodes a code `c` as `c` times the `f32` nearest `1 / 1023`, where Metal a… |
+| `extended-swizzles-rg10unormx12` | A padded 10-bit texel read or sampled (`R10Unorm_X6`, `RG10Unorm_X12`): the function decodes a code `c` as `c` times the `f32` nearest `1 / 1023`, where Metal a… |
+| `extended-swizzles-rg10unormx12` | A padded 10-bit texel read or sampled (`R10Unorm_X6`, `RG10Unorm_X12`): the function decodes a code `c` as `c` times the `f32` nearest `1 / 1023`, where Metal a… |
+| `extended-swizzles-rg10unormx12` | A padded 10-bit texel read or sampled (`R10Unorm_X6`, `RG10Unorm_X12`): the function decodes a code `c` as `c` times the `f32` nearest `1 / 1023`, where Metal a… |
+| `extended-swizzles-rg10unormx12` | A padded 10-bit texel read or sampled (`R10Unorm_X6`, `RG10Unorm_X12`): the function decodes a code `c` as `c` times the `f32` nearest `1 / 1023`, where Metal a… |
+| `extended-swizzles-rg10unormx12` | A padded 10-bit format's linear sample (`sl`: `R10Unorm_X6`, `RG10Unorm_X12` and their sRGB twins, filtered in the module) blends its four decoded taps by the d… |
+| `extended-swizzles-rg10unormx12` | A padded 10-bit format's linear sample (`sl`: `R10Unorm_X6`, `RG10Unorm_X12` and their sRGB twins, filtered in the module) blends its four decoded taps by the d… |
+| `extended-swizzles-rg10unormx12` | A padded 10-bit format's linear sample (`sl`: `R10Unorm_X6`, `RG10Unorm_X12` and their sRGB twins, filtered in the module) blends its four decoded taps by the d… |
+| `extended-swizzles-rgba16bfloat` | A bfloat texel's NaN code read, sampled or gathered (`RGBA16Bfloat`): the function shifts the code up 16 bits and keeps the NaN as it is, its sign and payload, … |
+| `extended-swizzles-rgba16bfloat` | A bfloat texel's NaN code read, sampled or gathered (`RGBA16Bfloat`): the function shifts the code up 16 bits and keeps the NaN as it is, its sign and payload, … |
+| `extended-swizzles-rgba16bfloat` | A bfloat texel's NaN code read, sampled or gathered (`RGBA16Bfloat`): the function shifts the code up 16 bits and keeps the NaN as it is, its sign and payload, … |
+| `extended-swizzles-rgba16bfloat` | A bfloat texel's NaN code read, sampled or gathered (`RGBA16Bfloat`): the function shifts the code up 16 bits and keeps the NaN as it is, its sign and payload, … |
+| `extended-swizzles-rgba16bfloat` | A bfloat texel's NaN code read, sampled or gathered (`RGBA16Bfloat`): the function shifts the code up 16 bits and keeps the NaN as it is, its sign and payload, … |
+| `extended-swizzles-rgba16bfloat` | A bfloat texel's NaN code read, sampled or gathered (`RGBA16Bfloat`): the function shifts the code up 16 bits and keeps the NaN as it is, its sign and payload, … |
+| `extended-swizzles-rgba16bfloat` | A bfloat texel's NaN code read, sampled or gathered (`RGBA16Bfloat`): the function shifts the code up 16 bits and keeps the NaN as it is, its sign and payload, … |
+| `extended-swizzles-rgba16bfloat` | A bfloat texel's NaN code read, sampled or gathered (`RGBA16Bfloat`): the function shifts the code up 16 bits and keeps the NaN as it is, its sign and payload, … |
+| `extended-swizzles-rgba16bfloat` | A bfloat texel's NaN code read, sampled or gathered (`RGBA16Bfloat`): the function shifts the code up 16 bits and keeps the NaN as it is, its sign and payload, … |
+| `extended-swizzles-rgba16bfloat` | A bfloat texel's NaN code read, sampled or gathered (`RGBA16Bfloat`): the function shifts the code up 16 bits and keeps the NaN as it is, its sign and payload, … |
+| `extended-swizzles-rgba16bfloat` | A bfloat texel's NaN code read, sampled or gathered (`RGBA16Bfloat`): the function shifts the code up 16 bits and keeps the NaN as it is, its sign and payload, … |
+| `extended-swizzles-rgba16bfloat` | A bfloat texel's NaN code read, sampled or gathered (`RGBA16Bfloat`): the function shifts the code up 16 bits and keeps the NaN as it is, its sign and payload, … |
+| `extended-swizzles-rgba16bfloat` | A bfloat texel's NaN code read, sampled or gathered (`RGBA16Bfloat`): the function shifts the code up 16 bits and keeps the NaN as it is, its sign and payload, … |
+| `extended-swizzles-rgba16bfloat` | A bfloat texel's NaN code read, sampled or gathered (`RGBA16Bfloat`): the function shifts the code up 16 bits and keeps the NaN as it is, its sign and payload, … |
 | `xr-two-plane-samples-p2-lc-f` | A linear sample of a two-plane extended-range texture (`RGB10A8_2P_XR10` or its sRGB twin) blends its four decoded taps by the device's `FMix` at the `f32` frac… |
 | `xr-two-plane-samples-p2-lc-f` | A linear sample of a two-plane extended-range texture (`RGB10A8_2P_XR10` or its sRGB twin) blends its four decoded taps by the device's `FMix` at the `f32` frac… |
 | `xr-two-plane-samples-p2-lc-h` | A linear sample of a two-plane extended-range texture (`RGB10A8_2P_XR10` or its sRGB twin) blends its four decoded taps by the device's `FMix` at the `f32` frac… |
@@ -3316,20 +3509,24 @@ A case whose difference from Metal is recorded rather than compared away. The le
 | `xr-two-plane-samples-p2s-lc-h` | A linear sample of a two-plane extended-range texture (`RGB10A8_2P_XR10` or its sRGB twin) blends its four decoded taps by the device's `FMix` at the `f32` frac… |
 | `xr-two-plane-samples-p2s-lr-f` | A linear sample of a two-plane extended-range texture (`RGB10A8_2P_XR10` or its sRGB twin) blends its four decoded taps by the device's `FMix` at the `f32` frac… |
 | `xr-two-plane-samples-p2s-lr-h` | A linear sample of a two-plane extended-range texture (`RGB10A8_2P_XR10` or its sRGB twin) blends its four decoded taps by the device's `FMix` at the `f32` frac… |
-| `extended-swizzles-r10unormx6` | A padded 10-bit format's linear sample (`sl`: `R10Unorm_X6`, `RG10Unorm_X12` and their sRGB twins, filtered in the module) blends its four decoded taps by the d… |
-| `extended-swizzles-r10unormx6` | A padded 10-bit format's linear sample (`sl`: `R10Unorm_X6`, `RG10Unorm_X12` and their sRGB twins, filtered in the module) blends its four decoded taps by the d… |
-| `extended-swizzles-r10unormx6` | A padded 10-bit format's linear sample (`sl`: `R10Unorm_X6`, `RG10Unorm_X12` and their sRGB twins, filtered in the module) blends its four decoded taps by the d… |
-| `extended-swizzles-r10unormx6-srgb` | A padded 10-bit format's linear sample (`sl`: `R10Unorm_X6`, `RG10Unorm_X12` and their sRGB twins, filtered in the module) blends its four decoded taps by the d… |
-| `extended-swizzles-r10unormx6-srgb` | A padded 10-bit format's linear sample (`sl`: `R10Unorm_X6`, `RG10Unorm_X12` and their sRGB twins, filtered in the module) blends its four decoded taps by the d… |
-| `extended-swizzles-r10unormx6-srgb` | A padded 10-bit format's linear sample (`sl`: `R10Unorm_X6`, `RG10Unorm_X12` and their sRGB twins, filtered in the module) blends its four decoded taps by the d… |
-| `extended-swizzles-rg10unormx12` | A padded 10-bit format's linear sample (`sl`: `R10Unorm_X6`, `RG10Unorm_X12` and their sRGB twins, filtered in the module) blends its four decoded taps by the d… |
-| `extended-swizzles-rg10unormx12` | A padded 10-bit format's linear sample (`sl`: `R10Unorm_X6`, `RG10Unorm_X12` and their sRGB twins, filtered in the module) blends its four decoded taps by the d… |
-| `extended-swizzles-rg10unormx12` | A padded 10-bit format's linear sample (`sl`: `R10Unorm_X6`, `RG10Unorm_X12` and their sRGB twins, filtered in the module) blends its four decoded taps by the d… |
-| `extended-swizzles-rg10unormx12` | A padded 10-bit format's linear sample (`sl`: `R10Unorm_X6`, `RG10Unorm_X12` and their sRGB twins, filtered in the module) blends its four decoded taps by the d… |
-| `extended-swizzles-rg10unormx12` | A padded 10-bit format's linear sample (`sl`: `R10Unorm_X6`, `RG10Unorm_X12` and their sRGB twins, filtered in the module) blends its four decoded taps by the d… |
-| `extended-swizzles-rg10unormx12-srgb` | A padded 10-bit format's linear sample (`sl`: `R10Unorm_X6`, `RG10Unorm_X12` and their sRGB twins, filtered in the module) blends its four decoded taps by the d… |
-| `extended-swizzles-rg10unormx12-srgb` | A padded 10-bit format's linear sample (`sl`: `R10Unorm_X6`, `RG10Unorm_X12` and their sRGB twins, filtered in the module) blends its four decoded taps by the d… |
-| `extended-swizzles-rg10unormx12-srgb` | A padded 10-bit format's linear sample (`sl`: `R10Unorm_X6`, `RG10Unorm_X12` and their sRGB twins, filtered in the module) blends its four decoded taps by the d… |
-| `extended-swizzles-rg10unormx12-srgb` | A padded 10-bit format's linear sample (`sl`: `R10Unorm_X6`, `RG10Unorm_X12` and their sRGB twins, filtered in the module) blends its four decoded taps by the d… |
-| `extended-swizzles-rg10unormx12-srgb` | A padded 10-bit format's linear sample (`sl`: `R10Unorm_X6`, `RG10Unorm_X12` and their sRGB twins, filtered in the module) blends its four decoded taps by the d… |
+| `xr-blend-bgra10xr-add` | A `half4` fill blended into an extended-range attachment (one over the destination, added): the function blends in the shader, inside the pixel interlock, in th… |
+| `xr-blend-bgra10xr-premul` | A `half4` fill blended into an extended-range attachment (premultiplied over: one over one minus the source alpha, added): the function blends in the shader, in… |
+| `xr-blend-bgr10xr-add` | A `half4` fill blended into an extended-range attachment (one over the destination, added): the function blends in the shader, inside the pixel interlock, in th… |
+| `xr-blend-bgr10xr-premul` | A `half4` fill blended into an extended-range attachment (premultiplied over: one over one minus the source alpha, added): the function blends in the shader, in… |
+| `rgb10a2-srgb-samples-linear-f` | `RGB10A2Unorm_sRGB`'s colour read, sampled, written or stored: the function decodes a code `c` as `c` times the `f32` nearest `1 / 1023` through the MSL transfe… |
+| `rgb10a2-srgb-samples-linear-f` | `RGB10A2Unorm_sRGB`'s colour read, sampled, written or stored: the function decodes a code `c` as `c` times the `f32` nearest `1 / 1023` through the MSL transfe… |
+| `rgb10a2-srgb-samples-linear-h` | `RGB10A2Unorm_sRGB`'s colour read, sampled, written or stored: the function decodes a code `c` as `c` times the `f32` nearest `1 / 1023` through the MSL transfe… |
+| `rgb10a2-srgb-samples-linear-h` | `RGB10A2Unorm_sRGB`'s colour read, sampled, written or stored: the function decodes a code `c` as `c` times the `f32` nearest `1 / 1023` through the MSL transfe… |
+| `xr-blend-bgra10xr-srgb-add` | A `half4` fill blended into an extended-range attachment (one over the destination, added): the function blends in the shader, inside the pixel interlock, in th… |
+| `xr-blend-bgra10xr-srgb-premul` | A `half4` fill blended into an extended-range attachment (premultiplied over: one over one minus the source alpha, added): the function blends in the shader, in… |
+| `xr-blend-bgr10xr-srgb-add` | A `half4` fill blended into an extended-range attachment (one over the destination, added): the function blends in the shader, inside the pixel interlock, in th… |
+| `xr-blend-bgr10xr-srgb-premul` | A `half4` fill blended into an extended-range attachment (premultiplied over: one over one minus the source alpha, added): the function blends in the shader, in… |
+| `xr-blend-planes-add` | A `half4` fill blended into an extended-range attachment (one over the destination, added): the function blends in the shader, inside the pixel interlock, in th… |
+| `xr-blend-planes-add` | A `half4` fill blended into an extended-range attachment (one over the destination, added): the function blends in the shader, inside the pixel interlock, in th… |
+| `xr-blend-planes-premul` | A `half4` fill blended into an extended-range attachment (premultiplied over: one over one minus the source alpha, added): the function blends in the shader, in… |
+| `xr-blend-planes-premul` | A `half4` fill blended into an extended-range attachment (premultiplied over: one over one minus the source alpha, added): the function blends in the shader, in… |
+| `xr-blend-planes-srgb-add` | A `half4` fill blended into an extended-range attachment (one over the destination, added): the function blends in the shader, inside the pixel interlock, in th… |
+| `xr-blend-planes-srgb-add` | A `half4` fill blended into an extended-range attachment (one over the destination, added): the function blends in the shader, inside the pixel interlock, in th… |
+| `xr-blend-planes-srgb-premul` | A `half4` fill blended into an extended-range attachment (premultiplied over: one over one minus the source alpha, added): the function blends in the shader, in… |
+| `xr-blend-planes-srgb-premul` | A `half4` fill blended into an extended-range attachment (premultiplied over: one over one minus the source alpha, added): the function blends in the shader, in… |
 

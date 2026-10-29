@@ -36,7 +36,6 @@ use crate::error::{Error, Feature, Unsupported};
 use crate::lower::arith::extended_range;
 use crate::lower::arith::texel_round::{self, HalfRounding};
 use crate::lower::arith::{FloatFmt, Form, Held};
-use crate::lower::emit::EmitCx;
 use crate::lower::select::SelectCx;
 use crate::metal::format::ExtendedRange;
 use crate::pipeline::lower_inputs::ExtendedRangeColor;
@@ -94,7 +93,6 @@ pub(super) fn plan(
 /// attachment `e`: [`texel`] (or, a bfloat one's [`bfloat_output`]), as the raw format's
 /// components.
 pub(super) fn encode(
-    cx: &mut EmitCx<'_>,
     fb: &mut FunctionBuilder<'_>,
     e: ExtendedRangeColor,
     f: Form,
@@ -103,7 +101,7 @@ pub(super) fn encode(
     let form = e.form;
     let texel = match form.bfloat() {
         true => bfloat_output(fb, e, f, x)?,
-        false => texel(cx, fb, form, f, x)?,
+        false => texel(fb, form, f, x)?,
     };
     raw_components(fb, form, texel)
 }
@@ -158,15 +156,13 @@ const FOUR: Form = Form {
 /// then the kernel write's encode. The storage form's unblended write stores it too
 /// (`lower::fragment::fetch`).
 pub(crate) fn texel(
-    cx: &mut EmitCx<'_>,
     fb: &mut FunctionBuilder<'_>,
     form: ExtendedRange,
     f: Form,
     x: Value,
 ) -> BResult<Value> {
     let v = held(fb, form, f, x)?;
-    let table = crate::lower::texture::extended_table(cx, form)?;
-    extended_range::encode(fb, form, v, table)
+    extended_range::encode(fb, form, v)
 }
 
 /// The value [`texel`] encodes for output `x` (form `f`) to an attachment held in `form`, a

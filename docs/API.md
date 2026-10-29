@@ -3308,7 +3308,19 @@ bound.
   serve an implicit imageblock access of a normalized attachment (a `half` load rounding the
   unpacked `float` once more), a fragment function's read and write of an 8-bit sRGB attachment
   in the interlocked storage form or through its word view, and a snapshot read's decode of a
-  normalized code (`c` times the `f32` nearest `1 / D`), noted alike.
+  normalized code (`c` times the `f32` nearest `1 / D`), noted alike. So does every conversion of
+  an extended-range, padded 10-bit or bfloat texel (`BGR10_XR`, `BGRA10_XR`, `RGB10A8_2P_XR10`,
+  `R10Unorm_X6`, `RG10Unorm_X12`, their sRGB twins, `RGB10A2Unorm_sRGB`, `R16Bfloat`, `RG16Bfloat`,
+  `RGBA16Bfloat`), which no Vulkan format holds: a read is `float(c - 384)` (a padded code `c`)
+  times the `f32` nearest `1 / 510` (`1 / 1023`), a write `RoundEven` of the clamped value's `f32`
+  product plus 384, an sRGB twin's colour the MSL transfer by the device's `Pow` on the magnitude,
+  a `half` result the device's narrowing, a bfloat code's NaN as it is (a write's kept a NaN by
+  its quiet bit). Metal divides correctly rounded, rounds the exact product, rounds a `half` with
+  ties away from zero, converts the sRGB twins through its own tables, makes a bfloat NaN
+  `0x7fc00000` or `0x7fc0`, and rounds a bfloat sample's `half` toward zero: a linear value within
+  one `f32` ulp, a code within one, an sRGB twin's decoded value within half a `2^-13` step of
+  Metal's table (`R10Unorm_X6_sRGB`'s 1.64 steps) beyond the `Pow`'s bound, a `half` result within
+  one `half` ulp.
 - `metal2vulkan-degrade-color-attachment-groups` (precision).
   `PrecisionNote::ColorAttachmentGroups`: A render pipeline whose color attachments the device
   draws in more than one group (more than the lesser of its `maxColorAttachments` and

@@ -1881,66 +1881,6 @@ fn normalized_division_is_correctly_rounded() {
     }
 }
 
-/// A normalized pack rounds the exact product `x * m`, not `fl(x * m)`: the values where the `f32`
-/// multiply rounds onto a half-integer that the exact product is not (found by search next to every
-/// `k + 1/2`), and ordinary values, for every channel scale.
-#[test]
-fn normalized_packs_round_the_exact_product() {
-    let x = float(32);
-    let word = int(32);
-    for (m, snorm) in [
-        (255u32, false),
-        (127, true),
-        (65535, false),
-        (32767, true),
-        (1023, false),
-        (3, false),
-        (31, false),
-        (63, false),
-    ] {
-        let lo = if snorm { -1.0f32 } else { 0.0 };
-        let mut vals: Vec<f32> = vec![0.0, -0.0, 1.0, 0.5, 1e-30, 1.0e-6, 0.999_999_9, lo];
-        let mut split = 0;
-        'search: for k in 0..m {
-            let x0 = (f64::from(k) + 0.5) / f64::from(m);
-            let first = (x0 as f32).to_bits().saturating_sub(4);
-            for b in first..first + 9 {
-                let v = f32::from_bits(b);
-                let p = v * m as f32;
-                let exact = f64::from(v) * f64::from(m);
-                if p.fract() == 0.5 && f64::from(p) != exact {
-                    vals.push(v);
-                    if snorm {
-                        vals.push(-v);
-                    }
-                    split += 1;
-                    if split >= 24 {
-                        break 'search;
-                    }
-                }
-            }
-        }
-        assert!(split > 0 || m < 8, "scale {m}: no split found");
-        let cases: Vec<Case> = vals
-            .iter()
-            .map(|v| vec![vec![u64::from(v.to_bits())]])
-            .collect();
-        check(
-            &format!("exact product x {m}"),
-            &[x],
-            word,
-            &|fb, v| math::round_exact_product(fb, x, v[0], m, snorm),
-            &cases,
-            &|c| {
-                let v = f64::from(f32::from_bits(arg(c, 0) as u32));
-                let r = (v * f64::from(m)).round_ties_even() as i64;
-                Some(vec![r as u64 & 0xFFFF_FFFF])
-            },
-            false,
-        );
-    }
-}
-
 /// The value of a packed small-float field with a 5-bit exponent (bias 15) above `man` bits.
 fn small_float(field: u64, man: u32) -> f64 {
     let e = (field >> man) & 0x1F;

@@ -224,17 +224,16 @@ pub(crate) fn texel(
     second: Option<(Form, SValue)>,
 ) -> BResult<SValue> {
     let Some(b) = &ib.blend else {
-        return crate::lower::stage_io::extended_color::texel(cx, fb, ib.form, form, part);
+        return crate::lower::stage_io::extended_color::texel(fb, ib.form, form, part);
     };
     let s1 = fetch::blend_second(cx, b, second)?;
-    let table = crate::lower::texture::extended_table(cx, ib.form)?;
     let codes = super::color::input_texel(cx, fb, color)?;
-    let d = extended_range::tile_value(fb, ib.form, codes, table)?;
+    let d = extended_range::tile_value(fb, ib.form, codes)?;
     let constant = fetch::blend_constant(cx, fb, b)?;
     let ranges = Some(extended_range::blend::extended_ranges(ib.form));
     let v = extended_range::blend::native(fb, b, ranges, (part, s1, d), constant)?;
     if ib.kept.is_empty() {
-        return extended_range::encode(fb, ib.form, v, table);
+        return extended_range::encode(fb, ib.form, v);
     }
     let kept = [
         vk::ColorComponentFlags::R,
@@ -243,7 +242,7 @@ pub(crate) fn texel(
         vk::ColorComponentFlags::A,
     ]
     .map(|c| ib.kept.contains(c));
-    extended_range::encode_keeping(fb, ib.form, v, table, (codes, kept))
+    extended_range::encode_keeping(fb, ib.form, v, (codes, kept))
 }
 
 /// The words the planned blends add at `rets` returns: one input attachment each beside the

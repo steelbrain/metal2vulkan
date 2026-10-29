@@ -119,7 +119,9 @@ fn clear_texels_are_the_kernel_writes_of_their_halves() {
         return;
     };
     let (stem, p) = profiles().into_iter().next().expect("profile");
-    for form in FORMS {
+    // An `_sRGB` form's write takes the device's `Pow`, which the interpreter does not model (and
+    // its clear texel keeps Metal's table: the two may be a code apart).
+    for form in FORMS.into_iter().filter(|f| !f.srgb()) {
         let mut inputs = LowerInputs::new();
         inputs.extended_range.insert(TARGET, form);
         inputs.storage_images.insert(

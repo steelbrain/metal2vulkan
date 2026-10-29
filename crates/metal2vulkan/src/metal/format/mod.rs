@@ -411,9 +411,9 @@ impl ExtendedRange {
         }
     }
 
-    /// Whether the color channels are sRGB-encoded through the extended-range formats' tables
-    /// (`lower::arith::extended_range::declare`). The padded `_sRGB` twins have tables of their
-    /// own ([`padded_srgb`](Self::padded_srgb)).
+    /// Whether the color channels are sRGB-encoded, `BGR10_XR_sRGB`, `BGRA10_XR_sRGB` and
+    /// `RGB10A8_2P_XR10_sRGB` (`lower::arith::extended_range`'s transfer by the device's `Pow`). The
+    /// padded `_sRGB` twins are [`padded_srgb`](Self::padded_srgb).
     pub fn srgb(self) -> bool {
         match self {
             ExtendedRange::Bgr10 { srgb }
@@ -439,9 +439,9 @@ impl ExtendedRange {
         )
     }
 
-    /// Whether the codes convert through the padded `_sRGB` formats' tables
-    /// (`R10Unorm_X6_sRGB`, `RG10Unorm_X12_sRGB`, and `RGB10A2Unorm_sRGB`'s color channels
-    /// through `R10Unorm_X6_sRGB`'s; `lower::arith::extended_range::declare_padded`).
+    /// Whether the form is a padded `_sRGB` twin: `R10Unorm_X6_sRGB`, `RG10Unorm_X12_sRGB` and
+    /// `RGB10A2Unorm_sRGB` (`lower::arith::extended_range`'s transfer by the device's `Pow`; the
+    /// runtime's clear texels through Metal's tables, `metal::format::padded_srgb`).
     pub fn padded_srgb(self) -> bool {
         matches!(
             self,
@@ -477,9 +477,8 @@ impl ExtendedRange {
 
     /// The forms an argument buffer's texture is read in (a heap element), in the order their
     /// classes follow `metal::texel_format::heap_classes`' own: a function decodes such a texture's
-    /// raw texels, read through the heap's unsigned integer array, without a table. The `_sRGB`
-    /// forms' decodes take the module's tables and the two-plane forms are held in two planes, so a
-    /// heap does not hold them.
+    /// raw texels, read through the heap's unsigned integer array. A heap holds no `_sRGB` form
+    /// (their heap classes are not built) and no two-plane form, which is held in two planes.
     pub const HEAP_READ: [ExtendedRange; 7] = [
         ExtendedRange::Bgr10 { srgb: false },
         ExtendedRange::Bgra10 { srgb: false },

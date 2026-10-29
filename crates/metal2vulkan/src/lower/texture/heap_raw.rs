@@ -73,7 +73,7 @@ pub fn define(mb: &mut ModuleBuilder, half: bool) -> BResult<FuncId> {
     let mut v = zero;
     let mut alpha_one = None;
     for (k, &f) in (0u64..).zip(ExtendedRange::HEAP_READ.iter()) {
-        let decoded = crate::lower::arith::extended_range::decode(&mut fb, f, raw, None, half)?;
+        let decoded = crate::lower::arith::extended_range::decode(&mut fb, f, raw, half)?;
         let c = fb.module().constant(Constant::Scalar {
             ty: u32_,
             bits: ConstBits(k),

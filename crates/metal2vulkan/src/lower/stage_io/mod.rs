@@ -1995,7 +1995,7 @@ fn output_part(
                     None => word,
                 }
             }
-            (None, Some(e)) => extended_color::encode(cx, fb, e, o.link.form, part)?,
+            (None, Some(e)) => extended_color::encode(fb, e, o.link.form, part)?,
             (None, None) => color_write::round(cx, fb, color, o.link.form, part)?,
         },
         None => part,

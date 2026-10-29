@@ -147,7 +147,6 @@ fn main() {
         "metal2vulkan/src/lower/fragment/stencil.rs",
         "metal2vulkan/src/lower/arith/exact_division.rs",
         "metal2vulkan/src/lower/arith/extended_range/blend_color.rs",
-        "metal2vulkan/src/lower/arith/extended_range/table.rs",
         "metal2vulkan/src/lower/arith/pack.rs",
         "metal2vulkan/src/lower/arith/srgb.rs",
         "metal2vulkan/src/lower/mesh/work.rs",

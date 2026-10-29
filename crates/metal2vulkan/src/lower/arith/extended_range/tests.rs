@@ -1,17 +1,15 @@
-//! Metal's extended-range conversions run through the interpreter: every code read, and the
-//! writes around every rounding boundary, against the exact rule.
+//! The extended-range conversions run through the interpreter: every code read, and the writes
+//! around every rounding boundary, against the device's arithmetic; the `_sRGB` forms' transfer
+//! (the device's `Pow`, which the interpreter does not model) checked in the module and against
+//! Metal's tables.
 
 use super::blend::{extended_ranges, native, NativeBlend};
-use super::{
-    declare, declare_padded, decode, encode, tile_read, tile_value, SOURCE_RANGE, SRGB_SOURCE_RANGE,
-};
+use super::{decode, encode, tile_read, tile_value, SOURCE_RANGE, SRGB_SOURCE_RANGE};
 use crate::error::Error;
 use crate::lower::arith::{FloatFmt, Form, Held};
 use crate::lower::stage_io::extended_color::bfloat_output;
 use crate::metal::format::extended_srgb::{SRGB_DECODE_STEPS, SRGB_ENCODE_FIRST};
-use crate::metal::format::padded_srgb::{
-    R10X6_SRGB_DECODE_STEPS, R10X6_SRGB_ENCODE_FIRST, RG10X12_SRGB_WRITE_CODES,
-};
+use crate::metal::format::padded_srgb::{R10X6_SRGB_ENCODE_FIRST, RG10X12_SRGB_WRITE_CODES};
 use crate::metal::format::ExtendedRange;
 use crate::metal::{BlendFactor, BlendOperation, ColorWriteMask, TextureWriteRoundingMode};
 use crate::pipeline::lower_inputs::{BlendEquation, ExtendedRangeColor};
@@ -25,14 +23,7 @@ use crate::spirv::ir::{
     Type, TypedModule,
 };
 
-const FORMS: [ExtendedRange; 4] = [
-    ExtendedRange::Bgr10 { srgb: false },
-    ExtendedRange::Bgr10 { srgb: true },
-    ExtendedRange::Bgra10 { srgb: false },
-    ExtendedRange::Bgra10 { srgb: true },
-];
-
-/// [`FORMS`] and the two-plane forms.
+/// The linear and `_sRGB` forms of `BGR10_XR`, `BGRA10_XR` and the two-plane format.
 pub(crate) const EVERY_FORM: [ExtendedRange; 6] = [
     ExtendedRange::Bgr10 { srgb: false },
     ExtendedRange::Bgr10 { srgb: true },
@@ -130,10 +121,6 @@ fn kernel(form: ExtendedRange, op: Op) -> BResult<TypedModule> {
     let vec4 = b.ty(Type::Vector { elem: f32_, len: 4 })?;
     let input = storage_buffer(&mut b, 0, u32_)?;
     let output = storage_buffer(&mut b, 1, u32_)?;
-    let table = match form.srgb() {
-        true => Some(declare(&mut b)?),
-        false => declare_padded(&mut b, form)?,
-    };
     let id = b.builtin(crate::spv::BuiltIn::GlobalInvocationId, IoDir::Input, uvec3)?;
     let void = b.ty(Type::Void)?;
     let mut f = b.function(void)?;
@@ -149,18 +136,18 @@ fn kernel(form: ExtendedRange, op: Op) -> BResult<TypedModule> {
     let out = match op {
         Op::Encode => {
             let v = f.convert(ConvOp::Bitcast, x, vec4)?;
-            encode(&mut f, form, v, table)?
+            encode(&mut f, form, v)?
         }
         Op::Decode => {
-            let v = decode(&mut f, form, x, table, false)?;
+            let v = decode(&mut f, form, x, false)?;
             f.convert(ConvOp::Bitcast, v, uvec4)?
         }
         Op::DecodeHalf => {
-            let v = decode(&mut f, form, x, table, true)?;
+            let v = decode(&mut f, form, x, true)?;
             f.convert(ConvOp::Bitcast, v, uvec4)?
         }
         Op::Tile => {
-            let v = tile_value(&mut f, form, x, table)?;
+            let v = tile_value(&mut f, form, x)?;
             f.convert(ConvOp::Bitcast, v, uvec4)?
         }
         Op::TileRead => {
@@ -188,7 +175,7 @@ fn kernel(form: ExtendedRange, op: Op) -> BResult<TypedModule> {
             let c = f.composite_construct(uvec4, &lanes[8..12])?;
             let s1 = f.composite_construct(uvec4, &lanes[12..16])?;
             let s1 = f.convert(ConvOp::Bitcast, s1, vec4)?;
-            let d = tile_value(&mut f, form, x, table)?;
+            let d = tile_value(&mut f, form, x)?;
             let ranges = Some(extended_ranges(form));
             let v = native(&mut f, &b, ranges, (s, Some(s1), d), Some(c))?;
             f.convert(ConvOp::Bitcast, v, uvec4)?
@@ -249,43 +236,15 @@ fn run<const N: usize>(form: ExtendedRange, op: Op, lanes: &[[u32; N]]) -> Vec<[
         .collect()
 }
 
-/// `n / 510` correctly rounded to `f32` (`|n| <= 639`): the `f64` quotient's neighbours compared
-/// exactly (each `f32` times 510 is exact in `f64`).
-fn ratio(n: i32) -> f32 {
-    let q = f64::from(n) / 510.0;
-    let y = q as f32;
-    let candidates = [
-        y,
-        f32::from_bits(y.to_bits().wrapping_sub(1)),
-        f32::from_bits(y.to_bits() + 1),
-    ];
-    let err = |c: f32| (f64::from(c) * 510.0 - f64::from(n)).abs();
-    let best = candidates
-        .into_iter()
-        .filter(|c| c.is_finite())
-        .min_by(|a, b| err(*a).partial_cmp(&err(*b)).expect("finite"))
-        .expect("a candidate");
-    if n == 0 {
-        0.0
-    } else {
-        best
-    }
+/// The `f32` nearest `1 / d`.
+fn reciprocal(d: f32) -> f32 {
+    1.0 / d
 }
 
-/// Metal's value of code `c` of a color channel.
-fn color_value(c: u32, srgb: bool) -> f32 {
-    let n = c as i32 - 384;
-    match srgb {
-        false => ratio(n),
-        true => {
-            let s = f32::from(SRGB_DECODE_STEPS[n.unsigned_abs() as usize]) / 8192.0;
-            if n < 0 {
-                -s
-            } else {
-                s
-            }
-        }
-    }
+/// The device's value of code `c` of a linear color channel: `float(c - 384)` times the `f32`
+/// nearest `1 / 510`, rounded once.
+fn color_value(c: u32) -> f32 {
+    (c as i32 - 384) as f32 * reciprocal(510.0)
 }
 
 /// The raw texel of red, green, blue, and alpha codes `rgba` in `form` (a two-plane form's alpha
@@ -318,65 +277,86 @@ pub(crate) fn raw(form: ExtendedRange, rgba: [u32; 4], junk: u32) -> [u32; 4] {
     }
 }
 
-/// Every code of every channel reads Metal's value, bit for bit, whatever the bits Metal does not
-/// read hold: `(c - 384) / 510` correctly rounded, an `_sRGB` color channel its table's step over
-/// 8192, alpha clamped to `[0, 1]` (1 where the format has none).
+/// The device's value of the alpha code `c` of `form` (a two-plane texel's byte).
+fn alpha_value(form: ExtendedRange, c: u32) -> f32 {
+    match form {
+        ExtendedRange::Bgr10 { .. } => 1.0,
+        ExtendedRange::Planes { .. } => (c & 0xFF) as f32 * reciprocal(255.0),
+        _ => color_value(c.clamp(384, 894)),
+    }
+}
+/// The three linear forms.
+const LINEAR: [ExtendedRange; 3] = [
+    ExtendedRange::Bgra10 { srgb: false },
+    ExtendedRange::Bgr10 { srgb: false },
+    ExtendedRange::Planes { srgb: false },
+];
+
+/// The code a write of alpha value `v` stores in a two-plane texel's alpha byte: the `f32`
+/// product with 255, `RoundEven`.
+fn alpha_byte(v: f32) -> u32 {
+    let v = if v.is_nan() { 0.0 } else { v.clamp(0.0, 1.0) };
+    round_even(f64::from(v * 255.0)) as u32
+}
+
+/// Every code of every channel of a linear form reads the device's product, `float(c - 384)`
+/// times the `f32` nearest `1 / 510` (a two-plane texel's alpha byte times that of `1 / 255`),
+/// alpha clamped to `[0, 1]` (1 where the format has none), whatever the bits Metal does not
+/// read hold; a `half` read is that value narrowed to nearest even. The product misses Metal's
+/// correctly rounded quotient at some codes, so the old quotient fails here.
 #[test]
-fn every_code_reads_metals_value() {
-    for form in FORMS {
-        let srgb = form.srgb();
-        let lanes: Vec<[u32; 4]> = (0..1024u32)
-            .map(|c| raw(form, [c, 1023 - c, (c * 7) % 1024, c], c * 13))
-            .collect();
-        let got = run(form, Op::Decode, &lanes);
-        for (c, g) in (0..1024u32).zip(&got) {
+fn every_code_reads_the_devices_product() {
+    let mut apart = 0;
+    for form in LINEAR {
+        let codes = |c: u32| [c, 1023 - c, (c * 7) % 1024, c];
+        let lanes: Vec<[u32; 4]> = (0..1024u32).map(|c| raw(form, codes(c), c * 13)).collect();
+        let floats = run(form, Op::Decode, &lanes);
+        let halves = run(form, Op::DecodeHalf, &lanes);
+        for ((c, f), h) in (0..1024u32).zip(&floats).zip(&halves) {
+            let k = codes(c);
             let want = [
-                color_value(c, srgb),
-                color_value(1023 - c, srgb),
-                color_value((c * 7) % 1024, srgb),
-                match form {
-                    ExtendedRange::Bgr10 { .. } => 1.0,
-                    _ => ratio(c.clamp(384, 894) as i32 - 384),
-                },
+                color_value(k[0]),
+                color_value(k[1]),
+                color_value(k[2]),
+                alpha_value(form, k[3]),
             ];
-            assert_eq!(*g, want.map(f32::to_bits), "{form:?} code {c}");
+            assert_eq!(*f, want.map(f32::to_bits), "{form:?} code {c}");
+            assert_eq!(
+                *h,
+                want.map(|v| to_half(f64::from(v), false).to_bits()),
+                "{form:?} half, code {c}"
+            );
+            let quotient = ((c as i32 - 384) as f64 / 510.0) as f32;
+            apart += usize::from(quotient != want[0]);
         }
     }
+    assert!(apart > 0, "the product never misses the quotient");
 }
 
 /// `x` rounded to the nearest integer, ties to even (`x` exact in `f64`).
 fn round_even(x: f64) -> f64 {
-    let r = x.round();
-    if (x - x.trunc()).abs() == 0.5 && r % 2.0 != 0.0 {
-        r - x.signum()
-    } else {
-        r
-    }
+    x.round_ties_even()
 }
 
-/// The code Metal writes for color value `v` (alpha where `alpha`).
-fn code(v: f32, srgb: bool, alpha: bool) -> u32 {
+/// The code the device writes for linear color value `v` (alpha where `alpha`): the value, a NaN
+/// 0, clamped to the linear values of codes 0 and 1023 (alpha to `[0, 1]`), times 510 in `f32`,
+/// `RoundEven`, plus 384.
+fn code(v: f32, alpha: bool) -> u32 {
     let v = if v.is_nan() { 0.0 } else { v };
-    let v = if alpha { v.clamp(0.0, 1.0) } else { v };
-    let neg = v < 0.0;
-    if srgb && !alpha {
-        let q = round_even(f64::from(v.abs().min(2.0)) * 8192.0) as u32;
-        let n = (0..640)
-            .rev()
-            .find(|&n| u32::from(SRGB_ENCODE_FIRST[n]) <= q)
-            .expect("offset 0") as u32;
-        return if neg { 384 - n.min(384) } else { 384 + n };
-    }
-    let k = round_even(f64::from(v.abs().min(1.5)) * 510.0) as i32;
-    (384 + if neg { -k } else { k }).clamp(0, 1023) as u32
+    let (lo, hi) = match alpha {
+        true => (0.0, 1.0),
+        false => ((-384.0f64 / 510.0) as f32, (639.0f64 / 510.0) as f32),
+    };
+    let k = round_even(f64::from(v.clamp(lo, hi) * 510.0));
+    (k + 384.0) as u32
 }
 
-/// A write stores Metal's code around every boundary: each code's value and its neighbours, the
-/// `f32`s either side of each midpoint (each an exact tie is not, the exact product rounding to
-/// nearest even), each `_sRGB` index's half-point and its neighbours, and the specials; bits Metal
-/// does not read are written as it writes them.
+/// A write of a linear form stores the device's rounded product: each code's value and its
+/// neighbours, the `f32`s either side of each midpoint, and the specials (a NaN the zero code,
+/// the infinities and values past the range the end codes); bits Metal does not read are written
+/// as it writes them.
 #[test]
-fn writes_round_at_metals_boundaries() {
+fn writes_store_the_devices_rounded_product() {
     let specials = [
         0.0f32,
         -0.0,
@@ -394,43 +374,29 @@ fn writes_round_at_metals_boundaries() {
         -2.0,
         1e-40,
     ];
-    for form in FORMS {
-        let srgb = form.srgb();
-        let mut xs: Vec<f32> = specials.to_vec();
-        for c in 0..1023u32 {
-            let (a, b) = (color_value(c, srgb), color_value(c + 1, srgb));
-            let mid = ((f64::from(a) + f64::from(b)) / 2.0) as f32;
-            xs.extend([
-                a,
-                mid,
-                f32::from_bits(mid.to_bits() + 1),
-                f32::from_bits(mid.to_bits().wrapping_sub(1)),
-            ]);
-        }
-        if srgb {
-            for first in SRGB_ENCODE_FIRST.iter().skip(1) {
-                let h = (f32::from(*first) - 0.5) / 8192.0;
-                for x in [h, -h] {
-                    xs.extend([
-                        x,
-                        f32::from_bits(x.to_bits() + 1),
-                        f32::from_bits(x.to_bits() - 1),
-                    ]);
-                }
-            }
-        }
+    let mut xs: Vec<f32> = specials.to_vec();
+    for c in 0..1023u32 {
+        let (a, b) = (color_value(c), color_value(c + 1));
+        let mid = ((f64::from(a) + f64::from(b)) / 2.0) as f32;
+        xs.extend([
+            a,
+            mid,
+            f32::from_bits(mid.to_bits() + 1),
+            f32::from_bits(mid.to_bits().wrapping_sub(1)),
+        ]);
+    }
+    for form in LINEAR {
         let lanes: Vec<[u32; 4]> = xs
             .iter()
             .map(|x| [x.to_bits(), (-x).to_bits(), x.to_bits(), x.to_bits()])
             .collect();
         let got = run(form, Op::Encode, &lanes);
         for (x, g) in xs.iter().zip(&got) {
-            let rgba = [
-                code(*x, srgb, false),
-                code(-x, srgb, false),
-                code(*x, srgb, false),
-                code(*x, srgb, true),
-            ];
+            let alpha = match form {
+                ExtendedRange::Planes { .. } => alpha_byte(*x),
+                _ => code(*x, true),
+            };
+            let rgba = [code(*x, false), code(-x, false), code(*x, false), alpha];
             let want = match form {
                 ExtendedRange::Bgr10 { .. } => {
                     [rgba[2] | rgba[1] << 10 | rgba[0] << 20 | 3 << 30, 0, 0, 0]
@@ -442,49 +408,111 @@ fn writes_round_at_metals_boundaries() {
     }
 }
 
-/// Metal's own answers on an Apple M3 Max and an M4: writes at its measured ties and
-/// thresholds, and reads of its measured values.
+/// Every word of the module serialized from `m`.
+fn module_words(m: TypedModule) -> Vec<u32> {
+    crate::spirv::serialize::serialize(m)
+        .expect("serialize")
+        .words
+}
+
+/// Whether `words` hold a `GLSL.std.450` `Pow` and an initialized `Private` variable (a table).
+fn pow_and_table(words: &[u32]) -> (bool, bool) {
+    let (mut pow, mut table) = (false, false);
+    let mut at = 5;
+    while at < words.len() {
+        let (count, op) = ((words[at] >> 16) as usize, words[at] & 0xFFFF);
+        // `OpExtInst` 12 (instruction number 26, `Pow`); `OpVariable` 59 with an initializer in
+        // `Private` (6).
+        pow |= op == 12 && words.get(at + 4) == Some(&26);
+        table |= op == 59 && count == 5 && words.get(at + 3) == Some(&6);
+        at += count.max(1);
+    }
+    (pow, table)
+}
+
+/// An `_sRGB` form's read, tile value and write take the MSL transfer by the device's `Pow` and
+/// declare no table (Metal's tables are gone from the module), as do the padded `_sRGB` forms'.
 #[test]
-fn metals_measured_answers_hold() {
-    // Linear: -0.75, 0.25 and 1.25 are exact ties, written as codes 2, 512 and 1022; code 0
-    // reads -384/510 (0xbf40c0c1), code 512 0.25098 (0x3e808081).
-    let linear = ExtendedRange::Bgra10 { srgb: false };
-    let w = run(
-        linear,
-        Op::Encode,
-        &[[
-            (-0.75f32).to_bits(),
-            0.25f32.to_bits(),
-            1.25f32.to_bits(),
-            0,
-        ]],
-    );
-    assert_eq!(w[0], [1022 << 6, 512 << 6, 2 << 6, 384 << 6]);
-    let r = run(linear, Op::Decode, &[raw(linear, [0, 512, 1023, 1023], 0)]);
-    assert_eq!(r[0], [0xbf40_c0c1, 0x3e80_8081, 0x3fa0_6060, 0x3f80_0000]);
-    // sRGB: code 0 reads -0.527099609375 (0xbf06f000), code 1023 1.6749267578125 (0x3fd66400);
-    // 0.56634521484375 is the least float writing code 781, -0.13214111328125 the least writing
-    // code 181 (bisection thresholds).
-    let srgb = ExtendedRange::Bgr10 { srgb: true };
-    let r = run(srgb, Op::Decode, &[raw(srgb, [0, 1023, 384, 0], 0)]);
-    assert_eq!(r[0][..3], [0xbf06_f000, 0x3fd6_6400, 0]);
-    let below = |x: f32| f32::from_bits(x.to_bits() - 1);
-    let w = run(
-        srgb,
-        Op::Encode,
-        &[[
-            0.566_345_2f32.to_bits(),
-            below(0.566_345_2).to_bits(),
-            (-0.132_141_11f32).to_bits(),
-            0,
-        ]],
-    );
-    let codes = [
-        (w[0][0] >> 20) & 0x3FF,
-        (w[0][0] >> 10) & 0x3FF,
-        w[0][0] & 0x3FF,
+fn srgb_forms_take_the_transfer_by_the_devices_pow() {
+    let forms = [
+        ExtendedRange::Bgr10 { srgb: true },
+        ExtendedRange::Bgra10 { srgb: true },
+        ExtendedRange::Planes { srgb: true },
+        ExtendedRange::R10X6Srgb,
+        ExtendedRange::Rg10X12Srgb,
+        ExtendedRange::Rgb10A2Srgb,
     ];
-    assert_eq!(codes, [781, 780, 181]);
+    for form in forms {
+        let mut ops = vec![Op::Encode];
+        // `RG10Unorm_X12_sRGB` reads its codes linearly.
+        if form != ExtendedRange::Rg10X12Srgb {
+            ops.extend([Op::Decode, Op::DecodeHalf]);
+        }
+        if form.srgb() {
+            ops.push(Op::Tile);
+        }
+        for op in ops {
+            let words = module_words(kernel(form, op).expect("kernel"));
+            assert_eq!(pow_and_table(&words), (true, false), "{form:?}");
+        }
+    }
+    let words = module_words(kernel(ExtendedRange::Rg10X12Srgb, Op::Decode).expect("kernel"));
+    assert_eq!(pow_and_table(&words), (false, false));
+}
+
+/// The MSL transfer in `f64` (`f32` lanes of the device differ by its `Pow`'s error): the encode
+/// of `x` in `[0, 1]`, and the decode.
+fn srgb_encode(x: f64) -> f64 {
+    match x < 0.003_130_8 {
+        true => 12.92 * x,
+        false => 1.055 * x.powf(1.0 / 2.4) - 0.055,
+    }
+}
+
+/// See [`srgb_encode`].
+fn srgb_decode(c: f64) -> f64 {
+    match c <= 0.040_45 {
+        true => c / 12.92,
+        false => ((c + 0.055) / 1.055).powf(2.4),
+    }
+}
+
+/// The transfer meets Metal's measured tables within `DevicePackConversion`'s bound, as the
+/// module docs state: half a `2^-13` step of every extended-range decode step, a code of every
+/// encode on the `2^-13` grid (32 of them apart), a code of `R10Unorm_X6_sRGB`'s encode, and a code
+/// of `RG10Unorm_X12_sRGB`'s write of every linear code (36 apart).
+#[test]
+fn the_transfer_meets_metals_tables_within_the_note() {
+    for (n, &s) in SRGB_DECODE_STEPS.iter().enumerate() {
+        let v = srgb_decode(f64::from(n as f32 * reciprocal(510.0)));
+        assert!((v * 8192.0 - f64::from(s)).abs() <= 0.5, "offset {n}");
+    }
+    let first = |table: &[u16], i: u32| table.partition_point(|&f| u32::from(f) <= i) as i64 - 1;
+    let mut apart = 0;
+    for i in 0..=2 * 8192u32 {
+        let x = f64::from(i) / 8192.0;
+        let ours = (srgb_encode(x) * 510.0).round_ties_even().min(639.0) as i64;
+        let metal = first(&SRGB_ENCODE_FIRST, i);
+        assert!((ours - metal).abs() <= 1, "{x}");
+        apart += usize::from(ours != metal);
+    }
+    assert_eq!(apart, 32);
+    for i in 0..=8192u32 {
+        let x = f64::from(i) / 8192.0;
+        let ours = (srgb_encode(x) * 1023.0).round_ties_even() as i64;
+        assert!(
+            (ours - first(&R10X6_SRGB_ENCODE_FIRST, i)).abs() <= 1,
+            "{x}"
+        );
+    }
+    let mut apart = 0;
+    for (m, &metal) in RG10X12_SRGB_WRITE_CODES.iter().enumerate() {
+        let t = f64::from(m as f32 * reciprocal(4092.0));
+        let ours = (srgb_encode(t) * 255.0).round_ties_even() as i64;
+        assert!((ours - i64::from(metal)).abs() <= 1, "linear code {m}");
+        apart += usize::from(ours != i64::from(metal));
+    }
+    assert_eq!(apart, 36);
 }
 
 /// `x` (exact in `f64`) rounded to `half`: to nearest, ties away from zero where `away`, else to
@@ -508,41 +536,31 @@ fn half(h: u16) -> f32 {
     crate::float16::f16_bits_to_f32(h)
 }
 
-/// Metal's tile value of a texel of `form` whose codes are `rgba` (a two-plane form's alpha its
-/// byte), as the module docs of `tile_value` state the rule.
+/// The tile value of a texel of linear `form` whose codes are `rgba` (a two-plane form's alpha its
+/// byte), as the module docs of `tile_value` state the rule: a code above 1022 as 1022, each lane
+/// the device's value narrowed to `half`, nearest even. The `_sRGB` forms' are the device's
+/// (the interpreter models no `Pow`).
 pub(crate) fn tile_model(form: ExtendedRange, rgba: [u32; 4]) -> [f32; 4] {
-    let srgb = form.srgb();
-    let by_code = !srgb || matches!(form, ExtendedRange::Bgra10 { .. });
-    let (lo, hi) = ((-384.0f64 / 510.0) as f32, (638.0f64 / 510.0) as f32);
-    let color = |c: u32| match by_code {
-        true => color_value(c.min(1022), srgb),
-        false => color_value(c, srgb).clamp(lo, hi),
-    };
-    let alpha = match form {
-        ExtendedRange::Bgr10 { .. } => 1.0,
-        ExtendedRange::Bgra10 { .. } => ratio(rgba[3].clamp(384, 894) as i32 - 384),
-        ExtendedRange::Planes { .. } => (f64::from(rgba[3]) / 255.0) as f32,
-        ExtendedRange::R10X6
-        | ExtendedRange::Rg10X12
-        | ExtendedRange::R10X6Srgb
-        | ExtendedRange::Rg10X12Srgb
-        | ExtendedRange::Rgb10A2Srgb => {
-            panic!("{form:?}: a padded form's tile value is not measured")
-        }
-        ExtendedRange::R16Bfloat | ExtendedRange::Rg16Bfloat | ExtendedRange::Rgba16Bfloat => {
-            panic!("{form:?}: a bfloat form's tile value is not measured")
-        }
-    };
-    [color(rgba[0]), color(rgba[1]), color(rgba[2]), alpha].map(|v| to_half(f64::from(v), true))
+    assert!(
+        !form.srgb() && !form.padded() && !form.bfloat(),
+        "{form:?}: not a linear form"
+    );
+    let color = |c: u32| color_value(c.min(1022));
+    [
+        color(rgba[0]),
+        color(rgba[1]),
+        color(rgba[2]),
+        alpha_value(form, rgba[3]),
+    ]
+    .map(|v| to_half(f64::from(v), false))
 }
 
-/// Every code of every channel of the six forms reads Metal's tile value, whatever the bits Metal
-/// does not read hold: a linear or `BGRA10_XR_sRGB` code above 1022 as 1022, the other `_sRGB`
-/// forms' values clamped to the linear values of codes 0 and 1022, and each lane rounded to `half`,
-/// ties away from zero. The ends are the blend's source ranges.
+/// Every code of every channel of the linear forms reads its tile value, whatever the bits Metal
+/// does not read hold: a code above 1022 as 1022, each lane narrowed to `half`. The ends are the
+/// blend's source range.
 #[test]
-fn every_code_reads_metals_tile_value() {
-    for form in EVERY_FORM {
+fn every_code_reads_its_tile_value() {
+    for form in LINEAR {
         let alpha = |c: u32| match form {
             ExtendedRange::Planes { .. } => c % 256,
             _ => c,
@@ -554,13 +572,8 @@ fn every_code_reads_metals_tile_value() {
             let want = tile_model(form, codes(c));
             assert_eq!(*g, want.map(f32::to_bits), "{form:?} code {c}");
         }
-        // The other `_sRGB` forms' tiles end inside their source range.
-        let (lo, hi) = match form {
-            ExtendedRange::Bgra10 { srgb: true } => SRGB_SOURCE_RANGE,
-            _ if form.srgb() => continue,
-            _ => SOURCE_RANGE,
-        };
         // Codes 0, 1022 and 1023: the source range's ends.
+        let (lo, hi) = SOURCE_RANGE;
         assert_eq!(f32::from_bits(got[0][0]), lo, "{form:?}");
         assert_eq!(f32::from_bits(got[0][1]), hi, "{form:?}");
         assert_eq!(f32::from_bits(got[1][1]), hi, "{form:?}");
@@ -839,16 +852,22 @@ fn every_blend_is_built_but_a_placeholder() {
     ));
 }
 
-/// A padded 10-bit form reads every 16-bit word as the code in its top 10 bits over 1023, correctly
-/// rounded (a `half` result to nearest even), blue 0 and alpha 1, whatever the low 6 bits hold
-/// (every word); and writes the code of the exact product of the value clamped to `[0, 1]` (a
-/// NaN 0) with 1023, rounded to nearest, in its word's top 10 bits, the low 6 bits zero (a grid,
-/// and three `f32`s about every midpoint, each lane).
+/// A padded 10-bit form reads every 16-bit word as `float(c)` of the code `c` in its top 10 bits
+/// times the `f32` nearest `1 / 1023` (a `half` result that value narrowed to nearest even), blue
+/// 0 and alpha 1, whatever the low 6 bits hold (every word; `RG10Unorm_X12_sRGB` reads its codes
+/// so too); and writes `RoundEven(clamp(v, 0, 1) · 1023)` of the `f32` product (a NaN 0) in its
+/// word's top 10 bits, the low 6 bits zero (a grid, and three `f32`s about every midpoint, each
+/// lane). The product misses Metal's correctly rounded quotient at some codes.
 #[test]
-fn padded_forms_read_and_write_metals_codes() {
-    let value = |w: u32| ((w >> 6) as f64 / 1023.0) as f32;
-    for form in [ExtendedRange::R10X6, ExtendedRange::Rg10X12] {
-        let two = form == ExtendedRange::Rg10X12;
+fn padded_forms_read_and_write_the_devices_codes() {
+    let value = |w: u32| (w >> 6) as f32 * reciprocal(1023.0);
+    let mut apart = 0;
+    for form in [
+        ExtendedRange::R10X6,
+        ExtendedRange::Rg10X12,
+        ExtendedRange::Rg10X12Srgb,
+    ] {
+        let two = form != ExtendedRange::R10X6;
         // Every code under four fillings of the low 6 bits, the other lanes' words other codes.
         let lanes: Vec<[u32; 4]> = (0..4096u32)
             .map(|i| {
@@ -856,50 +875,36 @@ fn padded_forms_read_and_write_metals_codes() {
                 [w, w.wrapping_mul(40503) & 0xFFFF, 0xFFFF, 0xFFFF]
             })
             .collect();
-        let got = run(form, Op::Decode, &lanes);
+        let floats = run(form, Op::Decode, &lanes);
         let halves = run(form, Op::DecodeHalf, &lanes);
-        for ((l, g), h) in lanes.iter().zip(&got).zip(&halves) {
+        for ((l, f), h) in lanes.iter().zip(&floats).zip(&halves) {
             let green = if two { value(l[1]) } else { 0.0 };
             let want = [value(l[0]), green, 0.0, 1.0];
-            assert_eq!(*g, want.map(f32::to_bits), "{form:?} words {l:x?}");
-            let want = want.map(|v| to_half(f64::from(v), false));
-            assert_eq!(*h, want.map(f32::to_bits), "{form:?} half, words {l:x?}");
+            assert_eq!(*f, want.map(f32::to_bits), "{form:?} words {l:x?}");
+            let want = want.map(|v| to_half(f64::from(v), false).to_bits());
+            assert_eq!(*h, want, "{form:?} half, words {l:x?}");
+            apart += usize::from(value(l[0]) != (f64::from(l[0] >> 6) / 1023.0) as f32);
         }
-        // Writes: about every midpoint, the codes, and the specials.
-        let mut values = vec![1.0f32];
-        for k in 0..1023u32 {
-            values.push((f64::from(k) / 1023.0) as f32);
-            let mid = ((f64::from(k) + 0.5) / 1023.0) as f32;
-            values.extend((0..5).map(|d| f32::from_bits(mid.to_bits() + d - 2)));
+        if form == ExtendedRange::Rg10X12Srgb {
+            continue;
         }
-        values.extend([
-            f32::NAN,
-            -f32::NAN,
-            f32::INFINITY,
-            f32::NEG_INFINITY,
-            -0.0,
-            -1.0,
-            1.5,
-            2.0,
-            f32::from_bits(1),
-            -f32::from_bits(1),
-        ]);
-        let code = |v: f32| -> u32 {
-            match v.is_nan() {
-                true => 0,
-                false => (f64::from(v.clamp(0.0, 1.0)) * 1023.0).round_ties_even() as u32,
-            }
+        let code = |v: f32| {
+            let v = if v.is_nan() { 0.0 } else { v.clamp(0.0, 1.0) };
+            round_even(f64::from(v * 1023.0)) as u32
         };
-        let lanes: Vec<[u32; 4]> = (0..values.len())
-            .map(|i| {
-                let g = values[(i * 7919) % values.len()];
-                [
-                    values[i].to_bits(),
-                    g.to_bits(),
-                    0.5f32.to_bits(),
-                    1f32.to_bits(),
-                ]
-            })
+        let mut values = vec![f32::NAN, -1.0, 2.0, f32::INFINITY, -0.0, 0.5];
+        for c in 0..1023u32 {
+            let mid = ((f64::from(c) + 0.5) / 1023.0) as f32;
+            values.extend([
+                mid,
+                f32::from_bits(mid.to_bits() + 1),
+                f32::from_bits(mid.to_bits() - 1),
+            ]);
+        }
+        let lanes: Vec<[u32; 4]> = values
+            .iter()
+            .zip(values.iter().rev())
+            .map(|(r, g)| [r.to_bits(), g.to_bits(), 0, 0])
             .collect();
         let got = run(form, Op::Encode, &lanes);
         for (l, g) in lanes.iter().zip(&got) {
@@ -908,246 +913,45 @@ fn padded_forms_read_and_write_metals_codes() {
             assert_eq!(*g, [code(r) << 6, green, 0, 0], "{form:?} values {r}, {gr}");
         }
     }
-}
-
-/// The code Metal's write of `v` stores to a padded `_sRGB` form's channel (the form docs): a NaN
-/// 0, the value clamped to `[0, 1]`; `R10Unorm_X6_sRGB`'s the largest code whose first encode index
-/// is at most the value rounded to `2^-13` (nearest even), `RG10Unorm_X12_sRGB`'s the table's code
-/// of `RG10Unorm_X12`'s.
-fn padded_srgb_code(form: ExtendedRange, v: f32) -> u32 {
-    let v = match v.is_nan() {
-        true => 0.0,
-        false => f64::from(v.clamp(0.0, 1.0)),
-    };
-    match form {
-        ExtendedRange::R10X6Srgb => {
-            let i = (v * 8192.0).round_ties_even() as u16;
-            let codes = R10X6_SRGB_ENCODE_FIRST.partition_point(|&f| f <= i);
-            codes as u32 - 1
-        }
-        _ => u32::from(RG10X12_SRGB_WRITE_CODES[(v * 1023.0).round_ties_even() as usize]),
-    }
-}
-
-/// `R10Unorm_X6_sRGB` reads every 16-bit word as its code's decode step over 8192 (a `half` result
-/// with ties away from zero), `RG10Unorm_X12_sRGB` as `RG10Unorm_X12` does (`c / 1023`, a `half` to
-/// nearest even), blue 0 and alpha 1, whatever the low 6 bits hold; and each writes Metal's code
-/// through its table ([`padded_srgb_code`]) in its word's top 10 bits, the low 6 bits zero: values
-/// about every threshold of `R10Unorm_X6_sRGB`'s codes and every midpoint of the linear codes, the
-/// codes' values, and the specials.
-#[test]
-fn padded_srgb_forms_read_and_write_metals_codes() {
-    let step = |w: u32| f32::from(R10X6_SRGB_DECODE_STEPS[(w >> 6) as usize]) / 8192.0;
-    let linear = |w: u32| ((w >> 6) as f64 / 1023.0) as f32;
-    // Values about every threshold and midpoint, the codes' values, and the specials.
-    let mut values = vec![1.0f32];
-    for k in 0..1024u32 {
-        values.push(step(k << 6));
-        values.push((f64::from(k) / 1023.0) as f32);
-        let mid = ((f64::from(k) + 0.5) / 1023.0) as f32;
-        values.extend((0..5).map(|d| f32::from_bits(mid.to_bits() + d - 2)));
-        let first = f64::from(R10X6_SRGB_ENCODE_FIRST[k as usize]);
-        if first > 0.0 {
-            let edge = ((first - 0.5) / 8192.0) as f32;
-            values.extend((0..5).map(|d| f32::from_bits(edge.to_bits() + d - 2)));
-        }
-    }
-    values.extend([
-        f32::NAN,
-        -f32::NAN,
-        f32::INFINITY,
-        f32::NEG_INFINITY,
-        -0.0,
-        -1.0,
-        1.5,
-        2.0,
-        f32::from_bits(1),
-        -f32::from_bits(1),
-    ]);
-    for form in [ExtendedRange::R10X6Srgb, ExtendedRange::Rg10X12Srgb] {
-        let two = form == ExtendedRange::Rg10X12Srgb;
-        let (red, rounding_away) = match two {
-            false => (step as fn(u32) -> f32, true),
-            true => (linear as fn(u32) -> f32, false),
-        };
-        // Every code under four fillings of the low 6 bits, the other lanes' words other codes.
-        let lanes: Vec<[u32; 4]> = (0..4096u32)
-            .map(|i| {
-                let w = (i & 1023) << 6 | [0, 0x3F, 0x15, 0x2A][(i >> 10) as usize];
-                [w, w.wrapping_mul(40503) & 0xFFFF, 0xFFFF, 0xFFFF]
-            })
-            .collect();
-        let got = run(form, Op::Decode, &lanes);
-        let halves = run(form, Op::DecodeHalf, &lanes);
-        for ((l, g), h) in lanes.iter().zip(&got).zip(&halves) {
-            let green = if two { linear(l[1]) } else { 0.0 };
-            let want = [red(l[0]), green, 0.0, 1.0];
-            assert_eq!(*g, want.map(f32::to_bits), "{form:?} words {l:x?}");
-            let want = [
-                to_half(f64::from(want[0]), rounding_away),
-                to_half(f64::from(green), false),
-                0.0,
-                1.0,
-            ];
-            assert_eq!(*h, want.map(f32::to_bits), "{form:?} half, words {l:x?}");
-        }
-        let lanes: Vec<[u32; 4]> = (0..values.len())
-            .map(|i| {
-                let g = values[(i * 7919) % values.len()];
-                [
-                    values[i].to_bits(),
-                    g.to_bits(),
-                    0.5f32.to_bits(),
-                    1f32.to_bits(),
-                ]
-            })
-            .collect();
-        let got = run(form, Op::Encode, &lanes);
-        for (l, g) in lanes.iter().zip(&got) {
-            let (r, gr) = (f32::from_bits(l[0]), f32::from_bits(l[1]));
-            let green = if two {
-                padded_srgb_code(form, gr) << 6
-            } else {
-                0
-            };
-            let want = [padded_srgb_code(form, r) << 6, green, 0, 0];
-            assert_eq!(*g, want, "{form:?} values {r}, {gr}");
-        }
-    }
-}
-
-/// `a / 3` correctly rounded to `f32` (`a` below 4): the `f64` quotient's neighbours compared
-/// exactly (each `f32` times 3 is exact in `f64`).
-fn third(a: u32) -> f32 {
-    let q = f64::from(a) / 3.0;
-    let y = q as f32;
-    [
-        y,
-        f32::from_bits(y.to_bits().wrapping_sub(1)),
-        f32::from_bits(y.to_bits() + 1),
-    ]
-    .into_iter()
-    .min_by(|x, z| {
-        let d = |v: &f32| (f64::from(*v) * 3.0 - f64::from(a)).abs();
-        d(x).total_cmp(&d(z))
-    })
-    .expect("a candidate")
-}
-
-/// `RGB10A2Unorm_sRGB` (an Apple M3 Max under macOS 27.0.1, our probe: every code of each
-/// channel read, 16,385 values and the specials written in each) reads each color field's code as
-/// `R10Unorm_X6_sRGB`'s red (its decode step over 8192, a `half` with ties away from zero) and
-/// alpha's 2-bit code `a` as `a / 3`, and writes each color channel as `R10Unorm_X6_sRGB`'s red
-/// and alpha as the exact product with 3 of the value clamped to `[0, 1]` (a NaN 0), rounded to
-/// nearest, into one word: red from bit 0, green 10, blue 20, alpha 30. Its clear texels and load
-/// codes follow the same rules.
-#[test]
-fn rgb10a2_srgb_reads_and_writes_metals_codes() {
-    let form = ExtendedRange::Rgb10A2Srgb;
-    let step = |c: u32| f32::from(R10X6_SRGB_DECODE_STEPS[c as usize]) / 8192.0;
-    // The probe's words: red c, green 1023 - c, blue 7c mod 1024, alpha c mod 4.
-    let lanes: Vec<[u32; 4]> = (0..1024u32)
-        .map(|c| {
-            [
-                c | (1023 - c) << 10 | (7 * c % 1024) << 20 | (c % 4) << 30,
-                0,
-                0,
-                0,
-            ]
-        })
-        .collect();
-    let got = run(form, Op::Decode, &lanes);
-    let halves = run(form, Op::DecodeHalf, &lanes);
-    for ((l, g), h) in lanes.iter().zip(&got).zip(&halves) {
-        let w = l[0];
-        let want = [
-            step(w & 1023),
-            step(w >> 10 & 1023),
-            step(w >> 20 & 1023),
-            third(w >> 30),
-        ];
-        assert_eq!(*g, want.map(f32::to_bits), "word {w:08x}");
-        let want = want.map(|v| to_half(f64::from(v), true));
-        assert_eq!(*h, want.map(f32::to_bits), "half, word {w:08x}");
-    }
-    let mut values: Vec<f32> = (0..=16384u32).map(|k| k as f32 / 16384.0).collect();
-    for &first in &R10X6_SRGB_ENCODE_FIRST {
-        let first = f64::from(first);
-        if first > 0.0 {
-            let edge = ((first - 0.5) / 8192.0) as f32;
-            values.extend((0..5).map(|d| f32::from_bits(edge.to_bits() + d - 2)));
-        }
-    }
-    for a in [1.0f64, 2.0] {
-        let mid = ((a - 0.5) / 3.0) as f32;
-        values.extend((0..5).map(|d| f32::from_bits(mid.to_bits() + d - 2)));
-    }
-    values.extend([
-        f32::NAN,
-        -f32::NAN,
-        f32::INFINITY,
-        f32::NEG_INFINITY,
-        -0.0,
-        -1.0,
-        1.5,
-        f32::from_bits(1),
-    ]);
-    let alpha_code = |v: f32| match v.is_nan() {
-        true => 0,
-        false => (f64::from(v.clamp(0.0, 1.0)) * 3.0).round_ties_even() as u32,
-    };
-    let lanes: Vec<[u32; 4]> = (0..values.len())
-        .map(|i| {
-            let v = |k: usize| values[(i * k) % values.len()].to_bits();
-            [v(1), v(7919), v(104_729), v(31)]
-        })
-        .collect();
-    let got = run(form, Op::Encode, &lanes);
-    for (l, g) in lanes.iter().zip(&got) {
-        let v = l.map(f32::from_bits);
-        let code = |c: usize| padded_srgb_code(ExtendedRange::R10X6Srgb, v[c]);
-        let word = code(0) | code(1) << 10 | code(2) << 20 | alpha_code(v[3]) << 30;
-        assert_eq!(*g, [word, 0, 0, 0], "values {v:?}");
-    }
-    // The crate's clear texels agree with the rules (the runtime's clear writes `clear_texel`).
-    let half = |v: f64| crate::float16::f16_bits_to_f32(crate::float16::f32_to_f16_bits(v as f32));
-    for color in [
-        [0.25, 0.5, 0.75, 0.4],
-        [1.0, 0.0, 0.1, 1.0],
-        [-1.0, 2.0, f64::NAN, 0.2],
-    ] {
-        let route = crate::metal::format::ClearRoute::ThroughHalf;
-        let code = |c: usize| padded_srgb_code(ExtendedRange::R10X6Srgb, half(color[c]));
-        let word = code(0) | code(1) << 10 | code(2) << 20 | alpha_code(half(color[3])) << 30;
-        assert_eq!(form.clear_texel(color, route), [word, 0, 0, 0], "{color:?}");
-    }
+    assert!(apart > 0, "the product never misses the quotient");
 }
 
 /// Metal's `float` of bfloat code `c`, as bits (`metal::format::ExtendedRange::R16Bfloat`): the
 /// code shifted up 16, any NaN code the quiet NaN.
 fn bfloat_read(c: u32) -> u32 {
-    match c & 0x7FFF > 0x7F80 {
-        true => 0x7FC0_0000,
-        false => c << 16,
-    }
+    c << 16
 }
 
-/// Metal's code of a kernel's write of the `f32` of bits `b` to a bfloat texture: its top 16 bits,
-/// a NaN `0x7fc0`.
+/// The code of a kernel's write of the `f32` of bits `b` to a bfloat texture: its top 16 bits, a
+/// NaN's with its quiet bit set (Metal writes `0x7fc0`).
 fn bfloat_write(b: u32) -> u32 {
     match b & 0x7FFF_FFFF > 0x7F80_0000 {
-        true => 0x7FC0,
+        true => (b | 0x0040_0000) >> 16,
         false => b >> 16,
     }
 }
 
-/// Every code of each bfloat form in each channel reads Metal's `float` and its `half` (rounded to
-/// nearest even, overflows to the infinities), the channels a form lacks 0 and alpha 1 whatever
-/// their words hold; a write stores Metal's codes: per code its bits and its tie's neighbours,
-/// every eighth `half` widened, and the specials, the components a form lacks zero (an Apple M4:
-/// every code, read and written, in each bfloat format).
+/// The interpreter's device narrowing of the `float` of bits `b` to `half` (`OpQuantizeToF16`:
+/// nearest even, a result below the smallest normal `half` its signed zero), a NaN kept as it is
+/// (`narrow::round_texel`).
+fn device_half(b: u32) -> u32 {
+    let x = f32::from_bits(b);
+    if x.is_nan() {
+        return b;
+    }
+    let h = crate::float16::f32_to_f16_bits(x);
+    let h = if h & 0x7C00 == 0 { h & 0x8000 } else { h };
+    crate::float16::f16_bits_to_f32(h).to_bits()
+}
+
+/// Every code of each bfloat form in each channel reads its `float`, a NaN code's NaN unchanged
+/// (`0x7f81` reads `0x7f810000`, where Metal reads `0x7fc00000`), and its `half` the device's
+/// narrowing of it, the channels a form lacks 0 and alpha 1 whatever their words hold; a write
+/// stores each value's top 16 bits, a NaN's quiet bit set (`0x7f800001` writes `0x7fc0`,
+/// `0x7f810000` writes `0x7fc1`, where Metal writes `0x7fc0`): per code its bits and its tie's
+/// neighbours, every eighth `half` widened, and the specials, the components a form lacks zero.
 #[test]
-fn bfloat_forms_read_and_write_metals_codes() {
+fn bfloat_forms_read_and_write_their_bits() {
     let forms = [
         (ExtendedRange::R16Bfloat, 1usize, 4096u32),
         (ExtendedRange::Rg16Bfloat, 2, 4096),
@@ -1178,11 +982,7 @@ fn bfloat_forms_read_and_write_metals_codes() {
                 (false, _) => 0,
             });
             assert_eq!(*f, want, "{form:?} words {l:x?}");
-            let half = |b: u32| {
-                let h = crate::float16::f32_to_f16_bits(f32::from_bits(b));
-                crate::float16::f16_bits_to_f32(h).to_bits()
-            };
-            assert_eq!(*h, want.map(half), "{form:?} half, words {l:x?}");
+            assert_eq!(*h, want.map(device_half), "{form:?} half, words {l:x?}");
         }
         // Writes: per code its bits and the neighbours of its tie, every eighth `half`, and the
         // specials, `value k` in channel `k % 4` of invocation `k / 4`.
@@ -1199,6 +999,7 @@ fn bfloat_forms_read_and_write_metals_codes() {
             f32::NAN.to_bits(),
             (-f32::NAN).to_bits(),
             0x7F80_0001,
+            0x7F81_0000,
             0xFFFF_FFFF,
             f32::INFINITY.to_bits(),
             f32::NEG_INFINITY.to_bits(),
@@ -1248,9 +1049,10 @@ fn fnv(bytes: &[u8]) -> u64 {
 
 /// A fragment function's `float` and `half` outputs to a bfloat attachment store Metal's codes:
 /// a `float` rounded to `half` toward zero (65504 at most) or, at `NearestEven`, to nearest even,
-/// then the bfloat code nearest, ties to even, a NaN `0x7fc0`; every `float` around each code's
-/// tie and every `half` code against Metal's digests, the narrower forms keeping their lanes, and
-/// named answers.
+/// then the bfloat code nearest, ties to even; a NaN stays a NaN code (`narrow::round`'s quiet
+/// bit), where Metal stores `0x7fc0`. Every `float` around each code's tie and every `half` code
+/// against Metal's digests with each NaN code read as Metal's, the narrower forms keeping their
+/// lanes, and named answers.
 #[test]
 fn bfloat_attachments_store_metals_codes() {
     let digest = |got: &[[u32; 4]]| {
@@ -1258,7 +1060,11 @@ fn bfloat_attachments_store_metals_codes() {
         let bytes: Vec<u8> = got
             .iter()
             .flatten()
-            .flat_map(|&c| (c as u16).to_le_bytes())
+            .map(|&c| match c & 0x7FFF > 0x7F80 {
+                true => 0x7FC0,
+                false => c,
+            })
+            .flat_map(|c| (c as u16).to_le_bytes())
             .collect();
         fnv(&bytes)
     };
@@ -1316,7 +1122,10 @@ fn bfloat_attachments_store_metals_codes() {
         );
         for (&(b, default, nearest), g) in named.iter().zip(&got) {
             let want = if nearest_even { nearest } else { default };
-            assert_eq!(g[0], want, "{b:#x}, nearest even {nearest_even}");
+            match want == 0x7FC0 {
+                true => assert!(g[0] & 0x7FFF > 0x7F80, "{b:#x}: {:#x}", g[0]),
+                false => assert_eq!(g[0], want, "{b:#x}, nearest even {nearest_even}"),
+            }
         }
     }
 }

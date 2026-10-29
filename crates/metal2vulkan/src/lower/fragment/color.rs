@@ -426,10 +426,7 @@ pub(super) fn value(
     }
     let texel = input_texel(cx, fb, c.color)?;
     let texel = match c.extended {
-        Some(form) => {
-            let table = crate::lower::texture::extended_table(cx, form)?;
-            extended_range::tile_value(fb, form, texel, table)?
-        }
+        Some(form) => extended_range::tile_value(fb, form, texel)?,
         // The image's red, Metal's alpha: `(0, 0, 0, r)`.
         None if c.alpha_red => alpha_in_red(fb, texel)?,
         None => texel,

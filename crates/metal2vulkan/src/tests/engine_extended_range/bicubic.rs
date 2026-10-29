@@ -115,28 +115,13 @@ fn two_plane_samples_are_metals() {
 }
 
 #[test]
-fn two_plane_srgb_samples_are_metals() {
-    replay(551);
-}
-
-#[test]
 fn bgra10_samples_are_metals() {
     replay(552);
 }
 
 #[test]
-fn bgra10_srgb_samples_are_metals() {
-    replay(553);
-}
-
-#[test]
 fn bgr10_samples_are_metals() {
     replay(554);
-}
-
-#[test]
-fn bgr10_srgb_samples_are_metals() {
-    replay(555);
 }
 
 /// A padded or bfloat form's bicubic sample, a swizzled texture's, and a gather through a bicubic

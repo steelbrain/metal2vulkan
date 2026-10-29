@@ -25,8 +25,9 @@
 //! of a format the device holds as its UNORM twin decodes the codes by the device's transfer (a slot
 //! of a format the device samples decodes on the device too, the same words); every other
 //! difference fails. The extended-range
-//! `_sRGB` twins, whose decode needs the module's tables, are not read so yet: their heap dispatch
-//! is printed on a `HEAP-READ-UNCOVERED` line, refused or not, and not counted. A texture the
+//! `_sRGB` twins, which a heap does not hold (`ExtendedRange::HEAP_READ`), are not read so yet:
+//! their heap dispatch is printed on a `HEAP-READ-UNCOVERED` line, refused or not, and not
+//! counted. A texture the
 //! runtime does not make (the padded formats', whose plain creation is refused) is printed on a
 //! `HEAP-READ-REFUSED` line and counted apart.
 //!

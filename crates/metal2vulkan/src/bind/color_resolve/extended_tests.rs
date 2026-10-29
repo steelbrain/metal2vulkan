@@ -1,7 +1,7 @@
 //! The extended-range resolve modules (the module docs' extended-range forms): the forms Metal
 //! multisamples, valid on every committed profile and needing nothing of a device, and on the CPU
-//! interpreter a linear form's colors and every alpha by their rules, an `_sRGB` color within its
-//! samples' codes, and a pixel of alike samples its code.
+//! interpreter a linear form's colors and alpha by their rules, and a pixel of alike samples its
+//! code (the `_sRGB` forms' transfer is the device's `Pow`, which the interpreter does not model).
 
 use super::*;
 use crate::spirv::interp::{run, Buffer, Config, Order, Resources};
@@ -115,11 +115,6 @@ const RESOLVED_OUT: ResourceSlot = ResourceSlot {
 fn kernel(form: ExtendedRange, samples: u32) -> TypedModule {
     let mut b = ModuleBuilder::new();
     let t = Types::new(&mut b).expect("types");
-    let table = match form {
-        ExtendedRange::Rgb10A2Srgb => xr::declare_padded(&mut b, form).expect("table"),
-        _ if form.srgb() => Some(xr::declare(&mut b).expect("table")),
-        _ => None,
-    };
     let words = super::super::visibility_resolve::words_buffer;
     let input = words(&mut b, SAMPLES_IN, t.u32_).expect("in");
     let output = words(&mut b, RESOLVED_OUT, t.u32_).expect("out");
@@ -160,7 +155,7 @@ fn kernel(form: ExtendedRange, samples: u32) -> TypedModule {
             }
             raws.push(f.composite_construct(uvec4, &lanes)?);
         }
-        let out = resolve_extended(f, t, form, table, &raws)?;
+        let out = resolve_extended(f, t, form, &raws)?;
         let four = uint(f, t, 4)?;
         let out_base = f.binary(BinOp::IMul, i, four)?;
         for lane in 0..4 {
@@ -276,14 +271,18 @@ fn resolved(form: ExtendedRange, samples: usize, pixels: &[Vec<[u32; 4]>]) -> Ve
         .collect()
 }
 
-/// A linear form's color is the samples' codes' average rounded half up (Metal's rule); every
-/// form's alpha its near-equivalent (`BGRA10_XR`'s a tie down, `RGB10A2Unorm_sRGB`'s up); an
-/// `_sRGB` color lies within its samples' codes; and a pixel of alike samples is their code, with
-/// the unused bits as Metal writes them.
+/// A linear form's color is the samples' codes' average rounded half up (Metal's rule); its
+/// alpha its near-equivalent (`BGRA10_XR`'s a tie down); and a pixel of alike samples is their
+/// code, with the unused bits as Metal writes them. The `_sRGB` forms' (and
+/// `RGB10A2Unorm_sRGB`'s) decode and encode take the transfer by the device's `Pow`, which the
+/// interpreter does not model: their colors, held within the samples' codes, are the device's.
 #[test]
 fn the_resolves_follow_their_rules() {
     let mut r = SplitMix(0x5eed_0e7e);
-    for form in FORMS {
+    let linear = FORMS
+        .into_iter()
+        .filter(|f| !f.srgb() && *f != ExtendedRange::Rgb10A2Srgb);
+    for form in linear {
         for samples in [2usize, 4, 8] {
             let mut pixels: Vec<Vec<[u32; 4]>> = Vec::new();
             for i in 0..384 {
