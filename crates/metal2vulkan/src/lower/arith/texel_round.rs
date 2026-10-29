@@ -11,10 +11,6 @@
 //!   on a format's grid is (the 8- and 16-bit normalized formats' bicubic sums). [`ratio_to_half`]
 //!   rounds once: rounding the `f32` quotient to `half` instead differs from it at `±65455 /
 //!   65535`, `±65519 / 65535`, and `±32759 / 32767`.
-//! - [`ratio_by_255_to_f32`]: `m / 255` correctly rounded to `f32` by one multiplication and an
-//!   exact integer correction, the extended-range grids' quotient (`255 · 2^k`).
-//! - [`normal_half_bits`]: a non-negative `f32` rounded to a normal `half`, to nearest even or
-//!   with ties away, by an addition and a mask.
 //! - [`f32_to_half_from_even`]: toward zero saturating or ties away, derived from an exact
 //!   rounding to nearest even.
 //! - [`grid_value`]: a signed step's value `n / D` on a normalized format's grid exactly, the
@@ -336,84 +332,6 @@ pub fn ratio_to_f32(fb: &mut FunctionBuilder<'_>, u: Form, k: Value, d: Value) -
     let bits = fb.select(zero, z, bits)?;
     let ft = ty(fb, floats(u))?;
     fb.convert(ConvOp::Bitcast, bits, ft)
-}
-
-/// `m / 255` correctly rounded to `f32` (nearest even), for `u32` lanes (form `u`) with
-/// `m < 2^24`, in a third of [`ratio_to_f32`]'s operations: the product `q₀` of `m` (exact as an
-/// `f32`) and `1/255` rounded to `f32`, each of its two roundings within `2^-24` of the value, so
-/// `q₀` lies within two units in the last place of the quotient, then corrected by the exact
-/// residual. With `q₀ = Q · 2^-s` (`Q` its significand, `2^23 <= Q < 2^24`), `m · 2^s` is
-/// within `2 · 255` of `255 Q`, below `2^32`, so the residual `R = m · 2^s - 255 Q` is exact in
-/// one word, and the quotient's significand is `Q + R / 255`: it rounds to `Q + k`, `k` the
-/// integer nearest `R / 255` (never a tie: `m / 255` is dyadic only where it is an integer), the
-/// `f32` whose bits are `q₀`'s plus `k`. The one quotient that crosses a binade, a power of two
-/// (`m = 255 · 2^j`), does so from just below it by `k = 1`, which the bits' carry gives. `m = 0`
-/// is `+0`. The product takes `NoContraction`.
-pub fn ratio_by_255_to_f32(fb: &mut FunctionBuilder<'_>, u: Form, m: Value) -> BResult<Value> {
-    let c = |fb: &mut FunctionBuilder<'_>, v: u64| splat(fb, u, v);
-    let f = floats(u);
-    let ft = ty(fb, f)?;
-    let x = fb.convert(ConvOp::ConvertUToF, m, ft)?;
-    let r = splat(fb, f, u64::from((1.0f32 / 255.0).to_bits()))?;
-    let q0 = fb.binary_no_contraction(BinOp::FMul, x, r)?;
-    let ut = ty(fb, u)?;
-    let bits = fb.convert(ConvOp::Bitcast, q0, ut)?;
-    // q₀ = Q · 2^(e - 150) for its biased exponent e.
-    let (k23, k150, k31) = (c(fb, 23)?, c(fb, 150)?, c(fb, 31)?);
-    let e = bin(fb, BinOp::ShiftRightLogical, bits, k23)?;
-    let (low, hidden) = (c(fb, 0x7F_FFFF)?, c(fb, 0x80_0000)?);
-    let q = bin(fb, BinOp::BitwiseAnd, bits, low)?;
-    let q = bin(fb, BinOp::BitwiseOr, q, hidden)?;
-    let s = bin(fb, BinOp::ISub, k150, e)?;
-    // Zero's shift is past the word; its lane is +0 below.
-    let s = fb.glsl(GlslOp::UMin, &[s, k31])?;
-    let scaled = bin(fb, BinOp::ShiftLeftLogical, m, s)?;
-    let k255 = c(fb, 255)?;
-    let q255 = bin(fb, BinOp::IMul, q, k255)?;
-    let residual = bin(fb, BinOp::ISub, scaled, q255)?;
-    // k = [R >= 128] + [R >= 383] - [R <= -128] - [R <= -383], R signed.
-    let (z, one) = (c(fb, 0)?, c(fb, 1)?);
-    let mut bits = bits;
-    for (op, bound, add) in [
-        (BinOp::SGreaterThanEqual, 128i32, true),
-        (BinOp::SGreaterThanEqual, 383, true),
-        (BinOp::SLessThanEqual, -128, false),
-        (BinOp::SLessThanEqual, -383, false),
-    ] {
-        let b = c(fb, u64::from(bound as u32))?;
-        let past = bin(fb, op, residual, b)?;
-        let step = fb.select(past, one, z)?;
-        let op = if add { BinOp::IAdd } else { BinOp::ISub };
-        bits = bin(fb, op, bits, step)?;
-    }
-    let zero = bin(fb, BinOp::IEqual, m, z)?;
-    let bits = fb.select(zero, z, bits)?;
-    fb.convert(ConvOp::Bitcast, bits, ft)
-}
-
-/// The `half` nearest the non-negative `f32` whose bits are `bits` (`u32` lanes of form `u`),
-/// held as its `f32` bits, for a value that rounds to a normal `half` or is zero: to nearest even,
-/// or with ties away from zero on the lanes where `away` (`bool` lanes) holds. The significand
-/// keeps its top ten fraction bits: half a `half` unit (`2^12` in the `f32` bits), less one for an
-/// even kept bit, is added before the low thirteen bits are cleared (only half a unit, for ties
-/// away), so a carry rounds into the exponent. Not for a value whose `half` is a denormal or past
-/// the largest finite `half` ([`f32_to_half`]).
-pub fn normal_half_bits(
-    fb: &mut FunctionBuilder<'_>,
-    u: Form,
-    bits: Value,
-    away: Value,
-) -> BResult<Value> {
-    let c = |fb: &mut FunctionBuilder<'_>, v: u64| splat(fb, u, v);
-    let (k13, one) = (c(fb, 13)?, c(fb, 1)?);
-    let kept = bin(fb, BinOp::ShiftRightLogical, bits, k13)?;
-    let odd = bin(fb, BinOp::BitwiseAnd, kept, one)?;
-    let (below, tie) = (c(fb, 0xFFF)?, c(fb, 0x1000)?);
-    let even = bin(fb, BinOp::IAdd, below, odd)?;
-    let bias = fb.select(away, tie, even)?;
-    let up = bin(fb, BinOp::IAdd, bits, bias)?;
-    let mask = c(fb, 0xFFFF_E000)?;
-    bin(fb, BinOp::BitwiseAnd, up, mask)
 }
 
 /// `k / d` correctly rounded to `half` (nearest even), held as its `f32`, for `u32` lanes (form

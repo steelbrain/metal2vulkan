@@ -250,18 +250,14 @@ impl Shape {
     }
 
     /// [`Shape::scales_finitely`] beside `emulations` of Metal's anisotropic filter, each of whose
-    /// spacings takes two `Ldexp`s and one `Exp2` of its own (`anisotropic::exp2_chord` and
-    /// `anisotropic::scale`).
+    /// spacings takes two `Exp2`s of its own (the log ratio's power and the level's scale,
+    /// `anisotropic::footprint`) and no `Ldexp`.
     fn scales_finitely_beside(&self, n: usize, exp2: usize, emulations: usize, what: &str) {
         assert_eq!(self.glsl_count(GLSL_FREXP_STRUCT), n, "{what}: Frexp");
-        assert_eq!(
-            self.glsl_count(GLSL_LDEXP),
-            2 * n + 2 * emulations,
-            "{what}: Ldexp"
-        );
+        assert_eq!(self.glsl_count(GLSL_LDEXP), 2 * n, "{what}: Ldexp");
         assert_eq!(
             self.glsl_count(GLSL_EXP2),
-            n + exp2 + emulations,
+            n + exp2 + 2 * emulations,
             "{what}: Exp2"
         );
         let clamps = self.constant_clamps();
@@ -280,13 +276,16 @@ impl Shape {
             );
         }
         for (_, bounds) in clamps {
+            // An emulation's level is held in `[0, last level]`, its upper bound queried.
+            let level = emulations > 0 && bounds == (Some(0.0), None);
             assert!(
-                [
-                    (Some(-150.0), Some(126.0)),
-                    (Some(-64.0), Some(64.0)),
-                    (Some(-32.0), Some(31.984375)),
-                ]
-                .contains(&bounds),
+                level
+                    || [
+                        (Some(-150.0), Some(126.0)),
+                        (Some(-64.0), Some(64.0)),
+                        (Some(-32.0), Some(31.984375)),
+                    ]
+                    .contains(&bounds),
                 "{what}: FClamp bounds {bounds:?}"
             );
         }
@@ -482,7 +481,7 @@ fn a_base_level_takes_the_whole_bias() {
 const ANISOTROPIC_WORDS: u64 = (SAMPLER_WORDS & !(0xf << 20)) | (15 << 20);
 
 /// The taps Metal's anisotropic filter, emulated, holds in its code, whatever its degree: tap 0
-/// and its loop's one (two explicit-level samples each under a linear mip filter).
+/// and its loop's one (one explicit-level sample each, the device blending the levels).
 const WRITTEN_TAPS: u32 = 2;
 
 /// Through an anisotropic constexpr sampler of a 2D texture with a bias of its own, Metal's bias
@@ -491,8 +490,8 @@ const WRITTEN_TAPS: u32 = 2;
 /// alone (the coordinate's derivatives, their lengths in texels of the level-0 size, and `Exp2` of
 /// Metal's reading of the bias), with `PrecisionNote::GradFromBias`. With `samplerAnisotropy` the
 /// device's anisotropic filter samples at them; without it they are the footprint of Metal's
-/// anisotropic filter, emulated: its taps' samples at explicit levels, two a tap under the
-/// sampler's linear mip filter, `AnisotropicFilter` recorded.
+/// anisotropic filter, emulated: its taps' samples at explicit levels, one a tap (the device
+/// blending the sampler's linear mip filter's two levels), `AnisotropicFilter` recorded.
 #[test]
 fn an_anisotropic_sampler_takes_the_axis_gradients() {
     for stem in ["amd-rdna3-radv", "lavapipe"] {
@@ -523,7 +522,7 @@ fn an_anisotropic_sampler_takes_the_axis_gradients() {
                 assert_eq!(uses("sampler.sample_bias_gradients"), 1, "{what}");
                 assert_eq!(s.count(OP_IMAGE_SAMPLE_IMPLICIT_LOD), 0, "{what}");
                 let explicit = match withheld {
-                    true => 2 * WRITTEN_TAPS as usize,
+                    true => WRITTEN_TAPS as usize,
                     false => 1,
                 };
                 assert_eq!(s.count(OP_IMAGE_SAMPLE_EXPLICIT_LOD), explicit, "{what}");

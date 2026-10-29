@@ -964,12 +964,10 @@ pub(crate) fn srgb_texel(
 }
 
 /// Texel `x` of codes (a `vec4` of `f32`, `c / 255` as in [`srgb_texel`]) of an 8-bit sRGB
-/// texture held as its UNORM twin, as a bicubic filter's tap on the grids of
-/// `BicubicTexels::SRGB`: each color lane the device's decode of its code
-/// (`pack::srgb_decode_texel`), which the exact routines read on the grid `1/4095`
-/// (`RoundEven(x · 4095)`, the step nearest the device's value), alpha's `c / 255` as it is (`16 c`
-/// on its grid). A border color the filter substitutes (each lane 0 or 1) reads the same either
-/// way.
+/// texture held as its UNORM twin, as a bicubic filter's tap (`BicubicTexels::SRGB`): each color
+/// lane the device's decode of its code (`pack::srgb_decode_texel`), which the filter sums as it
+/// is, alpha's `c / 255` as it is. A border color the filter substitutes (each lane 0 or 1) reads
+/// the same either way.
 pub(crate) fn srgb_raw_tap(fb: &mut FunctionBuilder<'_>, x: SValue) -> BResult<SValue> {
     crate::lower::arith::pack::srgb_decode_texel(fb, x, SRGB_TEXEL)
 }

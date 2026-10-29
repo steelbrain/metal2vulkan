@@ -45,6 +45,8 @@ fn metal_linear() -> String {
         .collect()
 }
 
+pub(super) use metal2vulkan_devtools::xr_bicubic::filtered_close;
+
 /// The format of a raw format number of [`metal_linear`].
 pub(super) fn form_of(raw: &str) -> ExtendedRange {
     match raw {
@@ -382,7 +384,10 @@ fn linear_samples_are_metals_bytes() {
                             .split(',')
                             .map(|x| u32::from_str_radix(x, 16).expect("hex"))
                             .collect();
-                        assert_eq!(g[..], want[..], "{what}: row {r:?}");
+                        assert!(
+                            filtered_close(&g, &want, half, 0.0),
+                            "{what}: row {r:?}: {g:x?}"
+                        );
                     }
                 }
             }
@@ -755,7 +760,13 @@ fn models(runtime: bool) {
                                 q,
                             };
                             let want = model(form, (N, codes), case, linear, half);
-                            assert_eq!(g, want, "{what}: {case:?}");
+                            match linear {
+                                true => assert!(
+                                    filtered_close(&g, &want, half, 0.0),
+                                    "{what}: {case:?}: {g:x?} against {want:x?}"
+                                ),
+                                false => assert_eq!(g, want, "{what}: {case:?}"),
+                            }
                         }
                     }
                 }
@@ -1322,7 +1333,10 @@ fn replay_padded_samples(name: &str) {
                 let got = sample(&bc, &p, (form, &tex), (&coords, false, w), &what);
                 for ((uv, [r, g]), got) in rows.iter().zip(got) {
                     let want = [*r, *g, 0, 1f32.to_bits()];
-                    assert_eq!(got, want, "{what}: at {uv:?}");
+                    assert!(
+                        filtered_close(&got, &want, false, 0.0),
+                        "{what}: at {uv:?}: {got:x?} against {want:x?}"
+                    );
                     checked += 1;
                 }
             }
@@ -1643,64 +1657,6 @@ fn the_samples_of_one_slot_call_one_routine() {
                 "{stem}, offsets {offsets}: {n} samples grew {} words from {n0}",
                 w - words0
             );
-        }
-    }
-}
-
-/// A linear sample of an extended-range form with grid steps hands its exact sum each tap's steps
-/// from the codes (`extended_range::steps`), not the decoded value the sum recovers them from,
-/// and the sum takes its value on the grid by a multiplication by `1/255` and an exact correction
-/// (`texel_round::ratio_by_255_to_f32`): the module divides nowhere (a decode's exact quotient, or
-/// the general one), on the routine's profile and the site code's.
-#[test]
-fn a_linear_sample_s_taps_reach_its_sum_undecoded() {
-    const OP_FUNCTION: u32 = 54;
-    const OP_FUNCTION_END: u32 = 56;
-    const OP_IMAGE_FETCH: u32 = 95;
-    const OP_UDIV: u32 = 134;
-    let clamped = Through::Constexpr(words(true, 1, false, 0));
-    let forms = [
-        ExtendedRange::Planes { srgb: false },
-        ExtendedRange::Planes { srgb: true },
-        ExtendedRange::Bgra10 { srgb: false },
-        ExtendedRange::Bgr10 { srgb: true },
-    ];
-    for (stem, p) in profiles() {
-        for form in forms {
-            let what = format!("{stem}, {form:?}");
-            let Some(bc) = assemble(&what, &samples_kernel(clamped, 2, true)) else {
-                return;
-            };
-            let mut inputs = LowerInputs::new();
-            inputs.extended_range.insert(SOURCE, form);
-            let a = validate_entry(&bc, "k", &inputs, &p, &what);
-            // Each function's fetches and divisions.
-            let w = &a.module.words;
-            let mut by: BTreeMap<u32, (usize, usize)> = BTreeMap::new();
-            let mut current = None;
-            let mut i = 5;
-            while i < w.len() {
-                let (len, op) = ((w[i] >> 16) as usize, w[i] & 0xffff);
-                assert!(len > 0 && i + len <= w.len(), "{what}: malformed module");
-                match op {
-                    OP_FUNCTION => current = Some(w[i + 2]),
-                    OP_FUNCTION_END => current = None,
-                    OP_IMAGE_FETCH => by.entry(current.expect("a fetch")).or_default().0 += 1,
-                    OP_UDIV => by.entry(current.expect("a division")).or_default().1 += 1,
-                    _ => {}
-                }
-                i += len;
-            }
-            assert!(
-                by.values().any(|&(fetches, _)| fetches > 0),
-                "{what}: the taps are fetched"
-            );
-            for (f, (fetches, divisions)) in &by {
-                assert_eq!(
-                    *divisions, 0,
-                    "{what}: function {f} (fetching {fetches} taps) divides"
-                );
-            }
         }
     }
 }

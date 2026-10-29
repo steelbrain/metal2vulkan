@@ -25,7 +25,7 @@ use crate::air_library::AirLibrary;
 use metal2vulkan::bind::SamplerDescriptor;
 use metal2vulkan::metal::{PixelFormat, SamplerAddressMode, SamplerMinMagFilter, TextureUsage};
 use metal2vulkan::pipeline::{ComputePipelineDescriptor, StageSource};
-use metal2vulkan_devtools::{engine_dir, llvm_assemble};
+use metal2vulkan_devtools::{engine_dir, llvm_assemble, xr_bicubic};
 use metal2vulkan_runtime::{
     Buffer, CommandBufferStatus, CommandQueue, ComputePipelineState, Device, PipelineOptions,
     Region, ResourceOptions, SamplerState, Size, Texture, TextureDescriptor,
@@ -225,7 +225,9 @@ fn metal_s_samples_cover_every_format_and_result() {
 }
 
 /// Each of Metal's linear samples of each extended-range format, through the runtime sampler
-/// and through the constexpr one, with a `float` and a `half` result, is Metal's bit for bit.
+/// and through the constexpr one, with a `float` and a `half` result, is Metal's within the
+/// device's filter arithmetic (`bicubic-filter-arithmetic`, `xr_bicubic::filtered_close`): the
+/// decoded taps blended by the device's `FMix`, where Metal sums them exactly on the format's grid.
 #[test]
 fn linear_samples_of_extended_range_textures_are_metal_s() {
     on_device(|device, _| {
@@ -262,7 +264,7 @@ fn linear_samples_of_extended_range_textures_are_metal_s() {
                     );
                     for (k, (s, g)) in rows.iter().zip(got).enumerate() {
                         checked += 1;
-                        if g != s.out {
+                        if !xr_bicubic::filtered_close(&g, &s.out, half, 0.0) {
                             wrong.push(format!(
                                 "{name} {raw} sample {k} kx {} ky {} taps {:?}: {g:x?}, Metal {:x?}",
                                 s.kx, s.ky, s.taps, s.out
@@ -329,7 +331,8 @@ fn coordinate_buffer(device: &Device, at: impl Iterator<Item = (f32, f32)>) -> B
 /// Each extended-range format's sample through a runtime sampler stating `MirrorClampToEdge` on
 /// `s` and `t` is the clamp-to-edge sampler's at the reflected position (module docs), nearest
 /// and linear, normalized and pixel coordinates, with a `float` and a `half` result, at 64
-/// positions within three sizes either side of the 8 x 4 texture.
+/// positions within three sizes either side of the 8 x 4 texture: a linear one within the
+/// device's `FMix` of the reflected fraction (`xr_bicubic::filtered_close`).
 #[test]
 fn mirror_clamped_axes_sample_as_metal_addresses_them() {
     on_device(|device, _| {
@@ -397,7 +400,7 @@ fn mirror_clamped_axes_sample_as_metal_addresses_them() {
                     );
                     for (k, (g, w)) in got.iter().zip(&want).enumerate() {
                         checked += 1;
-                        if g != w {
+                        if !xr_bicubic::filtered_close(g, w, half, 0.0) {
                             wrong.push(format!(
                                 "{raw} half {half} linear {linear} pixel {pixel} at {:?}: {g:x?}, clamp-to-edge at the reflection {w:x?}",
                                 positions[k]

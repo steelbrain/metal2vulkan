@@ -87,8 +87,6 @@ fn choices() -> Vec<Choice> {
 /// Where a precision note stands in the ledger.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Ledger {
-    /// The default's form where the accurate one is not built yet: a row of the first table.
-    NotBuilt,
     /// A device gap, no speed choice: a row of the second table.
     DeviceGap,
     /// None of these: docs/API.md section 9 states it.
@@ -110,8 +108,8 @@ macro_rules! notes {
 
 fn notes() -> Vec<(&'static str, Ledger)> {
     notes! {
-        NotBuilt: [BicubicFilterArithmetic],
         DeviceGap: [
+            BicubicFilterArithmetic,
             ExtendedRangeBlendSource,
             ExtendedRangeFloatBlendSource,
             NativeTranscendentals,

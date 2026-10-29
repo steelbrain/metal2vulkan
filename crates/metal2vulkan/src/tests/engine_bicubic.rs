@@ -25,7 +25,7 @@ use crate::device::profile::{DeviceProfile, FloatFunctions};
 use crate::device::DevicePolicy;
 use crate::error::{Error, Feature, Needs, Unsupported};
 use crate::lower::select::Plan;
-use crate::metal::bicubic::{texels, weights, BicubicTexels};
+use crate::metal::bicubic::{texels, BicubicTexels};
 use crate::metal::PixelFormat;
 use crate::pipeline::interface::PushLoc;
 use crate::pipeline::sym::{
@@ -464,12 +464,8 @@ fn split(x: f64) -> (i64, f64) {
     (q >> 8, (q & 255) as f64 / 256.0)
 }
 
-/// Metal's weights at fraction `f` (a multiple of 1/256).
-fn metal_weights(f: f64) -> [f64; 4] {
-    weights((f * 256.0) as u32).map(|w| f64::from(w) / 65536.0)
-}
-
-/// The code scale `2^b - 1` (`2^(b-1) - 1` signed) of an `EXACT` format of `class`.
+/// The code scale `2^b - 1` (`2^(b-1) - 1` signed) of an 8- or 16-bit normalized format of
+/// `class`, whose texels are codes.
 fn code_scale(class: BicubicTexels) -> Option<f64> {
     if class.0 & BicubicTexels::EXACT == 0 {
         return None;
@@ -484,31 +480,15 @@ fn code_scale(class: BicubicTexels) -> Option<f64> {
     })
 }
 
-/// Metal's result for an `EXACT` format of `class`: the codes `c` of the taps `t` (the signed least
-/// code reading as the one above it), the exact sum `Σ c g wx wy` on the grid `D = g · scale` (`g`
-/// 16 for an 8-bit format, else 1) in units of `2^-32`, rounded half up, clamped, and `n / D`
-/// correctly rounded to `f32`.
-fn exact_sum(class: BicubicTexels, taps: &[([f64; 4], i64)]) -> [f64; 4] {
-    let scale = code_scale(class).expect("an EXACT format");
-    let g = if class.0 & BicubicTexels::WIDE16 != 0 {
-        1
-    } else {
-        16
-    };
-    let d = g * scale as i64;
-    let lo = if class.0 & BicubicTexels::SNORM != 0 {
-        -d
-    } else {
-        0
-    };
-    std::array::from_fn(|c| {
-        let s: i64 = taps
-            .iter()
-            .map(|(t, w)| (t[c] * scale).round() as i64 * g * w)
-            .sum();
-        let n = ((s + (1 << 31)) >> 32).clamp(lo, d);
-        f64::from((n as f64 / d as f64) as f32)
-    })
+/// The Catmull-Rom weights (`a = -1/2`) at fraction `f`.
+fn catmull_rom(f: f64) -> [f64; 4] {
+    let (f2, f3) = (f * f, f * f * f);
+    [
+        -0.5 * f3 + f2 - 0.5 * f,
+        1.5 * f3 - 2.5 * f2 + 1.0,
+        -1.5 * f3 + 2.0 * f2 + 0.5 * f,
+        0.5 * f3 - 0.5 * f2,
+    ]
 }
 
 /// The border color `b` through the channels of `class`.
@@ -564,19 +544,8 @@ fn reference(
     let (wx, wy) = if linear {
         ([0.0, 1.0 - fx, fx, 0.0], [0.0, 1.0 - fy, fy, 0.0])
     } else {
-        (metal_weights(fx), metal_weights(fy))
+        (catmull_rom(fx), catmull_rom(fy))
     };
-    if class.0 & BicubicTexels::EXACT != 0 {
-        let (ix, iy) = (weights((fx * 256.0) as u32), weights((fy * 256.0) as u32));
-        let mut taps = Vec::with_capacity(16);
-        for (b, wyb) in iy.iter().enumerate() {
-            for (a, wxa) in ix.iter().enumerate() {
-                let t = tap(tex, class, address, i - 1 + a as i64, j - 1 + b as i64, k);
-                taps.push((t, i64::from(*wxa) * i64::from(*wyb)));
-            }
-        }
-        return exact_sum(class, &taps);
-    }
     let mut r = [0.0; 4];
     for (b, wyb) in wy.iter().enumerate() {
         for (a, wxa) in wx.iter().enumerate() {
@@ -600,15 +569,12 @@ fn reference(
     })
 }
 
-/// `got` is `want` exactly for an `EXACT` format, else within the emulation's `f32` arithmetic:
-/// `2^-18` relative to the larger of 1 and `|want|`, and for a `half` format also one `half` ulp
-/// of `want` (the sum's rounding near a tie).
-fn close(got: f32, want: f64, class: BicubicTexels) -> bool {
-    if class.0 & BicubicTexels::EXACT != 0 {
-        return f64::from(got) == want;
-    }
+/// `got` is `want` within the device's `f32` arithmetic of the sum (sixteen products and the
+/// weights from the fraction): `2^-18` relative to the larger of 1 and `|want|`, and for a `half`
+/// result also one `half` ulp of `want` (the device's narrowing).
+fn close(got: f32, want: f64, half: bool) -> bool {
     let arith = want.abs().max(1.0) * 2f64.powi(-18);
-    let tol = if class.0 & BicubicTexels::HALF != 0 {
+    let tol = if half {
         arith.max(half_ulp(want))
     } else {
         arith
@@ -828,7 +794,7 @@ fn bicubic_samples_match_the_reference_filter() {
                         want[c]
                     };
                     assert!(
-                        close(out[lane][c], want_c, class),
+                        close(out[lane][c], want_c, class.0 & BicubicTexels::HALF != 0),
                         "{name} {pf:?} lane {lane} ({x}, {y}) channel {c}: {} vs {want_c}",
                         out[lane][c]
                     );
@@ -921,7 +887,7 @@ fn a_1d_texture_an_array_layer_and_an_offset() {
             };
             for c in 0..4 {
                 assert!(
-                    close(out[lane][c], want[c], class),
+                    close(out[lane][c], want[c], class.0 & BicubicTexels::HALF != 0),
                     "{name} lane {lane} ({x}, {y}) channel {c}: {} vs {}",
                     out[lane][c],
                     want[c]
@@ -973,7 +939,7 @@ fn an_offset_on_a_repeating_axis_takes_metals_placement() {
             told += usize::from(want != at((ox, oy)));
             for c in 0..4 {
                 assert!(
-                    close(out[lane][c], want[c], class),
+                    close(out[lane][c], want[c], class.0 & BicubicTexels::HALF != 0),
                     "{w}x{h} lane {lane} ({x}, {y}) channel {c}: {} vs {}",
                     out[lane][c],
                     want[c]
@@ -1058,7 +1024,7 @@ fn mirrored_axes() {
                         want[c]
                     };
                     assert!(
-                        close(out[lane][c], want_c, class),
+                        close(out[lane][c], want_c, class.0 & BicubicTexels::HALF != 0),
                         "{name} {pf:?} lane {lane} ({x}, {y}) channel {c}: {} vs {want_c}",
                         out[lane][c]
                     );
@@ -1479,15 +1445,13 @@ fn the_estimate_bounds_the_bicubic_fixtures() {
     }
 }
 
-/// A 2D bicubic sample computes its small level's accumulated sum and a 32-bit float format's
-/// bicubic sum by one call of the accumulated quad routine, so a driver that inlines every call
-/// (Mesa's) compiles that routine once a sample. `bcx_rules`'s twelve 2D samples call routines of
-/// the quad's shape (four texels, two fractions, the format's bits, a `half` result: eight
-/// parameters) twice each, the small level's exact sum and the shared accumulated one, where they
-/// called three (an accumulated call at the merged fractions beside the plane's at the sample's own
-/// took the cases' pipelines from 1.2 to 8 s to create on an Intel Iris Xe, ANV).
+/// A 2D bicubic sample is one call of the plane's routine (its sixteen taps, four fractions, the
+/// bilinear test and the format's bits: 22 parameters), whose sum is the device's arithmetic: no
+/// other routine of the old fixed-point datapath (the small level's separate quad call, the weights'
+/// table, the half accumulator) is called. `bcx_rules`'s twelve 2D samples make twelve calls, and
+/// its 1D ones call the line's sum.
 #[test]
-fn a_bicubic_samples_small_level_shares_the_planes_accumulated_call() {
+fn a_bicubic_sample_is_one_call_of_the_planes_sum() {
     let bc = match llvm_assemble(&engine_dir().join("bcx_rules.ll")) {
         Ok(b) => b,
         Err(AssembleError::Missing(t)) => {
@@ -1500,23 +1464,25 @@ fn a_bicubic_samples_small_level_shares_the_planes_accumulated_call() {
     let (_, m) = typed_module(&bc, "bcx_rules", &p).expect("typed module");
     let functions = m.functions();
     let entry = functions.get(m.entry().func.index()).expect("entry");
-    let quad_calls = entry
+    let calls: Vec<usize> = entry
         .blocks
         .iter()
         .filter_map(|b| m.blocks().get(b.index()))
         .flat_map(|b| b.insts.iter())
-        .filter(|node| match &node.inst {
-            Inst::Call { func, .. } => functions
-                .get(func.index())
-                .is_some_and(|f| f.params.len() == 8),
-            _ => false,
+        .filter_map(|node| match &node.inst {
+            Inst::Call { func, .. } => functions.get(func.index()).map(|f| f.params.len()),
+            _ => None,
         })
-        .count();
+        .collect();
     assert_eq!(
-        quad_calls,
-        2 * 12,
-        "each of bcx_rules's twelve 2D samples calls the small level's exact sum and one shared \
-         accumulated sum"
+        calls.iter().filter(|n| **n == 22).count(),
+        12,
+        "each of bcx_rules's twelve 2D samples calls the plane's sum once: {calls:?}"
+    );
+    // Its 1D samples call the line's sum (two taps, the fraction and the format's bits).
+    assert!(
+        calls.iter().all(|n| *n == 22 || *n == 4),
+        "no other routine is called: {calls:?}"
     );
 }
 

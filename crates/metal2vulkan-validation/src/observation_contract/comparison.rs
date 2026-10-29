@@ -172,16 +172,11 @@ impl UlpTable {
 ///   be shaded where Metal leaves it, so a coordinate the function rounds or compares can land on
 ///   another pixel, and what it reads there differs by any amount. A shader's decoder records
 ///   nothing: it is Apple's GPU decoder over Metal's own parameter data.
-/// - `BicubicFilterArithmetic`: unbounded in ulps. The weights are Metal's and an 8- or 16-bit
-///   normalized format's sum is exact, as is a 1D 32-bit float sum, but four differences remain,
-///   none an ulp bound on the stored value: a 2D normalized sum next to a rounding tie may land one
-///   grid step away (within about `2^-21` of the format's range, 1 or 2, of the tie), a 2D float or
-///   half-format sum differs by Metal's accumulator error, a fraction of the largest tap's
-///   magnitude (up to about `2^-40` and `2^-19.4`) which cancellation makes any multiple of the
-///   result's ulp, a 1D half-format sum within about `2^-19.4` of its larger tap from a tie may
-///   round to the other `half`, and a heap element's sRGB sum is the device's decode summed in
-///   `f32`, unbounded by the Vulkan specification (a texture slot's sRGB sum is exact under its
-///   `SrgbTexture` variant). The comparator cannot see a lane's footprint, so it cannot check the
+/// - `BicubicFilterArithmetic`: unbounded in ulps. An emulated filter sums its taps in the
+///   device's arithmetic under the Catmull-Rom weights computed from the fraction, where Metal sums
+///   its fixed-point weights exactly onto the format's grid: a lane may differ by a few grid steps
+///   and by the weights' distance times the taps, which cancellation makes any multiple of the
+///   result's ulp. The comparator cannot see a lane's footprint, so it cannot check the
 ///   near-tie conditions; it hands back the narrowest bound it can check.
 /// - `SparseResidency`: unbounded: the sparse form's residency and unmapped texels are the
 ///   device's, which no Metal reading has compared; another residency answer flips a whole status

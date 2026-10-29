@@ -162,7 +162,15 @@ fn volume_samples_are_metals_bytes() {
                     &what,
                 );
                 for (r, lanes) in group.iter().zip(got) {
-                    assert_eq!(lanes.to_vec(), r.bits, "{what}: point {:?}", r.point);
+                    match r.linear {
+                        true => assert!(
+                            super::samples::filtered_close(&lanes, &r.bits, r.half, 0.0),
+                            "{what}: point {:?}: {lanes:x?} against {:x?}",
+                            r.point,
+                            r.bits
+                        ),
+                        false => assert_eq!(lanes.to_vec(), r.bits, "{what}: point {:?}", r.point),
+                    }
                     checked += 1;
                 }
             }

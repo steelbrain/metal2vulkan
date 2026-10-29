@@ -47,26 +47,17 @@
 //!   constant offset on a mirrored axis, and a gather through a mirrored bicubic sampler are not
 //!   measured, and are refused (below).
 //!
-//! **The arithmetic after the fetches** is Metal's, in module routines every sample calls
-//! ([`routines`]): Metal's fixed-point weights (`metal::bicubic::weights`), then, by the bound
-//! format, an exact integer sum rounded half up onto the format's grid (the 8- and 16-bit
-//! normalized formats, `BicubicTexels::EXACT`; an extended-range texture's decoded taps, whose
-//! sample `super::extended` emits through [`filter`] and clamps into the format's endpoints, under
-//! its format's bits), a 32-bit float or half sum through Metal's
-//! accumulators in integer operations (a 1D sum and a 32-bit float format's 2D bilinear one through
-//! its linear accumulator, a half format's 2D Catmull-Rom sum through its two-pass one), or a sum
-//! in `f32` operations with `NoContraction` (every other format), and Metal's rounding to `half`,
-//! clamps, and non-finite results. Two differences remain, recorded as
-//! `PrecisionNote::BicubicFilterArithmetic`:
-//! - A 2D exact sum within about `2^-21` of the format's range (`1` unsigned, `2` signed) of a
-//!   rounding tie may round to the other side of it: Metal's 2D datapath carries an error of that
-//!   size which no model tried fits.
-//! - An argument-buffer (heap) element's sRGB taps are the device's decoded values, summed in
-//!   `f32`, where Metal sums its twelve-bit decode table's steps exactly: its format is never
-//!   known. A texture slot bound in an 8-bit sRGB format reads the raw codes through a UNORM view
-//!   under its `SrgbTexture` variant ([`Bicubic::raw`]), decodes each tap by the device's
-//!   transfer, and the exact routine sums them on the sRGB grids. The packed normalized formats and `Depth16Unorm`, whose
-//!   exact rule is not measured, sum in `f32`.
+//! **The arithmetic after the fetches** is the device's, in module routines every sample calls
+//! ([`routines`]): the Catmull-Rom weights computed in `f32` from the fraction, the sixteen taps
+//! summed by the device's multiply and add, the bilinear inner taps by its `FMix` where Metal's rule
+//! filters bilinearly (a 32-bit float format, a level under four texels), the normalized formats'
+//! clamps, and a `half` result the device's narrowing of the `f32` sum (`arith::narrow::round`).
+//! Metal's own datapath (its fixed-point weight table, exact integer sums rounded half up onto the
+//! format's grid, its float accumulators and its `half` rounding of a half format's sum) is not
+//! reproduced: the sample records `PrecisionNote::BicubicFilterArithmetic`. An 8-bit sRGB
+//! texture held as its UNORM twin reads the raw codes through a UNORM view under its
+//! `SrgbTexture` variant ([`Bicubic::raw`]) and decodes each tap by the device's transfer
+//! (`PrecisionNote::SrgbTexelDecode`) before the sum.
 //!
 //! Everything else above is Metal's reading, except inferences:
 //! - The signed clamp's lower bound comes from the format's range (no reading went below `-1`).
@@ -74,13 +65,8 @@
 //!   (all but `R8Unorm`, `RGBA8Unorm`, `RGBA16Float`, and `R32Float`) are their families'.
 //! - `RG8UnormSRGB`, never probed, takes its family's treatment. So do `RG8Unorm`, `RG8Snorm`,
 //!   `RG16Unorm`, `BGRA8Unorm`, and `A8Unorm`, which take the exact rule no case reads on them.
-//! - A 1D half sum's non-finite results follow IEEE on the taps of nonzero weight, the 32-bit
-//!   float formats' 1D rule; no case reads them.
-//! - The small floats (`RG11B10Float`, `RGB9E5Float`) sum through the half formats'
-//!   accumulators and `Depth32Float` through the 32-bit float formats', by family: no case reads
-//!   a bicubic sum of either.
-//! - Whether Metal flushes a denormal 32-bit float tap first, and then a zero result's sign: no
-//!   lane tells the readings apart. The emulation keeps the tap and gives `+0`.
+//! - `Depth32Float` is filtered as the 32-bit float formats are, by family: no case reads a
+//!   bicubic sum of it.
 //!
 //! **Refused** (`NotImplemented(SamplerBicubicFilter)`): `min_lod_clamp` (Apple's device compiler
 //! fails to build a pipeline that samples a bicubic sampler with it, so Metal gives no reference);
@@ -112,7 +98,6 @@ use crate::spirv::ir::{
 };
 
 use super::{CombinedImage, Sampling};
-use routines::RowIndex;
 
 pub mod routines;
 
@@ -150,8 +135,8 @@ pub struct Bicubic {
     /// The constant texel offset Metal applies, per plane axis.
     pub offset: Option<Vec<i32>>,
     /// The sample reads an 8-bit sRGB texture's raw codes, its slot in the `SrgbTexture`
-    /// variant: each tap's color lanes become the device's decode of their codes (`srgb_raw_tap`),
-    /// and the exact routine sums them on the sRGB grids (`BicubicTexels::SRGB`).
+    /// variant: each tap's color lanes become the device's decode of their codes (`srgb_raw_tap`)
+    /// before the sum.
     pub raw: bool,
 }
 
@@ -890,9 +875,6 @@ pub(super) struct Footprint {
     lod: ImageOperands,
     /// Per plane axis, the fraction's 1/256 steps and the taps of [`Taps::span`].
     pub(super) axes: Vec<(SValue, Vec<Tap>)>,
-    /// A runtime sampler's address mode per plane axis (`u32`s, `MTLSamplerAddressMode`'s
-    /// values); empty for a constexpr sampler.
-    pub(super) modes: Vec<SValue>,
 }
 
 impl Footprint {
@@ -957,12 +939,6 @@ impl Footprint {
             (Some(c), Some(bt)) => fb.select(c, texel, bt),
             _ => Ok(texel),
         }
-    }
-
-    /// The border texel (a `vec4` of `f32`) a tap outside a border axis reads, where an axis has
-    /// a border.
-    pub(super) fn border_texel(&self) -> Option<SValue> {
-        self.border
     }
 }
 
@@ -1272,7 +1248,6 @@ fn footprint_at(
         border,
         lod,
         axes: out,
-        modes,
     })
 }
 
@@ -1293,7 +1268,7 @@ pub(super) fn word_field(
 }
 
 /// The `vec4` texel the bicubic sample `s` of sampled image `si` (image facts `image`) reads
-/// (module docs).
+/// (module docs), its `half` result the device's narrowing of the `f32` sum.
 pub(super) fn emit(
     cx: &mut EmitCx<'_>,
     fb: &mut FunctionBuilder<'_>,
@@ -1318,7 +1293,8 @@ pub(super) fn emit(
     let size = fb.query(ImageQuery::SizeLod(zero_u), img)?;
     let bits = Bits::Spec(spec);
     let fp = footprint_on(cx, fb, &t, s, (size, image), bits, &taps)?;
-    filter(cx, fb, (&t, &fp, size), b, (bits, half), Texels::Own(img))
+    let x = filter(cx, fb, (&t, &fp, size), b, bits, Texels::Own(img))?;
+    narrowed(fb, x, half)
 }
 
 /// The `vec4` texel of the bicubic sample `s` shared by the arms of a switch-at-use (SEMANTICS
@@ -1339,24 +1315,31 @@ pub(super) fn emit_shared(
     let taps = b.taps(span);
     let bits = Bits::Value(bits);
     let fp = footprint_on(cx, fb, &t, s, (size, image), bits, &taps)?;
-    filter(
-        cx,
-        fb,
-        (&t, &fp, size),
-        b,
-        (bits, half),
-        Texels::Candidates(c),
-    )
+    let x = filter(cx, fb, (&t, &fp, size), b, bits, Texels::Candidates(c))?;
+    narrowed(fb, x, half)
 }
 
-/// Whether the bicubic sample `s` has a `half` result, which the routines round exactly, so that
-/// nothing rounds it after.
+/// Whether the bicubic sample `s` has a `half` result.
 fn half_result(cx: &mut EmitCx<'_>, s: &Sampling) -> BResult<bool> {
     match s.texel.map(|f| f.conv) {
         Some(TexelConv::F32) => Ok(false),
         Some(TexelConv::F16) => Ok(true),
         _ => Err(cx.fail("a bicubic sample without a float texel form")),
     }
+}
+
+/// Texel `x` (a `vec4` of `f32`) as a sample's result holds it: the device's narrowing to `half`
+/// where `half` (`arith::narrow::round`), else as it is.
+pub(super) fn narrowed(fb: &mut FunctionBuilder<'_>, x: SValue, half: bool) -> BResult<SValue> {
+    use crate::lower::arith::legal::{FloatFmt, Form, Held};
+    if !half {
+        return Ok(x);
+    }
+    let form = Form {
+        held: Held::Float(FloatFmt::Half),
+        lanes: 4,
+    };
+    crate::lower::arith::narrow::round(fb, form, x)
 }
 
 impl Bicubic {
@@ -1386,16 +1369,15 @@ impl Bicubic {
     }
 }
 
-/// The filter's texel over footprint `fp` (types `t`) on a base level of `size` (the `uint`
-/// lanes `ImageQuerySizeLod` gives), under the bound format's treatment `bits`, a `half` result
-/// when `half`, its taps read from `texels` (module docs). A raw sample, and an extended-range
-/// texture's, whose `bits` are its format's, takes the exact routines alone.
+/// The filter's `f32` texel over footprint `fp` (types `t`) on a base level of `size` (the `uint`
+/// lanes `ImageQuerySizeLod` gives), under the bound format's treatment `bits`, its taps read from
+/// `texels` (module docs): the routines' sum in the device's arithmetic ([`routines`]).
 pub(super) fn filter(
     cx: &mut EmitCx<'_>,
     fb: &mut FunctionBuilder<'_>,
     (t, fp, size): (&Tys, &Footprint, SValue),
     b: &Bicubic,
-    (bits, half): (Bits, bool),
+    bits: Bits,
     texels: Texels<'_>,
 ) -> BResult<SValue> {
     let mut axes = fp.axes.iter();
@@ -1404,7 +1386,6 @@ pub(super) fn filter(
     };
     let kx = *kx;
     let vertical = axes.next().map(|(k, row)| (*k, row));
-    let exact_only = b.raw || matches!(texels, Texels::Extended(_));
     // A raw sample's taps are the device's decode of their codes.
     let post = |_: &mut EmitCx<'_>, fb: &mut FunctionBuilder<'_>, v: SValue| {
         if b.raw {
@@ -1413,27 +1394,7 @@ pub(super) fn filter(
             Ok(v)
         }
     };
-    // The format's arithmetic: the exact routine where the bound format is `EXACT`, else the
-    // emulated one (`routines`), selected on the specialization. A raw sample's is the exact
-    // routine on the sRGB grids alone.
     let flags = bits.value(fb)?;
-    let flags = if b.raw {
-        let raw = scalar(
-            fb,
-            t.u32_,
-            u64::from(BicubicTexels::EXACT | BicubicTexels::SRGB),
-        )?;
-        let raw = value(fb, raw)?;
-        fb.binary(BinOp::BitwiseOr, flags, raw)?
-    } else {
-        flags
-    };
-    let half = fb.module().constant(Constant::Scalar {
-        ty: t.bool_,
-        bits: ConstBits(u64::from(half)),
-    })?;
-    let half = value(fb, half)?;
-    let exact = bits.test(fb, t, BicubicTexels::EXACT)?;
     let call = |fb: &mut FunctionBuilder<'_>, f, args: &[SValue]| -> BResult<SValue> {
         fb.call(f, args)?.ok_or_else(missing_routine)
     };
@@ -1444,13 +1405,8 @@ pub(super) fn filter(
         };
         let sites: Vec<[Tap; 1]> = xtaps.iter().map(|x| [*x]).collect();
         let mut args = texels.fetch(cx, fb, (t, fp), &sites, &post)?;
-        args.extend([kx, flags, half]);
-        let e = call(fb, line.exact, &args)?;
-        if exact_only {
-            return Ok(e);
-        }
-        let f = call(fb, line.float, &args)?;
-        return fb.select(exact, e, f);
+        args.extend([kx, flags]);
+        return call(fb, line.sum, &args);
     };
     let Some(plane) = cx.decl.families.sampler.bicubic_plane else {
         return Err(cx.fail("a 2D bicubic sample without its routines"));
@@ -1458,19 +1414,20 @@ pub(super) fn filter(
     let (&[x0, x1, x2, x3], &[y0, y1, y2, y3]) = (xtaps.as_slice(), ytaps.as_slice()) else {
         return Err(cx.fail("a 2D bicubic sample's footprint is not four taps square"));
     };
-    // A level below four texels on either plane axis takes Metal's linear filter (module docs).
+    // A level below four texels on either plane axis takes Metal's linear filter, and so does a
+    // 32-bit float format (module docs).
     let w = fb.composite_extract(size, &[0])?;
     let h = fb.composite_extract(size, &[1])?;
     let least = fb.glsl(GlslOp::UMin, &[w, h])?;
     let four = scalar(fb, t.u32_, 4)?;
     let four = value(fb, four)?;
     let small = fb.binary(BinOp::ULessThan, least, four)?;
+    let is_linear = bits.test(fb, t, BicubicTexels::LINEAR)?;
+    let bilinear = fb.binary(BinOp::LogicalOr, small, is_linear)?;
     // A mirrored axis reads texel 1 at fraction 0 where Metal takes its bicubic sum (a level of
     // at least four texels each way, a format not filtered bilinearly), else the linear filter's
     // mirrored taps (module docs).
     let pinned = if b.address.contains(&TapAddress::Mirror) {
-        let is_linear = bits.test(fb, t, BicubicTexels::LINEAR)?;
-        let bilinear = fb.binary(BinOp::LogicalOr, small, is_linear)?;
         Some(fb.unary(UnOp::LogicalNot, bilinear)?)
     } else {
         None
@@ -1492,119 +1449,22 @@ pub(super) fn filter(
     };
     let (kx, [x0, x1, x2, x3]) = pin(fb, 0, kx, [x0, x1, x2, x3])?;
     let (ky, [y0, y1, y2, y3]) = pin(fb, 1, ky, [y0, y1, y2, y3])?;
-    // The `t` axis's taps as vectors, for a row a loop's counter names: their indices, and on a
-    // border axis whether each lies inside the level.
-    let rows = if exact_only {
-        None
-    } else {
-        let vector = |fb: &mut FunctionBuilder<'_>, elem: TypeId| {
-            fb.module().ty(SType::Vector { elem, len: 4 })
-        };
-        let uvec4 = vector(fb, t.u32_)?;
-        let at = fb.composite_construct(uvec4, &[y0.0, y1.0, y2.0, y3.0])?;
-        let inside = match (y0.1, y1.1, y2.1, y3.1) {
-            (Some(a), Some(b), Some(c), Some(d)) => {
-                let bvec4 = vector(fb, t.bool_)?;
-                Some(fb.composite_construct(bvec4, &[a, b, c, d])?)
-            }
-            _ => None,
-        };
-        Some((at, inside))
-    };
-    // The footprint's row `j` (the `t` axis), by column `i` (the `s` axis), read as the routines
-    // pass it (`Plane::sums`).
-    let mut fetch_row = |fb: &mut FunctionBuilder<'_>, j: RowIndex| -> BResult<[SValue; 4]> {
-        let y = match (j, rows) {
-            (RowIndex::At(0), _) => y0,
-            (RowIndex::At(1), _) => y1,
-            (RowIndex::At(2), _) => y2,
-            (RowIndex::At(_), _) => y3,
-            (RowIndex::Counter(k), Some((at, inside))) => {
-                let inside = match inside {
-                    Some(v) => Some(fb.vector_extract_dynamic(v, k)?),
-                    None => None,
-                };
-                (fb.vector_extract_dynamic(at, k)?, inside)
-            }
-            (RowIndex::Counter(_), None) => {
-                return Err(cx.fail("an exact bicubic sample reads no row by a counter"));
-            }
-        };
-        let sites = [x0, x1, x2, x3].map(|x| [x, y]);
-        match texels.fetch(cx, fb, (t, fp), &sites, &post)?[..] {
-            [a, b, c, d] => Ok([a, b, c, d]),
-            _ => Err(cx.fail("a bicubic row without its four texels")),
+    // The footprint row by row (the `t` axis), each by column (the `s` axis).
+    let mut sites = Vec::with_capacity(16);
+    for y in [y0, y1, y2, y3] {
+        for x in [x0, x1, x2, x3] {
+            sites.push([x, y]);
         }
-    };
-    // The small level's linear sample (the 2D emulation) reads the inner taps with a merged axis's
-    // fraction 0. Its accumulated sum is the routine a 32-bit float format's bicubic sum is
-    // (`define_float_quad`), over the same inner taps: one call at the fractions the sample takes,
-    // the merged ones on a small level, gives both, so a device that inlines every call compiles
-    // that routine once a sample, not twice.
+    }
+    let mut args = texels.fetch(cx, fb, (t, fp), &sites, &post)?;
+    // The bilinear filter's fractions: a small level's merged ones (an axis whose two inner taps
+    // read one texel takes fraction 0), else the sample's own.
     let mkx = super::linear::merged(fb, t, kx, [x1, x2])?;
     let mky = super::linear::merged(fb, t, ky, [y1, y2])?;
     let lkx = fb.select(small, mkx, kx)?;
     let lky = fb.select(small, mky, ky)?;
-    // An axis whose four taps read one texel: a half format's sum weighs it alone.
-    let whole = (
-        one_texel(fb, [x0, x1, x2, x3])?,
-        one_texel(fb, [y0, y1, y2, y3])?,
-    );
-    let sums = plane.sums(
-        fb,
-        &mut fetch_row,
-        (kx, ky),
-        (lkx, lky),
-        whole,
-        (flags, half),
-        exact_only,
-    )?;
-    let cubic = match sums.float {
-        None => sums.exact,
-        Some(float) => {
-            let is_half = bits.test(fb, t, BicubicTexels::HALF)?;
-            let is_linear = bits.test(fb, t, BicubicTexels::LINEAR)?;
-            let f = float.select(fb, is_half, is_linear)?;
-            fb.select(exact, sums.exact, f)?
-        }
-    };
-    // The small level's exact sum; its accumulated sum is the plane's shared call (above).
-    let Some(quad) = cx.decl.families.sampler.linear_quad else {
-        return Err(cx.fail("a 2D bicubic sample without its linear routines"));
-    };
-    let sites = [[x1, y1], [x2, y1], [x1, y2], [x2, y2]];
-    let mut args = texels.fetch(cx, fb, (t, fp), &sites, &post)?;
-    args.extend([mkx, mky, flags, half]);
-    let linear = call(fb, quad.exact, &args)?;
-    let linear = match sums.float {
-        None => linear,
-        Some(float) => fb.select(exact, linear, float.linear)?,
-    };
-    fb.select(small, linear, cubic)
-}
-
-/// Whether an axis's four taps read one texel (a `bool`): their indices are one (each clamped
-/// onto the level's edge texel past that edge, or a level one texel wide), and on a border axis
-/// they lie all inside or all outside the level, as [`super::linear::merged`] tells a pair.
-/// Metal's half formats' 2D sum weighs such an axis as that texel alone at the unit weight, its
-/// weights at fraction 0 (`routines::Plane::sums`). A mirrored axis pinned to taps `0 ..= 3`
-/// ([`filter`]) never reads one.
-fn one_texel(fb: &mut FunctionBuilder<'_>, [a, b, c, d]: [Tap; 4]) -> BResult<SValue> {
-    let same = |fb: &mut FunctionBuilder<'_>, x: Tap, y: Tap| -> BResult<SValue> {
-        let at = fb.binary(BinOp::IEqual, x.0, y.0)?;
-        match (x.1, y.1) {
-            (Some(p), Some(q)) => {
-                let both = fb.binary(BinOp::LogicalEqual, p, q)?;
-                fb.binary(BinOp::LogicalAnd, at, both)
-            }
-            _ => Ok(at),
-        }
-    };
-    let ab = same(fb, a, b)?;
-    let ac = same(fb, a, c)?;
-    let ad = same(fb, a, d)?;
-    let abc = fb.binary(BinOp::LogicalAnd, ab, ac)?;
-    fb.binary(BinOp::LogicalAnd, abc, ad)
+    args.extend([kx, ky, lkx, lky, bilinear, flags]);
+    call(fb, plane.sum, &args)
 }
 
 /// A routine call without a result: every routine returns its texel.

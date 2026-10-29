@@ -173,7 +173,7 @@ use crate::pipeline::sym::{
 };
 use crate::spirv::builder::{FunctionBuilder, ModuleBuilder};
 use crate::spirv::error::BResult;
-use crate::spirv::ids::{ConstId, DemoteTy, FuncId, GlobalId, Value as SValue};
+use crate::spirv::ids::{ConstId, DemoteTy, GlobalId, Value as SValue};
 use crate::spirv::ir::{ConstBits, Dim, ExecMode, ImageUsage, StorageClass, Type as SType};
 
 fn refuse() -> Error {
@@ -1123,20 +1123,12 @@ pub struct Declared {
     /// The `BicubicTexels` specialization constant (`u32`) of each texture slot a bicubic sample
     /// reads.
     pub bicubic: BTreeMap<u32, ConstId>,
-    /// The 2D bicubic samples' routines, when the module has one.
+    /// The 2D bicubic samples' routine, when the module has one.
     pub bicubic_plane: Option<bicubic::routines::Plane>,
-    /// The 1D bicubic samples' routines, when the module has one.
+    /// The 1D bicubic samples' routine, when the module has one.
     pub bicubic_line: Option<bicubic::routines::Line>,
-    /// The emulated linear 2D samples' routines, when the module has one.
+    /// The in-place two-plane YCbCr linear samples' routines, when the module has one.
     pub linear_quad: Option<bicubic::routines::Quad>,
-    /// The emulated linear 3D samples' routines, when the module has one.
-    pub linear_block: Option<bicubic::routines::Block>,
-    /// The blend of an extended-range sample's two levels under a linear mip filter
-    /// (`bicubic::routines::define_levels`), when the module has one.
-    pub level_blend: Option<FuncId>,
-    /// The exact sum of a linear 2D extended-range sample's taps' grid steps
-    /// (`bicubic::routines::define_quad_steps`), when the module has one.
-    pub quad_steps: Option<FuncId>,
 }
 
 /// Complete the sampler family's plan: declare each combined binding (its image from the
@@ -1453,15 +1445,6 @@ pub fn declare(
             }
             bicubic::routines::Routine::Quad => {
                 d.linear_quad = Some(bicubic::routines::define_quad(mb)?);
-            }
-            bicubic::routines::Routine::Block => {
-                d.linear_block = Some(bicubic::routines::define_block(mb)?);
-            }
-            bicubic::routines::Routine::Levels => {
-                d.level_blend = Some(bicubic::routines::define_levels(mb)?);
-            }
-            bicubic::routines::Routine::QuadSteps => {
-                d.quad_steps = Some(bicubic::routines::define_quad_steps(mb)?);
             }
         }
     }

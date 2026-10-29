@@ -51,17 +51,16 @@ pub type Table = BTreeMap<(u32, Size, String), Vec<Sample>>;
 /// The textures' codes by the raw format and the size ([`textures`]).
 pub type Textures = BTreeMap<(u32, Size), Vec<[u32; 4]>>;
 
-/// One of Metal's samples: its coordinate, the result's lanes as bits (`half` lanes for a `_half`
-/// kernel), and the lanes Metal rounds to the other side of a tie the exact sum does not.
+/// One of Metal's samples: its coordinate and the result's lanes as bits (`half` lanes for a
+/// `_half` kernel).
 pub struct Sample {
     pub at: [f32; 2],
     pub lanes: [u32; 4],
-    pub ties: Vec<usize>,
 }
 
 /// The committed table, one sample per line: the raw format, the texture's width and height, the
 /// kernel, the coordinate's `u` and `v` as `f32` bits, the result's lanes as bits, and the lanes at
-/// a tie (`-` for none). Of the 2,304 samples the probe took of each texture through each kernel,
+/// which Metal's exact sum lies at a rounding tie (`-` for none; read by no check). Of the 2,304 samples the probe took of each texture through each kernel,
 /// it holds the middle texel's centre, four random coordinates, the first sample with a color lane
 /// at a clamp bound and the first with a lane at a tie. By the raw format, the size and the kernel.
 pub fn table() -> Table {
@@ -70,16 +69,12 @@ pub fn table() -> Table {
     let mut out = BTreeMap::<_, Vec<Sample>>::new();
     for line in text.lines() {
         let f: Vec<&str> = line.split(' ').collect();
-        let [raw, w, h, kernel, u, v, lanes, ties] = f[..] else {
+        let [raw, w, h, kernel, u, v, lanes, _ties] = f[..] else {
             panic!("xr_bicubic.tsv: {line}");
         };
         let number = |s: &str| s.parse::<u32>().unwrap_or_else(|e| panic!("{line}: {e}"));
         let bits = |s: &str| u32::from_str_radix(s, 16).unwrap_or_else(|e| panic!("{line}: {e}"));
         let lanes: Vec<u32> = lanes.split(',').map(bits).collect();
-        let ties = match ties {
-            "-" => Vec::new(),
-            t => t.split(',').map(|c| number(c) as usize).collect(),
-        };
         out.entry((number(raw), (number(w), number(h)), kernel.to_string()))
             .or_default()
             .push(Sample {
@@ -87,7 +82,6 @@ pub fn table() -> Table {
                 lanes: lanes
                     .try_into()
                     .unwrap_or_else(|_| panic!("{line}: four lanes")),
-                ties,
             });
     }
     out
@@ -143,9 +137,18 @@ pub fn grid(raw: u32, lane: usize) -> f64 {
     }
 }
 
-/// Whether the lane `got` is one step of `grid` from Metal's `want` (`half` lanes where `half`):
-/// apart, and no further apart than a step and the result's rounding.
-pub fn one_step(got: u32, want: u32, grid: f64, half: bool) -> bool {
+/// How far Metal's fixed-point bicubic weights move a sum from the Catmull-Rom polynomial's: per
+/// axis the four weights miss the polynomial by at most `4.83e-4` together (their table rounds the
+/// cube to 16 units of `2^-17` over most fractions), so a 2D footprint's weights by at most
+/// `1.21e-3` together, times the largest decoded tap (an `_sRGB` twin's `1.674`).
+pub const WEIGHTS_BOUND: f64 = 2.1e-3;
+
+/// Whether the lane `got` is Metal's `want` (`half` lanes where `half`) within the device's
+/// bicubic arithmetic: the decoded taps summed by the device's `f32` multiply and add under the
+/// Catmull-Rom weights computed from the fraction, where Metal sums its fixed-point weights
+/// ([`WEIGHTS_BOUND`]) exactly onto the lane's `grid` (two steps), and the result's rounding (a
+/// `half` result's narrowing).
+pub fn near(got: u32, want: u32, grid: f64, half: bool) -> bool {
     let value = |bits: u32| match half {
         true => half_value(bits as u16),
         false => f64::from(f32::from_bits(bits)),
@@ -156,7 +159,7 @@ pub fn one_step(got: u32, want: u32, grid: f64, half: bool) -> bool {
         true => 2f64.powf(exponent.max(-14.0) - 10.0),
         false => 2f64.powf(exponent.max(-126.0) - 23.0),
     };
-    got != want && (g - w).abs() <= 1.0 / grid + ulp
+    got == want || (g - w).abs() <= 2.0 / grid + WEIGHTS_BOUND + ulp
 }
 
 /// The finite `half` of `bits`.
@@ -170,4 +173,41 @@ fn half_value(bits: u16) -> f64 {
     } else {
         magnitude
     }
+}
+
+/// Whether a filtered sample's lanes `got` (`f32` bits) are Metal's `want` within the device's
+/// filter arithmetic (`PrecisionNote::BicubicFilterArithmetic`): the decoded taps summed by the
+/// device's multiply and add, where Metal sums them exactly on the lane's grid (a step of `1/8160`,
+/// `1/8192` or `1/4080`), plus `weight` times the larger lane's magnitude for a blend weight the
+/// device takes in `f32` where Metal truncates it (a linear mip filter's `1/64`), and a `half`
+/// result's narrowing (one `half` ulp).
+pub fn filtered_close(got: &[u32], want: &[u32], half: bool, weight: f64) -> bool {
+    // A lane's value: `f32` bits, or a `half` result's bits.
+    let value = |bits: u32| match half {
+        false => f64::from(f32::from_bits(bits)),
+        true => {
+            let h = bits as u16;
+            let m = match (h >> 10) & 0x1f {
+                0 => f64::from(h & 0x3ff) * 2f64.powi(-24),
+                e => (1.0 + f64::from(h & 0x3ff) / 1024.0) * 2f64.powi(i32::from(e) - 15),
+            };
+            if h & 0x8000 != 0 {
+                -m
+            } else {
+                m
+            }
+        }
+    };
+    got.len() == want.len()
+        && got.iter().zip(want).all(|(&g, &w)| {
+            if g == w {
+                return true;
+            }
+            let (g, w) = (value(g), value(w));
+            let ulp = match half {
+                true => 2f64.powf(w.abs().max(2f64.powi(-14)).log2().floor() - 10.0),
+                false => 0.0,
+            };
+            (g - w).abs() <= 2.5e-4 + weight * w.abs().max(1.0) * 2.0 + ulp
+        })
 }

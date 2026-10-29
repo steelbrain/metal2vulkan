@@ -2863,15 +2863,15 @@ bound.
   regions' lines are this crate's tiles' exact lines, where Apple's are its fixed-point ones, so a
   fragment's evaluated point lies within a bounded distance of Metal's.
 - `metal2vulkan-degrade-bicubic-filter-arithmetic` (precision).
-  `PrecisionNote::BicubicFilterArithmetic`: Metal's bicubic filter, emulated by fetches with Metal's
-  weights, the 8- and 16-bit normalized and the extended-range formats' exact sum rounded half up
-  onto the format's grid, and the 32-bit float and half-float formats' sums through Metal's
-  accumulators, differs from an Apple M3 Max in what is not yet pinned: a 2D normalized sum within
-  about `2^-21` of the format's range (`1` unsigned, `2` signed) of a rounding tie: Metal may round
-  it to the other side, one grid step away (`1/65535` or `1/32767` for 16-bit, `1/4080` or `1/2032`
-  for 8-bit); an extended-range 2D sum (`BGR10_XR`, `BGRA10_XR`, `RGB10A8_2P_XR10` and their sRGB
-  twins) within 0.014 of a grid step of a tie likewise (`1/8160` a color lane, `1/8192` an sRGB
-  color lane, `1/4080` alpha).
+  `PrecisionNote::BicubicFilterArithmetic`: a filter emulated by fetches (Metal's bicubic filter on
+  every format, and an extended-range texture's linear, 3D and linear-mip-filter samples) sums its
+  taps in the device's arithmetic: the Catmull-Rom weights computed in `f32` from the fraction, the
+  taps summed by the device's multiply and add, a bilinear, trilinear or level blend by its `FMix`
+  at the `f32` fractions, and a `half` result the device's narrowing. The footprint, addressing,
+  filter choice, level and clamps are Metal's. Metal's fixed-point weights, exact grid sums, float
+  accumulators and sixty-fourth level fractions are not reproduced: a lane may differ by a few grid
+  steps (`1/4080` at 8 bits), by up to `2.1e-3` on an extended-range sRGB texture's bicubic sample,
+  and by up to `1/64` of the two levels' difference under a linear mip filter.
 - `metal2vulkan-degrade-sparse-residency` (precision). `PrecisionNote::SparseResidency`: A stage
   samples or gathers a texture whose residency it observes (`sparse_color::resident()`) through the
   slot's sparse form, which the module has where the profile enables `shaderResourceResidency`:
@@ -3123,7 +3123,9 @@ bound.
   level or with explicit gradients, or of a cube or cube array with explicit gradients, through a
   constexpr sampler of `maxAnisotropy` above 1, or through a runtime sampler slot whose word states
   anisotropy (under that word alone). A device with the feature samples with its own anisotropic
-  filter. Cost: a
+  filter. The footprint's logarithms and powers are the device's `Log2` and `Exp2`, its level and
+  spacing unrounded, and a linear mip filter's two levels the device's own blend at the fractional
+  level, where Metal takes a piecewise-linear `log2`, 256ths and 4096ths. Cost: a
   cube's taps step across its face by Metal's face gradients, and a tap past the face's edge reads
   the next face as the device projects it, which Metal's own is not measured against.
 - `metal2vulkan-degrade-device-anisotropic-filter` (precision).

@@ -29,7 +29,7 @@ fn controls(words: &[u32]) -> Vec<u32> {
 
 /// The texel conversion and the linear and bicubic filters' sums beside a kernel entry: on
 /// moltenvk-m3 each routine states `DontInline` (0x2) and the entry `None`; on amd-rdna3-radv the
-/// four texel routines state `DontInline` (the linear quad's and block's two sums each) and every
+/// texel routine states `DontInline` (the in-place linear quad's exact sum) and every
 /// other function `None`.
 #[test]
 fn the_sampling_routines_are_declared_dont_inline_where_every_call_is_inlined() {
@@ -38,7 +38,6 @@ fn the_sampling_routines_are_declared_dont_inline_where_every_call_is_inlined() 
     routines::define_plane(&mut b).expect("plane");
     routines::define_line(&mut b).expect("line");
     routines::define_quad(&mut b).expect("quad");
-    routines::define_block(&mut b).expect("block");
     let m = kernel_on(b, 3, &|_, p, _| Ok(p)).expect("kernel");
     for (stem, inlines_every_call) in [("moltenvk-m3", true), ("amd-rdna3-radv", false)] {
         let p = profile(stem, DevicePolicy::default()).expect("profile");
@@ -52,11 +51,11 @@ fn the_sampling_routines_are_declared_dont_inline_where_every_call_is_inlined() 
         let words = serialize_for(m.clone(), &p).expect("serialized").words;
         let mut got = controls(&words);
         got.sort_unstable();
-        // 13 routines (the plane's six, two each for the line, quad and block, and the texel
-        // conversion) and the entry.
-        assert!(got.len() >= 14, "{stem}: {} functions", got.len());
-        // The texel routines state it on every profile.
-        let kept = if inlines_every_call { got.len() - 1 } else { 4 };
+        // 4 routines (the plane's, the line's, the quad's, and the texel conversion) and the
+        // entry.
+        assert!(got.len() >= 5, "{stem}: {} functions", got.len());
+        // The texel routine states it on every profile.
+        let kept = if inlines_every_call { got.len() - 1 } else { 1 };
         let mut want = vec![0x2; kept];
         want.splice(0..0, vec![0; got.len() - kept]);
         assert_eq!(

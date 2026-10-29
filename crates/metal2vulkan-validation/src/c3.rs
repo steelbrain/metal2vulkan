@@ -723,9 +723,10 @@ pub struct SlotRow {
 ///   drops, which Metal's may leave out, and the count, ballot, or reduction is ordinary data later
 ///   words use. Where Metal's placement was measured, the module makes it (a sum moved past the
 ///   discard, or counted ahead of it) and records no note.
-/// - A bicubic sample's unpinned arithmetic (`BicubicFilterArithmetic`): a 2D normalized sum near a
-///   rounding tie lands one grid step from Metal's, whose 2D rounding no model fitted, and the
-///   sampled value is ordinary data later words use.
+/// - An emulated filter's arithmetic (`BicubicFilterArithmetic`): a bicubic sum (and an
+///   extended-range linear, 3D or level blend) in the device's multiply and add under weights
+///   computed from the fraction, where Metal sums its fixed-point weights exactly onto the
+///   format's grid, and the sampled value is ordinary data later words use.
 /// - A vertex function's simdgroup operation on a device that groups vertices otherwise than
 ///   Apple's GPUs and cannot pin the vertex stage's subgroup size (`VertexSimdgroupGrouping`): the
 ///   operation combines the device's group of vertices, a simdgroup Metal allows, and its value is
@@ -847,12 +848,12 @@ fn near_equivalent_bound(note: PrecisionNote) -> &'static str {
              discarded); after the discard every venue measured counts Metal's lanes"
         }
         PrecisionNote::BicubicFilterArithmetic => {
-            "a 2D bicubic sum of an 8- or 16-bit normalized or sRGB format near a rounding tie \
-             one step of the format's grid from Apple M3 Max's (1/65535 or 1/32767 of a 16-bit \
-             format, 1/4080 or 1/2032 of an 8-bit one, an sRGB table step), on 824 words of the \
-             five cases measured; a 2D float or half sum's accumulator, a 1D half sum near a tie \
-             and its non-finite results, the packed formats and Depth16Unorm unpinned; exact \
-             path: Apple's 2D rounding, which no model fitted"
+            "a bicubic sum (and an extended-range linear, 3D or level blend) in the device's \
+             f32 multiply and add under the Catmull-Rom weights computed from the fraction, a \
+             half result the device's narrowing, where Apple M3 Max's sums its fixed-point \
+             weights (each axis within 4.83e-4 of the polynomial) exactly onto the format's \
+             grid: a few grid steps apart (1/4080 of an 8-bit format), up to 2.1e-3 on an \
+             extended-range sRGB texture; no exact path: the device's arithmetic is the form"
         }
         PrecisionNote::VertexSimdgroupGrouping => {
             "a vertex function's simdgroup holds the device's group of vertices: 8 a subgroup, \

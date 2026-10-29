@@ -459,7 +459,19 @@ fn level_samples_are_metals_bytes() {
                         .flatten()
                         .copied()
                         .collect();
-                    assert_eq!(lanes, r.bits, "{what}: point {:?}", r.point);
+                    // A linear filter's sum, and a linear mip filter's blend by the clamped level's
+                    // `f32` fraction where Metal takes sixty-fourths, are the device's arithmetic.
+                    let blends = r.mip == SamplerMipFilter::Linear;
+                    let weight = if blends { 1.0 / 64.0 } else { 0.0 };
+                    match (r.linear || blends) && !r.gather {
+                        true => assert!(
+                            super::samples::filtered_close(&lanes, &r.bits, r.half, weight),
+                            "{what}: point {:?}: {lanes:x?} against {:x?}",
+                            r.point,
+                            r.bits
+                        ),
+                        false => assert_eq!(lanes, r.bits, "{what}: point {:?}", r.point),
+                    }
                     checked += 1;
                 }
             }

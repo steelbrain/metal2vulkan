@@ -1,15 +1,14 @@
 //! Bicubic samples of extended-range textures on the device the cfg selects, under the validation
-//! layer, against Metal's bits.
+//! layer, against Metal's answers.
 //!
 //! The owned fixture `xr_bicubic`'s kernels sample each texture of the extended-range bicubic
 //! table (`metal2vulkan_devtools::xr_bicubic`: random codes of each `BGR10_XR`, `BGRA10_XR` and
 //! two-plane format and `_sRGB` twin at five sizes, written as Metal's probe wrote them) at the
 //! table's coordinates, through constexpr bicubic samplers and through a runtime sampler whose
-//! filters are `Cubic`. Metal's answer is the table's (an Apple M3 Max on macOS 26.7): each lane's
-//! bits, but at the lanes it marks, where Metal's 2D sum lies within 0.014 of a grid step of a
-//! rounding tie and rounds to the other side, which the exact sum does not: there the lane is one
-//! step from Metal's (`bicubic-filter-arithmetic`, which each kernel's state announces). A
-//! differing lane is printed on an `XR-BICUBIC-DIFFERS` line.
+//! filters are `Cubic`. Metal's answer is the table's (an Apple M3 Max on macOS 26.7); the
+//! device's is the bicubic filter in its own arithmetic (`bicubic-filter-arithmetic`, which each
+//! kernel's state announces), each lane within two steps of its grid and the result's rounding of
+//! Metal's (`xr_bicubic::near`). A lane past that is printed on an `XR-BICUBIC-DIFFERS` line.
 
 use super::degrade_notices::{counts, on_device};
 use super::extended_range_samples::{format, state_of, texel};
@@ -75,7 +74,7 @@ fn bicubic_samples_of_extended_range_textures_are_metal_s() {
         let sampler = device.new_sampler_state(&cubic).unwrap();
         let table = xr_bicubic::table();
         let textures = xr_bicubic::textures();
-        let (mut checked, mut ties, mut wrong) = (0, 0, Vec::new());
+        let (mut checked, mut apart, mut wrong) = (0, 0, Vec::new());
         for kernel in KERNELS {
             let state = state_of(device, "xr_bicubic", kernel);
             let half = kernel.ends_with("_half");
@@ -126,20 +125,12 @@ fn bicubic_samples_of_extended_range_textures_are_metal_s() {
                         });
                         for (c, (&got, &want)) in got.iter().zip(&s.lanes).enumerate() {
                             checked += 1;
-                            let tie = s.ties.contains(&c);
-                            ties += usize::from(tie);
-                            let right = match tie {
-                                true => {
-                                    xr_bicubic::one_step(got, want, xr_bicubic::grid(raw, c), half)
-                                }
-                                false => got == want,
-                            };
-                            if !right {
+                            apart += usize::from(got != want);
+                            if !xr_bicubic::near(got, want, xr_bicubic::grid(raw, c), half) {
                                 wrong.push(format!(
-                                    "{kernel} {raw} {w}x{h} at {:?} lane {c}{}: {got:#x}, Metal \
+                                    "{kernel} {raw} {w}x{h} at {:?} lane {c}: {got:#x}, Metal \
                                      {want:#x}",
-                                    s.at,
-                                    if tie { " (a tie)" } else { "" }
+                                    s.at
                                 ));
                             }
                         }
@@ -152,11 +143,16 @@ fn bicubic_samples_of_extended_range_textures_are_metal_s() {
             println!("XR-BICUBIC-DIFFERS {}: {line}", device.name());
         }
         println!(
-            "XR-BICUBIC {}: {checked} lanes checked ({ties} at a tie), {} differ from Metal",
+            "XR-BICUBIC {}: {checked} lanes checked ({apart} apart from Metal's), {} past the \
+             device's arithmetic",
             device.name(),
             wrong.len()
         );
-        assert!(wrong.is_empty(), "{} lanes differ from Metal", wrong.len());
+        assert!(
+            wrong.is_empty(),
+            "{} lanes past the device's arithmetic",
+            wrong.len()
+        );
         assert!(
             notices.contains_key(&Degradation::BicubicFilterArithmetic),
             "the filter's arithmetic is announced: {notices:?}"

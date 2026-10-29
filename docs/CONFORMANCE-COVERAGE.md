@@ -44,7 +44,7 @@ Its limits, measured rather than asserted:
 | committed recordings | 1122 |
 | distinct SDK items the Metal leg reaches, of any status | 800 |
 | of those, reached only where this cannot name the family | 2 |
-| ledger rows (a case whose gap is recorded) | 1082 |
+| ledger rows (a case whose gap is recorded) | 1130 |
 | declared crossings of the option space (pairs put to Metal at once) | 26 |
 | declared crossings that are no pair of it (a boolean or numeric field, or one type in two slots) | 30 |
 
@@ -3284,4 +3284,52 @@ A case whose difference from Metal is recorded rather than compared away. The le
 | `xr-blend-planes-srgb-add` | A `half4` fill blended into an extended-range attachment (one over the destination, added): the function blends in the shader, inside the pixel interlock, in th… |
 | `xr-blend-planes-srgb-premul` | A `half4` fill blended into an extended-range attachment (premultiplied over: one over one minus the source alpha, added): the function blends in the shader, in… |
 | `xr-blend-planes-srgb-premul` | A `half4` fill blended into an extended-range attachment (premultiplied over: one over one minus the source alpha, added): the function blends in the shader, in… |
+| `extended-swizzles-bgr10xr` | An extended-range format's linear sample (`sl`) blends its four decoded taps by the device's `FMix` at the `f32` fractions (crates/metal2vulkan/src/lower/sample… |
+| `extended-swizzles-bgr10xr` | An extended-range format's linear sample (`sl`) blends its four decoded taps by the device's `FMix` at the `f32` fractions (crates/metal2vulkan/src/lower/sample… |
+| `extended-swizzles-bgr10xr` | An extended-range format's linear sample (`sl`) blends its four decoded taps by the device's `FMix` at the `f32` fractions (crates/metal2vulkan/src/lower/sample… |
+| `extended-swizzles-bgr10xr` | An extended-range format's linear sample (`sl`) blends its four decoded taps by the device's `FMix` at the `f32` fractions (crates/metal2vulkan/src/lower/sample… |
+| `extended-swizzles-bgr10xr` | An extended-range format's linear sample (`sl`) blends its four decoded taps by the device's `FMix` at the `f32` fractions (crates/metal2vulkan/src/lower/sample… |
+| `extended-swizzles-bgr10xr-srgb` | An extended-range format's linear sample (`sl`) blends its four decoded taps by the device's `FMix` at the `f32` fractions (crates/metal2vulkan/src/lower/sample… |
+| `extended-swizzles-bgr10xr-srgb` | An extended-range format's linear sample (`sl`) blends its four decoded taps by the device's `FMix` at the `f32` fractions (crates/metal2vulkan/src/lower/sample… |
+| `extended-swizzles-bgr10xr-srgb` | An extended-range format's linear sample (`sl`) blends its four decoded taps by the device's `FMix` at the `f32` fractions (crates/metal2vulkan/src/lower/sample… |
+| `extended-swizzles-bgr10xr-srgb` | An extended-range format's linear sample (`sl`) blends its four decoded taps by the device's `FMix` at the `f32` fractions (crates/metal2vulkan/src/lower/sample… |
+| `extended-swizzles-bgr10xr-srgb` | An extended-range format's linear sample (`sl`) blends its four decoded taps by the device's `FMix` at the `f32` fractions (crates/metal2vulkan/src/lower/sample… |
+| `extended-swizzles-bgra10xr` | An extended-range format's linear sample (`sl`) blends its four decoded taps by the device's `FMix` at the `f32` fractions (crates/metal2vulkan/src/lower/sample… |
+| `extended-swizzles-bgra10xr` | An extended-range format's linear sample (`sl`) blends its four decoded taps by the device's `FMix` at the `f32` fractions (crates/metal2vulkan/src/lower/sample… |
+| `extended-swizzles-bgra10xr` | An extended-range format's linear sample (`sl`) blends its four decoded taps by the device's `FMix` at the `f32` fractions (crates/metal2vulkan/src/lower/sample… |
+| `extended-swizzles-bgra10xr` | An extended-range format's linear sample (`sl`) blends its four decoded taps by the device's `FMix` at the `f32` fractions (crates/metal2vulkan/src/lower/sample… |
+| `extended-swizzles-bgra10xr` | An extended-range format's linear sample (`sl`) blends its four decoded taps by the device's `FMix` at the `f32` fractions (crates/metal2vulkan/src/lower/sample… |
+| `extended-swizzles-bgra10xr-srgb` | An extended-range format's linear sample (`sl`) blends its four decoded taps by the device's `FMix` at the `f32` fractions (crates/metal2vulkan/src/lower/sample… |
+| `extended-swizzles-bgra10xr-srgb` | An extended-range format's linear sample (`sl`) blends its four decoded taps by the device's `FMix` at the `f32` fractions (crates/metal2vulkan/src/lower/sample… |
+| `extended-swizzles-bgra10xr-srgb` | An extended-range format's linear sample (`sl`) blends its four decoded taps by the device's `FMix` at the `f32` fractions (crates/metal2vulkan/src/lower/sample… |
+| `extended-swizzles-bgra10xr-srgb` | An extended-range format's linear sample (`sl`) blends its four decoded taps by the device's `FMix` at the `f32` fractions (crates/metal2vulkan/src/lower/sample… |
+| `extended-swizzles-bgra10xr-srgb` | An extended-range format's linear sample (`sl`) blends its four decoded taps by the device's `FMix` at the `f32` fractions (crates/metal2vulkan/src/lower/sample… |
+| `xr-two-plane-samples-p2-lc-f` | A linear sample of a two-plane extended-range texture (`RGB10A8_2P_XR10` or its sRGB twin) blends its four decoded taps by the device's `FMix` at the `f32` frac… |
+| `xr-two-plane-samples-p2-lc-f` | A linear sample of a two-plane extended-range texture (`RGB10A8_2P_XR10` or its sRGB twin) blends its four decoded taps by the device's `FMix` at the `f32` frac… |
+| `xr-two-plane-samples-p2-lc-h` | A linear sample of a two-plane extended-range texture (`RGB10A8_2P_XR10` or its sRGB twin) blends its four decoded taps by the device's `FMix` at the `f32` frac… |
+| `xr-two-plane-samples-p2-lc-h` | A linear sample of a two-plane extended-range texture (`RGB10A8_2P_XR10` or its sRGB twin) blends its four decoded taps by the device's `FMix` at the `f32` frac… |
+| `xr-two-plane-samples-p2-lr-f` | A linear sample of a two-plane extended-range texture (`RGB10A8_2P_XR10` or its sRGB twin) blends its four decoded taps by the device's `FMix` at the `f32` frac… |
+| `xr-two-plane-samples-p2-lr-h` | A linear sample of a two-plane extended-range texture (`RGB10A8_2P_XR10` or its sRGB twin) blends its four decoded taps by the device's `FMix` at the `f32` frac… |
+| `xr-two-plane-samples-p2s-lc-f` | A linear sample of a two-plane extended-range texture (`RGB10A8_2P_XR10` or its sRGB twin) blends its four decoded taps by the device's `FMix` at the `f32` frac… |
+| `xr-two-plane-samples-p2s-lc-f` | A linear sample of a two-plane extended-range texture (`RGB10A8_2P_XR10` or its sRGB twin) blends its four decoded taps by the device's `FMix` at the `f32` frac… |
+| `xr-two-plane-samples-p2s-lc-h` | A linear sample of a two-plane extended-range texture (`RGB10A8_2P_XR10` or its sRGB twin) blends its four decoded taps by the device's `FMix` at the `f32` frac… |
+| `xr-two-plane-samples-p2s-lc-h` | A linear sample of a two-plane extended-range texture (`RGB10A8_2P_XR10` or its sRGB twin) blends its four decoded taps by the device's `FMix` at the `f32` frac… |
+| `xr-two-plane-samples-p2s-lr-f` | A linear sample of a two-plane extended-range texture (`RGB10A8_2P_XR10` or its sRGB twin) blends its four decoded taps by the device's `FMix` at the `f32` frac… |
+| `xr-two-plane-samples-p2s-lr-h` | A linear sample of a two-plane extended-range texture (`RGB10A8_2P_XR10` or its sRGB twin) blends its four decoded taps by the device's `FMix` at the `f32` frac… |
+| `extended-swizzles-r10unormx6` | A padded 10-bit format's linear sample (`sl`: `R10Unorm_X6`, `RG10Unorm_X12` and their sRGB twins, filtered in the module) blends its four decoded taps by the d… |
+| `extended-swizzles-r10unormx6` | A padded 10-bit format's linear sample (`sl`: `R10Unorm_X6`, `RG10Unorm_X12` and their sRGB twins, filtered in the module) blends its four decoded taps by the d… |
+| `extended-swizzles-r10unormx6` | A padded 10-bit format's linear sample (`sl`: `R10Unorm_X6`, `RG10Unorm_X12` and their sRGB twins, filtered in the module) blends its four decoded taps by the d… |
+| `extended-swizzles-r10unormx6-srgb` | A padded 10-bit format's linear sample (`sl`: `R10Unorm_X6`, `RG10Unorm_X12` and their sRGB twins, filtered in the module) blends its four decoded taps by the d… |
+| `extended-swizzles-r10unormx6-srgb` | A padded 10-bit format's linear sample (`sl`: `R10Unorm_X6`, `RG10Unorm_X12` and their sRGB twins, filtered in the module) blends its four decoded taps by the d… |
+| `extended-swizzles-r10unormx6-srgb` | A padded 10-bit format's linear sample (`sl`: `R10Unorm_X6`, `RG10Unorm_X12` and their sRGB twins, filtered in the module) blends its four decoded taps by the d… |
+| `extended-swizzles-rg10unormx12` | A padded 10-bit format's linear sample (`sl`: `R10Unorm_X6`, `RG10Unorm_X12` and their sRGB twins, filtered in the module) blends its four decoded taps by the d… |
+| `extended-swizzles-rg10unormx12` | A padded 10-bit format's linear sample (`sl`: `R10Unorm_X6`, `RG10Unorm_X12` and their sRGB twins, filtered in the module) blends its four decoded taps by the d… |
+| `extended-swizzles-rg10unormx12` | A padded 10-bit format's linear sample (`sl`: `R10Unorm_X6`, `RG10Unorm_X12` and their sRGB twins, filtered in the module) blends its four decoded taps by the d… |
+| `extended-swizzles-rg10unormx12` | A padded 10-bit format's linear sample (`sl`: `R10Unorm_X6`, `RG10Unorm_X12` and their sRGB twins, filtered in the module) blends its four decoded taps by the d… |
+| `extended-swizzles-rg10unormx12` | A padded 10-bit format's linear sample (`sl`: `R10Unorm_X6`, `RG10Unorm_X12` and their sRGB twins, filtered in the module) blends its four decoded taps by the d… |
+| `extended-swizzles-rg10unormx12-srgb` | A padded 10-bit format's linear sample (`sl`: `R10Unorm_X6`, `RG10Unorm_X12` and their sRGB twins, filtered in the module) blends its four decoded taps by the d… |
+| `extended-swizzles-rg10unormx12-srgb` | A padded 10-bit format's linear sample (`sl`: `R10Unorm_X6`, `RG10Unorm_X12` and their sRGB twins, filtered in the module) blends its four decoded taps by the d… |
+| `extended-swizzles-rg10unormx12-srgb` | A padded 10-bit format's linear sample (`sl`: `R10Unorm_X6`, `RG10Unorm_X12` and their sRGB twins, filtered in the module) blends its four decoded taps by the d… |
+| `extended-swizzles-rg10unormx12-srgb` | A padded 10-bit format's linear sample (`sl`: `R10Unorm_X6`, `RG10Unorm_X12` and their sRGB twins, filtered in the module) blends its four decoded taps by the d… |
+| `extended-swizzles-rg10unormx12-srgb` | A padded 10-bit format's linear sample (`sl`: `R10Unorm_X6`, `RG10Unorm_X12` and their sRGB twins, filtered in the module) blends its four decoded taps by the d… |
 

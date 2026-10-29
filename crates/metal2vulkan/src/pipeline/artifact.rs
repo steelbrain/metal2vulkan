@@ -754,48 +754,34 @@ pub enum PrecisionNote {
     /// arithmetic over Metal's parameter data, bit for bit (it once recorded this note, when the
     /// data was this crate's own layout).
     RasterizationRateMap,
-    /// Metal's bicubic filter, emulated by fetches with Metal's weights, the 8- and 16-bit
-    /// normalized and the extended-range formats' exact sum rounded half up onto the format's grid
-    /// (an extended-range one clamped into the format's decoded endpoints), and the 32-bit float
-    /// and half-float formats' sums through Metal's accumulators (a 1D sum and a 32-bit float
-    /// format's 2D bilinear one through its linear accumulator, a half format's 2D Catmull-Rom sum
-    /// through its two-pass one, an axis whose four taps clamp onto one texel weighed as that texel
-    /// alone; every lane of the P2d probe and of the float fixtures, of the held-out P2e and P2f
-    /// probes, and of the 16 half and small-float cases), differs from an Apple M3 Max in what is
-    /// not yet pinned:
-    /// - A 2D normalized sum within about `2^-21` of the format's range (`1` unsigned, `2`
-    ///   signed) of a rounding tie: Metal may round it to the other side, one grid step away
-    ///   (`1/65535` or `1/32767` for 16-bit, `1/4080` or `1/2032` for 8-bit). No model of Metal's
-    ///   2D datapath tried fits; its 1D sums are exact.
-    /// - An extended-range texture's 2D sum (`BGR10_XR`, `BGRA10_XR`, `RGB10A8_2P_XR10` and their
-    ///   `_sRGB` twins, read through the slot's `extended_range` variant) within 0.014 of a grid
-    ///   step of a rounding tie: Metal may round it to the other side, one step away (`1/8160` a
-    ///   color lane, `1/8192` an `_sRGB` color lane, `1/4080` alpha); 4,050 of the 3,317,760 lanes
-    ///   measured (every one at most 0.013968 of a step from a tie), every other lane exact. No
-    ///   model of Metal's datapath tried fits.
-    /// - An sRGB sum: Metal decodes each tap's code through its twelve-bit table and sums the
-    ///   steps exactly; the emulation sums the device's decoded taps in `f32`, the device's decode
-    ///   being the only form where it samples the format ([`PrecisionNote::SrgbTexelDecode`]). A
-    ///   texture slot bound in an 8-bit sRGB format the device holds as its UNORM twin decodes
-    ///   each tap's codes under its `SrgbTexture` variant by the device's transfer
-    ///   ([`PrecisionNote::SrgbTexelDecode`]) and sums them exactly on the grids `1/4095` (color,
-    ///   the step nearest each tap) and `1/(16 · 255)` (alpha), so only the first bullet's 2D
-    ///   residue applies to that sum. The packed normalized formats and `Depth16Unorm` sum in `f32` (their exact
-    ///   rule is not measured).
+    /// A filter the module emulates by fetches sums its taps in the device's arithmetic, where
+    /// Metal's sampler has its own datapath: Metal's bicubic filter (every format), and an
+    /// extended-range texture's linear, 3D and linear-mip-filter samples (`BGR10_XR`,
+    /// `BGRA10_XR`, `RGB10A8_2P_XR10` and their `_sRGB` twins, the padded forms; read through the
+    /// slot's `extended_range` variant or an argument buffer's raw element). The footprint, the
+    /// fraction (`1/256` of a texel), the addressing of each tap, the filter each format selects
+    /// (a 32-bit float format's bicubic sample and a level under four texels bilinear), the level
+    /// a mip filter reads, and each format's clamp are Metal's; the arithmetic is the device's:
+    /// the Catmull-Rom weights computed in `f32` from the fraction and the taps summed by its
+    /// multiply and add, a bilinear, trilinear or level blend by its `FMix` at the `f32`
+    /// fractions, and a `half` result the device's narrowing of the `f32` value. Metal's own
+    /// weights are a fixed-point table (each within `4.83e-4` of the polynomial's per axis,
+    /// together), it sums an 8- or 16-bit normalized or extended-range format's codes exactly onto
+    /// the format's grid with half-up rounding (a linear sum's terms truncated first), it sums the
+    /// float formats through its own accumulators and rounds a half format's sum to `half`, and it
+    /// truncates a linear mip filter's level fraction onto sixty-fourths: a lane may differ by a
+    /// few grid steps (`1/4080` at 8 bits), by the weights' distance times the taps (`2.1e-3` at
+    /// most on an extended-range `_sRGB` texture's taps), and by up to `1/64` of the two levels'
+    /// difference under a linear mip filter. A tap of an 8-bit sRGB texture held as its UNORM twin
+    /// is the device's decode of its code ([`PrecisionNote::SrgbTexelDecode`]).
     ///
-    /// The footprint, the fraction, the addressing of each tap, the filter each format selects,
-    /// the weights, each format's clamp and rounding, and the non-finite results are Metal's, but
-    /// for inferences: the signed clamp's lower bound, the treatment of the formats no case reads
-    /// (`RG8UnormSRGB`, and the exact rule's `RG8Unorm`, `RG8Snorm`, `RG16Unorm`, `BGRA8Unorm`,
-    /// and `A8Unorm`), the sums of `Depth32Float` (the 32-bit float formats') and the small
-    /// floats' non-finite results (`RG11B10Float`, `RGB9E5Float`: the half formats', whose
-    /// finite 2D sums are measured), taken by family, a 1D half sum's non-finite results, and two
-    /// 32-bit float sub-rules no lane tells apart: whether a denormal tap is flushed first (the
-    /// emulation keeps it) and then the sign of a zero result (the emulation gives `+0`). The
-    /// footprint is exact for every coordinate within `[-2^23 + 1/2, 2^23]` texels, where its 1/256
-    /// step fits an `i32`. Past that range a coordinate below `2^120` texels saturates it, the
-    /// translation's choice. A non-finite or larger coordinate gives an unspecified footprint whose
-    /// taps stay in bounds. Metal's value is not measured for either.
+    /// Inferences, taken by family: the signed clamp's lower bound, the treatment of the formats
+    /// no case reads (`RG8UnormSRGB`, `RG8Unorm`, `RG8Snorm`, `RG16Unorm`, `BGRA8Unorm`,
+    /// `A8Unorm`, `Depth32Float`). The footprint is exact for every coordinate within
+    /// `[-2^23 + 1/2, 2^23]` texels, where its 1/256 step fits an `i32`. Past that range a
+    /// coordinate below `2^120` texels saturates it, the translation's choice. A non-finite or
+    /// larger coordinate gives an unspecified footprint whose taps stay in bounds. Metal's value
+    /// is not measured for either.
     ///
     /// The note's class is unbounded: a lane that differs for any of these reasons is reported
     /// as explained, never accepted as a match.
@@ -1389,14 +1375,20 @@ pub enum PrecisionNote {
     /// explicit gradients, through a constexpr sampler of `maxAnisotropy` above 1, or through a
     /// runtime sampler slot whose word states anisotropy (under that word alone). A device with
     /// the feature samples with its own anisotropic filter. Metal's footprint (its gradient lengths,
-    /// piecewise-linear `log2`, level, tap count, tap weights and direction) is reproduced as
-    /// measured on an Apple M4 (the M3 Max answering identically), with this residue:
-    /// - the level is off by `1/256` of a level on about 1% of anisotropic samples;
-    /// - the tap spacing is Metal's at the ratio cap and for two taps (but where the ratio lies
-    ///   within `0.07/256` of a rounding tie, on about 5% of two-tap footprints, by up to 1.8/256
-    ///   of a texel), and a fitted approximation for three or more taps below the cap (exact on
-    ///   1,021 of 1,674 measured windows; up to about 18/256 of a texel at the outer tap of 10 or
-    ///   more taps);
+    /// level rule, tap count thresholds, tap weights and direction) is reproduced as measured on
+    /// an Apple M4 (the M3 Max answering identically), in the device's arithmetic: its `Log2` and
+    /// `Exp2` where Metal takes a piecewise-linear `log2` and its chords, the level and the
+    /// spacing unrounded where Metal rounds them to 256ths and 4096ths, and under a linear mip
+    /// filter the device's own blend of the two levels at the fractional level where Metal blends
+    /// them by 256ths. The residue:
+    /// - the level may differ from Metal's by its rounding (Metal's `log2` is within about
+    ///   `0.006` of a level of the true one), and a tap count at a threshold may differ by one
+    ///   count;
+    /// - the tap spacing is a fitted approximation for three or more taps below the cap (up to
+    ///   about 18/256 of a texel at the outer tap of 10 or more taps), and otherwise the device's
+    ///   unrounded value;
+    /// - the blend of two levels is the device's linear mip filter at the fractional level, within
+    ///   its `mipmapPrecisionBits`;
     /// - each tap is the device's own filter at the level the shader hands it, so its footprint
     ///   and sum are the device's (Metal's own on MoltenVK; elsewhere
     ///   [`PrecisionNote::DeviceSampling`]);
@@ -1406,7 +1398,8 @@ pub enum PrecisionNote {
     ///   face's edge reads the next face as the device projects it, where Metal's is not measured.
     ///
     /// Measured by `runtime_lane::anisotropic_filter` against the M4's answers on `rgba8Unorm`
-    /// at `maxAnisotropy` 2 to 16. With a linear filter, every channel is within a code: at most
+    /// at `maxAnisotropy` 2 to 16, with Metal's logarithm and blend (the device's are not yet
+    /// measured there). With a linear filter, every channel is within a code: at most
     /// 0.53 (mean up to 0.071) on lavapipe, 0.41 (0.027) on ANV (Iris Xe), 0.91 (0.043) on RADV
     /// (Radeon 780M; its bilinear filter's own residue) and 0.68 (0.075) on an RTX 3090. An RTX
     /// 3090's own anisotropic filter misses by up to 62 codes (mean 6.8). With a nearest filter,

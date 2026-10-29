@@ -10,29 +10,20 @@
 //! byte-identical): a nearest sample is the read of the texel at Metal's position, decoded
 //! (`extended_range::decode`, its `half` rounded with ties away from zero). A linear sample's
 //! footprint is the other formats' (`linear`, the position quantized to 1/256 of a texel, each tap
-//! addressed on its own, a border tap the sampler's border color through the format's channels),
-//! and its sum is the exact routine's on the format's grid (`bicubic::routines`,
-//! `BicubicTexels::EXTENDED`): each tap's code `16 (c - 384)` (an `_sRGB` color step `±s`, alpha
-//! `8 (c - 384)` of its clamped code), each term of the 2D product weights truncated (onto `2^-7`
-//! of a color lane's steps, `2^-4` of alpha's), the step rounded half up, divided by the grid
-//! exactly, and a `half` result rounded to nearest even but an `_sRGB` color lane's, which rounds
-//! the exact `f32` with ties away from zero. Every lane of 4,096 random 2D footprints per format
-//! and result type matched. A 2D linear sample of a form but a padded or bfloat one hands the
-//! routine each tap's step from its codes (`extended_range::steps`, a border tap's its value on
-//! each lane's grid), the integer the routine recovers from the decoded value, so no tap is decoded
-//! (`bicubic::routines::define_quad_steps`), and the routine takes the sum's value on the grid as
-//! `RN(|n| / 255)` exactly scaled (`texel_round::ratio_by_255_to_f32`, an `_sRGB` color lane's
-//! `|n| / 8192` exact), a `half` result rounded from it once (`texel_round::normal_half_bits`): a
-//! guest fragment's 49 two-plane samples took 84,961 instructions (143:524 spills:fills) and
-//! 17.5-17.6 s to make on the Iris Xe (ANV) with decoded taps and the general quotient, and 46,373
-//! (84:204) and 6.6 s so.
+//! addressed on its own, a border tap the sampler's border color through the format's channels).
+//! Its sum is the device's: the four taps' decoded values blended by its `FMix` at the fractions
+//! `k / 256` ([`filtered`]), a `half` result the device's narrowing of the `f32` value. Metal sums
+//! the taps' codes exactly on the format's grid (each term of the 2D product weights truncated onto
+//! `2^-7` of a color lane's steps and `2^-4` of alpha's, the step rounded half up, divided by the
+//! grid exactly; every lane of 4,096 random 2D footprints per format and result type read so), which
+//! the device's arithmetic does not reproduce: the sample records
+//! `PrecisionNote::BicubicFilterArithmetic`, the emulated filters' note.
 //!
 //! **The two-plane formats** (an Apple M4 on macOS 27.0.1: every lane of 4,096
 //! samples of a 16 x 16 texture per format, filter, address mode and result type): the color
 //! lanes are `BGR10_XR`'s (or its twin's), and the alpha byte `b` reads `b / 255` (a nearest
-//! sample's `half` rounded with ties away from zero, as the decode rounds it) and filters as an
-//! 8-bit unorm code on `1/(16 · 255)`, which is alpha's grid `8 · 510` here: the step
-//! `⌊Σ 16 b w / 2^16 + 1/2⌋` of the product weights `w`, its `half` rounded to nearest even.
+//! sample's `half` rounded with ties away from zero, as the decode rounds it) and filters as the
+//! other lanes do, where Metal filters it as an 8-bit unorm code on `1/(16 · 255)`.
 //!
 //! **A runtime sampler** reads its slot's `SamplerState` word: the sample is linear where the word
 //! states linear minification and magnification, else nearest; the taps follow the word's address
@@ -42,13 +33,12 @@
 //!
 //! **Levels and layers.** A sample reads the level Metal's rule reads (`level`, the rule measured on
 //! the other formats: the level rounded to `half`, clamped into the sampler's clamp and the
-//! texture's levels, its fraction truncated onto sixty-fourths): level 0 without a mip filter, the
-//! level `L + 1` past half a level under a nearest one, and under a linear one levels `L` and
-//! `L + 1` summed as one trilinear footprint, the level its third axis
-//! (`bicubic::routines::define_levels`: each level's taps under its own fractions, a nearest
-//! filter's texel at full weight, the second level weighing `4q` 256ths, each tap's weight the
-//! product rounded as a 3D footprint's, each term truncated as a 2D sum's), where the second level
-//! weighs anything, else level `L`'s sample. A 2D array's layer is clamped into the array, as
+//! texture's levels): level 0 without a mip filter, the level `L + 1` past half a level under a
+//! nearest one, and under a linear one levels `L` and `L + 1` of the level clamped in `f32`,
+//! blended by the device's `FMix` at its `f32` fraction where the second weighs anything, else
+//! level `L`'s sample. Metal truncates the fraction onto sixty-fourths and sums both levels' taps
+//! exactly as one trilinear footprint (`PrecisionNote::BicubicFilterArithmetic`). A 2D array's
+//! layer is clamped into the array, as
 //! sampling clamps it. Measured (the XR mip probe, an Apple M3 Max on macOS 27.0.1): every lane of
 //! 8,192 samples per `BGR10_XR` and `BGRA10_XR` form and `_sRGB` twin, nearest and linear filter,
 //! nearest and linear mip filter, `float` and `half` result, of 2D and 2D array textures of five
@@ -72,11 +62,10 @@
 //! down, under a nearest mip filter, `float` and `half`, through a runtime sampler clamping to the
 //! edge; and of 8,192 linear samples of `BGRA10_XR`, its twin and `BGR10_XR` under mirrored repeat
 //! and under repeat, coordinates up to 1.3 past the edges). A nearest sample reads the texel at
-//! Metal's position on the three axes. A linear one sums the 3D footprint's eight taps through
-//! the exact 3D routine under the format's bits (`bicubic::routines::Block`, as the other formats'
-//! 3D filter): each tap's weight the product of the axes' weights rounded onto `2^-16`, a tie up on
-//! the `t` axis's first tap in Metal's frame (its second where a mirrored axis's taps run
-//! backwards), each term truncated as a 2D sum's. The level follows the 2D rules under a nearest
+//! Metal's position on the three axes. A linear one blends the 3D footprint's eight taps' decoded
+//! values by the device's `FMix` along each axis ([`filtered`]), where Metal weighs each tap by the
+//! product of the axes' weights rounded onto `2^-16` and truncates each term as a 2D sum's
+//! (`PrecisionNote::BicubicFilterArithmetic`). The level follows the 2D rules under a nearest
 //! mip filter. A linear mip filter's blend of a 3D texture's two levels fits no rule tried (the
 //! closest, 284 of 8,192 samples apart), so it is refused, by the lowering for a constexpr sampler
 //! and by the binder for a runtime one; so are another form's 3D sample (not measured) and a 3D
@@ -92,19 +81,17 @@
 //! formats, `bicubic::cubic_state`), with `float` results and, under clamp to edge, `half` ones:
 //! 3,317,760 lanes): the footprint, the weights, the addressing, a mirrored axis and a level below
 //! four texels are the other formats' (`bicubic`), each tap the decoded texel or the border texel
-//! through the format's channels. A level below four texels sums as this module's linear filter.
-//! Otherwise the sum is the exact routine's (`bicubic::routines::Plane::exact`, under the format's
-//! bits): each tap's step weighed by the product of Metal's weights and summed exactly, no term
-//! truncated as the linear filter's are, the step rounded half up, then clamped into the steps of
-//! the format's codes 0 and 1023 (a color lane's decoded endpoints: `(0 - 384) / 510` and
-//! `(1023 - 384) / 510`, an `_sRGB` twin's table steps; alpha's `[0, 1]`), and divided by the grid
-//! exactly, its `half` rounded as a linear sample's. The clamp is applied to the routine's result:
-//! each rounding is monotonic, so clamping the rounded sum into the rounded endpoints is clamping
-//! the step. Every lane but 4,050 matched; each of those is one step from Metal's, its exact sum
-//! within 0.014 of a step of a rounding tie, which Metal rounds to the other side. No model of
-//! Metal's datapath tried fits, so the sample records `PrecisionNote::BicubicFilterArithmetic`. A
-//! bfloat or padded form's bicubic sample, a gather through a bicubic sampler, and a swizzled
-//! texture's bicubic sample are not measured, and are refused.
+//! through the format's channels. The sum is the device's arithmetic (`bicubic::routines::Plane`:
+//! the Catmull-Rom weights computed from the fraction, the decoded taps summed by its multiply and
+//! add, a level below four texels its `FMix` of the inner taps), clamped into the decoded values of
+//! the format's codes 0 and 1023 (a color lane's `(0 - 384) / 510` and `(1023 - 384) / 510`, an
+//! `_sRGB` twin's through the sRGB transfer; alpha's `[0, 1]`), and a `half` result the device's
+//! narrowing of the clamped `f32` value. Metal's sum (its fixed-point weights, each tap's step
+//! summed exactly, rounded half up onto the grid) differs from it by up to about `2^-9` of a lane
+//! (`xr_bicubic::WEIGHTS_BOUND`, its weights' distance from the polynomial), recorded as
+//! `PrecisionNote::BicubicFilterArithmetic`. A bfloat or padded form's bicubic sample, a gather
+//! through a bicubic sampler, and a swizzled texture's bicubic sample are not measured, and are
+//! refused.
 //!
 //! The bicubic paragraph above is Metal's reading on these formats, except inferences, each the
 //! other formats' bicubic reading (`bicubic`; for a runtime sampler) carried to
@@ -169,7 +156,6 @@ use crate::air::abi::{BorderColor, MipFilter, SamplerState};
 use crate::air::ir::ValueId;
 use crate::lower::emit::EmitCx;
 use crate::metal::bicubic::BicubicTexels;
-use crate::metal::format::extended_srgb::SRGB_DECODE_STEPS;
 use crate::metal::format::ExtendedRange;
 use crate::metal::sampler::SamplerWord;
 use crate::metal::{PixelFormat, SamplerMipFilter, TextureSwizzleChannels};
@@ -414,15 +400,9 @@ impl Sample {
             false => super::position::OFFSET_RULE_WORDS,
         };
         let offset = moved * rule;
-        // A 2D footprint's four taps, a 3D one's eight, each decoded; a 2D linear filter of a
-        // form with grid steps takes each tap's steps and, past a border, the border's.
+        // A 2D footprint's four taps, a 3D one's eight, each decoded.
         let corners = 1 << axes;
         let linear = super::linear::PLANE_WORDS + corners * decode + offset;
-        let stepped =
-            match !self.volume && crate::lower::arith::extended_range::has_steps(self.form) {
-                true => super::linear::PLANE_WORDS + corners * (STEPS + STEP_BORDER_WORDS) + offset,
-                false => linear,
-            };
         let nearest = NEAREST_WORDS + decode + offset;
         let position = axes * super::position::POSITION_WORDS;
         // A gather's footprint and four decodes, or a bfloat form's nearest sample alone, under
@@ -473,10 +453,9 @@ impl Sample {
         };
         let (level, blends) = self.level_words();
         let filters = match blends {
-            // The two levels' filters of decoded taps and the one level's, the routine's call and
-            // the branch.
-            true => 2 * filters(linear) + filters(stepped) + BLEND_CALL_WORDS + BRANCH_WORDS,
-            false => filters(stepped),
+            // The two levels' filters and the one level's, the blend and the branch.
+            true => 3 * filters(linear) + BLEND_WORDS + BRANCH_WORDS,
+            false => filters(linear),
         };
         filters + level + swizzle
     }
@@ -495,19 +474,12 @@ impl Sample {
     }
 }
 
-/// The census words of a tap's grid steps (`extended_range::STEPS_WORDS`).
-const STEPS: u32 = crate::lower::arith::extended_range::STEPS_WORDS;
-
-/// The census words of a tap's steps past a border: the grids, the border texel's product and
-/// conversion, and the select.
-const STEP_BORDER_WORDS: u32 = 32;
-
 /// The census words of a level from derivatives or gradients: the derivatives, the size query
 /// and its conversion, the gradients' lengths, their maximum and `log2`, and the bias.
 const DERIVED_WORDS: u32 = 128;
 
-/// The census words of the levels' blend's call: its operands and the call.
-const BLEND_CALL_WORDS: u32 = 24;
+/// The census words of the levels' blend: the weight's test, its broadcast and the `FMix`.
+const BLEND_WORDS: u32 = 24;
 
 /// What a sample's fetches read: the slot's image (image facts `image`), the format's bits for
 /// the exact routine and the border texel ([`flags`]), and how its raw texels decode; and the
@@ -800,39 +772,29 @@ fn sampled(
             };
             filters(cx, fb, &t, &at, &tex, &r.state)?
         }
-        // A linear mip filter's two levels, blended where the second weighs anything.
+        // A linear mip filter's two levels, blended by the device's `FMix` where the second
+        // weighs anything.
         Some(Levels {
             first,
             blend: Some((second, weight)),
         }) => {
-            let zero = scalar(fb, t.u32_, 0)?;
+            let zero = scalar(fb, t.f32_, 0)?;
             let zero = value(fb, zero)?;
-            let blends = fb.binary(BinOp::INotEqual, weight, zero)?;
-            let Some(blend) = cx.decl.families.sampler.level_blend else {
-                return Err(cx.fail("an extended-range sample without its levels' blend"));
-            };
+            let blends = fb.binary(BinOp::FOrdNotEqual, weight, zero)?;
             let (t, tex, state) = (&t, &tex, &r.state);
-            let half = scalar(fb, t.bool_, u64::from(at.half))?;
-            let half = value(fb, half)?;
             let both: ArmFn<'_, EmitCx<'_>> = Box::new(move |fb, cx| {
-                let mut args = Vec::with_capacity(15);
-                let mut ks = Vec::with_capacity(4);
-                for level in [first, second] {
-                    let at = At {
-                        level: Some(level),
-                        ..at
-                    };
-                    let [t00, t01, t10, t11, kx, ky] = level_taps(cx, fb, t, &at, tex, state)?;
-                    args.extend([t00, t01, t10, t11]);
-                    ks.extend([kx, ky]);
+                let mut x = [first, second].map(|level| At {
+                    level: Some(level),
+                    half: false,
+                    ..at
+                });
+                for at in &mut x {
+                    at.coord = filters(cx, fb, t, at, tex, state)?;
                 }
-                args.extend(ks);
-                // The second level's weight in 256ths.
-                let two = scalar(fb, t.u32_, 2)?;
-                let two = value(fb, two)?;
-                let kz = fb.binary(BinOp::ShiftLeftLogical, weight, two)?;
-                args.extend([kz, tex.flags, half]);
-                let x = fb.call(blend, &args)?.ok_or_else(missing_routine)?;
+                let [a, b] = x.map(|at| at.coord);
+                let w = fb.composite_construct(t.vec4, &[weight; 4])?;
+                let x = fb.glsl(GlslOp::FMix, &[a, b, w])?;
+                let x = super::bicubic::narrowed(fb, x, at.half)?;
                 Ok(ArmEnd::FallThrough(vec![x]))
             });
             let one: ArmFn<'_, EmitCx<'_>> = Box::new(move |fb, cx| {
@@ -933,8 +895,8 @@ pub(super) fn filters(
 }
 
 /// The levels a mipmapped sample reads (module docs): the level (a `u32`), and under a linear mip
-/// filter the next one (a `u32`, the last level past it) with its weight in sixty-fourths (a
-/// `u32`; 0 where the sample reads one level).
+/// filter the next one (a `u32`, the last level past it) with its weight (an `f32`, the clamped
+/// level's fraction; 0 where the sample reads one level).
 struct Levels {
     first: SValue,
     blend: Option<(SValue, SValue)>,
@@ -961,15 +923,24 @@ fn levels(
     let one = value(fb, one)?;
     let last = fb.binary(BinOp::ISub, count, one)?;
     let last_f = fb.convert(ConvOp::ConvertUToF, last, t.f32_)?;
-    // A linear mip filter's two levels and the next one's weight in sixty-fourths.
-    let pair = |fb: &mut FunctionBuilder<'_>, (l, q): (SValue, SValue)| -> BResult<_> {
+    // A linear mip filter's two levels and the next one's weight: the level clamped into the
+    // sampler's clamp `[min, max]` (`None`: no maximum) and the texture's levels, in `f32`, its
+    // floor and fraction.
+    let pair = |fb: &mut FunctionBuilder<'_>, (min, max): (SValue, Option<SValue>)| -> BResult<_> {
+        let h = fb.glsl(GlslOp::NMax, &[x, min])?;
+        let h = match max {
+            Some(max) => fb.glsl(GlslOp::NMin, &[h, max])?,
+            None => h,
+        };
+        let zero = scalar(fb, t.f32_, 0)?;
+        let zero = value(fb, zero)?;
+        let h = fb.glsl(GlslOp::NMax, &[h, zero])?;
+        let h = fb.glsl(GlslOp::NMin, &[h, last_f])?;
+        let l = fb.glsl(GlslOp::Floor, &[h])?;
+        let w = fb.binary(BinOp::FSub, h, l)?;
         let l0 = fb.convert(ConvOp::ConvertFToU, l, t.u32_)?;
         let l1 = fb.binary(BinOp::IAdd, l0, one)?;
         let l1 = fb.glsl(GlslOp::UMin, &[l1, last])?;
-        let k64 = scalar(fb, t.f32_, u64::from(64f32.to_bits()))?;
-        let k64 = value(fb, k64)?;
-        let w = fb.binary_no_contraction(BinOp::FMul, q, k64)?;
-        let w = fb.convert(ConvOp::ConvertFToU, w, t.u32_)?;
         Ok((l0, l1, w))
     };
     let levels = match r.level {
@@ -979,9 +950,9 @@ fn levels(
             let min = value(fb, min)?;
             let max = scalar(fb, t.f32_, u64::from(stated.max))?;
             let max = value(fb, max)?;
-            let grid = super::level::clamped_on_grid(fb, x, (min, Some(max)), last_f)?;
             match stated.linear {
                 false => {
+                    let grid = super::level::clamped_on_grid(fb, x, (min, Some(max)), last_f)?;
                     let n = super::level::nearest_on_grid(fb, grid)?;
                     Levels {
                         first: fb.convert(ConvOp::ConvertFToU, n, t.u32_)?,
@@ -989,7 +960,7 @@ fn levels(
                     }
                 }
                 true => {
-                    let (l0, l1, w) = pair(fb, grid)?;
+                    let (l0, l1, w) = pair(fb, (min, Some(max)))?;
                     Levels {
                         first: l0,
                         blend: Some((l1, w)),
@@ -1019,8 +990,7 @@ fn levels(
             let step = scalar(fb, t.f32_, u64::from((1f32 / 64.0).to_bits()))?;
             let step = value(fb, step)?;
             let min = fb.binary_no_contraction(BinOp::FMul, min, step)?;
-            let grid = super::level::clamped_on_grid(fb, x, (min, None), last_f)?;
-            let (l0, l1, w) = pair(fb, grid)?;
+            let (l0, l1, w) = pair(fb, (min, None))?;
             let mip = scalar(fb, t.u32_, u64::from(SamplerWord::MIP_FILTER))?;
             let mip = value(fb, mip)?;
             let linear = SamplerMipFilter::Linear.as_raw() << SamplerWord::MIP_FILTER_SHIFT;
@@ -1028,7 +998,7 @@ fn levels(
             let linear = value(fb, linear)?;
             let have = fb.binary(BinOp::BitwiseAnd, word, mip)?;
             let linear = fb.binary(BinOp::IEqual, have, linear)?;
-            let zero = scalar(fb, t.u32_, 0)?;
+            let zero = scalar(fb, t.f32_, 0)?;
             let zero = value(fb, zero)?;
             Levels {
                 first: fb.select(linear, l0, near)?,
@@ -1100,9 +1070,11 @@ fn swizzled(fb: &mut FunctionBuilder<'_>, tex: &Texture, x: SValue) -> BResult<S
     }
 }
 
-/// The linear sample at `at` of `tex` under `addressing`: the exact 2D routine's sum of the four
-/// taps' decoded values, a merged axis's fraction taken as 0; a 3D texture's, the exact 3D
-/// routine's sum of the eight ([`block_taps`]).
+/// The linear sample at `at` of `tex` under `addressing`: the device's `FMix` of the four taps'
+/// decoded values by the fractions `k / 256`, a merged axis's fraction taken as 0, or a 3D
+/// texture's of the eight ([`block_taps`]); its `half` result the device's narrowing. An in-place
+/// two-plane YCbCr texture's is Metal's exact sum of its taps on its grid (`super::in_place`,
+/// `bicubic::routines::Quad`).
 pub(super) fn filtered(
     cx: &mut EmitCx<'_>,
     fb: &mut FunctionBuilder<'_>,
@@ -1111,43 +1083,64 @@ pub(super) fn filtered(
     tex: &Texture,
     addressing: Addressing<'_>,
 ) -> BResult<SValue> {
-    let (routine, mut args) = match tex.image.plane {
+    if let Decode::InPlace(_) = tex.decode {
+        let Some(quad) = cx.decl.families.sampler.linear_quad else {
+            return Err(cx.fail("an in-place linear sample without its routines"));
+        };
+        let mut args = quad_taps(cx, fb, t, at, tex, addressing)?.to_vec();
+        args.push(tex.flags);
+        let half = fb.module().constant(Constant::Scalar {
+            ty: t.bool_,
+            bits: ConstBits(u64::from(at.half)),
+        })?;
+        args.push(value(fb, half)?);
+        return fb.call(quad.exact, &args)?.ok_or_else(missing_routine);
+    }
+    let x = match tex.image.plane {
         3 => {
-            let Some(block) = cx.decl.families.sampler.linear_block else {
-                return Err(cx.fail("an extended-range 3D linear sample without its routines"));
-            };
-            (block.exact, block_taps(cx, fb, t, at, tex, addressing)?)
-        }
-        // A form with grid steps sums its taps' steps (`bicubic::routines::define_quad_steps`).
-        _ if steps_of(tex).is_some() => {
-            let Some(routine) = cx.decl.families.sampler.quad_steps else {
-                return Err(cx.fail("an extended-range linear sample without its routines"));
-            };
-            let taps = quad_taps(cx, fb, t, at, tex, addressing, Tapped::Steps)?;
-            (routine, taps.to_vec())
+            let (taps, [kx, ky, kz]) = block_taps(cx, fb, t, at, tex, addressing)?;
+            let fx = fraction(fb, t, kx)?;
+            let fy = fraction(fb, t, ky)?;
+            let fz = fraction(fb, t, kz)?;
+            let [t000, t001, t010, t011, t100, t101, t110, t111] = taps;
+            let near = bilinear(fb, [t000, t001, t010, t011], (fx, fy))?;
+            let far = bilinear(fb, [t100, t101, t110, t111], (fx, fy))?;
+            fb.glsl(GlslOp::FMix, &[near, far, fz])?
         }
         _ => {
-            let Some(quad) = cx.decl.families.sampler.linear_quad else {
-                return Err(cx.fail("an extended-range linear sample without its routines"));
-            };
-            let taps = quad_taps(cx, fb, t, at, tex, addressing, Tapped::Values)?;
-            (quad.exact, taps.to_vec())
+            let [t00, t01, t10, t11, kx, ky] = quad_taps(cx, fb, t, at, tex, addressing)?;
+            let fx = fraction(fb, t, kx)?;
+            let fy = fraction(fb, t, ky)?;
+            bilinear(fb, [t00, t01, t10, t11], (fx, fy))?
         }
     };
-    args.push(tex.flags);
-    let half = fb.module().constant(Constant::Scalar {
-        ty: t.bool_,
-        bits: ConstBits(u64::from(at.half)),
-    })?;
-    args.push(value(fb, half)?);
-    fb.call(routine, &args)?.ok_or_else(missing_routine)
+    super::bicubic::narrowed(fb, x, at.half)
 }
 
-/// The linear footprint at `at` of a 3D texture `tex` under `addressing`, as the exact 3D routine
-/// takes it (`bicubic::routines::Block`): its eight taps' decoded values (or the border texel),
-/// `s` fastest and `r` slowest, the fractions `kx`, `ky`, `kz` in 256ths, a merged axis's 0, and
-/// whether the `t` axis's taps run backwards (a mirrored axis's in the reflected half of its
-/// period, where Metal's first tap is the second, as `linear`'s 3D emulation takes it).
+/// The fraction `k / 256` of `k` (a `u32`, below 256) in every lane of a `vec4`, exact.
+fn fraction(fb: &mut FunctionBuilder<'_>, t: &Tys, k: SValue) -> BResult<SValue> {
+    let x = fb.convert(ConvOp::ConvertUToF, k, t.f32_)?;
+    let step = scalar(fb, t.f32_, u64::from((1f32 / 256.0).to_bits()))?;
+    let step = value(fb, step)?;
+    let f = fb.binary(BinOp::FMul, x, step)?;
+    fb.composite_construct(t.vec4, &[f; 4])
+}
+
+/// The device's bilinear filter of taps `(i, j)`, `(i + 1, j)`, `(i, j + 1)`, `(i + 1, j + 1)` by
+/// the fractions `fx` and `fy` (`vec4`s): `FMix` along the `s` axis, then the `t` axis.
+fn bilinear(
+    fb: &mut FunctionBuilder<'_>,
+    [t00, t01, t10, t11]: [SValue; 4],
+    (fx, fy): (SValue, SValue),
+) -> BResult<SValue> {
+    let top = fb.glsl(GlslOp::FMix, &[t00, t01, fx])?;
+    let bottom = fb.glsl(GlslOp::FMix, &[t10, t11, fx])?;
+    fb.glsl(GlslOp::FMix, &[top, bottom, fy])
+}
+
+/// The linear footprint at `at` of a 3D texture `tex` under `addressing`: its eight taps' decoded
+/// values (or the border texel), `s` fastest and `r` slowest, and the fractions `kx`, `ky`, `kz`
+/// in 256ths, a merged axis's 0.
 fn block_taps(
     cx: &mut EmitCx<'_>,
     fb: &mut FunctionBuilder<'_>,
@@ -1155,7 +1148,7 @@ fn block_taps(
     at: &At<'_>,
     tex: &Texture,
     addressing: Addressing<'_>,
-) -> BResult<Vec<SValue>> {
+) -> BResult<([SValue; 8], [SValue; 3])> {
     let taps = Taps {
         addressing,
         offset: at.offset,
@@ -1170,7 +1163,7 @@ fn block_taps(
     let (&[x0, x1], &[y0, y1], &[z0, z1]) = (xs.as_slice(), ys.as_slice(), zs.as_slice()) else {
         return Err(cx.fail("an extended-range 3D linear axis without two taps"));
     };
-    let mut out = Vec::with_capacity(14);
+    let mut out = Vec::with_capacity(8);
     for z in [z0, z1] {
         for y in [y0, y1] {
             for x in [x0, x1] {
@@ -1178,43 +1171,20 @@ fn block_taps(
             }
         }
     }
-    out.push(super::linear::merged(fb, t, *kx, [x0, x1])?);
-    out.push(super::linear::merged(fb, t, *ky, [y0, y1])?);
-    out.push(super::linear::merged(fb, t, *kz, [z0, z1])?);
-    let back = fb.binary(BinOp::UGreaterThan, y0.0, y1.0)?;
-    let flip = match (addressing, fp.modes.get(1)) {
-        (Addressing::Modes { address, .. }, _) => match address.get(1) {
-            Some(TapAddress::Mirror) => back,
-            _ => {
-                let no = scalar(fb, t.bool_, 0)?;
-                value(fb, no)?
-            }
-        },
-        (Addressing::Word { .. }, Some(&mode)) => {
-            let mirror = scalar(fb, t.u32_, super::bicubic::MIRROR_REPEAT)?;
-            let mirror = value(fb, mirror)?;
-            let mirrors = fb.binary(BinOp::IEqual, mode, mirror)?;
-            fb.binary(BinOp::LogicalAnd, mirrors, back)?
-        }
-        (Addressing::Word { .. }, None) => {
-            return Err(cx.fail("an extended-range 3D sample without its t axis's mode"));
-        }
-    };
-    out.push(flip);
-    Ok(out)
+    let out: [SValue; 8] = out
+        .try_into()
+        .map_err(|_| cx.fail("an extended-range 3D linear footprint without its taps"))?;
+    let k = [
+        super::linear::merged(fb, t, *kx, [x0, x1])?,
+        super::linear::merged(fb, t, *ky, [y0, y1])?,
+        super::linear::merged(fb, t, *kz, [z0, z1])?,
+    ];
+    Ok((out, k))
 }
 
-/// What a footprint's taps hand its sum: each tap's decoded value (or the border texel), or its
-/// grid steps ([`step`]).
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum Tapped {
-    Values,
-    Steps,
-}
-
-/// The linear footprint at `at` of `tex` under `addressing`: its four taps, `(i, j)`, `(i + 1,
-/// j)`, `(i, j + 1)`, `(i + 1, j + 1)`, as `tapped` hands them, and the fractions `kx`, `ky` in
-/// 256ths, a merged axis's 0.
+/// The linear footprint at `at` of `tex` under `addressing`: its four taps' decoded values (or the
+/// border texel), `(i, j)`, `(i + 1, j)`, `(i, j + 1)`, `(i + 1, j + 1)`, and the fractions `kx`,
+/// `ky` in 256ths, a merged axis's 0.
 fn quad_taps(
     cx: &mut EmitCx<'_>,
     fb: &mut FunctionBuilder<'_>,
@@ -1222,7 +1192,6 @@ fn quad_taps(
     at: &At<'_>,
     tex: &Texture,
     addressing: Addressing<'_>,
-    tapped: Tapped,
 ) -> BResult<[SValue; 6]> {
     let taps = Taps {
         addressing,
@@ -1241,74 +1210,12 @@ fn quad_taps(
     let (kx, ky) = (*kx, *ky);
     let mut out = Vec::with_capacity(6);
     for site in [[x0, y0], [x1, y0], [x0, y1], [x1, y1]] {
-        out.push(match tapped {
-            Tapped::Values => texel(cx, fb, &fp, tex, &site, false)?,
-            Tapped::Steps => step(cx, fb, &fp, tex, &site)?,
-        });
+        out.push(texel(cx, fb, &fp, tex, &site, false)?);
     }
     out.push(super::linear::merged(fb, t, kx, [x0, x1])?);
     out.push(super::linear::merged(fb, t, ky, [y0, y1])?);
     out.try_into()
         .map_err(|_| cx.fail("an extended-range linear footprint without its taps"))
-}
-
-/// A level's taps for the levels' blend (`bicubic::routines::define_levels`) at `at` of `tex` by
-/// `state`: a linear filter's footprint ([`quad_taps`]), or a nearest filter's texel (decoded, a
-/// `float`) at each tap and the fractions 0.
-fn level_taps(
-    cx: &mut EmitCx<'_>,
-    fb: &mut FunctionBuilder<'_>,
-    t: &Tys,
-    at: &At<'_>,
-    tex: &Texture,
-    state: &State,
-) -> BResult<[SValue; 6]> {
-    let at = At { half: false, ..*at };
-    let one = |cx: &mut EmitCx<'_>,
-               fb: &mut FunctionBuilder<'_>,
-               addressing: Addressing<'_>|
-     -> BResult<[SValue; 6]> {
-        let x = nearest(cx, fb, t, &at, tex, addressing)?;
-        let zero = scalar(fb, t.u32_, 0)?;
-        let zero = value(fb, zero)?;
-        Ok([x, x, x, x, zero, zero])
-    };
-    match state {
-        State::Constant {
-            linear,
-            address,
-            border,
-            pixel,
-        } => {
-            let addressing = Addressing::Modes {
-                address,
-                border: *border,
-                pixel: *pixel,
-            };
-            match linear {
-                true => quad_taps(cx, fb, t, &at, tex, addressing, Tapped::Values),
-                false => one(cx, fb, addressing),
-            }
-        }
-        State::Slot { sampler } => {
-            let word = super::emit::sampler_word(cx, fb, Pixel::Spec(*sampler))?;
-            let addressing = Addressing::Word { word, axes: AXES };
-            let linear = word_linear(fb, t, word)?;
-            let at = &at;
-            let filtered: ArmFn<'_, EmitCx<'_>> = Box::new(move |fb, cx| {
-                let x = quad_taps(cx, fb, t, at, tex, addressing, Tapped::Values)?;
-                Ok(ArmEnd::FallThrough(x.to_vec()))
-            });
-            let nearest: ArmFn<'_, EmitCx<'_>> = Box::new(move |fb, cx| {
-                let x = one(cx, fb, addressing)?;
-                Ok(ArmEnd::FallThrough(x.to_vec()))
-            });
-            let Merged(merged) = fb.if_(cx, linear, filtered, Some(nearest))?;
-            merged
-                .try_into()
-                .map_err(|_| cx.fail("an extended-range level's branch without its taps"))
-        }
-    }
 }
 
 /// Whether runtime sampler word `word` states linear minification and magnification (a `bool`): a
@@ -1323,8 +1230,9 @@ pub(super) fn word_linear(fb: &mut FunctionBuilder<'_>, t: &Tys, word: SValue) -
     fb.binary(BinOp::IEqual, have, want)
 }
 
-/// The bicubic sample `cubic` at `at` of `tex` in `form` (module docs): Metal's bicubic filter of
-/// the decoded taps, through the exact routines alone, clamped into the format's endpoints.
+/// The bicubic sample `cubic` at `at` of `tex` in `form` (module docs): the bicubic filter of the
+/// decoded taps in the device's arithmetic, clamped into the format's endpoints, its `half`
+/// result the device's narrowing.
 fn bicubic(
     cx: &mut EmitCx<'_>,
     fb: &mut FunctionBuilder<'_>,
@@ -1340,15 +1248,8 @@ fn bicubic(
     let zero = fb.u32_const(0)?;
     let zero = value(fb, zero)?;
     let size = fb.query(ImageQuery::SizeLod(zero), tex.img)?;
-    let x = super::bicubic::filter(
-        cx,
-        fb,
-        (t, &fp, size),
-        cubic,
-        (bits, at.half),
-        Texels::Extended(tex),
-    )?;
-    let [lo, hi] = clamp_bounds(form, at.half).map(|lanes| {
+    let x = super::bicubic::filter(cx, fb, (t, &fp, size), cubic, bits, Texels::Extended(tex))?;
+    let [lo, hi] = clamp_bounds(form).map(|lanes| {
         let mut parts = Vec::with_capacity(lanes.len());
         for x in lanes {
             parts.push(scalar(fb, t.f32_, u64::from(x.to_bits()))?);
@@ -1359,66 +1260,30 @@ fn bicubic(
         })?;
         value(fb, k)
     });
-    fb.glsl(GlslOp::NClamp, &[x, lo?, hi?])
+    let x = fb.glsl(GlslOp::NClamp, &[x, lo?, hi?])?;
+    super::bicubic::narrowed(fb, x, at.half)
 }
 
-/// The bounds a bicubic sample of `form` is clamped into, as its result reads them (a `half` one's
-/// where `half`): per lane, red to alpha, the values of the steps of the codes 0 and 1023 on the
-/// lane's grid (module docs), rounded as the exact routine rounds a step (`f32` correctly; `half`
-/// to nearest even, an `_sRGB` color lane's `f32` with ties away from zero). A lane the format
-/// lacks is 0 or 1 at every tap, within its bounds.
-fn clamp_bounds(form: ExtendedRange, half: bool) -> [[f32; 4]; 2] {
-    let color = |code: u32| -> f32 {
-        let n = code as i64 - 384;
-        let (steps, grid) = match form.srgb() {
-            true => {
-                // Codes 0 and 1023: the table's entries 384 and 639.
-                let at = n.unsigned_abs() as usize;
-                let s = SRGB_DECODE_STEPS.get(at).copied().map_or(0, i64::from);
-                (if n < 0 { -s } else { s }, 8192)
-            }
-            false => (16 * n, 16 * 510),
-        };
-        match (half, form.srgb()) {
-            (false, _) => steps as f32 / grid as f32,
-            // An `_sRGB` step over 8192 is an exact `f32`.
-            (true, true) => half_of(steps, grid, true),
-            (true, false) => half_of(steps, grid, false),
+/// The bounds a bicubic sample of `form` is clamped into: per lane, red to alpha, the values of
+/// the codes 0 and 1023 (a color lane's `(c - 384) / 510`, an `_sRGB` twin's through the sRGB
+/// transfer of its magnitude, sign kept), alpha's `[0, 1]`. A lane the format lacks is 0 or 1 at
+/// every tap, within its bounds.
+fn clamp_bounds(form: ExtendedRange) -> [[f32; 4]; 2] {
+    let color = |code: i32| -> f32 {
+        let v = f64::from(code - 384) / 510.0;
+        if !form.srgb() {
+            return v as f32;
         }
+        let a = v.abs();
+        let d = if a <= 0.04045 {
+            a / 12.92
+        } else {
+            ((a + 0.055) / 1.055).powf(2.4)
+        };
+        (d * v.signum()) as f32
     };
     let (lo, hi) = (color(0), color(1023));
     [[lo, lo, lo, 0.0], [hi, hi, hi, 1.0]]
-}
-
-/// `n / d` (nonzero, within `half`'s normal range) rounded to `half`, with ties away from zero
-/// where `away`, else to even, as an `f32`.
-fn half_of(n: i64, d: i64, away: bool) -> f32 {
-    let a = n.unsigned_abs();
-    let d = d.unsigned_abs();
-    // `e` with `2^e <= a / d < 2^(e + 1)`.
-    let mut e = i32::try_from(a.ilog2()).unwrap_or(0) - i32::try_from(d.ilog2()).unwrap_or(0);
-    let at_least = |e: i32| match e >= 0 {
-        true => a >= d << e,
-        false => a << -e >= d,
-    };
-    if !at_least(e) {
-        e -= 1;
-    }
-    // The significand's eleven bits and the remainder: `a · 2^(10 - e) = q · d + r`.
-    let (num, den) = match 10 - e >= 0 {
-        true => (a << (10 - e), d),
-        false => (a, d << (e - 10)),
-    };
-    let (mut q, r) = (num / den, num % den);
-    if 2 * r > den || (2 * r == den && (away || q & 1 == 1)) {
-        q += 1;
-    }
-    let m = q as f32 * 2f32.powi(e - 10);
-    if n < 0 {
-        -m
-    } else {
-        m
-    }
 }
 
 /// The nearest sample at `at` of `tex` under `addressing`: the texel at Metal's position, decoded.
@@ -1524,46 +1389,6 @@ pub(super) fn texel(
     let (raw, inside) = tap(fb, fp, tex, site)?;
     let v = decoded(cx, fb, tex, raw, half)?;
     fp.border(fb, v, inside)
-}
-
-/// The grid steps of the tap at `site` (`extended_range::steps`, `i32` bits on four `u32` lanes):
-/// the raw texel's, fetched from the base level, or the border texel's (its value times each
-/// lane's grid, `extended_range::step_grids`) where the tap lies outside a border axis. The exact
-/// sum recovers the same integers from the decoded value ([`texel`]), so a sum of steps is a sum
-/// of the decoded taps.
-fn step(
-    cx: &mut EmitCx<'_>,
-    fb: &mut FunctionBuilder<'_>,
-    fp: &Footprint,
-    tex: &Texture,
-    site: &[Tap],
-) -> BResult<SValue> {
-    let Some((form, table)) = steps_of(tex) else {
-        return Err(cx.fail("an extended-range tap's steps of a form without them"));
-    };
-    let (raw, inside) = tap(fb, fp, tex, site)?;
-    let steps = crate::lower::arith::extended_range::steps(fb, form, raw, table)?;
-    match (inside, fp.border_texel()) {
-        (Some(inside), Some(border)) => {
-            let grids = crate::lower::arith::extended_range::step_grids(fb, form)?;
-            let ty = fb.value_ty(steps)?;
-            let b = fb.binary(BinOp::FMul, border, grids)?;
-            let b = fb.convert(ConvOp::ConvertFToS, b, ty)?;
-            fb.select(inside, steps, b)
-        }
-        _ => Ok(steps),
-    }
-}
-
-/// The form and `_sRGB` table of `tex`'s taps where they have grid steps
-/// (`extended_range::has_steps`): a slot's form's, never a heap handle's.
-fn steps_of(tex: &Texture) -> Option<(ExtendedRange, Option<GlobalId>)> {
-    match tex.decode {
-        Decode::Form { form, table } if crate::lower::arith::extended_range::has_steps(form) => {
-            Some((form, table))
-        }
-        _ => None,
-    }
 }
 
 /// The raw texel of the tap at `site`, fetched from the base level, and whether the tap lies

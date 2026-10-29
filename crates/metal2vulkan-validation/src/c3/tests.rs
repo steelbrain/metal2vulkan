@@ -1369,13 +1369,13 @@ fn a_cube_gradient_footprint_row_is_deferred_and_never_a_reviewed_reading() {
     );
 }
 
-/// A bicubic sample's unpinned arithmetic (`BicubicFilterArithmetic`) is deferred the same way,
-/// with its measured bound: no model of Apple's 2D rounding fitted.
+/// An emulated filter's arithmetic (`BicubicFilterArithmetic`: the device's multiply and add where
+/// Metal sums fixed-point weights exactly) is deferred the same way, with its bound.
 #[test]
 fn a_bicubic_filter_arithmetic_row_is_deferred_and_never_a_reviewed_reading() {
     deferred_and_never_reviewed(
         PrecisionNote::BicubicFilterArithmetic,
-        "BicubicFilterArithmetic:a 2D bicubic sum",
+        "BicubicFilterArithmetic:a bicubic sum",
     );
 }
 

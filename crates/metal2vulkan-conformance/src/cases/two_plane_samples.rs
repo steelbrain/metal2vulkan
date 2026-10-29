@@ -21,9 +21,10 @@
 //! of each. The comparison then names the sample, the lane and both values, and the digest stays
 //! beside the value as a projection of it.
 //!
-//! Every result compares exactly and the cases carry **no allowance**: on both venues this round
-//! covers, the runtime announces nothing here. A venue that does will read as divergent until
-//! whoever adds it names the notice with a run behind it.
+//! Every result compares exactly. The cases declare one notice of the runtime's: an
+//! extended-range texture's linear filter blends its decoded taps in the device's arithmetic
+//! (`bicubic-filter-arithmetic`), which every case's module holds (its runtime sampler may state a
+//! linear filter), and which moves a linear case's values (`known-gaps.tsv`).
 //!
 //! Nothing here can fault a GPU: two compute passes a case, one texture, three buffers, no loop.
 //! The coordinates do reach outside the texture, which is what the address modes are here for and
@@ -381,10 +382,17 @@ impl Case for TwoPlaneSamples {
     }
 
     fn allowances(&self) -> Vec<Allowance> {
-        // One declaration and no tolerance: the buffer each pass writes its samples into is `Shared`, which is
-        // what [`crate::replay::shared_memory_notice`] is for. It loosens the notices site alone,
-        // so every value this case reads still compares exactly.
-        vec![crate::replay::shared_memory_notice()]
+        // Declarations and no tolerance: the buffer each pass writes its samples into is `Shared`,
+        // which is what [`crate::replay::shared_memory_notice`] is for, and the module's linear
+        // filter of the decoded taps is the device's arithmetic (`bicubic-filter-arithmetic`,
+        // announced on the M3 Max for all sixteen cases). Each loosens the notices site alone, so
+        // every value this case reads still compares exactly.
+        vec![
+            crate::replay::shared_memory_notice(),
+            crate::replay::notice_allowance(
+                metal2vulkan_runtime::Degradation::BicubicFilterArithmetic.code(),
+            ),
+        ]
     }
 
     fn shaders(&self) -> Result<Vec<ShaderRef>, String> {

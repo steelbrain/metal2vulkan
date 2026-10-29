@@ -1,17 +1,18 @@
-//! Bicubic samples of an extended-range texture are Metal's.
+//! Bicubic samples of an extended-range texture are Metal's within the device's arithmetic.
 //!
 //! On the CPU interpreter, on the lavapipe and MoltenVK-on-M3 profiles, each sample of the
 //! extended-range bicubic table (`metal2vulkan_devtools::xr_bicubic`: an Apple M3 Max on macOS
-//! 26.7, through the owned fixture `xr_bicubic`) is Metal's bits, through the same kernel:
-//! constexpr bicubic samplers under every address mode and both opaque borders, with pixel
-//! coordinates and with a constant offset, and a runtime sampler whose filters are `Cubic`
-//! (`LoweringInputs::cubic_samplers`), with `float` and `half` results. The lanes the table marks
-//! are the exception: there Metal's 2D sum lies within 0.014 of a grid step of a rounding tie and
-//! rounds to the other side, which the exact sum does not (`PrecisionNote::BicubicFilterArithmetic`),
-//! and each is one step of its lane's grid from Metal's. Each compile is validated, and its plan's
-//! estimate bounds it. What no case measured is refused, `NotImplemented(SamplerBicubicFilter)`: a
-//! padded or bfloat form's bicubic sample, a swizzled texture's, and a gather through a bicubic
-//! sampler.
+//! 26.7, through the owned fixture `xr_bicubic`) is Metal's lanes within the device's arithmetic
+//! (`PrecisionNote::BicubicFilterArithmetic`), through the same kernel: constexpr bicubic samplers
+//! under every address mode and both opaque borders, with pixel coordinates and with a constant
+//! offset, and a runtime sampler whose filters are `Cubic` (`LoweringInputs::cubic_samplers`), with
+//! `float` and `half` results. The footprint, the addressing, the weights' polynomial, the small
+//! level's linear filter and the format's clamp are Metal's; the sum is the device's `f32`
+//! multiply and add of the decoded taps under the weights computed from the fraction, where Metal
+//! sums fixed-point weights exactly onto the lane's grid, and a `half` result is the device's
+//! narrowing. Each compile is validated, and its plan's estimate bounds it. What no case measured
+//! is refused, `NotImplemented(SamplerBicubicFilter)`: a padded or bfloat form's bicubic sample, a
+//! swizzled texture's, and a gather through a bicubic sampler.
 
 use metal2vulkan_devtools::xr_bicubic::{self, KERNELS, SIZES};
 
@@ -52,7 +53,7 @@ fn replay(raw: u32) {
     cubic.s_address_mode = SamplerAddressMode::ClampToEdge;
     cubic.t_address_mode = SamplerAddressMode::ClampToEdge;
     let word = SamplerWord::of(&cubic).0;
-    let (mut lanes, mut ties) = (0, 0);
+    let (mut lanes, mut apart) = (0, 0);
     for (stem, p) in profiles() {
         for kernel in KERNELS {
             let half = kernel.ends_with("_half");
@@ -95,21 +96,17 @@ fn replay(raw: u32) {
                     for (c, (&got, &want)) in got.iter().zip(&s.lanes).enumerate() {
                         let what = format!("{what} at {:?} lane {c}", s.at);
                         lanes += 1;
-                        if s.ties.contains(&c) {
-                            ties += 1;
-                            assert!(
-                                xr_bicubic::one_step(got, want, xr_bicubic::grid(raw, c), half),
-                                "{what}: {got:#x}, Metal's {want:#x} at a tie"
-                            );
-                        } else {
-                            assert_eq!(got, want, "{what}");
-                        }
+                        apart += usize::from(got != want);
+                        assert!(
+                            xr_bicubic::near(got, want, xr_bicubic::grid(raw, c), half),
+                            "{what}: {got:#x}, Metal's {want:#x}"
+                        );
                     }
                 }
             }
         }
     }
-    eprintln!("{raw}: {lanes} lanes, {ties} of them at a tie, one step from Metal's");
+    eprintln!("{raw}: {lanes} lanes, {apart} of them apart from Metal's, within its arithmetic");
 }
 
 #[test]

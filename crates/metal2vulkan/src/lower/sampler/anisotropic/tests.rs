@@ -31,8 +31,8 @@ const BASE_WORDS: u64 = 34901797601036873;
 const OP_IMAGE_SAMPLE_IMPLICIT_LOD: u16 = 87;
 const OP_IMAGE_SAMPLE_EXPLICIT_LOD: u16 = 88;
 const OP_IMAGE_QUERY_LEVELS: u16 = 106;
-/// The taps an emulation's code holds, whatever its degree: tap 0 and the loop's one (two
-/// explicit-level samples each under a linear mip filter).
+/// The taps an emulation's code holds, whatever its degree: tap 0 and the loop's one (one
+/// explicit-level sample each, the device blending a linear mip filter's two levels).
 const WRITTEN_TAPS: u32 = 2;
 
 /// The constexpr sampler words of linear filters, mip filter `mip` and `maxAnisotropy` `aniso`.
@@ -204,7 +204,7 @@ fn dont_unroll_loops(a: &FunctionArtifact) -> usize {
 
 /// A fragment's implicit-level sample through a constexpr sampler of `maxAnisotropy` 3, 8 and 16
 /// under a linear mip filter, on devices without `samplerAnisotropy`, is Metal's filter emulated:
-/// no implicit-level sample, two explicit-level samples a tap, the level count queried, and
+/// no implicit-level sample, one explicit-level sample a tap, the level count queried, and
 /// `AnisotropicFilter` recorded. With the feature (MoltenVK's here) the device's sample stays,
 /// unrecorded. Whatever the degree Metal rounds the anisotropy to (4, 8, 16), the code holds tap 0
 /// and one loop of the others that asks the driver not to unroll it.
@@ -221,7 +221,7 @@ fn a_constexpr_anisotropic_sample_takes_metals_filter() {
             assert_eq!(count(&a, OP_IMAGE_SAMPLE_IMPLICIT_LOD), 0, "{what}");
             assert_eq!(
                 count(&a, OP_IMAGE_SAMPLE_EXPLICIT_LOD),
-                2 * WRITTEN_TAPS as usize,
+                WRITTEN_TAPS as usize,
                 "{what}"
             );
             assert_eq!(dont_unroll_loops(&a), 1, "{what}");
@@ -304,10 +304,10 @@ fn a_runtime_slot_takes_metals_filter_where_its_word_states_anisotropy() {
             "{stem}: {fields:?}"
         );
         // The variant is the base with the emulation's arm: every sample the base takes, and
-        // two a tap of the emulation's, its taps past the first in a loop the driver is asked
+        // one a tap of the emulation's, its taps past the first in a loop the driver is asked
         // not to unroll.
         assert!(
-            count(&a, OP_IMAGE_SAMPLE_EXPLICIT_LOD) >= plain + 2 * WRITTEN_TAPS as usize,
+            count(&a, OP_IMAGE_SAMPLE_EXPLICIT_LOD) >= plain + WRITTEN_TAPS as usize,
             "{stem}: {plain}"
         );
         assert_eq!(dont_unroll_loops(&a), 1, "{stem}");
@@ -709,7 +709,7 @@ fn unmeasured_moltenvk() -> DeviceProfile {
 /// A cube's explicit gradients through a constexpr sampler of `maxAnisotropy` 8 under a linear
 /// mip filter take Metal's footprint in the shader on every device without `samplerAnisotropy`:
 /// Metal's level and taps (no gradient sample, the level count queried, tap 0 and the loop's tap
-/// of two explicit levels each, `AnisotropicFilter` recorded and `CubeGradientFootprint` not).
+/// of one explicit level each, `AnisotropicFilter` recorded and `CubeGradientFootprint` not).
 /// Through an isotropic sampler a device without the feature keeps its own gradient sample, at the
 /// footprint the cube's form hands it. On a measured route (`moltenvk-m3`, whose kernels hand
 /// Metal's own gradients) the device's gradient sample stays, unrecorded; on MoltenVK where its
@@ -726,7 +726,7 @@ fn a_cubes_explicit_gradients_take_metals_level_and_taps() {
         ) else {
             return;
         };
-        let explicit = 2 * if taps { WRITTEN_TAPS as usize } else { 1 };
+        let explicit = if taps { WRITTEN_TAPS as usize } else { 2 };
         let mut shader = Vec::new();
         let mut device = vec![
             ("moltenvk-m3", full("moltenvk-m3")),
@@ -850,7 +850,7 @@ const SITE_CALL_WORDS: usize = 256;
 
 /// The emulation of a runtime sampler slot's samples is one routine every sample calls
 /// (`routine::Filter`): under the variant naming the slot, a fragment function of 1, 2 and 4 such
-/// samples holds one emulation's taps (two explicit-level samples each, past the base's) and its
+/// samples holds one emulation's taps (one explicit-level sample each, past the base's) and its
 /// one loop, and each sample past the first adds no more than the plain sample's words and a
 /// call's. Written at every site, each sample added about 2,100 words more than the plain one's.
 #[test]
@@ -868,7 +868,7 @@ fn anisotropic_samples_call_one_routine() {
             let a = ok_with(&bc, &inputs, &p);
             assert_eq!(
                 count(&a, OP_IMAGE_SAMPLE_EXPLICIT_LOD),
-                count(&base, OP_IMAGE_SAMPLE_EXPLICIT_LOD) + 2 * WRITTEN_TAPS as usize,
+                count(&base, OP_IMAGE_SAMPLE_EXPLICIT_LOD) + WRITTEN_TAPS as usize,
                 "{what}"
             );
             assert_eq!(dont_unroll_loops(&a), 1, "{what}");
@@ -933,14 +933,10 @@ fn anisotropic_samples_at_every_offset_call_one_routine() {
             assert_eq!(dont_unroll_loops(&a), routines, "{what}");
             assert_eq!(
                 count(&a, OP_IMAGE_SAMPLE_EXPLICIT_LOD),
-                count(&base, OP_IMAGE_SAMPLE_EXPLICIT_LOD) + routines * 2 * WRITTEN_TAPS as usize,
+                count(&base, OP_IMAGE_SAMPLE_EXPLICIT_LOD) + routines * WRITTEN_TAPS as usize,
                 "{what}"
             );
-            let taps = if passes {
-                0
-            } else {
-                n * 2 * WRITTEN_TAPS as usize
-            };
+            let taps = if passes { 0 } else { n * WRITTEN_TAPS as usize };
             assert_eq!(
                 const_offset_samples(&a),
                 const_offset_samples(&base) + taps,

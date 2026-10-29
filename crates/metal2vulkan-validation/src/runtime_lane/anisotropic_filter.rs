@@ -17,9 +17,10 @@
 //! every sample takes the product's emulation of Metal's filter (the module
 //! `lower::sampler::anisotropic`) on every device, MoltenVK's too, and the device announces
 //! `anisotropic-filter`. Each sampler's answers stay within its bound in codes ([`Bound`]): for
-//! linear filters the emulation's residue, the device's own bilinear filter (under clamp to edge,
-//! lavapipe's 8-bit path) and Metal's level at `1/256` of a level; for nearest ones a tap a texel
-//! off Metal's where it sits within the spacing's residue of a texel edge. The test prints each
+//! linear filters the footprint in the device's arithmetic (its logarithm, powers and level
+//! blend), the device's own bilinear filter (under clamp to edge, lavapipe's 8-bit path); for
+//! nearest ones a tap a texel off Metal's where it sits within the spacing's residue of a texel
+//! edge. The test prints each
 //! sampler's largest and mean difference in codes and the share of channels a code or more off.
 //! (With `samplerAnisotropy`, the device's own anisotropic filter answers, which no bound here
 //! measures.)
@@ -71,31 +72,33 @@ enum Bound {
     Nearest { mean: f64, share: f64 },
 }
 
-/// The bound of the linear filters: the emulation's residue on ANV, RADV and an RTX 3090 at
-/// `maxAnisotropy` 8 was 0.36, 0.91 and 0.68 of a code.
+/// The bound of the linear filters: the footprint in the device's arithmetic (its `Log2` and
+/// `Exp2`, the spacing and level unrounded, a linear mip filter's levels the device's blend), whose
+/// tap count at a threshold and tap positions differ from Metal's by its logarithm's and rounding's
+/// residue. On the M3 Max (MoltenVK, `samplerAnisotropy` withheld) at `maxAnisotropy` 3 to 16:
+/// 10.375 codes at most (one footprint), the mean 0.21 at most.
 const LINEAR: Bound = Bound::Linear {
-    max: 1.0,
-    mean: 0.15,
+    max: 12.0,
+    mean: 0.25,
 };
 
 /// The bound of the nearest filters: a tap a texel off Metal's where it sits within the
-/// spacing's residue of a texel edge. That is the model's residue, the same channels on every
-/// device: lavapipe, ANV and RADV answered 4 of 5,072 channels a code or more off at
-/// `maxAnisotropy` 8, and 37 and 47 at 16 (nearest and linear mip filters), whose sixteen taps
-/// carry the fitted spacing's largest residue.
+/// spacing's residue of a texel edge, the spacing and the level in the device's arithmetic. On the
+/// M3 Max at `maxAnisotropy` 2 to 16: the mean 0.82 codes at most, at most 338 of 5,072 channels
+/// (6.7%) a code or more off.
 const NEAREST: Bound = Bound::Nearest {
-    mean: 0.1,
-    share: 0.015,
+    mean: 1.0,
+    share: 0.08,
 };
 
 /// The bound of the linear filters under clamp to edge: lavapipe filters `rgba8Unorm` under a
 /// wrap mode it takes as simple (clamp to edge, repeat) by its own 8-bit path, whose bilinear
 /// answers at these interior footprints differ from its clamp-to-zero ones by up to 1.62 codes
-/// (mean 0.34) without anisotropy; the emulation through it was 1.375 codes off the M4 at most
-/// (mean 0.17) at `maxAnisotropy` 8 and 16.
+/// (mean 0.34) without anisotropy, beside the linear filters' residue ([`LINEAR`]); the M3 Max
+/// was 6.531 codes off the M4 at most (mean 0.071) at `maxAnisotropy` 8 and 16.
 const LINEAR_EDGE: Bound = Bound::Linear {
-    max: 1.5,
-    mean: 0.2,
+    max: 12.0,
+    mean: 0.3,
 };
 
 /// The samplers, in [`METAL`]'s order: (name, min/mag filter, mip filter, `maxAnisotropy`,

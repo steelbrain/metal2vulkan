@@ -647,11 +647,9 @@ fn heap_raw_sample(
         cx.families.texture.heap_raw.insert(true);
     }
     cx.families.access.heap_class_index = true;
+    // A linear filter's sum of the decoded taps is the device's arithmetic (`extended::filtered`).
     if gather.is_none() && !matches!(state, State::Constant { linear: false, .. }) {
-        cx.families
-            .sampler
-            .bicubic_routines
-            .insert(super::bicubic::routines::Routine::Quad);
+        cx.precision.insert(PrecisionNote::BicubicFilterArithmetic);
     }
     Ok(Some(HeapRaw {
         state,
@@ -1515,24 +1513,16 @@ fn select_extended(
     }
     cx.families.arith.converts(form);
     let filters = !form.bfloat() && gather.is_none();
+    // A linear filter's sum of the decoded taps is the device's arithmetic, as a bicubic
+    // sample's is (its 2D routine), not Metal's datapath.
     if filters && !matches!(state, State::Constant { linear: false, .. }) {
-        // A 2D linear filter of a form with grid steps sums its taps' steps; a 3D one, and a
-        // padded form's, their decoded values.
-        let steps = crate::lower::arith::extended_range::has_steps(form);
-        let routine = match (volume, steps) {
-            (true, _) => super::bicubic::routines::Routine::Block,
-            (false, true) => super::bicubic::routines::Routine::QuadSteps,
-            (false, false) => super::bicubic::routines::Routine::Quad,
-        };
-        cx.families.sampler.bicubic_routines.insert(routine);
+        cx.precision.insert(PrecisionNote::BicubicFilterArithmetic);
     }
-    // A bicubic sample takes the 2D routines, and a level below four texels on either axis the
-    // linear ones; its sum near a rounding tie is not Metal's datapath's.
     if cubic.is_some() {
-        cx.families.sampler.bicubic_routines.extend([
-            super::bicubic::routines::Routine::Plane,
-            super::bicubic::routines::Routine::Quad,
-        ]);
+        cx.families
+            .sampler
+            .bicubic_routines
+            .insert(super::bicubic::routines::Routine::Plane);
         cx.precision.insert(PrecisionNote::BicubicFilterArithmetic);
     }
     // A linear mip filter's blend of two levels (not a 3D texture's).
@@ -1542,10 +1532,7 @@ fn select_extended(
         Level::Word { .. } => form.blends_levels() && !volume,
     };
     if blends {
-        cx.families
-            .sampler
-            .bicubic_routines
-            .insert(super::bicubic::routines::Routine::Levels);
+        cx.precision.insert(PrecisionNote::BicubicFilterArithmetic);
     }
     let coord = ops
         .get(TexRole::Coord)
@@ -1991,10 +1978,7 @@ fn select_one(
         let routines: &[_] = if shape.dim == ImageDim::D1 {
             &[super::bicubic::routines::Routine::Line]
         } else {
-            &[
-                super::bicubic::routines::Routine::Plane,
-                super::bicubic::routines::Routine::Quad,
-            ]
+            &[super::bicubic::routines::Routine::Plane]
         };
         cx.families
             .sampler

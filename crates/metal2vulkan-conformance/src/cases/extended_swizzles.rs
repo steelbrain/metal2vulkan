@@ -359,7 +359,8 @@ impl Case for ExtendedSwizzles {
         MetalSource::Run
     }
 
-    /// One declaration, and it is the venue's memory model rather than any format's arithmetic.
+    /// The venue's memory model, and for a format the module filters itself the device's
+    /// arithmetic of that filter (`bicubic-filter-arithmetic`).
     ///
     /// Each op reads every lane of its sweep in one dispatch, in groups of at most 64 threads, and
     /// no lane count here is a whole number of such groups. That shape used to make our side run
@@ -389,7 +390,27 @@ impl Case for ExtendedSwizzles {
         // nothing else (replay-nvidia.log). On MoltenVK, where
         // the chip's GPU shares the CPU's memory, it cannot fire at all, which is why no
         // recording of this suite declares it.
-        vec![crate::replay::shared_memory_notice()]
+        //
+        // An extended-range or padded 10-bit format's linear sample (`sl`) blends its decoded taps
+        // in the device's arithmetic, announced as `bicubic-filter-arithmetic` (the M3 Max, each
+        // of the four extended-range formats); its values move by it (`known-gaps.tsv`).
+        let mut named = vec![crate::replay::shared_memory_notice()];
+        if matches!(
+            self.format().format,
+            PixelFormat::BGRA10XR
+                | PixelFormat::BGRA10XRSRGB
+                | PixelFormat::BGR10XR
+                | PixelFormat::BGR10XRSRGB
+                | PixelFormat::R10UnormX6
+                | PixelFormat::R10UnormX6SRGB
+                | PixelFormat::RG10UnormX12
+                | PixelFormat::RG10UnormX12SRGB
+        ) {
+            named.push(crate::replay::notice_allowance(
+                metal2vulkan_runtime::Degradation::BicubicFilterArithmetic.code(),
+            ));
+        }
+        named
     }
 
     fn shaders(&self) -> Result<Vec<ShaderRef>, String> {

@@ -12,42 +12,32 @@
 //! Measured per format (authored cases `bicubic-impulse-weights-per-bound-format` and
 //! `bicubic-random-texels-per-bound-format`, and 32 formats probed through the implicit sample;
 //! the other sample forms were read through `rgba16Float`, `rgba32Float`, and `rgba8Unorm`; the
-//! weights and each format's rounding were pinned by the cases). [`texels`] maps `RG8UnormSRGB`
+//! weights and each format's rounding were read by the cases). [`texels`] maps `RG8UnormSRGB`
 //! (normalized unsigned) by family alone, never probed; `RG16Snorm`, mapped so at first, is read by
 //! the cases. Those cases read the [`EXACT`] rule on `R8Unorm`, `RGBA8Unorm`, the 8-bit snorm R and
 //! RGBA formats, and every 16-bit unorm and snorm format but `RG16Unorm`; `RG8Unorm`, `RG8Snorm`,
 //! `RG16Unorm`, `BGRA8Unorm`, and `A8Unorm` take it by family.
 //!
 //! - 32-bit float channels (`R32Float`, `RG32Float`, `RGBA32Float`, `Depth32Float`): bilinear
-//!   over the inner taps with the same 1/256 fraction, the sum rounded to `f32` with ties away
-//!   from zero, a tap of zero weight skipped ([`LINEAR`]). The sum is Metal's linear accumulator
-//!   (each term truncated toward zero onto a grid 38 bits below the largest term's tap and weight
-//!   exponents, the terms summed exactly; `Depth32Float`'s by family), and a denormal result is
-//!   `+0`.
+//!   over the inner taps with the same 1/256 fraction ([`LINEAR`]).
 //! - Normalized unsigned channels (8- and 16-bit, sRGB, the packed 16-bit and 10:10:10:2 formats,
 //!   `A8Unorm`, `Depth16Unorm`): Catmull-Rom, the sum clamped into `[0, 1]` ([`UNORM`]).
 //! - Normalized signed channels: Catmull-Rom, the sum clamped into `[-1, 1]` ([`SNORM`]). The
 //!   upper bound is measured; the lower is inferred from the format's range, since no sum read
 //!   went below `-1`.
 //! - Half-float channels (`R16Float`, `RG16Float`, `RGBA16Float`) and the small floats
-//!   (`RG11B10Float`, `RGB9E5Float`): Catmull-Rom, the sum rounded to `half` with ties away from
-//!   zero, unclamped ([`HALF`]). A 1D sum is Metal's linear accumulator with a grid 17 bits below
-//!   the reference, a 2D one its two-pass accumulator (each row onto a grid 17 bits below the
-//!   row's reference, then the rows onto one 20 bits below theirs), an axis whose four taps clamp
-//!   onto one texel weighed as that texel alone at the unit weight, and a NaN or an infinity
-//!   anywhere in a 2D footprint decides the result whatever its weight.
+//!   (`RG11B10Float`, `RGB9E5Float`): Catmull-Rom, unclamped ([`HALF`]).
 //!
-//! The weights are Metal's fixed-point table (`weights`), the same on both axes and for every
-//! format measured. The 8- and 16-bit normalized formats with channels of one width
-//! (`R8Unorm`, `RG8Unorm`, `RGBA8Unorm`, `BGRA8Unorm`, `A8Unorm`, the 8-bit signed formats, and
-//! the 16-bit unsigned and signed ones but `Depth16Unorm`) sum their codes exactly and round the
-//! sum half up onto `1/(16 · 255)`, `1/(16 · 127)`, `1/65535`, or `1/32767`: [`EXACT`], with
-//! [`WIDE16`] for the 16-bit grids. That is all of Metal's arithmetic for a 1D texture and for a
-//! 2D one but next to a rounding tie. An 8-bit sRGB format sums its decoded taps exactly too, onto
-//! `1/4095` (color) and `1/(16 · 255)` (alpha), where a function reads the raw codes ([`SRGB`] with
-//! [`EXACT`], set by the emission, not here; each tap the device's decode of its code). The 32-bit float and half-float formats' sums are
-//! Metal's accumulators. The other formats' sums are an emulation in `f32` operations:
-//! `PrecisionNote::BicubicFilterArithmetic`.
+//! Metal's arithmetic of the sum (its fixed-point weight table, an exact sum of an 8- or 16-bit
+//! format's codes rounded half up onto its grid, its linear and two-pass accumulators of the float
+//! formats, its rounding of a half format's sum to `half`) is not reproduced: the filter is the
+//! Catmull-Rom polynomial's weights computed from the fraction and summed in the device's
+//! arithmetic (`lower::sampler::bicubic::routines`, `PrecisionNote::BicubicFilterArithmetic`). The
+//! bits that named that arithmetic stay the classes the binder states: [`EXACT`] and [`WIDE16`]
+//! the 8- and 16-bit normalized formats of one channel width (`R8Unorm`, `RG8Unorm`,
+//! `RGBA8Unorm`, `BGRA8Unorm`, `A8Unorm`, the 8-bit signed formats, and the 16-bit unsigned and
+//! signed ones but `Depth16Unorm`), and [`SRGB`] and [`EXTENDED`] the classes of the in-place
+//! linear filter's exact sum (`lower::sampler::bicubic::routines::Quad`).
 //!
 //! A tap outside the texture under `clamp_to_zero` or `clamp_to_border` reads Metal's border texel
 //! (`metal::sampler::border_texel`; the sampler's border color under either mode): the border color
@@ -88,39 +78,29 @@ impl BicubicTexels {
     pub const UNORM: u32 = 1 << 1;
     /// The filtered value is clamped into `[-1, 1]` (normalized signed channels).
     pub const SNORM: u32 = 1 << 2;
-    /// The filtered value is rounded to `half` (half-float and small-float channels).
+    /// Half-float and small-float channels: the filtered value is unclamped.
     pub const HALF: u32 = 1 << 3;
     /// Bit `PRESENT + c` is set when the format has channel `c` (0 red, 1 green, 2 blue, 3
     /// alpha): a tap outside the texture under a border address reads the border's channel `c`
     /// there, and otherwise 0 for red, green, and blue and 1 for alpha.
     pub const PRESENT: u32 = 4;
-    /// The channels are 8- or 16-bit normalized codes of one width whose sum Metal computes
-    /// exactly and rounds half up onto the format's grid (module docs): `1/(16 · 255)` or
-    /// `1/(16 · 127)`, or with [`WIDE16`](Self::WIDE16) `1/65535` or `1/32767`. Set with
-    /// [`UNORM`](Self::UNORM) or [`SNORM`](Self::SNORM).
+    /// The channels are 8- or 16-bit normalized codes of one width, whose sum Metal computes
+    /// exactly on the format's grid (module docs): `1/(16 · 255)` or `1/(16 · 127)`, or with
+    /// [`WIDE16`](Self::WIDE16) `1/65535` or `1/32767`. Set with [`UNORM`](Self::UNORM) or
+    /// [`SNORM`](Self::SNORM). The bicubic filter sums them in the device's arithmetic.
     pub const EXACT: u32 = 1 << 8;
     /// With [`EXACT`](Self::EXACT): the codes are 16-bit.
     pub const WIDE16: u32 = 1 << 9;
-    /// The channels are 8-bit sRGB codes (`metal::texel_format::srgb_coded`). With
-    /// [`EXACT`](Self::EXACT), set only where a function decodes the codes itself (the slot's
-    /// `SrgbTexture` variant: a format the device holds as its UNORM twin), each tap's color value
-    /// is the device's decode of its code (the MSL transfer through its `Pow`), read on the grid
-    /// `1/4095`, and its alpha a code on `1/(16 · 255)`, so the exact sum rounds half up onto those
-    /// grids. [`texels`] never sets it;
-    /// `metal::texel_format::texel_format` does, without `EXACT`, where the device decodes the
-    /// taps and the sum is the emulated one.
+    /// The channels are 8-bit sRGB codes (`metal::texel_format::srgb_coded`), set by
+    /// `metal::texel_format::texel_format`, never by [`texels`]: each tap is the device's decode of
+    /// its code, and the bicubic sum the device's arithmetic of the decoded taps.
     pub const SRGB: u32 = 1 << 10;
     /// The channels are Apple's extended-range codes (`metal::format::ExtendedRange`), set with
     /// [`EXACT`](Self::EXACT) where a function samples such a texture, and with
-    /// [`SRGB`](Self::SRGB) for an `_sRGB` twin. Each tap arrives as its value (the shader's decode
-    /// of the raw code): a color lane's `(c - 384) / 510` on the grid `1/(16 · 510)` (an `_sRGB`
-    /// twin's `±s / 8192` on `1/8192`), and alpha's `(c - 384) / 510`, its code clamped to `[384,
-    /// 894]` first, on `1/(8 · 510)`. The sums are signed and reach past `±1` (up to twice the
-    /// grid); a 2D or 3D linear sum truncates a color lane's terms onto `2^-7` of its grid steps
-    /// and alpha's onto `2^-4`, where a bicubic sum (the 2D exact routine's) truncates none; and a
-    /// `half` result rounds an `_sRGB` color lane's value with ties away from zero (an Apple M3 Max
-    /// and an Apple M4; the bicubic filter's, `lower::sampler::extended`). [`texels`] never sets
-    /// it: an extended-range slot's samples read the format's bits as constants under its variant.
+    /// [`SRGB`](Self::SRGB) for an `_sRGB` twin. Each tap arrives as its decoded value, and the
+    /// linear, 3D, level and bicubic filters sum the decoded taps in the device's arithmetic
+    /// (`lower::sampler::extended`). [`texels`] never sets it: an extended-range slot's samples
+    /// read the format's bits as constants under its variant.
     pub const EXTENDED: u32 = 1 << 11;
     /// Bit `BORDER + 3c + b` is set when channel `c` (0 red to 3 alpha) of a tap outside the
     /// texture under a border address reads 1, not 0, for border color `b`, `MTLSamplerBorderColor`'s
@@ -282,36 +262,6 @@ pub fn texels(pf: PixelFormat) -> Option<BicubicTexels> {
     Some(T::new(flags, channels).with_border(pf, TextureSwizzleChannels::DEFAULT))
 }
 
-/// Metal's Catmull-Rom weights of taps `i - 1 .. i + 2` at fraction `k / 256` (`k < 256`), in
-/// units of `2^-16`; they sum to `2^16`.
-///
-/// A compressed encoding of the table Metal answers (authored case
-/// `bicubic-weight-table-at-every-fraction-on-rgba16-unorm`, `628c2f53`, both axes alike; checked against the
-/// table by `metal::bicubic::tests::the_weights_are_the_measured_table`), not a derivation: the
-/// cube `C = k³ / 256` is rounded to the nearest unit for `k` in `76 ..= 95`, `161 ..= 176`, and
-/// `255`, and to the nearest 16 units elsewhere, and each weight is half of `-C + 2k² - 256k`,
-/// `3C - 5k² + 2^17`, `-3C + 4k² + 256k`, or `C - k²` (the Catmull-Rom polynomials scaled by
-/// `2^17`), rounded to nearest with ties away from zero. The ranges are fitted to the readings.
-#[cfg(test)]
-pub fn weights(k: u32) -> [i32; 4] {
-    let k = (k & 255) as i32;
-    let cube = k * k * k;
-    let fine = (76..=95).contains(&k) || (161..=176).contains(&k) || k == 255;
-    let c = if fine {
-        (cube + 128) >> 8
-    } else {
-        ((cube + 2048) >> 12) << 4
-    };
-    let (k2, k256) = (k * k, 256 * k);
-    let half_away = |a: i32| a.signum() * ((a.abs() + 1) >> 1);
-    [
-        half_away(-c + 2 * k2 - k256),
-        half_away(3 * c - 5 * k2 + (1 << 17)),
-        half_away(-3 * c + 4 * k2 + k256),
-        half_away(c - k2),
-    ]
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -373,103 +323,6 @@ mod tests {
         // A 4:2:2 format takes `RGBX8Unorm`'s treatment.
         assert_eq!(t(PixelFormat::GBGR422).0, t(PixelFormat::RGBX8Unorm).0);
     }
-    /// Metal's weights at every fraction `k`, four per `k` in units of `2^-16`, read from the
-    /// impulse responses of authored case `628c2f53` (both axes answered alike). `k = 75` and
-    /// `181` were not solved uniquely there: their rows are the rule's, whose sums reproduce that
-    /// case's readings at both fractions.
-    const MEASURED: [i32; 1024] = [
-        0, 65536, 0, 0, -127, 65534, 130, -1, -252, 65526, 264, -2, -375, 65514, 402, -5, -496,
-        65496, 544, -8, -615, 65474, 690, -13, -732, 65446, 840, -18, -847, 65414, 994, -25, -960,
-        65376, 1152, -32, -1071, 65334, 1314, -41, -1180, 65286, 1480, -50, -1287, 65234, 1650,
-        -61, -1392, 65176, 1824, -72, -1503, 65138, 1978, -77, -1604, 65070, 2160, -90, -1703,
-        64998, 2346, -105, -1800, 64920, 2536, -120, -1895, 64838, 2730, -137, -1988, 64750, 2928,
-        -154, -2087, 64682, 3106, -165, -2176, 64584, 3312, -184, -2263, 64482, 3522, -205, -2356,
-        64398, 3712, -218, -2439, 64286, 3930, -241, -2520, 64168, 4152, -264, -2607, 64070, 4354,
-        -281, -2684, 63942, 4584, -306, -2767, 63834, 4794, -325, -2840, 63696, 5032, -352, -2919,
-        63578, 5250, -373, -2996, 63454, 5472, -394, -3063, 63302, 5722, -425, -3136, 63168, 5952,
-        -448, -3207, 63030, 6186, -473, -3276, 62886, 6424, -498, -3335, 62714, 6690, -533, -3400,
-        62560, 6936, -560, -3463, 62402, 7186, -589, -3524, 62238, 7440, -618, -3583, 62070, 7698,
-        -649, -3648, 61920, 7936, -672, -3703, 61742, 8202, -705, -3756, 61558, 8472, -738, -3807,
-        61370, 8746, -773, -3864, 61200, 9000, -800, -3911, 61002, 9282, -837, -3964, 60822, 9544,
-        -866, -4007, 60614, 9834, -905, -4056, 60424, 10104, -936, -4103, 60230, 10378, -969,
-        -4148, 60030, 10656, -1002, -4183, 59802, 10962, -1045, -4224, 59592, 11248, -1080, -4263,
-        59378, 11538, -1117, -4300, 59158, 11832, -1154, -4343, 58958, 12106, -1185, -4376, 58728,
-        12408, -1224, -4407, 58494, 12714, -1265, -4444, 58278, 13000, -1298, -4471, 58034, 13314,
-        -1341, -4504, 57808, 13608, -1376, -4527, 57554, 13930, -1421, -4556, 57318, 14232, -1458,
-        -4583, 57078, 14538, -1497, -4608, 56832, 14848, -1536, -4631, 56582, 15162, -1577, -4652,
-        56326, 15480, -1618, -4671, 56066, 15802, -1661, -4696, 55824, 16104, -1696, -4711, 55554,
-        16434, -1741, -4732, 55302, 16744, -1778, -4743, 55022, 17082, -1825, -4760, 54760, 17400,
-        -1864, -4775, 54494, 17722, -1905, -4788, 54222, 18048, -1946, -4799, 53946, 18378, -1989,
-        -4810, 53669, 18708, -2031, -4819, 53388, 19040, -2073, -4827, 53107, 19371, -2115, -4834,
-        52823, 19705, -2158, -4840, 52536, 20040, -2200, -4845, 52248, 20376, -2243, -4849, 51957,
-        20713, -2285, -4852, 51665, 21051, -2328, -4854, 51369, 21392, -2371, -4855, 51072, 21732,
-        -2413, -4855, 50774, 22073, -2456, -4853, 50472, 22416, -2499, -4851, 50169, 22759, -2541,
-        -4848, 49865, 23103, -2584, -4844, 49558, 23448, -2626, -4839, 49250, 23794, -2669, -4833,
-        48939, 24141, -2711, -4826, 48627, 24489, -2754, -4818, 48312, 24838, -2796, -4810, 47997,
-        25187, -2838, -4800, 47680, 25536, -2880, -4791, 47366, 25882, -2921, -4780, 47046, 26232,
-        -2962, -4767, 46722, 26586, -3005, -4752, 46392, 26944, -3048, -4743, 46082, 27282, -3085,
-        -4724, 45742, 27648, -3130, -4711, 45422, 27994, -3169, -4696, 45096, 28344, -3208, -4679,
-        44766, 28698, -3249, -4660, 44430, 29056, -3290, -4639, 44090, 29418, -3333, -4624, 43768,
-        29760, -3368, -4599, 43418, 30130, -3413, -4580, 43086, 30480, -3450, -4559, 42750, 30834,
-        -3489, -4536, 42408, 31192, -3528, -4511, 42062, 31554, -3569, -4492, 41734, 31896, -3602,
-        -4463, 41378, 32266, -3645, -4440, 41040, 32616, -3680, -4415, 40698, 32970, -3717, -4388,
-        40350, 33328, -3754, -4359, 39998, 33690, -3793, -4336, 39664, 34032, -3824, -4311, 39326,
-        34378, -3857, -4276, 38958, 34752, -3898, -4247, 38610, 35106, -3933, -4216, 38256, 35464,
-        -3968, -4191, 37922, 35802, -3997, -4156, 37558, 36168, -4034, -4127, 37214, 36514, -4065,
-        -4096, 36864, 36864, -4096, -4063, 36510, 37218, -4129, -4028, 36150, 37576, -4162, -3999,
-        35810, 37914, -4189, -3968, 35464, 38256, -4216, -3927, 35090, 38626, -4253, -3892, 34734,
-        38976, -4282, -3863, 34398, 39306, -4305, -3824, 34032, 39664, -4336, -3791, 33686, 40002,
-        -4361, -3756, 33334, 40344, -4386, -3719, 32978, 40690, -4413, -3680, 32616, 41040, -4440,
-        -3639, 32250, 41394, -4469, -3604, 31902, 41728, -4490, -3567, 31550, 42066, -4513, -3528,
-        31192, 42408, -4536, -3487, 30830, 42754, -4561, -3452, 30486, 43080, -4578, -3415, 30138,
-        43410, -4597, -3368, 29760, 43768, -4624, -3335, 29426, 44082, -4637, -3292, 29062, 44424,
-        -4658, -3255, 28718, 44746, -4673, -3208, 28344, 45096, -4696, -3167, 27990, 45426, -4713,
-        -3132, 27654, 45736, -4722, -3087, 27290, 46074, -4741, -3048, 26944, 46392, -4752, -3007,
-        26594, 46714, -4765, -2964, 26238, 47040, -4778, -2919, 25878, 47370, -4793, -2880, 25536,
-        47680, -4800, -2838, 25187, 47997, -4810, -2796, 24838, 48312, -4818, -2754, 24489, 48627,
-        -4826, -2711, 24141, 48939, -4833, -2669, 23794, 49250, -4839, -2626, 23448, 49558, -4844,
-        -2584, 23103, 49865, -4848, -2541, 22759, 50169, -4851, -2499, 22416, 50472, -4853, -2456,
-        22073, 50774, -4855, -2413, 21732, 51072, -4855, -2371, 21392, 51369, -4854, -2328, 21051,
-        51665, -4852, -2285, 20713, 51957, -4849, -2243, 20376, 52248, -4845, -2200, 20040, 52536,
-        -4840, -2159, 19710, 52818, -4833, -2116, 19374, 53104, -4826, -2071, 19034, 53394, -4821,
-        -2032, 18712, 53664, -4808, -1991, 18386, 53938, -4797, -1948, 18054, 54216, -4786, -1903,
-        17718, 54498, -4777, -1864, 17400, 54760, -4760, -1823, 17078, 55026, -4745, -1780, 16750,
-        55296, -4730, -1735, 16418, 55570, -4717, -1696, 16104, 55824, -4696, -1655, 15786, 56082,
-        -4677, -1620, 15486, 56320, -4650, -1575, 15158, 56586, -4633, -1536, 14848, 56832, -4608,
-        -1495, 14534, 57082, -4585, -1460, 14238, 57312, -4554, -1415, 13914, 57570, -4533, -1376,
-        13608, 57808, -4504, -1343, 13322, 58026, -4469, -1300, 13006, 58272, -4442, -1263, 12710,
-        58498, -4409, -1224, 12408, 58728, -4376, -1191, 12126, 58938, -4337, -1148, 11814, 59176,
-        -4306, -1111, 11522, 59394, -4269, -1080, 11248, 59592, -4224, -1039, 10946, 59818, -4189,
-        -1004, 10662, 60024, -4146, -967, 10374, 60234, -4105, -936, 10104, 60424, -4056, -903,
-        9830, 60618, -4009, -868, 9550, 60816, -3962, -831, 9266, 61018, -3917, -800, 9000, 61200,
-        -3864, -767, 8730, 61386, -3813, -740, 8478, 61552, -3754, -703, 8198, 61746, -3705, -672,
-        7936, 61920, -3648, -647, 7694, 62074, -3585, -612, 7422, 62256, -3530, -583, 7170, 62418,
-        -3469, -560, 6936, 62560, -3400, -527, 6674, 62730, -3341, -500, 6430, 62880, -3274, -471,
-        6182, 63034, -3209, -448, 5952, 63168, -3136, -423, 5718, 63306, -3065, -396, 5478, 63448,
-        -2994, -375, 5258, 63570, -2917, -352, 5032, 63696, -2840, -327, 4802, 63826, -2765, -300,
-        4566, 63960, -2690, -279, 4350, 64074, -2609, -264, 4152, 64168, -2520, -239, 3926, 64290,
-        -2441, -220, 3718, 64392, -2354, -199, 3506, 64498, -2269, -184, 3312, 64584, -2176, -167,
-        3114, 64674, -2085, -148, 2910, 64768, -1994, -135, 2726, 64842, -1897, -120, 2536, 64920,
-        -1800, -103, 2342, 65002, -1705, -92, 2166, 65064, -1602, -79, 1986, 65130, -1501, -72,
-        1824, 65176, -1392, -55, 1634, 65250, -1293, -52, 1486, 65280, -1178, -39, 1310, 65338,
-        -1073, -32, 1152, 65376, -960, -23, 990, 65418, -849, -20, 846, 65440, -730, -15, 698,
-        65466, -613, -8, 544, 65496, -496, -7, 410, 65506, -373, -4, 270, 65520, -250, -1, 130,
-        65534, -127,
-    ];
-
-    /// [`weights`] is the measured table at every fraction, and each row sums to `2^16`.
-    #[test]
-    fn the_weights_are_the_measured_table() {
-        for k in 0..256u32 {
-            let w = weights(k);
-            let at = 4 * k as usize;
-            assert_eq!(w[..], MEASURED[at..at + 4], "k = {k}");
-            assert_eq!(w.iter().sum::<i32>(), 1 << 16, "k = {k}");
-            // The outer taps never weigh positively, the inner ones never negatively.
-            assert!(w[0] <= 0 && w[3] <= 0 && w[1] >= 0 && w[2] >= 0, "k = {k}");
-        }
-    }
-
     /// The border texels: per border color, the channels reading 1 after the
     /// format's channels and the swizzle. `R8Unorm` reads `(0, 0, 0, 1)` under transparent black
     /// and `(1, 0, 0, 1)` under white; `A8Unorm`'s alpha is the color's red, so its opaque black
