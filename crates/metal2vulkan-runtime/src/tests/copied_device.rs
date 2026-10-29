@@ -15,6 +15,8 @@
 //!   those bytes alone merged back.
 //! - **Unreadable pages** (mapped without access, memory Metal makes no buffer over) are never
 //!   copied: the buffer is refused, as their import is.
+//! - **A dma-buf's mapping** (Linux, where `/dev/udmabuf` opens), whose pages the kernel's read
+//!   cannot pin, is copied where the gate refuses its import, with the same coherence.
 //! - **Rebinds.** A rebind's new pages are a copy where the gate refuses their import or the
 //!   admitted import fails, with the same coherence; the old pages stay as they were, and a later
 //!   rebind imports again.
@@ -41,8 +43,19 @@ const LENGTH: usize = 64 * 1024;
 /// Host memory of whole pages, in a pattern of its own, freed when dropped (after the device).
 struct Host {
     pointer: NonNull<u8>,
-    layout: Layout,
+    backing: Backing,
     seed: u8,
+}
+
+/// What a [`Host`]'s pages are.
+enum Backing {
+    /// An allocation of this layout.
+    Allocated(Layout),
+    /// A mapping of a dma-buf of a `memfd`'s pages, as a consumer maps guest RAM.
+    #[cfg(target_os = "linux")]
+    DmaBuf {
+        _mapping: super::copied::DmaBufMapping,
+    },
 }
 
 impl Host {
@@ -52,18 +65,28 @@ impl Host {
         let pointer = NonNull::new(unsafe { std::alloc::alloc(layout) }).unwrap();
         let host = Host {
             pointer,
-            layout,
+            backing: Backing::Allocated(layout),
             seed,
         };
         host.write(0, &host.pattern());
         host
     }
 
+    /// Host memory over a dma-buf's mapping (`VM_PFNMAP`), or `None` where `/dev/udmabuf` does
+    /// not open, which it says.
+    #[cfg(target_os = "linux")]
+    fn over_dma_buf(seed: u8) -> Option<Host> {
+        let mapping = super::copied::DmaBufMapping::new(&pattern(seed))?;
+        Some(Host {
+            pointer: mapping.pages,
+            backing: Backing::DmaBuf { _mapping: mapping },
+            seed,
+        })
+    }
+
     /// The pattern it was made with.
     fn pattern(&self) -> Vec<u8> {
-        (0..LENGTH)
-            .map(|i| ((i % 251) as u8).wrapping_add(self.seed.wrapping_mul(37)))
-            .collect()
+        pattern(self.seed)
     }
 
     /// Its bytes, read while no command buffer runs.
@@ -109,9 +132,23 @@ impl Host {
 
 impl Drop for Host {
     fn drop(&mut self) {
-        // SAFETY: allocated with this layout.
-        unsafe { std::alloc::dealloc(self.pointer.as_ptr(), self.layout) };
+        match self.backing {
+            // SAFETY: allocated with this layout.
+            Backing::Allocated(layout) => unsafe {
+                std::alloc::dealloc(self.pointer.as_ptr(), layout)
+            },
+            // Unmapped by the mapping's own drop.
+            #[cfg(target_os = "linux")]
+            Backing::DmaBuf { .. } => {}
+        }
     }
+}
+
+/// The bytes of a [`Host`] of `seed`.
+fn pattern(seed: u8) -> Vec<u8> {
+    (0..LENGTH)
+        .map(|i| ((i % 251) as u8).wrapping_add(seed.wrapping_mul(37)))
+        .collect()
 }
 
 /// The degrade notices a device announced.
@@ -293,6 +330,28 @@ fn copied_buffer_is_made_where_the_caller_s_gate_refuses_the_import() {
     assert_eq!(gpu_bytes(&device, &imported), other.pattern());
     assert_eq!(asked.lock().unwrap().len(), 2, "asked once more");
     drop((buffer, imported));
+}
+
+/// Pages of a dma-buf's mapping (`VM_PFNMAP`, as a consumer maps guest RAM), which the kernel's
+/// read cannot pin, whose import the gate refuses, are copied all the same (read with plain loads,
+/// mapped readable), with the copy's coherence. Linux only, where `/dev/udmabuf` opens.
+#[cfg(target_os = "linux")]
+#[test]
+fn copied_buffer_is_made_over_a_dma_buf_mapping_the_gate_refuses() {
+    let Some(host) = Host::over_dma_buf(9) else {
+        return;
+    };
+    let Some((device, heard)) = device() else {
+        return;
+    };
+    let asked: Arc<Mutex<Vec<ImportRequest>>> = Arc::default();
+    let before = device.work_counts();
+    let buffer = host.buffer(&device, Some(gate(&asked, false)));
+    let after = device.work_counts();
+    assert_eq!(moved(&before, &after), [1, 1, 1, 0, 0]);
+    assert_eq!(announced(&heard), 1, "announced once");
+    lies_in_a_copy(&device, &buffer, &host);
+    drop(buffer);
 }
 
 #[test]

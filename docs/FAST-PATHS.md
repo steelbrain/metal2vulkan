@@ -319,8 +319,10 @@ driver's. Each is open work.
 - **A copied host buffer costs O(its size) at every commit and every batch's completion**
   (`copied.rs`, `copied-host-pages`): each compares every byte of every live copy with the bytes
   the copy and the pages last agreed on, whichever buffers the work names, where a page log or the
-  work's uses could bound it. A copy is made only where the caller's gate refuses an import or an
-  admitted import fails, never by default.
+  work's uses could bound it: a live 64 MiB copy added 45 to 68 ms to each empty command buffer's
+  commit and wait (0.2 ms without) on an RTX 5080 laptop (Intel Core Ultra 9 275HX). A copy is
+  made only where the caller's gate refuses an import or an admitted import fails, never by
+  default.
 - **A copied host buffer's merge keeps the CPU's byte where the CPU and the GPU both wrote it**
   between a commit and the completion: bytes are merged one at a time, so a GPU write never
   rewrites a byte beside it, but a byte both wrote keeps the CPU's, where on Metal the later write

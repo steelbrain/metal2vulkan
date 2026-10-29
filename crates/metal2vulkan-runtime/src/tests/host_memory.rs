@@ -1,6 +1,8 @@
 //! Buffers over host memory (`host_memory.rs`): the pages an import covers, where the buffer
 //! binds in them, the memory types an import may use, and the host's page.
 
+#[cfg(target_os = "linux")]
+use crate::host_memory::Access;
 use crate::host_memory::{
     based_size, binds_in, buffer_base, host_page, import_refused, import_window, refused,
     ImportWindow, WindowRefusal,
@@ -217,7 +219,7 @@ fn the_host_page_is_unknown_elsewhere() {
     assert_eq!(host_page(), None);
 }
 
-/// Lines of `/proc/<pid>/maps` (address order) for the writability check.
+/// Lines of `/proc/<pid>/maps` (address order) for the permission checks.
 #[cfg(target_os = "linux")]
 fn maps(lines: &[&str]) -> Vec<String> {
     lines.iter().map(|line| line.to_string()).collect()
@@ -226,7 +228,7 @@ fn maps(lines: &[&str]) -> Vec<String> {
 #[cfg(target_os = "linux")]
 #[test]
 fn only_pages_mapped_writable_without_a_gap_are_importable() {
-    use crate::host_memory::writable;
+    use crate::host_memory::permitted;
     let lines = maps(&[
         "1000-3000 rw-p 00000000 00:00 0",
         "3000-5000 rw-s 00000000 00:01 7   /dev/shm/guest (deleted)",
@@ -238,7 +240,10 @@ fn only_pages_mapped_writable_without_a_gap_are_importable() {
     // The answer, and how many mappings it judged.
     let judged = |lines: Vec<String>, start: u64, end: u64| {
         let mut asked = 0;
-        (writable(lines, start, end, &mut asked), asked)
+        (
+            permitted(lines, start, end, Access::Write, &mut asked),
+            asked,
+        )
     };
     // Inside one mapping, and across two adjacent writable ones (private and shared).
     assert_eq!(judged(lines.clone(), 0x1000, 0x3000), (true, 1));
@@ -253,6 +258,37 @@ fn only_pages_mapped_writable_without_a_gap_are_importable() {
     assert_eq!(judged(lines.clone(), 0x7000, 0x9000), (true, 2));
     // Nothing mapped at all.
     assert_eq!(judged(Vec::new(), 0x1000, 0x2000), (false, 0));
+}
+
+/// The read check takes a mapping's `r` as the write check takes its `w`: a read-only page is
+/// readable, a page mapped without access or a gap is not.
+#[cfg(target_os = "linux")]
+#[test]
+fn only_pages_mapped_readable_without_a_gap_are_readable() {
+    use crate::host_memory::permitted;
+    let lines = maps(&[
+        "1000-3000 rw-s 00000000 00:06 1066 /dmabuf:",
+        "3000-5000 r--p 00000000 00:00 0",
+        "5000-6000 ---p 00000000 00:00 0",
+        "6000-7000 -w-p 00000000 00:00 0",
+        "8000-9000 r-xp 00000000 00:00 0",
+    ]);
+    let judged = |start: u64, end: u64| {
+        let mut asked = 0;
+        (
+            permitted(lines.clone(), start, end, Access::Read, &mut asked),
+            asked,
+        )
+    };
+    // Shared and read-only mappings, adjacent.
+    assert_eq!(judged(0x1000, 0x5000), (true, 2));
+    // A page mapped without access, alone or at the end of a range; a write-only one.
+    assert_eq!(judged(0x5000, 0x6000), (false, 1));
+    assert_eq!(judged(0x4000, 0x6000), (false, 2));
+    assert_eq!(judged(0x6000, 0x7000), (false, 1));
+    // A gap, and an executable mapping past it.
+    assert_eq!(judged(0x7000, 0x9000), (false, 1));
+    assert_eq!(judged(0x8000, 0x9000), (true, 1));
 }
 
 /// The mapping queries go through one file the process keeps open (`host_memory::kept_maps`),
@@ -309,9 +345,10 @@ fn this_process_s_read_only_and_unmapped_pages_are_refused() {
     assert!(refused(refuse_unwritable(&window, &counts)));
 }
 
-/// The kernel's answer for a window (`PROCMAP_QUERY`) is the maps lines' answer, over one
-/// mapping, two of different permissions, a read-only page alone, and a page no longer mapped;
-/// and a kernel of Linux 6.11 or later answers it, so no import reads the maps' text. Both
+/// The kernel's answer for a window (`PROCMAP_QUERY`) is the maps lines' answer, for write
+/// permission and for read permission, over one mapping, two of different permissions, a
+/// read-only page alone, a page mapped without access, and a page no longer mapped; and a kernel
+/// of Linux 6.11 or later answers it, so no import or copy reads the maps' text. Both
 /// answers read the address space of a child forked for each state ([`window_answers`]), which
 /// no other thread changes: in this process, another test's mapping may take the unmapped page
 /// between the two readings.
@@ -351,15 +388,15 @@ fn the_kernel_s_answer_for_a_window_is_the_maps_lines_answer() {
     let windows = [(0, 1), (0, 2), (1, 2), (1, 3), (0, 3), (2, 3)];
     let spans = windows.map(|(from, to)| (base + from * page, base + to * page));
     let check = |state: &str| {
-        for ((from, to), (read, queried)) in windows.into_iter().zip(window_answers(&spans)) {
-            if queries {
-                assert_eq!(
-                    queried,
-                    Some(read),
-                    "{state}: pages {from}..{to} on {release}"
-                );
-            } else if let Some(queried) = queried {
-                assert_eq!(queried, read, "{state}: pages {from}..{to} on {release}");
+        for access in [Access::Write, Access::Read] {
+            let answers = window_answers(&spans, access);
+            for ((from, to), (lines, queried)) in windows.into_iter().zip(answers) {
+                let what = format!("{state}, {access:?}: pages {from}..{to} on {release}");
+                if queries {
+                    assert_eq!(queried, Some(lines), "{what}");
+                } else if let Some(queried) = queried {
+                    assert_eq!(queried, lines, "{what}");
+                }
             }
         }
     };
@@ -369,6 +406,10 @@ fn the_kernel_s_answer_for_a_window_is_the_maps_lines_answer() {
     let protected = unsafe { libc::mprotect(page_at(1), page as usize, libc::PROT_READ) };
     assert_eq!(protected, 0);
     check("the middle page read-only");
+    // SAFETY: as above; its middle page loses every access.
+    let protected = unsafe { libc::mprotect(page_at(1), page as usize, libc::PROT_NONE) };
+    assert_eq!(protected, 0);
+    check("the middle page without access");
     // SAFETY: as above; its last page goes.
     assert_eq!(unsafe { libc::munmap(page_at(2), page as usize) }, 0);
     check("the last page unmapped");
@@ -376,17 +417,20 @@ fn the_kernel_s_answer_for_a_window_is_the_maps_lines_answer() {
     assert_eq!(unsafe { libc::munmap(at, 2 * page as usize) }, 0);
 }
 
-/// The answers for windows `[start, end)` in a child forked now: the maps lines' answer
-/// ([`writable`](crate::host_memory::writable)) and the kernel's
-/// ([`queried_writable`](crate::host_memory::queried_writable)), from one snapshot. The child's
-/// address space is this process's at the fork, and its one thread maps nothing. It asks the
-/// kernel and copies its maps text to a pipe without allocating (a fork of a multithreaded
-/// process leaves only async-signal-safe calls safe; another thread may have held `malloc`'s lock)
-/// and ends with `_exit`, which runs no exit handler; this process reads the lines' answers from
-/// the copy.
+/// The answers for windows `[start, end)` in a child forked now, for write permission and for
+/// read permission: the maps lines' answer ([`permitted`](crate::host_memory::permitted)) and the
+/// kernel's ([`queried_permitted`](crate::host_memory::queried_permitted)), from one snapshot.
+/// The child's address space is this process's at the fork, and its one thread maps nothing. It
+/// asks the kernel and copies its maps text to a pipe without allocating (a fork of a
+/// multithreaded process leaves only async-signal-safe calls safe; another thread may have held
+/// `malloc`'s lock) and ends with `_exit`, which runs no exit handler; this process reads the
+/// lines' answers from the copy.
 #[cfg(target_os = "linux")]
-fn window_answers<const N: usize>(windows: &[(u64, u64); N]) -> [(bool, Option<bool>); N] {
-    use crate::host_memory::writable;
+fn window_answers<const N: usize>(
+    windows: &[(u64, u64); N],
+    access: Access,
+) -> [(bool, Option<bool>); N] {
+    use crate::host_memory::permitted;
     use std::io::Read;
     use std::os::fd::FromRawFd;
     let mut pipe = [0; 2];
@@ -400,7 +444,7 @@ fn window_answers<const N: usize>(windows: &[(u64, u64); N]) -> [(bool, Option<b
     // `_exit`.
     let child = unsafe { libc::fork() };
     if child == 0 {
-        let code = send_window_answers(pipe[1], windows);
+        let code = send_window_answers(pipe[1], windows, access);
         // SAFETY: ends the child at once, running no exit handler.
         unsafe { libc::_exit(code) };
     }
@@ -427,16 +471,21 @@ fn window_answers<const N: usize>(windows: &[(u64, u64); N]) -> [(bool, Option<b
     std::array::from_fn(|i| {
         let (start, end) = windows[i];
         let queried = (answers[i] & 1 != 0).then_some(answers[i] & 2 != 0);
-        (writable(lines.iter().cloned(), start, end, &mut 0), queried)
+        let lines = permitted(lines.iter().cloned(), start, end, access, &mut 0);
+        (lines, queried)
     })
 }
 
 /// The forked child's side of [`window_answers`], which allocates nothing: one byte per window
-/// for the kernel's answer (1 where it answers, plus 2 where that is writable), then the maps
+/// for the kernel's answer (1 where it answers, plus 2 where that is `access`), then the maps
 /// text, written to `sink`. The exit code: 0, or what failed (2 the open, 3 a write, 4 a read).
 #[cfg(target_os = "linux")]
-fn send_window_answers<const N: usize>(sink: i32, windows: &[(u64, u64); N]) -> i32 {
-    use crate::host_memory::queried_writable;
+fn send_window_answers<const N: usize>(
+    sink: i32,
+    windows: &[(u64, u64); N],
+    access: Access,
+) -> i32 {
+    use crate::host_memory::queried_permitted;
     use std::os::fd::FromRawFd;
     let send = |mut bytes: &[u8]| {
         while !bytes.is_empty() {
@@ -464,12 +513,13 @@ fn send_window_answers<const N: usize>(sink: i32, windows: &[(u64, u64); N]) -> 
     }
     // SAFETY: `fd` is the file just opened, which the `File` owns from here.
     let maps = unsafe { std::fs::File::from_raw_fd(fd) };
-    let answers = windows.map(
-        |(start, end)| match queried_writable(&maps, start, end, &mut 0) {
-            None => 0,
-            Some(writable) => 1 | (u8::from(writable) << 1),
-        },
-    );
+    let answers =
+        windows.map(
+            |(start, end)| match queried_permitted(&maps, start, end, access, &mut 0) {
+                None => 0,
+                Some(permitted) => 1 | (u8::from(permitted) << 1),
+            },
+        );
     if !send(&answers) {
         return 3;
     }

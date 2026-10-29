@@ -2507,8 +2507,11 @@ bound.
   the device's own, which no import maps (a heap's textures shadows of its bytes):
   the caller's gate (`HostMemory::with_import_gate`) refused the pages' import, or the import the
   device and the gate admitted failed (out of memory, or another Vulkan error, such as a driver out
-  of the mappings the host kernel allows). Pages the process cannot read are never copied: the
-  buffer is refused, as their import is. A copy whose own allocation fails refuses the call
+  of the mappings the host kernel allows). The copy reads the pages through the kernel, and
+  where the kernel cannot (on Linux it pins each page, which a dma-buf's mapping does not allow),
+  with plain loads where the process maps every page readable. Pages not mapped, or mapped
+  without read permission, are never copied: the buffer is refused, as their import is. A copy
+  whose own allocation fails refuses the call
   (`OutOfMemory`). A heap's rebind and memory whose GPU writes Metal's private option bit 24 drops
   are never copied. Counted: `WorkCounts::copied_host_buffers_made`, of them
   `copied_host_buffers_refused` and `copied_host_buffers_degraded` (and `copied_heaps_made`,

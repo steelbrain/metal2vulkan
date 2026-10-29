@@ -618,18 +618,23 @@ pub(super) fn import_refused(error: vk::Result) -> Error {
 /// Refuse the window's pages, typed, unless the process maps every one of them writable: Linux
 /// drivers pin imported pages for writing. Asked by each call that imports the pages itself, not
 /// by a buffer that lies in a live import of them. The kernel answers for the mappings over the
-/// window ([`queried_writable`]) at each call, so a page remapped or reprotected since an earlier
+/// window ([`queried_permitted`]) at each call, so a page remapped or reprotected since an earlier
 /// import is judged as it is now: one query per mapping, so its cost grows with the mappings over
 /// the window (a view of scattered pages maps each run apart). The queries go through the file
 /// the process keeps open ([`kept_maps`]). A kernel without the query (before Linux 6.11) has the
-/// lines of `/proc/self/maps` read up to the window instead ([`writable`]), from a file opened for
+/// lines of `/proc/self/maps` read up to the window instead ([`permitted`]), from a file opened for
 /// the reading, which cost about 4.5 ms per import in a process of 34,000 mappings. Each mapping
 /// asked is counted in `counts` (`WorkCounts::host_mappings_queried`). When the file cannot be
 /// opened, every import is refused as not implemented here.
 #[cfg(target_os = "linux")]
 pub(super) fn refuse_unwritable(window: &ImportWindow, counts: &Counters) -> Result<(), Error> {
     let mut asked = 0;
-    let answer = mappings_writable(window.start, window.start + window.size, &mut asked);
+    let answer = mappings_permitted(
+        window.start,
+        window.start + window.size,
+        Access::Write,
+        &mut asked,
+    );
     counts.host_mappings_queried(asked);
     match answer {
         Some(true) => Ok(()),
@@ -640,25 +645,69 @@ pub(super) fn refuse_unwritable(window: &ImportWindow, counts: &Counters) -> Res
     }
 }
 
-/// Whether the process maps `[start, end)` without a gap, each page with write permission, as the
-/// kernel answers now: for the mappings over it ([`queried_writable`]), or from the lines of
-/// `/proc/self/maps` where the kernel predates the query ([`writable`]); `None` when that file
+/// Whether the process maps every page of `[start, end)` with read permission, as the kernel
+/// answers now ([`mappings_permitted`]): where it does, the CPU reads the bytes with plain loads,
+/// as a copied host buffer's comparisons read them at each commit (`copied.rs`). `false` where
+/// the mappings cannot be read (`/proc/self/maps` does not open).
+#[cfg(target_os = "linux")]
+pub(super) fn mapped_readable(start: u64, end: u64) -> bool {
+    mappings_permitted(start, end, Access::Read, &mut 0) == Some(true)
+}
+
+/// [`mapped_readable`] where the runtime does not ask the system for its mappings: `false`.
+#[cfg(not(target_os = "linux"))]
+pub(super) fn mapped_readable(_start: u64, _end: u64) -> bool {
+    false
+}
+
+/// A permission the process's mappings are asked for.
+#[cfg(target_os = "linux")]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum Access {
+    /// `VM_READ`, the `r` of a mapping's line in the maps: a copy reads the pages (`copied.rs`).
+    Read,
+    /// `VM_WRITE`, the `w`: Linux drivers pin imported pages for writing ([`refuse_unwritable`]).
+    Write,
+}
+
+#[cfg(target_os = "linux")]
+impl Access {
+    /// The mapping's flag of the permission in `PROCMAP_QUERY`'s answer (`vma_flags`).
+    fn queried(self) -> u64 {
+        match self {
+            Access::Read => PROCMAP_QUERY_VMA_READABLE,
+            Access::Write => PROCMAP_QUERY_VMA_WRITABLE,
+        }
+    }
+
+    /// The permission's place and letter in a maps line's permissions (`rw-p`).
+    fn letter(self) -> (usize, u8) {
+        match self {
+            Access::Read => (0, b'r'),
+            Access::Write => (1, b'w'),
+        }
+    }
+}
+
+/// Whether the process maps `[start, end)` without a gap, each page with `access`, as the kernel
+/// answers now: for the mappings over it ([`queried_permitted`]), or from the lines of
+/// `/proc/self/maps` where the kernel predates the query ([`permitted`]); `None` when that file
 /// cannot be opened. Each mapping asked is added to `asked`.
 #[cfg(target_os = "linux")]
-fn mappings_writable(start: u64, end: u64, asked: &mut u64) -> Option<bool> {
+fn mappings_permitted(start: u64, end: u64, access: Access, asked: &mut u64) -> Option<bool> {
     use std::io::BufRead;
     let maps = kept_maps()?;
-    if let Some(writable) = queried_writable(&maps, start, end, asked) {
-        return Some(writable);
+    if let Some(permitted) = queried_permitted(&maps, start, end, access, asked) {
+        return Some(permitted);
     }
     // The lines are read from a file of their own: reading moves its position, which the kept
     // one's queries share among threads.
     let maps = std::fs::File::open("/proc/self/maps").ok()?;
     let lines = std::io::BufReader::new(maps).lines().map_while(Result::ok);
-    Some(writable(lines, start, end, asked))
+    Some(permitted(lines, start, end, access, asked))
 }
 
-/// This process's `/proc/self/maps`, opened once for [`queried_writable`] and kept with the id of
+/// This process's `/proc/self/maps`, opened once for [`queried_permitted`] and kept with the id of
 /// the process that opened it, or opened again (`None` where it cannot be): each `PROCMAP_QUERY`
 /// answers from the process's mappings as they are at the call, so a file kept open reads the same
 /// answers as one opened for the call, without the opening, which cost each import about as much
@@ -709,20 +758,26 @@ const _: () = assert!(std::mem::size_of::<ProcmapQuery>() == 104);
 const PROCMAP_QUERY: u64 =
     (3 << 30) | ((std::mem::size_of::<ProcmapQuery>() as u64) << 16) | ((b'f' as u64) << 8) | 17;
 
+/// `PROCMAP_QUERY_VMA_READABLE`: the mapping's `VM_READ`, the `r` of its line in the maps.
+#[cfg(target_os = "linux")]
+const PROCMAP_QUERY_VMA_READABLE: u64 = 0x01;
+
 /// `PROCMAP_QUERY_VMA_WRITABLE`: the mapping's `VM_WRITE`, the `w` of its line in the maps.
 #[cfg(target_os = "linux")]
 const PROCMAP_QUERY_VMA_WRITABLE: u64 = 0x02;
 
-/// Whether the process maps `[start, end)` without a gap, each mapping with write permission, as
-/// the kernel answers `PROCMAP_QUERY` on `maps` (this process's `/proc/self/maps`): one query per
+/// Whether the process maps `[start, end)` without a gap, each mapping with `access`, as the
+/// kernel answers `PROCMAP_QUERY` on `maps` (this process's `/proc/self/maps`): one query per
 /// mapping the window touches, each for the mapping covering the first address not yet covered,
 /// and each added to `asked`. `None` where the kernel does not answer the query (before Linux
-/// 6.11, `ENOTTY`) or fails it otherwise; a missing mapping (`ENOENT`) is an answer, not writable.
+/// 6.11, `ENOTTY`) or fails it otherwise; a missing mapping (`ENOENT`) is an answer, not
+/// permitted.
 #[cfg(target_os = "linux")]
-pub(super) fn queried_writable(
+pub(super) fn queried_permitted(
     maps: &std::fs::File,
     start: u64,
     end: u64,
+    access: Access,
     asked: &mut u64,
 ) -> Option<bool> {
     use std::os::fd::AsRawFd;
@@ -751,7 +806,7 @@ pub(super) fn queried_writable(
         if query.vma_start > covered || query.vma_end <= covered {
             return None;
         }
-        if query.vma_flags & PROCMAP_QUERY_VMA_WRITABLE == 0 {
+        if query.vma_flags & access.queried() == 0 {
             return Some(false);
         }
         covered = query.vma_end;
@@ -767,14 +822,15 @@ pub(super) fn refuse_unwritable(_window: &ImportWindow, _counts: &Counters) -> R
 }
 
 /// Whether the mappings of `maps` (lines of `/proc/<pid>/maps`, in address order) cover
-/// `[start, end)` without a gap, each with write permission, adding to `asked` each mapping it
-/// judged (one ending past the address it reached). Reading stops at the first line past `end`; a
-/// line that does not parse is skipped.
+/// `[start, end)` without a gap, each with `access`, adding to `asked` each mapping it judged (one
+/// ending past the address it reached). Reading stops at the first line past `end`; a line that
+/// does not parse is skipped.
 #[cfg(target_os = "linux")]
-pub(super) fn writable(
+pub(super) fn permitted(
     maps: impl IntoIterator<Item = String>,
     start: u64,
     end: u64,
+    access: Access,
     asked: &mut u64,
 ) -> bool {
     let mut covered = start;
@@ -782,14 +838,14 @@ pub(super) fn writable(
         if covered >= end {
             break;
         }
-        let Some((from, to, write)) = mapping(&line) else {
+        let Some((from, to, allowed)) = mapping(&line, access) else {
             continue;
         };
         if to <= covered {
             continue;
         }
         *asked += 1;
-        if from > covered || !write {
+        if from > covered || !allowed {
             return false;
         }
         covered = to;
@@ -797,16 +853,17 @@ pub(super) fn writable(
     covered >= end
 }
 
-/// One line of `/proc/<pid>/maps`: the mapping's start, its end, and whether it is writable.
+/// One line of `/proc/<pid>/maps`: the mapping's start, its end, and whether it has `access`.
 #[cfg(target_os = "linux")]
-fn mapping(line: &str) -> Option<(u64, u64, bool)> {
+fn mapping(line: &str, access: Access) -> Option<(u64, u64, bool)> {
     let mut fields = line.split_ascii_whitespace();
     let (from, to) = fields.next()?.split_once('-')?;
     let permissions = fields.next()?;
+    let (place, letter) = access.letter();
     Some((
         u64::from_str_radix(from, 16).ok()?,
         u64::from_str_radix(to, 16).ok()?,
-        permissions.as_bytes().get(1) == Some(&b'w'),
+        permissions.as_bytes().get(place) == Some(&letter),
     ))
 }
 

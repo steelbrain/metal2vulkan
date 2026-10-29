@@ -7,8 +7,11 @@
 //! - **The copy.** A `VkBuffer` of the buffer's length in host-visible, coherent memory of the
 //!   runtime's own ([`MemoryClass::Shared`](crate::memory::MemoryClass)), which the GPU uses; the
 //!   buffer's `contents` stays the caller's pointer, as Metal's is. Made over pages the process
-//!   reads: the first copy reads them through the kernel ([`read_pages`]), and pages it cannot
-//!   read (memory Metal makes no buffer over) keep the import's own refusal.
+//!   reads ([`read_caller`]): the first copy reads them through the kernel ([`read_pages`]), and
+//!   where the kernel fails the read, with plain loads where the process maps every page with
+//!   read permission ([`mapped_readable`]): on Linux the kernel reads no page it cannot pin, such
+//!   as a mapping of a dma-buf (`VM_PFNMAP`). Pages not mapped, or mapped without read permission
+//!   (memory Metal makes no buffer over), keep the import's own refusal.
 //! - **Coherence.** The runtime keeps, for each copy, the bytes the pages and the copy last agreed
 //!   on (its snapshot). At each commit, before any of the command buffer's work is submitted,
 //!   every byte the CPU changed in the pages since then is written into the copy
@@ -35,6 +38,7 @@
 //!   (`shadowed-texture`): no image is bound to the copy.
 
 use crate::device::lock;
+use crate::host_memory::mapped_readable;
 use crate::work_counts::Counters;
 use std::ptr::NonNull;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
@@ -94,20 +98,43 @@ impl Drop for Copied {
 
 impl CopiedBuffers {
     /// Register the copy at `copy` of the `length` bytes at `pages`, its bytes read from the pages
-    /// now, through the kernel ([`read_pages`]). Refused, registering nothing, where the process
-    /// cannot read every page, or the host has no memory for the bytes the copy and the pages last
-    /// agreed on.
+    /// now ([`read_caller`]: through the kernel, or where it fails, with plain loads of pages
+    /// mapped readable). Refused, registering nothing, where the process cannot read every page,
+    /// or the host has no memory for the bytes the copy and the pages last agreed on.
     ///
     /// # Safety
     ///
     /// `copy` is `length` bytes of mapped memory nothing else uses yet, which stays mapped until
     /// the answer is dropped; `pages` the caller's bytes, which stay mapped as long
-    /// (`HostMemory::new`).
+    /// (`HostMemory::new`), and which the CPU reads without a fault wherever the process maps
+    /// them with read permission.
     pub(crate) unsafe fn add(
         self: &Arc<Self>,
         pages: NonNull<u8>,
         copy: NonNull<u8>,
         length: usize,
+    ) -> Result<Copied, NotCopied> {
+        let read = |pages: NonNull<u8>, into: &mut [u8]| {
+            // SAFETY: the caller's bytes, read with plain loads only where the process maps them
+            // readable (the caller's contract).
+            unsafe { read_caller(pages, into, read_pages, mapped_readable) }
+        };
+        // SAFETY: the caller's.
+        unsafe { self.add_reading(pages, copy, length, read) }
+    }
+
+    /// [`CopiedBuffers::add`], the first bytes of the pages read by `read`, which answers whether
+    /// it read every one.
+    ///
+    /// # Safety
+    ///
+    /// As [`CopiedBuffers::add`]'s.
+    pub(crate) unsafe fn add_reading(
+        self: &Arc<Self>,
+        pages: NonNull<u8>,
+        copy: NonNull<u8>,
+        length: usize,
+        read: impl FnOnce(NonNull<u8>, &mut [u8]) -> bool,
     ) -> Result<Copied, NotCopied> {
         let mut snapshot = Vec::new();
         if snapshot.try_reserve_exact(length).is_err() {
@@ -115,7 +142,7 @@ impl CopiedBuffers {
         }
         snapshot.resize(length, 0u8);
         let mut snapshot = snapshot.into_boxed_slice();
-        if !read_pages(pages, &mut snapshot) {
+        if !read(pages, &mut snapshot) {
             return Err(NotCopied::Unreadable);
         }
         // SAFETY: the copy is `length` bytes nothing else uses yet (the caller's).
@@ -211,12 +238,44 @@ pub(crate) unsafe fn sync(
     written
 }
 
+/// Read the caller's `into.len()` bytes at `pages` into `into`: through the kernel (`kernel`,
+/// [`read_pages`]), and where it fails, with plain loads where every page of them is mapped with
+/// read permission (`readable`, asked for the bytes' addresses, [`mapped_readable`]). Whether
+/// they were read: `false` where the kernel failed and a page is not mapped readable.
+///
+/// The kernel's read is a test that faults on nothing, but on Linux it pins each page, and no
+/// page of a `VM_PFNMAP` or `VM_IO` mapping can be pinned: a mapping of a dma-buf (udmabuf's on
+/// Linux 7.2, measured) is mapped readable and fails it all the same. The plain loads are the
+/// access a copy's comparisons make at each commit ([`sync`]).
+///
+/// # Safety
+///
+/// `pages` is `into.len()` bytes the CPU reads without a fault wherever `readable` answers `true`
+/// for them.
+pub(crate) unsafe fn read_caller(
+    pages: NonNull<u8>,
+    into: &mut [u8],
+    kernel: impl FnOnce(NonNull<u8>, &mut [u8]) -> bool,
+    readable: impl FnOnce(u64, u64) -> bool,
+) -> bool {
+    if kernel(pages, into) {
+        return true;
+    }
+    let start = pages.as_ptr() as u64;
+    if !readable(start, start + into.len() as u64) {
+        return false;
+    }
+    // SAFETY: the bytes are mapped readable (the caller's); `into` is the runtime's own, apart.
+    unsafe { std::ptr::copy_nonoverlapping(pages.as_ptr(), into.as_mut_ptr(), into.len()) };
+    true
+}
+
 /// Read the caller's `into.len()` bytes at `pages` into `into` through the kernel, which answers a
 /// page the process cannot read (unmapped, or mapped without read permission) with a failure, not a
 /// fault: `false` then. On Linux `process_vm_readv` of the process's own pages; on macOS
 /// `mach_vm_read_overwrite` of its own task's; elsewhere nothing is read and the answer is `false`.
 #[cfg(target_os = "linux")]
-fn read_pages(pages: NonNull<u8>, into: &mut [u8]) -> bool {
+pub(crate) fn read_pages(pages: NonNull<u8>, into: &mut [u8]) -> bool {
     let mut done = 0;
     while done < into.len() {
         let local = libc::iovec {
@@ -240,7 +299,7 @@ fn read_pages(pages: NonNull<u8>, into: &mut [u8]) -> bool {
 
 /// [`read_pages`] on macOS.
 #[cfg(target_os = "macos")]
-fn read_pages(pages: NonNull<u8>, into: &mut [u8]) -> bool {
+pub(crate) fn read_pages(pages: NonNull<u8>, into: &mut [u8]) -> bool {
     unsafe extern "C" {
         /// `<mach/mach_init.h>`: the port of this process's task.
         static mach_task_self_: libc::mach_port_t;
@@ -269,6 +328,6 @@ fn read_pages(pages: NonNull<u8>, into: &mut [u8]) -> bool {
 
 /// [`read_pages`] where the system is not asked: nothing is copied.
 #[cfg(not(any(target_os = "linux", target_os = "macos")))]
-fn read_pages(_pages: NonNull<u8>, _into: &mut [u8]) -> bool {
+pub(crate) fn read_pages(_pages: NonNull<u8>, _into: &mut [u8]) -> bool {
     false
 }

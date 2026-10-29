@@ -336,8 +336,11 @@ Each commit writes into the copy every byte the CPU changed in the pages since t
 pages last agreed, and each batch's completion writes back every byte the GPU changed, before its
 handlers run or a waiter returns, keeping a byte the CPU changed since (`copied_copy_in_bytes`,
 `copied_merge_back_bytes`). Each compares every byte of every live copy, so keep copies few. A
-texture over a copied buffer is a shadow of its bytes. Pages the process cannot read are never
-copied: the buffer is refused, as their import is.
+texture over a copied buffer is a shadow of its bytes. The copy reads the pages through the kernel
+first, and where the kernel cannot read them, with plain loads where the process maps every page
+with read permission: on Linux the kernel's read pins each page, which a mapping of a dma-buf
+(`VM_PFNMAP`) does not allow. Pages not mapped, or mapped
+without read permission, are never copied: the buffer is refused, as their import is.
 
 A no-copy heap's own buffer is copied the same way (`copied_heaps_made`): its buffers lie in the
 copy, and its textures are shadows of its bytes. `Buffer::rebind_bytes_no_copy` gives the buffer a
