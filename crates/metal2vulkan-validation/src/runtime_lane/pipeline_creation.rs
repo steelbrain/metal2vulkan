@@ -45,7 +45,6 @@
 //! ([`draws_made_on_the_pool_draw_as_made_ones`]).
 
 use super::executions::KERNEL;
-use super::pixel_samplers::metal_sampler;
 use super::{
     buffer_with, layer_reported_nothing_at_all, pipeline_state, public_case, read_buffer,
     validated_device, validated_device_with, Messages, ScratchCache, WAIT,
@@ -860,14 +859,11 @@ fn quadrants(
 
 /// Draws whose `VkPipeline`s the runtime makes on its pool while the draws go on draw as draws of
 /// pipelines made already: one state drawn binding each of four formats into a quadrant each, then
-/// as a line, under a `Counting` visibility query. Where the device samples through Metal's own
-/// texture unit, the format draws take two `VkPipeline`s, each format's class reaching the
-/// function as a push field but for whether its `half` texels are the plain rounding: the one the
-/// state's creation made where a draw keys as it predicted, and one the first draw that keys apart
-/// hands to the pool. Elsewhere they take the one the creation made. The line, whose key no
-/// creation predicts, hands its making to the pool; none is made at a draw; the command buffer
-/// completes,
-/// and a command buffer committed after it on its queue completes after it. The same draws again,
+/// as a line, under a `Counting` visibility query. The format draws take the `VkPipeline` the
+/// state's creation made, on every device: each format's class reaches the function as a push
+/// field, and none keys apart. The line, whose key no creation predicts, hands its making to the
+/// pool; none is made at a draw; the command buffer completes, and a command buffer committed
+/// after it on its queue completes after it. The same draws again,
 /// their pipelines made, hand nothing to the pool, and render the same bytes and count the same
 /// samples. The validation layer reports nothing.
 #[test]
@@ -953,19 +949,16 @@ fn draws_made_on_the_pool_draw_as_made_ones() {
         (pixels, counted)
     };
     // The bound format's class is a push field. On a device that samples through Metal's own
-    // texture unit, the draws through the probe's linear samplers of normalized coordinates key as
-    // the state's creation predicted (no texture bound and Metal's default sampler: its pipeline
-    // was made at the creation) where the class's `half` texels are the plain rounding
-    // (`TexelFormat::plain_on_metal_sampler`: the 8-bit normalized ones); the 16-bit normalized
-    // ones key apart (`SpecKey::PlainHalfTexels` 0), and the first of them hands that key's making
-    // to the pool. Elsewhere every slot's `half` texel is the device's rounding of its own `float`
-    // texel (`PrecisionNote::HalfTexelConversion`, whatever is bound), which neither the class nor
-    // the samplers' word specializes: the draws take the creation's pipeline. The line hands its
-    // own to the pool on every device.
-    assert!(VARIANTS
-        .iter()
-        .any(|format| matches!(format, PixelFormat::RGBA16Snorm | PixelFormat::RGBA16Unorm)));
-    let pooled = draw(1 + u64::from(metal_sampler(&device)));
+    // texture unit, a slot's `half` texels are the device's `float` texel rounded to nearest even
+    // (`SpecKey::PlainHalfTexels` 1) for every class but a YCbCr field on the grid `8192`
+    // (`TexelFormat::plain_on_metal_sampler`), which no variant is: the draws through the probe's
+    // linear samplers of normalized coordinates key as the state's creation predicted (no texture
+    // bound and Metal's default sampler: its pipeline was made at the creation). Elsewhere every
+    // slot's `half` texel is the device's rounding of its own `float` texel
+    // (`PrecisionNote::HalfTexelConversion`, whatever is bound), which neither the class nor the
+    // samplers' word specializes. The draws take the creation's pipeline on every device; the line
+    // alone hands its making to the pool.
+    let pooled = draw(1);
     let made = draw(0);
     assert!(pooled.1 > 0, "the draws counted samples");
     assert_eq!(pooled.1, made.1, "the same samples counted");
