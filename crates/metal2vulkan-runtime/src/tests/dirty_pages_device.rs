@@ -52,6 +52,13 @@
 //! copy in is not cut to the scissor, so the image holds every texel for the next command buffer,
 //! and the pass's own copy back of rows 0 to 8 is no change to it.
 //!
+//! Such a shadow sampled by a pass whose first instance records inline (`render/inline_first.rs`)
+//! takes its gated copy in before the pass, as every command before the pass does
+//! (`EncoderCore::hold_pass`): the pass's draws read the bytes the CPU wrote, the first time and
+//! after a write told to the log, and the pass stays one inline instance. So does a texture the
+//! pass only samples, which a discrete GPU makes a device copy (`WorkCounts::device_copy_textures`)
+//! and every other device reads in place (no copy, printed).
+//!
 //! Device tests: compiled only under the validation crate's GPU safety cfgs (`m2v_gpu`,
 //! `m2v_cpu_icd`). The kernels are the owned fixture
 //! `validation/fixtures/public/examples/runtime_examples.ll` (`llvm-as`).
@@ -993,6 +1000,116 @@ fn one_wait_serves_every_gated_copy_in_of_a_commit() {
         "one unanswered wait for both"
     );
     drop((first, second));
+    drop(buffer);
+    drop(device);
+}
+
+/// One pass that clears `target` and draws a triangle over it sampling `source`
+/// (`sampled_fragment`), to completion.
+fn draw_sampled(device: &Device, source: &Texture, target: &Texture) {
+    let state = render_state(
+        device,
+        "examples/runtime_examples.ll",
+        "colored_vertex",
+        "sampled_fragment",
+    );
+    let queue = device.new_command_queue().unwrap();
+    let command_buffer = queue.command_buffer().unwrap();
+    let mut pass = RenderPassDescriptor::new();
+    let attachment = &mut pass.color_attachments[0];
+    attachment.texture = Some(target.clone());
+    attachment.load_action = LoadAction::Clear;
+    attachment.store_action = StoreAction::Store;
+    attachment.clear_color = ClearColor::new(0.0, 0.0, 0.0, 0.0);
+    let mut encoder = command_buffer.render_command_encoder(&pass).unwrap();
+    encoder.set_render_pipeline_state(&state).unwrap();
+    let positions = bytes_of(&[-1.0f32, -1.0, 3.0, -1.0, -1.0, 3.0], f32::to_le_bytes);
+    let colors = bytes_of(&[1.0f32; 12], f32::to_le_bytes);
+    encoder.set_vertex_bytes(&positions, 0).unwrap();
+    encoder.set_vertex_bytes(&colors, 1).unwrap();
+    encoder.set_fragment_texture(Some(source), 0).unwrap();
+    encoder
+        .draw_primitives(PrimitiveType::Triangle, 0, 3, 1, 0)
+        .unwrap();
+    encoder.end_encoding().unwrap();
+    command_buffer.commit().unwrap();
+    assert!(command_buffer.wait_until_completed_for(WAIT).is_ok());
+    assert_eq!(command_buffer.status(), CommandBufferStatus::Completed);
+}
+
+#[test]
+fn a_logged_shadow_sampled_in_an_inline_pass_is_copied_in_before_the_pass() {
+    let usage = TextureUsage::SHADER_READ | TextureUsage::SHADER_WRITE;
+    sampled_in_an_inline_pass("dirty-pages-inline", usage);
+}
+
+#[test]
+fn a_logged_device_copy_sampled_in_an_inline_pass_is_copied_in_before_the_pass() {
+    sampled_in_an_inline_pass("dirty-pages-inline-copy", TextureUsage::SHADER_READ);
+}
+
+/// A texture of `usage` over logged pages, sampled by a pass recorded inline, its copies in
+/// before the pass (the module docs); nothing where the device reads it in place.
+fn sampled_in_an_inline_pass(name: &str, usage: TextureUsage) {
+    let scratch = Scratch::new(name);
+    let host = Host::new();
+    let device = device(&scratch.0);
+    eprintln!("DIRTY-PAGES: device {:?}", device.name());
+    let log = Arc::new(Log::default());
+    let Some(buffer) = over_logged(&device, &host, &log) else {
+        return;
+    };
+    host.fill(0x4040_4040);
+    let made = |device: &Device| {
+        let c = device.work_counts();
+        [c.shadowed_textures, c.device_copy_textures]
+    };
+    let before = made(&device);
+    let mut descriptor = TextureDescriptor::texture_2d(PixelFormat::RGBA8Unorm, SIDE, SIDE, false);
+    descriptor.usage = usage;
+    let source = buffer.new_texture(&descriptor, 0, ROW).unwrap();
+    let [shadowed, copied] = std::array::from_fn(|i| made(&device)[i] - before[i]);
+    eprintln!("DIRTY-PAGES: {usage:?}: {shadowed} shadow, {copied} device copy made");
+    if shadowed == 0 && copied == 0 {
+        return;
+    }
+    let mut plain = TextureDescriptor::texture_2d(PixelFormat::RGBA8Unorm, SIDE, SIDE, false);
+    plain.usage = TextureUsage::RENDER_TARGET;
+    plain.resource_options = ResourceOptions::shared();
+    let target = device.new_texture(&plain).unwrap();
+    let read = |row: u64| {
+        let mut bytes = [0u8; 4];
+        (target.get_bytes(&mut bytes, 4, 0, Region::new_2d(SIDE / 2, row, 1, 1), 0, 0)).unwrap();
+        bytes
+    };
+    let inline = |device: &Device| {
+        let c = device.work_counts();
+        [c.inline_passes, c.inline_passes_split]
+    };
+
+    // Frame 1: the first copy in, every row.
+    let (before, passes) = (counts(&device), inline(&device));
+    draw_sampled(&device, &source, &target);
+    let first = delta(&device, before);
+    let passes = std::array::from_fn::<u64, 2, _>(|i| inline(&device)[i] - passes[i]);
+    eprintln!("DIRTY-PAGES: inline frame 1 {first:?}, inline passes (all, split) {passes:?}");
+    assert_eq!(first[0], 1, "the copy in is gated");
+    assert_eq!(passes, [1, 0], "the pass is one instance recorded inline");
+    assert_eq!(read(10), [0x40; 4], "the draw read the CPU's bytes");
+
+    // Frame 2: every row written and told to the log.
+    host.fill(0x8080_8080);
+    log.told(0..SIDE * ROW, 0);
+    let (before, passes) = (counts(&device), inline(&device));
+    draw_sampled(&device, &source, &target);
+    let second = delta(&device, before);
+    let passes = std::array::from_fn::<u64, 2, _>(|i| inline(&device)[i] - passes[i]);
+    eprintln!("DIRTY-PAGES: inline frame 2 {second:?}, inline passes (all, split) {passes:?}");
+    assert_eq!(second[0], 1, "the copy in is gated");
+    assert_eq!(second[4], SIDE * SIDE * 4, "every row the log told of");
+    assert_eq!(passes, [1, 0], "the pass is one instance recorded inline");
+    assert_eq!(read(10), [0x80; 4], "the draw read the CPU's new bytes");
+    drop(source);
     drop(buffer);
     drop(device);
 }

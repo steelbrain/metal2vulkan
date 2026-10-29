@@ -1720,13 +1720,17 @@ impl EncoderCore {
     /// Leave `copy`, a shadow's copy in over host pages a consumer logs that the encoder tracked
     /// already ([`shadow_command`](Self::shadow_command)), to its batch's submission, its regions
     /// decided by `gate` then (`shadow::GatedCopyIn`), the encoder going on in a new
-    /// `VkCommandBuffer`. Recorded whole here instead inside a predicated loop's laying, which
-    /// its check may submit again, or where no new `VkCommandBuffer` can be made.
+    /// `VkCommandBuffer`. A render pass held for an instance recorded inline
+    /// ([`hold_pass`](Self::hold_pass)) stays held: the copies of its first instance go before
+    /// the pass, so the segment goes between the command buffers of the commands before it,
+    /// ahead of the pass's draws that read the copy. Recorded whole here instead inside a
+    /// predicated loop's laying, which its check may submit again, or where no new
+    /// `VkCommandBuffer` can be made.
     fn defer_copy_in(&mut self, copy: &ShadowCopy, gate: Arc<CopyInGate>) {
         let laying = (self.open.command_buffer.state().predication_mut()).laying();
         let next = match laying {
             true => None,
-            false => self.release_pass().and_then(|()| self.continuation()).ok(),
+            false => self.continuation().ok(),
         };
         let Some(next) = next else {
             if let Some(raw) = self.recording() {
