@@ -155,7 +155,7 @@ impl Model {
             let mut signaled = Vec::new();
             for &(event, value) in &spec.signals {
                 if let Signal::Kept { index, after } = self.events[event].signal(value, vk_queue) {
-                    self.events[event].keep(index, value, vk_queue);
+                    self.events[event].keep(index, value, vk_queue, false);
                     self.kept[event] = index;
                     signaled.push((event, index));
                     waits.extend(after.map(|after| (event, after)));

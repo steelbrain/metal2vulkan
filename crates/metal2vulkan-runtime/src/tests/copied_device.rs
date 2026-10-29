@@ -746,3 +746,102 @@ fn copied_heap_s_texture_keeps_its_texels_in_the_caller_s_pages() {
     );
     drop((texture, copied));
 }
+
+/// Host memory of `length` bytes of whole pages, zeroed, freed when dropped (after the device and
+/// every buffer over it).
+struct Pages {
+    pointer: NonNull<u8>,
+    layout: Layout,
+}
+
+impl Pages {
+    fn new(length: usize) -> Pages {
+        let layout = Layout::from_size_align(length, 1 << 16).unwrap();
+        // SAFETY: the layout's size is not zero.
+        let pointer = NonNull::new(unsafe { std::alloc::alloc_zeroed(layout) }).unwrap();
+        Pages { pointer, layout }
+    }
+
+    /// A no-copy buffer over all of it, its import refused by the gate: a copy.
+    fn copied(&self, device: &Device) -> Buffer {
+        // SAFETY: the memory outlives every buffer over it and the device (dropped after both).
+        let memory = unsafe { HostMemory::new(self.pointer) }.with_import_gate(Arc::new(|_| false));
+        // SAFETY: as above.
+        unsafe {
+            device.new_buffer_with_bytes_no_copy(
+                memory,
+                self.layout.size() as u64,
+                ResourceOptions::default(),
+                None,
+            )
+        }
+        .unwrap()
+    }
+}
+
+impl Drop for Pages {
+    fn drop(&mut self) {
+        // SAFETY: allocated with this layout.
+        unsafe { std::alloc::dealloc(self.pointer.as_ptr(), self.layout) }
+    }
+}
+
+/// A shared event signaled after a command buffer's write to a copied buffer: a reader that
+/// sees the event's value, by reading it as a guest's CPU spins on it or by a host wait, finds
+/// the write in the caller's pages, as Metal's writes before a signal are there once its value is
+/// seen. The signal is kept behind the merge (`WorkCounts::event_signals_behind_merge`). A large
+/// copy beside it makes each merge long, so a value seen before the merge would show.
+#[test]
+fn a_shared_event_s_value_is_seen_once_the_copy_s_bytes_are_in_the_pages() {
+    let host = Host::new(3);
+    let large = Pages::new(64 << 20);
+    let Some((device, _heard)) = device() else {
+        return;
+    };
+    let asked: Arc<Mutex<Vec<ImportRequest>>> = Arc::default();
+    let buffer = host.buffer(&device, Some(gate(&asked, false)));
+    assert!(buffer.copied(), "the buffer is a copy");
+    let large = (large.copied(&device), large);
+    assert!(large.0.copied(), "the large buffer is a copy");
+    let event = device.new_shared_event().unwrap();
+    let queue = device.new_command_queue().unwrap();
+    for round in 1..=6u64 {
+        let fill = 0x10 + round as u8;
+        let command_buffer = queue.command_buffer().unwrap();
+        let mut encoder = command_buffer.blit_command_encoder().unwrap();
+        encoder.fill_buffer(&buffer, 0..4096, fill).unwrap();
+        encoder.end_encoding().unwrap();
+        command_buffer
+            .encode_signal_event(crate::EventRef::from(&event), round)
+            .unwrap();
+        let before = device.work_counts();
+        command_buffer.commit().unwrap();
+        // Even rounds spin on the value, odd ones wait on the host.
+        if round % 2 == 0 {
+            let deadline = std::time::Instant::now() + WAIT;
+            while event.signaled_value() < round {
+                assert!(std::time::Instant::now() < deadline, "round {round}");
+                std::hint::spin_loop();
+            }
+        } else {
+            assert!(
+                event.wait_until_signaled_value(round, WAIT),
+                "round {round}"
+            );
+        }
+        // SAFETY: the pages' first bytes, which the command buffer wrote before the signal.
+        let seen = unsafe { std::slice::from_raw_parts(host.pointer.as_ptr(), 4096) }.to_vec();
+        assert!(
+            seen.iter().all(|&byte| byte == fill),
+            "round {round}: the write is in the pages once the value is seen",
+        );
+        command_buffer.wait_until_completed_for(WAIT).unwrap();
+        let after = device.work_counts();
+        assert_eq!(
+            after.event_signals_behind_merge - before.event_signals_behind_merge,
+            1,
+            "round {round}: the signal is kept behind the merge",
+        );
+    }
+    drop(large.0);
+}

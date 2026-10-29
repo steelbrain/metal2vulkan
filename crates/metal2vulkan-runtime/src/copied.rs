@@ -22,6 +22,11 @@
 //!   commit copies in. Bytes are compared 8 at a time and merged one at a time where they differ,
 //!   so a merge writes no byte the GPU did not change. Each batch ends with a barrier that makes
 //!   its writes visible to the host (`tracker::Barrier::to_host`).
+//! - **Event signals.** A batch's event signals, submitted while a copy is live, are seen at its
+//!   completion turn alone, after the merge: no read of the value observes them earlier, and a
+//!   wait for them is held on the host until that turn (`event_timeline.rs`), so the GPU's writes
+//!   before a signal are in the pages once its value is seen, as Metal's are. No submission is
+//!   added; a reader sees the value a completion turn later than the semaphore's counter shows it.
 //! - **Cost.** Every live copy is compared whole at each commit and at each batch's completion,
 //!   whichever buffers the work names: O(bytes) per commit and per batch, a fallback's cost
 //!   (`docs/FAST-PATHS.md`, known gaps). Counted: `WorkCounts::copied_copy_in_bytes`,
@@ -97,6 +102,12 @@ impl Drop for Copied {
 }
 
 impl CopiedBuffers {
+    /// Whether a copy is live: a batch submitted now may write one, so its event signals are seen
+    /// at its completion turn alone (`event_timeline.rs`).
+    pub(crate) fn any(&self) -> bool {
+        self.live.load(Ordering::Relaxed) > 0
+    }
+
     /// Register the copy at `copy` of the `length` bytes at `pages`, its bytes read from the pages
     /// now ([`read_caller`]: through the kernel, or where it fails, with plain loads of pages
     /// mapped readable). Refused, registering nothing, where the process cannot read every page,

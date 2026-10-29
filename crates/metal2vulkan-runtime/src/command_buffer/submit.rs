@@ -1043,8 +1043,14 @@ impl CommandBufferShared {
                 shared.interop.wrapped.forget(image);
             }
         }
+        // Its signals are seen at its completion turn alone where it may write a copied host
+        // buffer, whose bytes reach the pages there (`event_timeline.rs`).
+        let behind_merge = !kept.is_empty() && shared.copied.any();
+        if behind_merge {
+            shared.counts.event_signals_behind_merge(kept.len());
+        }
         for (event, signal, value) in &kept {
-            event.keep(*signal, *value, queue);
+            event.keep(*signal, *value, queue, behind_merge);
         }
         // Its commands may reach every texture through its resource ID where one bound a heap
         // set: the stale-reach degrade's trigger decides (`detach.rs`).

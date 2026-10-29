@@ -1612,6 +1612,7 @@ impl Gpu for Runtime {
             ("slot_wait_nanos", c.slot_wait_nanos),
             ("event_waits_met", c.event_waits_met),
             ("shared_event_waits_held", c.shared_event_waits_held),
+            ("event_signals_behind_merge", c.event_signals_behind_merge),
             ("bare_starts", c.bare_starts),
             ("prefixed_starts", c.prefixed_starts),
             ("command_barriers", c.command_barriers),

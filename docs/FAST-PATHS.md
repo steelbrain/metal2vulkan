@@ -328,10 +328,6 @@ driver's. Each is open work.
   rewrites a byte beside it, but a byte both wrote keeps the CPU's, where on Metal the later write
   wins. A heap's rebind is never copied, nor a buffer's rebind with an image in place over the
   buffer: a refused or failed import of either still refuses the call.
-- **A shared event's value can reach the CPU before a copied host buffer's merge**: the host reads
-  the event's semaphore, which the batch signals before its completion merges the GPU's writes
-  back, so a CPU that waits for the value may read the pages before them, where Metal's writes are
-  in the pages when the value is seen.
 - **On MoltenVK a kernel's out-of-bounds write through a buffer reaches other bytes of the
   buffer's memory allocation**, where Metal's GPU faults past the pages of the resource: on the
   M3 Max (MoltenVK 1.4.2) a dispatch writing three pages through a one-page buffer of the

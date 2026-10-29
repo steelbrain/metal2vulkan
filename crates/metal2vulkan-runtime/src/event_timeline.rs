@@ -34,6 +34,16 @@
 //!
 //! The held batch goes once the value is reached: a host set wakes the scheduler, and so does a
 //! completion turn that observes the GPU signal (`event.rs`).
+//!
+//! **A signal behind a merge is seen at its completion turn alone** ([`EventTimeline::keep`]).
+//! A batch submitted while the device keeps a copied host buffer may write the copy, whose bytes
+//! reach the caller's pages only at the batch's completion turn (`copied.rs`); Metal's writes
+//! before a signal are in the pages once anyone sees its value. So no read of the counter observes
+//! such a signal, nor any after it (a read of the counter is a raw read of the GPU's progress),
+//! and no wait is handed its index, the scheduler's own host wait included: the completion turn,
+//! which merges first, observes it, and wakes every host wait and held batch for it. A plain
+//! event's wait for such a signal is held as a shared event's is. The signal itself stays the
+//! batch's GPU signal: no submission is added.
 
 use crate::command_buffer::completion::seen;
 use std::collections::VecDeque;
@@ -45,6 +55,9 @@ struct Pending<Q> {
     value: u64,
     /// The `VkQueue` of the batch that signals it.
     queue: Q,
+    /// Seen at its batch's completion turn alone, after the copied host buffers merged (the
+    /// module docs).
+    behind_merge: bool,
 }
 
 /// How a batch waits for a Metal value.
@@ -139,6 +152,12 @@ impl<Q: Copy + Eq> EventTimeline<Q> {
         read: u64,
         reaches: impl FnOnce(u64) -> Result<bool, E>,
     ) -> Result<bool, E> {
+        // Never past a signal behind a merge, which its completion turn observes (the module
+        // docs).
+        let read = match self.pending.iter().find(|pending| pending.behind_merge) {
+            Some(pending) => read.min(pending.index - 1),
+            None => read,
+        };
         let index = seen(self.reached, None, read, reaches)?;
         Ok(self.observe(index))
     }
@@ -165,14 +184,20 @@ impl<Q: Copy + Eq> EventTimeline<Q> {
     /// holds on the host is one too; `None` while no submitted signal and no host set reaches it.
     /// The host waits for the semaphore's index (the scheduler's thread, `scheduler/mod.rs`), and
     /// a set meanwhile wakes it as any host signal does: no batch is handed that index.
+    /// A value a signal behind a merge reaches, or one after it, is `None` too: only its
+    /// completion turn observes it (the module docs).
     pub(super) fn landing(&self, value: u64) -> Option<WaitFor> {
         if value <= self.value() {
             return Some(WaitFor::Reached);
         }
-        self.pending
-            .iter()
-            .find(|pending| pending.value >= value)
-            .map(|pending| WaitFor::Index(pending.index))
+        let mut behind_merge = false;
+        for pending in &self.pending {
+            behind_merge |= pending.behind_merge;
+            if pending.value >= value {
+                return (!behind_merge).then_some(WaitFor::Index(pending.index));
+            }
+        }
+        None
     }
 
     /// Whether a wait for `value` is held on the host where a Vulkan wait for a submitted GPU
@@ -205,12 +230,14 @@ impl<Q: Copy + Eq> EventTimeline<Q> {
     }
 
     /// The batch of a kept signal (`index` from [`EventTimeline::signal`]) of `value` on `queue`
-    /// was submitted.
-    pub(super) fn keep(&mut self, index: u64, value: u64, queue: Q) {
+    /// was submitted; `behind_merge` where the device kept a copied host buffer then (the module
+    /// docs).
+    pub(super) fn keep(&mut self, index: u64, value: u64, queue: Q, behind_merge: bool) {
         self.pending.push_back(Pending {
             index,
             value,
             queue,
+            behind_merge,
         });
     }
 

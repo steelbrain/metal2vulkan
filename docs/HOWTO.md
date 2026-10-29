@@ -335,7 +335,10 @@ The copy is host-visible memory of the device's own; the buffer's `contents` is 
 Each commit writes into the copy every byte the CPU changed in the pages since the copy and the
 pages last agreed, and each batch's completion writes back every byte the GPU changed, before its
 handlers run or a waiter returns, keeping a byte the CPU changed since (`copied_copy_in_bytes`,
-`copied_merge_back_bytes`). Each compares every byte of every live copy, so keep copies few. A
+`copied_merge_back_bytes`). An event signal submitted while a copy is live is seen at its batch's
+completion, after that write-back: no read of the event's value shows it earlier, and a wait for it
+on another queue (a plain `Event`'s too) is held until then rather than chained on the GPU
+(`event_signals_behind_merge`). Each compares every byte of every live copy, so keep copies few. A
 texture over a copied buffer is a shadow of its bytes. The copy reads the pages through the kernel
 first, and where the kernel cannot read them, with plain loads where the process maps every page
 with read permission: on Linux the kernel's read pins each page, which a mapping of a dma-buf

@@ -10,7 +10,7 @@ use crate::event_timeline::{EventTimeline, Signal, WaitFor};
 fn submit(timeline: &mut EventTimeline<usize>, value: u64, queue: usize) -> Signal {
     let signal = timeline.signal(value, queue);
     if let Signal::Kept { index, .. } = signal {
-        timeline.keep(index, value, queue);
+        timeline.keep(index, value, queue, false);
     }
     signal
 }
@@ -236,4 +236,41 @@ fn a_counter_read_is_observed_only_once_a_host_wait_returned_for_it() {
     submit(&mut timeline, 7, 0);
     assert_eq!(timeline.observe_read(3, |_| Err("lost")), Err("lost"));
     assert_eq!(timeline.value(), 5);
+}
+
+/// A signal kept behind a merge (its batch may write a copied host buffer, merged into the pages
+/// at its completion turn) is observed by that turn alone: a counter read past it observes only
+/// the signals before it, no wait is handed its index or a later one's (a plain event's wait is
+/// held as a shared event's is), and the completion turn's observation reaches it and those after
+/// it.
+#[test]
+fn a_signal_behind_a_merge_is_seen_at_its_completion_turn_alone() {
+    for settable in [false, true] {
+        let mut timeline = EventTimeline::new(settable);
+        for (value, behind_merge) in [(3, false), (5, true), (7, false)] {
+            let Signal::Kept { index, .. } = timeline.signal(value, 0) else {
+                panic!("kept");
+            };
+            timeline.keep(index, value, 0, behind_merge);
+        }
+        // The counter shows all three: the read observes the first alone.
+        assert_eq!(timeline.observe_read::<()>(3, |_| Ok(true)), Ok(true));
+        assert_eq!(timeline.value(), 3, "{settable}");
+        assert_eq!(timeline.observe_read::<()>(3, |_| Ok(true)), Ok(false));
+        assert_eq!(timeline.value(), 3, "{settable}");
+        // No wait is handed the index of the signal behind the merge, or a later one's.
+        for value in [4, 5, 6, 7] {
+            assert_eq!(timeline.landing(value), None, "{settable} {value}");
+            assert_eq!(timeline.wait(value), None, "{settable} {value}");
+        }
+        assert_eq!(timeline.wait(3), Some(WaitFor::Reached));
+        // The completion turn, after the merge, observes it.
+        assert!(timeline.observe(2));
+        assert_eq!(timeline.value(), 5, "{settable}");
+        // A later signal not behind a merge is read and waited for as before.
+        let want = (!settable).then_some(WaitFor::Index(3));
+        assert_eq!(timeline.wait(7), want, "{settable}");
+        assert_eq!(timeline.observe_read::<()>(3, |_| Ok(true)), Ok(true));
+        assert_eq!(timeline.value(), 7, "{settable}");
+    }
 }

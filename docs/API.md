@@ -2519,8 +2519,10 @@ bound.
   the bytes, into which each commit writes every byte the CPU changed in the pages since, and from
   which each batch's completion writes back every byte the GPU changed, where Metal's GPU reads and
   writes the pages themselves: a CPU write the GPU reads mid-command-buffer, or a GPU write the CPU
-  reads before the batch completes (behind a shared event's value among them), is not seen, and
-  each commit and completion compares every byte of every copy.
+  reads before the batch completes, is not seen, and each commit and completion compares every
+  byte of every copy. An event signal submitted while a copy is live is seen once its batch's
+  writes are back in the pages, as Metal's: its value at the completion turn, and a wait for it
+  held on the host until then (`event_signals_behind_merge`).
 - `metal2vulkan-degrade-grouped-completion` (precision). `GroupedCompletion`: Batches of command
   buffers committed on one queue that the scheduler found ready together, or held while two or more
   earlier submissions of their queue ran, went to the driver in one `vkQueueSubmit`, only the last

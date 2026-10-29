@@ -17,7 +17,7 @@ use crate::event_timeline::{EventTimeline, Signal, WaitFor};
 /// Submit a GPU signal of `value` on `queue`, kept when it is.
 fn submit(timeline: &mut EventTimeline<usize>, value: u64, queue: usize) {
     if let Signal::Kept { index, .. } = timeline.signal(value, queue) {
-        timeline.keep(index, value, queue);
+        timeline.keep(index, value, queue, false);
     }
 }
 
@@ -87,7 +87,7 @@ fn the_signals_of_either_kind_take_the_same_indices() {
                 after: None
             }
         );
-        timeline.keep(1, 4, 0);
+        timeline.keep(1, 4, 0, false);
         assert_eq!(timeline.signal(4, 1), Signal::Dropped);
         assert_eq!(
             timeline.signal(5, 1),

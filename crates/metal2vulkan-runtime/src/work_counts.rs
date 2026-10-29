@@ -195,6 +195,7 @@ pub(crate) struct Counters {
     completed_waits: AtomicU64,
     event_waits_met: AtomicU64,
     shared_event_waits_held: AtomicU64,
+    event_signals_behind_merge: AtomicU64,
     bare_starts: AtomicU64,
     prefixed_starts: AtomicU64,
     command_barriers: AtomicU64,
@@ -1471,6 +1472,13 @@ impl Counters {
     pub(crate) fn shared_event_waits_held(&self, waits: usize) {
         self.shared_event_waits_held
             .fetch_add(waits as u64, Ordering::Relaxed);
+    }
+
+    /// A batch was submitted with `signals` kept event signals while the device kept a copied
+    /// host buffer: they are seen at its completion turn alone (`event_timeline.rs`).
+    pub(crate) fn event_signals_behind_merge(&self, signals: usize) {
+        self.event_signals_behind_merge
+            .fetch_add(signals as u64, Ordering::Relaxed);
     }
 
     /// A batch with work was submitted with no command buffer of barriers before its first
@@ -3790,6 +3798,14 @@ pub struct WorkCounts {
     /// A plain event's wait (`MTLEvent`, which no host call signals) is never among them: it
     /// chains on the `VkQueue`, where that is exact.
     pub shared_event_waits_held: u64,
+    /// Event signals (`encodeSignalEvent:value:`, kept: above every value known before them)
+    /// submitted while the device kept a copied host buffer, and so seen at their batch's
+    /// completion turn alone, after the copies' merge put the GPU's writes in the caller's pages
+    /// (`copied-host-pages`): no read of the event's value observes them earlier, a host wait
+    /// returns at that turn, and a wait for them, a plain event's (`MTLEvent`) too, is held on
+    /// the host until it rather than chained on the `VkQueue`. Metal's writes before a signal are
+    /// in the pages once its value is seen.
+    pub event_signals_behind_merge: u64,
     /// Batches with work submitted with no command buffer of barriers before their first
     /// encoder: nothing planned before it, and no start timestamp to write there (none, or one
     /// its first encoder wrote, `WorkCounts::prefixed_starts`).
@@ -5248,6 +5264,7 @@ impl Device {
             completed_waits: counters.completed_waits.load(Ordering::Relaxed),
             event_waits_met: counters.event_waits_met.load(Ordering::Relaxed),
             shared_event_waits_held: counters.shared_event_waits_held.load(Ordering::Relaxed),
+            event_signals_behind_merge: counters.event_signals_behind_merge.load(Ordering::Relaxed),
             bare_starts: counters.bare_starts.load(Ordering::Relaxed),
             prefixed_starts: counters.prefixed_starts.load(Ordering::Relaxed),
             command_barriers: counters.command_barriers.load(Ordering::Relaxed),
