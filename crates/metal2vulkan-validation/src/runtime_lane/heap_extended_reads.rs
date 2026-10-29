@@ -22,7 +22,7 @@
 //! `HEAP-READ-ANNOUNCED` line and counted apart: an 8-bit sRGB texture's
 //! (`metal::format::srgb_raw_twin`) read through a heap pipeline whose stage records
 //! `PrecisionNote::SrgbTexelDecode`, which the device announced, decodes on the device where a slot
-//! of a format the device holds as its UNORM twin decodes the codes through Metal's table (a slot
+//! of a format the device holds as its UNORM twin decodes the codes by the device's transfer (a slot
 //! of a format the device samples decodes on the device too, the same words); every other
 //! difference fails. The extended-range
 //! `_sRGB` twins, whose decode needs the module's tables, are not read so yet: their heap dispatch

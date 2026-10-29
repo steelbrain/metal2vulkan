@@ -421,7 +421,7 @@ pub(super) fn block_family(pf: PixelFormat) -> PixelFormat {
 /// Whether `plan` holds an 8-bit sRGB texture in the format of its UNORM twin
 /// (`metal::format::srgb_raw_twin`): the device samples the twin but not the sRGB format, so the
 /// texture's sampled views are the twin's, through which the shader reads the raw codes and decodes
-/// them as Metal does; nothing on the device decodes them.
+/// them by the MSL transfer through the device's `Pow`; no sRGB view decodes them.
 pub(super) fn holds_srgb_twin(plan: &ImagePlan) -> bool {
     srgb_raw_twin(plan.pixel_format).and_then(direct_format) == Some(plan.format)
 }
@@ -618,7 +618,7 @@ fn plan_held(
 
     let wants = |bit: TextureUsage| usage.contains(bit);
     // An 8-bit sRGB format the device cannot sample is sampled through its UNORM twin's view,
-    // whose codes the shader decodes through Metal's table ([`holds_srgb_twin`]).
+    // whose codes the shader decodes by the device's transfer ([`holds_srgb_twin`]).
     let sampled = vk_format(pf, &[FormatUsage::SampledImage].into(), profile)
         .ok()
         .or_else(|| {

@@ -1407,7 +1407,7 @@ fn depth_and_stencil_fall_back_to_combined_formats() {
 }
 
 /// A one- or two-channel 8-bit sRGB storage texture on a device that stores neither sRGB format
-/// takes its UNORM twin's view, converting through Metal's tables (`SrgbEncode`), as the
+/// takes its UNORM twin's view, converting by the device's transfer (`SrgbEncode`), as the
 /// four-channel ones do; without the UNORM format's storage the refusal names both routes.
 #[test]
 fn one_and_two_channel_srgb_storage_takes_the_unorm_alias() {

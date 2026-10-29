@@ -60,7 +60,7 @@ mod tests;
 /// unchanged version, and its bless records the version. Independent of the crate's version and of
 /// [`ARTIFACT_FORMAT_VERSION`]. The commit that bumps it says what changed; this comment keeps no
 /// history.
-pub const SEMANTICS_VERSION: u32 = 1917;
+pub const SEMANTICS_VERSION: u32 = 1918;
 
 /// The byte-layout version of encoded artifacts (`CompiledFunction::to_bytes` and the
 /// [`PipelineArtifact`] encodings). Every encoded artifact carries it, and a decode under another
@@ -185,7 +185,8 @@ pub struct VariantKey {
     /// holds as the format's UNORM twin (`metal::format::srgb_raw_twin`), whose views read the
     /// codes (`c / 255`): every slot of a `RuntimeFact::SrgbTexture` the shape binds in such a
     /// format (`metal::texel_format::srgb_twin_on`). The function decodes what it reads there
-    /// through Metal's twelve-bit table, as the device would through an sRGB view it lacks
+    /// by the MSL transfer through the device's `Pow`, as the device would through an sRGB view
+    /// it lacks
     /// (`LoweringInputs::srgb_textures`); a slot bound in an sRGB format the device samples reads
     /// the device's decode and is no slot of this. The plan of a pipeline compiled under it
     /// states it.

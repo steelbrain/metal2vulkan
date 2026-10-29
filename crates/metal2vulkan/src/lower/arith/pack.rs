@@ -199,6 +199,34 @@ fn fields(
     fb.glsl(GlslOp::NMax, &[q, m1])
 }
 
+/// Texel `x` (four `f32` lanes) of 8-bit sRGB codes as a UNORM view reads them (`c / 255`), its
+/// lanes where `colour` holds decoded by the MSL transfer ([`srgb_decode`], the device's division
+/// and `Pow`) and the others (alpha) kept: an 8-bit sRGB format's decode where the device has no
+/// sRGB view of it (a storage image's UNORM alias, a UNORM twin).
+pub fn srgb_decode_texel(
+    fb: &mut FunctionBuilder<'_>,
+    x: Value,
+    colour: [bool; 4],
+) -> BResult<Value> {
+    if !colour.contains(&true) {
+        return Ok(x);
+    }
+    let s = Form {
+        held: Held::Float(FloatFmt::F32),
+        lanes: 4,
+    };
+    let t = srgb_decode(fb, s, x)?;
+    let pick: Vec<u32> = (0u32..)
+        .zip(colour)
+        .map(|(i, c)| if c { i } else { 4 + i })
+        .collect();
+    fb.vector_shuffle(t, x, &pick)
+}
+
+/// The SPIR-V words of [`srgb_decode_texel`], at most: the transfer's steps and their constants,
+/// and the shuffle.
+pub const SRGB_DECODE_TEXEL_WORDS: u32 = 9 * 6 + 5 * 8 + 12;
+
 /// A transfer function on `float` lanes of form `s`.
 type Transfer = fn(&mut FunctionBuilder<'_>, Form, Value) -> BResult<Value>;
 

@@ -1004,15 +1004,6 @@ fn nearest_fetch(r: SamplerRef, dim: ImageDim, integer: bool) -> Result<bool, Er
         && edge)
 }
 
-/// Whether a sample through `r` reads one texel of one level, its value unfiltered: a constexpr
-/// sampler that does not filter ([`linear::unfiltered`](super::linear::unfiltered)).
-fn nearest_texel(r: SamplerRef) -> Result<bool, Error> {
-    let SamplerRef::Constexpr(words) = r else {
-        return Ok(false);
-    };
-    Ok(super::linear::unfiltered(&super::state_of(words)?))
-}
-
 /// Select sampling call `call` of texture slot `index` through static sampler `sampler`: an
 /// extended-range sample where the slot's variant binds such a format ([`select_extended`]), else
 /// [`select_one`]'s sampling. `arm` is set for an arm of a switch-at-use, whether it reads the
@@ -2091,30 +2082,14 @@ fn select_one(
     }
     // An 8-bit sRGB texture the device reads through its own sRGB view, but under the slot's twin
     // variant (a bound format the device cannot sample, held as its UNORM twin), whose view reads
-    // the codes: a nearest sample's, a pixel fetch's, a gather's and a bicubic sample's texels are
-    // one texel's codes, decoded exactly through Metal's table (`raw`), and any other sample's are
-    // the device's filter of the codes, decoded through it (`srgb_codes`). An LOD query reads no
+    // the codes: what the device reads (one texel's codes, its filter of them, a gather's, a
+    // bicubic sample's taps) is decoded by the device's transfer (`raw`). An LOD query reads no
     // texel.
-    let (raw, srgb_codes) = match form {
+    let raw = match form {
         Some(f) if matches!(f.conv, TexelConv::F16 | TexelConv::F32) => {
-            use crate::lower::texture::SrgbReach;
-            let reach = match &op {
-                SampleOp::PixelFetch { .. } | SampleOp::Bicubic(_) | SampleOp::Gather { .. } => {
-                    SrgbReach::Codes
-                }
-                SampleOp::Sample { dref: None, .. } => match stat {
-                    Some((r, _)) if nearest_texel(r)? => SrgbReach::Codes,
-                    _ => SrgbReach::Filtered,
-                },
-                _ => SrgbReach::Filtered,
-            };
-            let twin = crate::lower::texture::srgb_texels(cx, image, shape, reach, m)?;
-            (
-                twin && reach == SrgbReach::Codes,
-                twin && reach == SrgbReach::Filtered,
-            )
+            crate::lower::texture::srgb_texels(cx, image, shape, m)?
         }
-        _ => (false, false),
+        _ => false,
     };
     // A filtered sample's note, where Metal's own sampler filters the slot and a two-plane YCbCr
     // format bound there takes another filter than Metal's: the clauses test the bound format
@@ -2163,8 +2138,8 @@ fn select_one(
         }
         other => other,
     };
-    // A bicubic sample rounds its `half` result exactly, keeping denormals, as a raw texel's decode
-    // does; another `half` access converts its texel: the device's where the device's texel is
+    // A bicubic sample rounds its `half` result exactly, keeping denormals, and a raw texel's
+    // decode rounds its own; another `half` access converts its texel: the device's where the device's texel is
     // the answer, else by the bound format's class (a heap color texture's by the class its
     // handle carries: the module's routine, called with the class read from the handle).
     let device = crate::lower::texture::device_texels(cx);
@@ -2177,7 +2152,7 @@ fn select_one(
         crate::lower::texture::half_texels(cx, image, shape, sample, device, m)?
     }
     // A `float` texel that may be one texel's is the device's conversion of its codes: not an sRGB
-    // raw texel's (decoded exactly), a bicubic sample's, or an LOD query's; nor a depth
+    // raw texel's (decoded by the device's transfer, `SrgbTexelDecode`), a bicubic sample's, or an LOD query's; nor a depth
     // comparison's, whose result is no texel.
     let comparison = matches!(
         op,
@@ -2341,7 +2316,6 @@ fn select_one(
         offset_base,
         anisotropic,
         raw,
-        srgb_codes,
         clamp_reference,
     };
     Ok(sampling)

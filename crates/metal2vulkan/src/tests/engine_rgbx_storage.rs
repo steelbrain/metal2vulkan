@@ -9,8 +9,9 @@
 //! is the plain read with alpha 1, in bounds and past the texture (whose alpha Metal reads 1
 //! too); a write, `access::write` or `read_write`, stores the plain write's texel with its fourth
 //! lane the green lane's bits, after the class's conversion. An sRGB twin's `SrgbEncode`, and an
-//! `_sRGB` format's at any storage slot, reads and writes Metal's codes through its twelve-bit
-//! tables, with and without the RGBX conversion. An `RGB9E5Float` texture's `SharedExponentBits`
+//! `_sRGB` format's at any storage slot, reads and writes its codes by the MSL transfer through
+//! the device's `Pow`, with and without the RGBX conversion (the interpreter models no `Pow`, so
+//! those modules are checked by their instructions and notes). An `RGB9E5Float` texture's `SharedExponentBits`
 //! writes Metal's truncated shared-exponent word through its `R32_UINT` alias and reads it exactly.
 //!
 //! `llvm-as` assembles the kernels; without it the tests skip visibly.
@@ -409,84 +410,19 @@ fn an_rgbx_storage_write_stores_green_as_x() {
     assert!(ran > 0);
 }
 
-/// The choice of an 8-bit sRGB format at a storage slot: its UNORM alias, converting through
-/// Metal's tables (`SrgbEncode`).
+/// The choice of an 8-bit sRGB format at a storage slot: its UNORM alias, converting by the
+/// device's transfer (`SrgbEncode`).
 const SRGB: (vk::Format, StorageImageClass) =
     (vk::Format::R8G8B8A8_UNORM, StorageImageClass::SrgbEncode);
 
-/// The `f32` bits a UNORM alias's image holds for code `c`: `c / 255` correctly rounded.
-fn unorm_bits(c: u32) -> u32 {
-    super::engine_srgb_decode::f32_bits(u64::from(c), 255)
-}
-
-/// Metal's code of channel value `v` written to an 8-bit sRGB format, a color channel's
-/// (`color`) or alpha's: a NaN 0, the value clamped to `[0, 1]`, the exact product with 4095
-/// (255 for alpha) rounded to nearest even, and a color channel's byte the largest whose first
-/// encode index is at or below it (`pack_float_to_srgb_unorm4x8`).
-fn srgb_code(v: f32, color: bool) -> u32 {
-    use crate::lower::arith::srgb::SRGB_ENCODE_FIRST;
-    let v = if v.is_nan() { 0.0 } else { v.clamp(0.0, 1.0) };
-    let scale = if color { 4095.0 } else { 255.0 };
-    // A 24-bit significand times a 12-bit integer: exact in `f64`.
-    let i = (f64::from(v) * scale).round_ties_even() as u32;
-    match color {
-        true => (1..256u32)
-            .rev()
-            .find(|&b| u32::from(SRGB_ENCODE_FIRST[b as usize]) <= i)
-            .unwrap_or(0),
-        false => i,
-    }
-}
-
-/// The values a test writes: for each byte's first encode index `i`, the `f32` nearest
-/// `(i - 1/2) / 4095` and two either side (`color`), or for each code `j`, nearest `(j - 1/2) /
-/// 255`, and two either side of every eighth (alpha); then NaN, the infinities, `-0`, values past
-/// `[0, 1]`, and `0.5`. As `half`s (`half`), each rounded to nearest even, so the list holds the
-/// halves either side of each half step.
-fn srgb_values(color: bool, half: bool) -> Vec<f32> {
-    use crate::float16::{f16_bits_to_f32, f32_to_f16_bits};
-    use crate::lower::arith::srgb::SRGB_ENCODE_FIRST;
-    let steps: Vec<f64> = match color {
-        true => (1..256)
-            .map(|b| (f64::from(SRGB_ENCODE_FIRST[b]) - 0.5) / 4095.0)
-            .collect(),
-        false => (1..256).map(|j| (f64::from(j) - 0.5) / 255.0).collect(),
-    };
-    let mut out = Vec::new();
-    for (n, s) in steps.into_iter().enumerate() {
-        let x = s as f32;
-        let reach = if color || n % 8 == 0 { 2 } else { 0 };
-        for k in -reach..=reach {
-            let v = f32::from_bits((x.to_bits() as i64 + i64::from(k)) as u32);
-            out.push(match half {
-                true => f16_bits_to_f32(f32_to_f16_bits(v)),
-                false => v,
-            });
-        }
-    }
-    out.extend([
-        f32::NAN,
-        f32::INFINITY,
-        f32::NEG_INFINITY,
-        -0.0,
-        -0.25,
-        1.5,
-        0.5,
-        1.0,
-    ]);
-    out
-}
-
 /// A `read_write` read of an 8-bit sRGB format's codes through its UNORM alias (`SrgbEncode`)
-/// is Metal's: each color code's step of the twelve-bit table over 4095, alpha's code over 255 (1
-/// for an RGBX format's), each correctly rounded to `float` or `half`, every code in every channel.
-/// The consumer's M3 Max read `[3e1c89c9, 3c040841, 3e864865, 3f800000]` for an `RGBX8Unorm_sRGB`
-/// texel, steps 626, 33 and 1074 over 4095, where the transfer function at the device's precision
-/// answered `[3e1c98af, 3c0373b5, 3e8645bb, 3f800000]`.
+/// decodes the codes the view reads by the MSL transfer through the device's `Pow`, declaring no
+/// Metal table, and records `PrecisionNote::SrgbTexelDecode` (Metal decodes each code through its
+/// twelve-bit table), `float` and `half`, with and without the RGBX conversion, on every committed
+/// profile; each module validates.
 #[test]
-fn an_srgb_storage_read_is_metals_table() {
-    use super::engine_srgb_decode::{f32_bits, half_bits as ratio_half};
-    use crate::lower::arith::srgb::SRGB_DECODE_STEPS;
+fn an_srgb_storage_read_takes_the_devices_transfer() {
+    use crate::pipeline::PrecisionNote;
     let mut ran = 0;
     for texel in [Texel::Float, Texel::Half] {
         let what = format!("{texel:?}");
@@ -496,27 +432,16 @@ fn an_srgb_storage_read_is_metals_table() {
         for (stem, p) in committed_profiles().expect("profiles") {
             for x in [false, true] {
                 let what = format!("{what} x {x} on {stem}");
-                let (plan, m) = compiled(&bc, &p, &inputs(SRGB, x), &what);
-                let size = if texel == Texel::Half { 8 } else { 16 };
-                let codes = |b: u32| [b, 255 - b, (37 * b) & 255, (b + 128) & 255];
-                let img = image_of(256, |n| codes(n).map(unorm_bits), robust(&p));
-                let fill = vec![0xab; size * 256];
-                let (got, _) = run_over(256, &m, &resources(&plan, fill), &img);
-                for n in 0..256 {
-                    for (c, code) in codes(n).into_iter().enumerate() {
-                        let (k, d) = match (c, x) {
-                            (3, true) => (1, 1),
-                            (3, false) => (u64::from(code), 255),
-                            _ => (u64::from(SRGB_DECODE_STEPS[code as usize]), 4095),
-                        };
-                        let want = match texel {
-                            Texel::Half => u32::from(ratio_half(k, d)),
-                            _ => f32_bits(k, d),
-                        };
-                        let read = lane(&got, texel, n, c);
-                        assert_eq!(read, want, "{what}: code {code} lane {c}");
-                    }
-                }
+                let a = crate::pipeline::testing::compile_with(&bc, "k", &p, &inputs(SRGB, x))
+                    .unwrap_or_else(|e| panic!("{what}: {e}"));
+                link_and_validate(&a, &p).unwrap_or_else(|e| panic!("{what}: {e}"));
+                let words = &a.module.words;
+                assert!(super::engine_srgb_decode::takes_pow(words), "{what}");
+                assert!(!super::engine_fragment::holds_srgb_table(words), "{what}");
+                assert!(
+                    a.precision.contains(&PrecisionNote::SrgbTexelDecode),
+                    "{what}"
+                );
                 ran += 1;
             }
         }
@@ -525,24 +450,16 @@ fn an_srgb_storage_read_is_metals_table() {
 }
 
 /// A write of an 8-bit sRGB format through its UNORM alias (`SrgbEncode`), `access::write` and
-/// `read_write`, of `float` and of `half` texels, stores Metal's codes: each color channel's
-/// twelve-bit encode, alpha's nearest code (for an RGBX format, green's code in the X field),
-/// around every byte's encode threshold and every alpha code's half step, and NaN, infinities, `-0`
-/// and values past `[0, 1]`. Each code `c` is stored as `c` times the `f32` nearest `1 / 255`,
-/// which a device's conversion stores as `c`.
+/// `read_write`, of `float` and of `half` texels, encodes each color channel by the MSL transfer
+/// through the device's `Pow` and `PackUnorm4x8` (`pack::pack`'s `unorm4x8_srgb`), declaring no
+/// Metal table, and records `PrecisionNote::DevicePackConversion` (Metal encodes through its
+/// twelve-bit table), with and without the RGBX conversion, on every committed profile; each
+/// module validates.
 #[test]
-fn an_srgb_storage_write_stores_metals_codes() {
+fn an_srgb_storage_write_takes_the_devices_conversion() {
+    use crate::pipeline::PrecisionNote;
     let mut ran = 0;
     for texel in [Texel::Float, Texel::Half] {
-        let (colors, alphas) = (
-            srgb_values(true, texel == Texel::Half),
-            srgb_values(false, texel == Texel::Half),
-        );
-        let texels = colors.len().div_ceil(3).max(alphas.len());
-        let value = |t: usize, c: usize| match c {
-            3 => alphas[t % alphas.len()],
-            _ => colors[(3 * t + c) % colors.len()],
-        };
         for access in ["write", "read_write"] {
             let what = format!("{texel:?} {access}");
             let Some(bc) = assemble(&what, &write_kernel(texel, access)) else {
@@ -551,34 +468,16 @@ fn an_srgb_storage_write_stores_metals_codes() {
             for (stem, p) in committed_profiles().expect("profiles") {
                 for x in [false, true] {
                     let what = format!("{what} x {x} on {stem}");
-                    let (plan, m) = compiled(&bc, &p, &inputs(SRGB, x), &what);
-                    let width = u32::try_from(texels).expect("texels");
-                    let bytes: Vec<u8> = (0..texels)
-                        .flat_map(|n| {
-                            (0..4).flat_map(move |c| {
-                                let v = value(n, c);
-                                match texel {
-                                    Texel::Half => {
-                                        crate::float16::f32_to_f16_bits(v).to_le_bytes().to_vec()
-                                    }
-                                    _ => v.to_bits().to_le_bytes().to_vec(),
-                                }
-                            })
-                        })
-                        .collect();
-                    let img = image_of(width, |_| [0x5a5a_5a5a; 4], robust(&p));
-                    let (_, got) = run_over(width, &m, &resources(&plan, bytes), &img);
-                    for n in 0..width {
-                        let at = img.index(0, 0, 0, [n, 0, 0]).expect("texel");
-                        let mut want: [u32; 4] =
-                            std::array::from_fn(|c| srgb_code(value(n as usize, c), c < 3));
-                        if x {
-                            want[3] = want[1];
-                        }
-                        let want = want.map(|c| (c as f32 * (1.0f32 / 255.0)).to_bits());
-                        let values: [f32; 4] = std::array::from_fn(|c| value(n as usize, c));
-                        assert_eq!(got[at], want, "{what}: values {values:?}");
-                    }
+                    let a = crate::pipeline::testing::compile_with(&bc, "k", &p, &inputs(SRGB, x))
+                        .unwrap_or_else(|e| panic!("{what}: {e}"));
+                    link_and_validate(&a, &p).unwrap_or_else(|e| panic!("{what}: {e}"));
+                    let words = &a.module.words;
+                    assert!(super::engine_srgb_decode::takes_pow(words), "{what}");
+                    assert!(!super::engine_fragment::holds_srgb_table(words), "{what}");
+                    assert!(
+                        a.precision.contains(&PrecisionNote::DevicePackConversion),
+                        "{what}"
+                    );
                     ran += 1;
                 }
             }

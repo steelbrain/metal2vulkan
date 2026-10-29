@@ -1931,7 +1931,7 @@ pub(super) fn texel_value(
 }
 
 /// The held texel of sampling `s`'s image texel `texel`: an 8-bit sRGB texel's raw code decoded
-/// as Metal decodes it, a slot's `half` or `float` texel converted by the bound format's class,
+/// by the device's transfer, a slot's `half` or `float` texel converted by the bound format's class,
 /// else the texel held as the result's type holds it; before the lanes Metal reads as constants
 /// are set ([`held_constants`]).
 pub(super) fn held_value(
@@ -1944,19 +1944,14 @@ pub(super) fn held_value(
     let Some(form) = s.texel else {
         return Err(cx.fail("a sample without a texel form"));
     };
-    // An 8-bit sRGB texel's raw code, decoded as Metal decodes it: a gather's lanes are one
-    // channel's, all alpha or all color.
-    if s.raw || s.srgb_codes {
+    // An 8-bit sRGB texel's raw code, or the device's filter of the codes, decoded by the
+    // device's transfer: a gather's lanes are one channel's, all alpha or all color.
+    if s.raw {
         let color = match s.op {
             SampleOp::Gather { component, .. } => [component != 3; 4],
             _ => crate::lower::texture::SRGB_TEXEL,
         };
-        // The device's sample of a twin's codes, filtered: decoded through the table, exactly
-        // where it read one texel.
-        if !s.raw {
-            return crate::lower::texture::srgb_filtered_texel(cx, fb, form, texel, color);
-        }
-        return crate::lower::texture::srgb_raw_texel(cx, fb, form, texel, color);
+        return crate::lower::texture::srgb_texel(fb, form, texel, color);
     }
     // A `half` texel of a slot converts by the bound format's class: a gather's texel as a read's,
     // a sample's (nearest, linear, or fetched) filtered value as a sample's, each with the access's

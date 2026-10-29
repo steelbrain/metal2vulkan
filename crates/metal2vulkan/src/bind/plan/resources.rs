@@ -1266,11 +1266,10 @@ impl ResourcePlanner<'_> {
     }
 
     /// Whether slot `slot`'s function decodes the codes of a texture of `pf` bound there with
-    /// `swizzle` through Metal's table (`RuntimeFact::SrgbTexture`, an 8-bit sRGB format the
+    /// `swizzle` by the device's transfer (`RuntimeFact::SrgbTexture`, an 8-bit sRGB format the
     /// device holds as its UNORM twin, `srgb_twin_on`) where the swizzle moves a code between a
     /// color lane and alpha: a view's component mapping would move it before the decode (a color
-    /// code onto alpha, read as alpha's `c / 255`; alpha's code onto a color lane, decoded through
-    /// the table), where plain Metal swizzles the decoded texel. The function then decodes the
+    /// code onto alpha, read as alpha's `c / 255`; alpha's code onto a color lane, decoded), where plain Metal swizzles the decoded texel. The function then decodes the
     /// unswizzled texel and swizzles it, every access of the slot alike, under
     /// `VariantKey::swizzled_storage`, and the slot's views take no swizzle. A swizzle among the
     /// color lanes, or to a constant (0 and 1 decode to themselves), reads the same either way and

@@ -43,9 +43,9 @@
 //! the 16-bit unsigned and signed ones but `Depth16Unorm`) sum their codes exactly and round the
 //! sum half up onto `1/(16 · 255)`, `1/(16 · 127)`, `1/65535`, or `1/32767`: [`EXACT`], with
 //! [`WIDE16`] for the 16-bit grids. That is all of Metal's arithmetic for a 1D texture and for a
-//! 2D one but next to a rounding tie. An 8-bit sRGB format sums its table's steps exactly too, onto
+//! 2D one but next to a rounding tie. An 8-bit sRGB format sums its decoded taps exactly too, onto
 //! `1/4095` (color) and `1/(16 · 255)` (alpha), where a function reads the raw codes ([`SRGB`] with
-//! [`EXACT`], set by the emission, not here). The 32-bit float and half-float formats' sums are
+//! [`EXACT`], set by the emission, not here; each tap the device's decode of its code). The 32-bit float and half-float formats' sums are
 //! Metal's accumulators. The other formats' sums are an emulation in `f32` operations:
 //! `PrecisionNote::BicubicFilterArithmetic`.
 //!
@@ -104,8 +104,9 @@ impl BicubicTexels {
     /// The channels are 8-bit sRGB codes (`metal::texel_format::srgb_coded`). With
     /// [`EXACT`](Self::EXACT), set only where a function decodes the codes itself (the slot's
     /// `SrgbTexture` variant: a format the device holds as its UNORM twin), each tap's color value
-    /// is a step of Metal's twelve-bit table on the grid `1/4095`, and its alpha a code on
-    /// `1/(16 · 255)`, so the exact sum rounds half up onto those grids. [`texels`] never sets it;
+    /// is the device's decode of its code (the MSL transfer through its `Pow`), read on the grid
+    /// `1/4095`, and its alpha a code on `1/(16 · 255)`, so the exact sum rounds half up onto those
+    /// grids. [`texels`] never sets it;
     /// `metal::texel_format::texel_format` does, without `EXACT`, where the device decodes the
     /// taps and the sum is the emulated one.
     pub const SRGB: u32 = 1 << 10;

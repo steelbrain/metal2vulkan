@@ -11,8 +11,8 @@
 //! bit alone. Every sample must then hold the second draw's red and keep its own green, and both
 //! colors must be the ones a single-sample texture of the format stores under the same draws (a
 //! path `runtime_lane::color_writes::partly_masked_packed_formats_keep_their_fields` holds to
-//! Metal's codes). Each sample is read by a kernel through `texture2d_ms`, decoded through Metal's
-//! table, so equal codes read equal values.
+//! Metal's codes). Each sample is read by a kernel through `texture2d_ms`, decoded by the device's
+//! transfer, so equal codes read equal values.
 
 use super::{
     buffer_with, layer_reported_nothing_at_all, read_buffer, validated_device_with, Messages,

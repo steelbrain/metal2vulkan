@@ -1302,8 +1302,6 @@ fn cells_pass<'c>(
                                 lanes: 4,
                             },
                             held,
-                            None,
-                            NanTest::for_modes(&cx.plan.families.arith.modes),
                         )?;
                         let mem = crate::lower::sync::memory_model::coherence(cx.plan).texel(fb)?;
                         fb.write(img, pixel, texel, &ImageOperands::default(), mem)?;

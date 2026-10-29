@@ -2274,8 +2274,9 @@ degradations! {
         /// `Unpack` instructions for `unorm4x8`, `snorm4x8`, `unorm2x16` and `snorm2x16`, their
         /// definition by the device's clamp, multiply, `RoundEven` and reciprocal for `rgb10a2`
         /// and `rgb565`, and the MSL transfer functions by the device's `Pow` for
-        /// `unorm4x8_srgb`'s colour, where Metal rounds the exact product, divides correctly
-        /// rounded and takes an sRGB colour through its twelve-bit table. Recorded bound: a packed
+        /// `unorm4x8_srgb`'s colour (also an 8-bit sRGB storage texture's write through its UNORM
+        /// alias), where Metal rounds the exact product, divides correctly rounded and takes an
+        /// sRGB colour through its twelve-bit table. Recorded bound: a packed
         /// code within one of Metal's, apart only near a half-integer; an unpacked value within
         /// 2.5 ulp of the correctly rounded quotient; a decoded sRGB colour within half a
         /// twelve-bit step (`1 / 8190`) of Metal's step `k / 4095`, beyond its division's and

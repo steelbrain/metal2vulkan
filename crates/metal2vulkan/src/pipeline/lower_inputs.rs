@@ -146,12 +146,9 @@ pub struct LoweringInputs {
     /// Texture slots bound to an 8-bit sRGB texture the device cannot sample, which the runtime
     /// holds as the format's UNORM twin, whose views read the codes (`VariantKey::srgb_textures`,
     /// `RuntimeFact::SrgbTexture`): each `half` or `float` access of such a slot decodes what its
-    /// own binding reads through Metal's twelve-bit table. A read, a nearest sample, a
-    /// pixel-coordinate fetch and a gather (a `float` one's where the device does not sample
-    /// through Metal's own sampler) read one texel's codes and decode them exactly, and a bicubic
-    /// sample sums their steps exactly; any other access decodes the device's filter of the codes
-    /// (`PrecisionNote::SrgbTexelDecode`), exactly where the filter reads one texel. A slot of no
-    /// such access is ignored.
+    /// own binding reads (one texel's codes, or the device's filter of them; a bicubic sample's
+    /// taps) by the MSL transfer through the device's `Pow`, recording
+    /// `PrecisionNote::SrgbTexelDecode`. A slot of no such access is ignored.
     #[cfg_attr(feature = "serde", serde(default))]
     pub srgb_textures: BTreeSet<SlotRef>,
     /// Fragment texture slots of `StageInterface::snapshot_textures` the draw reads through a
@@ -1309,8 +1306,9 @@ pub enum StorageImageClass {
     /// A bgra8 image viewed as rgba8, or a bgr10a2 image as rgb10a2: the shader exchanges red and
     /// blue.
     SwizzleBgra,
-    /// An sRGB image viewed as its UNORM alias: the shader encodes and decodes sRGB, through
-    /// Metal's twelve-bit tables.
+    /// An sRGB image viewed as its UNORM alias: the shader encodes and decodes sRGB by the MSL
+    /// transfer through the device's `Pow` (`PrecisionNote::DevicePackConversion` for a write,
+    /// `PrecisionNote::SrgbTexelDecode` for a read), where Metal takes its twelve-bit tables.
     SrgbEncode,
     /// A `BGRA8Unorm_sRGB` image viewed as `R8G8B8A8_UNORM`, on a device that cannot declare its
     /// `B8G8R8A8_UNORM` twin (a format without a SPIR-V image format, so it needs the device's

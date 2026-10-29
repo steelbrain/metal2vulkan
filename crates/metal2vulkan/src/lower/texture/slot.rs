@@ -1471,23 +1471,21 @@ pub fn finish(cx: &mut SelectCx<'_>) -> Result<(), Error> {
         }
     }
     for (index, d, volatile) in decls {
-        // An 8-bit sRGB format's codes convert through Metal's twelve-bit tables (`emit::
-        // srgb_codes`, `emit::srgb_raw_texel`), which the module declares once.
-        if matches!(
+        // A write of an 8-bit sRGB format's codes encodes by the device's conversion
+        // (`emit::srgb_codes`, `pack::pack`'s `unorm4x8_srgb`), where Metal encodes through its
+        // twelve-bit table; a read's decode records its own note.
+        let srgb = matches!(
             d.class,
             StorageImageClass::SrgbEncode | StorageImageClass::SrgbEncodeBgra
-        ) {
-            let written = cx
-                .families
-                .texture
-                .slots
-                .get(&index)
-                .is_some_and(|s| s.uses.write);
-            let dir = match written {
-                true => crate::air::intrinsics::PackDir::Pack,
-                false => crate::air::intrinsics::PackDir::Unpack,
-            };
-            cx.families.arith.srgb.get_or_insert(dir);
+        );
+        let written = cx
+            .families
+            .texture
+            .slots
+            .get(&index)
+            .is_some_and(|s| s.uses.write);
+        if srgb && written {
+            cx.precision.insert(PrecisionNote::DevicePackConversion);
         }
         if let Some(s) = cx.families.texture.slots.get_mut(&index) {
             s.decl = Some(d);

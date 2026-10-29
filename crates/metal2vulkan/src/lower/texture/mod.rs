@@ -42,7 +42,8 @@
 //! decoded NaN kept (`narrow::round_texel`; the NaN is the device's decode,
 //! `PrecisionNote::DeviceNanEncoding`), 16-bit integers are held zero-extended and written
 //! sign-extended, and a storage image of class `SwizzleBgra` or `SrgbEncode` converts in the
-//! shader, the latter through Metal's twelve-bit sRGB tables.
+//! shader, the latter by the device's sRGB transfer (`PrecisionNote::SrgbTexelDecode` for a read,
+//! `PrecisionNote::DevicePackConversion` for a write).
 //!
 //! **Containment**. A write is discarded out of bounds (Metal's semantics) by a builder-closed
 //! bounds check unless the profile's robustness discards it already (`robustImageAccess`;
@@ -135,9 +136,9 @@ pub use atomic::TexAtomic;
 pub(crate) use emit::{
     constant_lanes, dispatch, extended_table, half_class, heap_element, heap_half_class,
     heap_raw_form, heap_raw_image, live_or_zero, reinterpret, resident_access, rgb9e5_word,
-    slot_image, sparse_spec, srgb_filtered_texel, srgb_raw_tap, srgb_raw_texel, swizzled_float,
-    swizzled_gather, swizzled_held, tile_map, tiled_word, with_word, NullLeaf, TileLevel,
-    RGB9E5_WORDS, SRGB_FILTERED_WORDS, SRGB_RAW_WORDS, SRGB_TAP_WORDS, SRGB_TEXEL,
+    slot_image, sparse_spec, srgb_raw_tap, srgb_texel, swizzled_float, swizzled_gather,
+    swizzled_held, tile_map, tiled_word, with_word, NullLeaf, TileLevel, RGB9E5_WORDS,
+    SRGB_DECODE_WORDS, SRGB_TAP_WORDS, SRGB_TEXEL,
 };
 pub use emit::{emit, held_texel, to_image};
 pub(crate) use slot::depth_comparison;
@@ -286,12 +287,12 @@ pub struct Read {
     /// A Metal 4.1 read through a clamp-to-edge sampler ([`Edge`]).
     pub edge: Option<Edge>,
     /// The read takes an 8-bit sRGB texel's codes from its slot's image, which holds the format's
-    /// UNORM twin (`LoweringInputs::srgb_textures`), and decodes them as Metal decodes them
-    /// (`emit::srgb_raw_texel`, `RuntimeFact::SrgbTexture`).
+    /// UNORM twin (`LoweringInputs::srgb_textures`), and decodes them by the device's transfer
+    /// (`emit::srgb_texel`, `RuntimeFact::SrgbTexture`).
     pub raw: bool,
     /// The read, of a storage slot whose class is `SrgbEncode`, takes the codes of an 8-bit sRGB
-    /// format from its UNORM alias and decodes them as Metal does, through the module's table
-    /// (`emit::srgb_raw_texel`).
+    /// format from its UNORM alias and decodes them by the device's transfer
+    /// (`emit::srgb_texel`).
     pub srgb_codes: bool,
     /// The read, of a texture buffer slot, applies the bound texture buffer's swizzle to its
     /// texel, an out-of-bounds texel included, under the slot's `TextureSwizzle` specialization
@@ -371,7 +372,7 @@ fn read_words(r: &Read) -> u32 {
         }
         + if r.edge.is_some() { 64 } else { 0 }
         + if r.raw || r.srgb_codes {
-            SRGB_RAW_WORDS
+            SRGB_DECODE_WORDS
         } else if r.extended.is_some() {
             crate::lower::arith::extended_range::DECODE_WORDS + r.texel.read_words()
         } else if r.texel.conv == TexelConv::F16 {
@@ -1624,17 +1625,6 @@ pub(crate) fn constexpr_address_map(
     Ok(cx.inputs.address_maps.get(&slot).copied())
 }
 
-/// How an access of a texture held as an 8-bit sRGB format's UNORM twin decodes the codes its
-/// view reads ([`srgb_texels`]).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum SrgbReach {
-    /// The device's filter of the codes, decoded through Metal's table: Metal's value where the
-    /// filter reads one texel (`emit::srgb_filtered_texel`).
-    Filtered,
-    /// One texel's codes, decoded or summed exactly as Metal does.
-    Codes,
-}
-
 /// A read, sample, or gather of `image` (shape `shape`) with a `half` or `float` result, which an
 /// 8-bit sRGB format bound to it would decode (`metal::texel_format`). On a sampled color texture
 /// slot (not a texture buffer, a depth texture, or a storage slot) the module records
@@ -1642,12 +1632,9 @@ pub(crate) enum SrgbReach {
 ///
 /// Where the slot is one of `LoweringInputs::srgb_textures` (its variant: bound to a format the
 /// device cannot sample, held as its UNORM twin, whose view reads the codes) the access decodes
-/// the codes through Metal's twelve-bit table, returning `true` and declaring the table
-/// (`arith::srgb`, shared with `air.unpack`'s `unorm4x8_srgb`, whose census name it is charged
-/// to): `reach` says how, the caller deciding. A read, a nearest sample, a pixel-coordinate
-/// fetch, a gather and a bicubic tap read one texel's codes and decode them exactly
-/// ([`SrgbReach::Codes`]); any other sample decodes the device's filter of the codes
-/// ([`SrgbReach::Filtered`]), recording `PrecisionNote::SrgbTexelDecode`.
+/// what the view reads (one texel's codes, or the device's filter of them) by the MSL transfer
+/// through the device's `Pow` (`emit::srgb_texel`), returning `true` and recording
+/// `PrecisionNote::SrgbTexelDecode`.
 ///
 /// Elsewhere the access reads the device's own decode through the slot's view, an sRGB format's
 /// sRGB view: the module records `PrecisionNote::SrgbTexelDecode` where the bound format's class
@@ -1660,7 +1647,6 @@ pub(crate) fn srgb_texels(
     cx: &mut SelectCx<'_>,
     image: ImageRef,
     shape: ImageShape,
-    reach: SrgbReach,
     m: &mut Meter,
 ) -> Result<bool, Error> {
     if shape.dim == ImageDim::Buffer || shape.depth {
@@ -1681,13 +1667,7 @@ pub(crate) fn srgb_texels(
         device_decode(cx, Some(index), m)?;
         return Ok(false);
     }
-    if reach == SrgbReach::Filtered {
-        cx.precision.insert(PrecisionNote::SrgbTexelDecode);
-    }
-    cx.families
-        .arith
-        .srgb
-        .get_or_insert(crate::air::intrinsics::PackDir::Unpack);
+    cx.precision.insert(PrecisionNote::SrgbTexelDecode);
     Ok(true)
 }
 
@@ -2913,31 +2893,36 @@ fn select_read_as(
         }
         _ => false,
     };
-    // An 8-bit sRGB texel's codes, under the slot's twin variant, decoded exactly; another `half`
-    // texel converts by the bound format's class, and its NaN is the device's decode.
-    let raw = matches!(texel.conv, TexelConv::F16 | TexelConv::F32)
-        && srgb_texels(cx, image, shape, SrgbReach::Codes, m)?;
-    // A storage slot's 8-bit sRGB codes, through its UNORM alias, decoded through Metal's table
-    // (the slot's planning declares it), as a UNORM twin's are.
+    // An 8-bit sRGB texel's codes, under the slot's twin variant, decoded by the device's
+    // transfer; another `half` texel converts by the bound format's class, and its NaN is the
+    // device's decode.
+    let raw =
+        matches!(texel.conv, TexelConv::F16 | TexelConv::F32) && srgb_texels(cx, image, shape, m)?;
+    // A storage slot's 8-bit sRGB codes, through its UNORM alias, decoded by the device's
+    // transfer, as a UNORM twin's are.
     let srgb_codes = storage
         && matches!(texel.conv, TexelConv::F16 | TexelConv::F32)
         && matches!(
             storage_class(cx, image)?,
             StorageImageClass::SrgbEncode | StorageImageClass::SrgbEncodeBgra
         );
+    if srgb_codes {
+        cx.precision.insert(PrecisionNote::SrgbTexelDecode);
+    }
     // An `RGB9E5Float` slot's word through its `R32_UINT` alias, decoded exactly (the slot's
     // planning declares it).
     let words = storage
         && matches!(texel.conv, TexelConv::F16 | TexelConv::F32)
         && storage_class(cx, image)? == StorageImageClass::SharedExponentBits;
-    let exact = raw || srgb_codes || words;
-    // An extended-range texel is decoded exactly to `f32`, which a `half` result rounds to
-    // nearest even, as Metal answers. A read is one texel.
-    if texel.conv == TexelConv::F16 && !exact && extended.is_none() {
+    // The shader decodes these texels itself, recording its own notes. An extended-range texel is
+    // decoded exactly to `f32`, which a `half` result rounds to nearest even, as Metal answers. A
+    // read is one texel.
+    let decoded = raw || srgb_codes || words;
+    if texel.conv == TexelConv::F16 && !decoded && extended.is_none() {
         half_texels(cx, image, shape, false, device_texels(cx), m)?;
         half_texel_nans(cx, image, shape, m)?;
     }
-    if texel.conv == TexelConv::F32 && !exact && extended.is_none() {
+    if texel.conv == TexelConv::F32 && !decoded && extended.is_none() {
         float_texel_notes(cx, image, shape, OneTexel::Always);
     }
     // A float read of a sampled heap group of one sample decodes a member of a form a heap reads

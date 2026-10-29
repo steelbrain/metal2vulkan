@@ -298,7 +298,8 @@ pub enum RuntimeFact {
     /// format that the device cannot sample, which the runtime holds as the format's UNORM twin
     /// (`metal::format::srgb_raw_twin`, `metal::texel_format::srgb_twin_on`), the slot joins the
     /// plan's variant (`VariantKey::srgb_textures`, `LoweringInputs::srgb_textures`), under which
-    /// the function decodes the codes its own binding reads through Metal's twelve-bit table.
+    /// the function decodes the codes its own binding reads by the MSL transfer through the
+    /// device's `Pow` (`PrecisionNote::SrgbTexelDecode`).
     /// Bound in any other format, or unbound, the slot leaves the variant, and the function reads
     /// the device's decode through the texture's own view.
     SrgbTexture { slot: SlotRef },

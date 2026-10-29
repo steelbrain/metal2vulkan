@@ -652,10 +652,10 @@ pub struct ArithPlan {
     /// The `half` additions, subtractions and products held at `float` precision, unrounded,
     /// between a chain's roundings on a device without `shaderFloat16` ([`half_chain`]).
     pub held_at_float: BTreeSet<InstId>,
-    /// The direction of the first sRGB conversion that reads Metal's sRGB table (a tile's, a
-    /// color attachment's or a texture's), which [`declare`] then declares once ([`srgb`]) and the
-    /// census charges once, to that direction's name ([`routine_words`]).
-    /// `air.pack`/`air.unpack` of `unorm4x8_srgb` read none ([`pack`]).
+    /// The direction of the first sRGB conversion that reads Metal's sRGB table (a tile's or a
+    /// color attachment's), which [`declare`] then declares once ([`srgb`]) and the census
+    /// charges once, to that direction's name ([`routine_words`]). `air.pack`/`air.unpack` of
+    /// `unorm4x8_srgb`, an sRGB storage texture's alias and a UNORM twin read none ([`pack`]).
     pub srgb: Option<PackDir>,
     /// Whether a call takes Metal's precise `fmod` on `float` or `half` lanes ([`libm::uses`]),
     /// recorded at selection; [`finish`] decides [`ArithPlan::fmod`] from it.

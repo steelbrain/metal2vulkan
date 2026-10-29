@@ -775,10 +775,11 @@ pub enum PrecisionNote {
     /// - An sRGB sum: Metal decodes each tap's code through its twelve-bit table and sums the
     ///   steps exactly; the emulation sums the device's decoded taps in `f32`, the device's decode
     ///   being the only form where it samples the format ([`PrecisionNote::SrgbTexelDecode`]). A
-    ///   texture slot bound in an 8-bit sRGB format the device holds as its UNORM twin decodes the
-    ///   codes under its `SrgbTexture` variant and sums the steps exactly as Metal does, on the
-    ///   grids `1/4095` (color) and `1/(16 · 255)` (alpha), so only the first bullet's 2D residue
-    ///   applies to it. The packed normalized formats and `Depth16Unorm` sum in `f32` (their exact
+    ///   texture slot bound in an 8-bit sRGB format the device holds as its UNORM twin decodes
+    ///   each tap's codes under its `SrgbTexture` variant by the device's transfer
+    ///   ([`PrecisionNote::SrgbTexelDecode`]) and sums them exactly on the grids `1/4095` (color,
+    ///   the step nearest each tap) and `1/(16 · 255)` (alpha), so only the first bullet's 2D
+    ///   residue applies to that sum. The packed normalized formats and `Depth16Unorm` sum in `f32` (their exact
     ///   rule is not measured).
     ///
     /// The footprint, the fraction, the addressing of each tap, the filter each format selects,
@@ -991,13 +992,17 @@ pub enum PrecisionNote {
     /// Where the device cannot sample the bound format, whose texture it holds as the format's
     /// UNORM twin (`metal::texel_format::srgb_twin_on`: `R8Unorm_sRGB` and `RG8Unorm_sRGB` on
     /// lavapipe, `RG8Unorm_sRGB` on ANV and NVIDIA among the committed profiles), the slot's
-    /// `SrgbTexture` variant decodes the twin's codes through the table: a read, a nearest sample,
-    /// a pixel-coordinate fetch, a gather and a bicubic tap exactly, recording nothing; a filtered
-    /// sample (a linear filter, a linear mip filter, anisotropy, or a runtime sampler) decodes the
-    /// device's filter of the codes, Metal's value where the filter reads one texel, Metal's sum
-    /// where it blends two adjacent codes, otherwise the decode of the codes' blend where Metal
-    /// blends the decoded texels, recorded on every device. Validation derives no tolerance from
-    /// it: the class is unbounded.
+    /// `SrgbTexture` variant decodes what the twin's view reads by the MSL transfer through the
+    /// device's division and `Pow` (`pack::srgb_decode_texel`): a read, a sample, a fetch, a
+    /// gather and a bicubic tap one texel's codes, a filtered sample (a linear filter, a linear
+    /// mip filter, anisotropy, or a runtime sampler) the device's filter of the codes, the decode
+    /// of the codes' blend where Metal blends the decoded texels. So does a read of an 8-bit sRGB
+    /// storage texture held through its UNORM alias (`StorageImageClass::SrgbEncode`, Vulkan
+    /// having no sRGB storage view). Both are recorded outright, on every device: Metal's table
+    /// rounds the transfer to a twelve-bit step, up to half a step (`1 / 8190`) from it, where
+    /// MoltenVK's `Pow` read within `1.83e-7` of the transfer through the alias
+    /// (`runtime_lane::srgb_storage`). Validation derives no tolerance from it: the class is
+    /// unbounded.
     SrgbTexelDecode,
     /// The module samples a texture with a `float` result through a filter that Metal's own
     /// sampler (`VkProperty::MetalSampler`, MoltenVK) answers otherwise than Metal filters the
@@ -1796,7 +1801,9 @@ pub enum PrecisionNote {
     /// division and `Pow` around the 8-bit instruction. Metal rounds the exact product to its code
     /// and divides correctly rounded, answers code 0 for a NaN channel, and takes an sRGB colour
     /// through its twelve-bit table: a decode answers its step `k / 4095` nearest the transfer, an
-    /// encode the byte of that table's step. Recorded on every device but for
+    /// encode the byte of that table's step. Also: a write of an 8-bit sRGB storage texture held
+    /// through its UNORM alias (`StorageImageClass::SrgbEncode`, Vulkan having no sRGB storage
+    /// view) encodes by `unorm4x8_srgb`'s pack. Recorded on every device but for
     /// a `float` conversion of the four named formats on a device whose functions are Metal's own
     /// (MoltenVK: Metal's own `pack_float_to_*` and `unpack_*_to_float`). **Recorded bound:**
     /// Vulkan bounds the instructions by their definition (`round(clamp(c) * scale)` and

@@ -201,7 +201,8 @@ fn storage_format_follows_the_choice_and_the_profile() {
 
 /// The required pair: on every profile where bgra8 is not storage-capable, a bgra8 and an rgba8
 /// storage texture give distinct compile keys and modules, and only the bgra8 one swizzles. The
-/// sRGB class encodes in the shader through Metal's table, with no device-precision note.
+/// sRGB class encodes in the shader by the device's conversion (the MSL transfer through its
+/// `Pow`), declaring no Metal table and recording `DevicePackConversion`.
 #[test]
 fn bgra8_and_rgba8_storage_textures_compile_to_distinct_modules() {
     let Some(bc) = fixture("storage_texture_write") else {
@@ -252,17 +253,20 @@ fn bgra8_and_rgba8_storage_textures_compile_to_distinct_modules() {
             if choice.class == StorageImageClass::SrgbEncode {
                 srgb += 1;
                 assert!(!s.precision.contains(&PrecisionNote::DeviceTranscendentals));
+                assert!(
+                    s.precision.contains(&PrecisionNote::DevicePackConversion),
+                    "{stem}"
+                );
                 assert_ne!(s.key, rgba.key, "{stem}");
-                // The encode's table, which an rgba8 write, left to the device's conversion,
-                // takes none of.
-                assert!(table(s) && !table(&rgba), "{stem}");
+                // No Metal table: the encode is the device's.
+                assert!(!table(s) && !table(&rgba), "{stem}");
             }
         }
-        // bgra8 sRGB through rgba8: the encode's table, and red and blue exchanged after it.
+        // bgra8 sRGB through rgba8: the device's encode, and red and blue exchanged after it.
         if let Some((choice, b)) = variant(PixelFormat::BGRA8UnormSRGB) {
             if choice.class == StorageImageClass::SrgbEncodeBgra {
                 srgb_bgra += 1;
-                assert!(table(&b), "{stem}");
+                assert!(!table(&b), "{stem}");
                 assert_ne!(b.key, rgba.key, "{stem}");
                 if let Some((c, s)) = &srgb_rgba {
                     if c.class == StorageImageClass::SrgbEncode {

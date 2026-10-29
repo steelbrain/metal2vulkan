@@ -2915,7 +2915,9 @@ bound.
   decoded twin's sRGB view), so it is announced at a draw or dispatch that binds such a texture,
   at an argument buffer's texture access, and at a render pipeline that reads an sRGB color
   attachment as an input attachment; never on MoltenVK, whose decode is Metal's own. Where the
-  device holds the format as its UNORM twin, only a filtered sample announces it.
+  device holds the format as its UNORM twin, or a storage texture holds it through its UNORM
+  alias, the module decodes the codes (or the device's filter of them) by the MSL transfer
+  through the device's `Pow`, announced at every such access on every device.
 - `metal2vulkan-degrade-float-sample-filter` (precision). `PrecisionNote::FloatSampleFilter`: The
   module samples a texture with a `float` result through a filter that Metal's own sampler
   (MoltenVK) answers otherwise than Metal filters the format bound there: a two-plane YCbCr
@@ -3264,7 +3266,8 @@ bound.
   rounds the exact product and divides correctly rounded, answers code 0 for a NaN channel, and
   takes an sRGB colour through its twelve-bit table; a packed code is within one of Metal's, an
   unpacked value within 2.5 ulp, a decoded sRGB colour within half a twelve-bit step (`1 / 8190`)
-  of Metal's step beyond its `Pow`'s bound. Not recorded for a
+  of Metal's step beyond its `Pow`'s bound. Also a write of an 8-bit sRGB storage texture held
+  through its UNORM alias, which encodes by `unorm4x8_srgb`'s pack. Not recorded for a
   `float` conversion of the four named formats on MoltenVK, Metal's own there. The same conversions
   serve an implicit imageblock access of a normalized attachment (a `half` load rounding the
   unpacked `float` once more), a fragment function's read and write of an 8-bit sRGB attachment

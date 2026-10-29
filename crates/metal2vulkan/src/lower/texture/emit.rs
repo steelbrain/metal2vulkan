@@ -2,7 +2,6 @@
 
 use crate::air::ir::{InstId, ValueId};
 use crate::lower::access::imageblock;
-use crate::lower::arith::nan::NanTest;
 use crate::lower::arith::narrow;
 use crate::lower::emit::EmitCx;
 use crate::lower::sync::barrier::{memory_model, BarrierModel};
@@ -825,27 +824,18 @@ fn heap_alpha_in_red(
     fb.select(is, held, x)
 }
 
-/// The words [`srgb_codes`] emits, at most: `math::pack`'s `unorm4x8_srgb` (its exact products,
-/// three table searches, and the placement) and the codes' extraction and scale.
-pub(crate) const SRGB_WRITE_WORDS: u32 =
-    64 + 3 * crate::lower::arith::srgb::SEARCH_WORDS + 400 + 24 * 4 + 96;
+/// The words [`srgb_codes`] emits, at most: `pack::pack`'s `unorm4x8_srgb` (the transfer's steps
+/// and their constants, the 8-bit instruction) and the codes' extraction and scale.
+pub(crate) const SRGB_WRITE_WORDS: u32 = 16 + 9 * 6 + 5 * 8 + 12 + 24 * 4 + 96;
 
-/// The values an 8-bit sRGB format's UNORM alias (`SrgbEncode`) stores as the codes Metal writes
-/// for held texel `x` (four `f32` lanes, a `half` texel's widened exactly): each color channel's
-/// code Metal's twelve-bit encode of the value through `table` (the module's sRGB table,
-/// [`srgb::declare`](crate::lower::arith::srgb::declare)): a NaN 0, the value clamped to `[0, 1]`,
-/// the exact product with 4095 rounded to nearest, and the byte of the largest first index at or
-/// below it; alpha's the exact product with 255 rounded to nearest: `pack_float_to_srgb_unorm4x8`
-/// (`math::pack`), which a kernel's write takes too. Each code `c` is written as
-/// `c` times the `f32` nearest `1 / 255`, whose product with 255 lies within `2^-7` of `c`, so
-/// every device's conversion stores `c`.
-fn srgb_codes(
-    fb: &mut FunctionBuilder<'_>,
-    table: crate::spirv::ids::GlobalId,
-    form: TexelForm,
-    x: SValue,
-    test: NanTest,
-) -> BResult<SValue> {
+/// The values an 8-bit sRGB format's UNORM alias (`SrgbEncode`) stores as the codes of held texel
+/// `x` (four `f32` lanes, a `half` texel's widened exactly): `pack_float_to_srgb_unorm4x8` by the
+/// device's conversion (`pack::pack`: each colour channel through the MSL transfer by the device's
+/// `Pow`, then `PackUnorm4x8`; `PrecisionNote::DevicePackConversion`), which a kernel's write
+/// takes too. Metal encodes each colour channel through its twelve-bit table. Each code `c` is
+/// written as `c` times the `f32` nearest `1 / 255`, whose product with 255 lies within `2^-7` of
+/// `c`, so every device's conversion stores `c`.
+fn srgb_codes(fb: &mut FunctionBuilder<'_>, form: TexelForm, x: SValue) -> BResult<SValue> {
     use crate::air::intrinsics::PackFormat;
     use crate::lower::arith::legal::{FloatFmt, Form, Held};
     if form.lanes != 4 {
@@ -857,8 +847,7 @@ fn srgb_codes(
         held: Held::Float(FloatFmt::F32),
         lanes: 4,
     };
-    let word =
-        crate::lower::arith::math::pack(fb, PackFormat::Unorm4x8Srgb, f, x, Some(table), test)?;
+    let word = crate::lower::arith::pack::pack(fb, PackFormat::Unorm4x8Srgb, f, x)?;
     let u = u32_ty(fb)?;
     let vu = vec(fb, u, 4)?;
     let spread = fb.composite_construct(vu, &[word; 4])?;
@@ -879,9 +868,9 @@ fn srgb_codes(
 
 /// The held AIR texel of image texel `x` (a `vec4` of the image's sampled type), read as one
 /// texel: a `half` one converted by the bound format's class (`half`), a `float` one where the
-/// read takes `float`; an 8-bit sRGB format's codes through Metal's table (`SrgbEncode`).
+/// read takes `float`; an 8-bit sRGB format's codes decoded by the device's transfer
+/// (`SrgbEncode`, [`srgb_texel`]).
 fn from_image(
-    cx: &mut EmitCx<'_>,
     fb: &mut FunctionBuilder<'_>,
     decl: &ImageDecl,
     form: TexelForm,
@@ -894,19 +883,19 @@ fn from_image(
     let x = match decl.class {
         StorageImageClass::Identity => x,
         StorageImageClass::SwizzleBgra => swizzle_bgra(fb, x)?,
-        // An 8-bit sRGB format's codes, through its UNORM alias: decoded as Metal decodes them,
-        // through its twelve-bit table, as a UNORM twin's are (alpha 1 for an RGBX format's).
+        // An 8-bit sRGB format's codes, through its UNORM alias: decoded by the device's
+        // transfer, as a UNORM twin's are (alpha 1 for an RGBX format's).
         StorageImageClass::SrgbEncode => {
             let x = match decl.x_channel {
                 true => x_channel_read(fb, decl, x)?,
                 false => x,
             };
-            return srgb_raw_texel(cx, fb, form, x, SRGB_TEXEL);
+            return srgb_texel(fb, form, x, SRGB_TEXEL);
         }
         // `BGRA8Unorm_sRGB`'s codes through an rgba8 view: red and blue exchanged, then decoded.
         StorageImageClass::SrgbEncodeBgra => {
             let x = swizzle_bgra(fb, x)?;
-            return srgb_raw_texel(cx, fb, form, x, SRGB_TEXEL);
+            return srgb_texel(fb, form, x, SRGB_TEXEL);
         }
         StorageImageClass::RotateArgb => rotate_argb(fb, x, true)?,
         StorageImageClass::AlphaInRed => alpha_in_red(fb, x, true)?,
@@ -939,225 +928,63 @@ fn from_image(
     }
 }
 
-/// The held texel (`form`, a `half` or `float` result) of texel `x` of codes (a `vec4` of `f32`:
-/// each lane an 8-bit code `c` as a UNORM view reads it, `c / 255` correctly rounded) of an 8-bit
-/// sRGB texture, as Metal reads it (`metal::texel_format`): `c` recovered by rounding `x · 255` to
-/// nearest (within `2^-16` of `c`), a color lane's step `k` of Metal's twelve-bit table and its
-/// value `k / 4095`, an alpha lane's `c / 255`, correctly rounded to `half` (to nearest even) for a
-/// `half` result, to `f32` for a `float` one. `color` says which lanes are color: a texel's first
-/// three, every lane of a gather of a color channel, none of a gather of alpha. Integer sequences
-/// on the codes, so every device answers alike. A format of fewer channels reads 0 for green and
-/// blue and 1 for alpha through its view, which decode to the same.
-pub(crate) fn srgb_raw_texel(
-    cx: &mut EmitCx<'_>,
+/// The held texel (`form`, a `half` or `float` result) of texel `x` (a `vec4` of `f32`) of an
+/// 8-bit sRGB texture that the device has no sRGB view of (a storage image's UNORM alias, a
+/// format's UNORM twin): each lane an 8-bit code `c` as the UNORM view reads it, `c / 255`, or the
+/// device's filter of such codes. A color lane is decoded by the MSL transfer through the device's
+/// division and `Pow` (`pack::srgb_decode_texel`), an alpha lane kept, and a `half` result is the
+/// `float` value rounded to nearest even. Metal decodes each code through its twelve-bit table
+/// and filters the decoded values (`PrecisionNote::SrgbTexelDecode`). `color` says which lanes are
+/// color: a texel's first three, every lane of a gather of a color channel, none of a gather of
+/// alpha. A format of fewer channels reads 0 for green and blue and 1 for alpha through its view,
+/// which decode to the same.
+pub(crate) fn srgb_texel(
     fb: &mut FunctionBuilder<'_>,
     form: TexelForm,
     x: SValue,
     color: [bool; 4],
 ) -> BResult<SValue> {
-    let steps = srgb_raw_steps(cx, fb, x, color)?;
-    srgb_ratio(fb, form, steps)
-}
-
-/// The held texel (`form`, a `half` or `float` result) of a device's sample `x` (a `vec4` of
-/// `f32`) of an 8-bit sRGB texture held as its UNORM twin, whose view reads each code `c` as
-/// `c / 255`, so the device filters the codes, where Metal decodes each texel and filters the
-/// decoded values (`PrecisionNote::SrgbTexelDecode`). A lane within `2^-10` of a code once
-/// scaled by 255 (one texel's: a nearest sample's, a gather's) decodes as [`srgb_raw_texel`]
-/// decodes it, Metal's value exactly. Another color lane, `c + t` between codes `c` and `c + 1`,
-/// takes the steps' interpolation `(k_c + t (k_{c+1} - k_c)) / 4095`, Metal's sum where the
-/// filter blends two adjacent codes and near it where the codes are close; another alpha lane
-/// keeps the device's filtered value, which Metal's alpha sums alike. `color` says which lanes
-/// are color, as [`srgb_raw_texel`]'s.
-pub(crate) fn srgb_filtered_texel(
-    cx: &mut EmitCx<'_>,
-    fb: &mut FunctionBuilder<'_>,
-    form: TexelForm,
-    x: SValue,
-    color: [bool; 4],
-) -> BResult<SValue> {
-    use crate::lower::arith::legal::{Form, Held};
-    let Some(table) = cx.decl.families.arith.srgb else {
-        return Err(cx.fail("an sRGB twin's sample without Metal's table"));
-    };
-    let four = TexelForm { lanes: 4, ..form };
-    let exact = srgb_raw_texel(cx, fb, four, x, color)?;
-    let (u, f) = (u32_ty(fb)?, f32_ty(fb)?);
-    let (vu, vf) = (vec(fb, u, 4)?, vec(fb, f, 4)?);
-    let scale = f32s(fb, 4, 255.0)?;
-    let zero = f32s(fb, 4, 0.0)?;
-    let c = fb.binary(BinOp::FMul, x, scale)?;
-    let c = fb.glsl(GlslOp::FClamp, &[c, zero, scale])?;
-    // One texel's lanes: within `2^-10` of a code.
-    let nearest = fb.glsl(GlslOp::RoundEven, &[c])?;
-    let off = fb.binary(BinOp::FSub, c, nearest)?;
-    let off = fb.glsl(GlslOp::FAbs, &[off])?;
-    let within = f32s(fb, 4, 1.0 / 1024.0)?;
-    let one = fb.binary(BinOp::FOrdLessThanEqual, off, within)?;
-    // The steps' interpolation between the codes below and above, `c` 255 taking 254 and 255.
-    let below = fb.glsl(GlslOp::Floor, &[c])?;
-    let below = fb.convert(ConvOp::ConvertFToU, below, vu)?;
-    let top = u32s(fb, 4, 254)?;
-    let below = fb.glsl(GlslOp::UMin, &[below, top])?;
-    let base = fb.convert(ConvOp::ConvertUToF, below, vf)?;
-    let t = fb.binary(BinOp::FSub, c, base)?;
-    let ones = u32s(fb, 4, 1)?;
-    let above = fb.binary(BinOp::IAdd, below, ones)?;
-    let steps = f32s(fb, 1, 1.0 / 4095.0)?;
-    let mut lanes = Vec::with_capacity(4);
-    for (i, color) in (0u32..).zip(color) {
-        if !color {
-            lanes.push(fb.composite_extract(x, &[i])?);
-            continue;
-        }
-        let lo = fb.composite_extract(below, &[i])?;
-        let hi = fb.composite_extract(above, &[i])?;
-        let lo = crate::lower::arith::srgb::step(fb, table, lo)?;
-        let hi = crate::lower::arith::srgb::step(fb, table, hi)?;
-        let lo = fb.convert(ConvOp::ConvertUToF, lo, f)?;
-        let hi = fb.convert(ConvOp::ConvertUToF, hi, f)?;
-        let rise = fb.binary(BinOp::FSub, hi, lo)?;
-        let ti = fb.composite_extract(t, &[i])?;
-        let k = fb.glsl(GlslOp::Fma, &[ti, rise, lo])?;
-        lanes.push(fb.binary(BinOp::FMul, k, steps)?);
-    }
-    let blended = fb.composite_construct(vf, &lanes)?;
-    let blended = match form.conv {
+    use crate::lower::arith::legal::{FloatFmt, Form, Held};
+    let d = crate::lower::arith::pack::srgb_decode_texel(fb, x, color)?;
+    let d = match form.conv {
         TexelConv::F16 => {
             let half = Form {
-                held: Held::Float(crate::lower::arith::legal::FloatFmt::Half),
+                held: Held::Float(FloatFmt::Half),
                 lanes: 4,
             };
-            narrow::round_texel(fb, half, blended)?
+            narrow::round(fb, half, d)?
         }
-        _ => blended,
-    };
-    let r = fb.select(one, exact, blended)?;
-    if form.lanes == 1 {
-        fb.composite_extract(r, &[0])
-    } else {
-        Ok(r)
-    }
-}
-
-/// The steps of texel `x` of codes ([`srgb_raw_texel`]): per lane the code `c` recovered by
-/// rounding `x · 255` to nearest, a color lane's table step `k` with its grid 4095, an alpha
-/// lane's `c` with 255, as a `uvec4` of numerators and one of denominators.
-fn srgb_raw_steps(
-    cx: &mut EmitCx<'_>,
-    fb: &mut FunctionBuilder<'_>,
-    x: SValue,
-    color: [bool; 4],
-) -> BResult<(SValue, SValue)> {
-    let Some(table) = cx.decl.families.arith.srgb else {
-        return Err(cx.fail("an sRGB raw read without Metal's table"));
-    };
-    let u = u32_ty(fb)?;
-    let vu = vec(fb, u, 4)?;
-    let scale = f32s(fb, 4, 255.0)?;
-    let v = fb.binary(BinOp::FMul, x, scale)?;
-    let v = fb.glsl(GlslOp::RoundEven, &[v])?;
-    let c = fb.convert(ConvOp::ConvertFToU, v, vu)?;
-    let steps = fb.u32_const(4095)?;
-    let steps = fb.module().const_value(steps)?;
-    let codes = fb.u32_const(255)?;
-    let codes = fb.module().const_value(codes)?;
-    let mut k = Vec::with_capacity(4);
-    let mut d = Vec::with_capacity(4);
-    for (i, color) in (0u32..).zip(color) {
-        let code = fb.composite_extract(c, &[i])?;
-        if color {
-            k.push(crate::lower::arith::srgb::step(fb, table, code)?);
-            d.push(steps);
-        } else {
-            k.push(code);
-            d.push(codes);
-        }
-    }
-    let k = fb.composite_construct(vu, &k)?;
-    let d = fb.composite_construct(vu, &d)?;
-    Ok((k, d))
-}
-
-/// The held texel (`form`) of the `uvec4` ratios `k / d`, each correctly rounded: to `half` (to
-/// nearest even) for a `half` result, to `f32` for a `float` one; its first lane where `form`
-/// has one.
-fn srgb_ratio(
-    fb: &mut FunctionBuilder<'_>,
-    form: TexelForm,
-    (k, d): (SValue, SValue),
-) -> BResult<SValue> {
-    use crate::lower::arith::legal::{Form, Held};
-    let lanes = Form {
-        held: Held::Int {
-            bits: 32,
-            container: 32,
-        },
-        lanes: 4,
-    };
-    let r = match form.conv {
-        TexelConv::F16 => crate::lower::arith::texel_round::ratio_to_half(fb, lanes, k, d)?,
-        _ => crate::lower::arith::texel_round::ratio_to_f32(fb, lanes, k, d)?,
+        _ => d,
     };
     if form.lanes == 1 {
-        fb.composite_extract(r, &[0])
+        fb.composite_extract(d, &[0])
     } else {
-        Ok(r)
+        Ok(d)
     }
 }
 
-/// Texel `x` of codes (a `vec4` of `f32`, `c / 255` as in [`srgb_raw_texel`]) of an 8-bit
-/// sRGB texture as a filter's tap on the grids of `BicubicTexels::SRGB`: each color lane the
-/// step `k` of its code over 4095 (`ConvertUToF(k) / 4095`, within an ulp of `k / 4095`, so the
-/// exact routines' `RoundEven(x · 4095)` recovers `k`), alpha's `c / 255` as it is (`16 c` on
-/// its grid). A border color the filter substitutes (each lane 0 or 1) reads the same either way.
-pub(crate) fn srgb_raw_tap(
-    cx: &mut EmitCx<'_>,
-    fb: &mut FunctionBuilder<'_>,
-    x: SValue,
-) -> BResult<SValue> {
-    let Some(table) = cx.decl.families.arith.srgb else {
-        return Err(cx.fail("an sRGB raw tap without Metal's table"));
-    };
-    let (u, f) = (u32_ty(fb)?, f32_ty(fb)?);
-    let (vu, vf3, vf) = (vec(fb, u, 4)?, vec(fb, f, 3)?, vec(fb, f, 4)?);
-    let vu3 = vec(fb, u, 3)?;
-    let scale = f32s(fb, 4, 255.0)?;
-    let v = fb.binary(BinOp::FMul, x, scale)?;
-    let v = fb.glsl(GlslOp::RoundEven, &[v])?;
-    let c = fb.convert(ConvOp::ConvertFToU, v, vu)?;
-    let mut k = Vec::with_capacity(3);
-    for i in 0..3 {
-        let code = fb.composite_extract(c, &[i])?;
-        k.push(crate::lower::arith::srgb::step(fb, table, code)?);
-    }
-    let k = fb.composite_construct(vu3, &k)?;
-    let k = fb.convert(ConvOp::ConvertUToF, k, vf3)?;
-    let steps = f32s(fb, 3, 4095.0)?;
-    let color = fb.binary(BinOp::FDiv, k, steps)?;
-    let mut lanes = Vec::with_capacity(4);
-    for i in 0..3 {
-        lanes.push(fb.composite_extract(color, &[i])?);
-    }
-    lanes.push(fb.composite_extract(x, &[3])?);
-    fb.composite_construct(vf, &lanes)
+/// Texel `x` of codes (a `vec4` of `f32`, `c / 255` as in [`srgb_texel`]) of an 8-bit sRGB
+/// texture held as its UNORM twin, as a bicubic filter's tap on the grids of
+/// `BicubicTexels::SRGB`: each color lane the device's decode of its code
+/// (`pack::srgb_decode_texel`), which the exact routines read on the grid `1/4095`
+/// (`RoundEven(x · 4095)`, the step nearest the device's value), alpha's `c / 255` as it is (`16 c`
+/// on its grid). A border color the filter substitutes (each lane 0 or 1) reads the same either
+/// way.
+pub(crate) fn srgb_raw_tap(fb: &mut FunctionBuilder<'_>, x: SValue) -> BResult<SValue> {
+    crate::lower::arith::pack::srgb_decode_texel(fb, x, SRGB_TEXEL)
 }
 
-/// The words [`srgb_raw_tap`] emits, at most: per color lane the recovery, the step, and the
-/// quotient, and the texel's assembly (`the_srgb_estimate_bounds_its_emission`).
-pub(crate) const SRGB_TAP_WORDS: u32 = 160;
+/// The words [`srgb_raw_tap`] emits, at most: the transfer's steps on the color lanes
+/// (`the_srgb_estimate_bounds_its_emission`).
+pub(crate) const SRGB_TAP_WORDS: u32 = crate::lower::arith::pack::SRGB_DECODE_TEXEL_WORDS;
 
-/// The color lanes of an sRGB texel ([`srgb_raw_texel`]): red, green, and blue.
+/// The color lanes of an sRGB texel ([`srgb_texel`]): red, green, and blue.
 pub(crate) const SRGB_TEXEL: [bool; 4] = [true, true, true, false];
 
-/// The words [`srgb_raw_texel`] emits, at most: the code's recovery, up to four table steps, and
-/// the exact quotients (`the_srgb_raw_words_bound_its_emission`).
-pub(crate) const SRGB_RAW_WORDS: u32 = 520;
-
-/// The words [`srgb_filtered_texel`] emits, at most: [`srgb_raw_texel`]'s, the codes' scale, test
-/// and interpolation (two table steps per color lane), a `half` result's rounding, and the
-/// selection (`the_srgb_estimate_bounds_its_emission`).
-pub(crate) const SRGB_FILTERED_WORDS: u32 = SRGB_RAW_WORDS + 400;
+/// The words [`srgb_texel`] emits, at most: the transfer's steps, a `half` result's rounding, and
+/// the lane's extraction (`the_srgb_estimate_bounds_its_emission`).
+pub(crate) const SRGB_DECODE_WORDS: u32 =
+    crate::lower::arith::pack::SRGB_DECODE_TEXEL_WORDS + 64 + 4 * 4 + 8;
 
 /// The conversion of a slot's `half` texels by the bound format's class: the module's routine and
 /// the slot's `TexelFormat` specialization constant; or of a heap color texture's by the class its
@@ -1534,15 +1361,12 @@ fn int_lanes(fb: &mut FunctionBuilder<'_>, elem: TypeId, lanes: &[u32]) -> BResu
 }
 
 /// The image texel (a `vec4` of the image's sampled type) of held AIR texel `v`; an 8-bit sRGB
-/// format's codes encoded through `srgb`, the module's sRGB table (`SrgbEncode`, [`srgb_codes`]),
-/// a NaN told by `test`.
+/// format's codes encoded by the device's conversion (`SrgbEncode`, [`srgb_codes`]).
 pub fn to_image(
     fb: &mut FunctionBuilder<'_>,
     decl: &ImageDecl,
     form: TexelForm,
     v: SValue,
-    srgb: Option<crate::spirv::ids::GlobalId>,
-    test: NanTest,
 ) -> BResult<SValue> {
     let signed = decl.texel == TexelClass::Sint;
     let i32_ = fb.module().ty(SType::Int {
@@ -1569,25 +1393,11 @@ pub fn to_image(
     let x = match decl.class {
         StorageImageClass::Identity => x,
         StorageImageClass::SwizzleBgra => swizzle_bgra(fb, x)?,
-        StorageImageClass::SrgbEncode => match srgb {
-            Some(table) => srgb_codes(fb, table, form, x, test)?,
-            None => {
-                return Err(crate::spirv::error::BuildError::Type(
-                    crate::spirv::error::TypeRule::FunctionSignature,
-                ))
-            }
-        },
-        StorageImageClass::SrgbEncodeBgra => match srgb {
-            Some(table) => {
-                let codes = srgb_codes(fb, table, form, x, test)?;
-                swizzle_bgra(fb, codes)?
-            }
-            None => {
-                return Err(crate::spirv::error::BuildError::Type(
-                    crate::spirv::error::TypeRule::FunctionSignature,
-                ))
-            }
-        },
+        StorageImageClass::SrgbEncode => srgb_codes(fb, form, x)?,
+        StorageImageClass::SrgbEncodeBgra => {
+            let codes = srgb_codes(fb, form, x)?;
+            swizzle_bgra(fb, codes)?
+        }
         StorageImageClass::RotateArgb => rotate_argb(fb, x, false)?,
         StorageImageClass::AlphaInRed if form.lanes == 4 => alpha_in_red(fb, x, false)?,
         StorageImageClass::AlphaInRed => {
@@ -2710,13 +2520,13 @@ fn read(cx: &mut EmitCx<'_>, fb: &mut FunctionBuilder<'_>, r: &Read) -> BResult<
         }
         _ => texel,
     };
-    // An 8-bit sRGB texture held as its UNORM twin: the codes the slot's image reads, decoded
-    // through Metal's table.
+    // An 8-bit sRGB texture held as its UNORM twin: the codes the slot's image reads, decoded by
+    // the device's transfer.
     let texel = match r.raw {
-        true => srgb_raw_texel(cx, fb, r.texel, texel, SRGB_TEXEL)?,
+        true => srgb_texel(fb, r.texel, texel, SRGB_TEXEL)?,
         false => {
             let half = half_class(cx, &r.image, r.texel);
-            from_image(cx, fb, &decl, r.texel, texel, half)?
+            from_image(fb, &decl, r.texel, texel, half)?
         }
     };
     // A swizzled texture's swizzle at a storage slot, on the converted texel.
@@ -3042,10 +2852,7 @@ fn write(cx: &mut EmitCx<'_>, fb: &mut FunctionBuilder<'_>, w: &Write) -> BResul
             let table = extended_table(cx, form)?;
             crate::lower::arith::extended_range::encode(fb, form, v, table)?
         }
-        None => {
-            let test = NanTest::for_modes(&cx.plan.families.arith.modes);
-            to_image(fb, &decl, w.texel, v, cx.decl.families.arith.srgb, test)?
-        }
+        None => to_image(fb, &decl, w.texel, v)?,
     };
     // An integer texel's lanes, saturated to the format's channels as Metal stores them.
     let texel = saturated(cx, fb, &decl, (w.saturate, w.texel), texel)?;
@@ -3238,8 +3045,7 @@ fn slice<'c>(cx: &mut EmitCx<'c>, fb: &mut FunctionBuilder<'_>, s: &Slice) -> BR
             conv: s.texel.conv,
             lanes: 4,
         };
-        let test = NanTest::for_modes(&cx.plan.families.arith.modes);
-        let texel = to_image(fb, &decl, form, held, cx.decl.families.arith.srgb, test)?;
+        let texel = to_image(fb, &decl, form, held)?;
         let ty = vec(fb, u, dims)?;
         let delta = if dims == 2 {
             fb.composite_construct(ty, &[x, y])?

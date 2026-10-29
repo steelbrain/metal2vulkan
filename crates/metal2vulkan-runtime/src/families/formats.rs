@@ -14,7 +14,7 @@
 //!   integers: Metal filters none, a stencil view's included, nor a bfloat format's (a linear
 //!   sample reads the nearest texel). A texture held as its sRGB format's UNORM twin
 //!   (`image_plan::holds_srgb_twin`) is filtered by the device through the twin's view and the
-//!   filtered codes decoded through Metal's table (`PrecisionNote::SrgbTexelDecode`): its Filter
+//!   filtered codes decoded by the device's transfer (`PrecisionNote::SrgbTexelDecode`): its Filter
 //!   is the twin's linear filter. An extended-range texture
 //!   (`ExtendedRange`) is filtered by the shader from fetches of its raw texels on every device:
 //!   its Filter is its `ShaderRead` texture's.

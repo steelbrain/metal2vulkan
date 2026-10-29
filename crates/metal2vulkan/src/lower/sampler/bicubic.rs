@@ -64,8 +64,8 @@
 //! - An argument-buffer (heap) element's sRGB taps are the device's decoded values, summed in
 //!   `f32`, where Metal sums its twelve-bit decode table's steps exactly: its format is never
 //!   known. A texture slot bound in an 8-bit sRGB format reads the raw codes through a UNORM view
-//!   under its `SrgbTexture` variant ([`Bicubic::raw`]), and the exact routine sums their steps
-//!   on the sRGB grids, as Metal does. The packed normalized formats and `Depth16Unorm`, whose
+//!   under its `SrgbTexture` variant ([`Bicubic::raw`]), decodes each tap by the device's
+//!   transfer, and the exact routine sums them on the sRGB grids. The packed normalized formats and `Depth16Unorm`, whose
 //!   exact rule is not measured, sum in `f32`.
 //!
 //! Everything else above is Metal's reading, except inferences:
@@ -150,8 +150,8 @@ pub struct Bicubic {
     /// The constant texel offset Metal applies, per plane axis.
     pub offset: Option<Vec<i32>>,
     /// The sample reads an 8-bit sRGB texture's raw codes, its slot in the `SrgbTexture`
-    /// variant: each tap's color lanes become the table's steps (`srgb_raw_tap`), and the exact
-    /// routine sums them on the sRGB grids (`BicubicTexels::SRGB`).
+    /// variant: each tap's color lanes become the device's decode of their codes (`srgb_raw_tap`),
+    /// and the exact routine sums them on the sRGB grids (`BicubicTexels::SRGB`).
     pub raw: bool,
 }
 
@@ -1405,10 +1405,10 @@ pub(super) fn filter(
     let kx = *kx;
     let vertical = axes.next().map(|(k, row)| (*k, row));
     let exact_only = b.raw || matches!(texels, Texels::Extended(_));
-    // A raw sample's taps are the table's steps.
-    let post = |cx: &mut EmitCx<'_>, fb: &mut FunctionBuilder<'_>, v: SValue| {
+    // A raw sample's taps are the device's decode of their codes.
+    let post = |_: &mut EmitCx<'_>, fb: &mut FunctionBuilder<'_>, v: SValue| {
         if b.raw {
-            crate::lower::texture::srgb_raw_tap(cx, fb, v)
+            crate::lower::texture::srgb_raw_tap(fb, v)
         } else {
             Ok(v)
         }

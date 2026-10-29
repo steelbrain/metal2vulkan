@@ -16,14 +16,21 @@
 //! steps `round(decode(c / 255) * 4095)` of the sRGB transfer (every one at least `1.6e-4` of a
 //! step from a half step).
 //!
+//! The device's answers are its own (rule 1): a write encodes each color channel by the MSL
+//! transfer through the device's `Pow` and `PackUnorm4x8` (`device-pack-conversion`), every code
+//! within one of Metal's but a NaN channel's, the device's; a read decodes each code by the
+//! transfer through the device's `Pow` (`srgb-texel-decode`), within `2^-16` of the transfer's
+//! exact value (a `half` result within its rounding past that). Each test prints how many differ
+//! from Metal's and asserts the bounds and the notice.
+//!
 //! The values are the probe's, in its order: the `f32`s around each twelve-bit index's half step
 //! (three ulps either side), each step's value and its neighbours, each alpha code's half step
 //! (three ulps either side), the specials, and its 81,920 random values; and every half. Channel
 //! `c` of texel `t` takes value `4t + (c + p) % 4` in pass `p` of 4, so each value reaches each
 //! channel. The kernels are the owned fixture `fpv_srgb_storage`'s.
 
-use super::degrade_notices::{on_device, on_device_with};
-use super::{buffer_with, read_buffer, WAIT};
+use super::degrade_notices::{counts, on_device, on_device_with};
+use super::{buffer_with, read_buffer, Messages, WAIT};
 use crate::air_library::AirLibrary;
 use metal2vulkan::device::{VkExtension, VkFeature};
 use metal2vulkan::metal::format::storage_image_choice;
@@ -32,8 +39,8 @@ use metal2vulkan::pipeline::StorageImageClass;
 use metal2vulkan::pipeline::{ComputePipelineDescriptor, StageSource};
 use metal2vulkan_devtools::{engine_dir, llvm_assemble};
 use metal2vulkan_runtime::{
-    CommandBufferStatus, ComputePipelineState, Device, PipelineOptions, Region, ResourceOptions,
-    Size, Texture, TextureDescriptor,
+    CommandBufferStatus, ComputePipelineState, Degradation, Device, PipelineOptions, Region,
+    ResourceOptions, Size, Texture, TextureDescriptor,
 };
 
 /// The texture's width; its height holds every value.
@@ -94,40 +101,23 @@ fn code(bytes: &[u8], v: f32, color: bool) -> u8 {
     }
 }
 
-/// `k / d` (`0 < k <= d`, `d` odd, so no ties) correctly rounded to `bits` significant bits: its
-/// significand `q` and exponent `e`, the value `q * 2^-e`.
-fn ratio(k: u64, d: u64, bits: u32) -> (u128, i32) {
-    let (k, d) = (u128::from(k), u128::from(d));
-    let mut e = 0;
-    while k << e < d << (bits - 1) {
-        e += 1;
-    }
-    let n = k << e;
-    (n / d + u128::from(2 * (n % d) > d), e)
-}
-
-/// `k / d` correctly rounded to `f32`, as bits.
-fn ratio_f32(k: u64, d: u64) -> u32 {
-    match k {
-        0 => 0,
-        _ => {
-            let (q, e) = ratio(k, d, 24);
-            ((q as f64 * 2f64.powi(-e)) as f32).to_bits()
-        }
+/// The MSL sRGB-to-linear transfer of `x`, in `f64`.
+fn transfer(x: f64) -> f64 {
+    if x <= 0.04045 {
+        x / 12.92
+    } else {
+        ((x + 0.055) / 1.055).powf(2.4)
     }
 }
 
-/// `k / d` correctly rounded to `half`, as bits (every nonzero quotient here a normal `half`).
-fn ratio_half(k: u64, d: u64) -> u16 {
-    if k == 0 {
-        return 0;
+/// `x` (0, or a normal `half` value's magnitude in `[2^-14, 1]`) rounded to the nearest `half`,
+/// ties to even.
+fn nearest_half(x: f64) -> f64 {
+    if x == 0.0 {
+        return 0.0;
     }
-    let (mut q, mut e) = ratio(k, d, 11);
-    if q == 1 << 11 {
-        q >>= 1;
-        e -= 1;
-    }
-    (((10 - e + 15) as u16) << 10) | (q as u16 - (1 << 10))
+    let ulp = 2f64.powi(x.log2().floor() as i32 - 10);
+    (x / ulp).round_ties_even() * ulp
 }
 
 /// The value of `half` bits `h`, exactly (a NaN for a NaN).
@@ -296,22 +286,23 @@ fn write_values(half: bool) -> Vec<(f32, Vec<u8>)> {
     }
 }
 
-/// Every kernel write of the probe's floats and of every half into each format: Metal's bytes,
-/// each texel's (the X field of `RGBX8Unorm_sRGB` green's byte), over bytes of `0xA5`.
+/// Every kernel write of the probe's floats and of every half into each format: the device's
+/// conversion, each code within one of Metal's byte but a NaN channel's (the X field of
+/// `RGBX8Unorm_sRGB` green's byte), over bytes of `0xA5`, announced `device-pack-conversion`.
 #[test]
-fn srgb_storage_writes_store_metals_codes() {
-    on_device(|device, _| writes_store_metals_codes(device));
+fn srgb_storage_writes_store_the_devices_codes() {
+    on_device(writes_store_the_devices_codes);
 }
 
-/// [`srgb_storage_writes_store_metals_codes`] on the device made without its storage accesses
+/// [`srgb_storage_writes_store_the_devices_codes`] on the device made without its storage accesses
 /// without a format (`shaderStorageImageReadWithoutFormat`, `shaderStorageImageWriteWithoutFormat`
 /// and `VK_KHR_format_feature_flags2`, under which a format's own bits would grant them at the
 /// runtime's Vulkan 1.2 instance), as ARL's and Pascal's profiles state none for
 /// `B8G8R8A8_UNORM`: a `BGRA8Unorm_sRGB` slot is then an `R8G8B8A8_UNORM` view that encodes and
-/// exchanges red and blue (`StorageImageClass::SrgbEncodeBgra`), and stores Metal's bytes as the
-/// twin's view does.
+/// exchanges red and blue (`StorageImageClass::SrgbEncodeBgra`), and stores the device's bytes as
+/// the twin's view does.
 #[test]
-fn srgb_storage_writes_through_rgba8_store_metals_codes() {
+fn srgb_storage_writes_through_rgba8_store_the_devices_codes() {
     on_device_with(
         |options| {
             options.withheld_features.extend([
@@ -322,19 +313,19 @@ fn srgb_storage_writes_through_rgba8_store_metals_codes() {
                 .withheld_extensions
                 .insert(VkExtension::KhrFormatFeatureFlags2);
         },
-        |device, _| {
+        |device, messages| {
             let profile = device.compile_device().profile();
             let choice = storage_image_choice(PixelFormat::BGRA8UnormSRGB, profile).unwrap();
             assert_eq!(choice.class, StorageImageClass::SrgbEncodeBgra);
-            writes_store_metals_codes(device);
+            writes_store_the_devices_codes(device, messages);
         },
     );
 }
 
-fn writes_store_metals_codes(device: &Device) {
+fn writes_store_the_devices_codes(device: &Device, messages: &Messages) {
     let bytes = encode_bytes();
     let name = device.name().to_owned();
-    let mut differ = Vec::new();
+    let (mut differ, mut notices) = (Vec::new(), Vec::new());
     for (pf, read_write, texel, at) in FORMATS {
         let rgbx = pf == PixelFormat::RGBX8UnormSRGB;
         let kernels: &[(&str, bool)] = match read_write {
@@ -353,7 +344,7 @@ fn writes_store_metals_codes(device: &Device) {
             let height = (texels as u64).div_ceil(WIDTH);
             let cells = (WIDTH * height) as usize;
             let size = list[0].1.len();
-            let (mut wrong, mut example) = (0, None);
+            let (mut wrong, mut far, mut example) = (0, 0, None);
             for pass in 0..4 {
                 let entry = |t: usize, c: usize| &list[4 * t + (c + pass) % 4];
                 let mut data = vec![0u8; cells * 4 * size];
@@ -369,15 +360,22 @@ fn writes_store_metals_codes(device: &Device) {
                 let got = bytes_of(&target, texel as u64, height);
                 for t in 0..texels {
                     let mut want = [0u8; 4];
+                    // A NaN channel's code is the device's conversion's.
+                    let mut nan = [false; 4];
                     for (c, byte) in at.into_iter().enumerate() {
                         if let Some(byte) = byte {
                             want[byte] = code(&bytes, entry(t, c).0, c < 3);
+                            nan[byte] = entry(t, c).0.is_nan();
                         }
                     }
                     if rgbx {
                         want[3] = want[1];
+                        nan[3] = nan[1];
                     }
                     let got = &got[texel * t..texel * (t + 1)];
+                    far += (0..texel)
+                        .filter(|&b| !nan[b] && got[b].abs_diff(want[b]) > 1)
+                        .count();
                     if got != &want[..texel] {
                         wrong += 1;
                         example.get_or_insert((
@@ -388,88 +386,148 @@ fn writes_store_metals_codes(device: &Device) {
                     }
                 }
             }
+            notices.extend(messages.take_notices());
             let example = example.map_or(String::new(), |e| format!(", e.g. {e:?}"));
             eprintln!(
                 "SRGB write {pf:?} by {kernel} on {name}: {wrong} of {} texels differ from \
-                 Metal's{example}",
+                 Metal's, {far} codes by more than one{example}",
                 4 * texels
             );
-            if wrong > 0 {
-                differ.push(format!("{pf:?} by {kernel}: {wrong} of {}", 4 * texels));
+            if far > 0 {
+                differ.push(format!("{pf:?} by {kernel}: {far} codes"));
             }
         }
     }
     assert!(
         differ.is_empty(),
-        "sRGB storage writes not Metal's: {differ:#?}"
+        "sRGB storage writes more than a code from Metal's: {differ:#?}"
+    );
+    let announced = counts(&notices);
+    assert!(
+        announced.contains_key(&Degradation::DevicePackConversion),
+        "{announced:?}"
     );
 }
 
-/// Every `read_write` read of every code in every channel of each format the probe read so:
-/// Metal's quotients, `float` and `half`.
+/// Every `read_write` read of every code in every channel of each format the probe read so, on the
+/// device as it is made: within half a twelve-bit step and `2^-16` of the transfer's exact value
+/// (a `half` result within its rounding past that), `float` and `half`, which Metal's own decode
+/// and the device's transfer both meet. Where the device stores the sRGB format itself (MoltenVK
+/// on Apple's GPU) the read is its own decode, which announces nothing there and reads Metal's
+/// every lane; through the UNORM alias it announces `srgb-texel-decode`
+/// ([`srgb_storage_reads_through_the_unorm_alias_are_the_devices_decode`]). It prints how many
+/// lanes differ from Metal's quotients.
 #[test]
-fn srgb_storage_reads_are_metals_table() {
-    on_device(|device, _| {
-        let name = device.name().to_owned();
-        let mut differ = Vec::new();
-        for (pf, read_write, texel, at) in FORMATS {
-            if !read_write {
-                continue;
-            }
-            let rgbx = pf == PixelFormat::RGBX8UnormSRGB;
-            let codes = |b: u32| [b, 255 - b, (37 * b) & 255, (b + 128) & 255];
-            let mut bytes = vec![0u8; 256 * texel];
-            for b in 0..256u32 {
-                for (c, code) in codes(b).into_iter().enumerate() {
-                    if let Some(byte) = at[c] {
-                        bytes[texel * b as usize + byte] = code as u8;
-                    }
-                }
-            }
-            let source = texture(device, (pf, texel as u64), 1, Some(&bytes));
-            for (kernel, half) in [
-                ("fpv_srgb_read_write", false),
-                ("fpv_srgb_read_write_half", true),
-            ] {
-                let size = if half { 8 } else { 16 };
-                let state = state(device, kernel);
-                let got = run(device, &state, &source, 1, &vec![0u8; 256 * size]);
-                let mut wrong = 0;
-                for b in 0..256u32 {
-                    for (c, code) in codes(b).into_iter().enumerate() {
-                        // A channel the format lacks reads 0, alpha 1.
-                        let (k, d) = match (c, rgbx, at[c]) {
-                            (3, true, _) | (3, _, None) => (1, 1),
-                            (_, _, None) => (0, 1),
-                            (3, false, Some(_)) => (u64::from(code), 255),
-                            _ => (u64::from(super::srgb_step(code)), 4095),
-                        };
-                        let lane = &got[(b as usize * 4 + c) * size / 4..];
-                        let (read, want) = match half {
-                            true => (
-                                u32::from(u16::from_le_bytes([lane[0], lane[1]])),
-                                u32::from(ratio_half(k, d)),
-                            ),
-                            false => (
-                                u32::from_le_bytes([lane[0], lane[1], lane[2], lane[3]]),
-                                ratio_f32(k, d),
-                            ),
-                        };
-                        wrong += usize::from(read != want);
-                    }
-                }
-                eprintln!(
-                    "SRGB read {pf:?} by {kernel} on {name}: {wrong} of 1024 lanes differ from \
-                     Metal's"
-                );
-                if wrong > 0 {
-                    differ.push(format!("{pf:?} by {kernel}: {wrong} of 1024"));
+fn srgb_storage_reads_are_the_devices_decode() {
+    on_device(|device, messages| reads_are_the_devices_decode(device, messages, false));
+}
+
+/// [`srgb_storage_reads_are_the_devices_decode`] on the device made without its storage accesses
+/// without a format, as [`srgb_storage_writes_through_rgba8_store_the_devices_codes`]: each format
+/// is then read through its UNORM alias (`StorageImageClass::SrgbEncode`), decoded by the MSL
+/// transfer through the device's `Pow`, announced `srgb-texel-decode`.
+#[test]
+fn srgb_storage_reads_through_the_unorm_alias_are_the_devices_decode() {
+    on_device_with(
+        |options| {
+            options.withheld_features.extend([
+                VkFeature::ShaderStorageImageReadWithoutFormat,
+                VkFeature::ShaderStorageImageWriteWithoutFormat,
+            ]);
+            options
+                .withheld_extensions
+                .insert(VkExtension::KhrFormatFeatureFlags2);
+        },
+        |device, messages| {
+            let profile = device.compile_device().profile();
+            let choice = storage_image_choice(PixelFormat::RGBA8UnormSRGB, profile).unwrap();
+            assert_eq!(choice.class, StorageImageClass::SrgbEncode);
+            reads_are_the_devices_decode(device, messages, true);
+        },
+    );
+}
+
+/// The reads of [`srgb_storage_reads_are_the_devices_decode`]; `alias` where every format reads
+/// through its UNORM alias, which must announce `srgb-texel-decode`.
+fn reads_are_the_devices_decode(device: &Device, messages: &Messages, alias: bool) {
+    let name = device.name().to_owned();
+    let (mut differ, mut notices, mut metals) = (Vec::new(), Vec::new(), true);
+    for (pf, read_write, texel, at) in FORMATS {
+        if !read_write {
+            continue;
+        }
+        let rgbx = pf == PixelFormat::RGBX8UnormSRGB;
+        let codes = |b: u32| [b, 255 - b, (37 * b) & 255, (b + 128) & 255];
+        let mut bytes = vec![0u8; 256 * texel];
+        for b in 0..256u32 {
+            for (c, code) in codes(b).into_iter().enumerate() {
+                if let Some(byte) = at[c] {
+                    bytes[texel * b as usize + byte] = code as u8;
                 }
             }
         }
-        assert!(
-            differ.is_empty(),
-            "sRGB storage reads not Metal's: {differ:#?}"
-        );
-    });
+        let source = texture(device, (pf, texel as u64), 1, Some(&bytes));
+        for (kernel, half) in [
+            ("fpv_srgb_read_write", false),
+            ("fpv_srgb_read_write_half", true),
+        ] {
+            let size = if half { 8 } else { 16 };
+            let state = state(device, kernel);
+            let got = run(device, &state, &source, 1, &vec![0u8; 256 * size]);
+            // The bound past the transfer's exact value: Metal's table (half a twelve-bit
+            // step) or the device's `Pow`, and a `half` result's rounding (half a `half` ulp
+            // below 1).
+            let bound = 1.0 / 8190.0 + 2f64.powi(-16) + if half { 2f64.powi(-12) } else { 0.0 };
+            let (mut wrong, mut far, mut worst) = (0, 0, 0f64);
+            for b in 0..256u32 {
+                for (c, code) in codes(b).into_iter().enumerate() {
+                    // A channel the format lacks reads 0, alpha 1.
+                    let (exact, metal) = match (c, rgbx, at[c]) {
+                        (3, true, _) | (3, _, None) => (1.0, 1.0),
+                        (_, _, None) => (0.0, 0.0),
+                        (3, false, Some(_)) => {
+                            let v = f64::from(code) / 255.0;
+                            (v, v)
+                        }
+                        _ => (
+                            transfer(f64::from(code) / 255.0),
+                            f64::from(super::srgb_step(code)) / 4095.0,
+                        ),
+                    };
+                    let lane = &got[(b as usize * 4 + c) * size / 4..];
+                    let read = match half {
+                        true => half_value(u16::from_le_bytes([lane[0], lane[1]])),
+                        false => f32::from_le_bytes([lane[0], lane[1], lane[2], lane[3]]),
+                    };
+                    let read = f64::from(read);
+                    let metal = match half {
+                        true => nearest_half(metal),
+                        false => f64::from(metal as f32),
+                    };
+                    wrong += usize::from(read != metal);
+                    let off = (read - exact).abs();
+                    worst = worst.max(off);
+                    far += usize::from(off.is_nan() || off > bound);
+                }
+            }
+            notices.extend(messages.take_notices());
+            metals &= wrong == 0;
+            eprintln!(
+                "SRGB read {pf:?} by {kernel} on {name}: {wrong} of 1024 lanes differ from \
+                 Metal's, {far} past {bound:e} of the transfer (worst {worst:e})"
+            );
+            if far > 0 {
+                differ.push(format!("{pf:?} by {kernel}: {far} of 1024"));
+            }
+        }
+    }
+    assert!(
+        differ.is_empty(),
+        "sRGB storage reads past the device's decode bound: {differ:#?}"
+    );
+    // The device's decode announces the note but where it is Metal's own.
+    let announced = counts(&notices);
+    let noted = announced.contains_key(&Degradation::SrgbTexelDecode);
+    eprintln!("SRGB reads on {name}: announced {noted}, every lane Metal's {metals}");
+    assert!(noted || (!alias && metals), "{announced:?}");
 }

@@ -1,22 +1,20 @@
-//! An 8-bit sRGB texel read as Metal reads it, by the device's decode wherever the device samples
-//! the format, and through Metal's twelve-bit table where it holds the format as its UNORM twin.
+//! An 8-bit sRGB texel read by the device's decode wherever the device samples the format, and by
+//! the MSL transfer through the device's `Pow` where it holds the format as its UNORM twin.
 //!
 //! - Without a slot's `SrgbTexture` variant every access reads the device's decode through the
 //!   slot's sRGB view, declaring no table: `PrecisionNote::SrgbTexelDecode` under the bound
 //!   format's class off Metal's own texture unit, `VkProperty::MetalSampler` on it.
-//! - Under the variant (a format the device cannot sample, held as its UNORM twin), on the CPU
-//!   interpreter, a read and a pixel-coordinate fetch of every code, with a `half` and a `float`
-//!   result, are the reference bit for bit: a color channel's step
-//!   `k = round(decode(c / 255) · 4095)` (the MSL transfer, which A1's every-byte reading matches)
-//!   and its value `k / 4095`, alpha's `c / 255`, each correctly rounded to the result's type. A
-//!   filtered sample decodes the device's filter of the codes (`SrgbTexelDecode`).
+//! - Under the variant (a format the device cannot sample, held as its UNORM twin) every access
+//!   decodes what the twin's view reads (one texel's codes, or the device's filter of them) by
+//!   the transfer through the device's `Pow`, declaring no table, and notes `SrgbTexelDecode`
+//!   outright. (The interpreter models no `Pow`, so no decoded value is run here.)
 //! - The binder joins a slot to the plan's variant exactly where the device holds the bound
 //!   format's twin, and its views then view the twin; elsewhere they view the sRGB format.
 //! - The plan's word estimate bounds the emission of every form on every committed profile.
 //!
 //! `llvm-as` assembles the kernels; without it the tests skip visibly.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::bind::{
@@ -25,16 +23,13 @@ use crate::bind::{
 use crate::budget::{Budget, SPIRV_WORDS};
 use crate::device::{Device, DeviceDescription, DevicePolicy, FormatUsage};
 use crate::library::{FunctionConstantValues, Library};
-use crate::lower::select::{LowerInputs, Plan};
+use crate::lower::select::LowerInputs;
 use crate::metal::format::bound_texel_format;
 use crate::metal::texel_format::srgb_twin_on;
 use crate::metal::{self, PixelFormat, TextureType};
 use crate::pipeline::compile::{compile_bitcode, plan_bitcode, EntryRef};
 use crate::pipeline::facts::RuntimeFact;
-use crate::pipeline::interface::PushLoc;
-use crate::pipeline::sym::{
-    Axis, PushField, ResourceKind, ResourceSlot, SlotClass, SlotRef, SpecKey, Stage,
-};
+use crate::pipeline::sym::{SlotClass, SlotRef, SpecKey, Stage};
 use crate::pipeline::testing::{
     link_and_validate, llvm_assemble, meter, profile, typed_module_with, AssembleError,
 };
@@ -42,14 +37,9 @@ use crate::pipeline::{
     ComputePipeline, ComputePipelineDescriptor, FunctionDescriptor, PrecisionNote, SpecializedNote,
     StageSource,
 };
-use crate::spirv::interp::{run_with_images, Buffer, Config, Image, Order, Resources};
-use crate::spirv::ir::{GlobalKind, TypedModule};
 use crate::spirv::testing::committed_profiles;
 
 const HEADER: &str = "target datalayout = \"e-p:64:64:64-i1:8:8-i8:8:8-i16:16:16-i32:32:32-i64:64:64-f32:32:32-f64:64:64-v16:16:16-v24:32:32-v32:32:32-v48:64:64-v64:64:64-v96:128:128-v128:128:128-v192:256:256-v256:256:256-v512:512:512-v1024:1024:1024-n8:16:32\"\ntarget triple = \"air64_v28-apple-macosx26.0.0\"\n\n";
-
-/// The texture's side: 16 x 16 texels, one per code.
-const SIDE: u32 = 16;
 
 const TEXTURE: SlotRef = SlotRef {
     stage: Stage::Kernel,
@@ -238,250 +228,6 @@ fn m3() -> crate::device::profile::DeviceProfile {
     profile("moltenvk-m3", DevicePolicy::default()).expect("profile")
 }
 
-// ---- The reference ----------------------------------------------------------------------------
-
-/// The four codes of texel `n` (0 to 255): every code in each channel, alpha's permuted.
-fn codes(n: u32) -> [u32; 4] {
-    [n, 255 - n, (n * 7 + 3) % 256, (n * 13 + 5) % 256]
-}
-
-/// Metal's decode step of code `c`: `round(decode(c / 255) · 4095)` for the MSL transfer.
-pub(super) fn step(c: u32) -> u64 {
-    let x = f64::from(c) / 255.0;
-    let lin = if x <= 0.04045 {
-        x / 12.92
-    } else {
-        ((x + 0.055) / 1.055).powf(2.4)
-    };
-    (lin * 4095.0).round() as u64
-}
-
-/// `k / d` (`0 <= k <= d`, `d` odd, so no ties) correctly rounded to a binary format of
-/// `bits` significand bits: its significand `q` and exponent `e` (`value = q · 2^-e`), `None` for
-/// zero.
-fn ratio(k: u64, d: u64, bits: u32) -> Option<(u128, i32)> {
-    if k == 0 {
-        return None;
-    }
-    let (k, d) = (u128::from(k), u128::from(d));
-    let mut e = 0;
-    while k << e < d << (bits - 1) {
-        e += 1;
-    }
-    let n = k << e;
-    let (q, r) = (n / d, n % d);
-    Some((q + u128::from(2 * r > d), e))
-}
-
-/// `f32` bits of `k / d` correctly rounded.
-pub(super) fn f32_bits(k: u64, d: u64) -> u32 {
-    ratio(k, d, 24)
-        .map_or(0.0f32, |(q, e)| ((q as f64) * 2f64.powi(-e)) as f32)
-        .to_bits()
-}
-
-/// `half` bits of `k / d` correctly rounded (every nonzero quotient here is a normal `half`).
-pub(super) fn half_bits(k: u64, d: u64) -> u16 {
-    let Some((mut q, mut e)) = ratio(k, d, 11) else {
-        return 0;
-    };
-    if q == 1 << 11 {
-        q >>= 1;
-        e -= 1;
-    }
-    let biased = 10 - e + 15;
-    assert!(biased > 0, "a half denormal");
-    ((biased as u16) << 10) | (q as u16 - (1 << 10))
-}
-
-/// Channel `c`'s exact quotient: a color channel's step over 4095, alpha's code over 255.
-fn quotient(channel: usize, code: u32) -> (u64, u64) {
-    if channel < 3 {
-        (step(code), 4095)
-    } else {
-        (u64::from(code), 255)
-    }
-}
-
-/// The twin's image at `slot`: texel `(x, y)` holds codes `codes(x + 16 y)`, each read as
-/// `c / 255` correctly rounded to `f32`, as a UNORM view reads it.
-fn codes_image(slot: ResourceSlot) -> Image {
-    let mut img = Image::new(slot, [SIDE, SIDE, 1], 1, 1, 1);
-    for n in 0..SIDE * SIDE {
-        let at = img.index(0, 0, 0, [n % SIDE, n / SIDE, 0]).expect("texel");
-        img.texels[at] = codes(n).map(|c| f32_bits(u64::from(c), 255));
-    }
-    img
-}
-
-/// The module's resource of `kind`'s shape at texture slot 0.
-fn resource(m: &TypedModule, kind: impl Fn(&ResourceKind) -> bool) -> Option<ResourceSlot> {
-    m.globals().iter().find_map(|g| match g.kind {
-        GlobalKind::Resource(s) if s.index == 0 && kind(&s.kind) => Some(s),
-        _ => None,
-    })
-}
-
-/// A sampled texture's binding: a texture, separate or combined with its sampler.
-fn texture(k: &ResourceKind) -> bool {
-    matches!(
-        k,
-        ResourceKind::Texture
-            | ResourceKind::SeparateTexture(_)
-            | ResourceKind::CombinedTextureSampler(_)
-    )
-}
-
-/// Resources of a dispatch of one-thread threadgroups over the 16 x 16 grid, `out` sized for
-/// `bytes` per texel.
-fn resources(plan: &Plan, bytes: usize) -> Resources {
-    let mut spec = BTreeMap::new();
-    for axis in [Axis::X, Axis::Y, Axis::Z] {
-        spec.insert(SpecKey::LocalSize(axis), 1);
-    }
-    spec.insert(SpecKey::FlatLocalSize, 1);
-    let push = vec![0u8; plan.push.push_range.map_or(0, |(_, end)| end as usize)];
-    for f in &plan.push.fields {
-        match (f.field, f.loc) {
-            (PushField::SlotBindOffset(_) | PushField::DispatchRegion, PushLoc::Push { .. }) => {}
-            // A bound value read as data, which the interpreter writes from `spec`.
-            (PushField::Specialized(_), PushLoc::Push { .. }) => {}
-            other => panic!("unexpected push field {other:?}"),
-        }
-    }
-    let out = Buffer {
-        slot: Some(ResourceSlot {
-            stage: Stage::Kernel,
-            kind: ResourceKind::Buffer,
-            index: 0,
-        }),
-        address: None,
-        bytes: vec![0xab; bytes * (SIDE * SIDE) as usize],
-    };
-    Resources {
-        buffers: vec![out],
-        push,
-        spec,
-    }
-}
-
-/// `m` over the grid with `images` bound, in both scheduling orders, which must agree: `out`.
-fn run(m: &TypedModule, res: &Resources, images: &[Image]) -> Vec<u8> {
-    let mut outs = Vec::new();
-    for order in [Order::Forward, Order::Reverse] {
-        let cfg = Config {
-            workgroups: [SIDE, SIDE, 1],
-            order,
-            ..Config::default()
-        };
-        let (o, _) = run_with_images(m, &cfg, res.clone(), images.to_vec())
-            .unwrap_or_else(|e| panic!("interpreter: {e:?}"));
-        outs.push(o.buffers);
-    }
-    assert_eq!(outs[0], outs[1], "the scheduling orders disagree");
-    outs.swap_remove(0).swap_remove(0)
-}
-
-/// Under the variant (a slot bound in a format the device holds as its UNORM twin, whose view
-/// reads each code as `c / 255`), a read and a pixel-coordinate fetch of every code, `half` and
-/// `float`, are Metal's decode bit for bit, through the slot's own binding, noting nothing.
-#[test]
-fn twin_reads_and_fetches_decode_every_code_as_metal_does() {
-    let fetch = sampler_words(0, 0, true);
-    for (name, access) in [("read", Access::Read), ("fetch", Access::Sample(fetch))] {
-        for half in [true, false] {
-            let what = format!("{name} {}", if half { "half" } else { "float" });
-            let Some(bc) = assemble(&what, &kernel(access, half)) else {
-                return;
-            };
-            for (stem, p) in [("lavapipe", lavapipe()), ("moltenvk-m3", m3())] {
-                let (plan, m) = typed_module_with(&bc, "k", &p, &inputs(true))
-                    .unwrap_or_else(|e| panic!("{what} on {stem}: {e}"));
-                assert!(
-                    !plan.precision.contains(&PrecisionNote::SrgbTexelDecode)
-                        && !plan
-                            .specialized
-                            .iter()
-                            .any(|s| s.note == PrecisionNote::SrgbTexelDecode),
-                    "{what} on {stem}"
-                );
-                let own = resource(&m, texture)
-                    .unwrap_or_else(|| panic!("{what} on {stem}: no texture binding"));
-                let bytes = if half { 8 } else { 16 };
-                let out = run(&m, &resources(&plan, bytes), &[codes_image(own)]);
-                for n in 0..SIDE * SIDE {
-                    for (c, code) in codes(n).into_iter().enumerate() {
-                        let (k, d) = quotient(c, code);
-                        let at = n as usize * bytes;
-                        let (got, want) = if half {
-                            let i = at + 2 * c;
-                            (
-                                u32::from(u16::from_le_bytes([out[i], out[i + 1]])),
-                                u32::from(half_bits(k, d)),
-                            )
-                        } else {
-                            let i = at + 4 * c;
-                            (
-                                u32::from_le_bytes([out[i], out[i + 1], out[i + 2], out[i + 3]]),
-                                f32_bits(k, d),
-                            )
-                        };
-                        assert_eq!(
-                            got, want,
-                            "{what} on {stem}: texel {n} channel {c} code {code}: {got:#x} vs {want:#x}"
-                        );
-                    }
-                }
-            }
-        }
-    }
-}
-
-/// Under the variant, a read of a texture whose swizzle moves a code between a color lane and
-/// alpha (`abgr`) decodes each code by its own channel and then swizzles, as plain Metal does,
-/// under the slot's `swizzled_storage` variant (the view takes no swizzle): each lane is its
-/// source channel's quotient, a color channel's step over 4095 on alpha's lane and alpha's code
-/// over 255 on red's, bit for bit, on the interpreter.
-#[test]
-fn a_swizzled_twin_read_decodes_before_its_swizzle() {
-    use crate::metal::{TextureSwizzle as S, TextureSwizzleChannels};
-    let Some(bc) = assemble("read float", &kernel(Access::Read, false)) else {
-        return;
-    };
-    let swizzle = TextureSwizzleChannels {
-        red: S::Alpha,
-        green: S::Blue,
-        blue: S::Green,
-        alpha: S::Red,
-    };
-    let source = [3usize, 2, 1, 0];
-    for (stem, p) in [("lavapipe", lavapipe()), ("moltenvk-m3", m3())] {
-        let mut under = inputs(true);
-        under.swizzled_storage.insert(TEXTURE);
-        let (plan, m) =
-            typed_module_with(&bc, "k", &p, &under).unwrap_or_else(|e| panic!("{stem}: {e}"));
-        let own = resource(&m, texture).unwrap_or_else(|| panic!("{stem}: no texture binding"));
-        let mut res = resources(&plan, 16);
-        res.spec
-            .insert(SpecKey::TextureSwizzle(TEXTURE), u64::from(swizzle.word()));
-        let out = run(&m, &res, &[codes_image(own)]);
-        for n in 0..SIDE * SIDE {
-            let codes = codes(n);
-            for (lane, &from) in source.iter().enumerate() {
-                let (k, d) = quotient(from, codes[from]);
-                let i = n as usize * 16 + 4 * lane;
-                let got = u32::from_le_bytes([out[i], out[i + 1], out[i + 2], out[i + 3]]);
-                assert_eq!(
-                    got,
-                    f32_bits(k, d),
-                    "{stem}: texel {n} lane {lane} (channel {from}, code {})",
-                    codes[from]
-                );
-            }
-        }
-    }
-}
-
 /// The plan of a slot bound with a swizzle in an 8-bit sRGB format the device holds as its UNORM
 /// twin names the slot in `VariantKey::swizzled_storage`, and its views take no swizzle, exactly
 /// where the swizzle moves a code between a color lane and alpha (the function decodes, then
@@ -552,21 +298,21 @@ fn an_srgb_swizzle_across_alpha_swizzles_in_the_function_on_a_twin() {
 /// on lavapipe it notes `PrecisionNote::SrgbTexelDecode` under the bound format's class (an
 /// `RGBA8Unorm_sRGB` or ASTC sRGB texture's, not an `RGBA8Unorm` one's), and on MoltenVK, whose
 /// decode is Metal's own, it requires `VkProperty::MetalSampler` instead. Under the variant every
-/// access declares the table, and only a filtered sample (a linear filter, a linear mip filter, a
-/// runtime sampler), the device's filter of the codes, notes `SrgbTexelDecode`, outright. On
-/// MoltenVK a filtered sample records `PrecisionNote::HalfSampleFilter` or
+/// access decodes what the twin's view reads by the MSL transfer through the device's `Pow`,
+/// declaring no table, and notes `SrgbTexelDecode` outright, on both devices. On MoltenVK a
+/// filtered sample records `PrecisionNote::HalfSampleFilter` or
 /// `PrecisionNote::FloatSampleFilter` (`lower::sampler::linear::metal_filtered_ycbcr`), a `half`
-/// access that converts the device's texel by the bound format's class states
-/// `RuntimeFact::TexelFormat`, and every sample and gather the device makes requires the
+/// access that converts the device's texel by the bound format's class (outside the variant)
+/// states `RuntimeFact::TexelFormat`, and every sample and gather the device makes requires the
 /// property. Every form validates on both devices.
 #[test]
-fn the_device_decodes_every_access_but_a_twins() {
+fn the_device_decodes_every_access_and_a_twin_takes_its_pow() {
     use crate::device::requirements::VkProperty;
     let nearest = sampler_words(0, 0, false);
     let linear = sampler_words(1, 0, false);
     let bicubic = sampler_words(2, 0, false);
     let fetch = sampler_words(0, 0, true);
-    // Each access, and whether it reads one texel's codes under the variant (not a filter's).
+    // Each access, and whether it reads one texel (not a filter's).
     let cases = [
         ("read half", Access::Read, true, true),
         ("read float", Access::Read, false, true),
@@ -614,7 +360,7 @@ fn the_device_decodes_every_access_but_a_twins() {
                 );
                 assert_eq!(
                     plan.precision.contains(&PrecisionNote::SrgbTexelDecode),
-                    !variant && !metal || variant && !codes,
+                    !metal || variant,
                     "{what}"
                 );
                 let noted = |pf| bound_note(&plan.specialized, pf);
@@ -622,10 +368,10 @@ fn the_device_decodes_every_access_but_a_twins() {
                     assert_eq!(noted(pf), !variant && !metal, "{what} {pf:?}");
                 }
                 assert!(!noted(PixelFormat::RGBA8Unorm), "{what}");
-                // On MoltenVK a `half` access outside the codes converts its texel by the
+                // On MoltenVK a `half` access outside the variant converts its texel by the
                 // format's class, whose rounding to `half` is Metal's there only through Metal's
                 // own texture unit; a bicubic sample's taps are fetched.
-                let converts = metal && half && !(variant && codes) && name != "bicubic half";
+                let converts = metal && half && !variant && name != "bicubic half";
                 assert_eq!(
                     plan.facts
                         .contains(&RuntimeFact::TexelFormat { slot: TEXTURE }),
@@ -652,9 +398,14 @@ fn the_device_decodes_every_access_but_a_twins() {
                     SPIRV_WORDS,
                 )
                 .unwrap_or_else(|e| panic!("{what}: {e}"));
+                assert!(
+                    !super::engine_fragment::holds_srgb_table(&a.module.words),
+                    "{what}"
+                );
+                // An alpha gather's lanes are alpha's, which no transfer decodes.
                 assert_eq!(
-                    super::engine_fragment::holds_srgb_table(&a.module.words),
-                    variant,
+                    takes_pow(&a.module.words),
+                    variant && name != "gather alpha half",
                     "{what}"
                 );
                 // Every sample and gather the device makes (not a read, a pixel fetch or a
@@ -679,6 +430,21 @@ fn the_device_decodes_every_access_but_a_twins() {
             }
         }
     }
+}
+
+/// Whether module `words` takes `GLSL.std.450`'s `Pow` (instruction 26): the transfer's decode.
+pub(super) fn takes_pow(words: &[u32]) -> bool {
+    const EXT_INST: u32 = 12;
+    const POW: u32 = 26;
+    let mut at = 5;
+    while let Some(&first) = words.get(at) {
+        let count = (first >> 16) as usize;
+        if first & 0xffff == EXT_INST && words.get(at + 4) == Some(&POW) {
+            return true;
+        }
+        at += count.max(1);
+    }
+    false
 }
 
 /// Whether `specialized` notes `PrecisionNote::SrgbTexelDecode` where texture slot 0 binds a
@@ -984,20 +750,20 @@ fn notes_bound(p: &ComputePipeline, pf: PixelFormat) -> bool {
 /// the slot views the image in that sRGB format (the device decodes it), and off Metal's own
 /// texture unit the pipeline notes `PrecisionNote::SrgbTexelDecode` under the bound format, which
 /// an `RGBA8Unorm` texture does not take. Where the device holds the twin, the variant's pipeline
-/// plans the same key, every binding of the slot views the twin, and only a runtime sampler's
-/// sample (the device's filter of the codes) notes `SrgbTexelDecode`, outright; each variant
-/// validates. A device that samples neither form refuses the format. Every committed profile, for
+/// plans the same key, every binding of the slot views the twin, and every access (the device's
+/// codes or its filter of them, decoded by the device's transfer) notes `SrgbTexelDecode`,
+/// outright; each variant validates. A device that samples neither form refuses the format. Every committed profile, for
 /// a read, a nearest sample and a runtime sampler's sample.
 #[test]
 fn a_slot_bound_in_srgb_joins_the_variant_only_where_the_device_holds_its_twin() {
     use crate::device::requirements::FormatUsage as U;
     let forms = [
-        ("read", Access::Read, false),
-        ("nearest", Access::Sample(sampler_words(0, 0, false)), false),
-        ("runtime", Access::Runtime, true),
+        ("read", Access::Read),
+        ("nearest", Access::Sample(sampler_words(0, 0, false))),
+        ("runtime", Access::Runtime),
     ];
     let (mut decoded, mut twinned) = (0, 0);
-    for (name, access, filtered) in forms {
+    for (name, access) in forms {
         let Some(bc) = assemble(name, &kernel(access, false)) else {
             return;
         };
@@ -1059,12 +825,11 @@ fn a_slot_bound_in_srgb_joins_the_variant_only_where_the_device_holds_its_twin()
                 let key = plan.variant.lowering_inputs(Stage::Kernel);
                 assert_eq!(key.srgb_textures, BTreeSet::from([TEXTURE]), "{what}");
                 let variant = pipeline(&dev, &bc, &key);
-                assert_eq!(
+                assert!(
                     variant
                         .stage
                         .precision_notes
                         .contains(&PrecisionNote::SrgbTexelDecode),
-                    filtered,
                     "{what}"
                 );
                 assert!(!notes_bound(&variant, pf), "{what}");

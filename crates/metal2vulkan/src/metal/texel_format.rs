@@ -124,9 +124,9 @@
 //! UNORM twin (`metal::format::srgb_raw_twin`, [`srgb_twin_on`]: `R8Unorm_sRGB` and
 //! `RG8Unorm_sRGB` on lavapipe, `RG8Unorm_sRGB` on ANV and NVIDIA among the committed profiles),
 //! whose views read the codes as `c / 255`. Having no sRGB decode there, the slot's
-//! `RuntimeFact::SrgbTexture` variant decodes the codes through Metal's table: a read, a nearest
-//! sample, a pixel-coordinate fetch, a gather and a bicubic tap exactly, any other sample the
-//! device's filter of the codes (`PrecisionNote::SrgbTexelDecode`).
+//! `RuntimeFact::SrgbTexture` variant decodes what the view reads (one texel's codes, or the
+//! device's filter of them) by the MSL transfer through the device's `Pow`
+//! (`PrecisionNote::SrgbTexelDecode`).
 //!
 //! **Depth formats**. A depth texture has no `half` result, and no linear filter is emulated on
 //! one, so its class is read by a read, plain gather or sample of one texel with a `float` result

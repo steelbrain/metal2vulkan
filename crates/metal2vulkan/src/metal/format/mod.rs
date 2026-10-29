@@ -1924,7 +1924,7 @@ fn candidates(pf: PixelFormat) -> Result<(vk::ImageAspectFlags, &'static [Candid
 /// same blocks): the same channels and bits, its texels the sRGB format's codes read as `c / 255`.
 /// A device that cannot sample the sRGB format holds a sampled texture of it in this format
 /// (`texel_format::srgb_twin_on`), and a pipeline reads the codes through its view and decodes
-/// them through Metal's table, having no sRGB view to decode them. `None` for any other format.
+/// them by the MSL transfer through the device's `Pow`, having no sRGB view to decode them. `None` for any other format.
 pub fn srgb_raw_twin(pf: PixelFormat) -> Option<PixelFormat> {
     use PixelFormat as P;
     Some(match pf {

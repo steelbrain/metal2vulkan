@@ -599,15 +599,10 @@ pub struct Sampling {
     /// sampler always, through a runtime sampler slot where its word states anisotropy.
     pub anisotropic: Option<anisotropic::Anisotropic>,
     /// The slot's binding views the codes of an 8-bit sRGB texture held as its UNORM twin
-    /// (`LoweringInputs::srgb_textures`), and the sample reads one texel's: its codes decode
-    /// exactly through Metal's table (`texture::srgb_raw_texel`), or a bicubic sample's taps do
-    /// (`texture::srgb_raw_tap`).
+    /// (`LoweringInputs::srgb_textures`): what the device reads there (one texel's codes, or its
+    /// filter of them) is decoded by the device's transfer (`texture::srgb_texel`), or a bicubic
+    /// sample's taps are (`texture::srgb_raw_tap`).
     pub raw: bool,
-    /// The slot's binding views the codes of an 8-bit sRGB texture held as its UNORM twin
-    /// (`LoweringInputs::srgb_textures`), and the sample filters them: the device's sample there,
-    /// filtered codes, decodes through Metal's table (`texture::srgb_filtered_texel`), exactly
-    /// where it read one texel.
-    pub srgb_codes: bool,
     /// A fragment function's depth comparison whose reference the pipeline's private
     /// `fragmentDepthCompareClampMask` clamps (`LoweringInputs::depth_compare_clamp_mask`): the
     /// reference is clamped to `[0, 1]`, a NaN taken as 0, before every comparison
@@ -889,8 +884,7 @@ impl Sampling {
         // raw decode; the bicubic routines round their `half` result themselves.
         let half = match (&self.op, self.texel) {
             (SampleOp::Bicubic(_), _) | (_, None) => 0,
-            _ if self.raw => crate::lower::texture::SRGB_RAW_WORDS,
-            _ if self.srgb_codes => crate::lower::texture::SRGB_FILTERED_WORDS,
+            _ if self.raw => crate::lower::texture::SRGB_DECODE_WORDS,
             // A heap color texture's call reads the class its handle carries first.
             (_, Some(f)) if f.conv == crate::lower::texture::TexelConv::F16 => {
                 let class = match self.source {
