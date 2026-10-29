@@ -1243,6 +1243,7 @@ enum	metal2vulkan-runtime::GpuFamily	#[derive(Clone, Copy, Debug, PartialEq, Eq,
 enum	metal2vulkan-runtime::HazardTrackingMode	#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum HazardTrackingMode
 enum	metal2vulkan-runtime::HeapProblem	#[derive(Clone, Copy, Debug, PartialEq, Eq)] #[non_exhaustive] pub enum HeapProblem
 enum	metal2vulkan-runtime::HeapType	#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum HeapType
+enum	metal2vulkan-runtime::HostBacking	#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum HostBacking
 enum	metal2vulkan-runtime::IdPlacement	#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum IdPlacement
 enum	metal2vulkan-runtime::IndirectCommand	#[derive(Clone, Debug)] #[non_exhaustive] pub enum IndirectCommand
 enum	metal2vulkan-runtime::IndirectCommandBufferProblem	#[derive(Clone, Copy, Debug, PartialEq, Eq)] #[non_exhaustive] pub enum IndirectCommandBufferProblem
@@ -7479,6 +7480,7 @@ method	metal2vulkan-runtime::Buffer::gpu_address	pub fn gpu_address(&self) -> Gp
 method	metal2vulkan-runtime::Buffer::hazard_tracking_mode	pub fn hazard_tracking_mode(&self) -> HazardTrackingMode
 method	metal2vulkan-runtime::Buffer::heap	pub fn heap(&self) -> Option<&Heap>
 method	metal2vulkan-runtime::Buffer::heap_offset	pub fn heap_offset(&self) -> u64
+method	metal2vulkan-runtime::Buffer::host_backing	pub fn host_backing(&self) -> Option<HostBacking>
 method	metal2vulkan-runtime::Buffer::is_aliasable	pub fn is_aliasable(&self) -> bool
 method	metal2vulkan-runtime::Buffer::label	pub fn label(&self) -> Option<String>
 method	metal2vulkan-runtime::Buffer::length	pub fn length(&self) -> u64
@@ -11454,6 +11456,11 @@ variant	metal2vulkan-runtime::HeapProblem::StorageMode	StorageMode { heap: Stora
 variant	metal2vulkan-runtime::HeapType::Automatic	Automatic
 variant	metal2vulkan-runtime::HeapType::Placement	Placement
 variant	metal2vulkan-runtime::HeapType::Sparse	Sparse
+variant	metal2vulkan-runtime::HostBacking::Copied	Copied
+variant	metal2vulkan-runtime::HostBacking::Detached	Detached
+variant	metal2vulkan-runtime::HostBacking::ImportedAsDmaBuf	ImportedAsDmaBuf
+variant	metal2vulkan-runtime::HostBacking::ImportedByPointer	ImportedByPointer
+variant	metal2vulkan-runtime::HostBacking::InHostRam	InHostRam
 variant	metal2vulkan-runtime::IdPlacement::Any	Any
 variant	metal2vulkan-runtime::IdPlacement::At	At(ResourceId)
 variant	metal2vulkan-runtime::IdPlacement::Outside	Outside

@@ -969,6 +969,12 @@ impl Placement {
         }
     }
 
+    /// Whether the placement lies in the device's import of a chunk of a guest RAM
+    /// (`host_ram.rs`), with no import of its own.
+    pub(super) fn over_ram_chunk(&self) -> bool {
+        self.ram_chunk.is_some()
+    }
+
     /// Whether the placement lies in pages the runtime mapped and imported
     /// ([`import_own_pages`]), to which no image is bound (`fresh_pages.rs`).
     pub(super) fn over_own_pages(&self) -> bool {

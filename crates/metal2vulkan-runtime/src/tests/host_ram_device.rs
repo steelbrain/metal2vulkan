@@ -32,8 +32,9 @@
 
 use super::dispatch_pending::state;
 use crate::{
-    Buffer, CommandBufferStatus, Device, DeviceKind, DeviceOptions, Error, EventRef, HostMemory,
-    HostRam, ImportGate, ImportRequest, KeepAlive, Problem, ResourceOptions, RunResolver, Size,
+    Buffer, CommandBufferStatus, Device, DeviceKind, DeviceOptions, Error, EventRef, HostBacking,
+    HostMemory, HostRam, ImportGate, ImportRequest, KeepAlive, Problem, ResourceOptions,
+    RunResolver, Size,
 };
 use std::ops::Range;
 use std::ptr::NonNull;
@@ -264,7 +265,7 @@ fn one_run_inside_a_chunk_is_bound_there_with_no_import_of_its_own() {
         NonNull::new(at as *mut u8),
         "contents are the pointer"
     );
-    assert!(!first.copied());
+    assert_eq!(first.host_backing(), Some(HostBacking::InHostRam));
     // The GPU reads the CPU's bytes, and a fill reaches them.
     assert_eq!(gpu_bytes(&device, &first, length), bytes(at..at + length));
     blit(&device, |encoder| {
@@ -744,7 +745,7 @@ fn a_rebind_asks_the_resolver_once_and_binds_one_run_in_its_chunk() {
         after.copied_rebind_pages_made - before.copied_rebind_pages_made,
         0
     );
-    assert!(!made.copied());
+    assert_eq!(made.host_backing(), Some(HostBacking::InHostRam));
     assert_eq!(made.contents(), NonNull::new(second as *mut u8));
     assert_eq!(
         gpu_bytes(&device, &made, length),
@@ -785,6 +786,7 @@ fn a_rebind_asks_the_resolver_once_and_binds_one_run_in_its_chunk() {
         1
     );
     assert!(gates.lock().unwrap().is_empty(), "the gate was not asked");
+    assert_eq!(placed.host_backing(), Some(HostBacking::InHostRam));
     assert_eq!(
         gpu_bytes(&device, &placed, 4 * page),
         bytes(heap_to + page..heap_to + 5 * page)
@@ -815,6 +817,7 @@ fn a_rebind_onto_several_runs_takes_the_gate_and_the_copy_where_it_refuses() {
         gate(&gates, true),
     )
     .unwrap();
+    assert_eq!(made.host_backing(), Some(HostBacking::InHostRam));
     runs.lock().unwrap().clear();
     let before = device.work_counts();
     rebind(&made, second, resolver(&runs, halves), gate(&gates, false)).unwrap();
@@ -829,7 +832,7 @@ fn a_rebind_onto_several_runs_takes_the_gate_and_the_copy_where_it_refuses() {
         after.copied_rebind_pages_made - before.copied_rebind_pages_made,
         1
     );
-    assert!(made.copied());
+    assert_eq!(made.host_backing(), Some(HostBacking::Copied));
     assert_eq!(
         gpu_bytes(&device, &made, length),
         bytes(second..second + length)

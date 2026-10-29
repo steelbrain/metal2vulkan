@@ -760,6 +760,12 @@ impl HostPages {
         self.import.copied()
     }
 
+    /// Whether they are bound in the device's import of a chunk of a guest RAM (`host_ram.rs`),
+    /// with no import of their own.
+    pub(super) fn in_ram_chunk(&self) -> bool {
+        self.import.shape.in_ram_chunk
+    }
+
     /// Where they lie as dma-bufs (`dma_buf.rs`): the imports, with the caller's source; the host
     /// address where their bytes start (from which an image over them reckons its texels'); and
     /// the imports' memory type. `None` for pages imported by their pointer. A read that keeps
@@ -913,6 +919,9 @@ pub(super) struct Shape {
     pub(super) type_index: u32,
     /// The pages were imported as dma-bufs (`dma_buf.rs`), not by their pointer.
     pub(super) over_dma_buf: bool,
+    /// The bytes are bound in the device's import of a chunk of a guest RAM (`host_ram.rs`), with
+    /// no import of their own.
+    pub(super) in_ram_chunk: bool,
     /// The pages were imported through a read-only view of them, which drops the GPU's writes
     /// (`read_only_view.rs`).
     pub(super) drops_writes: bool,
@@ -929,6 +938,7 @@ impl Shape {
             mapped: placement.mapped,
             type_index: placement.type_index(),
             over_dma_buf: placement.over_dma_buf(),
+            in_ram_chunk: placement.over_ram_chunk(),
             drops_writes: placement.over_read_only_view(),
         }
     }
@@ -942,6 +952,7 @@ impl Shape {
             self.reach,
             self.type_index,
             self.over_dma_buf,
+            self.in_ram_chunk,
             self.drops_writes,
         ) == (
             other.offset,
@@ -949,6 +960,7 @@ impl Shape {
             other.reach,
             other.type_index,
             other.over_dma_buf,
+            other.in_ram_chunk,
             other.drops_writes,
         ) && at(self) == at(other)
     }
@@ -3366,12 +3378,10 @@ impl Buffer {
     }
 
     /// Whether the buffer's bytes lie in a copy of the caller's pages (a copied host buffer,
-    /// `copied.rs`), not an import of them; false for a buffer over no host pages, or detached.
+    /// `copied.rs`), not an import of them ([`Buffer::host_backing`]); false for a buffer over no
+    /// host pages, or detached.
     pub(crate) fn copied(&self) -> bool {
-        match self.pages_cell().map(|cell| cell.lying()) {
-            Some(Lying::In(pages)) => pages.copied(),
-            _ => false,
-        }
+        self.host_backing() == Some(crate::HostBacking::Copied)
     }
 
     /// Whether the host pages the buffer's bytes lie in (a no-copy buffer's, or for a heap's

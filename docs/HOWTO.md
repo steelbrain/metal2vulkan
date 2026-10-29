@@ -363,6 +363,13 @@ happens where:
   `WorkCounts::host_imports_unpinnable`), and no dma-buf of the caller's source served them
   (`copied_host_buffers_degraded`).
 
+`Buffer::host_backing` answers, per buffer, whether it got the copy: `HostBacking::Copied`, else
+how its pages are imported (`ImportedByPointer`, `ImportedAsDmaBuf`, `InHostRam`), or `Detached`;
+`None` for a buffer over no host memory of the caller's. A buffer placed in a no-copy
+heap answers its heap's. The answer changes only at the buffer's (or heap's) rebind, which may move
+it between an import and a copy, and at a detach. Unlike a `WorkCounts` delta, it does not race
+with buffers another thread makes on the same device.
+
 The copy is host-visible memory of the device's own; the buffer's `contents` is still the pointer.
 Each commit writes into the copy every byte the CPU changed in the pages since the copy and the
 pages last agreed, and each batch's completion writes back every byte the GPU changed, before its

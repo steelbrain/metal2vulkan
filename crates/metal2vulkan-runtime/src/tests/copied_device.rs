@@ -30,14 +30,19 @@
 //!   texture bound to its bytes read and write the new pages. A command buffer committed before
 //!   such a rebind and held back reaches the copy, encoded again; a rebind while one not yet
 //!   committed used the buffer is refused, the gate unasked.
+//! - **The answer.** `Buffer::host_backing` says which: a buffer whose pages the device imported
+//!   answers it imported them by their pointer, a copy answers `Copied` (each test's copy above
+//!   too), a buffer placed in a no-copy heap its heap's, a detached one `Detached`, and a buffer
+//!   over no host memory of the caller's `None`; a rebind answers its new pages' form, from an
+//!   import to a copy and back.
 //!
 //! Device tests: compiled only under the GPU safety cfgs (`m2v_gpu`, `m2v_cpu_icd`), on the kind
 //! of device the cfg selects. A device that imports no host memory says so and passes.
 
 use crate::{
     AddressPlacement, Buffer, BufferContents, BufferDescriptor, CommandBufferStatus, Degradation,
-    Device, DeviceKind, DeviceOptions, GpuAddress, HostMemory, ImportGate, ImportRequest,
-    MessageSink, ResourceOptions, WorkCounts,
+    Device, DeviceKind, DeviceOptions, GpuAddress, HostBacking, HostMemory, ImportGate,
+    ImportRequest, MessageSink, ResourceOptions, WorkCounts,
 };
 use std::alloc::Layout;
 use std::ptr::NonNull;
@@ -231,7 +236,11 @@ fn gpu_bytes(device: &Device, buffer: &Buffer) -> Vec<u8> {
 /// commit reaches the GPU, those bytes alone copied in; a fill reaches its pages alone, those
 /// bytes alone merged back.
 fn lies_in_a_copy(device: &Device, buffer: &Buffer, host: &Host) {
-    assert!(buffer.copied(), "the buffer is a copy");
+    assert_eq!(
+        buffer.host_backing(),
+        Some(HostBacking::Copied),
+        "the buffer is a copy"
+    );
     assert_eq!(
         buffer.contents(),
         Some(host.pointer),
@@ -1859,4 +1868,117 @@ fn a_write_through_an_address_no_use_names_still_merges_back() {
         "the stores through the address are in the pages"
     );
     drop((buffer, out, state, queue));
+}
+
+/// `Buffer::host_backing` answers what the GPU uses for each kind of buffer: the caller's pages,
+/// imported by their pointer; a copy, where the gate refuses their import; a buffer placed in a
+/// no-copy heap its heap's; `Detached` while detached and the new pages' once rebound; and `None`
+/// for a buffer of the device's own and one placed in a heap of the device's own.
+#[test]
+fn host_backing_answers_what_the_gpu_uses_for_a_buffer_s_bytes() {
+    let (host, refused, heap_host, again) =
+        (Host::new(40), Host::new(41), Host::new(42), Host::new(43));
+    let Some((device, _heard)) = device() else {
+        return;
+    };
+    // The device's own memory: no host memory of the caller's.
+    let own = device
+        .new_buffer(LENGTH as u64, ResourceOptions::shared())
+        .unwrap();
+    assert_eq!(own.host_backing(), None, "a buffer of the device's own");
+    let descriptor = crate::HeapDescriptor::new(
+        crate::HeapType::Placement,
+        LENGTH as u64,
+        ResourceOptions::default(),
+    );
+    let own_heap = device.new_heap(&descriptor).unwrap();
+    let placed_in_own = own_heap
+        .new_buffer_at_offset(4096, ResourceOptions::default(), 0)
+        .unwrap();
+    assert_eq!(
+        placed_in_own.host_backing(),
+        None,
+        "a buffer of a heap of the device's own"
+    );
+    // The caller's pages, imported by their pointer.
+    let before = device.work_counts();
+    let imported = host.buffer(&device, None);
+    let after = device.work_counts();
+    assert_eq!(moved(&before, &after), [0, 0, 0, 0, 1], "a pointer import");
+    assert_eq!(
+        imported.host_backing(),
+        Some(HostBacking::ImportedByPointer)
+    );
+    assert_eq!(gpu_bytes(&device, &imported), host.pattern());
+    // A copy, where the gate refuses the import.
+    let asked: Arc<Mutex<Vec<ImportRequest>>> = Arc::default();
+    let before = device.work_counts();
+    let copied = refused.buffer(&device, Some(gate(&asked, false)));
+    let after = device.work_counts();
+    assert_eq!(moved(&before, &after), [1, 1, 1, 0, 0], "a refused import");
+    assert_eq!(copied.host_backing(), Some(HostBacking::Copied));
+    // A buffer placed in a no-copy heap answers its heap's: imported, then a copy of the pages a
+    // refusing gate gave the heap at its rebind.
+    let no_copy_heap = heap(&device, &heap_host, None);
+    let placed = no_copy_heap
+        .new_buffer_at_offset(4096, ResourceOptions::default(), 16 * 1024)
+        .unwrap();
+    assert_eq!(placed.host_backing(), Some(HostBacking::ImportedByPointer));
+    rebind_heap(&no_copy_heap, &again, Some(gate(&asked, false))).unwrap();
+    assert_eq!(placed.host_backing(), Some(HostBacking::Copied));
+    // Detached, then rebound: the new pages' form.
+    assert!(imported.detach_backing().unwrap(), "detached at once");
+    assert_eq!(imported.host_backing(), Some(HostBacking::Detached));
+    rebind(&imported, &host, None).unwrap();
+    assert_eq!(
+        imported.host_backing(),
+        Some(HostBacking::ImportedByPointer)
+    );
+    assert_eq!(gpu_bytes(&device, &imported), host.pattern());
+    eprintln!(
+        "HOST-BACKING: own {:?}, imported {:?}, refused {:?}, heap's rebound {:?}",
+        own.host_backing(),
+        imported.host_backing(),
+        copied.host_backing(),
+        placed.host_backing()
+    );
+    drop((
+        placed,
+        no_copy_heap,
+        copied,
+        imported,
+        placed_in_own,
+        own_heap,
+        own,
+    ));
+}
+
+/// A rebind answers its new pages' form: from an import to a copy where the gate refuses the new
+/// pages' import, back to an import with no gate, and to a copy again where the admitted import
+/// fails; the GPU reads each one's bytes.
+#[test]
+fn host_backing_follows_a_rebind_between_an_import_and_a_copy() {
+    let (first, second, third, fourth) =
+        (Host::new(44), Host::new(45), Host::new(46), Host::new(47));
+    let Some((device, _heard)) = device() else {
+        return;
+    };
+    let buffer = first.buffer(&device, None);
+    assert_eq!(buffer.host_backing(), Some(HostBacking::ImportedByPointer));
+    let asked: Arc<Mutex<Vec<ImportRequest>>> = Arc::default();
+    rebind(&buffer, &second, Some(gate(&asked, false))).unwrap();
+    assert_eq!(buffer.host_backing(), Some(HostBacking::Copied), "refused");
+    assert_eq!(gpu_bytes(&device, &buffer), second.pattern());
+    let before = device.work_counts();
+    rebind(&buffer, &third, None).unwrap();
+    let after = device.work_counts();
+    assert_eq!(moved(&before, &after), [0, 0, 0, 0, 1], "imported again");
+    assert_eq!(buffer.host_backing(), Some(HostBacking::ImportedByPointer));
+    assert_eq!(gpu_bytes(&device, &buffer), third.pattern());
+    device.fail_next_host_imports(1);
+    rebind(&buffer, &fourth, Some(gate(&asked, true))).unwrap();
+    assert_eq!(buffer.host_backing(), Some(HostBacking::Copied), "failed");
+    assert_eq!(gpu_bytes(&device, &buffer), fourth.pattern());
+    eprintln!("HOST-BACKING-REBIND: imported, copied, imported, copied, each read back");
+    drop(buffer);
 }

@@ -2525,7 +2525,9 @@ bound.
   rebind to bytes at another offset in their page under a texture planned at the old one is a copy
   laid out there (the detail says which). Counted: `WorkCounts::copied_host_buffers_made`, of them
   `copied_host_buffers_refused`, `copied_host_buffers_degraded` and `copied_rebind_pages_moved`
-  (and `copied_heaps_made`, `copied_rebind_pages_made`, `copied_rebind_images_made`). Cost: the GPU
+  (and `copied_heaps_made`, `copied_rebind_pages_made`, `copied_rebind_images_made`); each such
+  buffer, and each buffer placed in such a heap, answers `Buffer::host_backing` with
+  `HostBacking::Copied` until its next rebind or detach. Cost: the GPU
   uses a copy of
   the bytes, into which each commit writes every byte the CPU changed in the pages since, and from
   which each batch's completion writes back every byte the GPU changed, where Metal's GPU reads and

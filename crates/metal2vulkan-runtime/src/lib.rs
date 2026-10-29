@@ -116,6 +116,7 @@ mod gpu_time;
 mod heap;
 mod heap_sets;
 mod host_aliases;
+mod host_backing;
 mod host_bytes;
 mod host_memory;
 mod host_ram;
@@ -292,6 +293,7 @@ pub use function_table::{
 };
 pub use gpu_time::host_time;
 pub use heap::{Heap, HeapDescriptor, HeapProblem, HeapType, SizeAndAlign};
+pub use host_backing::HostBacking;
 pub use host_bytes::HostBytes;
 pub use host_memory::{Deallocator, HostMemory, ImportGate, ImportRequest, KeepAlive, RunResolver};
 pub use host_ram::{HostRam, HostRamUse};

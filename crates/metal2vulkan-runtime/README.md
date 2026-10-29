@@ -301,6 +301,10 @@ Calls Metal does not have, for a consumer that emulates a Metal device:
 - `HostMemory::with_import_gate` and its `ImportGate` (with `ImportRequest`): the consumer's
   gate over a no-copy buffer's, heap's or rebind's import of its pages; a refusal makes a copy of
   them.
+- `Buffer::host_backing` (with `HostBacking`): what the GPU uses for a no-copy buffer's bytes now,
+  or a no-copy heap's buffer's: the caller's pages, imported by their pointer, as dma-bufs or in a
+  guest RAM's chunk, or a copy of them (`copied-host-pages`), which Metal never makes; a rebind
+  may change it ([HOWTO](../../docs/HOWTO.md#copied-host-buffers)).
 - `HostRam`, `Device::use_host_ram` (with `HostRamUse`) and `HostMemory::with_runs` (with
   `RunResolver`): a guest's RAM imported whole, in 64 MiB chunks, for a device that refuses views
   of guest pages made through dma-bufs; a no-copy object whose pages the consumer resolves to one

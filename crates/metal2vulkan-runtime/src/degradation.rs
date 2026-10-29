@@ -1858,6 +1858,9 @@ degradations! {
         /// fails refuses the call (`OutOfMemory`).
         /// Announced once per device, by the call that makes it, or at each such call where
         /// `DeviceOptions::announce_each` asks. Counted: `WorkCounts::copied_host_buffers_made`.
+        /// Each such buffer, and each buffer placed in such a heap, answers
+        /// [`Buffer::host_backing`](crate::Buffer::host_backing) with `HostBacking::Copied` until
+        /// its next rebind or detach.
         CopiedHostPages = "copied-host-pages", Precision,
             "the GPU uses a copy of the bytes, into which each commit writes every byte the CPU \
              changed in the pages since, and from which each batch's completion writes back \
