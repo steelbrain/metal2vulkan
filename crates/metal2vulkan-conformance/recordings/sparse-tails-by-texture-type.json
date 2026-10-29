@@ -1037,6 +1037,8 @@
         "addressable_buffers_made": 2,
         "device_memory_allocated": 335544320,
         "empty_memory_blocks_live": 2,
+        "memory_frees.blocks": 1,
+        "memory_frees.pooled_emptied": 1,
         "new_buffer_bytes_cleared": 6272,
         "object_churn.buffers_evicted": 6,
         "object_churn.buffers_parked": 19,
@@ -1056,6 +1058,8 @@
       "composed": {
         "addressable_buffers_made": 2,
         "device_memory_allocated": 335544320,
+        "memory_frees.blocks": 1,
+        "memory_frees.pooled_emptied": 1,
         "pooled_memory_blocks_made": 5
       }
     }

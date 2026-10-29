@@ -2639,7 +2639,6 @@
         "addressable_buffers_made": 2,
         "device_memory_allocated": 201326592,
         "new_buffer_bytes_cleared": 5246976,
-        "object_churn.buffers_evicted": 4,
         "object_churn.buffers_parked": 1,
         "object_churn.buffers_recycled": 1,
         "object_churn.images_own_memory": 1,
@@ -2647,11 +2646,9 @@
         "object_churn.images_recycled": 1,
         "object_churn.textures_image": 1,
         "object_churn.vk_buffer_bindings": 5,
-        "object_churn.vk_buffers_destroyed": 9,
+        "object_churn.vk_buffers_destroyed": 5,
         "object_churn.vk_buffers_made": 5,
-        "pooled_memory_blocks_made": 3,
-        "scheduler_sleep_slices": 1,
-        "scheduler_sleeps": 1
+        "pooled_memory_blocks_made": 3
       },
       "composed": {
         "device_memory_allocated": 201326592

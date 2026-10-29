@@ -840,9 +840,7 @@
         "object_churn.vk_buffer_bindings": 2,
         "object_churn.vk_buffers_destroyed": 2,
         "object_churn.vk_buffers_made": 2,
-        "pooled_memory_blocks_made": 3,
-        "scheduler_sleep_slices": 1,
-        "scheduler_sleeps": 1
+        "pooled_memory_blocks_made": 3
       },
       "composed": {
         "device_memory_allocated": 201326592

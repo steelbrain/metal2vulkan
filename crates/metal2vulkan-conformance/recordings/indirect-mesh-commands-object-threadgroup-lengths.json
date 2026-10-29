@@ -514,11 +514,8 @@
         "command_buffers_begun_encoders": 2,
         "command_buffers_begun_secondaries": 3,
         "command_buffers_begun_segments": 1,
-        "command_buffers_deferred": 7,
-        "command_buffers_replayed": 7,
-        "command_buffers_replayed_inline": 7,
         "command_buffers_submitted": 6,
-        "commands_recorded.begin_command_buffer": 7,
+        "commands_recorded.begin_command_buffer": 9,
         "commands_recorded.cmd_begin_render_pass": 1,
         "commands_recorded.cmd_bind_descriptor_sets": 8,
         "commands_recorded.cmd_bind_pipeline": 8,
@@ -528,7 +525,7 @@
         "commands_recorded.cmd_draw_indirect": 2,
         "commands_recorded.cmd_end_render_pass": 1,
         "commands_recorded.cmd_execute_commands": 1,
-        "commands_recorded.cmd_pipeline_barrier": 10,
+        "commands_recorded.cmd_pipeline_barrier": 12,
         "commands_recorded.cmd_push_constants": 5,
         "commands_recorded.cmd_set_blend_constants": 1,
         "commands_recorded.cmd_set_cull_mode": 1,
@@ -544,7 +541,7 @@
         "commands_recorded.cmd_set_stencil_test_enable": 1,
         "commands_recorded.cmd_set_stencil_write_mask": 1,
         "commands_recorded.cmd_set_viewport": 1,
-        "commands_recorded.end_command_buffer": 7,
+        "commands_recorded.end_command_buffer": 9,
         "commits_handed_off": 1,
         "completed_waits": 4,
         "completed_where_seen": 1,
@@ -571,7 +568,7 @@
         "live_tables_uploaded": 1,
         "memory_frees.blocks": 1,
         "memory_frees.dedicated": 1,
-        "new_buffer_bytes_cleared": 5136,
+        "new_buffer_bytes_cleared": 5008,
         "object_churn.buffers_parked": 5,
         "object_churn.buffers_recycled": 5,
         "object_churn.images_own_memory": 1,
@@ -605,7 +602,7 @@
         "set_zero_sets_reused": 1,
         "shader_modules_made": 4,
         "slot_returns": 1,
-        "spare_command_pools_taken": 2,
+        "spare_command_pools_taken": 1,
         "stage_entries_shared": 1,
         "stage_entries_specialized": 2,
         "stage_tables_read": 8,
@@ -615,8 +612,12 @@
         "wakes_completion_waiters": 1,
         "wakes_spared": 7
       },
+      "moving": {
+        "gate_waits_slept": 0
+      },
       "composed": {
-        "device_memory_allocated": 1342177280
+        "device_memory_allocated": 1342177280,
+        "queues_sharing_a_vk_queue": 0
       },
       "ceilings": {
         "addressable_buffers_made": 2,

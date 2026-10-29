@@ -683,6 +683,7 @@
         "descriptor_keys_built": 1,
         "device_memory_allocated": 201326976,
         "driver_diagnostics_withheld": 1,
+        "functions_translated": 2,
         "linked_use_questions_asked": 2,
         "pipeline_layouts_made": 1,
         "pooled_memory_blocks_made": 3,
@@ -696,7 +697,8 @@
       },
       "composed": {
         "addressable_buffers_made": 2,
-        "device_memory_allocated": 201326976,
+        "device_memory_allocated": 201326848,
+        "functions_translated": 2,
         "linked_use_questions_asked": 2,
         "pooled_memory_blocks_made": 3,
         "render_passes_made": 1,

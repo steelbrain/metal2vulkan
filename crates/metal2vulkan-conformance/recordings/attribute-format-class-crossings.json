@@ -455,11 +455,19 @@
         "pipeline_layouts_made": 1,
         "pipeline_layouts_shared": 16,
         "pooled_memory_blocks_made": 3,
+        "shader_cache_writes_on_thread": 8,
         "shader_modules_made": 16,
-        "stage_entries_shared": 32
+        "stage_entries_shared": 32,
+        "stage_entries_specialized": 1
+      },
+      "moving": {
+        "shader_cache_writes_on_thread": 0
       },
       "composed": {
-        "device_memory_allocated": 201326592
+        "device_memory_allocated": 201326592,
+        "shader_cache_writes_on_thread": 0,
+        "stage_entries_shared": 31,
+        "stage_entries_specialized": 1
       },
       "ceilings": {
         "addressable_buffers_made": 2,

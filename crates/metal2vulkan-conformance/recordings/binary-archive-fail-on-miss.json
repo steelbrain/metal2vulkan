@@ -520,12 +520,12 @@
       "bounds": {
         "addressable_buffers_made": 2,
         "creation_pipelines_made": 4,
-        "creation_render_pipelines_made": 1,
+        "creation_render_pipelines_made": 2,
         "descriptor_keys_built": 8,
         "device_memory_allocated": 201326976,
         "driver_diagnostics_withheld": 2,
         "functions_shared": 11,
-        "functions_translated": 1,
+        "functions_translated": 4,
         "linked_use_questions_asked": 4,
         "pipeline_layouts_made": 3,
         "pipeline_layouts_shared": 1,
@@ -537,18 +537,22 @@
         "shader_modules_made": 4,
         "shader_modules_shared": 2,
         "stage_entries_shared": 10,
-        "stage_entries_specialized": 2,
+        "stage_entries_specialized": 4,
         "variant_pipelines_made": 4,
         "variants_taken_back": 13
       },
       "composed": {
         "addressable_buffers_made": 0,
-        "device_memory_allocated": 201326976,
+        "creation_pipelines_made": 2,
+        "creation_render_pipelines_made": 2,
+        "device_memory_allocated": 201326848,
         "driver_diagnostics_withheld": 2,
+        "functions_translated": 4,
         "linked_use_questions_asked": 4,
         "render_passes_made": 2,
         "stage_entries_shared": 10,
-        "stage_entries_specialized": 2
+        "stage_entries_specialized": 4,
+        "variant_pipelines_made": 2
       },
       "ceilings": {
         "addressable_buffers_made": 2,

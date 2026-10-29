@@ -462,6 +462,7 @@
         "creation_pipelines_made": 1,
         "device_memory_allocated": 268435584,
         "functions_shared": 1,
+        "functions_translated": 1,
         "host_texel_copies": 1,
         "images_started_on_the_host": 1,
         "new_buffer_bytes_cleared": 640,
@@ -475,12 +476,17 @@
         "pipeline_layouts_made": 1,
         "pooled_memory_blocks_made": 4,
         "shader_modules_made": 1,
+        "stage_entries_specialized": 1,
         "variant_pipelines_made": 1,
         "variants_taken_back": 1
       },
       "composed": {
         "addressable_buffers_made": 1,
-        "device_memory_allocated": 268435584
+        "creation_pipelines_made": 0,
+        "device_memory_allocated": 268435584,
+        "functions_translated": 1,
+        "stage_entries_specialized": 1,
+        "variant_pipelines_made": 0
       },
       "ceilings": {
         "addressable_buffers_made": 2,

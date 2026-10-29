@@ -2307,11 +2307,13 @@
         "object_churn.vk_memory_allocations": 6,
         "pipeline_layouts_made": 1,
         "pooled_memory_blocks_made": 3,
+        "scheduler_sleep_slices": 1,
+        "scheduler_sleeps": 1,
         "shader_modules_made": 1,
         "stage_entries_specialized": 1
       },
       "composed": {
-        "device_memory_allocated": 201328512
+        "device_memory_allocated": 201328256
       },
       "ceilings": {
         "pooled_memory_blocks_made": 3

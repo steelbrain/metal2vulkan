@@ -274,9 +274,11 @@
       "bounds": {
         "addressable_buffers_made": 2,
         "creation_pipelines_made": 1,
+        "creation_render_pipelines_made": 1,
         "descriptor_keys_built": 1,
         "device_memory_allocated": 201326592,
         "driver_diagnostics_withheld": 1,
+        "functions_translated": 1,
         "linked_use_questions_asked": 3,
         "pipeline_layouts_made": 1,
         "pooled_memory_blocks_made": 3,
@@ -290,8 +292,10 @@
         "variants_taken_back": 1
       },
       "composed": {
+        "creation_render_pipelines_made": 1,
         "device_memory_allocated": 201326592,
         "driver_diagnostics_withheld": 1,
+        "functions_translated": 1,
         "linked_use_questions_asked": 3,
         "render_passes_made": 1,
         "stage_entries_shared": 1,

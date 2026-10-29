@@ -178,6 +178,11 @@
         "command_buffers_begun": 1,
         "command_buffers_begun_batch_work": 1,
         "command_buffers_submitted": 1,
+        "commands_recorded.begin_command_buffer": 1,
+        "commands_recorded.cmd_copy_buffer": 3,
+        "commands_recorded.cmd_copy_buffer_to_image": 1,
+        "commands_recorded.cmd_pipeline_barrier": 4,
+        "commands_recorded.end_command_buffer": 1,
         "commits_handed_off": 1,
         "completed_where_seen": 1,
         "completion_arms": 1,
@@ -196,7 +201,6 @@
         "object_churn.vk_images_destroyed": 1,
         "object_churn.vk_images_made": 1,
         "pooled_memory_blocks_made": 3,
-        "primaries_begun_ahead": 1,
         "queue_submissions": 1,
         "queues_sharing_a_vk_queue": 1,
         "scheduled_where_submitted": 1,
@@ -216,7 +220,12 @@
         "gate_waits_slept": 0
       },
       "composed": {
-        "device_memory_allocated": 201326592
+        "commands_recorded.cmd_copy_buffer": 0,
+        "commands_recorded.cmd_copy_buffer_to_image": 0,
+        "commands_recorded.cmd_pipeline_barrier": 0,
+        "commands_recorded.end_command_buffer": 0,
+        "device_memory_allocated": 201326592,
+        "queues_sharing_a_vk_queue": 0
       },
       "ceilings": {
         "addressable_buffers_made": 2,

@@ -3565,10 +3565,13 @@
         "scheduler_sleep_slices": 1,
         "scheduler_sleeps": 1,
         "shader_modules_made": 1,
-        "stage_entries_shared": 1
+        "stage_entries_shared": 1,
+        "stage_entries_specialized": 1
       },
       "composed": {
-        "device_memory_allocated": 201326592
+        "device_memory_allocated": 201326592,
+        "stage_entries_shared": 0,
+        "stage_entries_specialized": 1
       },
       "ceilings": {
         "addressable_buffers_made": 2,

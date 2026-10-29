@@ -250,13 +250,11 @@
         "device_memory_allocated": 201326592,
         "driver_diagnostics_withheld": 1,
         "functions_shared": 1,
-        "functions_translated": 1,
+        "functions_translated": 2,
         "linked_use_questions_asked": 3,
         "pipeline_layouts_made": 1,
         "pooled_memory_blocks_made": 3,
         "render_passes_made": 1,
-        "scheduler_sleep_slices": 1,
-        "scheduler_sleeps": 1,
         "shader_modules_made": 2,
         "shader_modules_shared": 1,
         "stage_entries_shared": 5,
@@ -266,6 +264,7 @@
       "composed": {
         "addressable_buffers_made": 0,
         "device_memory_allocated": 201326592,
+        "functions_translated": 2,
         "stage_entries_specialized": 2
       },
       "ceilings": {

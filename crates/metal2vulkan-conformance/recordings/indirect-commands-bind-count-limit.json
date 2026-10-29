@@ -317,18 +317,24 @@
         "creation_pipelines_made": 1,
         "device_memory_allocated": 201326592,
         "functions_shared": 1,
+        "functions_translated": 1,
         "new_buffer_bytes_cleared": 7088,
         "object_churn.buffers_parked": 3,
         "object_churn.buffers_recycled": 3,
         "pipeline_layouts_made": 1,
         "pooled_memory_blocks_made": 3,
         "shader_modules_made": 1,
+        "stage_entries_specialized": 1,
         "variant_pipelines_made": 1,
         "variants_taken_back": 1
       },
       "composed": {
         "addressable_buffers_made": 1,
-        "device_memory_allocated": 201326592
+        "creation_pipelines_made": 0,
+        "device_memory_allocated": 201326592,
+        "functions_translated": 1,
+        "stage_entries_specialized": 1,
+        "variant_pipelines_made": 0
       },
       "ceilings": {
         "addressable_buffers_made": 2,

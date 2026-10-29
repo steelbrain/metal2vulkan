@@ -1694,7 +1694,9 @@
         "object_churn.vk_images_made": 16,
         "pooled_memory_blocks_made": 3,
         "requirement_images_made": 5,
-        "requirement_limits_asked": 5
+        "requirement_limits_asked": 5,
+        "scheduler_sleep_slices": 1,
+        "scheduler_sleeps": 1
       },
       "composed": {
         "device_memory_allocated": 201326592,

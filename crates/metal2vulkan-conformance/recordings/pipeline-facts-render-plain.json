@@ -250,6 +250,8 @@
         "pipeline_layouts_made": 1,
         "pooled_memory_blocks_made": 3,
         "render_passes_made": 1,
+        "scheduler_sleep_slices": 1,
+        "scheduler_sleeps": 1,
         "shader_modules_made": 2,
         "stage_entries_shared": 5,
         "stage_entries_specialized": 2,

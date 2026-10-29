@@ -217,10 +217,10 @@
       "measured": "8 run(s) of the whole selection on Apple M3 Max, in the case set's own order, the largest each count reached",
       "contrasted": "8 run(s) of each case on its own on Apple M3 Max, nothing before it on the device, the largest each count reached",
       "bounds": {
-        "scheduler_passes": 1,
+        "scheduler_passes": 2,
         "scheduler_sleeps": 1,
         "scheduler_wakes_host": 2,
-        "wakes_spared": 2
+        "wakes_spared": 3
       }
     }
   ],

@@ -312,10 +312,9 @@ random on honest work. Each reason is written at its site in `cost.rs` with the 
 A count in the `SPARED` table is gated from below only while it is gated at all: `racy` wins, so a
 reported count has no floor either.
 
-Totals stay gated where one exists, so nothing is lost: `command_buffers_deferred` holds the two
-replay counts between them, `encoder_command_buffers_begun` holds the primaries a completion thread
-began ahead, and a `_made` count holds its `_shared` partner — finding one already made only ever
-*lowers* it, and the gate is an upper bound.
+Totals stay gated where one exists, so nothing is lost: `encoder_command_buffers_begun` holds the
+primaries a completion thread began ahead, and a `_made` count holds its `_shared` partner — finding
+one already made only ever *lowers* it, and the gate is an upper bound.
 
 ### The two shapes, and why a bound needs both
 

@@ -217,9 +217,7 @@
         "object_churn.vk_image_bindings": 1,
         "object_churn.vk_images_destroyed": 3,
         "object_churn.vk_images_made": 3,
-        "pooled_memory_blocks_made": 4,
-        "scheduler_sleep_slices": 1,
-        "scheduler_sleeps": 1
+        "pooled_memory_blocks_made": 4
       },
       "composed": {
         "addressable_buffers_made": 2,

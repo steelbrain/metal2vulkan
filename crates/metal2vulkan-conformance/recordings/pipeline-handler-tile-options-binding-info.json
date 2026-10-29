@@ -319,15 +319,19 @@
         "addressable_buffers_made": 2,
         "device_memory_allocated": 201326592,
         "functions_shared": 2,
+        "functions_translated": 1,
         "pipeline_layouts_made": 1,
         "pooled_memory_blocks_made": 3,
         "scheduler_sleep_slices": 1,
         "scheduler_sleeps": 1,
         "shader_modules_made": 1,
+        "stage_entries_specialized": 1,
         "variants_taken_back": 2
       },
       "composed": {
-        "device_memory_allocated": 201326592
+        "device_memory_allocated": 201326592,
+        "functions_translated": 1,
+        "stage_entries_specialized": 1
       },
       "ceilings": {
         "addressable_buffers_made": 2,

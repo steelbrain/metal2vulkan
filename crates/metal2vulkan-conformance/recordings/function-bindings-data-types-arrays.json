@@ -7612,7 +7612,7 @@
         "stage_entries_specialized": 1
       },
       "composed": {
-        "device_memory_allocated": 201327232
+        "device_memory_allocated": 201327104
       },
       "ceilings": {
         "addressable_buffers_made": 2,

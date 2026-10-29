@@ -426,8 +426,6 @@
         "pipeline_layouts_made": 1,
         "pipeline_layouts_shared": 1,
         "pooled_memory_blocks_made": 3,
-        "scheduler_sleep_slices": 1,
-        "scheduler_sleeps": 1,
         "shader_modules_made": 1,
         "stage_entries_specialized": 1
       },

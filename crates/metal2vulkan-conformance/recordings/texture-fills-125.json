@@ -134,16 +134,14 @@
         "command_buffers_begun": 40,
         "command_buffers_begun_batch_work": 20,
         "command_buffers_begun_encoders": 20,
-        "command_buffers_deferred": 20,
-        "command_buffers_replayed_inline": 20,
         "command_buffers_submitted": 40,
-        "commands_recorded.begin_command_buffer": 20,
-        "commands_recorded.cmd_clear_color_image": 4,
+        "commands_recorded.begin_command_buffer": 40,
+        "commands_recorded.cmd_clear_color_image": 24,
         "commands_recorded.cmd_copy_buffer_to_image": 41,
         "commands_recorded.cmd_copy_image": 1,
         "commands_recorded.cmd_copy_image_to_buffer": 25,
-        "commands_recorded.cmd_pipeline_barrier": 60,
-        "commands_recorded.end_command_buffer": 20,
+        "commands_recorded.cmd_pipeline_barrier": 100,
+        "commands_recorded.end_command_buffer": 40,
         "commits_handed_off": 20,
         "completed_waits": 23,
         "completed_where_seen": 20,
@@ -177,7 +175,7 @@
         "scheduler_sleeps": 20,
         "scheduler_wakes_commit": 20,
         "slot_returns": 20,
-        "spare_command_pools_taken": 40,
+        "spare_command_pools_taken": 20,
         "submit_infos": 20,
         "trail_waits": 20,
         "wakes_completion_waiters": 20,
@@ -185,13 +183,13 @@
       },
       "moving": {
         "batches_submitted_by_waiters": 6,
-        "commands_recorded.begin_command_buffer": 18,
-        "gate_waits_slept": 18
+        "gate_waits_slept": 17
       },
       "composed": {
         "addressable_buffers_made": 2,
         "device_memory_allocated": 201326592,
-        "pooled_memory_blocks_made": 3
+        "pooled_memory_blocks_made": 3,
+        "queues_sharing_a_vk_queue": 0
       }
     }
   ],

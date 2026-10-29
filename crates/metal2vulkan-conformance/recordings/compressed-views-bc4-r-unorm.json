@@ -987,14 +987,12 @@
         "command_buffers_begun": 40,
         "command_buffers_begun_batch_work": 10,
         "command_buffers_begun_encoders": 30,
-        "command_buffers_deferred": 30,
-        "command_buffers_replayed_inline": 30,
         "command_buffers_submitted": 40,
-        "commands_recorded.begin_command_buffer": 30,
-        "commands_recorded.cmd_copy_buffer_to_image": 11,
+        "commands_recorded.begin_command_buffer": 40,
+        "commands_recorded.cmd_copy_buffer_to_image": 55,
         "commands_recorded.cmd_copy_image_to_buffer": 136,
-        "commands_recorded.cmd_pipeline_barrier": 30,
-        "commands_recorded.end_command_buffer": 30,
+        "commands_recorded.cmd_pipeline_barrier": 89,
+        "commands_recorded.end_command_buffer": 40,
         "commits_handed_off": 30,
         "completed_waits": 33,
         "completed_where_seen": 30,
@@ -1002,7 +1000,6 @@
         "completion_arms_after_a_wake": 30,
         "device_memory_allocated": 268435456,
         "encoder_command_buffers_begun": 30,
-        "encoder_primaries_begun_ahead": 2,
         "fence_waits": 30,
         "finales_folded": 30,
         "gate_waits": 30,
@@ -1022,7 +1019,6 @@
         "object_churn.vk_images_destroyed": 5,
         "object_churn.vk_images_made": 5,
         "pooled_memory_blocks_made": 4,
-        "primaries_begun_ahead": 2,
         "queue_submissions": 30,
         "queues_sharing_a_vk_queue": 1,
         "scheduled_where_submitted": 30,
@@ -1031,7 +1027,7 @@
         "scheduler_sleeps": 30,
         "scheduler_wakes_commit": 30,
         "slot_returns": 30,
-        "spare_command_pools_taken": 60,
+        "spare_command_pools_taken": 30,
         "submit_infos": 30,
         "trail_waits": 30,
         "wakes_completion_waiters": 30,
@@ -1039,12 +1035,12 @@
       },
       "moving": {
         "batches_submitted_by_waiters": 14,
-        "commands_recorded.begin_command_buffer": 28,
-        "gate_waits_slept": 28
+        "gate_waits_slept": 25
       },
       "composed": {
         "device_memory_allocated": 201326592,
-        "pooled_memory_blocks_made": 3
+        "pooled_memory_blocks_made": 3,
+        "queues_sharing_a_vk_queue": 0
       },
       "ceilings": {
         "addressable_buffers_made": 2,

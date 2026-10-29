@@ -266,9 +266,12 @@
       "bounds": {
         "functions_shared": 1,
         "functions_translated": 1,
-        "scheduler_sleep_slices": 1,
-        "scheduler_sleeps": 1,
-        "stage_entries_shared": 1
+        "stage_entries_shared": 1,
+        "stage_entries_specialized": 1
+      },
+      "composed": {
+        "stage_entries_shared": 0,
+        "stage_entries_specialized": 1
       },
       "per_state": {
         "pipelines": 0,

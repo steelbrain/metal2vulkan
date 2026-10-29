@@ -543,15 +543,14 @@
         "command_buffers_begun": 10,
         "command_buffers_begun_batch_work": 1,
         "command_buffers_begun_encoders": 9,
-        "command_buffers_deferred": 9,
-        "command_buffers_replayed_inline": 9,
         "command_buffers_submitted": 10,
-        "commands_recorded.begin_command_buffer": 9,
-        "commands_recorded.cmd_copy_buffer_to_image": 5,
+        "commands_recorded.begin_command_buffer": 10,
+        "commands_recorded.cmd_clear_color_image": 3,
+        "commands_recorded.cmd_copy_buffer_to_image": 7,
         "commands_recorded.cmd_copy_image": 2,
         "commands_recorded.cmd_copy_image_to_buffer": 6,
-        "commands_recorded.cmd_pipeline_barrier": 13,
-        "commands_recorded.end_command_buffer": 9,
+        "commands_recorded.cmd_pipeline_barrier": 15,
+        "commands_recorded.end_command_buffer": 10,
         "commits_handed_off": 9,
         "completed_waits": 12,
         "completed_where_seen": 9,
@@ -559,7 +558,6 @@
         "completion_arms_after_a_wake": 9,
         "device_memory_allocated": 268435456,
         "encoder_command_buffers_begun": 9,
-        "encoder_primaries_begun_ahead": 1,
         "fence_waits": 9,
         "finales_folded": 9,
         "gate_waits": 9,
@@ -579,7 +577,6 @@
         "object_churn.vk_images_destroyed": 10,
         "object_churn.vk_images_made": 15,
         "pooled_memory_blocks_made": 4,
-        "primaries_begun_ahead": 1,
         "queue_submissions": 9,
         "queues_sharing_a_vk_queue": 1,
         "scheduled_where_submitted": 9,
@@ -589,22 +586,22 @@
         "scheduler_wakes_commit": 9,
         "shadowed_textures": 1,
         "slot_returns": 9,
-        "spare_command_pools_taken": 18,
+        "spare_command_pools_taken": 9,
         "submit_infos": 9,
         "trail_waits": 9,
         "wakes_completion_waiters": 9,
         "wakes_spared": 63
       },
       "moving": {
-        "batches_submitted_by_waiters": 3,
-        "commands_recorded.begin_command_buffer": 7,
-        "gate_waits_slept": 7
+        "batches_submitted_by_waiters": 2,
+        "gate_waits_slept": 6
       },
       "composed": {
         "addressable_buffers_made": 2,
-        "arena_pools_made": 2,
+        "arena_pools_made": 0,
         "device_memory_allocated": 268435456,
-        "pooled_memory_blocks_made": 4
+        "pooled_memory_blocks_made": 4,
+        "queues_sharing_a_vk_queue": 0
       }
     }
   ],

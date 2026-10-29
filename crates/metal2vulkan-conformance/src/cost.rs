@@ -347,6 +347,21 @@ const AHEAD: &str = "whether this case's first encoder found a primary command b
      begun, which the thread that completed an earlier command buffer does ahead when nothing \
      waits for it. Its total, encoder_command_buffers_begun, stays gated, so nothing is lost";
 
+/// Why `commands_recorded.begin_command_buffer` is reported and never gated.
+///
+/// The recorder counts every `vkBeginCommandBuffer` at its call, whatever the command buffer and
+/// the thread, so the spare pools' primaries a completion thread begins ahead (`AHEAD`) are
+/// counted where that thread began them, in whichever case's window it ran. The runtime's
+/// `command_buffers_begun` counts such a primary as an encoder takes it, so it holds the case's
+/// own begins and stays gated.
+///
+/// Measured on this M3 Max: the eight rounds of a whole-set measurement saw it move in 238
+/// cases, and a whole-set replay of the records it wrote read 3 against a bound of 2 on
+/// `buffer-target-clears-pitch-16-stored`, whose `command_buffers_begun` stayed at 2.
+const BEGUN: &str = "every vkBeginCommandBuffer the device recorded, among them the primaries a \
+     completion thread begins ahead when nothing waits, so it moves with when that thread ran. \
+     The case's own begins, command_buffers_begun, stay gated, so nothing is lost";
+
 /// Why `completed_where_seen` is reported and never gated: it is the **complement of a count the
 /// rule already names**, so it cannot be deterministic while that one is not.
 ///
@@ -442,7 +457,7 @@ const POOLED: &str = "an object made because no spare was free, where a spare co
 /// replays of a larger case set — which reads like a regression and is not one. See [`BORROWED`].
 /// `slot_returns` beside it stays gated: it counts work items, one a command buffer, and has held
 /// still alone and in both case sets.
-const RACY: [(&str, &str); 32] = [
+const RACY: [(&str, &str); 33] = [
     ("fences_made", POOLED),
     // What is alive, parked or waiting at the instant the counts were read.
     ("memory_blocks_live", INSTANTANEOUS),
@@ -477,6 +492,7 @@ const RACY: [(&str, &str); 32] = [
     ("pipeline_pool_busy", POOL_STATE),
     ("encoder_primaries_begun_ahead", AHEAD),
     ("primaries_begun_ahead", AHEAD),
+    ("commands_recorded.begin_command_buffer", BEGUN),
     ("completed_where_seen", COMPLEMENT),
     ("pooled_memory_blocks_freed", QUIET),
     ("finales_folded", FOLDED),
@@ -595,7 +611,7 @@ pub fn monotone(name: &str) -> Option<&'static str> {
 /// truncated and it reran. The other read the counters behind its own movements and found every one
 /// of them process-shared. Neither symptom could be read off a single run, which is the property
 /// that makes this class worth naming rather than discovering again.
-const SHARED: [(&str, &str); 9] = [
+const SHARED: [(&str, &str); 21] = [
     // `work_counts.rs`: "every batch, by how far its queue's work ran behind its submission".
     // Four buckets of one histogram, and which bucket a batch lands in is decided by how fast the
     // GPU drained what was submitted before it, earlier cases included. The sum is the case's own
@@ -631,7 +647,41 @@ const SHARED: [(&str, &str); 9] = [
     // reason a count is reported is what the counter counts.
     ("scheduled_where_submitted", COMPLEMENT),
     ("finales_apart", FOLDED),
+    // "Signalling submissions of work that took 2 ms or more in the driver", and of the idle
+    // submissions "the ones that took the stall: 2.2 ms or more": a threshold on how long the
+    // driver took, which is a question about elapsed time. Corroborated on this M3 Max: the
+    // eight rounds of one whole-set measurement saw `submit_stalls_on_work` move in 160 cases,
+    // and two whole-set replays of the records it wrote went over its bound of 0 in three
+    // cases and in one, `sample-fills-rgba8-2` both times.
+    ("submit_stalls_on_work", ELAPSED),
+    ("submit_stalls_idle", ELAPSED),
+    // Every reason a look of the scheduler's found a head held, "each counted at every look that
+    // found it, so a head held through many looks is counted at each", the two "Times a look
+    // left a head" splits of them, and the "Batches that a look of the scheduler's had found
+    // held": how many looks the scheduler's thread made while a batch waited, which is when
+    // that thread ran (`scheduler_` above). Corroborated: the same measurement saw
+    // `heads_held_for_host_steps` move in 119 cases and `batches_held_past_a_look` in 51, and
+    // one replay read them 2 and 1 against bounds of 0 on `xr-clears-planes` and
+    // `xr-clears-planes-srgb`, the next within. The rest are here on the same definition.
+    ("heads_held_for_binary_semaphores", LOOKS),
+    ("heads_held_for_reencodes", LOOKS),
+    ("heads_held_for_decodes", LOOKS),
+    ("heads_held_for_host_steps", LOOKS),
+    ("heads_held_for_checks", LOOKS),
+    ("heads_held_for_event_values", LOOKS),
+    ("heads_held_for_earlier_commits", LOOKS),
+    ("heads_waiting_at_their_gate", LOOKS),
+    ("heads_awaiting_check_signals", LOOKS),
+    ("batches_held_past_a_look", LOOKS),
 ];
+
+/// Why a count of driver calls past a time threshold is reported and never gated.
+const ELAPSED: &str = "a submission the driver took longer than a threshold over, which is a \
+     question about elapsed time on a shared machine rather than about the case's work";
+
+/// Why a count of what the scheduler's looks found held is reported and never gated.
+const LOOKS: &str = "how many times the scheduler's thread looked while a batch was held, \
+     which is when that thread ran and not what the case asked for";
 
 /// Why a count of how far a queue's work ran behind is reported and never gated.
 const QUEUE_DEPTH: &str = "how far this `VkQueue`'s work ran behind when the case submitted, or \
