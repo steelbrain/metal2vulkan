@@ -207,11 +207,12 @@ the runtime made.
   ([HOWTO](../../docs/HOWTO.md#6-host-memory-a-driver-refuses)). A no-copy buffer's import of such
   dma-bufs that only blits have read may be released while idle and imported again at its next
   blit, which then costs time: RADV lists every import in every submission. Nothing of Metal's
-  observes it. A no-copy buffer, heap or buffer rebind whose import the caller's gate refuses
-  (`HostMemory::with_import_gate`), or whose admitted import fails, is made over a copy of its
-  bytes in memory of the device's own, announced (`copied-host-pages`,
+  observes it. A no-copy buffer, heap, or buffer's or heap's rebind whose import the caller's gate
+  refuses (`HostMemory::with_import_gate`), or whose admitted import fails, is made over a copy of
+  its bytes in memory of the device's own, announced (`copied-host-pages`,
   [HOWTO](../../docs/HOWTO.md#copied-host-buffers)), wherever the process maps the pages
-  readable (a dma-buf's mapping among them); over pages not mapped readable it is refused.
+  readable (a dma-buf's mapping among them); over pages not mapped readable it is refused. A
+  rebind's textures follow it onto the copy.
   `CommandBuffer::used_resources` lists what a command buffer uses until it completes, so a
   program knows when it may take memory away.
 - **Hazards** are tracked as Metal tracks them. A heap's resources are untracked by default, so

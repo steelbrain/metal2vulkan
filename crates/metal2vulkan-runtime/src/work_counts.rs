@@ -294,7 +294,9 @@ pub(crate) struct Counters {
     copied_host_buffers_made: AtomicU64,
     copied_host_buffers_refused: AtomicU64,
     copied_host_buffers_degraded: AtomicU64,
+    copied_rebind_pages_moved: AtomicU64,
     copied_rebind_pages_made: AtomicU64,
+    copied_rebind_images_made: AtomicU64,
     copied_heaps_made: AtomicU64,
     copied_copy_in_bytes: AtomicU64,
     copied_merge_back_bytes: AtomicU64,
@@ -2015,13 +2017,13 @@ impl Counters {
         (self.host_imports_refused_by_host).fetch_add(1, Ordering::Relaxed);
     }
 
-    /// A copied host buffer was made (`copied.rs`): after an admitted import failed where
-    /// `degraded`, else for the gate's refusal.
-    pub(crate) fn copied_host_buffer_made(&self, degraded: bool) {
+    /// A copied host buffer was made (`copied.rs`), for `cause`.
+    pub(crate) fn copied_host_buffer_made(&self, cause: CopiedBecause) {
         (self.copied_host_buffers_made).fetch_add(1, Ordering::Relaxed);
-        match degraded {
-            true => &self.copied_host_buffers_degraded,
-            false => &self.copied_host_buffers_refused,
+        match cause {
+            CopiedBecause::Failed => &self.copied_host_buffers_degraded,
+            CopiedBecause::Refused => &self.copied_host_buffers_refused,
+            CopiedBecause::Moved => &self.copied_rebind_pages_moved,
         }
         .fetch_add(1, Ordering::Relaxed);
     }
@@ -2052,6 +2054,11 @@ impl Counters {
     /// (`host_ram.rs`).
     pub(crate) fn chunk_bound_buffer_made(&self) {
         (self.chunk_bound_buffers_made).fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// A rebind made an image again over a copy of its new pages (`copied.rs`).
+    pub(crate) fn copied_rebind_image_made(&self) {
+        (self.copied_rebind_images_made).fetch_add(1, Ordering::Relaxed);
     }
 
     /// A commit copied `bytes` the CPU changed into copied host buffers (`copied.rs`).
@@ -4336,16 +4343,24 @@ pub struct WorkCounts {
     pub host_imports_refused_by_host: u64,
     /// The copied host buffers made (`copied-host-pages`): no-copy buffers whose bytes the GPU
     /// uses in a copy of the caller's pages in memory of the device's own, which no import maps.
-    /// Each is one of the next two.
+    /// Each is one of the next three.
     pub copied_host_buffers_made: u64,
     /// Of those, the ones made because the caller's gate refused the import.
     pub copied_host_buffers_refused: u64,
     /// Of those, the ones made because an import the device and the gate admitted failed (out
     /// of memory, another Vulkan error).
     pub copied_host_buffers_degraded: u64,
+    /// Of those, the ones a rebind made because the new bytes lie at another offset in their
+    /// page than the old, where a texture over the buffer was planned at the old offset
+    /// (`Buffer::rebind_bytes_no_copy`): the copy keeps the bytes at the old offset.
+    pub copied_rebind_pages_moved: u64,
     /// Of the copies made, those a rebind gave a buffer as its new pages
     /// (`Buffer::rebind_bytes_no_copy`), in `copied_host_buffers_made` and its kin too.
     pub copied_rebind_pages_made: u64,
+    /// The images rebinds made again over such a copy (`Buffer::rebind_bytes_no_copy`,
+    /// `Heap::rebind_bytes_no_copy`): a heap's textures bound to its bytes, and the images in place
+    /// of textures over the buffer, each a linear image of the copy's memory at its texels.
+    pub copied_rebind_images_made: u64,
     /// Of the copies made, the no-copy heaps' own buffers (`Device::new_heap_with_bytes_no_copy`),
     /// in `copied_host_buffers_made` and its kin too: the heap's buffers lie in the copy, and its
     /// textures are shadows of its bytes.
@@ -5441,7 +5456,9 @@ impl Device {
             copied_host_buffers_degraded: counters
                 .copied_host_buffers_degraded
                 .load(Ordering::Relaxed),
+            copied_rebind_pages_moved: counters.copied_rebind_pages_moved.load(Ordering::Relaxed),
             copied_rebind_pages_made: counters.copied_rebind_pages_made.load(Ordering::Relaxed),
+            copied_rebind_images_made: counters.copied_rebind_images_made.load(Ordering::Relaxed),
             copied_heaps_made: counters.copied_heaps_made.load(Ordering::Relaxed),
             copied_copy_in_bytes: counters.copied_copy_in_bytes.load(Ordering::Relaxed),
             copied_merge_back_bytes: counters.copied_merge_back_bytes.load(Ordering::Relaxed),
@@ -5711,4 +5728,16 @@ impl Device {
             tile_dispatches_recorded: counters.tile_dispatches_recorded.load(Ordering::Relaxed),
         }
     }
+}
+
+/// Why a no-copy buffer's bytes lie in a copy of the caller's pages (`copied.rs`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum CopiedBecause {
+    /// The caller's gate refused their import (`HostMemory::with_import_gate`).
+    Refused,
+    /// The import the device and the gate admitted failed.
+    Failed,
+    /// A rebind's new bytes lie at another offset in their page than the old, where a texture
+    /// over the buffer was planned at the old offset: no import lays them there.
+    Moved,
 }

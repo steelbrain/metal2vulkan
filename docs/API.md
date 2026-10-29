@@ -2511,11 +2511,14 @@ bound.
   where the kernel cannot (on Linux it pins each page, which a dma-buf's mapping does not allow),
   with plain loads where the process maps every page readable. Pages not mapped, or mapped
   without read permission, are never copied: the buffer is refused, as their import is. A copy
-  whose own allocation fails refuses the call
-  (`OutOfMemory`). A heap's rebind and memory whose GPU writes Metal's private option bit 24 drops
-  are never copied. Counted: `WorkCounts::copied_host_buffers_made`, of them
-  `copied_host_buffers_refused` and `copied_host_buffers_degraded` (and `copied_heaps_made`,
-  `copied_rebind_pages_made`). Cost: the GPU uses a copy of
+  whose own allocation fails refuses the call (`OutOfMemory`). Memory whose GPU writes Metal's
+  private option bit 24 drops is never copied. A buffer's or heap's rebind is copied the same way,
+  its heap's bound textures and its images in place made again over the copy, and a buffer's
+  rebind to bytes at another offset in their page under a texture planned at the old one is a copy
+  laid out there (the detail says which). Counted: `WorkCounts::copied_host_buffers_made`, of them
+  `copied_host_buffers_refused`, `copied_host_buffers_degraded` and `copied_rebind_pages_moved`
+  (and `copied_heaps_made`, `copied_rebind_pages_made`, `copied_rebind_images_made`). Cost: the GPU
+  uses a copy of
   the bytes, into which each commit writes every byte the CPU changed in the pages since, and from
   which each batch's completion writes back every byte the GPU changed, where Metal's GPU reads and
   writes the pages themselves: a CPU write the GPU reads mid-command-buffer, or a GPU write the CPU

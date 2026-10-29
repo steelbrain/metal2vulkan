@@ -22,6 +22,14 @@
 //!   rebind imports again.
 //! - **Heaps.** A no-copy heap's own buffer is a copy in the same two cases; a buffer placed in
 //!   it reads the caller's bytes at its offset, and a fill through it reaches those pages alone.
+//! - **Rebinds with textures.** A rebind of a buffer with a texture in place over it whose gate
+//!   refuses the new pages, and one whose new bytes lie at another offset in their page, give it
+//!   a copy, the texture's image made again over it: the texture reads the new texels, its writes
+//!   reach the new pages, and the buffer's bytes are the new pages'. A heap's rebind whose gate
+//!   refuses, or whose admitted import fails, gives the heap a copy: its placed buffer and its
+//!   texture bound to its bytes read and write the new pages. A command buffer committed before
+//!   such a rebind and held back reaches the copy, encoded again; a rebind while one not yet
+//!   committed used the buffer is refused, the gate unasked.
 //!
 //! Device tests: compiled only under the GPU safety cfgs (`m2v_gpu`, `m2v_cpu_icd`), on the kind
 //! of device the cfg selects. A device that imports no host memory says so and passes.
@@ -844,4 +852,490 @@ fn a_shared_event_s_value_is_seen_once_the_copy_s_bytes_are_in_the_pages() {
         );
     }
     drop(large.0);
+}
+
+/// The side, bytes per texel and row pitch of the textures over buffers below.
+const SIDE: usize = 16;
+const TEXEL: usize = 4;
+const PITCH: usize = 256;
+
+/// The rows of a texture's texels in `bytes`, its first texel at 0.
+fn rows(bytes: &[u8]) -> Vec<u8> {
+    (0..SIDE)
+        .flat_map(|row| bytes[row * PITCH..row * PITCH + SIDE * TEXEL].to_vec())
+        .collect()
+}
+
+/// A sampled 16 x 16 RGBA8 texture over `buffer` at 0, its rows `PITCH` apart, and whether it
+/// is an image in place over the bytes (`WorkCounts::host_textures_in_place`).
+fn texture_over(device: &Device, buffer: &Buffer) -> (crate::Texture, bool) {
+    let mut descriptor = crate::TextureDescriptor::texture_2d(
+        metal2vulkan::metal::PixelFormat::RGBA8Unorm,
+        SIDE as u64,
+        SIDE as u64,
+        false,
+    );
+    descriptor.usage = metal2vulkan::metal::TextureUsage::SHADER_READ;
+    descriptor.resource_options = buffer.resource_options();
+    let before = device.work_counts();
+    let texture = buffer.new_texture(&descriptor, 0, PITCH as u64).unwrap();
+    let after = device.work_counts();
+    let in_place = after.host_textures_in_place > before.host_textures_in_place;
+    eprintln!(
+        "COPIED: the texture over the buffer is {}",
+        if in_place { "in place" } else { "a shadow" }
+    );
+    (texture, in_place)
+}
+
+/// The texels of a 16 x 16 RGBA8 texture, as the GPU copies them out.
+fn texels(device: &Device, texture: &crate::Texture) -> Vec<u8> {
+    let bytes = (SIDE * SIDE * TEXEL) as u64;
+    let own = device.new_buffer(bytes, ResourceOptions::shared()).unwrap();
+    blit(device, |encoder| {
+        encoder
+            .copy_from_texture_to_buffer(
+                texture,
+                0,
+                0,
+                crate::Origin { x: 0, y: 0, z: 0 },
+                crate::Size::new(SIDE as u64, SIDE as u64, 1),
+                &own,
+                0,
+                (SIDE * TEXEL) as u64,
+                bytes,
+                crate::BlitOption::None,
+            )
+            .unwrap();
+    });
+    let contents = own.contents().unwrap();
+    // SAFETY: the buffer's bytes, which no command writes now.
+    unsafe { std::slice::from_raw_parts(contents.as_ptr(), bytes as usize) }.to_vec()
+}
+
+/// Write `value` into every texel of a 16 x 16 RGBA8 texture, by a GPU copy.
+fn write_texels(device: &Device, texture: &crate::Texture, value: u8) {
+    let bytes = SIDE * SIDE * TEXEL;
+    let staging = device
+        .new_buffer_with_bytes(&vec![value; bytes], ResourceOptions::shared())
+        .unwrap();
+    blit(device, |encoder| {
+        encoder
+            .copy_from_buffer_to_texture(
+                &staging,
+                0,
+                (SIDE * TEXEL) as u64,
+                bytes as u64,
+                crate::Size::new(SIDE as u64, SIDE as u64, 1),
+                texture,
+                0,
+                0,
+                crate::Origin { x: 0, y: 0, z: 0 },
+                crate::BlitOption::None,
+            )
+            .unwrap();
+    });
+}
+
+/// The texture over `buffer`, which lies in a copy of the `LENGTH` bytes at `pages` whose
+/// pattern is `pattern`, reads those texels; a GPU write into it reaches the texels' bytes in
+/// `pages` alone, the bytes between its rows and after it kept.
+fn texture_follows_the_copy(
+    device: &Device,
+    buffer: &Buffer,
+    texture: &crate::Texture,
+    pages: NonNull<u8>,
+    pattern: &[u8],
+) {
+    assert!(buffer.copied(), "the buffer is a copy");
+    assert_eq!(
+        buffer.contents(),
+        Some(pages),
+        "contents are the new pointer"
+    );
+    assert_eq!(texels(device, texture), rows(pattern), "the new texels");
+    assert_eq!(gpu_bytes(device, buffer), pattern, "the buffer's new bytes");
+    write_texels(device, texture, 0xA5);
+    // SAFETY: the caller's bytes, which no command buffer uses now.
+    let now = unsafe { std::slice::from_raw_parts(pages.as_ptr(), LENGTH) }.to_vec();
+    for row in 0..SIDE {
+        let (start, end) = (row * PITCH, row * PITCH + SIDE * TEXEL);
+        assert!(
+            now[start..end].iter().all(|&byte| byte == 0xA5),
+            "row {row}'s texels reached the pages"
+        );
+        let next = (row + 1) * PITCH;
+        assert_eq!(
+            now[end..next],
+            pattern[end..next],
+            "the bytes after row {row}"
+        );
+    }
+    assert_eq!(
+        now[SIDE * PITCH..],
+        pattern[SIDE * PITCH..],
+        "past the texels"
+    );
+    assert!(texels(device, texture).iter().all(|&byte| byte == 0xA5));
+}
+
+#[test]
+fn copied_rebind_makes_a_texture_s_image_in_place_again_over_the_copy() {
+    let (first, second) = (Host::new(20), Host::new(21));
+    let Some((device, heard)) = device() else {
+        return;
+    };
+    let settled = device.settle_in_place_checks(Duration::from_secs(120));
+    let buffer = first.buffer(&device, None);
+    let (texture, in_place) = texture_over(&device, &buffer);
+    eprintln!("COPIED: in-place verdicts settled: {settled}");
+    assert_eq!(texels(&device, &texture), rows(&first.pattern()));
+    let asked: Arc<Mutex<Vec<ImportRequest>>> = Arc::default();
+    let before = device.work_counts();
+    rebind(&buffer, &second, Some(gate(&asked, false))).unwrap();
+    let after = device.work_counts();
+    assert_eq!(moved(&before, &after), [1, 1, 1, 0, 0]);
+    assert_eq!(
+        after.copied_rebind_pages_made - before.copied_rebind_pages_made,
+        1
+    );
+    assert_eq!(asked.lock().unwrap().len(), 1, "the gate was asked once");
+    assert_eq!(announced(&heard), 1, "announced once");
+    let images = after.copied_rebind_images_made - before.copied_rebind_images_made;
+    assert_eq!(
+        images,
+        u64::from(in_place),
+        "the image in place made over the copy"
+    );
+    texture_follows_the_copy(
+        &device,
+        &buffer,
+        &texture,
+        second.pointer,
+        &second.pattern(),
+    );
+    assert_eq!(first.bytes(), first.pattern(), "the old pages stay");
+    // Rebound again with no gate, it imports, the image made again over the import.
+    rebind(&buffer, &first, None).unwrap();
+    assert!(!buffer.copied(), "imported again");
+    assert_eq!(texels(&device, &texture), rows(&first.pattern()));
+    eprintln!(
+        "COPIED-REBIND-IN-PLACE: texture {} over a gate-refused rebind's copy",
+        if in_place { "in place" } else { "a shadow" }
+    );
+    drop((texture, buffer));
+}
+
+/// Host memory of `LENGTH` bytes `at` bytes into a page, in `seed`'s pattern, freed when dropped.
+struct OffPage {
+    allocation: NonNull<u8>,
+    layout: Layout,
+    pointer: NonNull<u8>,
+    pattern: Vec<u8>,
+}
+
+impl OffPage {
+    fn new(seed: u8, at: usize) -> OffPage {
+        let layout = Layout::from_size_align(LENGTH + (1 << 16), 1 << 16).unwrap();
+        // SAFETY: the layout's size is not zero.
+        let allocation = NonNull::new(unsafe { std::alloc::alloc(layout) }).unwrap();
+        // SAFETY: `at` is inside the allocation's first 64 KiB.
+        let pointer = unsafe { NonNull::new_unchecked(allocation.as_ptr().add(at)) };
+        let pattern: Vec<u8> = (0..LENGTH)
+            .map(|i| ((i % 241) as u8).wrapping_add(seed.wrapping_mul(29)))
+            .collect();
+        // SAFETY: the allocation holds `LENGTH` bytes past `pointer`, which nothing uses yet.
+        unsafe { std::ptr::copy_nonoverlapping(pattern.as_ptr(), pointer.as_ptr(), LENGTH) };
+        OffPage {
+            allocation,
+            layout,
+            pointer,
+            pattern,
+        }
+    }
+}
+
+impl Drop for OffPage {
+    fn drop(&mut self) {
+        // SAFETY: allocated with this layout.
+        unsafe { std::alloc::dealloc(self.allocation.as_ptr(), self.layout) };
+    }
+}
+
+#[test]
+fn rebind_to_bytes_moved_in_their_page_under_a_texture_is_a_copy() {
+    let first = Host::new(22);
+    let moved_bytes = OffPage::new(23, 256);
+    let Some((device, heard)) = device() else {
+        return;
+    };
+    device.settle_in_place_checks(Duration::from_secs(120));
+    let buffer = first.buffer(&device, None);
+    let (texture, in_place) = texture_over(&device, &buffer);
+    let asked: Arc<Mutex<Vec<ImportRequest>>> = Arc::default();
+    let before = device.work_counts();
+    // SAFETY: the memory outlives the buffer and the device; no command uses the buffer.
+    let memory =
+        unsafe { HostMemory::new(moved_bytes.pointer) }.with_import_gate(gate(&asked, true));
+    // SAFETY: as above.
+    unsafe { buffer.rebind_bytes_no_copy(memory, None, None) }.unwrap();
+    let after = device.work_counts();
+    assert_eq!(moved(&before, &after), [0, 1, 0, 0, 0]);
+    assert_eq!(
+        after.copied_rebind_pages_moved - before.copied_rebind_pages_moved,
+        1
+    );
+    assert_eq!(
+        after.copied_rebind_pages_made - before.copied_rebind_pages_made,
+        1
+    );
+    assert!(
+        asked.lock().unwrap().is_empty(),
+        "nothing imported, the gate unasked"
+    );
+    assert_eq!(announced(&heard), 1, "announced once");
+    let images = after.copied_rebind_images_made - before.copied_rebind_images_made;
+    assert_eq!(
+        images,
+        u64::from(in_place),
+        "the image in place made over the copy"
+    );
+    texture_follows_the_copy(
+        &device,
+        &buffer,
+        &texture,
+        moved_bytes.pointer,
+        &moved_bytes.pattern,
+    );
+    assert_eq!(first.bytes(), first.pattern(), "the old pages stay");
+    // Back at the old offset, it imports.
+    rebind(&buffer, &first, None).unwrap();
+    assert!(!buffer.copied(), "imported again");
+    assert_eq!(texels(&device, &texture), rows(&first.pattern()));
+    eprintln!(
+        "COPIED-REBIND-MOVED: texture {} over a moved rebind's copy",
+        if in_place { "in place" } else { "a shadow" }
+    );
+    drop((texture, buffer));
+}
+
+/// Rebind `heap` to all of `host`, under a gate where given.
+fn rebind_heap(
+    heap: &crate::Heap,
+    host: &Host,
+    gate: Option<ImportGate>,
+) -> Result<(), crate::Error> {
+    // SAFETY: the memory outlives the heap and the device (dropped after both), and no command
+    // that uses the heap is encoded or pending.
+    let memory = unsafe { HostMemory::new(host.pointer) };
+    let memory = match gate {
+        Some(gate) => memory.with_import_gate(gate),
+        None => memory,
+    };
+    // SAFETY: as above.
+    unsafe { heap.rebind_bytes_no_copy(memory, None, None) }
+}
+
+/// `heap`, rebound to a copy of `host`'s pages, holds its placed `buffer` (at `at`) and its
+/// `texture` (at 0, `span` bytes) over them: the buffer reads the new bytes, a fill through it
+/// reaches those pages alone; the texture's written texels reach the pages in its span alone and
+/// read back.
+fn heap_follows_the_copy(
+    device: &Device,
+    (buffer, at): (&Buffer, usize),
+    (texture, span): (&crate::Texture, usize),
+    host: &Host,
+) {
+    let pattern = host.pattern();
+    assert_eq!(gpu_bytes_of(device, buffer, LENGTH - at), pattern[at..]);
+    let before = device.work_counts();
+    blit(device, |encoder| {
+        encoder.fill_buffer(buffer, 0..4096, 0x5A).unwrap();
+    });
+    let after = device.work_counts();
+    let bytes = host.bytes();
+    assert!(bytes[at..at + 4096].iter().all(|&byte| byte == 0x5A));
+    assert_eq!(
+        bytes[span..at],
+        pattern[span..at],
+        "between texture and buffer"
+    );
+    assert_eq!(bytes[at + 4096..], pattern[at + 4096..], "after the fill");
+    assert!(after.copied_merge_back_bytes > before.copied_merge_back_bytes);
+    write_texels(device, texture, 0xA5);
+    let bytes = host.bytes();
+    assert_eq!(
+        bytes[span..at],
+        pattern[span..at],
+        "past the texture's span"
+    );
+    assert!(
+        bytes[..span].contains(&0xA5),
+        "the texels reached the pages"
+    );
+    assert!(texels(device, texture).iter().all(|&byte| byte == 0xA5));
+}
+
+/// The first `length` bytes of `buffer` as the GPU reads them.
+fn gpu_bytes_of(device: &Device, buffer: &Buffer, length: usize) -> Vec<u8> {
+    let own = device
+        .new_buffer(length as u64, ResourceOptions::shared())
+        .unwrap();
+    blit(device, |encoder| {
+        encoder
+            .copy_from_buffer_to_buffer(buffer, 0, &own, 0, length as u64)
+            .unwrap();
+    });
+    let contents = own.contents().unwrap();
+    // SAFETY: the buffer's bytes, which no command writes now.
+    unsafe { std::slice::from_raw_parts(contents.as_ptr(), length) }.to_vec()
+}
+
+/// A no-copy heap with a texture bound at 0 and a buffer placed at 32 KiB, rebound under a gate
+/// answering `gate_answer` where given, the next `fail` imports failing: a copy, counted as
+/// `expect` ([`moved`]), the gate asked once where given; rebound again with no gate, it imports.
+fn heap_rebind_is_a_copy(gate_answer: Option<bool>, fail: u64, expect: [u64; 5]) {
+    let (first, second) = (Host::new(24), Host::new(25));
+    let Some((device, heard)) = device() else {
+        return;
+    };
+    let imported = heap(&device, &first, None);
+    let mut descriptor = crate::TextureDescriptor::texture_2d(
+        metal2vulkan::metal::PixelFormat::RGBA8Unorm,
+        SIDE as u64,
+        SIDE as u64,
+        false,
+    );
+    descriptor.usage = metal2vulkan::metal::TextureUsage::SHADER_READ;
+    descriptor.resource_options = ResourceOptions::default();
+    let span = device
+        .heap_texture_size_and_align(&descriptor)
+        .unwrap()
+        .size as usize;
+    let at = 32 * 1024;
+    assert!(span <= at);
+    let texture = imported.new_texture_at_offset(&descriptor, 0).unwrap();
+    let buffer = imported
+        .new_buffer_at_offset((LENGTH - at) as u64, ResourceOptions::default(), at as u64)
+        .unwrap();
+    let asked: Arc<Mutex<Vec<ImportRequest>>> = Arc::default();
+    let before = device.work_counts();
+    device.fail_next_host_imports(fail);
+    let gate = gate_answer.map(|answer| gate(&asked, answer));
+    rebind_heap(&imported, &second, gate).unwrap();
+    let after = device.work_counts();
+    assert_eq!(moved(&before, &after), expect);
+    assert_eq!(
+        after.copied_rebind_pages_made - before.copied_rebind_pages_made,
+        1
+    );
+    let requests = asked.lock().unwrap().clone();
+    assert_eq!(
+        requests.len(),
+        usize::from(gate_answer.is_some()),
+        "the gate asked once"
+    );
+    if let Some(request) = requests.first() {
+        assert_eq!(request.start, second.pointer);
+        assert_eq!(request.length, LENGTH as u64);
+    }
+    assert_eq!(announced(&heard), 1, "announced once");
+    eprintln!(
+        "COPIED-HEAP-REBIND: {} heap image(s) made again over the copy",
+        after.copied_rebind_images_made - before.copied_rebind_images_made
+    );
+    heap_follows_the_copy(&device, (&buffer, at), (&texture, span), &second);
+    assert_eq!(first.bytes(), first.pattern(), "the old pages stay");
+    // Rebound again with no gate, it imports.
+    let before = device.work_counts();
+    rebind_heap(&imported, &first, None).unwrap();
+    let after = device.work_counts();
+    assert_eq!(moved(&before, &after), [0, 0, 0, 0, 1]);
+    assert_eq!(
+        gpu_bytes_of(&device, &buffer, LENGTH - at),
+        first.pattern()[at..]
+    );
+    drop((buffer, texture, imported));
+}
+
+#[test]
+fn heap_rebind_is_a_copy_where_the_caller_s_gate_refuses_the_import() {
+    heap_rebind_is_a_copy(Some(false), 0, [1, 1, 1, 0, 0]);
+}
+
+#[test]
+fn heap_rebind_is_a_copy_where_an_admitted_import_fails_announced() {
+    heap_rebind_is_a_copy(Some(true), 1, [0, 1, 0, 1, 0]);
+}
+
+/// A command buffer committed before a gate-refused rebind and held back by an event fills the
+/// copy, encoded again, and its fill reaches the new pages at its completion, as one committed
+/// after the rebind does; a rebind while a command buffer not yet committed used the buffer is
+/// refused, the gate unasked, and the buffer stays.
+#[test]
+fn copied_rebind_keeps_metal_s_order_around_command_buffers() {
+    let (first, second) = (Host::new(26), Host::new(27));
+    let Some((device, _heard)) = device() else {
+        return;
+    };
+    device.settle_in_place_checks(Duration::from_secs(120));
+    let buffer = first.buffer(&device, None);
+    let (texture, _) = texture_over(&device, &buffer);
+    let queue = device.new_command_queue().unwrap();
+    // A use not yet committed refuses the rebind before the gate is asked.
+    let uncommitted = queue.command_buffer().unwrap();
+    let mut encoder = uncommitted.blit_command_encoder().unwrap();
+    encoder.fill_buffer(&buffer, 0..16, 0x77).unwrap();
+    encoder.end_encoding().unwrap();
+    let asked: Arc<Mutex<Vec<ImportRequest>>> = Arc::default();
+    let refused = rebind(&buffer, &second, Some(gate(&asked, false)));
+    assert!(
+        format!("{refused:?}").contains("EncodedUses"),
+        "refused as encoded uses: {refused:?}"
+    );
+    assert!(asked.lock().unwrap().is_empty(), "the gate unasked");
+    assert!(!buffer.copied(), "the buffer stays");
+    drop(uncommitted);
+    // One committed and held back by an event, then the rebind, then one committed after it.
+    let event = device.new_shared_event().unwrap();
+    let held = queue.command_buffer().unwrap();
+    held.encode_wait_for_event(crate::EventRef::from(&event), 1)
+        .unwrap();
+    let mut encoder = held.blit_command_encoder().unwrap();
+    encoder.fill_buffer(&buffer, 0..16, 0x11).unwrap();
+    encoder.end_encoding().unwrap();
+    held.commit().unwrap();
+    let before = device.work_counts();
+    rebind(&buffer, &second, Some(gate(&asked, false))).unwrap();
+    assert_eq!(asked.lock().unwrap().len(), 1, "the gate asked once");
+    assert!(buffer.copied());
+    let after_rebind = device.work_counts();
+    let next = queue.command_buffer().unwrap();
+    let mut encoder = next.blit_command_encoder().unwrap();
+    encoder.fill_buffer(&buffer, 16..32, 0x22).unwrap();
+    encoder.end_encoding().unwrap();
+    next.commit().unwrap();
+    assert_eq!(held.status(), CommandBufferStatus::Committed);
+    event.set_signaled_value(1);
+    for command_buffer in [&held, &next] {
+        command_buffer.wait_until_completed_for(WAIT).unwrap();
+        assert_eq!(command_buffer.status(), CommandBufferStatus::Completed);
+        assert_eq!(command_buffer.error(), None);
+    }
+    let pattern = second.pattern();
+    let bytes = second.bytes();
+    assert_eq!(&bytes[..16], &[0x11; 16], "the held fill, encoded again");
+    assert_eq!(&bytes[16..32], &[0x22; 16], "the later fill");
+    assert_eq!(bytes[32..], pattern[32..]);
+    assert_eq!(first.bytes(), first.pattern(), "the old pages untouched");
+    assert_eq!(
+        after_rebind.encoders_reencoded - before.encoders_reencoded,
+        1,
+        "the held encoder encoded again"
+    );
+    let mut expected = pattern.clone();
+    expected[..16].fill(0x11);
+    expected[16..32].fill(0x22);
+    assert_eq!(texels(&device, &texture), rows(&expected));
+    drop((texture, buffer));
 }

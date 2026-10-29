@@ -1626,17 +1626,22 @@ pub enum RuntimeGap {
     /// Metal's leftovers are not the runtime's, so there is nothing exact to write and the call is
     /// refused.
     EmptyFillPattern,
-    /// `Buffer::rebind_bytes_no_copy` of a no-copy buffer with a live texture over its bytes,
-    /// given memory at another offset in its page than the old: the texture's copies and texel
-    /// views are planned at the bytes' offset in their `VkBuffer` (`rebind.rs`). Also a rebind
-    /// of a no-copy buffer or heap with a texture whose image is bound to its bytes, where the
-    /// device makes no such image over the new memory: over memory it imports by its pointer, one
-    /// that takes the import's type and lies where the texture's texels do, its rows (and slices)
-    /// as far apart as the old image's, and never for a heap's texture whose image lay over
-    /// dma-bufs, whose rows the driver's `DRM_FORMAT_MOD_LINEAR` layout spaces; over memory it
-    /// imports as dma-bufs (`HostMemory::with_dma_buf`), an image of `DRM_FORMAT_MOD_LINEAR` over
-    /// a dma-buf of the texture's own new pages, which needs `VK_EXT_image_drm_format_modifier`
-    /// and `VK_EXT_queue_family_foreign`, a layout the driver takes and the source's dma-buf.
+    /// `Buffer::rebind_bytes_no_copy` of a no-copy buffer whose GPU writes are dropped (Metal's
+    /// private option bit 24) with a live texture over its bytes, given memory at another offset
+    /// in its page than the old: the texture's copies and texel views are planned at the bytes'
+    /// offset in their `VkBuffer` (`rebind.rs`), and such a buffer is never a copy laid out there,
+    /// as any other buffer's moved bytes are. Also a rebind of a no-copy buffer or heap with a
+    /// texture whose image is bound to its bytes, where the device makes no such image over the
+    /// new memory: over memory it imports by its pointer, one that takes the import's type and
+    /// lies where the texture's texels do, its rows (and slices) as far apart as the old image's,
+    /// and never for a heap's texture whose image lay over dma-bufs, whose rows the driver's
+    /// `DRM_FORMAT_MOD_LINEAR` layout spaces; over a copy of the memory (the caller's gate refused
+    /// its import, it failed, or its bytes moved in their page), a linear image of the copy's
+    /// memory at the texels' place, which for an image in place over a buffer the driver must lay
+    /// out at the texels' pitches; over memory it imports as dma-bufs
+    /// (`HostMemory::with_dma_buf`), an image of `DRM_FORMAT_MOD_LINEAR` over a dma-buf of the
+    /// texture's own new pages, which needs `VK_EXT_image_drm_format_modifier` and
+    /// `VK_EXT_queue_family_foreign`, a layout the driver takes and the source's dma-buf.
     RebindTextures,
     /// A PVRTC texture's blocks in a Metal block order the runtime does not lay out:
     /// `replaceRegion` and `getBytes` of a region other than a whole level, which Metal's API

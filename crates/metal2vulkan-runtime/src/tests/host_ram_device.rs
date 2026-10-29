@@ -12,6 +12,9 @@
 //! - **Other answers.** `None`, several runs and one run crossing a chunk's end take the gate's
 //!   path (asked once, the pointer imported where it admits); an answer that breaks the
 //!   resolver's contract is refused (`Invalid`, `Problem::HostRam`).
+//! - **Rebinds.** A buffer's or heap's rebind asks the resolver once with its new window: one run
+//!   in a chunk binds there, the gate unasked and nothing imported; several runs take the gate,
+//!   and the copy where it refuses.
 //! - **The use.** Dropping the use while a command buffer still holds a chunk frees the chunk
 //!   after that command buffer completed, and the RAM's keep-alive goes after it; the same RAM
 //!   used twice is refused, a RAM apart from it taken; a new RAM over the same ranges is taken once
@@ -674,5 +677,164 @@ fn a_ram_is_used_once_at_a_time_and_a_new_one_after() {
     );
     assert_eq!(gpu_bytes(&device, &made, page), bytes(start..start + page));
     drop((made, new_used, twin, ram));
+    assert!(settles(&dropped));
+}
+
+/// Give `buffer` the bytes at host address `at`, resolved by `runs`, under `gate`.
+fn rebind(buffer: &Buffer, at: u64, runs: RunResolver, gate: ImportGate) -> Result<(), Error> {
+    // SAFETY: the RAM's bytes, mapped until its keep-alive goes, after every device let go; no
+    // command that uses the buffer is encoded or pending.
+    let memory = unsafe { HostMemory::new(NonNull::new(at as *mut u8).unwrap()) }
+        .with_runs(runs)
+        .with_import_gate(gate);
+    // SAFETY: as above.
+    unsafe { buffer.rebind_bytes_no_copy(memory, None, None) }
+}
+
+/// The window's halves, two runs of the RAM.
+fn halves(start: u64, length: u64) -> Option<Vec<Range<u64>>> {
+    let half = length / 2;
+    Some(vec![start..start + half, start + half..start + length])
+}
+
+#[test]
+fn a_rebind_asks_the_resolver_once_and_binds_one_run_in_its_chunk() {
+    let Some(device) = device() else {
+        return;
+    };
+    let (ram, start, dropped) = new_ram();
+    let used = device.use_host_ram(&ram).unwrap();
+    let page = device.shared().host_import.as_ref().unwrap().page;
+    let length = 4 * page;
+    let (first, second) = (start + 2 * page, start + 64 * MIB + 8 * page);
+    fill_pattern(first..first + length);
+    fill_pattern(second..second + length);
+    let (runs, gates): (Arc<Mutex<_>>, Arc<Mutex<_>>) = Default::default();
+    let made = buffer(
+        &device,
+        first,
+        length,
+        resolver(&runs, itself),
+        gate(&gates, true),
+    )
+    .unwrap();
+    runs.lock().unwrap().clear();
+    let before = device.work_counts();
+    rebind(&made, second, resolver(&runs, itself), gate(&gates, false)).unwrap();
+    let after = device.work_counts();
+    assert_eq!(*runs.lock().unwrap(), vec![(second, length)], "asked once");
+    assert!(gates.lock().unwrap().is_empty(), "the gate was not asked");
+    assert_eq!(
+        after.chunk_bound_buffers_made - before.chunk_bound_buffers_made,
+        1
+    );
+    assert_eq!(
+        after.host_pointer_imports_made - before.host_pointer_imports_made,
+        0,
+        "nothing imported"
+    );
+    assert_eq!(
+        after.copied_rebind_pages_made - before.copied_rebind_pages_made,
+        0
+    );
+    assert!(!made.copied());
+    assert_eq!(made.contents(), NonNull::new(second as *mut u8));
+    assert_eq!(
+        gpu_bytes(&device, &made, length),
+        bytes(second..second + length)
+    );
+    blit(&device, |encoder| {
+        encoder.fill_buffer(&made, 0..page, 0x6B).unwrap();
+    });
+    assert!(bytes(second..second + page).iter().all(|&b| b == 0x6B));
+    // A heap rebound onto one run of the other chunk binds there too.
+    let (heap_at, heap_to) = (start + 32 * page, start + 96 * page);
+    fill_pattern(heap_to..heap_to + 16 * page);
+    // SAFETY: as `buffer`'s.
+    let memory = unsafe { HostMemory::new(NonNull::new(heap_at as *mut u8).unwrap()) }
+        .with_runs(resolver(&runs, itself))
+        .with_import_gate(gate(&gates, true));
+    let descriptor = crate::HeapDescriptor::new(
+        crate::HeapType::Placement,
+        16 * page,
+        ResourceOptions::default(),
+    );
+    // SAFETY: as above.
+    let heap =
+        unsafe { device.new_heap_with_bytes_no_copy(memory, &descriptor, None, None) }.unwrap();
+    let placed = heap
+        .new_buffer_at_offset(4 * page, ResourceOptions::default(), page)
+        .unwrap();
+    let before = device.work_counts();
+    // SAFETY: as above; nothing uses the heap.
+    let memory = unsafe { HostMemory::new(NonNull::new(heap_to as *mut u8).unwrap()) }
+        .with_runs(resolver(&runs, itself))
+        .with_import_gate(gate(&gates, false));
+    // SAFETY: as above.
+    unsafe { heap.rebind_bytes_no_copy(memory, None, None) }.unwrap();
+    let after = device.work_counts();
+    assert_eq!(
+        after.chunk_bound_buffers_made - before.chunk_bound_buffers_made,
+        1
+    );
+    assert!(gates.lock().unwrap().is_empty(), "the gate was not asked");
+    assert_eq!(
+        gpu_bytes(&device, &placed, 4 * page),
+        bytes(heap_to + page..heap_to + 5 * page)
+    );
+    eprintln!("HOST-RAM-REBIND: a buffer and a heap rebound onto one run, bound in its chunk");
+    drop((placed, heap, made, used, ram));
+    assert!(settles(&dropped));
+}
+
+#[test]
+fn a_rebind_onto_several_runs_takes_the_gate_and_the_copy_where_it_refuses() {
+    let Some(device) = device() else {
+        return;
+    };
+    let (ram, start, dropped) = new_ram();
+    let used = device.use_host_ram(&ram).unwrap();
+    let page = device.shared().host_import.as_ref().unwrap().page;
+    let length = 4 * page;
+    let (first, second) = (start + 2 * page, start + 20 * page);
+    fill_pattern(first..first + length);
+    fill_pattern(second..second + length);
+    let (runs, gates): (Arc<Mutex<_>>, Arc<Mutex<_>>) = Default::default();
+    let made = buffer(
+        &device,
+        first,
+        length,
+        resolver(&runs, itself),
+        gate(&gates, true),
+    )
+    .unwrap();
+    runs.lock().unwrap().clear();
+    let before = device.work_counts();
+    rebind(&made, second, resolver(&runs, halves), gate(&gates, false)).unwrap();
+    let after = device.work_counts();
+    assert_eq!(*runs.lock().unwrap(), vec![(second, length)], "asked once");
+    assert_eq!(gates.lock().unwrap().len(), 1, "the gate asked once");
+    assert_eq!(
+        after.chunk_bound_buffers_made - before.chunk_bound_buffers_made,
+        0
+    );
+    assert_eq!(
+        after.copied_rebind_pages_made - before.copied_rebind_pages_made,
+        1
+    );
+    assert!(made.copied());
+    assert_eq!(
+        gpu_bytes(&device, &made, length),
+        bytes(second..second + length)
+    );
+    blit(&device, |encoder| {
+        encoder.fill_buffer(&made, page..2 * page, 0x3C).unwrap();
+    });
+    let now = bytes(second..second + length);
+    assert!(now[page as usize..2 * page as usize]
+        .iter()
+        .all(|&b| b == 0x3C));
+    eprintln!("HOST-RAM-REBIND: a rebind onto two runs, refused by the gate, is a copy");
+    drop((made, used, ram));
     assert!(settles(&dropped));
 }

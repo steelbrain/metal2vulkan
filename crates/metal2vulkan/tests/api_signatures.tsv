@@ -2476,7 +2476,9 @@ field	metal2vulkan-runtime::WorkCounts.copied_host_buffers_degraded	pub copied_h
 field	metal2vulkan-runtime::WorkCounts.copied_host_buffers_made	pub copied_host_buffers_made: u64
 field	metal2vulkan-runtime::WorkCounts.copied_host_buffers_refused	pub copied_host_buffers_refused: u64
 field	metal2vulkan-runtime::WorkCounts.copied_merge_back_bytes	pub copied_merge_back_bytes: u64
+field	metal2vulkan-runtime::WorkCounts.copied_rebind_images_made	pub copied_rebind_images_made: u64
 field	metal2vulkan-runtime::WorkCounts.copied_rebind_pages_made	pub copied_rebind_pages_made: u64
+field	metal2vulkan-runtime::WorkCounts.copied_rebind_pages_moved	pub copied_rebind_pages_moved: u64
 field	metal2vulkan-runtime::WorkCounts.copy_regions_split	pub copy_regions_split: u64
 field	metal2vulkan-runtime::WorkCounts.copy_sites	pub copy_sites: [CopySite; 32]
 field	metal2vulkan-runtime::WorkCounts.cpu_block_decodes	pub cpu_block_decodes: u64

@@ -20,7 +20,8 @@
 //!   made.
 //! - **Refusals.** A buffer of the runtime's memory, a heap's buffer and a heap of the runtime's
 //!   memory are refused `Invalid` (`RebindProblem::NotHostMemory`); a buffer with a live texture
-//!   over it, given memory at another offset in its page, `NotImplemented(RebindTextures)`; a
+//!   over it, given memory at another offset in its page, is given a copy of the new bytes laid
+//!   out at the old offset (`copied-host-pages`), not refused; a
 //!   heap's memory off the import's unit `Invalid` (`HeapProblem::HostMemoryAlignment`). Each
 //!   refused call drops its deallocator unrun and changes nothing.
 //! - **Textures.** A heap's textures, bound to its bytes or shadows of them, a texture or a
@@ -654,8 +655,9 @@ fn rows(all: &[u8], side: usize, bytes: usize, pitch: usize) -> Vec<u8> {
 /// A 2D texture over a no-copy buffer (its linear image aliasing the pages where the device lays
 /// its rows as Metal does, made again over the new pages by the rebind; else a shadow of its bytes)
 /// reads the new pages after a rebind, and its GPU writes land there; given memory at another
-/// offset in its page, the rebind is refused `NotImplemented(RebindTextures)`, its deallocator
-/// unrun. The texture's form is printed.
+/// offset in its page, the rebind gives the buffer a copy of the new bytes laid out at the old
+/// offset (`copied-host-pages`), which the texture reads, that memory's deallocator running at the
+/// next rebind. The texture's form is printed.
 #[test]
 fn a_texture_over_a_rebound_buffer_reads_the_new_pages() {
     on_device(|device| {
@@ -685,23 +687,34 @@ fn a_texture_over_a_rebound_buffer_reads_the_new_pages() {
         };
         assert_eq!(read(&texture), rows(&counting(LEN, 1), side, bytes, pitch));
 
-        // Memory 256 bytes into a page.
+        // Memory 256 bytes into a page: a copy of it, laid out at the old offset.
         let off_page = Mapping::anonymous(LEN + host_page());
+        off_page.write(256, &counting(LEN, 3));
         // SAFETY: 256 bytes into the mapping, which holds the buffer's length past it.
         let off = unsafe { NonNull::new_unchecked(off_page.pointer().as_ptr().add(256)) };
         let seen = Arc::new(Seen::default());
         let count = DropRecord(Arc::clone(&seen));
         let deallocator: Deallocator = Box::new(move |_, _| drop(count));
-        // SAFETY: the mapping holds the length past `off` and outlives any rebind.
+        let before = device.work_counts();
+        // SAFETY: the mapping holds the length past `off` and outlives the next rebind.
         let made =
             unsafe { buffer.rebind_bytes_no_copy(HostMemory::new(off), Some(deallocator), None) };
-        assert_eq!(made, Err(Error::NotImplemented(RuntimeGap::RebindTextures)));
-        assert_eq!(seen.dropped.load(Ordering::SeqCst), 1);
-        drop(off_page);
+        assert_eq!(made, Ok(()));
+        let after = device.work_counts();
+        assert_eq!(
+            after.copied_rebind_pages_moved - before.copied_rebind_pages_moved,
+            1,
+            "a copy of the moved bytes"
+        );
+        assert_eq!(buffer.contents(), Some(off));
+        assert_eq!(read(&texture), rows(&counting(LEN, 3), side, bytes, pitch));
+        assert_eq!(seen.dropped.load(Ordering::SeqCst), 0);
 
         let next = host(LEN, 2);
         let pointer = next.pointer();
         rebind(&buffer, next, &Arc::default()).unwrap();
+        assert_eq!(seen.dropped.load(Ordering::SeqCst), 1);
+        drop(off_page);
         assert_eq!(read(&texture), rows(&counting(LEN, 2), side, bytes, pitch));
         let written: Vec<u8> = (0..side * side * bytes).map(|i| (i % 199) as u8).collect();
         blit_into(

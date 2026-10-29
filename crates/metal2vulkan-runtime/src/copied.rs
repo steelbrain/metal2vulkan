@@ -34,13 +34,14 @@
 //! - **Heaps and rebinds.** A no-copy heap's own buffer is copied as a buffer is, where the heap's
 //!   textures could lie, with a heap's hazard identity; its buffers lie in the copy at their
 //!   offsets, and its textures are shadows of its bytes (`AliasRoute::MemoryShadow` or Metal's
-//!   tiles). A buffer's rebind gives it a copy of its new pages laid out as their import would be
-//!   (`Device::copied_pages`), so texel views planned at the bytes' offset lie where they lay; a
-//!   rebind of a buffer with an image in place over it is refused instead
-//!   (`NotImplemented(RebindTextures)`).
-//! - **What is not copied.** A heap's rebind and memory whose GPU writes Metal's private option
-//!   bit 24 drops import as before. A texture over a copied buffer is a shadow of its bytes
-//!   (`shadowed-texture`): no image is bound to the copy.
+//!   tiles). A buffer's or heap's rebind gives it a copy of its new pages laid out as their import
+//!   would be (`Device::copied_pages`), so texel views planned at the bytes' offset lie where they
+//!   lay, and at the old offset where the bytes moved in their page under a texture; the heap's
+//!   textures bound to its bytes and the images in place over the buffer are made again over the
+//!   copy: in fresh pages the runtime imported where an image in place rides on it, made as over
+//!   the caller's pages; else linear images of its memory that start `PREINITIALIZED`.
+//! - **What is not copied.** Memory whose GPU writes Metal's private option bit 24 drops imports as
+//!   before. A texture made over a copied buffer is a shadow of its bytes (`shadowed-texture`).
 
 use crate::device::lock;
 use crate::host_memory::mapped_readable;

@@ -144,8 +144,9 @@ pub struct HostMemory {
 /// that together cover exactly the length asked; or `None` where the pages are no view of the
 /// RAM (or not all of them, or some are read-only), which leaves the object on the runtime's
 /// other paths. Asked at most once per object, as a no-copy buffer or heap is made over the
-/// pages (a rebind to them does not ask it: its pages take the rebind's other paths), on the
-/// calling thread, holding no lock of the runtime's, before the import gate ([`ImportGate`]);
+/// pages, and once at each rebind of either to new pages (but for bytes moved in their page under
+/// a texture, which take a copy without asking), on the calling thread, holding no lock of the
+/// runtime's, before the import gate ([`ImportGate`]);
 /// only on a device that uses a RAM
 /// ([`Device::use_host_ram`](crate::Device::use_host_ram)), and only where the object would import
 /// the pages itself (not one that lies in a live import of the same bytes, nor one whose GPU
@@ -166,10 +167,11 @@ pub type RunResolver = Arc<dyn Fn(u64, u64) -> Option<Vec<Range<u64>>> + Send + 
 /// thread that makes the buffer, heap or rebind, holding no lock of the runtime's. Not asked for a
 /// buffer or rebind that lies in a live import (one made over the same bytes), nor where the device
 /// refused the import before it (no host-pointer import, an import alignment the range cannot
-/// meet), nor for memory whose GPU writes Metal's private option bit 24 drops, nor for a heap's
-/// rebind, which imports without asking. An import it lets go on that then fails (out of memory,
-/// another Vulkan error) makes the copy all the same. Every copy is announced
-/// (`copied-host-pages`). No Metal counterpart.
+/// meet), nor for memory whose GPU writes Metal's private option bit 24 drops, nor for a buffer's
+/// rebind to bytes at another offset in their page under a texture planned at the old one, which
+/// is a copy without asking. A heap's rebind asks it as a heap's making does. An import it lets go
+/// on that then fails (out of memory, another Vulkan error) makes the copy all the same. Every copy
+/// is announced (`copied-host-pages`). No Metal counterpart.
 pub type ImportGate = Arc<dyn Fn(ImportRequest) -> bool + Send + Sync + 'static>;
 
 /// The pages an [`ImportGate`] is asked about: those an import would map for the buffer, from the
@@ -375,8 +377,9 @@ impl HostMemory {
 
     /// This memory, with the caller's gate over the import of its pages (a runtime extension,
     /// [`ImportGate`]): asked once, just before a no-copy buffer or heap made over it, or a
-    /// buffer's rebind to it, imports the pages; where it answers `false`, the buffer is a copied
-    /// host buffer (the heap's own buffer too, the rebind's new pages a copy), which no import maps,
+    /// buffer's or heap's rebind to it, imports the pages; where it answers `false`, the buffer is a
+    /// copied host buffer (the heap's own buffer too, the rebind's new pages a copy), which no
+    /// import maps,
     /// announced (`copied-host-pages`) and counted (`WorkCounts::host_imports_refused_by_host`,
     /// `WorkCounts::copied_host_buffers_refused`). No Metal counterpart.
     pub fn with_import_gate(self, gate: ImportGate) -> HostMemory {
@@ -388,8 +391,10 @@ impl HostMemory {
 
     /// This memory, with the caller's resolver of its pages to the runs of guest RAM they are
     /// views of (a runtime extension, [`RunResolver`]). On a device that uses that RAM
-    /// ([`Device::use_host_ram`](crate::Device::use_host_ram)), a no-copy buffer or heap whose
-    /// pages the resolver answers as one run inside one of the device's chunks of the RAM is a
+    /// ([`Device::use_host_ram`](crate::Device::use_host_ram)), a no-copy buffer or heap (or a
+    /// rebind of either, `rebind_bytes_no_copy`, but for a buffer's whose bytes moved in their
+    /// page under a texture, which is a copy) whose pages the resolver answers as one run inside
+    /// one of the device's chunks of the RAM is a
     /// `VkBuffer` bound in that chunk's import, at the run, sized and bound against the object's
     /// own pages as an import of them would be, so no access through the buffer reaches the rest
     /// of the chunk: no import of its own, no kernel mapping of the pages, and the import gate

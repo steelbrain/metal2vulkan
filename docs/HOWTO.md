@@ -325,9 +325,9 @@ happens where:
   byte's through the last's). `false` makes the copy (`WorkCounts::host_imports_refused_by_host`,
   `copied_host_buffers_refused`). A consumer with a budget of mappings (Linux's
   `vm.max_map_count`) refuses there, paying in copies instead of a failed call. It is not asked
-  for a buffer or rebind that lies in a live import of the same bytes, a heap's rebind, memory
-  whose GPU writes Metal's private option bit 24 drops, or where the device refused the pointer
-  before it;
+  for a buffer or rebind that lies in a live import of the same bytes, memory whose GPU writes
+  Metal's private option bit 24 drops, a rebind whose bytes moved in their page under a texture
+  (below), or where the device refused the pointer before it;
 - an import the device and the gate admitted fails (out of memory, another Vulkan error:
   `copied_host_buffers_degraded`).
 
@@ -346,9 +346,20 @@ with read permission: on Linux the kernel's read pins each page, which a mapping
 without read permission, are never copied: the buffer is refused, as their import is.
 
 A no-copy heap's own buffer is copied the same way (`copied_heaps_made`): its buffers lie in the
-copy, and its textures are shadows of its bytes. `Buffer::rebind_bytes_no_copy` gives the buffer a
-copy of its new pages the same way (`copied_rebind_pages_made`), except over a buffer with a
-texture in place over it, which the rebind refuses (`NotImplemented(RebindTextures)`).
+copy, and its textures are shadows of its bytes. `Buffer::rebind_bytes_no_copy` and
+`Heap::rebind_bytes_no_copy` give the buffer or heap a copy of their new pages the same way
+(`copied_rebind_pages_made`). The heap's placed buffers lie in the copy at their offsets; its
+textures bound to its bytes, and a texture's image in place over the buffer, are made again over
+the copy (`copied_rebind_images_made`): where an image in place rides on it, the copy is fresh
+pages the runtime maps and imports by pointer, and the image is made as over the caller's pages,
+under the device's in-place check for fresh pages; else the copy is memory the device allocates,
+and each image a linear image of it that starts `PREINITIALIZED`, so its first move keeps the
+copy's bytes. Textures held as shadows read the copy. A buffer's
+rebind to bytes at another offset in their page than the old, under a texture planned at the old
+offset, is a copy laid out at the old offset too, the gate unasked (`copied_rebind_pages_moved`).
+A rebind is refused (`NotImplemented(RebindTextures)`) only where the device makes no such image
+over the copy (its driver lays the linear image out at other pitches, or in memory of another type
+or alignment), or where the buffer's GPU writes are dropped and its bytes moved in their page.
 
 ### Guest RAM imported whole
 
@@ -361,7 +372,7 @@ pages then takes a kernel mapping per page) can give the device the guest's RAM 
   ranges are apart, and a new one over the same ranges once the earlier use ended; ranges that
   meet a used RAM's are misuse (`Invalid`, `Problem::HostRam`).
 - `HostMemory::with_runs(resolver)` gives each no-copy object a `RunResolver`: asked once, at the
-  object's making, on the calling thread with no lock of the runtime's held and before the import
+  object's making and at each `rebind_bytes_no_copy` to new memory, on the calling thread with no lock of the runtime's held and before the import
   gate, with the object's import window (whole host pages), it answers the host addresses of the
   same bytes in the RAM's ranges, as runs of whole pages in the object's byte order, or `None`.
   It is asked only on a device that uses a RAM, only where the object would import its pages
@@ -375,7 +386,8 @@ pages then takes a kernel mapping per page) can give the device the guest's RAM 
   at its run (`chunk_bound_buffers_made`): no import of its own, no gate asked, its `contents`
   still the pointer, and its size reaching no page past its own, so neither its Metal range, a
   robust descriptor range nor a root entry reaches the rest of the chunk. A no-copy heap's own
-  buffer takes the same path.
+  buffer, and a buffer's or heap's rebind, take the same path; a buffer's rebind to bytes at
+  another offset in their page under a texture takes the copy laid out at the old offset instead.
 - Any other answer (several runs, one run crossing a chunk's end, `None`) takes the paths above:
   the gate, then the import or the copy. The runs are kept with the object.
 - The chunks are never released while idle. Once the use is dropped, each is freed when nothing

@@ -511,10 +511,11 @@ impl Device {
     /// [`in_place_image`](Self::in_place_image) made it, bound in their import; over pages
     /// imported as dma-bufs, the `DRM_FORMAT_MOD_LINEAR` image `remade` holds for it, made before
     /// the rebind settled ([`dma_buf_in_place_again`](Self::dma_buf_in_place_again)), which its
-    /// first move acquires from `VK_QUEUE_FAMILY_FOREIGN_EXT`. Refused
+    /// first move acquires from `VK_QUEUE_FAMILY_FOREIGN_EXT`; over a copy of the caller's pages
+    /// (`copied.rs`), the image [`in_place_over_copy`](Self::in_place_over_copy) makes. Refused
     /// (`NotImplemented(RebindTextures)`) where the device makes no such image there: the new
-    /// import's memory type is not one the image takes, the image's alignment misses its place, or
-    /// `remade` holds none for it.
+    /// memory's type is not one the image takes, the image's alignment misses its place, the
+    /// driver lays the copy's image out at other pitches, or `remade` holds none for it.
     pub(crate) fn rebound_in_place_images(
         &self,
         watches: &[InPlaceWatch],
@@ -546,6 +547,11 @@ impl Device {
                 swaps.push(ImageSwap::acquired(image, objects, pages, family));
                 continue;
             }
+            if pages.copied() {
+                // Dropped on a later failure, the images made so far go.
+                swaps.push(self.in_place_over_copy(image, watch, pages)?);
+                continue;
+            }
             let at = base + watch.from_base;
             let made = self.in_place_unbound(image.plan(), &watch.layout, &facts)?;
             let Ok((made, _)) = made else {
@@ -575,6 +581,77 @@ impl Device {
             swaps.push(ImageSwap::new(image, objects, first, pages));
         }
         Ok(swaps)
+    }
+
+    /// The image in place of `image`'s plan over a rebind's copy of the caller's pages
+    /// (`copied.rs`: the caller's gate refused their import, it failed, or the bytes moved in
+    /// their page), its texels where `watch` notes them, swapped in once the rebind is made. Over
+    /// a copy in fresh pages the runtime imported (`fresh_pages.rs`), the image an import of the
+    /// caller's pages takes, made for host allocations (the driver's linear image at the texels'
+    /// pitches, else the `DRM_FORMAT_MOD_LINEAR` one), where the device's check passed for fresh
+    /// pages (`in_place.rs`); over one in memory the device allocates, a linear image of its own,
+    /// as a texture's over a buffer of the runtime's, which starts `PREINITIALIZED` and so keeps
+    /// the copy's bytes at its first move ("the transition away from this layout will preserve
+    /// that data", Image Layouts). Either lies at the texels' pitches from offset 0, in a type of
+    /// the copy's memory, at an offset its alignment meets, inside the copy's memory. Refused
+    /// (`NotImplemented(RebindTextures)`) where it does not.
+    fn in_place_over_copy(
+        &self,
+        image: Arc<Image>,
+        watch: &InPlaceWatch,
+        pages: &Arc<crate::buffer::HostPages>,
+    ) -> Result<ImageSwap, Error> {
+        let (memory, base) = pages.memory();
+        let layout = &watch.layout;
+        let raw_device = self.shared().vk();
+        let refused = || Error::NotImplemented(RuntimeGap::RebindTextures);
+        // A copy in fresh pages the runtime imported takes the image an import of the caller's
+        // pages takes, made for host allocations (`in_place_unbound`), where the device's check
+        // passed for fresh pages; one in memory the device allocates, a linear image of its own.
+        let made = match pages.over_own_pages() {
+            true => {
+                if self.in_place_verdict(PagesClass::Fresh) != crate::in_place::Verdict::Passed {
+                    return Err(refused());
+                }
+                let facts = self
+                    .shared()
+                    .textures
+                    .facts(self.compile_device().profile());
+                let Ok((made, _)) = self.in_place_unbound(image.plan(), layout, &facts)? else {
+                    return Err(refused());
+                };
+                made
+            }
+            false => {
+                let Ok(made) = self.linear_image(image.plan())? else {
+                    return Err(refused());
+                };
+                made
+            }
+        };
+        let raw = made.raw;
+        let at = base + watch.from_base;
+        let room = pages.room().saturating_sub(watch.from_base);
+        let lies = made.report.offset == 0
+            && made.report.row_pitch == layout.row_pitch
+            && (layout.slices == 1 || made.report.array_pitch == layout.slice_pitch);
+        if !lies || placed(&made.requirements, at, room, pages.type_index()).is_err() {
+            // SAFETY: the image is live and unbound, and no command uses it.
+            unsafe { release::object(raw_device, raw) };
+            return Err(refused());
+        }
+        // SAFETY: the image is live and unbound; the memory is the copy's, which the new pages
+        // hold, in a type the image takes, at an offset that meets its alignment, its size inside
+        // the memory (`placed`), where its texels lie as they lay in the old pages.
+        if let Err(error) = unsafe { crate::creation::bind_image(raw_device, raw, memory, at) } {
+            // SAFETY: the image is live and unbound, and no command uses it.
+            unsafe { release::object(raw_device, raw) };
+            return Err(vulkan(error));
+        }
+        self.shared().counts.copied_rebind_image_made();
+        let objects = ImageObjects::new(self, raw);
+        let first = FirstMove::new(raw, image.plan().format, made.initial, pages_hold(pages));
+        Ok(ImageSwap::new(image, objects, first, pages))
     }
 
     /// The images in place over a no-copy buffer's (or a no-copy heap's) bytes that `watches`

@@ -2883,9 +2883,9 @@ impl Device {
             &image.plan,
             image.tiling,
             binding.host,
-            binding.memory,
-            at,
+            (binding.memory, at),
             size,
+            None,
         )?;
         let (raw, initial) = made.ok_or_else(|| {
             internal("a heap texture's image does not lie where its plan placed it")
@@ -2963,15 +2963,16 @@ impl Device {
     /// A `VkImage` of `plan` and `tiling` (made for host allocations where `host`) bound at `at`
     /// of `memory`, whose requirements hold at most `size` bytes there, with the layout it
     /// starts in, for its caller to move to `GENERAL`; `None`, nothing made, where its
-    /// requirements do not (its alignment misses `at`, or it takes more bytes).
+    /// requirements do not (its alignment misses `at`, it takes more bytes, or, where
+    /// `type_index` names the memory's type, it takes none of that type).
     fn heap_raw_image(
         &self,
         plan: &ImagePlan,
         tiling: vk::ImageTiling,
         host: bool,
-        memory: vk::DeviceMemory,
-        at: u64,
+        (memory, at): (vk::DeviceMemory, u64),
         size: u64,
+        type_index: Option<u32>,
     ) -> Result<Option<(vk::Image, vk::ImageLayout)>, Error> {
         let raw_device = self.shared().vk();
         let view_formats = plan.ash_view_formats();
@@ -2998,7 +2999,10 @@ impl Device {
         let raw = unsafe { crate::creation::image(raw_device, &info) }?;
         // SAFETY: `raw` is a live image of this device.
         let requirements = unsafe { raw_device.get_image_memory_requirements(raw) };
-        if !at.is_multiple_of(requirements.alignment.max(1)) || requirements.size > size {
+        let untaken =
+            type_index.is_some_and(|index| requirements.memory_type_bits & (1 << index) == 0);
+        if !at.is_multiple_of(requirements.alignment.max(1)) || requirements.size > size || untaken
+        {
             // SAFETY: the image is live and unbound, and no command uses it.
             unsafe { release::object(raw_device, raw) };
             return Ok(None);
@@ -3018,14 +3022,21 @@ impl Device {
     /// pages, `pages` (`rebind.rs`): each the same plan, bound at the texture's offset; swapped in
     /// once the rebind is made, the device's next submission that names it moving it to
     /// `GENERAL`. Over pages imported by their pointer, linear and made for host allocations as
-    /// `host_heap_plan` made it; over pages imported as dma-bufs (`dma_buf.rs`), the
+    /// `host_heap_plan` made it; over a copy of the caller's pages (`copied.rs`, the caller's gate
+    /// refused their import, or it failed), a linear image of the runtime's own memory, which
+    /// starts `PREINITIALIZED` and so keeps the copy's bytes at its first move, as Vulkan has a
+    /// linear image's move from that layout keep them, or, where the copy is fresh pages the
+    /// runtime imported (`fresh_pages.rs`), one made for host allocations as over an import;
+    /// over pages imported as dma-bufs
+    /// (`dma_buf.rs`), the
     /// `DRM_FORMAT_MOD_LINEAR` image `remade` holds for it, made before the rebind settled
     /// ([`Device::dma_buf_images_again`]), which its first move acquires from
     /// `VK_QUEUE_FAMILY_FOREIGN_EXT`. A texture held as a shadow of the heap's bytes, or a texture
     /// buffer, takes none: the one's copies and the other's views read the heap's buffer as they
     /// are recorded or made. Refused (`NotImplemented(RebindTextures)`) where no such image is made
-    /// for a texture bound to the bytes: `remade` holds none for it, or the image made for host
-    /// allocations does not lie in its place (one made over dma-buf pages before).
+    /// for a texture bound to the bytes: `remade` holds none for it, or the image made does not
+    /// lie in its place (one made over dma-buf pages before, or over the copy one whose
+    /// alignment misses its offset, that takes more bytes, or none of the copy's memory type).
     pub(crate) fn rebound_heap_images(
         &self,
         heap: &Heap,
@@ -3034,6 +3045,11 @@ impl Device {
     ) -> Result<Vec<ImageSwap>, Error> {
         let (memory, base) = pages.memory();
         let dma_buf = pages.over_dma_buf();
+        let copied = pages.copied().then(|| pages.type_index());
+        // A copy in fresh pages the runtime imported (`fresh_pages.rs`) takes images made for
+        // host allocations, as an import of the caller's pages does
+        // (`VUID-vkBindImageMemory-memory-02728`).
+        let host = copied.is_none() || pages.over_own_pages();
         let (textures, _) = heap.textures_from(0);
         let mut swaps: Vec<ImageSwap> = Vec::new();
         for texture in &textures {
@@ -3061,21 +3077,25 @@ impl Device {
                 continue;
             }
             // An image over dma-buf pages lies in the layout the driver gives a
-            // `DRM_FORMAT_MOD_LINEAR` image, which its linear image need not keep.
-            if image.raw.dedicated() {
+            // `DRM_FORMAT_MOD_LINEAR` image, which its linear image need not keep; over a copy,
+            // nothing of the old contents is kept anyway.
+            if image.raw.dedicated() && copied.is_none() {
                 return Err(Error::NotImplemented(RuntimeGap::RebindTextures));
             }
             let made = self.heap_raw_image(
                 image.plan(),
                 vk::ImageTiling::LINEAR,
-                true,
-                memory,
-                base + place.offset,
+                host,
+                (memory, base + place.offset),
                 place.size,
+                copied,
             )?;
             let Some((raw, initial)) = made else {
                 return Err(Error::NotImplemented(RuntimeGap::RebindTextures));
             };
+            if copied.is_some() {
+                self.shared().counts.copied_rebind_image_made();
+            }
             let first = FirstMove::new(raw, image.plan().format, initial, pages_hold(pages));
             // Dropped on a later failure, the images made so far go.
             let objects = ImageObjects::new(self, raw);

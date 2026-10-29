@@ -699,6 +699,20 @@ impl HostPages {
         self.import.shape.offset
     }
 
+    /// Whether they lie in fresh pages the runtime mapped and imported (`fresh_pages.rs`): a copy
+    /// of the caller's pages that images in place ride on (`Device::copied_pages`).
+    pub(super) fn over_own_pages(&self) -> bool {
+        let pages = self.import.pages(ReadApart::Texture);
+        pages.memory.placement.over_own_pages()
+    }
+
+    /// The bytes of their memory from where the bytes start to the placement's end: the room an
+    /// image bound at their bytes has.
+    pub(super) fn room(&self) -> u64 {
+        let pages = self.import.pages(ReadApart::Texture);
+        pages.memory.placement.size().saturating_sub(pages.offset)
+    }
+
     /// The index of their memory's type.
     pub(super) fn type_index(&self) -> u32 {
         self.import.shape.type_index

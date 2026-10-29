@@ -326,8 +326,7 @@ driver's. Each is open work.
 - **A copied host buffer's merge keeps the CPU's byte where the CPU and the GPU both wrote it**
   between a commit and the completion: bytes are merged one at a time, so a GPU write never
   rewrites a byte beside it, but a byte both wrote keeps the CPU's, where on Metal the later write
-  wins. A heap's rebind is never copied, nor a buffer's rebind with an image in place over the
-  buffer: a refused or failed import of either still refuses the call.
+  wins.
 - **On MoltenVK a kernel's out-of-bounds write through a buffer reaches other bytes of the
   buffer's memory allocation**, where Metal's GPU faults past the pages of the resource: on the
   M3 Max (MoltenVK 1.4.2) a dispatch writing three pages through a one-page buffer of the

@@ -59,9 +59,12 @@
 //!   buffer committed after the rebind writes its set-1 elements again (`heap_sets.rs`). The
 //!   copies, views and aliasing images are planned at the bytes' offset in their `VkBuffer`, which
 //!   a heap's rebind keeps (its first byte at the import's unit); a no-copy buffer with a texture
-//!   over it is rebound only to memory at the same offset in its page
-//!   (`NotImplemented(RebindTextures)` else), as is one whose aliasing image the device cannot make
-//!   again over the new pages (their memory type is not one it takes). Over new pages imported as
+//!   over it given memory at another offset in its page lies in a copy of it laid out at the old
+//!   offset (`copied.rs`, `copied-host-pages`). A rebind is refused
+//!   (`NotImplemented(RebindTextures)`) where the device cannot make an aliasing image again over
+//!   the new pages (their memory type is not one it takes). Where the caller's gate refuses the
+//!   new pages' import, or the admitted import fails, a buffer's or a heap's rebind takes a copy
+//!   of them (`copied.rs`), its images made again over the copy. Over new pages imported as
 //!   dma-bufs, each such image is made again over a dma-buf of its own new pages before the rebind
 //!   settles (`Device::dma_buf_images_again`, `dma_buf.rs`), and refused likewise where it is not.
 
@@ -903,18 +906,20 @@ impl Buffer {
     /// ([`HostMemory::with_import_gate`](crate::HostMemory::with_import_gate)), or the import the
     /// device and the gate admitted fails (out of memory, another Vulkan error), the buffer is
     /// given a copy of the new pages in memory of the device's own instead, its `contents` the new
-    /// pointer, announced (`copied-host-pages`, `copied.rs`); refused instead where an image in
-    /// place aliases the buffer's bytes (`NotImplemented(RebindTextures)`).
+    /// pointer, announced (`copied-host-pages`, `copied.rs`), an image in place over its bytes made
+    /// again over the copy. New memory at another offset in its page than the old, where a texture
+    /// over the buffer lives, is given such a copy laid out at the old offset, the gate unasked.
+    /// Metal rebinds over any memory; the copy is the difference.
     ///
     /// Refused: a buffer that is not a no-copy buffer of its own (`Invalid`,
     /// [`RebindProblem::NotHostMemory`]); a command buffer not yet committed whose commands used
     /// the buffer, or an open encoder that did (a render encoder with an attachment over it, from
     /// its open) (`Invalid`, [`RebindProblem::EncodedUses`]); new memory at another offset in its
-    /// page than the old where a texture over the buffer lives (`NotImplemented(RebindTextures)`:
-    /// the texture's copies, views and aliasing image are planned at that offset), or where the
-    /// device cannot make a texture's aliasing image again over the new memory
-    /// (`NotImplemented(RebindTextures)`, which says when); memory the device cannot import
-    /// exactly, as `new_buffer_with_bytes_no_copy` refuses it; a lost device.
+    /// page than the old where a texture over the buffer lives and the buffer's GPU writes are
+    /// dropped (`NotImplemented(RebindTextures)`), or where the device cannot make a texture's
+    /// aliasing image again over the new memory or its copy (`NotImplemented(RebindTextures)`,
+    /// which says when); memory the device cannot import exactly, as
+    /// `new_buffer_with_bytes_no_copy` refuses it; a lost device.
     ///
     /// # Safety
     ///
@@ -962,7 +967,10 @@ impl Heap {
     /// returns, as has a texture over one of the heap's buffers whose linear image aliases its
     /// bytes; a texture held as a shadow of the heap's bytes, a texture buffer and a shadowed
     /// texture over one of the heap's buffers read them from their next use. Nothing of the old
-    /// contents is copied.
+    /// contents is copied. Where the caller's gate refuses the new memory's import, or the import
+    /// it admitted fails, the heap is given a copy of the new memory instead, as
+    /// [`Buffer::rebind_bytes_no_copy`]'s buffer is, its bound textures' images made again over the
+    /// copy, announced (`copied-host-pages`).
     ///
     /// Refused: a heap not over the caller's host memory (`Invalid`,
     /// [`RebindProblem::NotHostMemory`]); a command buffer not yet committed whose commands used

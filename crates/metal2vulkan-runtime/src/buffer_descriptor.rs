@@ -34,7 +34,7 @@ use super::rebind::RebindProblem;
 use super::texture::stand_in::TextureImages;
 use super::texture::Remade;
 use super::values::{ResourceOptions, StorageMode};
-use super::work_counts::Counters;
+use super::work_counts::{CopiedBecause, Counters};
 use super::Device;
 use crate::release;
 use ash::vk;
@@ -704,8 +704,7 @@ impl Device {
             writable,
             dirty,
             gate,
-            // A rebind's resolver is asked by the rebind's own routing (`host_ram.rs`).
-            runs: _,
+            runs,
         } = memory.into_parts();
         // A buffer whose GPU writes are dropped keeps them dropped over its new pages.
         let drops_writes = cell.drops_writes();
@@ -718,12 +717,30 @@ impl Device {
         }
         // The texel views and copies of the textures over the bytes are planned at their offset
         // in the `VkBuffer`, the bytes' offset in their page; and their images in place are bound
-        // where Metal lays their texels out, which keeps their alignment only at that offset.
+        // where Metal lays their texels out, which keeps their alignment only at that offset. New
+        // bytes at another offset in their page are given a copy of them laid out at the old
+        // offset (`copied.rs`), as no import lays them there: the gate is not asked, as nothing is
+        // imported. A buffer whose GPU writes are dropped is never a copy, and is refused so.
         let texels = cell.texels();
         let in_place = cell.in_place_images();
-        if (!texels.is_empty() || !in_place.is_empty()) && window.offset != cell.offset() {
+        let copyable = !drops_writes;
+        let moved = (!texels.is_empty() || !in_place.is_empty()) && window.offset != cell.offset();
+        if moved && !copyable {
             return Err(Error::NotImplemented(RuntimeGap::RebindTextures));
         }
+        let unit = importer.page.max(importer.alignment);
+        let copy_window = match moved {
+            true => ImportWindow {
+                start: (pointer.as_ptr() as u64).wrapping_sub(cell.offset()),
+                size: cell
+                    .offset()
+                    .checked_add(length)
+                    .and_then(|end| end.checked_next_multiple_of(unit))
+                    .ok_or_else(not_importable)?,
+                offset: cell.offset(),
+            },
+            false => window,
+        };
         // Detached bytes are given pages with no texture being made over them, and none is
         // made until the textures that presented stand-ins present their own images again.
         let detached_textures = || Error::NotImplemented(RuntimeGap::DetachTextures);
@@ -738,27 +755,54 @@ impl Device {
         // imports its own, whose images bound to its bytes are made again over the new import's
         // memory or its dma-bufs, as does a buffer whose GPU writes are dropped.
         let made_over = (pointer.as_ptr() as u64, length);
-        let shares = (heap.is_none() && !drops_writes)
+        let shares = (heap.is_none() && !drops_writes && !moved)
             .then(|| shared.aliases.import(made_over, class))
             .flatten();
         let (pages, remade) = match shares {
             Some(import) => (self.pages_in_import(import), Remade::default()),
             None => {
+                // Pages the caller resolves to runs of a guest RAM the device uses
+                // (`host_ram.rs`), as at the buffer's making: asked once, here, holding no lock of
+                // the runtime's (the textures over detached bytes let go of meanwhile, and
+                // settled again after it), before the gate. One run inside one chunk is bound in
+                // the chunk's import, with no import of its own, no pin and no gate, unless the
+                // bytes moved in their page, which take the copy laid out at the old offset.
+                // Others take the paths below, the runs kept with the new pages. A buffer whose
+                // GPU writes are dropped is never routed.
+                let routed = match (&runs, drops_writes) {
+                    (Some(resolver), false) => {
+                        let was_settled = settled.take().is_some();
+                        let routed = self.route_runs(call, importer, resolver, &window);
+                        if was_settled {
+                            settled = Some(cell.settled().ok_or_else(detached_textures)?);
+                        }
+                        routed?
+                    }
+                    _ => None,
+                };
+                // SAFETY: the window's pages are the bytes of the run in the RAM (the resolver's
+                // contract, `HostMemory::with_runs`).
+                let in_chunk = (routed.as_ref().filter(|_| !moved)).and_then(|routed| unsafe {
+                    self.bind_in_chunk(importer, routed, &window, length)
+                });
+                let chunk_bound = in_chunk.is_some();
+                let kept_runs = routed.as_ref().map(Routed::kept);
                 // Only pages imported here are pinned, and so have their writability asked.
-                let host = writability_settled(host, writable, &shared.counts)?;
-                let unwritable = host.unwritable;
+                let host = match chunk_bound {
+                    true => host,
+                    false => writability_settled(host, writable, &shared.counts)?,
+                };
+                let unwritable = !chunk_bound && host.unwritable;
                 // Whether an import alive now holds every page of them: counted once the import
                 // is made (`WorkCounts::host_rebind_imports_covered`).
-                let unit = importer.page.max(importer.alignment);
                 let start = pointer.as_ptr() as u64;
                 let covered = (shared.aliases).covered(start, start.saturating_add(length), unit);
-                // A buffer's new pages whose pointer the device would import (not a heap's, nor
-                // a buffer's whose GPU writes are dropped) may be a copy of them instead
+                // New pages whose pointer the device would import (a buffer's or a heap's, not a
+                // buffer's whose GPU writes are dropped) may be a copy of them instead
                 // (`copied.rs`): where the caller's gate refuses the import, asked here with the
                 // pages it would map, holding no lock of the runtime's; or where the import it
-                // admitted fails.
-                let copyable = heap.is_none() && !drops_writes;
-                let gate = gate.filter(|_| copyable && host.by_pointer);
+                // admitted fails. Bytes moved in their page are a copy, the gate unasked.
+                let gate = gate.filter(|_| copyable && host.by_pointer && !moved && !chunk_bound);
                 let refused_by_host = match gate {
                     Some(gate) => {
                         // Asked with no lock of the runtime's held: the textures over detached
@@ -779,20 +823,23 @@ impl Device {
                 if refused_by_host {
                     shared.counts.host_import_refused_by_host();
                 }
+                // The heap's images bound to its bytes, and the images in place over the bytes,
+                // are made again over the copy (`Device::rebound_heap_images`,
+                // `Device::rebound_in_place_images`): its memory holds whole pages from a multiple
+                // of the import's unit.
+                let images = (heap.is_some() || !in_place.is_empty()).then_some(unit);
+                let own_pages = !in_place.is_empty();
                 let copy = |failed: Option<Error>| {
-                    // An image in place over the bytes would be made again over the copy, which
-                    // is not done: refused, as over new pages no image takes.
-                    if !in_place.is_empty() {
-                        return Err(Error::NotImplemented(RuntimeGap::RebindTextures));
-                    }
+                    let window = &copy_window;
                     // SAFETY: the caller's contract.
-                    unsafe { self.copied_pages(pointer, length, &window, failed) }
+                    unsafe { self.copied_pages(pointer, length, window, images, own_pages, failed) }
                 };
-                let imported = match refused_by_host {
-                    true => Err(None),
+                let imported = match (in_chunk, refused_by_host || moved) {
+                    (Some(bound), _) => Ok(Ok(Ok(bound))),
+                    (None, true) => Err(None),
                     // SAFETY: the window lies in the pages of the caller's bytes, which stay
                     // mapped (`HostMemory::new`, `HostMemory::with_dma_buf`).
-                    false => match unsafe {
+                    (None, false) => match unsafe {
                         self.import_by_pointer(importer, pointer, length, host, class)
                     } {
                         Err(error) if copyable && copies_after(&error) => Err(Some(error)),
@@ -802,9 +849,13 @@ impl Device {
                 let (imported, copied) = match imported {
                     Ok(imported) => (imported, None),
                     Err(failed) => {
-                        let degraded = failed.is_some();
+                        let cause = match (moved, &failed) {
+                            (true, _) => CopiedBecause::Moved,
+                            (false, Some(_)) => CopiedBecause::Failed,
+                            (false, None) => CopiedBecause::Refused,
+                        };
                         let (host, placement, copied) = copy(failed)?;
-                        (Ok(Ok((host, placement))), Some((copied, degraded)))
+                        (Ok(Ok((host, placement))), Some((copied, cause)))
                     }
                 };
                 let (host, placement, remade) = match imported? {
@@ -857,21 +908,31 @@ impl Device {
                 if unwritable {
                     self.degrade_read_only_pages(call, pointer, length);
                 }
+                // A copy lies at the offset it was laid out at: the old one where the bytes moved.
+                let offset = match copied {
+                    Some(_) => copy_window.offset,
+                    None => window.offset,
+                };
                 let pages = self.host_pages(
                     host.raw,
                     placement,
-                    window.offset,
+                    offset,
                     host.base,
                     host.size - host.base,
                 );
                 match copied {
-                    Some((copied, degraded)) => {
+                    Some((copied, cause)) => {
                         pages.set_copied(copied);
-                        shared.counts.copied_host_buffer_made(degraded);
+                        shared.counts.copied_host_buffer_made(cause);
                         shared.counts.copied_rebind_pages_made();
-                        self.degrade_copied(call, pointer, length, degraded);
+                        self.degrade_copied(call, pointer, length, cause);
                     }
+                    None if chunk_bound => {}
                     None => shared.counts.host_rebind_import_made(covered),
+                }
+                // The guest RAM and runs the caller resolved the pages to stay with them.
+                if let Some(runs) = kept_runs {
+                    pages.keep_runs(runs);
                 }
                 (pages, remade)
             }
@@ -1181,7 +1242,14 @@ impl Device {
     /// out as their import of `window` would be: a `VkBuffer` from the window's first page, the
     /// bytes `window.offset` into it, in host-visible memory of the device's own, so the texel
     /// views planned at the bytes' offset lie where they lay. Its memory's host address is the
-    /// window's, so the buffer's `contents` stays the pointer. Refused as
+    /// window's, so the buffer's `contents` stays the pointer. Where images will be bound in it
+    /// (`images`, the import's unit: a heap's textures bound to its bytes, images in place over the
+    /// buffer's), its memory holds the window's whole pages from a multiple of that unit, as the
+    /// import's did, so each image's texels lie at the offset from an aligned start they had there.
+    /// Where images in place ride on it (`own_pages`), the copy is fresh pages the runtime maps and
+    /// imports by their pointer where the device takes them ([`Device::fresh_page_buffer`]), so
+    /// each image is made for host allocations, as over the caller's pages, under the device's
+    /// check for fresh pages (`in_place.rs`); else memory the device allocates. Refused as
     /// [`Device::copied_buffer`] refuses its copy.
     ///
     /// # Safety
@@ -1192,6 +1260,8 @@ impl Device {
         pointer: NonNull<u8>,
         length: u64,
         window: &ImportWindow,
+        images: Option<u64>,
+        own_pages: bool,
         failed: Option<Error>,
     ) -> Result<(HostBuffer, Placement, crate::copied::Copied), Error> {
         let shared = self.shared();
@@ -1201,43 +1271,23 @@ impl Device {
         let size = (window.offset.checked_add(length))
             .and_then(|end| end.checked_next_multiple_of(16))
             .ok_or(Error::OutOfMemory(MemoryKind::Device))?;
-        let info = shared.sharing().buffer(
-            vk::BufferCreateInfo::default()
-                .size(size)
-                .usage(usage(false)),
-        );
-        // SAFETY: the device is live and `info` valid.
-        let raw = unsafe { crate::creation::buffer(raw_device, &info) }.map_err(vulkan)?;
-        shared.counts.buffer_made(info.usage);
-        // SAFETY: `raw` is a live buffer of this device.
-        let requirements = unsafe { raw_device.get_buffer_memory_requirements(raw) };
-        let allocated = crate::memory::allocate_addressed(
-            &shared.memory,
-            raw_device,
-            &super::buffer::placed(requirements),
-            MemoryClass::Shared,
-            &shared.counts,
-        );
-        let mut memory = match allocated {
-            Ok(memory) => memory,
-            Err(error) => {
-                // SAFETY: the buffer is unused.
-                unsafe { release::object(raw_device, raw) };
-                return Err(error);
+        let fresh = match own_pages {
+            true => self.fresh_page_buffer(window.size.max(size), MemoryClass::Shared)?,
+            false => None,
+        };
+        let (raw, mut memory, requirements) = match fresh {
+            Some((raw, memory)) => {
+                // SAFETY: `raw` is a live buffer of this device.
+                let requirements = unsafe { raw_device.get_buffer_memory_requirements(raw) };
+                (raw, memory, requirements)
             }
+            None => self.copy_memory(size, window, images)?,
         };
         let discard = |memory: &Placement| {
             // SAFETY: the buffer is unused.
             unsafe { release::object(raw_device, raw) };
             lock(&shared.memory).free(raw_device, memory);
         };
-        // SAFETY: the placement meets the buffer's requirements and is not bound elsewhere.
-        let bound =
-            unsafe { crate::creation::bind_buffer(raw_device, raw, memory.memory, memory.offset) };
-        if let Err(error) = bound {
-            discard(&memory);
-            return Err(vulkan(error));
-        }
         let copy = memory
             .mapped
             .and_then(|mapped| NonNull::new(mapped.as_ptr().wrapping_add(window.offset as usize)));
@@ -1273,23 +1323,84 @@ impl Device {
         Ok((host, memory, copied))
     }
 
+    /// A `VkBuffer` of `size` bytes bound in host-visible memory the device allocates, of a
+    /// copy laid out as `window`'s import would be ([`Device::copied_pages`]), with its
+    /// requirements: holding the window's whole pages from a multiple of `images`' unit where
+    /// images will be bound in it.
+    fn copy_memory(
+        &self,
+        size: u64,
+        window: &ImportWindow,
+        images: Option<u64>,
+    ) -> Result<(vk::Buffer, Placement, vk::MemoryRequirements), Error> {
+        let shared = self.shared();
+        let raw_device = shared.vk();
+        let info = shared.sharing().buffer(
+            vk::BufferCreateInfo::default()
+                .size(size)
+                .usage(usage(false)),
+        );
+        // SAFETY: the device is live and `info` valid.
+        let raw = unsafe { crate::creation::buffer(raw_device, &info) }.map_err(vulkan)?;
+        shared.counts.buffer_made(info.usage);
+        // SAFETY: `raw` is a live buffer of this device.
+        let requirements = unsafe { raw_device.get_buffer_memory_requirements(raw) };
+        let placed = super::buffer::placed(requirements);
+        let placed = match images {
+            Some(unit) => vk::MemoryRequirements {
+                size: placed.size.max(window.size),
+                alignment: placed.alignment.max(unit),
+                ..placed
+            },
+            None => placed,
+        };
+        let allocated = crate::memory::allocate_addressed(
+            &shared.memory,
+            raw_device,
+            &placed,
+            MemoryClass::Shared,
+            &shared.counts,
+        );
+        let memory = match allocated {
+            Ok(memory) => memory,
+            Err(error) => {
+                // SAFETY: the buffer is unused.
+                unsafe { release::object(raw_device, raw) };
+                return Err(error);
+            }
+        };
+        // SAFETY: the placement meets the buffer's requirements and is not bound elsewhere.
+        let bound =
+            unsafe { crate::creation::bind_buffer(raw_device, raw, memory.memory, memory.offset) };
+        if let Err(error) = bound {
+            // SAFETY: the buffer is unused.
+            unsafe { release::object(raw_device, raw) };
+            lock(&shared.memory).free(raw_device, &memory);
+            return Err(vulkan(error));
+        }
+        Ok((raw, memory, requirements))
+    }
+
     /// Announce that `call` made the `length` bytes at `pointer` a copy of the caller's pages
-    /// (`Degradation::CopiedHostPages`): where `degraded`, because the import the device and the
-    /// gate admitted failed, else because the caller's gate refused it.
+    /// (`Degradation::CopiedHostPages`), for `cause`.
     fn degrade_copied(
         &self,
         call: &'static str,
         pointer: NonNull<u8>,
         length: u64,
-        degraded: bool,
+        cause: CopiedBecause,
     ) {
         self.degrade(Degradation::CopiedHostPages, || {
-            let why = match degraded {
-                false => {
+            let why = match cause {
+                CopiedBecause::Refused => {
                     "the caller's import gate (HostMemory::with_import_gate) refused their \
                           import"
                 }
-                true => "their import failed",
+                CopiedBecause::Failed => "their import failed",
+                CopiedBecause::Moved => {
+                    "they lie at another offset in their page than the buffer's old bytes, \
+                     where a texture over the buffer was planned, which no import lays them at"
+                }
             };
             (
                 format!("{call} over {length:#x} bytes at {pointer:p}"),
@@ -1411,11 +1522,15 @@ impl Device {
                 pages.keep_dirty(dirty);
             }
         }
-        shared.counts.copied_host_buffer_made(failed.is_some());
+        let cause = match failed {
+            Some(_) => CopiedBecause::Failed,
+            None => CopiedBecause::Refused,
+        };
+        shared.counts.copied_host_buffer_made(cause);
         if of_heap {
             shared.counts.copied_heap_made();
         }
-        self.degrade_copied(call, pointer, length, failed.is_some());
+        self.degrade_copied(call, pointer, length, cause);
         Ok(buffer)
     }
 
