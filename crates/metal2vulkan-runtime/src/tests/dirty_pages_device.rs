@@ -21,6 +21,28 @@
 //!   shadow's own write, `wrote_as`, at the commit and again at the completion); frame 6 then
 //!   copies nothing in for it (`changed_except` leaves the shadow's own write out).
 //!
+//! A pass that clears such a render target and draws inside rows 0 to 8 replaces every texel
+//! (`ShadowUse::overwrites`): over logged pages it takes the merge, not a plain copy back
+//! (`shadow.rs`, **Overwrites over logged pages**). A row the CPU wrote since and told the log,
+//! which the pass clears to the value the image held before, ends with the pass's value (the
+//! gated copy in took the CPU's bytes into the keep), and a row the CPU wrote but the log left
+//! out, which the pass clears to the same value, keeps the CPU's bytes: the merge stores only
+//! the words the pass changed against the keep. Over host pages with no log, the same pass's copy
+//! back is a plain copy of every texel.
+//!
+//! Over a 1024x1024 such target whose CPU-written texels (told to the log) differ from black at
+//! every other texel, a pass that clears it to black (with a draw in one pixel) changes every
+//! other word: its merge stores whole 256-byte blocks
+//! (`WorkCounts::shadow_merge_dispatches_in_blocks`) and the bytes are the pass's, the CPU's
+//! texels it cleared black among them; a pass that loads it and draws black over every pixel
+//! changes the same words, and its merge stores whole blocks too, as Metal's own store of such a
+//! pass writes back every texel of each tile its draws reach (`shadow.rs`, **Stored
+//! attachments**). Each prints the bytes its merge stores and its command buffers' median GPU
+//! time (`DIRTY-OVERWRITE`). A pass that loads it and draws inside a 64x64 square, while a CPU
+//! thread writes three texels beside the square over and over from before the commit to after
+//! the completion, merges in whole blocks of the square's rows alone: each of those texels ends
+//! holding the CPU's last write (`DIRTY-BESIDE`).
+//!
 //! One wait for a log's publication serves every gated copy in of a commit, two shadows over one
 //! log among them, and a wait the log answers `false` is not made again for them
 //! (`WorkCounts::dirty_waits`).
@@ -34,18 +56,19 @@
 //! `m2v_cpu_icd`). The kernels are the owned fixture
 //! `validation/fixtures/public/examples/runtime_examples.ll` (`llvm-as`).
 
-use super::blit_holds::{device, Host, Scratch, BYTES, WAIT};
+use super::blit_holds::{device, over_host, Host, Scratch, BYTES, WAIT};
 use super::encoder_holds::{bytes_of, render_state};
 use crate::{
-    Buffer, CommandBufferStatus, ComputePipelineState, Device, DirtyPages, DirtyStamp, Error,
-    EventRef, HostMemory, Library, LoadAction, PipelineOptions, Region, RenderPassDescriptor,
-    ResourceOptions, ScissorRect, Size, StoreAction, Texture, TextureDescriptor,
+    Buffer, ClearColor, CommandBufferStatus, ComputePipelineState, Device, DirtyPages, DirtyStamp,
+    Error, EventRef, HostMemory, Library, LoadAction, PipelineOptions, Region,
+    RenderPassDescriptor, ResourceOptions, ScissorRect, Size, StoreAction, Texture,
+    TextureDescriptor,
 };
 use metal2vulkan::metal::{PixelFormat, PrimitiveType, TextureUsage};
 use std::num::NonZeroU64;
 use std::ops::Range;
 use std::path::Path;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 const SIDE: u64 = 64;
@@ -423,6 +446,450 @@ fn a_logged_render_target_loaded_in_a_scissor_copies_only_the_changed_rows() {
     let third = delta(&device, before);
     eprintln!("DIRTY-PAGES: scissor frame 3 {third:?}");
     assert_eq!(third[2], 1, "nothing copied in");
+    drop(target);
+    drop(buffer);
+    drop(device);
+}
+
+/// One pass over `target` that clears it to opaque black and draws `color` over every pixel
+/// inside rows 0 to 8 (the scissor), to completion: it replaces every texel.
+fn clear_and_draw(device: &Device, target: &Texture, color: [f32; 4]) {
+    let state = render_state(device, "engine/tob_renders.ll", "tob_rect", "tob_solid");
+    let queue = device.new_command_queue().unwrap();
+    let command_buffer = queue.command_buffer().unwrap();
+    let mut pass = RenderPassDescriptor::new();
+    let attachment = &mut pass.color_attachments[0];
+    attachment.texture = Some(target.clone());
+    attachment.load_action = LoadAction::Clear;
+    attachment.clear_color = ClearColor::new(0.0, 0.0, 0.0, 1.0);
+    attachment.store_action = StoreAction::Store;
+    let mut encoder = command_buffer.render_command_encoder(&pass).unwrap();
+    encoder.set_render_pipeline_state(&state).unwrap();
+    let scissor = ScissorRect {
+        x: 0,
+        y: 0,
+        width: SIDE,
+        height: 8,
+    };
+    encoder.set_scissor_rect(scissor).unwrap();
+    let corners = bytes_of(&[-1.0f32, -1.0, 1.0, 1.0], f32::to_le_bytes);
+    encoder.set_vertex_bytes(&corners, 0).unwrap();
+    let color = bytes_of(&color, f32::to_le_bytes);
+    encoder.set_fragment_bytes(&color, 0).unwrap();
+    encoder
+        .draw_primitives(PrimitiveType::Triangle, 0, 6, 1, 0)
+        .unwrap();
+    encoder.end_encoding().unwrap();
+    command_buffer.commit().unwrap();
+    assert!(command_buffer.wait_until_completed_for(WAIT).is_ok());
+    assert_eq!(command_buffer.status(), CommandBufferStatus::Completed);
+}
+
+/// The texels copied back plainly and the merge dispatches planned so far.
+fn backs(device: &Device) -> [u64; 2] {
+    let c = device.work_counts();
+    [
+        c.shadow_texels_copied_back,
+        c.shadow_merge_dispatches_planned,
+    ]
+}
+
+/// A render target over `buffer`'s first bytes, or `None` where the device needs no shadow.
+fn render_target(device: &Device, buffer: &Buffer) -> Option<Texture> {
+    let shadows = device.work_counts().shadowed_textures;
+    let mut descriptor = TextureDescriptor::texture_2d(PixelFormat::RGBA8Unorm, SIDE, SIDE, false);
+    descriptor.usage = TextureUsage::RENDER_TARGET | TextureUsage::SHADER_READ;
+    let target = buffer.new_texture(&descriptor, 0, ROW).unwrap();
+    let shadowed = device.work_counts().shadowed_textures - shadows;
+    eprintln!("DIRTY-PAGES: {shadowed} render shadow made");
+    (shadowed > 0).then_some(target)
+}
+
+const BLACK: [u8; 4] = [0, 0, 0, 255];
+const RED: [u8; 4] = [255, 0, 0, 255];
+
+#[test]
+fn a_pass_replacing_a_logged_render_target_merges_back_the_words_it_changed() {
+    let scratch = Scratch::new("dirty-pages-overwrite");
+    let host = Host::new();
+    let device = device(&scratch.0);
+    eprintln!("DIRTY-PAGES: device {:?}", device.name());
+    let log = Arc::new(Log::default());
+    let Some(buffer) = over_logged(&device, &host, &log) else {
+        return;
+    };
+    host.fill(0x1010_1010);
+    let Some(target) = render_target(&device, &buffer) else {
+        return;
+    };
+    let bytes = buffer.contents().unwrap().as_ptr();
+    let texel_at = |row: u64| {
+        let mut texel = [0u8; 4];
+        // SAFETY: a texel inside the buffer's first rows, which no command uses now.
+        unsafe {
+            std::ptr::copy_nonoverlapping(bytes.add((row * ROW) as usize), texel.as_mut_ptr(), 4)
+        };
+        texel
+    };
+
+    // Frame 1: the pass clears every texel and draws rows 0 to 8, merged back, no plain copy.
+    let before = backs(&device);
+    clear_and_draw(&device, &target, [1.0, 0.0, 0.0, 1.0]);
+    let [copied, merges] = std::array::from_fn(|i| backs(&device)[i] - before[i]);
+    eprintln!("DIRTY-PAGES: overwrite frame 1: {copied} texels copied back, {merges} merges");
+    assert_eq!(copied, 0, "no texel copied back plainly");
+    assert!(merges > 0, "the pass's copy back is a merge");
+    assert_eq!(texel_at(0), RED, "the pass drew row 0");
+    assert_eq!(texel_at(20), BLACK, "and cleared row 20");
+
+    // Frame 2: the CPU writes row 40, told to the log, and row 50, left out of it; the pass
+    // clears both to the black the image held.
+    // SAFETY: rows inside the buffer's first bytes, which no command uses now.
+    unsafe {
+        std::ptr::write_bytes(bytes.add((40 * ROW) as usize), 0x40, ROW as usize);
+        std::ptr::write_bytes(bytes.add((50 * ROW) as usize), 0x50, ROW as usize);
+    }
+    log.told(40 * ROW..41 * ROW, 0);
+    let before = (backs(&device), counts(&device));
+    clear_and_draw(&device, &target, [1.0, 0.0, 0.0, 1.0]);
+    let [copied, merges] = std::array::from_fn(|i| backs(&device)[i] - before.0[i]);
+    let moved = delta(&device, before.1);
+    eprintln!(
+        "DIRTY-PAGES: overwrite frame 2: {copied} texels copied back, {merges} merges, copy in \
+         (gated, whole, skipped, bytes whole, copied) {moved:?}; row 40 {:?}, row 50 {:?}",
+        texel_at(40),
+        texel_at(50),
+    );
+    assert_eq!(copied, 0, "no texel copied back plainly");
+    assert!(merges > 0, "merged again");
+    assert_eq!(
+        moved[4],
+        SIDE * 4,
+        "the gated copy in took the told row alone"
+    );
+    assert_eq!(
+        texel_at(40),
+        BLACK,
+        "the pass's value over the told CPU write: Metal's"
+    );
+    assert_eq!(
+        texel_at(50),
+        [0x50; 4],
+        "a word the pass left as the keep held it is not stored"
+    );
+    assert_eq!(texel_at(0), RED);
+    drop(target);
+    drop(buffer);
+    drop(device);
+}
+
+#[test]
+fn a_pass_replacing_an_unlogged_render_target_copies_it_back() {
+    let scratch = Scratch::new("dirty-pages-overwrite-unlogged");
+    let host = Host::new();
+    let device = device(&scratch.0);
+    let runs = Arc::new(AtomicUsize::new(0));
+    let Some(buffer) = over_host(&device, &host, &runs) else {
+        return;
+    };
+    host.fill(0x1010_1010);
+    let Some(target) = render_target(&device, &buffer) else {
+        return;
+    };
+    let bytes = buffer.contents().unwrap().as_ptr();
+    for frame in 1..=2 {
+        // SAFETY: a row inside the buffer's first bytes, which no command uses now.
+        unsafe { std::ptr::write_bytes(bytes.add((50 * ROW) as usize), 0x50, ROW as usize) };
+        let before = backs(&device);
+        clear_and_draw(&device, &target, [1.0, 0.0, 0.0, 1.0]);
+        let [copied, merges] = std::array::from_fn(|i| backs(&device)[i] - before[i]);
+        let mut texel = [0u8; 4];
+        // SAFETY: as above; the command buffer completed.
+        unsafe {
+            std::ptr::copy_nonoverlapping(bytes.add((50 * ROW) as usize), texel.as_mut_ptr(), 4)
+        };
+        eprintln!(
+            "DIRTY-PAGES: unlogged overwrite frame {frame}: {copied} texels copied back, {merges} \
+             merges; row 50 {texel:?}"
+        );
+        assert_eq!(copied, SIDE * SIDE, "every texel copied back plainly");
+        assert_eq!(merges, 0, "no merge");
+        assert_eq!(texel, BLACK, "the pass's value");
+    }
+    drop(target);
+    drop(buffer);
+    drop(device);
+}
+
+/// The large target's side and rows, the host pages' 4 MiB.
+const LARGE: u64 = 1024;
+const LARGE_ROW: u64 = 4 * LARGE;
+
+/// One pass over `target` (`LARGE` square) that clears it to black (`load` `Clear`) or loads it,
+/// and draws `color` over the pixels inside `scissor`, to completion: the command buffer's GPU
+/// time in milliseconds, where the device gives it.
+fn pass(
+    device: &Device,
+    target: &Texture,
+    load: LoadAction,
+    scissor: ScissorRect,
+    color: [f32; 4],
+) -> Option<f64> {
+    let state = render_state(device, "engine/tob_renders.ll", "tob_rect", "tob_solid");
+    let queue = device.new_command_queue().unwrap();
+    let command_buffer = queue.command_buffer().unwrap();
+    let mut descriptor = RenderPassDescriptor::new();
+    let attachment = &mut descriptor.color_attachments[0];
+    attachment.texture = Some(target.clone());
+    attachment.load_action = load;
+    attachment.clear_color = ClearColor::new(0.0, 0.0, 0.0, 1.0);
+    attachment.store_action = StoreAction::Store;
+    let mut encoder = command_buffer.render_command_encoder(&descriptor).unwrap();
+    encoder.set_render_pipeline_state(&state).unwrap();
+    encoder.set_scissor_rect(scissor).unwrap();
+    let corners = bytes_of(&[-1.0f32, -1.0, 1.0, 1.0], f32::to_le_bytes);
+    encoder.set_vertex_bytes(&corners, 0).unwrap();
+    let color = bytes_of(&color, f32::to_le_bytes);
+    encoder.set_fragment_bytes(&color, 0).unwrap();
+    encoder
+        .draw_primitives(PrimitiveType::Triangle, 0, 6, 1, 0)
+        .unwrap();
+    encoder.end_encoding().unwrap();
+    command_buffer.commit().unwrap();
+    assert!(command_buffer.wait_until_completed_for(WAIT).is_ok());
+    assert_eq!(command_buffer.status(), CommandBufferStatus::Completed);
+    let (start, end) = (
+        command_buffer.gpu_start_time(),
+        command_buffer.gpu_end_time(),
+    );
+    Some((end.ok()? - start.ok()?) * 1e3)
+}
+
+/// The merge dispatches planned and those planned in whole blocks so far.
+fn merges(device: &Device) -> [u64; 2] {
+    let c = device.work_counts();
+    [
+        c.shadow_merge_dispatches_planned,
+        c.shadow_merge_dispatches_in_blocks,
+    ]
+}
+
+#[test]
+fn a_scattered_overwrite_of_logged_pages_merges_back_in_whole_blocks() {
+    const ROUNDS: usize = 8;
+    let scratch = Scratch::new("dirty-pages-blocks");
+    let host = Host::new();
+    let device = device(&scratch.0);
+    eprintln!("DIRTY-PAGES: device {:?}", device.name());
+    let log = Arc::new(Log::default());
+    let Some(buffer) = over_logged(&device, &host, &log) else {
+        return;
+    };
+    assert!(LARGE_ROW * LARGE <= BYTES as u64);
+    let shadows = device.work_counts().shadowed_textures;
+    let mut descriptor =
+        TextureDescriptor::texture_2d(PixelFormat::RGBA8Unorm, LARGE, LARGE, false);
+    descriptor.usage = TextureUsage::RENDER_TARGET | TextureUsage::SHADER_READ;
+    let target = buffer.new_texture(&descriptor, 0, LARGE_ROW).unwrap();
+    if device.work_counts().shadowed_textures == shadows {
+        eprintln!("DIRTY-PAGES: no render shadow made");
+        return;
+    }
+    let span = (LARGE_ROW * LARGE) as usize;
+    let bytes = buffer.contents().unwrap().as_ptr();
+    // The CPU's texels: every other one grey, the others black; told to the log.
+    let scatter = || {
+        let words: Vec<u32> = (0..LARGE * LARGE)
+            .map(|i| match i % 2 {
+                0 => 0x4040_4040,
+                _ => u32::from_le_bytes(BLACK),
+            })
+            .collect();
+        // SAFETY: the texture's bytes, which no command uses now.
+        unsafe { std::ptr::copy_nonoverlapping(words.as_ptr().cast::<u8>(), bytes, span) };
+        log.told(0..span as u64, 0);
+    };
+    let got = || {
+        // SAFETY: as above; every command buffer completed.
+        unsafe { std::slice::from_raw_parts(bytes, span) }.to_vec()
+    };
+    let every = ScissorRect {
+        x: 0,
+        y: 0,
+        width: LARGE,
+        height: LARGE,
+    };
+    let corner = ScissorRect {
+        x: 0,
+        y: 0,
+        width: 1,
+        height: 1,
+    };
+    let legs = [
+        (
+            "blocks (a pass clearing every texel)",
+            LoadAction::Clear,
+            corner,
+            RED,
+        ),
+        (
+            "blocks (a pass loading and drawing every texel)",
+            LoadAction::Load,
+            every,
+            BLACK,
+        ),
+    ];
+    for (what, load, scissor, drawn) in legs {
+        let color = drawn.map(|c| f32::from(c) / 255.0);
+        let mut times = Vec::new();
+        let (mut planned, mut in_blocks) = (0, 0);
+        for _ in 0..ROUNDS {
+            scatter();
+            let before = merges(&device);
+            times.extend(pass(&device, &target, load, scissor, color));
+            let after = merges(&device);
+            planned += after[0] - before[0];
+            in_blocks += after[1] - before[1];
+            let now = got();
+            let wrong = (now.as_chunks::<4>().0.iter().enumerate())
+                .filter(|&(i, texel)| *texel != if i == 0 { drawn } else { BLACK })
+                .count();
+            assert_eq!(wrong, 0, "{what}: texels other than the pass's");
+        }
+        assert!(planned > 0, "{what}: merged");
+        // Both store whole blocks: one clears every texel, the other loads every texel and
+        // stores the tiles its draws reach (`ShadowUse::tile_stores`).
+        assert_eq!(in_blocks, planned, "{what}");
+        // By construction: every 256-byte block holds a changed word.
+        let stored = span;
+        times.sort_by(f64::total_cmp);
+        let median = times.get(times.len() / 2).copied().unwrap_or(f64::NAN);
+        eprintln!(
+            "DIRTY-OVERWRITE: {}: {what}: {in_blocks} of {planned} merge dispatches in whole \
+             blocks, {stored} bytes stored; GPU time median {median:.3} ms of {} command buffers \
+             [{:.3}..{:.3}]",
+            device.name(),
+            times.len(),
+            times.first().copied().unwrap_or(f64::NAN),
+            times.last().copied().unwrap_or(f64::NAN),
+        );
+    }
+    drop(target);
+    drop(buffer);
+    drop(device);
+}
+
+/// The texels beside the square a pass draws in that the CPU writes while it runs: right of it in
+/// its rows (the next 256-byte block of a row), far right of it, and below it.
+const BESIDE: [(u64, u64); 3] = [(64, 10), (900, 40), (10, 100)];
+
+#[test]
+fn a_pass_storing_its_loaded_area_keeps_a_cpu_write_beside_it() {
+    const ROUNDS: usize = 8;
+    let scratch = Scratch::new("dirty-pages-beside");
+    let host = Host::new();
+    let device = device(&scratch.0);
+    eprintln!("DIRTY-PAGES: device {:?}", device.name());
+    let log = Arc::new(Log::default());
+    let Some(buffer) = over_logged(&device, &host, &log) else {
+        return;
+    };
+    assert!(LARGE_ROW * LARGE <= BYTES as u64);
+    let shadows = device.work_counts().shadowed_textures;
+    let mut descriptor =
+        TextureDescriptor::texture_2d(PixelFormat::RGBA8Unorm, LARGE, LARGE, false);
+    descriptor.usage = TextureUsage::RENDER_TARGET | TextureUsage::SHADER_READ;
+    let target = buffer.new_texture(&descriptor, 0, LARGE_ROW).unwrap();
+    if device.work_counts().shadowed_textures == shadows {
+        eprintln!("DIRTY-PAGES: no render shadow made");
+        return;
+    }
+    let span = (LARGE_ROW * LARGE) as usize;
+    let bytes = buffer.contents().unwrap().as_ptr();
+    let grey = 0x4040_4040u32;
+    let square = ScissorRect {
+        x: 0,
+        y: 0,
+        width: 64,
+        height: 64,
+    };
+    let inside = |x: u64, y: u64| x < 64 && y < 64;
+    let at = |(x, y): (u64, u64)| (y * LARGE_ROW + 4 * x) as usize;
+    let (mut planned, mut in_blocks, mut sweeps) = (0, 0, 0);
+    for _ in 0..ROUNDS {
+        // The CPU's texels: every other one grey, the others black; told to the log.
+        let words: Vec<u32> = (0..LARGE * LARGE)
+            .map(|i| match i % 2 {
+                0 => grey,
+                _ => u32::from_le_bytes(BLACK),
+            })
+            .collect();
+        // SAFETY: the texture's bytes, which no command uses now.
+        unsafe { std::ptr::copy_nonoverlapping(words.as_ptr().cast::<u8>(), bytes, span) };
+        log.told(0..span as u64, 0);
+        let before = merges(&device);
+        let stop = AtomicBool::new(false);
+        let started = AtomicBool::new(false);
+        let address = bytes as usize;
+        let last = std::thread::scope(|scope| {
+            let writer = scope.spawn(|| {
+                // SAFETY: whole texels of the buffer's bytes, 4-aligned; the pass writes none
+                // of them, and only this thread writes them while it runs.
+                let cells = BESIDE.map(|texel| unsafe {
+                    std::sync::atomic::AtomicU32::from_ptr((address + at(texel)) as *mut u32)
+                });
+                let mut value = 0u32;
+                let mut swept = 0u64;
+                loop {
+                    value = value.wrapping_add(1) | 0x8000_0000;
+                    for cell in &cells {
+                        cell.store(value, Ordering::SeqCst);
+                    }
+                    swept += 1;
+                    started.store(true, Ordering::SeqCst);
+                    if stop.load(Ordering::SeqCst) {
+                        return (value, swept);
+                    }
+                }
+            });
+            while !started.load(Ordering::SeqCst) {
+                std::hint::spin_loop();
+            }
+            pass(
+                &device,
+                &target,
+                LoadAction::Load,
+                square,
+                [0.0, 0.0, 0.0, 1.0],
+            );
+            stop.store(true, Ordering::SeqCst);
+            writer.join().unwrap()
+        });
+        sweeps += last.1;
+        let after = merges(&device);
+        planned += after[0] - before[0];
+        in_blocks += after[1] - before[1];
+        // SAFETY: the command buffer completed and the writer ended; nothing writes the bytes.
+        let now = unsafe { std::slice::from_raw_parts(bytes, span) };
+        for (texel, word) in now.as_chunks::<4>().0.iter().enumerate() {
+            let (x, y) = (texel as u64 % LARGE, texel as u64 / LARGE);
+            let want = match () {
+                _ if BESIDE.contains(&(x, y)) => last.0.to_le_bytes(),
+                _ if inside(x, y) => BLACK,
+                _ => words[texel].to_le_bytes(),
+            };
+            assert_eq!(*word, want, "texel ({x}, {y})");
+        }
+    }
+    eprintln!(
+        "DIRTY-BESIDE: {}: {in_blocks} of {planned} merge dispatches in whole blocks; the CPU \
+         wrote {} texels beside the square {sweeps} times over {ROUNDS} command buffers, each \
+         ending with its last write",
+        device.name(),
+        BESIDE.len(),
+    );
+    assert!(planned > 0, "merged");
+    assert_eq!(in_blocks, planned, "in whole blocks");
     drop(target);
     drop(buffer);
     drop(device);

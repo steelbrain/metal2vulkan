@@ -290,6 +290,8 @@ Calls Metal does not have, for a consumer that emulates a Metal device:
   the writes to a no-copy object's pages, by which every copy of them into memory of the device's
   own (a shadow of a texture over them) copies in only the pages changed since its last copy, on
   every device. The runtime's own writes into the pages are reported back, naming their writer.
+  A command that replaces every texel of such a shadow is merged back, as one that leaves some is:
+  copied in (the changed pages), kept, and only the words it changed written into the pages.
 - `HostMemory::with_import_gate` and its `ImportGate` (with `ImportRequest`): the consumer's
   gate over a no-copy buffer's, heap's or rebind's import of its pages; a refusal makes a copy of
   them.

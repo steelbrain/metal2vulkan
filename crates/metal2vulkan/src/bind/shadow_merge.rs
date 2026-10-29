@@ -62,6 +62,23 @@
 //! loads of every shape at 0.32 ms. On an RX 7900 XTX (RADV) and a Radeon 780M the two shapes are
 //! within measurement of each other.
 //!
+//! **Whole blocks** ([`ShadowMergeStores::Blocks`], the consumer's choice by the merge's
+//! structure). The `LOCAL_SIZE` words a workgroup takes in one step, `4Ng + Nk` to
+//! `4Ng + Nk + N - 1`, are one block of [`ShadowMergeModule::BLOCK_BYTES`]: each invocation first
+//! compares its words of the kept and changed buffers and marks the step's block in the
+//! workgroup's memory where its word differs (an atomic or, after the flags are cleared and a
+//! barrier); after a second barrier, every word below `count` of a marked block is merged as
+//! above, a word with no changed byte stored as the current buffer held it when read, and no word
+//! of an unmarked block is read or written. So every block holding a change is stored whole, its
+//! words consecutive across the invocations (a run per row it crosses), and the stores leave no
+//! gaps inside it: on an RTX 5080 Laptop GPU, stores into imported host memory that leave words
+//! between a warp's lanes take hundreds of times the time of the same bytes stored without gaps
+//! (above). The bytes are the same as word by word where no other writer writes the current
+//! buffer during the dispatch; one that writes a byte of a marked block outside its changed bytes
+//! between the read and the store is undone. A consumer takes this form only where every word of
+//! the region is bytes its commands wrote, or bytes Metal's own store of them writes back (a
+//! render pass's tiles), so that such a write is a race with them (`ShadowMergeStores::Blocks`).
+//!
 //! **Synchronization** (consumer): the copies' `TRANSFER_WRITE` → `SHADER_STORAGE_READ` and
 //! `SHADER_STORAGE_WRITE` in `COMPUTE_SHADER` before the dispatch; its writes →
 //! `TRANSFER_READ` before the current buffer is copied back, or the bytes' next use.
@@ -78,8 +95,8 @@ use crate::spirv::builder::{FunctionBuilder, ModuleBuilder};
 use crate::spirv::error::BResult;
 use crate::spirv::ids::{GlobalId, TypeId, Value};
 use crate::spirv::ir::{
-    natural_layout, BinOp, ExecMode, ExecModel, IoDir, LayoutRule, MemAccess, StorageClass, Type,
-    TypedModule,
+    natural_layout, AtomicOp, BinOp, ConstBits, Constant, ExecMode, ExecModel, IoDir, LayoutRule,
+    MemAccess, MemoryOrder, Scope, Semantics, StorageClass, Type, TypedModule,
 };
 
 /// The crate-owned shadow merge module of one device, validated like any output.
@@ -107,6 +124,9 @@ impl ShadowMergeModule {
     pub const WORDS: u32 = 4;
     /// Bytes of the `COMPUTE` push-constant range at offset 0: the region's shape.
     pub const PUSH_BYTES: u32 = 16;
+    /// Bytes of one block under whole-block stores ([`ShadowMergeStores::Blocks`]): the
+    /// `LOCAL_SIZE` consecutive words a workgroup takes in one step (the module docs).
+    pub const BLOCK_BYTES: u32 = 4 * Self::LOCAL_SIZE;
 
     /// The workgroups of a dispatch over `count` words.
     pub fn groups(count: u32) -> u32 {
@@ -175,7 +195,7 @@ const SHAPE: PushField = PushField::DispatchRegion;
 /// [`shadow_merge_module`] serializes, which the CPU interpreter runs. Its bindings are the
 /// symbols `KEPT`, `CHANGED` and `CURRENT`, and its push field the shape, a `uvec4` (the module
 /// docs).
-fn typed_module() -> BResult<TypedModule> {
+fn typed_module(blocks: bool) -> BResult<TypedModule> {
     let mut b = ModuleBuilder::new();
     let u32_ = b.ty(Type::Int {
         width: 32,
@@ -188,6 +208,10 @@ fn typed_module() -> BResult<TypedModule> {
     let kept = words_buffer(&mut b, KEPT, u32_)?;
     let changed = words_buffer(&mut b, CHANGED, u32_)?;
     let current = words_buffer(&mut b, CURRENT, u32_)?;
+    let block_flags = match blocks {
+        true => Some(block_flags(&mut b, u32_, ShadowMergeModule::WORDS)?),
+        false => None,
+    };
     let group = b.builtin(crate::spv::BuiltIn::WorkgroupId, IoDir::Input, uvec3)?;
     let local = b.builtin(crate::spv::BuiltIn::LocalInvocationId, IoDir::Input, uvec3)?;
     let void = b.ty(Type::Void)?;
@@ -219,24 +243,34 @@ fn typed_module() -> BResult<TypedModule> {
     )?;
     let base = f.binary(BinOp::IMul, g, span)?;
     let base = f.binary(BinOp::IAdd, base, l)?;
-    // The invocation's words, one after the other, each as one invocation took it alone.
-    for k in 0..ShadowMergeModule::WORDS {
-        let i = match k {
-            0 => base,
-            k => {
-                let step = u32_value(&mut f, k * ShadowMergeModule::LOCAL_SIZE)?;
-                f.binary(BinOp::IAdd, base, step)?
-            }
-        };
-        let inside = f.binary(BinOp::ULessThan, i, count)?;
-        let merge: ArmFn<'_, ()> = Box::new(move |f, _| {
-            let p = f.access_chain(kept, &[zero, i])?;
+    if let Some(block_flags) = block_flags {
+        // Whole blocks: each step's words, the workgroup's `LOCAL_SIZE` consecutive words, are
+        // one block, stored whole where any of them changed (the module docs).
+        let flags = Blocks::new(&mut f, block_flags, l)?;
+        let mut words = Vec::new();
+        for k in 0..ShadowMergeModule::WORDS {
+            let i = match k {
+                0 => base,
+                k => {
+                    let step = u32_value(&mut f, k * ShadowMergeModule::LOCAL_SIZE)?;
+                    f.binary(BinOp::IAdd, base, step)?
+                }
+            };
+            let inside = f.binary(BinOp::ULessThan, i, count)?;
+            // A word past the region reads the region's first, and counts as unchanged.
+            let read = f.select(inside, i, zero)?;
+            let p = f.access_chain(kept, &[zero, read])?;
             let before = f.load(p, MemAccess::default())?;
-            let p = f.access_chain(changed, &[zero, i])?;
+            let p = f.access_chain(changed, &[zero, read])?;
             let after = f.load(p, MemAccess::default())?;
             let differ = f.binary(BinOp::BitwiseXor, before, after)?;
-            let moved = f.binary(BinOp::INotEqual, differ, zero)?;
-            // A word the command left as it was is neither read nor written.
+            let differ = f.select(inside, differ, zero)?;
+            flags.mark(&mut f, k, differ)?;
+            words.push((i, inside, after, differ));
+        }
+        barrier(&mut f)?;
+        for (k, (i, inside, after, differ)) in (0..).zip(words) {
+            let store = flags.stores(&mut f, k, inside)?;
             let write: ArmFn<'_, ()> = Box::new(move |f, _| {
                 let y = f.binary(BinOp::UDiv, i, width)?;
                 let x = f.binary(BinOp::UMod, i, width)?;
@@ -247,10 +281,42 @@ fn typed_module() -> BResult<TypedModule> {
                 merge_word(f, at, after, differ)?;
                 Ok(ArmEnd::FallThrough(Vec::new()))
             });
-            f.if_(&mut (), moved, write, None)?;
-            Ok(ArmEnd::FallThrough(Vec::new()))
-        });
-        f.if_(&mut (), inside, merge, None)?;
+            f.if_(&mut (), store, write, None)?;
+        }
+    } else {
+        // The invocation's words, one after the other, each as one invocation took it alone.
+        for k in 0..ShadowMergeModule::WORDS {
+            let i = match k {
+                0 => base,
+                k => {
+                    let step = u32_value(&mut f, k * ShadowMergeModule::LOCAL_SIZE)?;
+                    f.binary(BinOp::IAdd, base, step)?
+                }
+            };
+            let inside = f.binary(BinOp::ULessThan, i, count)?;
+            let merge: ArmFn<'_, ()> = Box::new(move |f, _| {
+                let p = f.access_chain(kept, &[zero, i])?;
+                let before = f.load(p, MemAccess::default())?;
+                let p = f.access_chain(changed, &[zero, i])?;
+                let after = f.load(p, MemAccess::default())?;
+                let differ = f.binary(BinOp::BitwiseXor, before, after)?;
+                let moved = f.binary(BinOp::INotEqual, differ, zero)?;
+                // A word the command left as it was is neither read nor written.
+                let write: ArmFn<'_, ()> = Box::new(move |f, _| {
+                    let y = f.binary(BinOp::UDiv, i, width)?;
+                    let x = f.binary(BinOp::UMod, i, width)?;
+                    let row = f.binary(BinOp::IMul, y, row_words)?;
+                    let word = f.binary(BinOp::IAdd, first_word, row)?;
+                    let word = f.binary(BinOp::IAdd, word, x)?;
+                    let at = f.access_chain(current, &[zero, word])?;
+                    merge_word(f, at, after, differ)?;
+                    Ok(ArmEnd::FallThrough(Vec::new()))
+                });
+                f.if_(&mut (), moved, write, None)?;
+                Ok(ArmEnd::FallThrough(Vec::new()))
+            });
+            f.if_(&mut (), inside, merge, None)?;
+        }
     }
     f.ret(None)?;
     let id = f.finish()?;
@@ -266,9 +332,92 @@ fn typed_module() -> BResult<TypedModule> {
     b.finalize()
 }
 
+/// The workgroup's flags of its blocks under whole-block stores: one word per block, `steps` of
+/// them (the module docs).
+pub(super) fn block_flags(b: &mut ModuleBuilder, u32_: TypeId, steps: u32) -> BResult<GlobalId> {
+    let len = b.constant(Constant::Scalar {
+        ty: u32_,
+        bits: ConstBits(u64::from(steps)),
+    })?;
+    let flags = b.ty(Type::Array {
+        elem: u32_,
+        len,
+        stride: None,
+    })?;
+    b.plain_global(StorageClass::Workgroup, flags, None)
+}
+
+/// The workgroup barrier between the blocks' marks and their stores.
+pub(super) fn barrier(f: &mut FunctionBuilder<'_>) -> BResult<()> {
+    let sem = Semantics {
+        order: MemoryOrder::AcquireRelease,
+        workgroup_memory: true,
+        ..Semantics::RELAXED
+    };
+    f.control_barrier(Scope::Workgroup, Scope::Workgroup, sem)
+}
+
+/// The flags of a workgroup's blocks under whole-block stores, each zero until a word of its
+/// block changed (the module docs).
+pub(super) struct Blocks {
+    flags: Value,
+    zero: Value,
+}
+
+impl Blocks {
+    /// The flags `flags` (a [`block_flags`] global) cleared, invocation `l` clearing flag `l`
+    /// where it has one, then a barrier, so each mark lands after every clear.
+    pub(super) fn new(f: &mut FunctionBuilder<'_>, flags: GlobalId, l: Value) -> BResult<Blocks> {
+        let zero = u32_value(f, 0)?;
+        let flags = f.module().global_value(flags)?;
+        let steps = u32_value(f, ShadowMergeModule::WORDS)?;
+        let own = f.binary(BinOp::ULessThan, l, steps)?;
+        let clear: ArmFn<'_, ()> = Box::new(move |f, _| {
+            let at = f.access_chain(flags, &[l])?;
+            f.store(at, zero, MemAccess::default())?;
+            Ok(ArmEnd::FallThrough(Vec::new()))
+        });
+        f.if_(&mut (), own, clear, None)?;
+        barrier(f)?;
+        Ok(Blocks { flags, zero })
+    }
+
+    /// Mark block `k` changed where `differ` (a word's xor of its kept and changed words) is not
+    /// zero.
+    pub(super) fn mark(&self, f: &mut FunctionBuilder<'_>, k: u32, differ: Value) -> BResult<()> {
+        let (flags, zero) = (self.flags, self.zero);
+        let moved = f.binary(BinOp::INotEqual, differ, zero)?;
+        let at = u32_value(f, k)?;
+        let mark: ArmFn<'_, ()> = Box::new(move |f, _| {
+            let at = f.access_chain(flags, &[at])?;
+            let one = u32_value(f, 1)?;
+            f.atomic(AtomicOp::Or, at, Scope::Workgroup, Semantics::RELAXED, one)?;
+            Ok(ArmEnd::FallThrough(Vec::new()))
+        });
+        f.if_(&mut (), moved, mark, None)?;
+        Ok(())
+    }
+
+    /// Whether a word of block `k`, `inside` the region, is stored: its block changed. Read after
+    /// the barrier that follows every mark.
+    pub(super) fn stores(
+        &self,
+        f: &mut FunctionBuilder<'_>,
+        k: u32,
+        inside: Value,
+    ) -> BResult<Value> {
+        let at = u32_value(f, k)?;
+        let at = f.access_chain(self.flags, &[at])?;
+        let flag = f.load(at, MemAccess::default())?;
+        let changed = f.binary(BinOp::INotEqual, flag, self.zero)?;
+        f.binary(BinOp::LogicalAnd, inside, changed)
+    }
+}
+
 /// Merge into the current word at `at` the changed word `after`, `differ` its xor with the kept
-/// word (not zero): each byte where they differ becomes `after`'s, and the others keep the
-/// current word's (the module docs).
+/// word: each byte where they differ becomes `after`'s, and the others keep the current word's
+/// (the module docs); where `differ` is zero (a word of a changed block under whole-block
+/// stores), the current word is stored as read.
 pub(super) fn merge_word(
     f: &mut FunctionBuilder<'_>,
     at: Value,
@@ -295,6 +444,27 @@ pub(super) fn merge_word(
     Ok(())
 }
 
+/// How a merge module stores the region's changed bytes into the current buffer (the module
+/// docs).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum ShadowMergeStores {
+    /// The changed words alone: a word with no changed byte is neither read nor written, so
+    /// another writer's bytes there are never rewritten.
+    Words,
+    /// Whole blocks of [`ShadowMergeModule::BLOCK_BYTES`]: a block holding a changed word is
+    /// stored whole, its words the commands left as read, and no other block is read or
+    /// written. For a region every byte of which the consumer's commands wrote (a command that
+    /// replaced every texel of a texture, in a region of its texels' rows): another writer's
+    /// write to a byte of it is a race with those commands, which Metal leaves unordered.
+    Blocks,
+}
+
+impl ShadowMergeStores {
+    fn blocks(self) -> bool {
+        self == ShadowMergeStores::Blocks
+    }
+}
+
 /// The fixed binding numbers of the module's symbols.
 fn binding_of(sym: &Symbol) -> Option<u32> {
     match sym {
@@ -306,12 +476,15 @@ fn binding_of(sym: &Symbol) -> Option<u32> {
     }
 }
 
-/// The shadow merge module of `device`: built with the typed builder, checked by the owned
+/// The shadow merge module of `device`, storing as `stores` says: built with the typed builder, checked by the owned
 /// verifier against the device's profile (requirements included), serialized, and numbered with
 /// the fixed bindings of [`ShadowMergeModule`].
-pub fn shadow_merge_module(device: &Device) -> Result<ShadowMergeModule, Error> {
+pub fn shadow_merge_module(
+    device: &Device,
+    stores: ShadowMergeStores,
+) -> Result<ShadowMergeModule, Error> {
     let profile = device.profile();
-    let m = typed_module()?;
+    let m = typed_module(stores.blocks())?;
     let mut meter = Meter::new(&Budget::default());
     crate::spirv::verify::verify(&m, profile, &mut meter)?;
     let r = crate::spirv::serialize::serialize(m)?;
@@ -331,13 +504,16 @@ pub fn shadow_merge_module(device: &Device) -> Result<ShadowMergeModule, Error> 
 #[cfg(test)]
 mod tests {
     use super::{typed_module, ShadowMergeModule, CHANGED, CURRENT, KEPT};
+    use crate::spirv::interp::Outcome;
     use crate::spirv::interp::{run, Buffer, Config, Order, Resources};
     use crate::spirv::testing::{assert_valid, committed_profiles};
 
     #[test]
     fn the_merge_kernel_is_valid_on_every_committed_profile() {
         for (_, p) in committed_profiles().expect("profiles") {
-            assert_valid(typed_module().expect("module"), &p);
+            for blocks in [false, true] {
+                assert_valid(typed_module(blocks).expect("module"), &p);
+            }
         }
     }
 
@@ -350,8 +526,9 @@ mod tests {
     }
 
     /// Run the kernel over `kept`, `changed` and `current` with the push bytes `shape`, in
-    /// `groups` workgroups, both invocation orders: the current buffer after it, the others
-    /// unchanged.
+    /// `groups` workgroups, both invocation orders and both forms of its stores (whole blocks and
+    /// changed words, which give the same bytes where no other writer runs beside the kernel):
+    /// the current buffer after it, the others unchanged.
     fn merged_in(
         kept: &[u8],
         changed: &[u8],
@@ -359,8 +536,31 @@ mod tests {
         shape: &[u8; 16],
         groups: u32,
     ) -> Vec<u8> {
-        let m = typed_module().expect("module");
         let mut out = Vec::new();
+        for blocks in [false, true] {
+            let (bytes, outcome) = merged_form(kept, changed, current, shape, groups, blocks);
+            // Whole blocks take two workgroup barriers (the clear, the marks); words none.
+            let barriers = if blocks { 2 } else { 0 };
+            assert!(outcome.iter().all(|i| i.barriers == barriers), "{blocks}");
+            out.push(bytes);
+        }
+        assert_eq!(out[0], out[1], "whole blocks store the bytes words do");
+        out.swap_remove(0)
+    }
+
+    /// [`merged_in`] in one form of the stores, whole `blocks` or words: the current buffer
+    /// after it, and the invocations' stats.
+    fn merged_form(
+        kept: &[u8],
+        changed: &[u8],
+        current: &[u8],
+        shape: &[u8; 16],
+        groups: u32,
+        blocks: bool,
+    ) -> (Vec<u8>, Vec<crate::spirv::interp::InvocationStats>) {
+        let m = typed_module(blocks).expect("module");
+        let mut out = Vec::new();
+        let mut stats = Vec::new();
         for order in [Order::Forward, Order::Reverse] {
             let part = |slot, bytes: &[u8]| Buffer {
                 slot: Some(slot),
@@ -381,13 +581,18 @@ mod tests {
                 workgroups: [groups, 1, 1],
                 ..Config::default()
             };
-            let buffers = run(&m, &cfg, res).expect("run").buffers;
+            let Outcome {
+                buffers,
+                invocations,
+                ..
+            } = run(&m, &cfg, res).expect("run");
             assert_eq!(buffers[0], kept, "the kept buffer is only read");
             assert_eq!(buffers[1], changed, "the changed buffer is only read");
             out.push(buffers[2].clone());
+            stats = invocations;
         }
         assert_eq!(out[0], out[1], "order independent");
-        out.swap_remove(0)
+        (out.swap_remove(0), stats)
     }
 
     /// Each byte the texture changed is the changed buffer's; every other byte keeps the current
@@ -493,6 +698,30 @@ mod tests {
         let groups = ShadowMergeModule::groups(count);
         assert_eq!(groups, 3, "three workgroups, the last one over the tail");
         assert_eq!(merged_in(&kept, &changed, &current, &shape, groups), want);
+    }
+
+    /// Whole blocks: a block with no changed word reads and writes no word of the current
+    /// buffer, and a word of a changed block the command left keeps the current buffer's bytes.
+    /// The current buffer holds the first block's words alone, so an access to any other block's
+    /// traps (out of bounds) and fails the run; the words form touches the changed word alone.
+    #[test]
+    fn whole_blocks_touch_no_word_of_an_unchanged_block() {
+        let block = ShadowMergeModule::BLOCK_BYTES as usize;
+        // Two workgroups' words: eight blocks.
+        let words = 2 * (ShadowMergeModule::WORDS * ShadowMergeModule::LOCAL_SIZE) as usize;
+        let kept = vec![0u8; 4 * words];
+        let mut changed = kept.clone();
+        // One byte of word 3, in the first block.
+        changed[13] = 0x5a;
+        let current: Vec<u8> = (0..block).map(|i| (i % 251) as u8 ^ 0xc3).collect();
+        let mut want = current.clone();
+        want[13] = 0x5a;
+        let count = words as u32;
+        let shape = ShadowMergeModule::shape(count, count, 0, 0);
+        for blocks in [true, false] {
+            let (bytes, _) = merged_form(&kept, &changed, &current, &shape, 2, blocks);
+            assert_eq!(bytes, want, "{blocks}");
+        }
     }
 
     /// Invocations past the words write nothing, and every word of several workgroups merges.

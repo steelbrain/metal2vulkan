@@ -1403,8 +1403,9 @@ impl EncoderCore {
         let leases = &mut self.kept_leases;
         let planned = self
             .shadows
-            .before(shadows, uses, |copies, two_ways, area| {
-                let (merge, lease) = ShadowMerge::new(&device, copies, (two_ways, area), images)?;
+            .before(shadows, uses, |copies, made_for, area| {
+                let merging = (made_for.two_ways, made_for.blocks, area);
+                let (merge, lease) = ShadowMerge::new(&device, copies, merging, images)?;
                 leases.extend(lease);
                 Ok(Arc::new(merge))
             });

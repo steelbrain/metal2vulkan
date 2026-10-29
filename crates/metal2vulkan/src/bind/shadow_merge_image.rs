@@ -74,11 +74,18 @@
 //! `COMPUTE_SHADER`, the kept buffer's copy → `SHADER_STORAGE_READ` (the kept image's copy →
 //! `SHADER_SAMPLED_READ`), and the bytes' earlier accesses → `SHADER_STORAGE_READ` and
 //! `SHADER_STORAGE_WRITE` there, before the dispatch; its writes → the bytes' next use.
+//!
+//! **Whole blocks** (`ShadowMergeStores::Blocks`): as `bind::shadow_merge`'s module docs say,
+//! the `LOCAL_SIZE` words of a row a workgroup takes in one step are one block, marked in
+//! workgroup memory where a word of it changed, and every word of a marked block is stored, none
+//! of an unmarked one. A word past the row reads the row's first texel, and counts as unchanged.
 
 use std::sync::Arc;
 
 use super::shadow_copy_back::{fetched_words, ShadowTexelView};
-use super::shadow_merge::{merge_word, u32_value, words_buffer};
+use super::shadow_merge::{
+    barrier, block_flags, merge_word, u32_value, words_buffer, Blocks, ShadowMergeStores,
+};
 use crate::budget::{Budget, Meter};
 use crate::device::requirements::Requirements;
 use crate::device::Device;
@@ -280,7 +287,7 @@ impl Rebuild {
 /// [`shadow_merge_kept_image_module`]) serializes, which the CPU interpreter runs. Its bindings
 /// are the symbols `IMAGE`, `KEPT` (or `KEPT_IMAGE`) and `CURRENT`, and its push field the shape,
 /// a `uvec4` (the module docs).
-fn typed_module(read: ShadowMergeRead, kept: Kept) -> BResult<TypedModule> {
+fn typed_module(read: ShadowMergeRead, kept: Kept, blocks: bool) -> BResult<TypedModule> {
     let words = read.words();
     let mut b = ModuleBuilder::new();
     let u32_ = b.ty(Type::Int {
@@ -320,6 +327,10 @@ fn typed_module(read: ShadowMergeRead, kept: Kept) -> BResult<TypedModule> {
         }
     };
     let current = words_buffer(&mut b, CURRENT, u32_)?;
+    let block_flags = match blocks {
+        true => Some(block_flags(&mut b, u32_, ShadowMergeImageModule::WORDS)?),
+        false => None,
+    };
     let group = b.builtin(crate::spv::BuiltIn::WorkgroupId, IoDir::Input, uvec3)?;
     let local = b.builtin(crate::spv::BuiltIn::LocalInvocationId, IoDir::Input, uvec3)?;
     let void = b.ty(Type::Void)?;
@@ -406,65 +417,131 @@ fn typed_module(read: ShadowMergeRead, kept: Kept) -> BResult<TypedModule> {
     let span = u32_value(&mut f, span)?;
     let base = f.binary(BinOp::IMul, g, span)?;
     let base = f.binary(BinOp::IAdd, base, l)?;
-    // The invocation's words, one after the other, each as one invocation took it alone.
-    for k in 0..ShadowMergeImageModule::WORDS {
-        let w = match k {
-            0 => base,
-            k => {
-                let step = u32_value(&mut f, k * ShadowMergeImageModule::LOCAL_SIZE)?;
-                f.binary(BinOp::IAdd, base, step)?
-            }
-        };
-        let inside = f.binary(BinOp::ULessThan, w, row_count)?;
-        let lanes = lanes.clone();
-        let merge: ArmFn<'_, ()> = Box::new(move |f, _| {
+    if let Some(block_flags) = block_flags {
+        // Whole blocks: each step's words, the workgroup's `LOCAL_SIZE` consecutive words of the
+        // row, are one block, stored whole where any of them changed (`bind::shadow_merge`'s
+        // module docs).
+        let flags = Blocks::new(&mut f, block_flags, l)?;
+        let mut taken = Vec::new();
+        for k in 0..ShadowMergeImageModule::WORDS {
+            let w = match k {
+                0 => base,
+                k => {
+                    let step = u32_value(&mut f, k * ShadowMergeImageModule::LOCAL_SIZE)?;
+                    f.binary(BinOp::IAdd, base, step)?
+                }
+            };
+            let inside = f.binary(BinOp::ULessThan, w, row_count)?;
+            // A word past the row reads the row's first, and counts as unchanged.
+            let read = f.select(inside, w, zero)?;
             let (x, lane) = match split {
-                None => (w, None),
+                None => (read, None),
                 Some((shift, mask)) => (
-                    f.binary(BinOp::ShiftRightLogical, w, shift)?,
-                    Some(f.binary(BinOp::BitwiseAnd, w, mask)?),
+                    f.binary(BinOp::ShiftRightLogical, read, shift)?,
+                    Some(f.binary(BinOp::BitwiseAnd, read, mask)?),
                 ),
             };
             let tx = f.binary(BinOp::IAdd, x0, x)?;
             let coord = f.composite_construct(uvec2, &[tx, ty])?;
-            let image = f.load(image, MemAccess::default())?;
+            let loaded = f.load(image, MemAccess::default())?;
             let ops = ImageOperands {
                 lod: Some(zero),
                 ..ImageOperands::default()
             };
-            let texel = f.fetch(image, coord, &ops)?;
-            let texel = rebuild.words(f, texel)?;
-            let after = one_word(f, &texel, lane, &lanes)?;
-            // The word before the command: in the kept image, the texel's at its own
-            // coordinates; in the kept buffer, the row's word, row after row.
+            let texel = f.fetch(loaded, coord, &ops)?;
+            let texel = rebuild.words(&mut f, texel)?;
+            let after = one_word(&mut f, &texel, lane, &lanes)?;
             let before = match kept {
                 KeptAt::Image(kept, view) => {
                     let kept = f.load(kept, MemAccess::default())?;
                     let texel = f.fetch(kept, coord, &ops)?;
-                    let words = fetched_words(f, texel, view)?;
-                    one_word(f, &words, lane, &lanes)?
+                    let words = fetched_words(&mut f, texel, view)?;
+                    one_word(&mut f, &words, lane, &lanes)?
                 }
                 KeptAt::Buffer(kept) => {
                     let kept_row = f.binary(BinOp::IMul, y, row_count)?;
-                    let place = f.binary(BinOp::IAdd, kept_row, w)?;
+                    let place = f.binary(BinOp::IAdd, kept_row, read)?;
                     let p = f.access_chain(kept, &[zero, place])?;
                     f.load(p, MemAccess::default())?
                 }
             };
             let differ = f.binary(BinOp::BitwiseXor, before, after)?;
-            let moved = f.binary(BinOp::INotEqual, differ, zero)?;
-            // A word the command left as it was is neither read nor written.
+            let differ = f.select(inside, differ, zero)?;
+            flags.mark(&mut f, k, differ)?;
+            taken.push((w, inside, after, differ));
+        }
+        barrier(&mut f)?;
+        for (k, (w, inside, after, differ)) in (0..).zip(taken) {
+            let store = flags.stores(&mut f, k, inside)?;
             let write: ArmFn<'_, ()> = Box::new(move |f, _| {
-                // The word at its row's place in the current buffer.
                 let place = f.binary(BinOp::IAdd, row, w)?;
                 let to = f.access_chain(current, &[zero, place])?;
                 merge_word(f, to, after, differ)?;
                 Ok(ArmEnd::FallThrough(Vec::new()))
             });
-            f.if_(&mut (), moved, write, None)?;
-            Ok(ArmEnd::FallThrough(Vec::new()))
-        });
-        f.if_(&mut (), inside, merge, None)?;
+            f.if_(&mut (), store, write, None)?;
+        }
+    } else {
+        // The invocation's words, one after the other, each as one invocation took it alone.
+        for k in 0..ShadowMergeImageModule::WORDS {
+            let w = match k {
+                0 => base,
+                k => {
+                    let step = u32_value(&mut f, k * ShadowMergeImageModule::LOCAL_SIZE)?;
+                    f.binary(BinOp::IAdd, base, step)?
+                }
+            };
+            let inside = f.binary(BinOp::ULessThan, w, row_count)?;
+            let lanes = lanes.clone();
+            let merge: ArmFn<'_, ()> = Box::new(move |f, _| {
+                let (x, lane) = match split {
+                    None => (w, None),
+                    Some((shift, mask)) => (
+                        f.binary(BinOp::ShiftRightLogical, w, shift)?,
+                        Some(f.binary(BinOp::BitwiseAnd, w, mask)?),
+                    ),
+                };
+                let tx = f.binary(BinOp::IAdd, x0, x)?;
+                let coord = f.composite_construct(uvec2, &[tx, ty])?;
+                let image = f.load(image, MemAccess::default())?;
+                let ops = ImageOperands {
+                    lod: Some(zero),
+                    ..ImageOperands::default()
+                };
+                let texel = f.fetch(image, coord, &ops)?;
+                let texel = rebuild.words(f, texel)?;
+                let after = one_word(f, &texel, lane, &lanes)?;
+                // The word before the command: in the kept image, the texel's at its own
+                // coordinates; in the kept buffer, the row's word, row after row.
+                let before = match kept {
+                    KeptAt::Image(kept, view) => {
+                        let kept = f.load(kept, MemAccess::default())?;
+                        let texel = f.fetch(kept, coord, &ops)?;
+                        let words = fetched_words(f, texel, view)?;
+                        one_word(f, &words, lane, &lanes)?
+                    }
+                    KeptAt::Buffer(kept) => {
+                        let kept_row = f.binary(BinOp::IMul, y, row_count)?;
+                        let place = f.binary(BinOp::IAdd, kept_row, w)?;
+                        let p = f.access_chain(kept, &[zero, place])?;
+                        f.load(p, MemAccess::default())?
+                    }
+                };
+                let differ = f.binary(BinOp::BitwiseXor, before, after)?;
+                let moved = f.binary(BinOp::INotEqual, differ, zero)?;
+                // A word the command left as it was is neither read nor written.
+                let write: ArmFn<'_, ()> = Box::new(move |f, _| {
+                    // The word at its row's place in the current buffer.
+                    let place = f.binary(BinOp::IAdd, row, w)?;
+                    let to = f.access_chain(current, &[zero, place])?;
+                    merge_word(f, to, after, differ)?;
+                    Ok(ArmEnd::FallThrough(Vec::new()))
+                });
+                f.if_(&mut (), moved, write, None)?;
+                Ok(ArmEnd::FallThrough(Vec::new()))
+            });
+            f.if_(&mut (), inside, merge, None)?;
+        }
     }
     f.ret(None)?;
     let id = f.finish()?;
@@ -521,15 +598,17 @@ fn binding_of(sym: &Symbol) -> Option<u32> {
     }
 }
 
-/// The image-reading merge module of `device` reading the shadow's texels as `read` does:
+/// The image-reading merge module of `device` reading the shadow's texels as `read` does and
+/// storing as `stores` says:
 /// built with the typed builder, checked by the owned verifier against the device's profile
 /// (requirements included), serialized, and numbered with the fixed bindings of
 /// [`ShadowMergeImageModule`].
 pub fn shadow_merge_image_module(
     device: &Device,
     read: ShadowMergeRead,
+    stores: ShadowMergeStores,
 ) -> Result<ShadowMergeImageModule, Error> {
-    module_of(device, read, Kept::Buffer)
+    module_of(device, read, Kept::Buffer, stores)
 }
 
 /// The image-reading merge module of `device` reading texels through the unsigned-integer
@@ -539,8 +618,14 @@ pub fn shadow_merge_image_module(
 pub fn shadow_merge_kept_image_module(
     device: &Device,
     view: ShadowTexelView,
+    stores: ShadowMergeStores,
 ) -> Result<ShadowMergeImageModule, Error> {
-    module_of(device, ShadowMergeRead::Words(view), Kept::Image(view))
+    module_of(
+        device,
+        ShadowMergeRead::Words(view),
+        Kept::Image(view),
+        stores,
+    )
 }
 
 /// [`shadow_merge_image_module`] or [`shadow_merge_kept_image_module`], by `kept`.
@@ -548,9 +633,10 @@ fn module_of(
     device: &Device,
     read: ShadowMergeRead,
     kept: Kept,
+    stores: ShadowMergeStores,
 ) -> Result<ShadowMergeImageModule, Error> {
     let profile = device.profile();
-    let m = typed_module(read, kept)?;
+    let m = typed_module(read, kept, stores == ShadowMergeStores::Blocks)?;
     let mut meter = Meter::new(&Budget::default());
     crate::spirv::verify::verify(&m, profile, &mut meter)?;
     let r = crate::spirv::serialize::serialize(m)?;
@@ -592,7 +678,9 @@ mod tests {
     fn the_image_merge_kernels_are_valid_on_every_committed_profile() {
         for (_, p) in committed_profiles().expect("profiles") {
             for (read, kept) in forms() {
-                assert_valid(typed_module(read, kept).expect("module"), &p);
+                for blocks in [false, true] {
+                    assert_valid(typed_module(read, kept, blocks).expect("module"), &p);
+                }
             }
         }
     }
@@ -671,7 +759,8 @@ mod tests {
     /// The current buffer's words after one dispatch over `region` (`[x0, y0, width, height]`) of
     /// `shadow` read through `read`, `kept` its region's words before (in a buffer, row after row,
     /// or, by `form`, in an image at their own coordinates), rows `row_words` apart in `current`
-    /// from `first_word`, in both invocation orders.
+    /// from `first_word`, in both invocation orders and both forms of the stores (whole blocks and
+    /// changed words, which give the same bytes where no other writer runs beside the kernel).
     fn merged(
         shadow: &Image,
         (read, form): (ShadowMergeRead, Kept),
@@ -680,7 +769,6 @@ mod tests {
         (row_words, first_word): (u32, u32),
         current: &[u32],
     ) -> Vec<u32> {
-        let m = typed_module(read, form).expect("module");
         let [x0, y0, width, height] = region;
         let extent = [shadow.extent[0], shadow.extent[1]];
         let shape = ShadowMergeImageModule::shape([x0, y0], width, row_words, first_word);
@@ -698,7 +786,11 @@ mod tests {
             })
         };
         let mut out = Vec::new();
-        for order in [Order::Forward, Order::Reverse] {
+        for (blocks, order) in [false, true]
+            .into_iter()
+            .flat_map(|blocks| [Order::Forward, Order::Reverse].map(|order| (blocks, order)))
+        {
+            let m = typed_module(read, form, blocks).expect("module");
             let buffer = |slot, words: &[u32]| Buffer {
                 slot: Some(slot),
                 address: None,
@@ -722,6 +814,9 @@ mod tests {
                 ..Config::default()
             };
             let (outcome, images) = run_with_images(&m, &cfg, res, images).expect("run");
+            // Whole blocks take two workgroup barriers (the clear, the marks); words none.
+            let barriers = if blocks { 2 } else { 0 };
+            assert!(outcome.invocations.iter().all(|i| i.barriers == barriers));
             assert_eq!(&images[0], shadow, "the view is only read");
             match form {
                 Kept::Buffer => {
@@ -731,8 +826,47 @@ mod tests {
             }
             out.push(words_of(outcome.buffers.last().expect("current")));
         }
-        assert_eq!(out[0], out[1], "order independent");
+        assert!(
+            out.iter().all(|o| *o == out[0]),
+            "order and form independent"
+        );
         out.swap_remove(0)
+    }
+    /// Whole blocks: a block of a row with no changed word reads and writes no word of the
+    /// current buffer, and a word of a changed block the command left keeps the current
+    /// buffer's. The current buffer holds the row's first block alone (`LOCAL_SIZE` words), so an
+    /// access to any other block of the row traps (out of bounds) and fails the run, through
+    /// every read, the kept words in a buffer or in an image.
+    #[test]
+    fn whole_blocks_touch_no_word_of_an_unchanged_block_of_a_row() {
+        for (read, form) in forms() {
+            let words = read.words();
+            let region = [10, 2, 270, 1];
+            let [x0, y0, width, _] = region;
+            // Kept: the fetched words but texel 3's word 0, whose low byte alone differs.
+            let mut kept = Vec::new();
+            for x in 0..width {
+                for i in 0..words {
+                    let word = texel_word(x0 + x, y0, i);
+                    kept.push(if x == 3 && i == 0 { word ^ 0xff } else { word });
+                }
+            }
+            let current: Vec<u32> = (0..ShadowMergeImageModule::LOCAL_SIZE)
+                .map(|i| 0xa5a5_0000 | i)
+                .collect();
+            let got = merged(
+                &image([300, 7], read),
+                (read, form),
+                region,
+                &kept,
+                (width * words, 0),
+                &current,
+            );
+            let mut want = current.clone();
+            let at = (3 * words) as usize;
+            want[at] = (current[at] & !0xff) | (texel_word(x0 + 3, y0, 0) & 0xff);
+            assert_eq!(got, want, "{read:?} {form:?}");
+        }
     }
 
     /// Each byte the texture changed since the keep lands at its row's place; a word whose kept

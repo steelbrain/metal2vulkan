@@ -646,6 +646,7 @@ surface! {
         fn shadow_merge_kept_image_module;
         struct ShadowMergeImageModule N;
         enum ShadowMergeRead E;
+        enum ShadowMergeStores E;
         fn extended_shadow_module;
         struct ExtendedShadowModule N;
         struct BlockDecodeModule N;

@@ -60,7 +60,7 @@ use super::tracker::{Access, Barrier, Use};
 use super::Device;
 use crate::device::functions::Vk;
 use ash::vk;
-use metal2vulkan::bind::ShadowMergeModule;
+use metal2vulkan::bind::{ShadowMergeModule, ShadowMergeStores};
 
 /// What the offsets of the bindings are rounded to: a multiple of every
 /// `minStorageBufferOffsetAlignment`.
@@ -231,7 +231,7 @@ impl LinearMerge {
             }
         }
         (device.shared().counts).shadow_merge_planned(dispatches.len(), examined);
-        let kernel = device.owned_kernel(OwnedModule::ShadowMerge)?;
+        let kernel = device.owned_kernel(OwnedModule::ShadowMerge(ShadowMergeStores::Words))?;
         let binds = OwnedBinds::new(device, &kernel, &sets)?;
         let levels = backing.level..backing.level + 1;
         let backing_layers = backing.layer..backing.layer + backing.layers.max(1);

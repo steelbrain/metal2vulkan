@@ -305,7 +305,7 @@ pub use sample_planes::{
 };
 pub use shadow_copy_back::{shadow_copy_back_module, ShadowCopyBackModule, ShadowTexelView};
 pub use shadow_copy_in::{shadow_copy_in_module, ShadowCopyInModule};
-pub use shadow_merge::{shadow_merge_module, ShadowMergeModule};
+pub use shadow_merge::{shadow_merge_module, ShadowMergeModule, ShadowMergeStores};
 pub use shadow_merge_image::{
     shadow_merge_image_module, shadow_merge_kept_image_module, ShadowMergeImageModule,
     ShadowMergeRead,

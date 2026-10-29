@@ -124,6 +124,7 @@ fn through(texture: &Arc<ShadowCopies>, writes: bool) -> (ShadowUse, Use<Resourc
             kept: false,
             area: None,
             loads: None,
+            tile_stores: false,
         },
         used,
     )
@@ -261,6 +262,7 @@ fn a_copy_back_covers_only_where_the_commands_wrote() {
         kept: false,
         area,
         loads: None,
+        tile_stores: false,
     };
     let (_, written) = through(&t, true);
     let run = |areas: &[Option<[u32; 4]>]| {
@@ -371,6 +373,7 @@ fn a_copy_in_covers_only_where_the_command_reads_and_writes() {
         kept: false,
         area: writes.then_some(area),
         loads: Some(area),
+        tile_stores: false,
     };
     let a = [8, 4, 40, 20];
     let mut sync = ShadowSync::<u32>::default();
@@ -771,6 +774,7 @@ fn a_read_inside_a_rectangle_leaves_the_other_changed_texels_to_the_next_read() 
             kept: false,
             area: None,
             loads: Some(area),
+            tile_stores: false,
         };
         within_command(sync, &[reader], &[], std::slice::from_ref(&read))
     };
@@ -836,6 +840,7 @@ fn a_copy_back_of_a_part_leaves_a_twin_stale_there_alone() {
             kept: false,
             area: Some(area),
             loads: Some([0, 0, 64, 32]),
+            tile_stores: false,
         }];
         let mut uses = vec![written.clone()];
         for texture in also {
@@ -908,6 +913,7 @@ fn a_merge_of_a_part_leaves_a_twin_stale_there_alone() {
             kept: false,
             area: Some(area),
             loads: Some([0, 0, 64, 32]),
+            tile_stores: false,
         }];
         let mut uses = vec![written.clone()];
         for texture in also {
@@ -1051,6 +1057,7 @@ fn a_use_that_overwrites_every_texel_takes_no_copy_in() {
         kept: false,
         area: None,
         loads: None,
+        tile_stores: false,
     };
     let (_, written) = through(&t, true);
     for stores in [true, false] {
@@ -1601,6 +1608,7 @@ fn an_images_shadow_of_one_level_and_slice_is_cut_as_a_buffers_texture_is() {
     let (_, read) = through(&s, false);
     let reader = |area: [u32; 4]| ShadowUse {
         loads: Some(area),
+        tile_stores: false,
         ..through(&s, false).0
     };
     let attachment = texels(image, 2..3, 0..1, true);
@@ -1661,6 +1669,7 @@ fn an_images_shadow_of_one_level_and_slice_is_cut_as_a_buffers_texture_is() {
         writes: true,
         area: Some(a),
         loads: Some(a),
+        tile_stores: false,
         ..through(&s, true).0
     };
     let written = through(&s, true).1;
@@ -1742,6 +1751,7 @@ fn a_keep_holds_the_rectangle_its_commands_write_in() {
             writes: true,
             area,
             loads: area,
+            tile_stores: false,
             ..through(&a, true).0
         };
         let copies = sync
@@ -1981,6 +1991,7 @@ impl Frame {
         let shadows = [ShadowUse {
             area: Some(area),
             loads: Some(area),
+            tile_stores: false,
             ..through(texture, true).0
         }];
         let uses = [through(texture, true).1];
@@ -2262,4 +2273,60 @@ fn a_large_surfaces_first_copies_in_divide_into_carried_stood_earlier_and_unstoo
     let mut frame = Frame::new();
     frame.sampling(&small, 1).sampling(&small, 1);
     assert_eq!(frame.stood(), (64 * 32, 0, 0, 0), "a small mapped buffer's");
+}
+
+/// The scratch kinds a command's merges are made for (`MergeFor::blocks`) and the rectangles they
+/// keep, in a fresh encoder, for a command that uses the shadowed textures `shadows` and has
+/// `uses`.
+fn made_for(shadows: &[ShadowUse], uses: &[Use<ResourceKey>]) -> Vec<(bool, Option<[u32; 4]>)> {
+    let mut sync = ShadowSync::<u32>::default();
+    let mut made = Vec::new();
+    sync.before(shadows, uses, |_, merge_for, area| {
+        made.push((merge_for.blocks, area));
+        Ok(0)
+    })
+    .unwrap();
+    made
+}
+
+/// A render pass's color it loads and stores inside its draws' scissors
+/// (`ShadowUse::tile_stores`) is kept for a merge that stores whole blocks of that rectangle's
+/// rows, as Metal's own store writes back every texel of each tile its draws reach; a pass whose
+/// writes no rectangle bounds, and one whose texture a draw also writes through, keep one that
+/// stores the changed words alone.
+#[test]
+fn a_pass_storing_its_loaded_area_merges_in_whole_blocks() {
+    let buffer = ResourceKey::new();
+    let t = cut_shadow(buffer, 256..256 + 320 * 32);
+    assert!(t.merges_back() && t.cuts());
+    let area = [8, 4, 40, 20];
+    let pass = |area: Option<[u32; 4]>, tile_stores: bool| ShadowUse {
+        area,
+        loads: area,
+        tile_stores,
+        ..through(&t, true).0
+    };
+    let used = [through(&t, true).1];
+    assert_eq!(
+        made_for(&[pass(Some(area), true)], &used),
+        [(true, Some(area))]
+    );
+    // Not by tile stores alone, or bounded by no rectangle: the changed words alone.
+    assert_eq!(
+        made_for(&[pass(Some(area), false)], &used),
+        [(false, Some(area))]
+    );
+    assert_eq!(made_for(&[pass(None, true)], &used), [(false, None)]);
+    // A draw's write through the texture joins the pass's use: the changed words alone.
+    let mut joined = Vec::new();
+    shadow::join(&mut joined, &pass(Some(area), true));
+    shadow::join(&mut joined, &through(&t, true).0);
+    assert!(!joined[0].tile_stores && joined[0].area.is_none());
+    assert_eq!(made_for(&joined, &used), [(false, None)]);
+    // A draw's read of it leaves the pass's tile stores.
+    let mut joined = Vec::new();
+    shadow::join(&mut joined, &pass(Some(area), true));
+    shadow::join(&mut joined, &through(&t, false).0);
+    assert!(joined[0].tile_stores);
+    assert_eq!(made_for(&joined, &used), [(true, Some(area))]);
 }

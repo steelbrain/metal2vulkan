@@ -491,6 +491,7 @@ fn attachment_shadows(
                     kept: false,
                     area: None,
                     loads: None,
+                    tile_stores: false,
                 };
                 shadow::join(&mut shadows, &used);
             }
@@ -509,6 +510,7 @@ fn attachment_shadows(
                     kept: false,
                     area: None,
                     loads: None,
+                    tile_stores: false,
                 };
                 shadow::join(&mut shadows, &used);
             }
@@ -538,6 +540,9 @@ fn attachment_shadows(
                     kept: !reached,
                     area: area.map(|area| instance.unwrap_or(area)),
                     loads: area,
+                    // A color it loads and stores inside its draws' scissors: Metal's store
+                    // writes back each tile its draws reach whole (`shadow.rs`).
+                    tile_stores: stores && area.is_some(),
                 };
                 shadow::join(&mut shadows, &used);
             }
@@ -556,6 +561,7 @@ fn attachment_shadows(
                     kept: false,
                     area: None,
                     loads: None,
+                    tile_stores: false,
                 };
                 shadow::join(&mut shadows, &used);
             }

@@ -10,6 +10,7 @@
 use super::blit_holds::{device, Scratch};
 use crate::owned_kernel::{OwnedBinds, OwnedModule, OwnedSet, OwnedSets};
 use crate::ResourceOptions;
+use metal2vulkan::bind::ShadowMergeStores;
 
 #[test]
 fn a_pushed_kernel_s_sets_are_pushed_and_never_allocated() {
@@ -18,7 +19,11 @@ fn a_pushed_kernel_s_sets_are_pushed_and_never_allocated() {
     let pushes = device.shared().vk().push_descriptor().is_some();
     let buffer = device.new_buffer(4096, ResourceOptions::private()).unwrap();
     let (raw, at) = buffer.at(0);
-    for module in [OwnedModule::ShadowMerge, OwnedModule::RowsCopy] {
+    for module in [
+        OwnedModule::ShadowMerge(ShadowMergeStores::Words),
+        OwnedModule::ShadowMerge(ShadowMergeStores::Blocks),
+        OwnedModule::RowsCopy,
+    ] {
         let kernel = device.owned_kernel(module).unwrap();
         assert_eq!(kernel.pushed, pushes, "{module:?}");
         let set = || OwnedSet {

@@ -909,9 +909,15 @@ else.
   snaps each decoded tap to Metal's twelve-bit step (`lower/sampler/bicubic.rs`); and `half`
   `fmod` gives a zero result Metal's sign on its exact remainder routine, where no note records the
   device's yet. Each is open work toward the device's answer; none is announced.
-- **A shadow's merge back to host pages stores each changed word alone**, so over PCIe, where the
-  changed words alternate, the stores leave gaps the bus takes one at a time: on an RTX 5080 a
-  merge over 4 MiB of host pages with every other word changed took 150 ms of GPU time, against
-  0.40 ms with a 64x64 square changed and 0.86 ms with every word changed. Storing whole blocks
-  takes under 1 ms in each of those shapes, but would rewrite unchanged bytes a CPU may be writing
-  meanwhile, a write Metal keeps, so the merge does not. Not announced.
+- **A shadow's merge back to host pages stores each changed word alone after a command that
+  leaves texels it does not write** (a kernel's or a blit's partial writes among them; a render
+  pass that loads and stores its attachment inside its scissors, and a command that replaces
+  every texel over logged pages, store whole 256-byte blocks). Over PCIe each separate run of
+  changed words past the first in a 64-byte host line costs about 180 ns, serialized: on an RTX
+  5080, 4 MiB with every other word changed took 88 to 102 ms (11 ms with each line's runs stored
+  in separate passes), against 0.4 ms in whole blocks. Blocks stay out there: they rewrite
+  unchanged bytes a CPU may be writing meanwhile, and Metal keeps such a write beside a kernel's
+  (on an M3 Max, a kernel writing one texel lost none of a CPU thread's writes to the texels
+  around it in about 1.1e9 checks), while a loading and storing pass rewrites the whole 32x32
+  tile it draws in (`shadow.rs`, **Stored attachments**). A blit's partial writes keep the
+  kernel's rule. Not announced.

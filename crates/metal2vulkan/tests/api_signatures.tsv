@@ -308,6 +308,7 @@ assoc-const	metal2vulkan::bind::ShadowMergeImageModule::LOCAL_SIZE	pub const LOC
 assoc-const	metal2vulkan::bind::ShadowMergeImageModule::PUSH_BYTES	pub const PUSH_BYTES: u32
 assoc-const	metal2vulkan::bind::ShadowMergeImageModule::SET	pub const SET: u32
 assoc-const	metal2vulkan::bind::ShadowMergeImageModule::WORDS	pub const WORDS: u32
+assoc-const	metal2vulkan::bind::ShadowMergeModule::BLOCK_BYTES	pub const BLOCK_BYTES: u32
 assoc-const	metal2vulkan::bind::ShadowMergeModule::CHANGED_BINDING	pub const CHANGED_BINDING: u32
 assoc-const	metal2vulkan::bind::ShadowMergeModule::CURRENT_BINDING	pub const CURRENT_BINDING: u32
 assoc-const	metal2vulkan::bind::ShadowMergeModule::KEPT_BINDING	pub const KEPT_BINDING: u32
@@ -773,6 +774,7 @@ assoc-const-value	metal2vulkan::bind::ShadowMergeImageModule::LOCAL_SIZE	64
 assoc-const-value	metal2vulkan::bind::ShadowMergeImageModule::PUSH_BYTES	16
 assoc-const-value	metal2vulkan::bind::ShadowMergeImageModule::SET	0
 assoc-const-value	metal2vulkan::bind::ShadowMergeImageModule::WORDS	4
+assoc-const-value	metal2vulkan::bind::ShadowMergeModule::BLOCK_BYTES	4 * Self::LOCAL_SIZE
 assoc-const-value	metal2vulkan::bind::ShadowMergeModule::CHANGED_BINDING	1
 assoc-const-value	metal2vulkan::bind::ShadowMergeModule::CURRENT_BINDING	2
 assoc-const-value	metal2vulkan::bind::ShadowMergeModule::KEPT_BINDING	0
@@ -1343,6 +1345,7 @@ enum	metal2vulkan::bind::RewriteProgram	#[cfg_attr(feature = "serde", derive(ser
 enum	metal2vulkan::bind::RewriteSource	#[derive(Clone, Copy, Debug, PartialEq, Eq)] #[non_exhaustive] pub enum RewriteSource
 enum	metal2vulkan::bind::SamplerSource	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] pub enum SamplerSource
 enum	metal2vulkan::bind::ShadowMergeRead	#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)] pub enum ShadowMergeRead
+enum	metal2vulkan::bind::ShadowMergeStores	#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] pub enum ShadowMergeStores
 enum	metal2vulkan::bind::ShadowTexelView	#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)] pub enum ShadowTexelView
 enum	metal2vulkan::bind::StatusWord	#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] #[non_exhaustive] pub enum StatusWord
 enum	metal2vulkan::bind::TessellationRecords	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum TessellationRecords
@@ -2781,6 +2784,7 @@ field	metal2vulkan-runtime::WorkCounts.shadow_copies_in_dispatched	pub shadow_co
 field	metal2vulkan-runtime::WorkCounts.shadow_keeps	pub shadow_keeps: super::churn_counts::ShadowKeeps
 field	metal2vulkan-runtime::WorkCounts.shadow_keeps_from_staging	pub shadow_keeps_from_staging: u64
 field	metal2vulkan-runtime::WorkCounts.shadow_merge_copies_dispatched	pub shadow_merge_copies_dispatched: u64
+field	metal2vulkan-runtime::WorkCounts.shadow_merge_dispatches_in_blocks	pub shadow_merge_dispatches_in_blocks: u64
 field	metal2vulkan-runtime::WorkCounts.shadow_merge_dispatches_planned	pub shadow_merge_dispatches_planned: u64
 field	metal2vulkan-runtime::WorkCounts.shadow_merge_kept_images_followed	pub shadow_merge_kept_images_followed: u64
 field	metal2vulkan-runtime::WorkCounts.shadow_merge_kept_images_live	pub shadow_merge_kept_images_live: u64
@@ -4550,9 +4554,9 @@ fn	metal2vulkan::bind::rows_copy_module	pub fn rows_copy_module(device: &Device)
 fn	metal2vulkan::bind::sampler_desc	pub fn sampler_desc(device: &crate::device::Device, desc: &crate::bind::state::SamplerDescriptor, use_: SamplerUse, opaque_black: OpaqueBlackBorder, image_format: Option<vk::Format>) -> Result<vk::SamplerDesc, BindError>
 fn	metal2vulkan::bind::shadow_copy_back_module	pub fn shadow_copy_back_module(device: &Device, view: ShadowTexelView) -> Result<ShadowCopyBackModule, Error>
 fn	metal2vulkan::bind::shadow_copy_in_module	pub fn shadow_copy_in_module(device: &Device, view: ShadowTexelView) -> Result<ShadowCopyInModule, Error>
-fn	metal2vulkan::bind::shadow_merge_image_module	pub fn shadow_merge_image_module(device: &Device, read: ShadowMergeRead) -> Result<ShadowMergeImageModule, Error>
-fn	metal2vulkan::bind::shadow_merge_kept_image_module	pub fn shadow_merge_kept_image_module(device: &Device, view: ShadowTexelView) -> Result<ShadowMergeImageModule, Error>
-fn	metal2vulkan::bind::shadow_merge_module	pub fn shadow_merge_module(device: &Device) -> Result<ShadowMergeModule, Error>
+fn	metal2vulkan::bind::shadow_merge_image_module	pub fn shadow_merge_image_module(device: &Device, read: ShadowMergeRead, stores: ShadowMergeStores) -> Result<ShadowMergeImageModule, Error>
+fn	metal2vulkan::bind::shadow_merge_kept_image_module	pub fn shadow_merge_kept_image_module(device: &Device, view: ShadowTexelView, stores: ShadowMergeStores) -> Result<ShadowMergeImageModule, Error>
+fn	metal2vulkan::bind::shadow_merge_module	pub fn shadow_merge_module(device: &Device, stores: ShadowMergeStores) -> Result<ShadowMergeModule, Error>
 fn	metal2vulkan::bind::stencil_split_module	pub fn stencil_split_module(device: &Device, feature: Feature) -> Result<StencilSplitModule, Error>
 fn	metal2vulkan::bind::tessellation_scan_module	pub fn tessellation_scan_module(device: &Device, kernel: &TessellationScanKernel) -> Result<TessellationScanModule, Error>
 fn	metal2vulkan::bind::tiled_texels_module	pub fn tiled_texels_module(device: &Device) -> Result<TiledTexelsModule, Error>
@@ -12129,6 +12133,8 @@ variant	metal2vulkan::bind::SamplerSource::Slot	Slot { slot: SlotRef, compare: b
 variant	metal2vulkan::bind::ShadowMergeRead::B8G8R8A8Unorm	B8G8R8A8Unorm
 variant	metal2vulkan::bind::ShadowMergeRead::R8G8B8A8Unorm	R8G8B8A8Unorm
 variant	metal2vulkan::bind::ShadowMergeRead::Words	Words(ShadowTexelView)
+variant	metal2vulkan::bind::ShadowMergeStores::Blocks	Blocks
+variant	metal2vulkan::bind::ShadowMergeStores::Words	Words
 variant	metal2vulkan::bind::ShadowTexelView::R32G32B32A32Uint	R32G32B32A32Uint
 variant	metal2vulkan::bind::ShadowTexelView::R32G32Uint	R32G32Uint
 variant	metal2vulkan::bind::ShadowTexelView::R32Uint	R32Uint

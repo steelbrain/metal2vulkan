@@ -45,6 +45,12 @@ const EXTENDED: [ExtendedRange; 13] = [
     ExtendedRange::Rgba16Bfloat,
 ];
 
+/// Both forms of a shadow merge's stores.
+const STORES: [bind::ShadowMergeStores; 2] = [
+    bind::ShadowMergeStores::Words,
+    bind::ShadowMergeStores::Blocks,
+];
+
 fn modules() -> Vec<Build> {
     let mut out: Vec<Build> = Vec::new();
     macro_rules! plain {
@@ -66,7 +72,6 @@ fn modules() -> Vec<Build> {
         replay_preprocess_module,
         rotate_texels_module,
         rows_copy_module,
-        shadow_merge_module,
         tiled_texels_module,
         two_plane_texels_module,
         visibility_combine_module,
@@ -78,6 +83,12 @@ fn modules() -> Vec<Build> {
         |name: String, build: Box<dyn Fn(&Device) -> Result<Arc<[u32]>, Error> + Sync>| {
             out.push((name, build));
         };
+    for stores in STORES {
+        push(
+            format!("shadow_merge_module({stores:?})"),
+            Box::new(move |d| Ok(bind::shadow_merge_module(d, stores)?.spirv)),
+        );
+    }
     for form in EXTENDED {
         push(
             format!("extended_shadow_module({form:?})"),
@@ -101,16 +112,20 @@ fn modules() -> Vec<Build> {
             format!("shadow_copy_in_module({view:?})"),
             Box::new(move |d| Ok(bind::shadow_copy_in_module(d, view)?.spirv)),
         );
-        push(
-            format!("shadow_merge_kept_image_module({view:?})"),
-            Box::new(move |d| Ok(bind::shadow_merge_kept_image_module(d, view)?.spirv)),
-        );
+        for stores in STORES {
+            push(
+                format!("shadow_merge_kept_image_module({view:?}, {stores:?})"),
+                Box::new(move |d| Ok(bind::shadow_merge_kept_image_module(d, view, stores)?.spirv)),
+            );
+        }
     }
     for read in bind::ShadowMergeRead::ALL {
-        push(
-            format!("shadow_merge_image_module({read:?})"),
-            Box::new(move |d| Ok(bind::shadow_merge_image_module(d, read)?.spirv)),
-        );
+        for stores in STORES {
+            push(
+                format!("shadow_merge_image_module({read:?}, {stores:?})"),
+                Box::new(move |d| Ok(bind::shadow_merge_image_module(d, read, stores)?.spirv)),
+            );
+        }
     }
     for conversion in crate::bind::ycbcr_convert::conversions() {
         push(

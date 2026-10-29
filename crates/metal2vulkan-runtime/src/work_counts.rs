@@ -363,6 +363,7 @@ pub(crate) struct Counters {
     shadow_merge_copies_dispatched: AtomicU64,
     shadow_merge_dispatches_planned: AtomicU64,
     shadow_merge_words_examined: AtomicU64,
+    shadow_merge_dispatches_in_blocks: AtomicU64,
     shadow_merge_scratches_reused: AtomicU64,
     shadow_merge_scratches_zeroed: AtomicU64,
     row_copies: AtomicU64,
@@ -2324,6 +2325,13 @@ impl Counters {
             .fetch_add(dispatches as u64, Ordering::Relaxed);
         self.shadow_merge_words_examined
             .fetch_add(words, Ordering::Relaxed);
+    }
+
+    /// `dispatches` of a merge planned in whole blocks (`shadow_merge.rs`: a command's that replaces
+    /// every texel, or a render pass's that stores the tiles of its area).
+    pub(crate) fn shadow_merge_in_blocks(&self, dispatches: usize) {
+        self.shadow_merge_dispatches_in_blocks
+            .fetch_add(dispatches as u64, Ordering::Relaxed);
     }
 
     /// A merge of a shadowed texture took its scratch from its shadow's spares (`shadow_merge.rs`,
@@ -4622,6 +4630,14 @@ pub struct WorkCounts {
     /// after them and stores into the buffer's bytes only where they differ, so the words stored
     /// are at most these and are not counted (only the GPU knows them).
     pub shadow_merge_words_examined: u64,
+    /// Those dispatches that store whole 256-byte blocks (`bind::ShadowMergeStores::Blocks`): a
+    /// merge of a command that replaced every texel of a shadow over logged host pages, cut to its
+    /// texels' rows, every byte of which the command wrote (`shadow.rs`, **Overwrites over logged
+    /// pages**), or of a render pass that loaded and stored its color attachment inside its draws'
+    /// scissors, cut to that rectangle's rows, whose tiles Metal's own store writes back
+    /// (**Stored attachments**). Of the blocks they examine, each holding a changed word is stored
+    /// whole and each other is neither read nor written; which ones changed only the GPU knows.
+    pub shadow_merge_dispatches_in_blocks: u64,
     /// The merges of shadowed textures whose scratch was a buffer their shadow kept from an
     /// earlier merge whose command buffers completed (`shadow_merge.rs`): no buffer made.
     pub shadow_merge_scratches_reused: u64,
@@ -5558,6 +5574,9 @@ impl Device {
                 .load(Ordering::Relaxed),
             shadow_merge_words_examined: counters
                 .shadow_merge_words_examined
+                .load(Ordering::Relaxed),
+            shadow_merge_dispatches_in_blocks: counters
+                .shadow_merge_dispatches_in_blocks
                 .load(Ordering::Relaxed),
             shadow_merge_scratches_reused: counters
                 .shadow_merge_scratches_reused

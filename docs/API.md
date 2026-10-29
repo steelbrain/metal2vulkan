@@ -1315,7 +1315,12 @@ bound.
   is a dispatch that merges only the words the commands
   changed, so that writer's writes to the texels they left stay, as on Metal: the CPU's, over a
   `Shared` or `Managed` buffer's bytes, host pages or the caller's `VkBuffer`, and another queue's
-  commands', over an untracked buffer's. A tracked `Private` buffer's bytes have no such writer (the
+  commands', over an untracked buffer's. After a render pass that loads and stores it as a color
+  attachment inside its draws' scissors, or a command that replaces every texel over host pages
+  that log their writes, the dispatch stores each 256-byte block of the rows it merges that holds
+  a changed word whole (`WorkCounts::shadow_merge_dispatches_in_blocks`): Metal's own store of
+  such a pass writes back every texel of each tile its draws reach, so a write to a texel the
+  pass left inside its render area while it runs is not kept on Metal either. A tracked `Private` buffer's bytes have no such writer (the
   runtime orders another queue's commands that touch them before or after the command buffer, as
   Metal does), and are copied back (`shadow_texels_copied_back`), as a command that replaces every
   texel is. The scratch keeps the rectangle the commands write in, where they bound it and the
