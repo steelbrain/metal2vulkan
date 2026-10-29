@@ -116,7 +116,7 @@ fn select(
     if fetch::class_match(encoding, form.is_float(), attribute).is_err() {
         return Err(not_lowered());
     }
-    fetch::narrow_float_nans(cx, encoding, form);
+    fetch::decode_notes(cx, encoding, form);
     let layout = f.buffer_index;
     let rate = |rate: u32| -> Result<u32, Error> {
         match rate {

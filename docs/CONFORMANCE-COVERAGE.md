@@ -44,7 +44,7 @@ Its limits, measured rather than asserted:
 | committed recordings | 1122 |
 | distinct SDK items the Metal leg reaches, of any status | 800 |
 | of those, reached only where this cannot name the family | 2 |
-| ledger rows (a case whose gap is recorded) | 1077 |
+| ledger rows (a case whose gap is recorded) | 1092 |
 | declared crossings of the option space (pairs put to Metal at once) | 26 |
 | declared crossings that are no pair of it (a boolean or numeric field, or one type in two slots) | 30 |
 
@@ -2570,6 +2570,16 @@ A case whose difference from Metal is recorded rather than compared away. The le
 | `attribute-format-fetches` | A `half` attribute's NaN fetched through `[[stage_in]]` into the fixture's `half2` and reinterpreted (`as_type<ushort>`): Metal moves the attribute's own bits, … |
 | `attribute-format-fetches` | A `half` attribute's NaN fetched through `[[stage_in]]` into the fixture's `half2` and reinterpreted (`as_type<ushort>`): Metal moves the attribute's own bits, … |
 | `attribute-format-fetches` | A `half` attribute's NaN fetched through `[[stage_in]]` into the fixture's `half2` and reinterpreted (`as_type<ushort>`): Metal moves the attribute's own bits, … |
+| `attribute-format-fetches` | Metal converts a normalized attribute field as `c / (2^b - 1)`, correctly rounded, and a kernel's `[[stage_in]]` attribute is always the shader's own fetch, who… |
+| `attribute-format-fetches` | Metal converts a normalized attribute field as `c / (2^b - 1)`, correctly rounded, and a kernel's `[[stage_in]]` attribute is always the shader's own fetch, who… |
+| `attribute-format-fetches` | Metal converts a normalized attribute field as `c / (2^b - 1)`, correctly rounded, and a kernel's `[[stage_in]]` attribute is always the shader's own fetch, who… |
+| `attribute-format-fetches` | Metal converts a normalized attribute field as `c / (2^b - 1)`, correctly rounded, and a kernel's `[[stage_in]]` attribute is always the shader's own fetch, who… |
+| `attribute-format-fetches` | Metal converts a normalized attribute field as `c / (2^b - 1)`, correctly rounded, and a kernel's `[[stage_in]]` attribute is always the shader's own fetch, who… |
+| `attribute-format-fetches` | Metal converts a normalized attribute field as `c / (2^b - 1)`, correctly rounded, and a kernel's `[[stage_in]]` attribute is always the shader's own fetch, who… |
+| `attribute-format-fetches` | Metal converts a normalized attribute field as `c / (2^b - 1)`, correctly rounded, and a kernel's `[[stage_in]]` attribute is always the shader's own fetch, who… |
+| `attribute-format-fetches` | Metal converts a normalized attribute field as `c / (2^b - 1)`, correctly rounded, and a kernel's `[[stage_in]]` attribute is always the shader's own fetch, who… |
+| `attribute-format-fetches` | Metal converts a normalized attribute field as `c / (2^b - 1)`, correctly rounded, and a kernel's `[[stage_in]]` attribute is always the shader's own fetch, who… |
+| `attribute-format-fetches` | Metal converts a normalized attribute field as `c / (2^b - 1)`, correctly rounded, and a kernel's `[[stage_in]]` attribute is always the shader's own fetch, who… |
 | `border-swizzles-rgba8unorm` | A sample of an 8-bit unorm texel (red 0x40, green 0x80, blue 0xC0 and alpha 0x20) through a swizzled view and the device's own conversion: an 8-bit code's value… |
 | `border-swizzles-rgba8unorm` | A sample of an 8-bit unorm texel (red 0x40, green 0x80, blue 0xC0 and alpha 0x20) through a swizzled view and the device's own conversion: an 8-bit code's value… |
 | `border-swizzles-rgba8unorm` | A sample of an 8-bit unorm texel (red 0x40, green 0x80, blue 0xC0 and alpha 0x20) through a swizzled view and the device's own conversion: an 8-bit code's value… |
@@ -3088,6 +3098,11 @@ A case whose difference from Metal is recorded rather than compared away. The le
 | `vertex-format-constant-step` | A NaN of a narrow float attribute (`half`, or a small float of `FloatRG11B10`) fetched by fixed-function vertex input: Metal answers its canonical `0x7FC00000`,… |
 | `vertex-format-constant-step` | A NaN of a narrow float attribute (`half`, or a small float of `FloatRG11B10`) fetched by fixed-function vertex input: Metal answers its canonical `0x7FC00000`,… |
 | `vertex-format-constant-step` | A NaN of a narrow float attribute (`half`, or a small float of `FloatRG11B10`) fetched by fixed-function vertex input: Metal answers its canonical `0x7FC00000`,… |
+| `vertex-format-constant-step` | Metal converts a normalized vertex field as `c / (2^b - 1)`, correctly rounded, and on this venue the constant step is the shader's own fetch (the portability s… |
+| `vertex-format-constant-step` | Metal converts a normalized vertex field as `c / (2^b - 1)`, correctly rounded, and on this venue the constant step is the shader's own fetch (the portability s… |
+| `vertex-format-constant-step` | Metal converts a normalized vertex field as `c / (2^b - 1)`, correctly rounded, and on this venue the constant step is the shader's own fetch (the portability s… |
+| `vertex-format-constant-step` | Metal converts a normalized vertex field as `c / (2^b - 1)`, correctly rounded, and on this venue the constant step is the shader's own fetch (the portability s… |
+| `vertex-format-constant-step` | Metal converts a normalized vertex field as `c / (2^b - 1)`, correctly rounded, and on this venue the constant step is the shader's own fetch (the portability s… |
 | `blit-generated-mipmaps` | `generateMipmapsForTexture:` of an 8x8 `RGBA8Unorm` texture of four levels is the device's own filter: its blit chain (`vkCmdBlitImage` with `VK_FILTER_LINEAR`)… |
 | `bc1-rgba` | A BC1 texel read on lavapipe: Metal interpolates the block's endpoints with 6-bit weights and rounds each channel to an 8-bit code; ours is the device's own dec… |
 | `bc1-rgba` | A BC1 texel read on lavapipe: Metal interpolates the block's endpoints with 6-bit weights and rounds each channel to an 8-bit code; ours is the device's own dec… |

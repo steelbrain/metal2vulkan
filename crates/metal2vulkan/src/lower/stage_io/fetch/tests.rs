@@ -633,35 +633,44 @@ fn normalized_encodings() -> Vec<(VertexFormat, Encoding)> {
         .collect()
 }
 
-/// A normalized decode divides with integer operations, never a device `OpFDiv`, which may be an
-/// ULP off where Metal's conversion is correctly rounded.
+/// A normalized decode is the device's product of the code and its maximum's reciprocal: an
+/// `OpFMul`, with neither an integer division sequence (`OpUDiv`) nor an `OpFDiv`.
 #[test]
-fn a_normalized_decode_has_no_float_division() {
+fn a_normalized_decode_is_a_product_by_the_reciprocal() {
     let formats = normalized_encodings();
     assert_eq!(formats.len(), 19, "{formats:?}");
     for (format, e) in formats {
         for check in [Check::None, Check::InShader] {
             let m = module(e, float(4), Elem::Direct, 0, check);
             let ops = opcodes(m);
-            assert!(ops.contains(&(crate::spv::Op::UDiv as u32)), "{format:?}");
-            assert!(
-                !ops.contains(&(crate::spv::Op::FDiv as u32)),
-                "{format:?} {check:?} decodes with OpFDiv"
-            );
+            assert!(ops.contains(&(crate::spv::Op::FMul as u32)), "{format:?}");
+            for op in [crate::spv::Op::UDiv, crate::spv::Op::FDiv] {
+                assert!(
+                    !ops.contains(&(op as u32)),
+                    "{format:?} {check:?} decodes with {op:?}"
+                );
+            }
         }
     }
 }
 
 /// `c / d` correctly rounded to `f32` (`f64` holds the quotient to 53 bits, so its rounding to
-/// `f32` is the correctly rounded one), signed codes clamped to `-1`.
+/// `f32` is the correctly rounded one), signed codes clamped to `-1`: Metal's fetch.
 fn exact_quotient(c: i64, d: u32) -> f64 {
     f64::from(((c as f64 / f64::from(d)).max(-1.0)) as f32)
 }
 
-/// Every byte decodes as UNORM8 / SNORM8 (and BGRA8's reordered UNORM8) to the correctly rounded
-/// quotient.
+/// The decode's `f32` of code `c` over `d`: `float(c) · float(1 / d)`, rounded once, clamped to
+/// `-1`.
+fn product(c: i64, d: u32) -> f64 {
+    f64::from(((c as f32) * (1.0 / d as f32)).max(-1.0))
+}
+
+/// Every byte decodes as UNORM8 / SNORM8 (and BGRA8's reordered UNORM8) to the reciprocal
+/// product, which is Metal's correctly rounded quotient but at 126 unsigned codes (one ulp high)
+/// and 16 signed ones (one ulp toward zero).
 #[test]
-fn every_normalized_byte_is_correctly_rounded() {
+fn every_normalized_byte_is_the_reciprocal_product() {
     let data: Vec<u8> = (0..=255u8).collect();
     for (format, signed, order) in [
         (VertexFormat::UChar4Normalized, false, [0, 1, 2, 3]),
@@ -679,20 +688,26 @@ fn every_normalized_byte_is_correctly_rounded() {
                 } else {
                     i64::from(b)
                 };
-                exact_quotient(c, if signed { 127 } else { 255 })
+                product(c, if signed { 127 } else { 255 })
             });
             assert_eq!(want, reference(e, &data[4 * i as usize..]), "{format:?}");
             check_lanes(&format!("{format:?} element {i}"), float(4), &got, want);
         }
     }
+    let off = |codes: std::ops::RangeInclusive<i64>, d: u32| {
+        codes
+            .filter(|&c| product(c, d) != exact_quotient(c, d))
+            .count()
+    };
+    assert_eq!((off(0..=255, 255), off(-128..=127, 127)), (126, 16));
 }
 
-/// Every 10-bit and 2-bit code of the packed 10:10:10:2 formats decodes as Metal's fetch does:
-/// the correctly rounded quotient, signed codes (the most negative one `-1`) and unsigned, but a
-/// signed 10-bit field, which is its clamped magnitude times `float(1/511)` (an ULP toward zero
-/// of the quotient at 96 of the 1,024 codes).
+/// Every 10-bit and 2-bit code of the packed 10:10:10:2 formats decodes to the reciprocal
+/// product: Metal's own answer for a signed 10-bit field, which Metal computes so (an ULP toward
+/// zero of the quotient at 96 of the 1,024 codes), and Metal's correctly rounded quotient but at
+/// 24 unsigned 10-bit codes (one ulp low); every 2-bit code is exact.
 #[test]
-fn every_ten_and_two_bit_code_decodes_as_metals() {
+fn every_ten_and_two_bit_code_is_the_reciprocal_product() {
     let n = 1024u32.div_ceil(3);
     let words: Vec<u32> = (0..n)
         .map(|i| {
@@ -711,33 +726,90 @@ fn every_ten_and_two_bit_code_decodes_as_metals() {
             let got = run(&m, &data, [i as u32, 0, 4, 0], 4);
             let want = [(0, 10u32), (10, 10), (20, 10), (30, 2)].map(|(at, bits)| {
                 let c = (w >> at) & ((1 << bits) - 1);
-                if signed && bits == 10 {
+                if signed {
                     let s = 32 - bits;
-                    let c = ((c << s) as i32) >> s;
-                    let q = (c.unsigned_abs().min(511) as f32) * (1.0f32 / 511.0);
-                    f64::from(if c < 0 { -q } else { q })
-                } else if signed {
-                    let s = 32 - bits;
-                    let c = i64::from(((c << s) as i32) >> s);
-                    exact_quotient(c, (1 << (bits - 1)) - 1)
+                    product(i64::from(((c << s) as i32) >> s), (1 << (bits - 1)) - 1)
                 } else {
-                    exact_quotient(i64::from(c), (1 << bits) - 1)
+                    product(i64::from(c), (1 << bits) - 1)
                 }
             });
             assert_eq!(want, reference(e, &data[4 * i..]), "{format:?}");
             check_lanes(&format!("{format:?} element {i}"), float(4), &got, want);
         }
     }
-    let off = (-512i64..512)
-        .filter(|&c| {
-            let q = (c.unsigned_abs().min(511) as f32) * (1.0f32 / 511.0);
-            f64::from(if c < 0 { -q } else { q }) != exact_quotient(c, 511)
-        })
-        .count();
+    let off = |codes: std::ops::RangeInclusive<i64>, d: u32| {
+        codes
+            .filter(|&c| product(c, d) != exact_quotient(c, d))
+            .count()
+    };
     assert_eq!(
-        off, 96,
-        "the codes where Metal's product is not the quotient"
+        [
+            off(0..=1023, 1023),
+            off(-512..=511, 511),
+            off(0..=3, 3),
+            off(-2..=1, 1)
+        ],
+        [24, 96, 0, 0]
     );
+}
+
+/// `decode_notes` records `DeviceVertexConversion` for exactly the reads whose product misses
+/// Metal's fetch at some code, over every code of every normalized format's fields: into a
+/// `float`, every format but `Int1010102Normalized` (whose 10-bit fields Metal computes as the
+/// product); into a `half`, the 16-bit formats alone, at codes 65455 and 65519 unsigned and
+/// -32759 and 32759 signed (Metal rounds the quotient once to `half`).
+#[test]
+fn the_conversion_note_marks_the_reads_whose_product_misses_metal_s() {
+    let fields = |e: Encoding| -> Vec<(u32, bool)> {
+        match e {
+            Encoding::Int { bits, signed, .. } => vec![(u32::from(bits), signed)],
+            Encoding::Bgra8Unorm => vec![(8, false)],
+            Encoding::Rgb10A2 { signed } => vec![(10, signed), (2, signed)],
+            _ => unreachable!("{e:?} is not normalized"),
+        }
+    };
+    let half = |x: f64| f16_to_f64(f64_to_f16(x));
+    let mut noted = [0, 0];
+    for (format, e) in normalized_encodings() {
+        let mut misses = [Vec::new(), Vec::new()];
+        for (bits, signed) in fields(e) {
+            let (lo, d) = match signed {
+                true => (-(1i64 << (bits - 1)), (1u32 << (bits - 1)) - 1),
+                false => (0, (1u32 << bits) - 1),
+            };
+            for c in lo..=i64::from(d) {
+                let ours = product(c, d);
+                // Metal's `float`: the quotient, but a signed 10-bit field's product.
+                let metal = match e == (Encoding::Rgb10A2 { signed: true }) && bits == 10 {
+                    true => product(c, d),
+                    false => exact_quotient(c, d),
+                };
+                if ours != metal {
+                    misses[0].push(c);
+                }
+                // Metal's `half`: the quotient rounded once.
+                if half(ours) != half((c as f64 / f64::from(d)).max(-1.0)) {
+                    misses[1].push(c);
+                }
+            }
+        }
+        for (i, form) in [float(4), half_form(4)].into_iter().enumerate() {
+            let differs = product_differs(e, form);
+            assert_eq!(differs, !misses[i].is_empty(), "{format:?} {form:?}");
+            noted[i] += usize::from(differs);
+        }
+        if let Encoding::Int {
+            bits: 16, signed, ..
+        } = e
+        {
+            let codes = match signed {
+                true => vec![-32759, 32759],
+                false => vec![65455, 65519],
+            };
+            assert_eq!(misses[1], codes, "{format:?}");
+        }
+    }
+    assert_eq!(noted, [18, 8]);
 }
 
 /// A `half` field's widening to a `float` or `half` parameter, and a `FloatRG11B10` field's (a

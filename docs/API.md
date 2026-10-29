@@ -3199,7 +3199,14 @@ bound.
   unclamped (-128/127, -32768/32767) where Metal reads -1. Recorded on the pipeline's vertex stage
   on every device but one whose profile takes `DriverDeviation::MetalNormalizedVertexFetch`
   (MoltenVK on the Apple M3 Max's macOS 27 identity), where only a 16-bit format read as `half`
-  records it; one module serves every format the device fetches.
+  records it; one module serves every format the device fetches. A normalized attribute the shader
+  pulls from its buffer instead (an offset, stride or step fixed-function input cannot fetch, a
+  kernel's `[[stage_in]]` attribute) is the module's product of the code and its maximum's
+  reciprocal, rounded once, the signed one clamped to -1: within one `f32` ulp of Metal's quotient
+  (some 8-bit unsigned codes one ulp high, some signed, 10-bit and 16-bit codes one ulp toward
+  zero; 0, the maximum and -1 exact). The function records it on every device, read as `float` for
+  every normalized format but `Int1010102Normalized` (Metal's own product), and read as `half` for
+  a 16-bit format (one `half` ulp at four codes).
 - `metal2vulkan-degrade-native-half-conversion` (precision). `PrecisionNote::NativeHalfConversion`:
   Native half rounding (a conversion): the module rounds a `half` result it computes in `float` (a
   `half` operation's, a function's, a conversion from `float`'s, a texel's) by the device's

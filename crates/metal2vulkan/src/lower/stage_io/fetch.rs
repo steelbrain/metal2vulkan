@@ -42,8 +42,10 @@
 //! contained like any descriptor access (the normative in-shader check when the profile has no
 //! buffer robustness, reading at offset 0 and yielding zero bytes out of bounds) and decoded
 //! ([`Encoding`]): integers zero- or sign-extended by the format's signedness, normalized integers
-//! as Metal converts them (`c / (2^b - 1)`, signed `max(c / (2^(b-1) - 1), -1)`), `half` bits by
-//! the device's widening (`narrow::from_bits`), and the packed 10:10:10:2, 11:11:10 float, and
+//! by the device's product of the code and its maximum's reciprocal (`c · float(1 / (2^b - 1))`,
+//! signed `max(c · float(1 / (2^(b-1) - 1)), -1)`, within one `f32` ulp of Metal's correctly
+//! rounded quotient: `PrecisionNote::DeviceVertexConversion`), `half` bits by the device's
+//! widening (`narrow::from_bits`), and the packed 10:10:10:2, 11:11:10 float, and
 //! 9:9:9:5 shared-exponent formats by their layouts. Missing components read as `(0, 0, 0, 1)` and
 //! extra ones are dropped. A float format then rounds to a narrow float parameter; an integer
 //! format is masked to a narrow integer parameter. Across the classes ([`class_match`]): an
@@ -74,7 +76,7 @@
 
 use crate::error::{DescriptorError, Error, Feature, LowerFamily, Unsupported};
 use crate::lower::access::pulled::{self, SourceRead};
-use crate::lower::arith::{exact_division, narrow, ops, FloatFmt, Form, Held};
+use crate::lower::arith::{narrow, ops, FloatFmt, Form, Held};
 use crate::lower::dispatch;
 use crate::lower::emit::EmitCx;
 use crate::lower::select::SelectCx;
@@ -88,7 +90,7 @@ use crate::pipeline::sym::{PushField, SlotClass, SlotRef, Stage};
 use crate::spirv::builder::FunctionBuilder;
 use crate::spirv::error::{BResult, BuildError, Dangling};
 use crate::spirv::ids::Value as SValue;
-use crate::spirv::ir::{BinOp, Contraction, ConvOp, GlslOp, IoDir, MemAccess, UnOp};
+use crate::spirv::ir::{BinOp, Contraction, ConvOp, GlslOp, IoDir, MemAccess};
 
 use super::plan::{builtin, Shape};
 
@@ -486,7 +488,7 @@ pub(super) fn select(
         return Err(not_lowered());
     }
     class_match(encoding, form.is_float(), attribute)?;
-    narrow_float_nans(cx, encoding, form);
+    decode_notes(cx, encoding, form);
     let s = slot(Stage::Vertex, buffer);
     let draw_parameters = cx.profile.fields().draw_parameters;
     // The de-indexed and private list forms' per-vertex element is the vertex its index names.
@@ -661,41 +663,33 @@ fn field(fb: &mut FunctionBuilder<'_>, w: SValue, at: u32, width: u32) -> BResul
 }
 
 /// The float of a normalized `bits`-bit field `c` (zero-extended in a `u32`, `bits <= 16`, as in
-/// every normalized vertex format), as Metal converts it: `c / (2^b - 1)`, or signed
-/// `max(c / (2^(b-1) - 1), -1)`, each correctly rounded. The quotient is
-/// [`exact_division::div_exact`]'s integer sequence, not a device division, which may be an ULP
-/// off; a signed field divides its magnitude clamped to the scale (the most negative code is
-/// `-1` exactly) and takes the code's sign, as `air.unpack`'s SNORM formats do. A signed 10-bit
-/// field (`Int1010102Normalized`'s three) is Metal's product instead: the clamped magnitude times
-/// `float(1/511)`, one rounding, which lies an ULP toward zero of the quotient at 96 of the 1,024
-/// codes (`runtime_lane::normalized_vertex_fetch` measures Metal's fetch so).
+/// every normalized vertex format): the device's product of the code and the reciprocal of its
+/// maximum, `float(c) · float(1 / (2^b - 1))`, or signed `max(float(c) · float(1 / (2^(b-1) - 1)),
+/// -1)` on the sign-extended code, rounded once to `float` (no contraction). Metal's fetch answers
+/// the correctly rounded quotient `c / (2^b - 1)` (signed `max(c / (2^(b-1) - 1), -1)`), and an
+/// `Int1010102Normalized` 10-bit field's this same product; the product is within one `f32` ulp of
+/// the quotient, exact at 0, at the maximum and at -1 ([`decode_notes`] records
+/// `PrecisionNote::DeviceVertexConversion` where it can differ).
 fn normalized(fb: &mut FunctionBuilder<'_>, c: SValue, bits: u8, signed: bool) -> BResult<SValue> {
-    let u = u32_scalar();
-    if !signed {
-        return exact_division::div_exact(fb, u, c, (1u32 << bits) - 1);
-    }
-    let d = (1u32 << (bits - 1)) - 1;
-    let field = u.with(Held::Int {
-        bits,
-        container: 32,
-    });
-    let v = ops::sext(fb, field, c)?;
-    let z = k32(fb, 0)?;
-    let neg = fb.binary(BinOp::SLessThan, v, z)?;
-    let minus = fb.binary(BinOp::ISub, z, v)?;
-    let mag = fb.select(neg, minus, v)?;
-    let dk = k32(fb, d)?;
-    let mag = fb.glsl(GlslOp::UMin, &[mag, dk])?;
-    let q = if bits == 10 {
-        let ft = ops::ty(fb, f32_scalar())?;
-        let m = fb.convert(ConvOp::ConvertUToF, mag, ft)?;
-        let r = ops::splat(fb, f32_scalar(), u64::from((1.0f32 / 511.0).to_bits()))?;
-        fb.binary_with(BinOp::FMul, m, r, Contraction::Forbidden)?
+    let (v, d, op) = if signed {
+        let field = u32_scalar().with(Held::Int {
+            bits,
+            container: 32,
+        });
+        let v = ops::sext(fb, field, c)?;
+        (v, (1u32 << (bits - 1)) - 1, ConvOp::ConvertSToF)
     } else {
-        exact_division::div_exact(fb, u, mag, d)?
+        (c, (1u32 << bits) - 1, ConvOp::ConvertUToF)
     };
-    let nq = fb.unary(UnOp::FNegate, q)?;
-    fb.select(neg, nq, q)
+    let ft = ops::ty(fb, f32_scalar())?;
+    let f = fb.convert(op, v, ft)?;
+    let r = ops::splat(fb, f32_scalar(), u64::from((1.0f32 / d as f32).to_bits()))?;
+    let q = fb.binary_with(BinOp::FMul, f, r, Contraction::Forbidden)?;
+    if !signed {
+        return Ok(q);
+    }
+    let minus_one = ops::fsplat(fb, f32_scalar(), -1.0)?;
+    fb.glsl(GlslOp::FMax, &[q, minus_one])
 }
 
 /// The `f32` of half bits `h`: the device's widening of them (`narrow::from_bits`), the `half`'s
@@ -800,15 +794,54 @@ fn components(fb: &mut FunctionBuilder<'_>, e: Encoding, raw: SValue) -> BResult
     Ok(out)
 }
 
-/// Record `PrecisionNote::DeviceNanEncoding` for a read of an attribute of `encoding` as `float`
-/// lanes of `form` where the encoding is a narrow float's ([`Encoding::widens_narrow_float`]):
-/// Metal's fetch answers its canonical NaN, sign and payload dropped, where the decode, the
-/// device's widening of the 16-, 11- or 10-bit field as a half's bits, answers a NaN of the
-/// device's bits. A `half` read stored unchanged keeps the field's own bits, as Metal's does.
-pub(super) fn narrow_float_nans(cx: &mut SelectCx<'_>, encoding: Encoding, form: Form) {
+/// Record the precision notes of the module's decode ([`decode`]) of an attribute of `encoding`
+/// read into `form`, at every pulled read: a vertex function's ([`select`]), a kernel's
+/// `[[stage_in]]` attribute's (`super::stage_in`) and a post-tessellation function's
+/// (`lower::tessellation`), on every profile.
+///
+/// - `PrecisionNote::DeviceNanEncoding` where the encoding is a narrow float's
+///   ([`Encoding::widens_narrow_float`]) read as `float` lanes: Metal's fetch answers its
+///   canonical NaN, sign and payload dropped, where the decode, the device's widening of the 16-,
+///   11- or 10-bit field as a half's bits, answers a NaN of the device's bits. A `half` read
+///   stored unchanged keeps the field's own bits, as Metal's does.
+/// - `PrecisionNote::DeviceVertexConversion` where the decode's normalized product
+///   ([`normalized`]) differs from Metal's fetch at some code ([`product_differs`]): the product
+///   is the module's arithmetic, not the fixed-function conversion
+///   `DriverDeviation::MetalNormalizedVertexFetch` measures.
+pub(crate) fn decode_notes(cx: &mut SelectCx<'_>, encoding: Encoding, form: Form) {
+    use crate::pipeline::artifact::PrecisionNote;
     if encoding.widens_narrow_float() && form.float_fmt() == Some(FloatFmt::F32) {
-        cx.precision
-            .insert(crate::pipeline::artifact::PrecisionNote::DeviceNanEncoding);
+        cx.precision.insert(PrecisionNote::DeviceNanEncoding);
+    }
+    if product_differs(encoding, form) {
+        cx.precision.insert(PrecisionNote::DeviceVertexConversion);
+    }
+}
+
+/// Whether the normalized product ([`normalized`]) of a field of `encoding`, read into `form`,
+/// differs from Metal's fetch at some code. Into a `float`, every normalized encoding's but
+/// `Int1010102Normalized`'s, whose 10-bit fields Metal computes as this product and whose 2-bit
+/// field's product is exact: an 8-bit unsigned field's at 126 of its 256 codes, one ulp high (127
+/// as `0x3EFEFF00` where Metal reads `0x3EFEFEFF`), and one ulp toward zero a signed 8-bit
+/// field's at 16 codes, a 10-bit unsigned one's at 24, and a 16-bit one's at 512 unsigned and
+/// 1,536 signed. Into a `half`, a 16-bit field's, its `float` rounded to `half` again, one `half`
+/// ulp from Metal's quotient rounded once at codes 65455 and 65519 unsigned, 32759 and -32759
+/// signed; an 8-, 10- or 2-bit field's product rounds to Metal's `half` at every code.
+fn product_differs(encoding: Encoding, form: Form) -> bool {
+    match form.float_fmt() {
+        Some(FloatFmt::F32) => {
+            encoding.is_normalized() && encoding != Encoding::Rgb10A2 { signed: true }
+        }
+        Some(FloatFmt::Half) => matches!(
+            encoding,
+            Encoding::Int {
+                bits: 16,
+                normalized: true,
+                ..
+            }
+        ),
+        // A `bfloat`'s product rounds to the quotient's `bfloat` at every code.
+        _ => false,
     }
 }
 
@@ -964,9 +997,11 @@ pub(super) fn emit(
     fetch_from(fb, read, r.encoding, r.form)
 }
 
-/// A reference decoder for the tests: the component values Metal defines for `bytes` of
+/// A reference decoder for the tests: the component values the decode answers for `bytes` of
 /// `encoding` (missing ones `(0, 0, 0, 1)`), each as an `f64` for a float format or the
-/// sign-extended `u32` bits for an integer one.
+/// sign-extended `u32` bits for an integer one. They are Metal's but a normalized field's, which
+/// is the device's product of its code and its maximum's reciprocal ([`normalized`]), within one
+/// `f32` ulp of Metal's correctly rounded quotient.
 #[cfg(test)]
 pub(crate) fn reference(encoding: Encoding, bytes: &[u8]) -> [f64; 4] {
     use crate::lower::arith::legal::f16_to_f64;
@@ -982,11 +1017,11 @@ pub(crate) fn reference(encoding: Encoding, bytes: &[u8]) -> [f64; 4] {
     };
     let norm = |v: u32, bits: u32, signed: bool| -> f64 {
         if signed {
-            let d = f64::from((1u32 << (bits - 1)) - 1) as f32;
-            ((sx(v, bits) as f32) / d).max(-1.0) as f64
+            let d = ((1u32 << (bits - 1)) - 1) as f32;
+            f64::from(((sx(v, bits) as f32) * (1.0 / d)).max(-1.0))
         } else {
             let d = ((1u64 << bits) - 1) as f32;
-            ((v as f32) / d) as f64
+            f64::from((v as f32) * (1.0 / d))
         }
     };
     let small_float = |v: u32, mbits: u32| -> f64 {
@@ -1041,15 +1076,7 @@ pub(crate) fn reference(encoding: Encoding, bytes: &[u8]) -> [f64; 4] {
         Encoding::Rgb10A2 { signed } => {
             let w = word(0);
             for (o, (at, width)) in out.iter_mut().zip([(0, 10), (10, 10), (20, 10), (30, 2)]) {
-                let c = (w >> at) & ((1 << width) - 1);
-                *o = if signed && width == 10 {
-                    // Metal's product: the clamped magnitude times `float(1/511)`.
-                    let v = sx(c, width);
-                    let q = (v.unsigned_abs().min(511) as f32) * (1.0f32 / 511.0);
-                    f64::from(if v < 0 { -q } else { q })
-                } else {
-                    norm(c, width, signed)
-                };
+                *o = norm((w >> at) & ((1 << width) - 1), width, signed);
             }
         }
         Encoding::Rg11B10Float => {

@@ -843,7 +843,9 @@ pub enum PrecisionNote {
     /// format narrower than 32 bits (a `half` format, `FloatRG11B10`) to an attribute that
     /// fixed-function vertex input fetches and the function reads as `float`
     /// (`pipeline::link::vertex`): Metal widens its NaN to `0x7fc00000`, and the device's
-    /// widening need not. A pulled attribute's decode records it in the module. Also recorded by a
+    /// widening need not. A pulled attribute's decode records it in the module (a vertex
+    /// function's, a kernel's `[[stage_in]]` attribute's, a post-tessellation function's). Also
+    /// recorded by a
     /// 16-bit float attachment's blend
     /// the function computes in the storage form, on a device not measured to store `0x7fc00000` in
     /// a 16-bit float storage image as Metal's `0x7e00` (`DriverDeviation::MetalFloatStorageNans`):
@@ -1639,9 +1641,14 @@ pub enum PrecisionNote {
     /// the Apple M3 Max's macOS 27 identity), whose `float` is measured to be Metal's at every
     /// code: there such an attribute records nothing and the pipeline requires
     /// `VkProperty::MetalNormalizedVertexFetch`, but for a 16-bit format read as `half`, which
-    /// rounds twice. A function compiled alone records nothing: its module is the same for every
-    /// format the device fetches. A pulled attribute's decode divides in the shader and records
-    /// nothing either.
+    /// rounds twice. A function compiled alone records nothing for them: its module is the same
+    /// for every format the device fetches. A **pulled** attribute (one the shader fetches from
+    /// its buffer, a kernel's `[[stage_in]]` attribute and a post-tessellation function's
+    /// included) is the module's own product of the code and its maximum's reciprocal,
+    /// `float(c) · float(1 / (2^b - 1))` (signed `max(float(c) · float(1 / (2^(b-1) - 1)), -1)`),
+    /// rounded once; the function records the note on every profile where that misses Metal's
+    /// fetch at some code: read as `float`, every normalized format but `Int1010102Normalized`
+    /// (whose 10-bit fields Metal computes as this product); read as `half`, a 16-bit format.
     /// **Recorded bound:** within one `f32` ulp of Metal's `float` where measured, but a signed
     /// code past -1 on lavapipe per instance. llvmpipe multiplies by the reciprocal: read at every
     /// code (Mesa 26.0.8 on LLVM 21.1.8, arm64), every normalized format is within one ulp of
@@ -1652,8 +1659,12 @@ pub enum PrecisionNote {
     /// -1.00003), where Metal reads -1. RADV's unsigned formats are Metal's at the sites measured,
     /// its signed ones unmeasured. A 16-bit format read as `half` within one `half` ulp of Metal's,
     /// on a device whose `float` is Metal's: its `float` quotient rounded to `half` again differs
-    /// at codes 65455 and 65519 unsigned, 32759 and -32759 signed. Validation derives no tolerance
-    /// from it.
+    /// at codes 65455 and 65519 unsigned, 32759 and -32759 signed. A pulled attribute's product,
+    /// computed exhaustively: one `f32` ulp from Metal's quotient at 126 of the 256 8-bit
+    /// unsigned codes (high, 127 as `0x3EFEFF00` where Metal reads `0x3EFEFEFF`), and toward zero
+    /// at 16 signed 8-bit codes, 24 unsigned 10-bit codes, and 512 unsigned and 1,536 signed
+    /// 16-bit codes; exact at 0, at the maximum and at -1; read as `half`, one `half` ulp at the
+    /// same four 16-bit codes. Validation derives no tolerance from it.
     DeviceVertexConversion,
     /// Native half rounding (a conversion): the module rounds a `half` result it computes in
     /// `float` (a `half` operation's, a function's, a conversion from `float`'s, a texel's) by

@@ -465,6 +465,44 @@ fn the_constant_step_sweep_pulls_every_format_on_a_portability_device() {
     );
 }
 
+/// The same sweep's pulled decodes note the device's product: a normalized format's decode is the
+/// code times its maximum's reciprocal, and the function records
+/// `PrecisionNote::DeviceVertexConversion` wherever that misses Metal's fetch at some code, on
+/// `moltenvk-m3` too, whose fixed-function conversion is measured to be Metal's: read as a
+/// `float4`, 18 of the 19 normalized formats (all but `Int1010102Normalized`, whose 10-bit fields
+/// Metal computes as the product), and read as a `half4`, the eight 16-bit ones. No other format
+/// records it.
+#[test]
+fn a_pulled_normalized_decode_notes_the_device_s_product() {
+    let Some(bc) = fixture() else { return };
+    let p = prof();
+    let formats = float_readable();
+    let stride = SLOT * formats.len() as u32;
+    for (entry, want) in [(TO_FLOAT4, 18), (TO_HALF4, 8)] {
+        let mut noted = Vec::new();
+        for (at, &format) in formats.iter().enumerate() {
+            let proj = projection(&p, format, at, stride, VertexStepFunction::Constant);
+            assert!(
+                matches!(proj.attributes[&0], VertexFetch::Pulled { .. }),
+                "{format:?} is pulled on {PROFILE}"
+            );
+            let a = artifact(&bc, &p, entry, &proj);
+            if a.precision.contains(&PrecisionNote::DeviceVertexConversion) {
+                noted.push(format);
+            }
+        }
+        assert_eq!(noted.len(), want, "{entry}: {noted:?}");
+        let normalized = |f: &VertexFormat| {
+            crate::lower::stage_io::fetch::encoding(*f).is_ok_and(|e| e.is_normalized())
+        };
+        assert!(noted.iter().all(normalized), "{entry}: {noted:?}");
+        assert!(
+            !noted.contains(&VertexFormat::Int1010102Normalized),
+            "{entry}"
+        );
+    }
+}
+
 /// The same sweep where a constant-step binding is available: fixed-function vertex input fetches
 /// the formats the per-vertex sweep fetches, so the constant step costs exactly what the
 /// per-vertex step costs -- **one** module of one translation over the 45 creations, for a `float`

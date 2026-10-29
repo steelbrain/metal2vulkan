@@ -2207,7 +2207,13 @@ degradations! {
         /// RADV's unsigned formats are Metal's), but lavapipe's per-instance fetch reads the most
         /// negative code of an 8- or 16-bit signed format unclamped (-128/127, -32768/32767) where
         /// Metal reads -1; a 16-bit format read as `half`, one `half` ulp at four codes; the signed
-        /// formats on RADV, ANV and NVIDIA are unmeasured.
+        /// formats on RADV, ANV and NVIDIA are unmeasured. Also recorded, on every device, for a
+        /// normalized attribute the shader pulls from its buffer (a kernel's `[[stage_in]]`
+        /// attribute included), which is the module's product of the code and its maximum's
+        /// reciprocal: within one `f32` ulp of Metal's quotient (some 8-bit unsigned codes one ulp
+        /// high, some signed, 10-bit and 16-bit codes one ulp toward zero), but for
+        /// `Int1010102Normalized` read as `float` and an 8- or 10-bit format read as `half`, which
+        /// are Metal's and record nothing.
         DeviceVertexConversion = "device-vertex-conversion";
         /// Class: native half rounding. The device's own conversion of a `float` to 16 bits
         /// rounds the pipeline's `half` results, on a device with `shaderFloat16` whose float

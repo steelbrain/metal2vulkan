@@ -34,7 +34,9 @@
 //! there any word the stage's notes cover (that note, or the module's own `half` rounding,
 //! `NativeHalfConversion` or `NativeHalfQuantize`) is held within one `half` ulp. Elsewhere every
 //! normalized pipeline records the note, and the test prints how many words differ and by how
-//! many `f32` ulps at most, holding none.
+//! many `f32` ulps at most, holding none. A leg the projection pulls is the module's product of
+//! each code and its maximum's reciprocal, not the device's conversion: it records the note on
+//! every profile where that product misses Metal's at some code, and is not drawn.
 
 use super::degrade_notices::counts;
 use super::{
@@ -443,9 +445,16 @@ fn every_normalized_code_reads_metal_s_value() {
                 let pulled = !compiled.vertex_input.pulled.is_empty();
                 let conversion = notes.contains(&PrecisionNote::DeviceVertexConversion);
                 if pulled {
-                    // The module's decode: no conversion of the device's to measure.
+                    // The module's decode, its product of each code and the maximum's
+                    // reciprocal: noted on every profile where it misses Metal's at some code
+                    // (all but `Int1010102Normalized` read as `float`; a 16-bit format read as
+                    // `half`), and no conversion of the device's to measure.
+                    let misses = match half {
+                        true => coding.rounds_twice(),
+                        false => !matches!(coding, Coding::Packed { signed: true }),
+                    };
                     println!("NORM-FETCH {name}: {what}: pulled, not measured");
-                    assert!(!conversion && !requires, "{what}: {notes:?}");
+                    assert!(conversion == misses && !requires, "{what}: {notes:?}");
                     continue;
                 }
                 fixed += 1;

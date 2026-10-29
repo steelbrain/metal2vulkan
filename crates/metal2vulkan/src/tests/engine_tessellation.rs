@@ -325,6 +325,55 @@ fn control_points_and_patch_inputs_are_pulled() {
     }
 }
 
+/// A post-tessellation function's pulled decode records the notes a vertex function's and a
+/// kernel's stage-in decode record, under the same rule (`fetch::decode_notes`): the per-patch
+/// `float4 tint` given a `Half4` format records `PrecisionNote::DeviceNanEncoding` (Metal widens
+/// a NaN to `0x7fc00000`, the device's widening need not), given `UChar4Normalized`
+/// `PrecisionNote::DeviceVertexConversion` (the device's reciprocal product), and given the
+/// fixture's own `Float4` neither; the control points' `half2 uv`, read as `half`, records
+/// neither.
+#[test]
+fn a_patch_attribute_s_decode_records_the_vertex_fetch_s_notes() {
+    let Some(bc) = fixture() else { return };
+    let (with, _) = profiles();
+    let classes = BTreeMap::from([
+        (0, IoNumeric::Float),
+        (1, IoNumeric::Float),
+        (2, IoNumeric::Uint),
+        (5, IoNumeric::Float),
+    ]);
+    let notes = [
+        PrecisionNote::DeviceNanEncoding,
+        PrecisionNote::DeviceVertexConversion,
+    ];
+    assert!(
+        !with.is_empty(),
+        "a committed profile with tessellationShader"
+    );
+    for (stem, p) in &with {
+        for (tint, want) in [
+            (VertexFormat::Float4, vec![]),
+            (VertexFormat::Half4, vec![PrecisionNote::DeviceNanEncoding]),
+            (
+                VertexFormat::UChar4Normalized,
+                vec![PrecisionNote::DeviceVertexConversion],
+            ),
+        ] {
+            let mut d = descriptor();
+            d.attributes
+                .insert(5, VertexAttributeDescriptor::new(tint, 0, 1));
+            let proj = patch_fetch_projection(Some(&d), &classes).expect("projection");
+            let a = compile(&bc, "tess_triangle_points", p, Some(proj))
+                .unwrap_or_else(|e| panic!("{stem} {tint:?}: {e}"));
+            let got: Vec<PrecisionNote> = notes
+                .into_iter()
+                .filter(|n| a.precision.contains(n))
+                .collect();
+            assert_eq!(got, want, "{stem}: tint of {tint:?}");
+        }
+    }
+}
+
 /// A control-point read is named by what its source buffers' slots are: descriptor views
 /// (`tessellation.control_point`, under the profile's buffer encoding) or device addresses
 /// (`tessellation.control_point.psb`, here a `BufferRangeLimit` variant's), which are checked in
