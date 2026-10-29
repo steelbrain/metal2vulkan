@@ -1,8 +1,9 @@
 //! Dynamic roots: the root table, the resident-set search, and which roots are wide.
 //!
 //! **Wide roots.** A buffer pointer whose root set contains `Dynamic` (a pointer loaded from
-//! memory or made from an integer) is a *wide* fat pointer `(root: u64, offset: u64)`, the
-//! offset being the 64-bit Metal displacement from the entry's `bind_offset`. Every value of a
+//! memory or made from an integer) is a *wide* fat pointer `(root, at, host, size: u64)`, `at`
+//! being the 64-bit Metal displacement from the allocation's start and `host` and `size` its root
+//! entry's (`lower::access::dynamic`). Every value of a
 //! phi, `select`, GEP, or cast has an operand whose root set shares a root with its own, so the
 //! width is decided per **component**: two roots are connected when some buffer pointer's root
 //! set holds both, and every root of a component that holds `Dynamic` is wide
@@ -31,15 +32,16 @@
 //! then a loop of the same step while more than one candidate is left, which only a set of more
 //! than 2^[`SEARCH_STEPS`] entries enters (one uniform test where every invocation searches one
 //! table, no further load), then `i − guest ≤ size` (a one-past-the-end pointer stays in its
-//! allocation). A hit is `(root, i − guest)`; a miss, or an empty set, is `(0, i)`. A module with
+//! allocation). A hit is `(root, i − guest)`, with the entry's `host` and `size` for a wide pointer
+//! ([`resolve_wide`]); a miss, or an empty set, is `(0, i)` (`(0, i, 0, 0)`). A module with
 //! more than one search defines it once ([`define_resolve`]), as it does the handle-table search,
 //! and every search is a call of it; a single search is emitted in place. It reads the set as an
 //! array of typed entries from its first, `table + 32·R0` in 64-bit wrapping arithmetic, one access
 //! chain per field at an index in `0 .. N`, inside the set whatever `R0` is: an index below an
 //! array's start is outside it, where SPIR-V gives no address, so a set below the table is reached
 //! by the integer arithmetic alone. With `N = 0` it reads the table's entry 0. The root it gives is
-//! `R0` plus the index, modulo 2⁶⁴, which the access reads at `table + 32·root` as every root entry
-//! is read ([`entry_field`]).
+//! `R0` plus the index, modulo 2⁶⁴, whose entry is at `table + 32·root` as every root entry is
+//! ([`entry_field`]): the entry the search read the wide pointer's `host` and `size` from.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -260,8 +262,9 @@ pub fn extent_of(
 }
 
 /// Define the module's resident-set search: a function `fn(table: u64, guest: u64) -> wide`
-/// (`wide` a `u64vec2`), the wide pointer `(root, offset)` of `guest` through the root table at
-/// `table` ([`resolve`]). Every search of the module calls it, so its words are paid once.
+/// (`wide` a `u64vec4`), the wide pointer `(root, at, host, size)` of `guest` through the root
+/// table at `table` ([`resolve_wide`]). Every search of the module calls it, so its words are paid
+/// once.
 pub fn define_resolve(mb: &mut ModuleBuilder, wide: TypeId) -> BResult<FuncId> {
     let u64_ = mb.ty(Type::Int {
         width: 64,
@@ -270,9 +273,9 @@ pub fn define_resolve(mb: &mut ModuleBuilder, wide: TypeId) -> BResult<FuncId> {
     let mut fb = mb.function(wide)?;
     let table = fb.param(u64_)?;
     let guest = fb.param(u64_)?;
-    let (root, off) = resolve(&mut fb, table, guest)?;
-    let pair = fb.composite_construct(wide, &[root, off])?;
-    fb.ret(Some(pair))?;
+    let r = resolve_wide(&mut fb, table, guest)?;
+    let fat = fb.composite_construct(wide, &r)?;
+    fb.ret(Some(fat))?;
     fb.finish()
 }
 
@@ -306,6 +309,23 @@ fn field_of(fb: &mut FunctionBuilder<'_>, e: Value, root: Value, field: u64) -> 
     )
 }
 
+/// The wide pointer `[root, at, host, size]` (four `u64`s) of guest address `guest` (a `u64`)
+/// through the resident set of the root table at `table` ([`resolve`]): a hit's `at` is `i −
+/// guest` (a resident entry's `bind_offset` is 0) and `host` and `size` its entry's, read here
+/// once; a miss is `[0, i, 0, 0]`, the null root's fields.
+pub fn resolve_wide(
+    fb: &mut FunctionBuilder<'_>,
+    table: Value,
+    guest: Value,
+) -> BResult<[Value; 4]> {
+    let s = search(fb, table, guest)?;
+    let zero = k64(fb, 0)?;
+    let host = field_of(fb, s.set, s.base, HOST)?;
+    let host = fb.select(s.hit, host, zero)?;
+    let size = fb.select(s.hit, s.size, zero)?;
+    Ok([s.root, s.off, host, size])
+}
+
 /// The wide pointer `(root, offset)` (two `u64`s) of guest address `guest` (a `u64`) through the
 /// resident set of the root table at `table` (the module docs' search). The search walks the
 /// set's entries from its first, `R0` entries from the table; an empty set starts at the null
@@ -316,6 +336,26 @@ pub fn resolve(
     table: Value,
     guest: Value,
 ) -> BResult<(Value, Value)> {
+    let s = search(fb, table, guest)?;
+    Ok((s.root, s.off))
+}
+
+/// A finished search ([`search`]).
+struct Found {
+    /// The set's entries, from its first.
+    set: Value,
+    /// The last candidate's index in the set.
+    base: Value,
+    /// Its entry's `size`.
+    size: Value,
+    /// Whether it holds the address.
+    hit: Value,
+    root: Value,
+    off: Value,
+}
+
+/// The search of [`resolve`].
+fn search(fb: &mut FunctionBuilder<'_>, table: Value, guest: Value) -> BResult<Found> {
     let e = entries(fb, table)?;
     let sink = k64(fb, SINK_ROOT)?;
     let first = field_of(fb, e, sink, RESIDENT_FIRST)?;
@@ -343,7 +383,14 @@ pub fn resolve(
     let found = fb.binary(BinOp::IAdd, start, base)?;
     let root = fb.select(hit, found, null)?;
     let off = fb.select(hit, rel, guest)?;
-    Ok((root, off))
+    Ok(Found {
+        set,
+        base,
+        size,
+        hit,
+        root,
+        off,
+    })
 }
 
 /// One step of the search: of the `len` candidates from `base` of the set `set`, the half from

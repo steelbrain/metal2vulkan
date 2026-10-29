@@ -2023,3 +2023,125 @@ fn a_wide_pointers_bits_through_a_cell_are_its_guest_address() {
         }
     }
 }
+
+/// A loop that loads through a pointer read from a buffer, stores through it, and stores to a
+/// static slot each iteration (the store that may alias anything, as far as a driver knows).
+const LOOP_ACCESS: &str = "define void @loop_access(ptr addrspace(1) noundef \"air-buffer-no-alias\" %b0, ptr addrspace(1) noundef \"air-buffer-no-alias\" %b1, i32 %t) {
+entry:
+  %d = load ptr addrspace(1), ptr addrspace(1) %b0, align 8
+  %tz = zext i32 %t to i64
+  %q = getelementptr inbounds i32, ptr addrspace(1) %b1, i64 %tz
+  br label %loop
+
+loop:
+  %i = phi i64 [ 0, %entry ], [ %i1, %loop ]
+  %acc = phi i32 [ 0, %entry ], [ %acc1, %loop ]
+  %k = mul i64 %i, 64
+  %k2 = add i64 %k, %tz
+  %p = getelementptr inbounds i32, ptr addrspace(1) %d, i64 %k2
+  %v = load i32, ptr addrspace(1) %p, align 4
+  %acc1 = xor i32 %acc, %v
+  store i32 %acc1, ptr addrspace(1) %q, align 4
+  %w = getelementptr inbounds i32, ptr addrspace(1) %p, i64 1
+  store i32 %acc1, ptr addrspace(1) %w, align 4
+  %i1 = add i64 %i, 1
+  %done = icmp eq i64 %i1, 16
+  br i1 %done, label %exit, label %loop
+
+exit:
+  ret void
+}
+
+!air.kernel = !{!0}
+!air.version = !{!90}
+!air.language_version = !{!91}
+!0 = !{ptr @loop_access, !1, !2}
+!1 = !{}
+!2 = !{!10, !11, !12}
+!10 = !{i32 0, !\"air.buffer\", !\"air.location_index\", i32 0, i32 1, !\"air.read_write\", !\"air.address_space\", i32 1, !\"air.arg_type_size\", i32 8, !\"air.arg_type_align_size\", i32 8, !\"air.arg_type_name\", !\"ulong\", !\"air.arg_name\", !\"b0\"}
+!11 = !{i32 1, !\"air.buffer\", !\"air.location_index\", i32 1, i32 1, !\"air.read_write\", !\"air.address_space\", i32 1, !\"air.arg_type_size\", i32 4, !\"air.arg_type_align_size\", i32 4, !\"air.arg_type_name\", !\"uint\", !\"air.arg_name\", !\"b1\"}
+!12 = !{i32 2, !\"air.thread_index_in_threadgroup\", !\"air.arg_type_name\", !\"uint\", !\"air.arg_name\", !\"t\"}
+!90 = !{i32 2, i32 8, i32 0}
+!91 = !{!\"Metal\", i32 4, i32 0, i32 0}
+";
+
+/// An access through a wide pointer reads no root entry: the pointer carries its entry's `host`
+/// and `size` from where it was formed (the resident-set search, before the loop), and the sink's
+/// address is read once at entry. So a loop that stores each iteration, which a driver cannot
+/// prove leaves the root table alone, has no `u64` device-address load in its blocks at all
+/// (the old form read `host`, `bind_offset`, `size` and the sink's `host` per access: 8 here).
+#[test]
+fn accesses_through_a_loaded_pointer_read_no_root_entry_in_a_loop() {
+    let Some(bc) = assemble("loop_access", LOOP_ACCESS) else {
+        return;
+    };
+    for (what, p) in profiles() {
+        let (plan, m) = checked(&bc, "loop_access", &p, &LowerInputs::new(), &what);
+        assert_eq!(uses(&plan, "access.dynamic.load"), 1, "{what}");
+        assert_eq!(uses(&plan, "access.dynamic.store"), 1, "{what}");
+        let headers: Vec<(usize, usize)> = m
+            .blocks()
+            .iter()
+            .enumerate()
+            .filter_map(|(i, b)| match b.merge {
+                Some(crate::spirv::ir::Merge::Loop { merge, .. }) => Some((i, merge.index())),
+                _ => None,
+            })
+            .collect();
+        assert!(!headers.is_empty(), "{what}: no loop");
+        let is_entry_load = |ptr| match m.value(ptr).and_then(|d| m.types().get(d.ty)) {
+            Ok(Type::Pointer {
+                class: StorageClass::PhysicalStorageBuffer,
+                pointee,
+            }) => matches!(m.types().get(*pointee), Ok(Type::Int { width: 64, .. })),
+            _ => false,
+        };
+        let is_memory = |ptr| {
+            matches!(
+                m.value(ptr).and_then(|d| m.types().get(d.ty)),
+                Ok(Type::Pointer {
+                    class: StorageClass::PhysicalStorageBuffer | StorageClass::StorageBuffer,
+                    ..
+                })
+            )
+        };
+        let mut kernel_loops = 0;
+        for (header, merge) in headers {
+            // The loop's blocks: those reached from its header short of its merge block.
+            let mut seen = vec![header];
+            let mut work = vec![header];
+            while let Some(b) = work.pop() {
+                let succ: Vec<usize> = match &m.blocks()[b].term {
+                    crate::spirv::ir::Terminator::Branch(t) => vec![t.index()],
+                    crate::spirv::ir::Terminator::CondBranch { t, f, .. } => {
+                        vec![t.index(), f.index()]
+                    }
+                    crate::spirv::ir::Terminator::Switch { default, cases, .. } => {
+                        let mut v = vec![default.index()];
+                        v.extend(cases.iter().map(|(_, c)| c.index()));
+                        v
+                    }
+                    _ => Vec::new(),
+                };
+                for s in succ {
+                    if s != merge && !seen.contains(&s) {
+                        seen.push(s);
+                        work.push(s);
+                    }
+                }
+            }
+            let insts = || seen.iter().flat_map(|&b| &m.blocks()[b].insts);
+            // The kernel's loop, which stores to memory (the resident-set search's own loop over
+            // the table, which stores only its variables, is not one).
+            if !insts().any(|n| matches!(&n.inst, Inst::Store { ptr, .. } if is_memory(*ptr))) {
+                continue;
+            }
+            kernel_loops += 1;
+            let loads = insts()
+                .filter(|n| matches!(&n.inst, Inst::Load { ptr, .. } if is_entry_load(*ptr)))
+                .count();
+            assert_eq!(loads, 0, "{what}: root-entry loads in the loop");
+        }
+        assert_eq!(kernel_loops, 1, "{what}: the kernel's loop");
+    }
+}

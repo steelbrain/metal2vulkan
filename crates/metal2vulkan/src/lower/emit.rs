@@ -229,6 +229,9 @@ enum Invariant {
     /// The private list form's base vertex (`stage_io::read_listed_base`), read at entry
     /// (`stage_io::emit_entry`): the list is read-only to the draw.
     ListedBase,
+    /// The root table's sink address (`access::dynamic::read_sink_host`), read at entry
+    /// (`access::dynamic::emit_entry`): the root table is read-only to the dispatch.
+    SinkHost,
 }
 
 impl<'a> EmitCx<'a> {
@@ -387,6 +390,17 @@ impl<'a> EmitCx<'a> {
         }
         let v = crate::lower::stage_io::read_listed_base(self, fb)?;
         self.remember(fb, Invariant::ListedBase, v);
+        Ok(v)
+    }
+
+    /// The root table's sink address, read once where it dominates: `access::dynamic::emit_entry`
+    /// reads it in the function's first block, so no wide access reads the table for it.
+    pub(crate) fn sink_host(&mut self, fb: &mut FunctionBuilder<'_>) -> BResult<SValue> {
+        if let Some(v) = self.recall(fb, Invariant::SinkHost) {
+            return Ok(v);
+        }
+        let v = access::dynamic::read_sink_host(self, fb)?;
+        self.remember(fb, Invariant::SinkHost, v);
         Ok(v)
     }
 
@@ -1311,6 +1325,7 @@ pub fn emit_module(e: &Entry, plan: &Plan, m: &mut Meter) -> Result<Emitted, Err
                 // The bound values the function reads as data, right after their fields.
                 .and_then(|()| crate::lower::specialized::emit_entry(&mut em.cx, &mut fb))
                 .and_then(|()| dispatch::emit_entry(&mut em.cx, &mut fb))
+                .and_then(|()| access::dynamic::emit_entry(&mut em.cx, &mut fb))
                 .and_then(|()| stage_io::emit_entry(&mut em.cx, &mut fb))
                 .and_then(|()| tessellation::emit_entry(&mut em.cx, &mut fb))
                 .and_then(|()| fragment::emit_entry(&mut em.cx, &mut fb))
