@@ -2438,7 +2438,7 @@ fn closed_module_level_sets() {
     // Unknown module flag.
     expect_abi(
         module_with(|b| {
-            let n = node(b, &[I(1), S("Debug Info Version"), I(3)]);
+            let n = node(b, &[I(8), S("PIC Level"), I(2)]);
             b.named_md("llvm.module.flags", &[n]);
         }),
         AbiError::UnknownKey,
@@ -2450,6 +2450,76 @@ fn closed_module_level_sets() {
             b.named_md("air.language_version", &[n]);
         }),
         AbiError::BadValue,
+    );
+}
+
+/// What `-gline-tables-only` and `-frecord-sources` add to a module (Xcode's
+/// `MTL_ENABLE_DEBUG_INFO`): the compile units, the two debug-info module flags and, in an unlinked
+/// `.air`, the command line, the working directory and the recorded sources. The module decodes to
+/// the ABI it has without them.
+#[test]
+fn debug_info_and_recorded_sources_leave_the_abi_unchanged() {
+    let textures = |b: &mut ModuleBuilder| node(b, &[I(7), S("air.max_textures"), I(128)]);
+    let plain = module_with(|b| {
+        let f = textures(b);
+        b.named_md("llvm.module.flags", &[f]);
+    })
+    .unwrap();
+    let debug = module_with(|b| {
+        let dwarf = node(b, &[I(7), S("Dwarf Version"), I(4)]);
+        let version = node(b, &[I(2), S("Debug Info Version"), I(3)]);
+        let f = textures(b);
+        b.named_md("llvm.module.flags", &[dwarf, version, f]);
+        let unit = b.md(Md::Debug);
+        b.named_md("llvm.dbg.cu", &[unit]);
+        let line = node(
+            b,
+            &[S("metal -c -gline-tables-only -frecord-sources a.metal")],
+        );
+        b.named_md("llvm.commandline", &[line]);
+        let dir = node(b, &[S("/src")]);
+        b.named_md("llvm_utils.workingdir", &[dir]);
+        let source = node(b, &[S("/src/a.metal"), S("#include \"a.h\"")]);
+        let header = node(b, &[S("/src/a.h"), S("")]);
+        let files = node(b, &[N(source), N(header)]);
+        b.named_md("llvm_utils.sources", &[files]);
+    })
+    .unwrap();
+    assert_eq!(debug, plain);
+}
+
+/// The debug-info and recorded-source lists are read by their shapes: a compile unit that is not a
+/// debug-info record, a recorded source without its text, or a file that is not a node is refused.
+#[test]
+fn debug_info_and_recorded_sources_have_closed_shapes() {
+    expect_abi(
+        module_with(|b| {
+            let n = node(b, &[S("not a compile unit")]);
+            b.named_md("llvm.dbg.cu", &[n]);
+        }),
+        AbiError::BadValue,
+    );
+    expect_abi(
+        module_with(|b| {
+            let file = node(b, &[S("/src/a.metal")]);
+            let files = node(b, &[N(file)]);
+            b.named_md("llvm_utils.sources", &[files]);
+        }),
+        AbiError::MissingKey,
+    );
+    expect_abi(
+        module_with(|b| {
+            let files = node(b, &[S("/src/a.metal"), S("")]);
+            b.named_md("llvm_utils.sources", &[files]);
+        }),
+        AbiError::BadValue,
+    );
+    expect_abi(
+        module_with(|b| {
+            let n = node(b, &[S("metal"), S("-c")]);
+            b.named_md("llvm.commandline", &[n]);
+        }),
+        AbiError::UnknownKey,
     );
 }
 

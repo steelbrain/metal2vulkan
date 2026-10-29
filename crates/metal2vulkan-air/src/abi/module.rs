@@ -13,7 +13,7 @@ use crate::bitcode::PointeeTable;
 use crate::budget::Meter;
 use crate::error::Error;
 use crate::error::{AbiError, DiagName, Feature, InputError, InputErrorKind, Location};
-use crate::ir::{MdId, Module, Type, TypeId, TypeLayouts};
+use crate::ir::{Md, MdId, Module, Type, TypeId, TypeLayouts};
 
 /// The closed set of named metadata lists.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -35,6 +35,10 @@ enum Named {
     SourceFileName,
     ModuleFlags,
     Ident,
+    CommandLine,
+    WorkingDirectory,
+    RecordedSources,
+    DebugCompileUnits,
 }
 
 const NAMED: &[(&str, Named)] = &[
@@ -58,6 +62,10 @@ const NAMED: &[(&str, Named)] = &[
     ("air.source_file_name", Named::SourceFileName),
     ("llvm.module.flags", Named::ModuleFlags),
     ("llvm.ident", Named::Ident),
+    ("llvm.commandline", Named::CommandLine),
+    ("llvm_utils.workingdir", Named::WorkingDirectory),
+    ("llvm_utils.sources", Named::RecordedSources),
+    ("llvm.dbg.cu", Named::DebugCompileUnits),
 ];
 
 /// Apple's named list of a module's program-scope buffer bindings (MSL 3.2): each entry
@@ -149,12 +157,38 @@ pub(super) fn decode(
                     }
                 }
             }
-            Named::SourceFileName => {
+            Named::SourceFileName => strings(m, ops, &site, "air.source_file_name", cx.meter)?,
+            // `-frecord-sources` (Xcode's `MTL_ENABLE_DEBUG_INFO=INCLUDE_SOURCE`) records the
+            // compiler's command line, its working directory, and each source it read as
+            // `!{!"<path>", !"<text>"}`. The linker moves them out of the module, so only an
+            // unlinked `.air` carries them.
+            Named::CommandLine => strings(m, ops, &site, "llvm.commandline", cx.meter)?,
+            Named::WorkingDirectory => {
+                strings(m, ops, &site, "llvm_utils.workingdir", cx.meter)?;
+            }
+            Named::RecordedSources => {
+                let key = Some("llvm_utils.sources");
                 for &id in ops {
                     cx.meter.tick(1)?;
-                    let mut n = Ops::node(m, id, site.clone())?;
-                    n.string(Some("air.source_file_name"))?;
-                    n.finish()?;
+                    let mut files = Ops::node(m, id, site.clone())?;
+                    while !files.is_done() {
+                        cx.meter.tick(1)?;
+                        let mut file = Ops::node(m, files.child(key)?, site.clone())?;
+                        file.string(key)?;
+                        file.string(key)?;
+                        file.finish()?;
+                    }
+                }
+            }
+            // Debug info's compile units (`-gline-tables-only`, which Xcode's
+            // `MTL_ENABLE_DEBUG_INFO` passes): debug-info records, which carry nothing the
+            // translation reads.
+            Named::DebugCompileUnits => {
+                for &id in ops {
+                    cx.meter.tick(1)?;
+                    if !matches!(m.md(id), Some(Md::Debug)) {
+                        return Err(site.err(AbiError::BadValue, Some("llvm.dbg.cu")));
+                    }
                 }
             }
             Named::Kernel | Named::Vertex | Named::Fragment | Named::Object | Named::Mesh => {}
@@ -240,6 +274,23 @@ pub(super) fn decode(
     }
     abi.structs = cx.structs.list;
     Ok(abi)
+}
+
+/// A list of single-string nodes, which carry nothing the translation reads.
+fn strings(
+    m: &Module,
+    ops: &[MdId],
+    site: &Site,
+    key: &'static str,
+    meter: &mut Meter,
+) -> Result<(), Error> {
+    for &id in ops {
+        meter.tick(1)?;
+        let mut n = Ops::node(m, id, site.clone())?;
+        n.string(Some(key))?;
+        n.finish()?;
+    }
+    Ok(())
 }
 
 /// The one node of a single-node list.
@@ -330,8 +381,8 @@ fn plain_signature(n: &mut Ops<'_>, site: &Site) -> Result<LinkageSignature, Err
 }
 
 /// `!llvm.module.flags`: `!{i32 <behavior>, !"<key>", <value>}`. The `air.max_*` limits are
-/// decoded; `wchar_size`, `frame-pointer`, and `SDK Version` are LLVM's and carry nothing the
-/// translation reads; `air.workaround.sampler_state_variable_length_encoding` (an `i1`) names the
+/// decoded; `wchar_size`, `frame-pointer`, `SDK Version`, and debug info's `Dwarf Version` and
+/// `Debug Info Version` are LLVM's and carry nothing the translation reads; `air.workaround.sampler_state_variable_length_encoding` (an `i1`) names the
 /// form of the module's constexpr sampler words, which each `air.sampler_state` global's own type
 /// states; any other flag is unknown.
 fn module_flags(
@@ -354,7 +405,11 @@ fn module_flags(
             b"air.max_textures" => &mut l.max_textures,
             b"air.max_read_write_textures" => &mut l.max_read_write_textures,
             b"air.max_samplers" => &mut l.max_samplers,
-            b"wchar_size" | b"frame-pointer" | b"SDK Version" => {
+            b"wchar_size"
+            | b"frame-pointer"
+            | b"SDK Version"
+            | b"Dwarf Version"
+            | b"Debug Info Version" => {
                 n.next(key)?;
                 n.finish()?;
                 continue;
