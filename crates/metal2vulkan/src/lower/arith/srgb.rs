@@ -14,9 +14,8 @@
 //!   ([`round_exact_product_lanes`](crate::lower::arith::math::round_exact_product_lanes)), and
 //!   [`search`] finds the byte in the thresholds: eight dependent loads, branch-free.
 //!
-//! The products and quotients run once per vector in `math::pack` and `math::unpack`, with a
-//! per-lane scale; only the table reads are per channel, since a `Private` array is indexed by a
-//! scalar.
+//! The quotients run once per vector in `math::unpack`, with a per-lane scale; only the table
+//! reads are per channel, since a `Private` array is indexed by a scalar.
 
 use crate::spirv::builder::{FunctionBuilder, ModuleBuilder};
 use crate::spirv::error::BResult;
@@ -75,10 +74,6 @@ pub(crate) const SRGB_ENCODE_FIRST: [u16; 256] = [
 /// An upper estimate of the SPIR-V words of the table (its 256 constants, the composite, and the
 /// variable), charged to every use.
 pub const TABLE_WORDS: u32 = 256 * 4 + 262 + 8;
-
-/// An upper estimate of the SPIR-V words of one encode's search (eight steps of six
-/// instructions) besides the index.
-pub const SEARCH_WORDS: u32 = 8 * 6 * 6;
 
 /// Declare the module's sRGB table: a `Private` `u32[256]` initialized to the steps (low halves)
 /// and thresholds (high halves).

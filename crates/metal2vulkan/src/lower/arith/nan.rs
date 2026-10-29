@@ -88,12 +88,6 @@ pub enum NanTest {
 }
 
 impl NanTest {
-    /// The test for `float` lanes in an entry that declares `SignedZeroInfNanPreserve` for the
-    /// widths `modes` (`ArithPlan::modes`).
-    pub fn for_modes(modes: &std::collections::BTreeSet<u8>) -> NanTest {
-        NanTest::for_width(modes, 32)
-    }
-
     /// The test for lanes of float container width `width` (32 or 64) in an entry that declares
     /// `SignedZeroInfNanPreserve` for the widths `modes`.
     pub fn for_width(modes: &std::collections::BTreeSet<u8>, width: u8) -> NanTest {

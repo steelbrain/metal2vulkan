@@ -1855,33 +1855,11 @@ fn fp8_to_integer_converts_every_pattern_as_its_value() {
     }
 }
 
-/// `air.pack`/`air.unpack` follow Metal's normalized conversions: to an integer by clamping
-/// (NaN to 0), scaling, and rounding to nearest even; to a float by dividing, correctly rounded
-/// (snorm clamped at -1). The sRGB format is `srgb_conversions_answer_with_metals_tables`'.
+/// `air.unpack` follows Metal's normalized conversion: to a float by dividing, correctly rounded
+/// (snorm clamped at -1). The sRGB format is `srgb_unpack_answers_with_metals_table`'.
 #[test]
-fn pack_and_unpack_follow_the_normalized_conversions() {
+fn unpack_follows_the_normalized_conversions() {
     use crate::air::intrinsics::PackFormat as P;
-    let fvals: Vec<f32> = vec![
-        0.0,
-        -0.0,
-        1.0,
-        -1.0,
-        0.5,
-        -0.5,
-        0.25,
-        0.75,
-        0.1,
-        -0.3,
-        1.5,
-        -2.0,
-        0.998,
-        0.0019,
-        f32::NAN,
-        f32::INFINITY,
-        f32::NEG_INFINITY,
-        0.501_960_8,
-        0.498_039_2,
-    ];
     let formats = [
         P::Unorm4x8,
         P::Snorm4x8,
@@ -1896,53 +1874,6 @@ fn pack_and_unpack_follow_the_normalized_conversions() {
         let word = int(math::packed_bits(format));
         for lane in [float(32), half()] {
             let f = vec(lane, lanes);
-            // Pack.
-            let cases: Vec<Case> = (0..fvals.len())
-                .map(|i| {
-                    vec![(0..usize::from(lanes))
-                        .map(|k| nbits(lane, f64::from(fvals[(i + 3 * k) % fvals.len()])))
-                        .collect()]
-                })
-                .collect();
-            // Either NaN test gives the format's NaN value.
-            for test in [NanTest::IsNan, NanTest::Bits] {
-                check(
-                    &format!("pack {format:?} from {lane:?} ({test:?})"),
-                    &[f],
-                    word,
-                    &|fb, x| math::pack(fb, format, f, x[0], None, test),
-                    &cases,
-                    &|c| {
-                        let mut w = 0u64;
-                        let mut at = 0;
-                        for (k, n) in widths.iter().enumerate() {
-                            let x = nval(lane, c[0][k]) as f32;
-                            let (lo, scale) = if snorm {
-                                (-1.0f32, (1u32 << (n - 1)) - 1)
-                            } else {
-                                (0.0, (1u32 << n) - 1)
-                            };
-                            let x = if x.is_nan() {
-                                lo.max(0.0)
-                            } else {
-                                x.clamp(lo, 1.0)
-                            };
-                            // The exact product (exact in f64), or for `rgb565` the `f32` product,
-                            // rounded to nearest even.
-                            let p = match math::pack_rounding(format) {
-                                math::PackRounding::ExactProduct => f64::from(x) * f64::from(scale),
-                                math::PackRounding::FloatProduct => f64::from(x * scale as f32),
-                            };
-                            let r = p.round_ties_even() as i64 as u64 & mask(*n as u8);
-                            w |= r << at;
-                            at += n;
-                        }
-                        Some(vec![w])
-                    },
-                    false,
-                );
-            }
-            // Unpack.
             let mut rng = Rng(7);
             let cases: Vec<Case> = (0..24)
                 .map(|_| vec![vec![rng.next() & mask(math::packed_bits(format))]])
@@ -1978,25 +1909,9 @@ fn pack_and_unpack_follow_the_normalized_conversions() {
     assert!(math::pack_layout(P::UnormRgb9e5).is_none());
 }
 
-/// Metal's `snorm` `rgb10a2` rule, as measured on Apple M3 Max (macOS 26.7) by the probe over every
-/// `float` and `half` pack input and every code of every unpack field: a channel packs as
-/// `RoundEven(fl(x * s))` after a NaN becomes -1 and `x` is clamped to `[-1, 1]`, and unpacks as
-/// `max(c * fl(1 / s), -1)` in `f32` (a `half` result rounds that `f32`), `s` being 511 for the
-/// 10-bit fields and 1 for the 2-bit alpha.
-fn snorm_10a2_pack_ref(xs: &[f32]) -> u64 {
-    let mut w = 0u64;
-    for (k, (at, n)) in [(0u32, 10u32), (10, 10), (20, 10), (30, 2)]
-        .iter()
-        .enumerate()
-    {
-        let s = ((1u32 << (n - 1)) - 1) as f32;
-        let x = if xs[k].is_nan() { -1.0 } else { xs[k] };
-        let p = (x.clamp(-1.0, 1.0) * s).round_ties_even() as i64 as u64;
-        w |= (p & mask(*n as u8)) << at;
-    }
-    w
-}
-
+/// Metal's `snorm` `rgb10a2` unpack, as measured on Apple M3 Max (macOS 26.7) by the probe over
+/// every code of every field: `max(c * fl(1 / s), -1)` in `f32` (a `half` result rounds that
+/// `f32`), `s` being 511 for the 10-bit fields and 1 for the 2-bit alpha.
 fn snorm_10a2_unpack_ref(w: u64) -> [f32; 4] {
     let mut out = [0.0f32; 4];
     for (k, (at, n)) in [(0u32, 10u32), (10, 10), (20, 10), (30, 2)]
@@ -2009,28 +1924,16 @@ fn snorm_10a2_unpack_ref(w: u64) -> [f32; 4] {
     out
 }
 
-/// `air.pack.snorm.rgb10a2` and `air.unpack.snorm.rgb10a2` compute Metal's measured rule
-/// ([`snorm_10a2_pack_ref`]): every code of every field unpacked to `float` and `half`, every
-/// `half` packed, and `float` inputs at each rounding boundary of the 10-bit fields (`(k + 0.5)
-/// / 511` and its neighbours, where the `f32` product and the exact one disagree on 448 of the
-/// probe's run ends, besides its 4 NaN run ends), the specials, and denormals. Metal's own words
-/// pin the rule: 65 unpacks to `0x3E024120`, one ULP below the quotient `65 / 511`;
-/// `0x3B406030` (just below `1.5 / 511`) packs to `0x200802`, whose fields are 2 where the exact
-/// product gives 1; a NaN packs to `0xE0180601` (every field -1).
+/// `air.unpack.snorm.rgb10a2` computes Metal's measured rule ([`snorm_10a2_unpack_ref`]) on every
+/// code of every field, unpacked to `float` and `half`. Metal's own word pins the rule: 65 unpacks
+/// to `0x3E024120`, one ULP below the quotient `65 / 511`.
 #[test]
-fn snorm_rgb10a2_converts_as_metal_measures() {
+fn snorm_rgb10a2_unpacks_as_metal_measures() {
     use crate::air::intrinsics::PackFormat as P;
     let word = int(32);
     // Metal's words.
     assert_eq!(snorm_10a2_unpack_ref(0x4411_0441)[0].to_bits(), 0x3E02_4120);
     assert_eq!(snorm_10a2_unpack_ref(0x2008_0200), [-1.0, -1.0, -1.0, 0.0]);
-    assert_eq!(
-        snorm_10a2_pack_ref(&[f32::from_bits(0x3B40_6030); 4]),
-        0x20_0802
-    );
-    assert_eq!(snorm_10a2_pack_ref(&[f32::NAN; 4]), 0xE018_0601);
-    assert_eq!(snorm_10a2_pack_ref(&[0.5; 4]), 0x1004_0100);
-    assert_eq!(snorm_10a2_pack_ref(&[f32::INFINITY; 4]), 0x5FF7_FDFF);
     // Unpack: every code of every field (r = g = b = k, a = k mod 4).
     let codes: Vec<Case> = (0..1024u64)
         .map(|k| vec![vec![k | k << 10 | k << 20 | (k & 3) << 30]])
@@ -2050,164 +1953,6 @@ fn snorm_rgb10a2_converts_as_metal_measures() {
             &|g, w| g == w,
         );
     }
-    // Pack: every half, as (x, x, x, x).
-    let f = vec(half(), 4);
-    let halves: Vec<Case> = (0..=0xFFFFu64).map(|h| vec![vec![h; 4]]).collect();
-    check(
-        "pack snorm rgb10a2 from half",
-        &[f],
-        word,
-        &|fb, x| math::pack(fb, P::SnormRgb10a2, f, x[0], None, NanTest::IsNan),
-        &halves,
-        &|c| {
-            Some(vec![snorm_10a2_pack_ref(
-                &[nval(half(), c[0][0]) as f32; 4],
-            )])
-        },
-        false,
-    );
-    // Pack: floats at every 10-bit rounding boundary and its neighbours, the specials, and
-    // denormals; the lanes differ so each field sees its own input.
-    let mut xs: Vec<u32> = Vec::new();
-    for k in -512i32..=512 {
-        let b = ((k as f32 + 0.5) / 511.0).to_bits();
-        xs.extend([b.wrapping_sub(1), b, b.wrapping_add(1)]);
-    }
-    xs.extend([
-        0x0000_0000,
-        0x8000_0000,
-        0x0000_0001,
-        0x8000_0001,
-        0x3F00_0000,
-        0xBF00_0000,
-        0x3F80_0000,
-        0xBF80_0000,
-        0x4000_0000,
-        0xC000_0000,
-        0x7F80_0000,
-        0xFF80_0000,
-        0x7FC0_0000,
-        0xFFC0_0001,
-        0x7F80_0001,
-    ]);
-    let f = vec(float(32), 4);
-    let cases: Vec<Case> = (0..xs.len())
-        .map(|i| {
-            vec![(0..4)
-                .map(|k| u64::from(xs[(i + 7 * k) % xs.len()]))
-                .collect()]
-        })
-        .collect();
-    check(
-        "pack snorm rgb10a2 from float",
-        &[f],
-        word,
-        &|fb, x| math::pack(fb, P::SnormRgb10a2, f, x[0], None, NanTest::IsNan),
-        &cases,
-        &|c| {
-            let lanes: Vec<f32> = c[0].iter().map(|b| f32::from_bits(*b as u32)).collect();
-            Some(vec![snorm_10a2_pack_ref(&lanes)])
-        },
-        false,
-    );
-}
-
-/// `pack_float_to_unorm565` and `pack_half_to_unorm565` give Metal's observed words of the authored
-/// case `the-rgb565-pack-at-the-exact-tie` (Apple M3 Max, ORACLE_ABI v32) for all 16 float and 16
-/// half lanes. Metal rounds the `f32` product with the field maximum to nearest even: eight of the
-/// float lanes have an exact product just past a half-integer that the `f32` product rounds onto
-/// (green `0x3D228A29 * 63` is exactly `2.50000009`, `fl` = `2.5`, and Metal answers 2), where
-/// rounding the exact product answers one more.
-#[test]
-fn rgb565_pack_rounds_the_float_product_as_metal_does() {
-    use crate::air::intrinsics::PackFormat as P;
-    // Lanes x, y, z of each `float4` input and Metal's `pack_float_to_unorm565`.
-    let floats: [([u32; 3], u64); 16] = [
-        ([0x3C84_2108, 0x3D22_8A29, 0x3E14_A529], 0x2040),
-        ([0x3EAD_6B5B, 0x3EA6_9A6A, 0x3F7B_DEF8], 0xF28A),
-        ([0x3F29_4A53, 0x3F24_9249, 0x3DA5_294A], 0x1514),
-        ([0x3F6B_5AD7, 0x3F7D_F7DF, 0x3E56_B5AD], 0x37DC),
-        ([0x3D46_318C, 0x3D63_8E39, 0x3E35_AD6B], 0x3082),
-        ([0x3F00_0000, 0x3F00_0000, 0x3F10_8421], 0x9410),
-        ([0x3E8C_6319, 0x3E6B_AEBB, 0x3F08_4211], 0x81C8),
-        ([0x3ECE_739D, 0x3EC7_1C72, 0x3F39_CE74], 0xB30C),
-        ([0x0000_0000, 0x0000_0000, 0x0000_0000], 0x0000),
-        ([0x3F80_0000, 0x3F80_0000, 0x3F80_0000], 0xFFFF),
-        ([0xBE80_0000, 0x3FE0_0000, 0x3F00_0000], 0x87E0),
-        ([0x3E80_0000, 0x3F40_0000, 0x3E00_0000], 0x25E8),
-        ([0x3EAA_AAAB, 0x3F2A_AAAB, 0x3DCC_CCCD], 0x1D4A),
-        ([0x3F7F_BE77, 0x3A83_126F, 0x3F00_0002], 0x801F),
-        ([0x3D00_0000, 0x3D80_0000, 0x3E00_0000], 0x2081),
-        ([0x3F33_3333, 0x3E4C_CCCD, 0x3EE6_6666], 0x71B6),
-    ];
-    // Lanes x, y, z of each `half4` input (as bits) and Metal's `pack_half_to_unorm565`.
-    let halves: [([u64; 3], u64); 16] = [
-        ([0x0000, 0x3C00, 0x3800], 0x87E0),
-        ([0x3800, 0x3800, 0x3800], 0x8410),
-        ([0x3C00, 0x0000, 0x3400], 0x401F),
-        ([0x3000, 0x3600, 0x3900], 0x9B04),
-        ([0x2C00, 0x2800, 0x2E00], 0x1842),
-        ([0x3555, 0x3954, 0x2E66], 0x1D4A),
-        ([0x3BFF, 0x1400, 0x3266], 0x301F),
-        ([0x399A, 0x34CD, 0x3733], 0x7276),
-        ([0x2E66, 0x3B33, 0x38CD], 0x9F23),
-        ([0x2A66, 0x3B9A, 0x359A], 0x5F82),
-        ([0x2400, 0x3BE0, 0x3800], 0x87C0),
-        ([0x3666, 0x38CD, 0x3266], 0x34CC),
-        ([0x3A66, 0x3266, 0x399A], 0xB1B9),
-        ([0x3400, 0x3400, 0x3A00], 0xBA08),
-        ([0x251F, 0x3BD7, 0x370A], 0x77C1),
-        ([0x2F0A, 0x3B1F, 0x3548], 0x5703),
-    ];
-    let word = int(math::packed_bits(P::UnormRgb565));
-    let f = vec(float(32), 3);
-    let cases: Vec<Case> = floats
-        .iter()
-        .map(|(l, _)| vec![l.iter().map(|b| u64::from(*b)).collect()])
-        .collect();
-    let want = |c: &Case| {
-        let lanes: Vec<u32> = c[0].iter().map(|b| *b as u32).collect();
-        floats
-            .iter()
-            .find(|(l, _)| l.as_slice() == lanes.as_slice())
-            .map(|(_, w)| vec![*w])
-    };
-    check(
-        "rgb565 of Metal's float lanes",
-        &[f],
-        word,
-        &|fb, x| math::pack(fb, P::UnormRgb565, f, x[0], None, NanTest::IsNan),
-        &cases,
-        &want,
-        false,
-    );
-    let h = vec(half(), 3);
-    let cases: Vec<Case> = halves.iter().map(|(l, _)| vec![l.to_vec()]).collect();
-    check(
-        "rgb565 of Metal's half lanes",
-        &[h],
-        word,
-        &|fb, x| math::pack(fb, P::UnormRgb565, h, x[0], None, NanTest::IsNan),
-        &cases,
-        &|c| {
-            halves
-                .iter()
-                .find(|(l, _)| l.as_slice() == c[0].as_slice())
-                .map(|(_, w)| vec![*w])
-        },
-        false,
-    );
-    // The exact product disagrees with Metal on the eight tie lanes.
-    let exact = |l: &[u32; 3]| {
-        let mut w = 0u64;
-        for (b, (n, at)) in l.iter().zip([(31u32, 0), (63, 5), (31, 11)]) {
-            let x = f64::from(f32::from_bits(*b)).clamp(0.0, 1.0);
-            w |= ((x * f64::from(n)).round_ties_even() as u64) << at;
-        }
-        w
-    };
-    let differ = floats.iter().filter(|(l, w)| exact(l) != *w).count();
-    assert_eq!(differ, 8, "lanes where the exact product misses Metal");
 }
 
 /// `k / d` is correctly rounded (the host's IEEE `f32` division) for every `k` in `[0, d]` of every
@@ -2236,22 +1981,14 @@ fn normalized_division_is_correctly_rounded() {
     }
 }
 
-/// `unorm4x8_srgb` converts through Metal's twelve-bit tables, on the interpreter.
-///
-/// - Unpacking every byte in every lane gives, for a color byte `b`, the correctly rounded
-///   `round(decode(b / 255) * 4095) / 4095` of the MSL transfer (every step at least `1.6e-4`
-///   from a half step), and for the alpha byte `a / 255` correctly rounded; among them Metal's
-///   steps of the authored case `srgb-transfer-and-its-twelve-bit-table` (M3 Max, ORACLE_ABI
-///   v32): byte 1 (`0.000303527`, 1.243 steps) is step 1, `0x39800801`; byte 137 is step 1024,
-///   `0x3E800801`; byte 255 is `1.0`.
-/// - Packing each `i / 4095`, the values just beside each tie `(i + 1/2) / 4095`, and the
-///   specials gives the byte of index `i = round(x * 4095)` (the exact product) that the MSL
-///   transfer with the exponent `0.41666` gives (every byte at least `2.5e-4` from a half); that
-///   transfer reproduces all 4096 bytes Metal answered in A1's
-///   `srgb-encode-of-every-half-and-a-2-14-float-grid` (8f7708ff), where the exponent `1/2.4`
-///   misses four. The alpha lane is the exact product `x * 255` rounded to nearest even.
+/// `unorm4x8_srgb` unpacks through Metal's twelve-bit decode table, on the interpreter: every byte
+/// in every lane gives, for a color byte `b`, the correctly rounded `round(decode(b / 255) * 4095)
+/// / 4095` of the MSL transfer (every step at least `1.6e-4` from a half step), and for the alpha
+/// byte `a / 255` correctly rounded; among them Metal's steps of the authored case
+/// `srgb-transfer-and-its-twelve-bit-table` (M3 Max, ORACLE_ABI v32): byte 1 (`0.000303527`, 1.243
+/// steps) is step 1, `0x39800801`; byte 137 is step 1024, `0x3E800801`; byte 255 is `1.0`.
 #[test]
-fn srgb_conversions_answer_with_metals_tables() {
+fn srgb_unpack_answers_with_metals_table() {
     use crate::air::intrinsics::PackFormat as P;
     use crate::lower::arith::srgb;
     let word = int(32);
@@ -2264,17 +2001,6 @@ fn srgb_conversions_answer_with_metals_tables() {
         };
         let k = (v * 4095.0).round_ties_even();
         u64::from(((k / 4095.0) as f32).to_bits())
-    };
-    let encode = |x: f32| {
-        let x = if x.is_nan() { 0.0 } else { x.clamp(0.0, 1.0) };
-        let i = (f64::from(x) * 4095.0).round_ties_even();
-        let c = i / 4095.0;
-        let v = if c < 0.0031308 {
-            12.92 * c
-        } else {
-            1.055 * c.powf(0.41666) - 0.055
-        };
-        (255.0 * v).round_ties_even() as u64
     };
     for lane in [float(32), half()] {
         let f = vec(lane, 4);
@@ -2306,63 +2032,10 @@ fn srgb_conversions_answer_with_metals_tables() {
             &exact_ok(f),
         );
     }
-    let s = float(32);
-    let f = vec(s, 4);
     let metal: [(u64, u64); 3] = [(1, 0x3980_0801), (137, 0x3E80_0801), (255, 0x3F80_0000)];
     for (b, want) in metal {
         assert_eq!(decode(b), want, "byte {b}");
     }
-    let mut xs: Vec<f32> = Vec::new();
-    for i in 0..4096u32 {
-        let x = (f64::from(i) / 4095.0) as f32;
-        let tie = ((f64::from(i) + 0.5) / 4095.0) as f32;
-        xs.extend([
-            x,
-            tie,
-            f32::from_bits(tie.to_bits() + 1),
-            f32::from_bits(tie.to_bits() - 1),
-        ]);
-    }
-    xs.extend([
-        -0.0,
-        -1.0,
-        2.0,
-        f32::INFINITY,
-        f32::NEG_INFINITY,
-        f32::NAN,
-        1e-40,
-    ]);
-    let cases: Vec<Case> = xs
-        .chunks(4)
-        .map(|c| {
-            let mut lanes: Vec<u64> = c.iter().map(|x| u64::from(x.to_bits())).collect();
-            lanes.resize(4, 0);
-            vec![lanes]
-        })
-        .collect();
-    check(
-        "pack sRGB",
-        &[f],
-        word,
-        &|fb, x| {
-            let t = srgb::declare(fb.module())?;
-            math::pack(fb, P::Unorm4x8Srgb, f, x[0], Some(t), NanTest::IsNan)
-        },
-        &cases,
-        &|c| {
-            let x: Vec<f32> = c[0].iter().map(|b| f32::from_bits(*b as u32)).collect();
-            let a = if x[3].is_nan() {
-                0.0
-            } else {
-                x[3].clamp(0.0, 1.0)
-            };
-            let alpha = (f64::from(a) * 255.0).round_ties_even() as u64;
-            Some(vec![
-                encode(x[0]) | (encode(x[1]) << 8) | (encode(x[2]) << 16) | (alpha << 24),
-            ])
-        },
-        false,
-    );
 }
 
 /// A normalized pack rounds the exact product `x * m`, not `fl(x * m)`: the values where the `f32`
@@ -2488,11 +2161,11 @@ fn packed_float_formats_unpack_exactly() {
     }
 }
 
-/// An `air.pack` or `air.unpack` of a normalized format converts its channels as one vector, so its
-/// code does not repeat a scalar sequence per channel. Previously a `float4` pack was 886 words
-/// (982 snorm) and an unpack 779 (955 snorm); after, 421 (470) and 297 (358).
+/// An `air.unpack` of a normalized format converts its channels as one vector, so its code does not
+/// repeat a scalar sequence per channel. Previously a `float4` unpack was 779 words (955 snorm);
+/// after, 297 (358).
 #[test]
-fn normalized_packs_and_unpacks_convert_their_channels_as_one_vector() {
+fn normalized_unpacks_convert_their_channels_as_one_vector() {
     use crate::air::intrinsics::PackFormat as P;
     use crate::lower::arith::ops::splat;
     use crate::spirv::serialize::serialize;
@@ -2501,96 +2174,16 @@ fn normalized_packs_and_unpacks_convert_their_channels_as_one_vector() {
         let m = kernel(ins, out, body).expect("build");
         serialize(m).expect("serialize").words.len()
     };
-    for (format, pack_most, unpack_most) in [
-        (P::UnormRgb10a2, 440, 310),
-        (P::Unorm4x8, 440, 310),
-        (P::Snorm4x8, 490, 370),
+    for (format, unpack_most) in [
+        (P::UnormRgb10a2, 310),
+        (P::Unorm4x8, 310),
+        (P::Snorm4x8, 370),
     ] {
         let fl = vec(float(32), 4);
-        let pack = size(&[fl], word, &|fb, x| {
-            math::pack(fb, format, fl, x[0], None, NanTest::IsNan)
-        }) - size(&[fl], word, &|fb, _| splat(fb, word, 0));
         let unpack = size(&[word], fl, &|fb, x| {
             math::unpack(fb, format, fl, x[0], None)
         }) - size(&[word], fl, &|fb, _| splat(fb, fl, 0));
-        assert!(pack <= pack_most, "{format:?} pack: {pack} words");
         assert!(unpack <= unpack_most, "{format:?} unpack: {unpack} words");
-    }
-}
-
-/// Each lane of a vector pack rounds the exact product with its own channel's scale: the values
-/// beside every channel's ties (where `fl(x * m)` rounds onto a half-integer that the exact product
-/// is not, as `normalized_packs_round_the_exact_product` finds them) in every lane, so a lane
-/// computed with a neighbour's scale or constant fails.
-#[test]
-fn a_vector_pack_rounds_each_lane_at_its_own_scale() {
-    use crate::air::intrinsics::PackFormat as P;
-    for format in [
-        P::UnormRgb10a2,
-        P::UnormRgb565,
-        P::Unorm4x8,
-        P::Snorm4x8,
-        P::Unorm2x16,
-        P::Snorm2x16,
-    ] {
-        let (widths, snorm) = math::pack_layout(format).expect("lowered");
-        let lanes = widths.len();
-        let scale = |n: u32| {
-            if snorm {
-                (1u32 << (n - 1)) - 1
-            } else {
-                (1u32 << n) - 1
-            }
-        };
-        // Values beside the ties of every channel's scale, and the ends.
-        let mut vals: Vec<f32> = vec![0.0, 1.0, 0.5, -1.0, 1e-30];
-        for n in widths {
-            let m = scale(*n);
-            for k in (0..m).step_by((m as usize / 40).max(1)) {
-                let x0 = ((f64::from(k) + 0.5) / f64::from(m)) as f32;
-                for d in -2i32..=2 {
-                    let v = f32::from_bits(x0.to_bits().wrapping_add_signed(d));
-                    vals.push(v);
-                    if snorm {
-                        vals.push(-v);
-                    }
-                }
-            }
-        }
-        let f = vec(float(32), lanes as u8);
-        // Rotate the values through the lanes so each lane sees every one.
-        let cases: Vec<Case> = (0..vals.len())
-            .map(|i| {
-                vec![(0..lanes)
-                    .map(|k| u64::from(vals[(i + 7 * k) % vals.len()].to_bits()))
-                    .collect()]
-            })
-            .collect();
-        check(
-            &format!("vector pack {format:?}"),
-            &[f],
-            int(math::packed_bits(format)),
-            &|fb, x| math::pack(fb, format, f, x[0], None, NanTest::IsNan),
-            &cases,
-            &|c| {
-                let mut w = 0u64;
-                let mut at = 0;
-                for (k, n) in widths.iter().enumerate() {
-                    let x = f32::from_bits(c[0][k] as u32);
-                    let lo = if snorm { -1.0f32 } else { 0.0 };
-                    let x = x.clamp(lo, 1.0);
-                    let m = scale(*n);
-                    let p = match math::pack_rounding(format) {
-                        math::PackRounding::ExactProduct => f64::from(x) * f64::from(m),
-                        math::PackRounding::FloatProduct => f64::from(x * m as f32),
-                    };
-                    w |= (p.round_ties_even() as i64 as u64 & mask(*n as u8)) << at;
-                    at += n;
-                }
-                Some(vec![w])
-            },
-            false,
-        );
     }
 }
 

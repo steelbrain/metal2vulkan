@@ -123,7 +123,6 @@ use crate::device::requirements::{FormatUsage, VkFeature};
 use crate::error::{
     Attachment, Capability, DescriptorError, Error, Feature, RuntimeInput, Unsupported,
 };
-use crate::lower::arith::nan::NanTest;
 use crate::lower::arith::{math, ops, pack, FloatFmt, Form, Held};
 use crate::lower::dispatch::KernelBuiltin;
 use crate::lower::emit::EmitCx;
