@@ -397,7 +397,9 @@ fn chained_fast_math_notes_fast_math_rewrites() {
 }
 
 /// The `OpFConvert`s of `words` that narrow to 16 bits a value the module widened from 16 bits, or
-/// a constant; and the count of 16-bit `OpFAdd`, `OpFSub` and `OpFMul`.
+/// a constant; and the count of 16-bit `OpFAdd`, `OpFSub` and `OpFMul`. A widening of a narrowing
+/// is a rounding's second half, which the builder keeps whole (a `half` store's narrowing reads
+/// it), so it is no widened 16-bit value here.
 fn narrowings_of_halves(words: &[u32]) -> (Vec<u32>, usize) {
     use crate::spv::Op;
     let mut width = std::collections::BTreeMap::new();
@@ -427,10 +429,17 @@ fn narrowings_of_halves(words: &[u32]) -> (Vec<u32>, usize) {
         i += len;
     }
     let bits = |ty: u32| width.get(vector.get(&ty).unwrap_or(&ty)).copied();
+    let narrowed: BTreeSet<u32> = converts
+        .iter()
+        .filter(|(ty, _, _)| bits(*ty) == Some(16))
+        .map(|(_, id, _)| *id)
+        .collect();
     let widened: BTreeSet<u32> = converts
         .iter()
         .filter(|(ty, _, x)| {
-            bits(*ty) == Some(32) && ty_of.get(x).and_then(|t| bits(*t)) == Some(16)
+            bits(*ty) == Some(32)
+                && ty_of.get(x).and_then(|t| bits(*t)) == Some(16)
+                && !narrowed.contains(x)
         })
         .map(|(_, id, _)| *id)
         .collect();

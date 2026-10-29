@@ -92,9 +92,9 @@ fn bf16_values() -> Vec<u64> {
 ///
 /// The store of a loaded value reuses the bits it was decoded from, so the round trip runs twice:
 /// once through that reuse, and once through a copy of the value, which has no noted bits, so
-/// `to_bits` runs its sequence: there a half NaN is the device's widening's (here the interpreter's
-/// canonical NaN, `PrecisionNote::NativeNanEncoding`), and every other half and every bfloat
-/// pattern comes back exactly.
+/// `to_bits` encodes it: there a half NaN is the device's widening's and narrowing's (here the
+/// interpreter's canonical NaN, `PrecisionNote::NativeNanEncoding`), and every other half and
+/// every bfloat pattern comes back exactly.
 #[test]
 fn narrow_bits_round_trip_every_pattern() {
     for f in [half(), bfloat()] {
@@ -109,7 +109,7 @@ fn narrow_bits_round_trip_every_pattern() {
             &|g, w| g == w,
         );
         check_accept(
-            &format!("{f:?} round trip through the encode sequence"),
+            &format!("{f:?} round trip through the encode"),
             &[f],
             f,
             &|fb, x| fb.unary(UnOp::CopyObject, x[0]),
@@ -129,11 +129,11 @@ fn narrow_bits_round_trip_every_pattern() {
     }
 }
 
-/// One exact half round trip through its format bits, `to_bits` then `from_bits` (their constants
-/// shared with the kernel's own load and store), is 160 words: each direction selects the normal or
-/// special rebias and applies it once, where separate normal and special results took 170. A load
-/// also decodes without masking the lane's low 16 bits first (the round trip test above feeds
-/// `from_bits` junk above them).
+/// One half round trip through its format bits, `to_bits` then `from_bits` (their types and
+/// constants shared with the kernel's own load and store), is the device's narrowing and widening
+/// alone: at most 40 words. A load also decodes
+/// without masking the lane's low 16 bits first (the round trip test above feeds `from_bits` junk
+/// above them).
 #[test]
 fn a_half_round_trip_through_its_bits_is_compact() {
     use crate::spirv::serialize::serialize;
@@ -141,7 +141,7 @@ fn a_half_round_trip_through_its_bits_is_compact() {
         let m = kernel(&[half()], half(), body).expect("build");
         serialize(m).expect("serialize").words.len()
     };
-    // Copies keep the decoded bits from being reused, so both sequences run.
+    // Copies keep the decoded bits from being reused, so both conversions run.
     let without = size(&|fb, x| fb.unary(UnOp::CopyObject, x[0]));
     let with = size(&|fb, x| {
         let c = fb.unary(UnOp::CopyObject, x[0])?;
@@ -149,26 +149,20 @@ fn a_half_round_trip_through_its_bits_is_compact() {
         let y = super::super::narrow::from_bits(fb, half(), b)?;
         fb.unary(UnOp::CopyObject, y)
     });
-    assert!(with - without <= 160, "{} words", with - without);
+    assert!(with - without <= 40, "{} words", with - without);
 }
 
 /// Under native half rounding a `half` may reach its store unrounded (the device folds the
-/// conversion pair), and the store's bits then saturate: a finite magnitude from `65536` up is
-/// infinity, never a NaN's code or a code past 16 bits (whose bit 17 a pair's store carried into
-/// the next lane); every other value is truncated toward zero onto the half
-/// grid, an infinity and a NaN as before, and a half value is its own bits. A module whose rounding
-/// is Metal's takes no cap.
+/// conversion pair), and the store's bits are then the device's narrowing of it, in either form
+/// (its conversion to 16 bits, `PackHalf2x16` without `shaderFloat16`): here the interpreter's, to
+/// nearest even on the half grid, half denormals kept, a finite magnitude from `65520` up the
+/// infinity of its sign, never a NaN's code or a code past 16 bits (whose bit 17 a pair's store
+/// would carry into the next lane), and a NaN a NaN; a half value is its own bits. The narrowing is
+/// the same instructions whether the module's rounding is native or not.
 #[test]
-fn an_unrounded_half_saturates_at_its_store_under_native_rounding() {
-    use super::super::narrow::{f32_of_half_bits, half_bits_of_f32};
-    let truncated = |b: u32| -> u64 {
-        let a = b & 0x7FFF_FFFF;
-        let sign = (b >> 16) & 0x8000;
-        u64::from(match a {
-            0x4780_0000..0x7F80_0000 => sign | 0x7C00,
-            _ => half_bits_of_f32(b),
-        })
-    };
+fn an_unrounded_half_is_the_devices_narrowing_at_its_store() {
+    use super::super::narrow::f32_of_half_bits;
+    use crate::spirv::builder::QuantizeForm;
     let mut bits: Vec<u32> = vec![
         0x7F7F_FFFF,
         0xFF7F_FFFF,
@@ -176,12 +170,15 @@ fn an_unrounded_half_saturates_at_its_store_under_native_rounding() {
         0x4780_0001,
         0x477F_FFFF,
         0x477F_F000,
+        0x477F_EFFF,
         0x477F_E000,
         0x47C3_5000,
         0x7149_F2CA,
         0xC780_0000,
         0x3F80_0001,
+        0x3F80_1000,
         0x3F80_1FFF,
+        0x3F80_3000,
         0x3649_539C,
         0x3380_0001,
         0x0000_0001,
@@ -193,40 +190,154 @@ fn an_unrounded_half_saturates_at_its_store_under_native_rounding() {
     ];
     bits.extend((0..=0xFFFFu32).step_by(7).map(f32_of_half_bits));
     let cases: Vec<Case> = bits.iter().map(|&b| vec![vec![u64::from(b)]]).collect();
-    let words = |native: bool| {
+    for q in [QuantizeForm::Converted, QuantizeForm::Device] {
+        let words = |native: bool| {
+            let body = move |fb: &mut FunctionBuilder<'_>, x: &[Value]| -> BResult<Value> {
+                fb.module().set_quantize_form(q);
+                fb.module().set_native_half(native);
+                Ok(x[0])
+            };
+            let m = kernel_with(&[float(32)], half(), &body, true, false).expect("build");
+            crate::spirv::serialize::serialize(m)
+                .expect("serialize")
+                .words
+                .len()
+        };
         let body = move |fb: &mut FunctionBuilder<'_>, x: &[Value]| -> BResult<Value> {
-            fb.module().set_native_half(native);
+            fb.module().set_quantize_form(q);
+            fb.module().set_native_half(true);
             Ok(x[0])
         };
-        let m = kernel_with(&[float(32)], half(), &body, true, false).expect("build");
-        crate::spirv::serialize::serialize(m)
-            .expect("serialize")
-            .words
-            .len()
-    };
-    let body = |fb: &mut FunctionBuilder<'_>, x: &[Value]| -> BResult<Value> {
-        fb.module().set_native_half(true);
-        Ok(x[0])
-    };
-    check_accept(
-        "native",
-        &[float(32)],
-        half(),
-        &body,
-        &cases,
-        &|c| Some(vec![truncated(arg(c, 0) as u32)]),
-        &|g, w| g == w,
-    );
-    assert!(
-        words(false) < words(true),
-        "the cap is emitted only under native rounding"
-    );
+        check_accept(
+            &format!("native {q:?}"),
+            &[float(32)],
+            half(),
+            &body,
+            &cases,
+            &|c| Some(vec![metal_half(arg(c, 0))]),
+            &|g, w| g == w || (is_nan(half(), g) && is_nan(half(), w)),
+        );
+        assert_eq!(
+            words(false),
+            words(true),
+            "{q:?}: no cap under native rounding"
+        );
+    }
 }
 
-/// The host transliterations of the two bit sequences, which fold a constant's bits at translation
-/// time, agree with the sequences' values on every half pattern (the widened value is the
-/// pattern's, and back is the pattern itself), and a constant that is no half value (a lost NaN
-/// payload, an `f32` between two halves) is not folded.
+/// A `half`'s bits from its value, where none are known, are the device's narrowing on every form,
+/// with no integer encode: wherever the module can hold a 16-bit float (`QuantizeForm::Converted`
+/// and `Controlled`, a profile with `shaderFloat16`), one conversion of the lanes to 16 bits, read
+/// as words beside a 16-bit zero, decorated `NoContraction` under the float controls; in
+/// `QuantizeForm::Device` (no `shaderFloat16`), `GLSL.std.450 PackHalf2x16` of each lane beside a
+/// zero (one a lane, and no 16-bit type). Every half value, on one to four lanes, encodes to its
+/// own bits zero-extended but a NaN, which encodes to a NaN (`PrecisionNote::NativeNanEncoding`),
+/// and `narrow::encodes_bits` finds the narrowing.
+#[test]
+fn a_half_encode_is_the_devices_narrowing_in_every_form() {
+    use super::super::narrow::{encodes_bits, f32_of_half_bits, half_bits_of_f32, to_bits};
+    use crate::spirv::builder::QuantizeForm;
+    use crate::spirv::ir::Contraction;
+    let lanes_of = |n: u32| -> Vec<Case> {
+        (0..0x1_0000u32)
+            .step_by(n as usize)
+            .map(|h| {
+                vec![(h..h + n)
+                    .map(|x| u64::from(f32_of_half_bits(x & 0xFFFF)))
+                    .collect()]
+            })
+            .collect()
+    };
+    let want = |c: &Case| {
+        Some(
+            c[0].iter()
+                .map(|b| u64::from(half_bits_of_f32(*b as u32)))
+                .collect(),
+        )
+    };
+    let half_nan = |b: u64| b >> 16 == 0 && is_nan(half(), b);
+    for q in [
+        QuantizeForm::Device,
+        QuantizeForm::Converted,
+        QuantizeForm::Controlled,
+    ] {
+        let float16 = q != QuantizeForm::Device;
+        for lanes in 1u8..=4 {
+            let cases = lanes_of(u32::from(lanes));
+            let cases = &cases;
+            let what = format!("{lanes} lanes, {q:?}");
+            let body = move |fb: &mut FunctionBuilder<'_>, x: &[Value]| -> BResult<Value> {
+                fb.module().set_quantize_form(q);
+                to_bits(fb, vec(half(), lanes), x[0])
+            };
+            let (ins, out) = ([vec(float(32), lanes)], vec(int(32), lanes));
+            let m = kernel_with(&ins, out, &body, true, false)
+                .unwrap_or_else(|e| panic!("{what}: build: {e:?}"));
+            let budget = crate::budget::Budget::default();
+            let mut meter = crate::budget::Meter::new(&budget);
+            assert!(
+                encodes_bits(&m, &mut meter).expect("encodes_bits"),
+                "{what}: encodes_bits"
+            );
+            let insts = || m.blocks().iter().flat_map(|b| &b.insts);
+            let integer_encode = insts().any(|n| {
+                matches!(
+                    n.inst,
+                    Inst::Convert {
+                        op: ConvOp::ConvertFToU,
+                        ..
+                    } | Inst::Select { .. }
+                )
+            });
+            let conversions: Vec<Contraction> = insts()
+                .filter_map(|n| match n.inst {
+                    Inst::Convert {
+                        op: ConvOp::FConvert,
+                        contract,
+                        ..
+                    } => Some(contract),
+                    _ => None,
+                })
+                .collect();
+            let packs = insts()
+                .filter(|n| {
+                    matches!(
+                        n.inst,
+                        Inst::Glsl {
+                            op: GlslOp::PackHalf2x16,
+                            ..
+                        }
+                    )
+                })
+                .count();
+            let halves = m
+                .types()
+                .iter()
+                .any(|(_, t)| matches!(t, Type::Float { width: 16 }));
+            let held = match q {
+                QuantizeForm::Controlled => Contraction::Forbidden,
+                _ => Contraction::Allowed,
+            };
+            assert_eq!(
+                conversions,
+                vec![held; usize::from(float16)],
+                "{what}: the conversions"
+            );
+            let want_packs = if float16 { 0 } else { usize::from(lanes) };
+            assert_eq!(packs, want_packs, "{what}: the packs");
+            assert_eq!(halves, float16, "{what}: a 16-bit float type");
+            assert!(!integer_encode, "{what}: an integer encode");
+            check_accept(&what, &ins, out, &body, cases, &want, &|g, w| {
+                g == w || (half_nan(g) && half_nan(w))
+            });
+        }
+    }
+}
+
+/// The host's bits of a half value and value of half bits, which fold a constant's bits at
+/// translation time, agree on every half pattern (the widened value is the pattern's, and back is
+/// the pattern itself), and a constant that is no half value (a lost NaN payload, an `f32` between
+/// two halves) is not folded.
 #[test]
 fn narrow_constant_bits_fold_exactly() {
     use super::super::narrow::{f32_of_half_bits, half_bits_of_f32};
@@ -252,7 +363,8 @@ fn narrow_constant_bits_fold_exactly() {
         assert_eq!(x == bits, folds, "{bits:#010x}");
     }
     // A store of a constant takes its bits at translation time: the kernel's store of every
-    // tested constant equals the pattern (the encode sequence would compute the same).
+    // tested constant equals the pattern (the device's narrowing would compute the same but for a
+    // NaN's bits).
     for f in [half(), bfloat()] {
         let vals = if f == half() {
             half_values()
@@ -287,11 +399,11 @@ fn narrow_constant_bits_fold_exactly() {
 /// in one lane of a 4-lane vector built from `undef`, is stored exactly as it was loaded (the junk
 /// the harness loads above each lane's 16 bits cleared); so is a vector that keeps two lanes of a
 /// loaded vector and replaces the other two; so is a chain one lane of which has no known bits (a
-/// copy of a loaded lane), which runs the sequence; so is each lane stored alone, with and without
-/// known vector bits; and the vector's widened lanes are the patterns' values. Where the sequence
-/// runs, a `half` NaN's bits are the device's widening's (`PrecisionNote::NativeNanEncoding`): so
-/// in a copy's chain, and in the loaded vector's, which the harness builds from its lanes' decodes
-/// (a construct, whose bits are not noted).
+/// copy of a loaded lane), which the device's narrowing encodes; so is each lane stored alone, with
+/// and without known vector bits; and the vector's widened lanes are the patterns' values. Where
+/// the narrowing encodes, a `half` NaN's bits are the device's
+/// (`PrecisionNote::NativeNanEncoding`): so in a copy's chain, and in the loaded vector's, which
+/// the harness builds from its lanes' decodes (a construct, whose bits are not noted).
 #[test]
 fn narrow_lanes_move_as_bits_through_vectors() {
     use super::super::narrow::note_insert;
@@ -321,7 +433,7 @@ fn narrow_lanes_move_as_bits_through_vectors() {
             .collect();
         let ins = [f, f, f, f];
         let lanes = |c: &Case| Some((0..4).map(|i| arg(c, i)).collect());
-        // Bits the sequence computes: a `half` NaN is the device's widening's.
+        // Bits the device's narrowing computes: a `half` NaN is the device's.
         let sequenced = |g: u64, w: u64| g == w || (f == half() && is_nan(f, g) && is_nan(f, w));
         for copy in [None, Some(2)] {
             check_accept(
@@ -413,9 +525,9 @@ fn narrow_lanes_move_as_bits_through_vectors() {
 
 /// Repeating a vector's lane inserts on bits never costs words. Four loaded halves stored as a
 /// vector need neither their decode nor the vector's encode once unread instructions are removed; a
-/// chain one lane of which has no known bits costs what it did without the notes (the sequence
-/// encodes the vector); and so does a lane stored from a vector whose bits are unknown (the lane is
-/// encoded alone).
+/// chain one lane of which has no known bits costs what it did without the notes (the device's
+/// narrowing encodes the vector); and so does a lane stored from a vector whose bits are unknown
+/// (the lane is encoded alone).
 #[test]
 fn narrow_lane_inserts_never_cost_words() {
     use super::super::narrow::note_insert;
@@ -446,7 +558,7 @@ fn narrow_lane_inserts_never_cost_words() {
     let v4 = vec(half(), 4);
     let (with, without) = (size(v4, &chain(true, None)), size(v4, &chain(false, None)));
     assert!(
-        with + 100 < without,
+        with + 64 < without,
         "{with} words with notes, {without} without"
     );
     let (with, without) = (

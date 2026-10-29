@@ -3125,8 +3125,9 @@ fn stores_nan(bits: u32, half: bool) -> bool {
 /// on `lavapipe` and `moltenvk-m3`, each with its driver's deviation `MetalCanonicalNans` taken
 /// and not: the module selects no NaN, so it is the same word for word on both sides of the fact;
 /// it records `PrecisionNote::NativeNanEncoding` exactly where `noted(kernel, fact)` or it reads a
-/// `half` from its bits by the device's widening (`narrow::widens_bits`: both profiles have
-/// `shaderFloat16`), and never `DeviceNanEncoding`; and the interpreter's answer is the kernel's
+/// `half` from its bits by the device's widening or encodes one by its narrowing
+/// (`narrow::widens_bits`, `narrow::encodes_bits`: both profiles have `shaderFloat16`), and never
+/// `DeviceNanEncoding`; and the interpreter's answer is the kernel's
 /// `want`, or a NaN, its bits the device's, where it has none, but for the kernels `unread` names,
 /// whose device instruction the interpreter does not evaluate.
 fn nans_are_the_device_s(
@@ -3148,6 +3149,9 @@ fn nans_are_the_device_s(
                 let (_, m) = crate::pipeline::testing::typed_module(bitcode, kk.name, &p)
                     .unwrap_or_else(|e| panic!("{what}: {e:?}"));
                 let widens = crate::lower::arith::narrow::widens_bits(&m, &mut meter())
+                    .and_then(|w| {
+                        Ok(w || crate::lower::arith::narrow::encodes_bits(&m, &mut meter())?)
+                    })
                     .unwrap_or_else(|e| panic!("{what}: {e:?}"));
                 assert_eq!(
                     a.precision.contains(&PrecisionNote::NativeNanEncoding),

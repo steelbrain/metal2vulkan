@@ -747,9 +747,9 @@ fn offsets(size: u64) -> Vec<u64> {
 /// Every leaf path, in-shader encoding, at offsets around the end of a 32-byte buffer and near 2^32
 /// (with residuals 0 and 4 wrapping them further): no trap, exact in bounds, 0 or unchanged out of
 /// bounds. Probes are skipped where the offset breaks the access's stated alignment (undefined in
-/// Metal). A `half` NaN loaded need only come back a NaN where the module reads a `half` from its
-/// bits by the device's widening (`PrecisionNote::NativeNanEncoding`), whose NaN encoding is the
-/// device's.
+/// Metal). A `half` NaN loaded, or stored from a constant, need only come back a NaN where the
+/// module reads a `half` from its bits by the device's widening or encodes one by its narrowing
+/// (`PrecisionNote::NativeNanEncoding`), whose NaN encoding is the device's.
 #[test]
 fn every_leaf_path_is_exact_in_bounds_and_contained_out_of_bounds() {
     let size = 32u64;
@@ -821,7 +821,15 @@ fn every_leaf_path_is_exact_in_bounds_and_contained_out_of_bounds() {
                             if inb {
                                 want[at..at + bytes.len()].copy_from_slice(bytes);
                             }
-                            assert_eq!(out.buffers[0], want, "{what} r={r} off={off:#x}");
+                            if native_halves {
+                                assert!(
+                                    same_halves(&out.buffers[0], &want),
+                                    "{what} r={r} off={off:#x}: {:?}",
+                                    out.buffers[0]
+                                );
+                            } else {
+                                assert_eq!(out.buffers[0], want, "{what} r={r} off={off:#x}");
+                            }
                         }
                     }
                 }
@@ -1048,9 +1056,10 @@ fn push_with_table(plan: &Plan) -> Vec<u8> {
 /// Every leaf path, with bind offsets 0 and 8, at offsets around the end of the allocation and near
 /// 2^32: no trap, exact in bounds, 0 out of bounds, and an out-of-bounds store lands in the sink
 /// and leaves the allocation unchanged. Robust buffer access does not cover device addresses, so
-/// the check is emitted on a robust profile too. A `half` NaN loaded need only come back a NaN
-/// where the module reads a `half` from its bits by the device's widening
-/// (`PrecisionNote::NativeNanEncoding`), whose NaN encoding is the device's.
+/// the check is emitted on a robust profile too. A `half` NaN loaded, or stored from a constant,
+/// need only come back a NaN where the module reads a `half` from its bits by the device's
+/// widening or encodes one by its narrowing (`PrecisionNote::NativeNanEncoding`), whose NaN
+/// encoding is the device's.
 #[test]
 fn a_device_address_slot_is_exact_and_contained() {
     let size = 32u64;
@@ -1138,7 +1147,15 @@ fn a_device_address_slot_is_exact_and_contained() {
                         if inb {
                             want[at..at + bytes.len()].copy_from_slice(bytes);
                         }
-                        assert_eq!(out.buffers[0], want, "{what} bind={bind} off={off:#x}");
+                        if native_halves {
+                            assert!(
+                                same_halves(&out.buffers[0], &want),
+                                "{what} bind={bind} off={off:#x}: {:?}",
+                                out.buffers[0]
+                            );
+                        } else {
+                            assert_eq!(out.buffers[0], want, "{what} bind={bind} off={off:#x}");
+                        }
                     }
                 }
             }
@@ -1750,9 +1767,10 @@ fn profile_without(stem: &str, features: &[VkFeature]) -> DeviceProfile {
 /// 2023 baseline, both on `moltenvk-m3`), every generated leaf kernel is exact in bounds and
 /// contained out of bounds at bind residuals that are not multiples of 4: a narrow unit's index
 /// follows the binder contract (descriptor base congruent to the Metal address modulo 4), and a
-/// sub-word store through a unit leaves its neighbours unchanged. A `half` NaN loaded need only
-/// come back a NaN where the module reads a `half` from its bits by the device's widening
-/// (`PrecisionNote::NativeNanEncoding`), whose NaN encoding is the device's.
+/// sub-word store through a unit leaves its neighbours unchanged. A `half` NaN loaded, or stored
+/// from a constant, need only come back a NaN where the module reads a `half` from its bits by the
+/// device's widening or encodes one by its narrowing (`PrecisionNote::NativeNanEncoding`), whose
+/// NaN encoding is the device's.
 #[test]
 fn narrow_units_are_exact_at_every_bind_residual() {
     let size = 32u64;
@@ -1829,7 +1847,15 @@ fn narrow_units_are_exact_at_every_bind_residual() {
                             if inb {
                                 want[at..at + bytes.len()].copy_from_slice(bytes);
                             }
-                            assert_eq!(out.buffers[0], want, "{what} r={r} off={o}");
+                            if native_halves {
+                                assert!(
+                                    same_halves(&out.buffers[0], &want),
+                                    "{what} r={r} off={o}: {:?}",
+                                    out.buffers[0]
+                                );
+                            } else {
+                                assert_eq!(out.buffers[0], want, "{what} r={r} off={o}");
+                            }
                         }
                     }
                 }
@@ -2087,8 +2113,9 @@ const VEC4_RESIDUALS: [u32; 6] = [0, 4, 12, 16, 36, 0xFFFF_FFF0];
 /// (declared beside the word view, and stored with one `OpStore`), in both encodings, on every
 /// tested profile; aligned to 4 it moves word by word (four stores, no `uvec4` view of the slot it
 /// stores to). At every residual a descriptor offset that is a multiple of 16 reads and writes
-/// exactly the leaf's 16 bytes of a 48-byte range, and with the in-shader check the offset past
-/// the range reads 0 and writes nothing.
+/// exactly the leaf's 16 bytes of a 48-byte range (a `half` NaN stored from a constant a NaN where
+/// the module encodes it by the device's narrowing, `PrecisionNote::NativeNanEncoding`), and with
+/// the in-shader check the offset past the range reads 0 and writes nothing.
 #[test]
 fn sixteen_byte_leaves_move_as_one_uvec4() {
     const OP_STORE: u16 = 62;
@@ -2120,6 +2147,8 @@ fn sixteen_byte_leaves_move_as_one_uvec4() {
                 "{what}: views of out"
             );
             let a = compile(&bc, k.name, &p).unwrap_or_else(|e| panic!("{what}: {e}"));
+            let native_halves =
+                k.ty.contains("half") && a.precision.contains(&PrecisionNote::NativeNanEncoding);
             let stores = opcodes(&a.module.words)
                 .iter()
                 .filter(|o| **o == OP_STORE)
@@ -2169,7 +2198,15 @@ fn sixteen_byte_leaves_move_as_one_uvec4() {
                             if inb {
                                 want[at..at + 16].copy_from_slice(bytes);
                             }
-                            assert_eq!(out.buffers[0], want, "{what} r={r:#x} {desc}");
+                            if native_halves {
+                                assert!(
+                                    same_halves(&out.buffers[0], &want),
+                                    "{what} r={r:#x} {desc}: {:?}",
+                                    out.buffers[0]
+                                );
+                            } else {
+                                assert_eq!(out.buffers[0], want, "{what} r={r:#x} {desc}");
+                            }
                         }
                     }
                 }

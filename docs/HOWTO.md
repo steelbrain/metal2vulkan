@@ -49,8 +49,10 @@ pipeline records `NativeHalfConversion` or `NativeHalfQuantize`. NVIDIA's driver
 folds the pair (`DriverWorkaround::HalfConversionPairFolded`), so it takes the native conversion.
 A `half` read from memory or from its bits is the device's widening on every device (an
 `OpFConvert` of the bits read as a 16-bit float with `shaderFloat16`, `GLSL.std.450
-UnpackHalf2x16` without it), and the pipeline records `NativeNanEncoding` (a NaN's bits) and,
-where that widening is neither under the float controls nor measured to be Metal's,
+UnpackHalf2x16` without it), and a `half` stored or reinterpreted as bits, unless they are the
+bits it was loaded from, the device's narrowing (an `OpFConvert` to 16 bits, `GLSL.std.450
+PackHalf2x16` without `shaderFloat16`); the pipeline records `NativeNanEncoding` (a NaN's bits)
+and, where that conversion is neither under the float controls nor measured to be Metal's,
 `NativeHalfConversion` (a denormal the device may flush).
 
 To read AIR without translating it (list a metallib's functions, decode a module into typed IR,

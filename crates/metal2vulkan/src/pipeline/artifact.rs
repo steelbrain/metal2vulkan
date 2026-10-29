@@ -1705,7 +1705,8 @@ pub enum PrecisionNote {
     ///   LLVM 23.1.1 and for a loaded texel on Mesa 26.0.8 with LLVM 21.1.8, barrier or not, whose
     ///   arithmetic measured rounded. The result is then the `float` computation itself: its
     ///   differences from Metal's compound across operations, and a value past the `half`'s range
-    ///   stays finite until a `half` store saturates it to infinity. The RTX 5080 Laptop GPU on the
+    ///   stays finite until a `half` store narrows it by the device's conversion (to infinity, or
+    ///   to 65504 rounding toward zero). The RTX 5080 Laptop GPU on the
     ///   same driver rounds here (8192 of 8192 sums Metal's);
     /// - on a device that rounds toward zero, a finite value from 65520 up is 65504 where
     ///   Metal's is infinity;
@@ -1718,16 +1719,19 @@ pub enum PrecisionNote {
     /// Every `half` a module reads from its bits (a load, a reinterpretation, a texel's bits) is
     /// the device's widening of them, on every device: an `OpFConvert` to 32 bits of the bits read
     /// as a 16-bit float with `shaderFloat16`, `GLSL.std.450 UnpackHalf2x16` of them without it.
-    /// A module that reads one records this note too where that widening is neither under the
-    /// float controls' `DenormPreserve` for 16 bits (ANV, RADV) nor measured to read every `half`
-    /// as Metal's (MoltenVK's conversion is, `DriverDeviation::MetalHalfArithmetic`, and the module
-    /// requires it there), so on every device without `shaderFloat16`: its bound is the last two
-    /// items', a half denormal read as the zero of its sign on a device that flushes 16-bit
-    /// denormals (the Vulkan spec lets a device flush a denormal "obtained via unpacking an
-    /// integer" without `DenormPreserve` for 16 bits, and gives `UnpackHalf2x16`
-    /// implementation-defined precision) and a NaN's bits the device's
-    /// ([`PrecisionNote::NativeNanEncoding`], which the module records); every other `half`
-    /// widens to its exact value.
+    /// So too every `half` a module encodes to its bits (a store, a reinterpretation, a texel's
+    /// bits) where they are not the bits it was read from: the device's narrowing of it, an
+    /// `OpFConvert` to 16 bits read as a word with `shaderFloat16`, `GLSL.std.450 PackHalf2x16`
+    /// without it. A module that reads or encodes one records this note too where that widening
+    /// or narrowing is neither under the float controls' `DenormPreserve` for 16 bits (ANV, RADV)
+    /// nor measured to read and narrow every `half` as Metal's (MoltenVK's conversion is,
+    /// `DriverDeviation::MetalHalfArithmetic`, and the module requires it there), so on every
+    /// device without `shaderFloat16`: its bound is the last two items', a half denormal read or
+    /// encoded as the zero of its sign on a device that flushes 16-bit denormals (the Vulkan spec
+    /// lets a device flush a denormal "obtained via unpacking an integer" without `DenormPreserve`
+    /// for 16 bits, and gives `UnpackHalf2x16` and `PackHalf2x16` implementation-defined
+    /// precision) and a NaN's bits the device's ([`PrecisionNote::NativeNanEncoding`], which the
+    /// module records); every other `half` widens to its exact value and encodes to its own bits.
     ///
     /// Validation derives no tolerance from it.
     NativeHalfConversion,
@@ -1763,9 +1767,14 @@ pub enum PrecisionNote {
     /// without it), and a NaN widens to a NaN whose bits are the device's, where Metal widens
     /// every `half` NaN to `0x7fc00000` and moves one it does not widen with its bits, so a `half`
     /// NaN the module moves as a value (through a select, a phi or a sign operation) may leave
-    /// with the device's bits; a `half` stored back unchanged keeps its bits. Every other `half`
-    /// widens to its value, but a denormal on a device that may flush 16-bit ones
-    /// ([`PrecisionNote::NativeHalfConversion`]). Validation derives no tolerance from it.
+    /// with the device's bits; a `half` stored back unchanged keeps its bits. And by every module
+    /// that encodes a `half` to its bits where they are not the bits it was read from (a store, a
+    /// reinterpretation, a texel's bits), on every device: the encode is the device's narrowing
+    /// (an `OpFConvert` to 16 bits with `shaderFloat16`, `PackHalf2x16` without it), and a NaN
+    /// narrows to a NaN whose bits are the device's, where Metal keeps a `half` NaN's sign and
+    /// payload. Every other `half` widens to its value and narrows to its bits, but a denormal on a
+    /// device that may flush 16-bit ones ([`PrecisionNote::NativeHalfConversion`]). Validation
+    /// derives no tolerance from it.
     NativeNanEncoding,
     /// Native device maths: Metal's `fmin`, `fmax`, `min3`, `max3`, `clamp` or `saturate` (its
     /// `clamp(x, +0, 1)`) on `float` or `half` is the device's `GLSL.std.450` `NMin`, `NMax` or

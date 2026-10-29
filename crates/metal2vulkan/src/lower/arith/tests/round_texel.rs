@@ -4,10 +4,10 @@
 //! The kernel reads `f32` words, the device's decode of an image texel, converts them as a texture
 //! access does, and stores the `half` bits. A half-float texel decodes to its exact `f32` value
 //! (a NaN to the `f32` NaN of its sign and payload), so the conversion must give the texel's own
-//! bits back: every subnormal, both zeros, both infinities, the largest half, and every NaN
-//! payload. A wider texel rounds to nearest even, half subnormals kept. `OpQuantizeToF16` alone
-//! fails both: the interpreter gives a value below the smallest normal half as the zero of its
-//! sign, and a NaN as `0x7E00`.
+//! bits back: every subnormal, both zeros, both infinities and the largest half; a NaN stays a
+//! NaN, its bits the store's narrowing's, the device's. A wider texel rounds to nearest even, half
+//! subnormals kept. `OpQuantizeToF16` alone fails the subnormals: the interpreter gives a value
+//! below the smallest normal half as the zero of its sign.
 
 use super::texel_round::half_probe_bits;
 use super::*;
@@ -52,8 +52,10 @@ fn want(w: u64) -> u64 {
 }
 
 /// Every half bit pattern, widened as the device decodes a half-float texel, reads back as itself,
-/// bit for bit: subnormals, zeros, infinities, `±65504`, and NaNs of every payload, signaling ones
-/// included; one lane at a time and four at once, as a `half4` read holds them.
+/// bit for bit: subnormals, zeros, infinities and `±65504`; a NaN of every payload, signaling ones
+/// included, reads back as a NaN, its bits the device's narrowing's at the store
+/// (`PrecisionNote::NativeNanEncoding`); one lane at a time and four at once, as a `half4` read
+/// holds them.
 #[test]
 fn a_half_texel_keeps_every_bit_pattern() {
     // The reference is the identity on every widened half.
@@ -61,6 +63,7 @@ fn a_half_texel_keeps_every_bit_pattern() {
         assert_eq!(want(widened(h)), u64::from(h), "{h:#06x}");
     }
     let cases: Vec<Case> = (0..=0xFFFFu16).map(|h| vec![vec![widened(h)]]).collect();
+    let same = |g: u64, w: u64| g == w || (is_nan(half(), g) && is_nan(half(), w));
     check_accept(
         "half texel",
         &[float(32)],
@@ -68,7 +71,7 @@ fn a_half_texel_keeps_every_bit_pattern() {
         &texel(1),
         &cases,
         &|c| Some(vec![want(arg(c, 0))]),
-        &|g, w| g == w,
+        &same,
     );
     let lanes: Vec<Case> = (0..0x1_0000u32)
         .step_by(4)
@@ -81,7 +84,7 @@ fn a_half_texel_keeps_every_bit_pattern() {
         &texel(4),
         &lanes,
         &|c| Some(c[0].iter().map(|w| want(*w)).collect()),
-        &|g, w| g == w,
+        &same,
     );
 }
 
@@ -189,7 +192,8 @@ fn unsigned_compares(m: &crate::spirv::ir::TypedModule) -> usize {
 /// the conversion's own rounding: every half-float texel and every wider value but a NaN reads as
 /// with the keep, to nearest even with half subnormals kept, and a NaN stays a NaN, without the
 /// keep's unsigned compare of the texel's bits. Without the flag the keep stands, and every half
-/// bit pattern reads back as itself.
+/// bit pattern reads back as itself, a NaN as a NaN (its bits the device's narrowing's at the
+/// store).
 #[test]
 fn a_texel_under_the_float_controls_takes_the_conversions_nan_by_default() {
     use crate::spirv::builder::QuantizeForm;
@@ -228,7 +232,7 @@ fn a_texel_under_the_float_controls_takes_the_conversions_nan_by_default() {
                 &body,
                 &halves,
                 &|c| Some(vec![want(arg(c, 0))]),
-                &|g, w| g == w,
+                &|g, w| g == w || (is_nan(half(), g) && is_nan(half(), w)),
             );
         }
     }

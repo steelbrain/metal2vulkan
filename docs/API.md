@@ -3232,9 +3232,11 @@ bound.
   conversion under them, exactly, with no note): NVIDIA, whose driver folds the conversion's round
   trip even under those controls (`DriverWorkaround::HalfConversionPairFolded`), MoltenVK,
   lavapipe, and any device without them. Also recorded where a `half` read from its bits is the
-  device's widening and that widening is neither under those controls nor measured to be Metal's:
-  the conversion on NVIDIA and lavapipe, and `GLSL.std.450 UnpackHalf2x16` on every device without
-  `shaderFloat16`. A half denormal may read as the zero of its sign.
+  device's widening, or a `half` encoded to its bits (where they are not the bits it was read from)
+  is the device's narrowing, and that conversion is neither under those controls nor measured to be
+  Metal's: the conversion on NVIDIA and lavapipe, and `GLSL.std.450 UnpackHalf2x16` and
+  `PackHalf2x16` on every device without `shaderFloat16`. A half denormal may read or encode as the
+  zero of its sign.
 - `metal2vulkan-degrade-native-half-quantize` (precision). `PrecisionNote::NativeHalfQuantize`:
   Native half rounding (a quantize): the module rounds a `half` result it computes in `float` (a
   `half` operation's, a function's, a conversion from `float`'s, a texel's) by the device's
@@ -3250,7 +3252,10 @@ bound.
   recorded wherever a `half` is read from its bits, on every device, since the read is the
   device's widening (its conversion with `shaderFloat16`, `UnpackHalf2x16` without): a NaN's bits
   the device's, where Metal widens every `half` NaN to `0x7fc00000` and moves one it does not
-  widen with its bits.
+  widen with its bits. And wherever a `half` is encoded to its bits (a store, a reinterpretation, a
+  texel's bits) where they are not the bits it was read from, on every device, since the encode is
+  the device's narrowing (its conversion with `shaderFloat16`, `PackHalf2x16` without): a NaN's
+  bits the device's, where Metal keeps a `half` NaN's sign and payload.
 - `metal2vulkan-degrade-native-min-max` (precision). `PrecisionNote::NativeMinMax`: Native device
   maths: Metal's `fmin`, `fmax`, `min3`, `max3`, `clamp` or `saturate` (its `clamp(x, +0, 1)`) on
   `float` or `half` is the device's `GLSL.std.450` `NMin`, `NMax` or `NClamp`, on a device not

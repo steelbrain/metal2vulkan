@@ -32,10 +32,13 @@
 //! ([`device_from_bits`]), else `GLSL.std.450 UnpackHalf2x16` of the bits as the low half of a
 //! word ([`unpacked_from_bits`]), which needs no 16-bit type: the device's value of every `half`
 //! but a NaN's bits and, on a device that may flush 16-bit denormals, a denormal, each recorded
-//! ([`widens_bits`]). Every other crossing is exact: [`to_bits`] and a `bfloat`'s move between a
-//! value and its format bits with integer sequences and, for a half denormal, one exact scaling by
-//! `2^24` of a normal `f32` to an integer (denormals, infinities, and NaN payloads included); an
-//! integer converts to `half` through `f32` without
+//! ([`widens_bits`]). A `half`'s bits from its value, where they are not known from the bits it
+//! was read from, are the device's narrowing of it on every profile ([`to_bits`]): its conversion
+//! to a 16-bit float read as a word where the module can hold one ([`converted_bits`]), else
+//! `GLSL.std.450 PackHalf2x16` ([`packed_bits`]), the same two notes recorded
+//! ([`encodes_bits`]). Every other crossing is exact: a `bfloat`'s move between a value and its
+//! format bits with integer shifts (NaN payloads included); an integer converts to `half` through
+//! `f32` without
 //! double rounding (any integer the `f32` step rounds is at least `2^24`, far above the largest
 //! half) and rounds by integer arithmetic, not `OpQuantizeToF16`, around a driver's defect
 //! ([`round_integer`]), an integer converts to `bfloat` through a round-to-odd `f32`
@@ -160,8 +163,8 @@ pub fn native_rounding(form: QuantizeForm) -> Option<PrecisionNote> {
 /// instruction computing `x`: Metal's compiler then rounds toward zero (`a1_half_tanh_regimes`,
 /// case 27353187: 1,204 of its 16,384 halves one ulp toward zero on MoltenVK). NVIDIA's compiler
 /// (RTX 3090) drops the pair, and so does lavapipe's where measured, so there the value is not
-/// rounded at all (the note's stated bound), and the store's bits saturate what passes `half`'s
-/// range ([`f32_bits_to_half_bits`]).
+/// rounded at all (the note's stated bound), and the store's conversion to bits rounds it
+/// ([`converted_bits`]).
 fn converted(fb: &mut FunctionBuilder<'_>, wide: Form, x: Value) -> BResult<Value> {
     let e = fb.module().ty(Type::Float { width: 16 })?;
     let h = match wide.lanes {
@@ -447,22 +450,25 @@ fn bf16_round_bits(fb: &mut FunctionBuilder<'_>, u: Form, b: Value) -> BResult<V
 }
 
 /// An upper estimate of the SPIR-V words of one [`to_bits`] or [`from_bits`] on one lane of
-/// form `f`: at most 22 instructions of at most six words for half, a shift for bfloat.
+/// form `f`: for half, the device's conversion or pack and their 16-bit types and zero, a few
+/// instructions of at most nine words; a shift for bfloat.
 pub fn bits_words(f: Form) -> u32 {
     match f.float_fmt() {
-        Some(FloatFmt::Half) => 136,
+        Some(FloatFmt::Half) => 48,
         Some(FloatFmt::BFloat) => 24,
         _ => 0,
     }
 }
 
-/// The format bits (zero-extended in `u32` lanes) of narrow value `x` of form `f`. Exact for
-/// every value of the format, including denormals, infinities, and NaN payloads (a NaN whose
-/// payload does not survive is quieted, never turned into an infinity).
+/// The format bits (zero-extended in `u32` lanes) of narrow value `x` of form `f`. A `bfloat`'s
+/// are exact for every value of the format. A `half`'s are the device's narrowing of the value
+/// ([`encode`]): exact for every `half` value but a NaN's bits and, on a device that may flush
+/// 16-bit denormals, a denormal, each recorded ([`encodes_bits`]).
 ///
-/// Bits already known are reused: see `known_bits`; and a lane extract's bits are taken from its
-/// vector's when those are known. Each is exactly what the sequence below computes from the value,
-/// so the result does not depend on which is taken.
+/// Bits already known are reused: see `known_bits`, so a `half` loaded and stored unchanged keeps
+/// its bits, a NaN's payload included; and a lane extract's bits are taken from its vector's when
+/// those are known. Each is the value's bits, so the result does not depend on which is taken but
+/// for a NaN's, which the device's narrowing may encode otherwise.
 pub fn to_bits(fb: &mut FunctionBuilder<'_>, f: Form, x: Value) -> BResult<Value> {
     let Some(fmt) = narrow_fmt(f) else {
         return encode(fb, f, x);
@@ -503,11 +509,11 @@ pub fn to_bits(fb: &mut FunctionBuilder<'_>, f: Form, x: Value) -> BResult<Value
     Ok(b)
 }
 
-/// The format bits of `x` (form `f`, format `fmt`) when they are known without running the
-/// sequence, cleared above each lane's 16 bits: the bits `x` was decoded from ([`from_bits`] notes
-/// them) or computed with earlier in the open block, a constant's bits computed at translation time
-/// ([`constant_bits`]), or, for a vector built by lane inserts ([`note_insert`]), the inserts
-/// repeated on the lanes' known bits. `None` otherwise.
+/// The format bits of `x` (form `f`, format `fmt`) when they are known without encoding the
+/// value ([`encode`]), cleared above each lane's 16 bits: the bits `x` was decoded from
+/// ([`from_bits`] notes them) or computed with earlier in the open block, a constant's bits
+/// computed at translation time ([`constant_bits`]), or, for a vector built by lane inserts
+/// ([`note_insert`]), the inserts repeated on the lanes' known bits. `None` otherwise.
 fn known_bits(
     fb: &mut FunctionBuilder<'_>,
     fmt: NarrowFmt,
@@ -546,7 +552,7 @@ fn clean(
 }
 
 /// The most lane inserts [`inserted_bits`] repeats on bits: a bound on its work (a longer chain
-/// runs the sequence).
+/// is encoded, [`encode`]).
 const MAX_INSERTS: usize = 16;
 
 /// Where a lane insert's bits come from.
@@ -742,24 +748,223 @@ fn vector_lanes(fb: &mut FunctionBuilder<'_>, v: Value) -> BResult<Option<u8>> {
     })
 }
 
-/// The format bits of narrow value `x` of form `f`, computed by the exact sequence.
+/// The format bits of narrow value `x` of form `f`, where no known bits stand: a `bfloat`'s its
+/// `f32` bits moved down, exact; a `half`'s the device's narrowing of the value, its conversion to
+/// a 16-bit float where the module can hold one (every [`QuantizeForm`] but
+/// [`QuantizeForm::Device`], [`converted_bits`]), else `GLSL.std.450 PackHalf2x16`
+/// ([`packed_bits`]).
 fn encode(fb: &mut FunctionBuilder<'_>, f: Form, x: Value) -> BResult<Value> {
-    let u = u32_form(f);
-    let ut = ty(fb, u)?;
-    let b = fb.convert(ConvOp::Bitcast, x, ut)?;
-    match f.held {
-        Held::Float(FloatFmt::BFloat) => {
+    match (f.held, fb.module().quantize_form()) {
+        (Held::Float(FloatFmt::BFloat), _) => {
+            let u = u32_form(f);
+            let ut = ty(fb, u)?;
+            let b = fb.convert(ConvOp::Bitcast, x, ut)?;
             let k16 = splat(fb, u, 16)?;
             bin(fb, BinOp::ShiftRightLogical, b, k16)
         }
-        _ => f32_bits_to_half_bits(fb, u, b),
+        (_, QuantizeForm::Device) => packed_bits(fb, f, x),
+        (_, QuantizeForm::Converted | QuantizeForm::Controlled) => converted_bits(fb, f, x),
     }
 }
 
+/// The `half` bits of `x` (`f32` lanes of form `f`), zero-extended in `u32` lanes, by the device's
+/// conversion to 16 bits: the lanes converted at once, one `OpFConvert` (decorated `NoContraction`
+/// under the float controls, as [`controlled`]'s), and each beside a 16-bit zero read as a word
+/// (`OpBitcast` maps the lower-numbered component to a word's lower-ordered bits), two lanes at a
+/// time as four. Three instructions for one or two lanes, six for three or four.
+///
+/// Every `half` value converts to its own bits, by the Vulkan spec ("Precision and Operation of
+/// SPIR-V Instructions": a conversion is "Correctly rounded"), but a NaN, whose bits are the
+/// device's (the SPIR-V spec's `SignedZeroInfNanPreserve`: "Bit patterns for NaNs might not be
+/// preserved"), where Metal moves a `half` NaN with its bits, and a denormal, which the device may
+/// flush to the zero of its sign without `DenormPreserve` for 16 bits: kept under the float
+/// controls ([`QuantizeForm::Controlled`], [`controlled_modes`]), measured kept on MoltenVK
+/// (`DriverDeviation::MetalHalfArithmetic`, whose measurement narrows every `half`), and elsewhere
+/// within `PrecisionNote::NativeHalfConversion`'s bound; the module records
+/// `PrecisionNote::NativeNanEncoding` ([`encodes_bits`]). A value that is no `half` value (under
+/// native half rounding the device's compiler may fold [`converted`]'s pair and hand `x` on
+/// unrounded, as NVIDIA's and lavapipe's do) takes the device's rounding, within
+/// `PrecisionNote::NativeHalfConversion`'s bound, which that module records.
+fn converted_bits(fb: &mut FunctionBuilder<'_>, f: Form, x: Value) -> BResult<Value> {
+    let e = fb.module().ty(Type::Float { width: 16 })?;
+    let halves =
+        |fb: &mut FunctionBuilder<'_>, len: u8| fb.module().ty(Type::Vector { elem: e, len });
+    let words = |fb: &mut FunctionBuilder<'_>, lanes: u8| ty(fb, u32_form(Form { lanes, ..f }));
+    let narrow = |fb: &mut FunctionBuilder<'_>, to| match fb.module().quantize_form() {
+        QuantizeForm::Controlled => fb.convert_no_contraction(x, to),
+        _ => fb.convert(ConvOp::FConvert, x, to),
+    };
+    if f.lanes <= 1 {
+        let h = narrow(fb, e)?;
+        let k = fb.module().constant(Constant::Null { ty: e })?;
+        let z = fb.module().const_value(k)?;
+        let pair = halves(fb, 2)?;
+        let p = fb.composite_construct(pair, &[h, z])?;
+        let w = words(fb, 1)?;
+        return fb.convert(ConvOp::Bitcast, p, w);
+    }
+    let n = u32::from(f.lanes);
+    let hv = halves(fb, f.lanes)?;
+    let h = narrow(fb, hv)?;
+    let pair = halves(fb, 2)?;
+    let k = fb.module().constant(Constant::Null { ty: pair })?;
+    let zeros = fb.module().const_value(k)?;
+    // At most two parts: a vector holds at most four lanes. Index `n` is a zero.
+    let mut parts = Vec::with_capacity(2);
+    let mut at = 0u32;
+    while at < n {
+        let part = if n - at >= 2 {
+            let q = fb.vector_shuffle(h, zeros, &[at, n, at + 1, n])?;
+            let w = words(fb, 2)?;
+            at += 2;
+            fb.convert(ConvOp::Bitcast, q, w)?
+        } else {
+            let p = fb.vector_shuffle(h, zeros, &[at, n])?;
+            let w = words(fb, 1)?;
+            at += 1;
+            fb.convert(ConvOp::Bitcast, p, w)?
+        };
+        parts.push(part);
+    }
+    match parts.as_slice() {
+        [one] => Ok(*one),
+        _ => {
+            let ut = ty(fb, u32_form(f))?;
+            fb.composite_construct(ut, &parts)
+        }
+    }
+}
+
+/// The `half` bits of `x` (`f32` lanes of form `f`), zero-extended in `u32` lanes, by
+/// `GLSL.std.450 PackHalf2x16` ([`QuantizeForm::Device`], a profile without `shaderFloat16`): each
+/// lane packed beside a zero, so a word's low 16 bits are the lane's `half` and its high 16 bits
+/// the zero's. Two instructions a lane, and a vector's construct.
+///
+/// It needs no 16-bit type: the instruction is core to every Vulkan device. Vulkan gives it no
+/// precision of its own ("implementation-defined"); every `half` value is an `f32`, and the
+/// device's narrowing is its answer: a NaN packs to a NaN whose bits are the device's, where Metal
+/// moves a `half` NaN with its bits, and a denormal may be flushed to the zero of its sign without
+/// `DenormPreserve` for 16 bits, which such a module does not declare. The module records
+/// `PrecisionNote::NativeNanEncoding` and `PrecisionNote::NativeHalfConversion`
+/// ([`encodes_bits`]).
+fn packed_bits(fb: &mut FunctionBuilder<'_>, f: Form, x: Value) -> BResult<Value> {
+    let wide = |lanes: u8| Form {
+        held: Held::Float(FloatFmt::F32),
+        lanes,
+    };
+    if f.lanes <= 1 {
+        let z = fsplat(fb, wide(1), 0.0)?;
+        let pair = ty(fb, wide(2))?;
+        let p = fb.composite_construct(pair, &[x, z])?;
+        return fb.glsl(GlslOp::PackHalf2x16, &[p]);
+    }
+    let n = u32::from(f.lanes);
+    // Index `n` is a zero.
+    let zeros = fsplat(fb, wide(2), 0.0)?;
+    let mut words = Vec::with_capacity(usize::from(f.lanes));
+    for i in 0..n {
+        let p = fb.vector_shuffle(x, zeros, &[i, n])?;
+        words.push(fb.glsl(GlslOp::PackHalf2x16, &[p])?);
+    }
+    let ut = ty(fb, u32_form(f))?;
+    fb.composite_construct(ut, &words)
+}
+
+/// Whether module `m` narrows a `half` to its bits by the device ([`to_bits`]): a
+/// `GLSL.std.450 PackHalf2x16` ([`packed_bits`], in [`QuantizeForm::Device`]), or an `OpBitcast`
+/// to integers of an `OpFConvert` from 32 to 16 bits, or of a construct or shuffle of one
+/// ([`converted_bits`]). It moves a `half` between its value and its bits as [`widens_bits`]'s
+/// widening does the other way, with the same notes: the module records
+/// `PrecisionNote::NativeNanEncoding` (a NaN's bits the device's); under the float controls
+/// ([`QuantizeForm::Controlled`]) its entry declares [`controlled_modes`], and elsewhere its
+/// denormals are the measured fact's (`DriverDeviation::MetalHalfArithmetic`) or the device's
+/// (`PrecisionNote::NativeHalfConversion`). At most three passes over the instructions, with two
+/// bits per value of the module charged to `meter` while they run.
+pub fn encodes_bits(m: &TypedModule, meter: &mut Meter) -> Result<bool, Error> {
+    let packs = m.blocks().iter().flat_map(|b| &b.insts).any(|n| {
+        matches!(
+            n.inst,
+            Inst::Glsl {
+                op: GlslOp::PackHalf2x16,
+                ..
+            }
+        )
+    });
+    if packs {
+        return Ok(true);
+    }
+    // The width of `v`'s float lanes, if it is a float or a vector of floats; integers are `0`.
+    let width = |v: Value| -> Option<u8> {
+        let ty = m.value(v).ok()?.ty;
+        let ty = match m.types().get(ty).ok()? {
+            Type::Vector { elem, .. } => *elem,
+            _ => ty,
+        };
+        match m.types().get(ty).ok()? {
+            Type::Float { width } => Some(*width),
+            Type::Int { .. } => Some(0),
+            _ => None,
+        }
+    };
+    let insts = || m.blocks().iter().flat_map(|b| &b.insts);
+    let words = m.values().len().div_ceil(64);
+    meter.charge(16 * words)?;
+    let mut narrowed = vec![0u64; words];
+    let mut gathered = vec![0u64; words];
+    let set = |bits: &mut [u64], v: Value| {
+        if let Some(w) = bits.get_mut(v.index() / 64) {
+            *w |= 1 << (v.index() % 64);
+        }
+    };
+    let has = |bits: &[u64], v: Value| {
+        bits.get(v.index() / 64)
+            .is_some_and(|w| w & (1 << (v.index() % 64)) != 0)
+    };
+    for n in insts() {
+        if let (
+            Inst::Convert {
+                op: ConvOp::FConvert,
+                a,
+                ..
+            },
+            Some(r),
+        ) = (&n.inst, n.result)
+        {
+            if width(*a) == Some(32) && width(r) == Some(16) {
+                set(&mut narrowed, r);
+            }
+        }
+    }
+    for n in insts() {
+        let taken = match &n.inst {
+            Inst::CompositeConstruct { parts } => parts.iter().any(|p| has(&narrowed, *p)),
+            Inst::VectorShuffle { a, b, .. } => has(&narrowed, *a) || has(&narrowed, *b),
+            _ => false,
+        };
+        if let (true, Some(r)) = (taken, n.result) {
+            set(&mut gathered, r);
+        }
+    }
+    let found = insts().any(|n| match (&n.inst, n.result) {
+        (
+            Inst::Convert {
+                op: ConvOp::Bitcast,
+                a,
+                ..
+            },
+            Some(r),
+        ) => (has(&narrowed, *a) || has(&gathered, *a)) && width(r) == Some(0),
+        _ => false,
+    });
+    drop((narrowed, gathered));
+    meter.release(16 * words);
+    Ok(found)
+}
+
 /// The format bits of `x` (form `f`) when `x` is a plain constant every lane of which is a
-/// value of the format, computed at translation time by [`half_bits_of_f32`], the transliteration
-/// of the device sequence, and checked by [`f32_of_half_bits`]: `None` for anything else (the
-/// device sequence then runs). A `null` is zero bits.
+/// value of the format, computed at translation time by [`half_bits_of_f32`] and checked by
+/// [`f32_of_half_bits`]: `None` for anything else (the device's narrowing then runs, [`encode`]).
+/// A `null` is zero bits.
 pub fn constant_bits(fb: &mut FunctionBuilder<'_>, f: Form, x: Value) -> BResult<Option<Value>> {
     match constant_lanes(fb, f, x)? {
         Some(k) => materialize(fb, f, &k).map(Some),
@@ -823,8 +1028,9 @@ fn materialize(fb: &mut FunctionBuilder<'_>, f: Form, lanes: &[u64]) -> BResult<
     fb.module().const_value(k)
 }
 
-/// The host transliteration of `f32_bits_to_half_bits` on one lane: the half bits of the
-/// `f32` with bits `b` (exact when `b` is a half value).
+/// The half bits of the `f32` with bits `b`, on the host, exact when `b` is a half value (a NaN's
+/// payload moved down under the all-ones exponent, quieted where its top bits are all zero): the
+/// bits [`constant_bits`] folds a constant to.
 pub fn half_bits_of_f32(b: u32) -> u32 {
     let a = b & 0x7FFF_FFFF;
     let sign = (b >> 16) & 0x8000;
@@ -860,70 +1066,6 @@ pub fn f32_of_half_bits(h: u32) -> u32 {
         (em << 13).wrapping_add(bias)
     };
     ((h & 0x8000) << 16) | r
-}
-
-/// `f32` bits `b` of a half value to its half bits: the magnitude `a` rebiased by `112 << 10` after
-/// dropping the 13 bits a half does not have; an infinity or NaN rebiased by `224 << 10`, to the
-/// half's all-ones exponent with the payload's top bits (a NaN whose top bits are all zero is
-/// quieted, never made infinite); a value below the smallest normal half (a half denormal or zero)
-/// is `|x| · 2^24` converted to an integer, which is exact: `|x|` is a multiple of `2^-24` at least
-/// `2^-24` (a normal `f32`, so no device flushes it) or zero, and the product is an integer below
-/// `2^10`.
-///
-/// Under native half rounding ([`crate::spirv::builder::ModuleBuilder::native_half`]) the value
-/// need not be a half value: the device's compiler may fold [`converted`]'s conversion pair, which
-/// is the device's own, and hand over `x` unrounded (NVIDIA and lavapipe do). A finite
-/// magnitude from `65536` up then rebiases past the half's exponent, to a NaN's code or beyond 16
-/// bits, whose bit 17 a store's pairing carries into the next lane; so there the finite code is
-/// capped at infinity's, `0x7C00`. Every other value takes the truncation, within the native
-/// conversion's bound (`NativeHalfConversion`: one ulp, and 65504 where Metal answers infinity).
-fn f32_bits_to_half_bits(fb: &mut FunctionBuilder<'_>, u: Form, b: Value) -> BResult<Value> {
-    let c = |fb: &mut FunctionBuilder<'_>, k: u64| splat(fb, u, k);
-    let abs_mask = c(fb, 0x7FFF_FFFF)?;
-    let a = bin(fb, BinOp::BitwiseAnd, b, abs_mask)?;
-    let k16 = c(fb, 16)?;
-    let sign = bin(fb, BinOp::ShiftRightLogical, b, k16)?;
-    let sm = c(fb, 0x8000)?;
-    let sign = bin(fb, BinOp::BitwiseAnd, sign, sm)?;
-    let k13 = c(fb, 13)?;
-    let t = bin(fb, BinOp::ShiftRightLogical, a, k13)?;
-    let inf = c(fb, 0x7F80_0000)?;
-    let is_special = bin(fb, BinOp::UGreaterThanEqual, a, inf)?;
-    let (special_bias, bias) = (c(fb, 224 << 10)?, c(fb, 112 << 10)?);
-    let bias = fb.select(is_special, special_bias, bias)?;
-    let normal = bin(fb, BinOp::ISub, t, bias)?;
-    // The cap is the bias less `0x14400`: `0x7C00` for a finite lane, `0x23C00` for an infinity
-    // or NaN, whose code (at most `0x7FFF`) it leaves alone.
-    let normal = match fb.module().native_half() {
-        true => {
-            let less = c(fb, 0x14400)?;
-            let cap = bin(fb, BinOp::ISub, bias, less)?;
-            fb.glsl(GlslOp::UMin, &[normal, cap])?
-        }
-        false => normal,
-    };
-    // A NaN whose payload lies below the half's bits: `a` in `(0x7F80_0000, 0x7F80_2000)`.
-    let first_nan = c(fb, 0x7F80_0001)?;
-    let low = bin(fb, BinOp::ISub, a, first_nan)?;
-    let span = c(fb, 0x1FFF)?;
-    let lost = bin(fb, BinOp::ULessThan, low, span)?;
-    let quiet = c(fb, 0x7E00)?;
-    let normal = fb.select(lost, quiet, normal)?;
-    // Only a denormal lane converts its magnitude (every other lane converts zero), so no
-    // conversion is out of range.
-    let min_normal = c(fb, 0x3880_0000)?;
-    let is_den = bin(fb, BinOp::ULessThan, a, min_normal)?;
-    let z = c(fb, 0)?;
-    let small = fb.select(is_den, a, z)?;
-    let wide = u.with(Held::Float(FloatFmt::F32));
-    let ft = ty(fb, wide)?;
-    let af = fb.convert(ConvOp::Bitcast, small, ft)?;
-    let scale = fsplat(fb, wide, 16_777_216.0)?;
-    let scaled = bin(fb, BinOp::FMul, af, scale)?;
-    let ut = ty(fb, u)?;
-    let den = fb.convert(ConvOp::ConvertFToU, scaled, ut)?;
-    let r = fb.select(is_den, den, normal)?;
-    bin(fb, BinOp::BitwiseOr, sign, r)
 }
 
 /// The narrow value (an `f32` of form `f`) of format bits `h`, the low 16 bits of each `u32`

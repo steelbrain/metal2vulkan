@@ -2590,13 +2590,14 @@ fn compile_kept<K>(
     // module records the native note.
     let converts = quantize == crate::spirv::builder::QuantizeForm::Converted
         && crate::lower::arith::narrow::rounds_by_conversion(&module, m)?;
-    // A `half` read from its bits by the device's widening (every profile: `OpFConvert` with
-    // `shaderFloat16`, `UnpackHalf2x16` without): a NaN's bits are the device's, recorded. Under
-    // the float controls its denormals are Metal's, as the conversion's; on a device whose
-    // conversion's widening is measured to read every `half` as Metal's
-    // (`DriverDeviation::MetalHalfArithmetic`) the module requires that fact; elsewhere the device
-    // may flush them, within the native conversion's note.
-    let widens = crate::lower::arith::narrow::widens_bits(&module, m)?;
+    // A `half` read from its bits by the device's widening, or encoded to them by its narrowing
+    // (every profile: `OpFConvert` with `shaderFloat16`, `UnpackHalf2x16` and `PackHalf2x16`
+    // without): a NaN's bits are the device's, recorded. Under the float controls its denormals
+    // are Metal's, as the conversion's; on a device whose conversion is measured to read and
+    // narrow every `half` as Metal's (`DriverDeviation::MetalHalfArithmetic`) the module requires
+    // that fact; elsewhere the device may flush them, within the native conversion's note.
+    let widens = crate::lower::arith::narrow::widens_bits(&module, m)?
+        || crate::lower::arith::narrow::encodes_bits(&module, m)?;
     let measured_widening = widens
         && quantize == crate::spirv::builder::QuantizeForm::Converted
         && p.takes_driver_deviation(crate::error::DriverDeviation::MetalHalfArithmetic);
