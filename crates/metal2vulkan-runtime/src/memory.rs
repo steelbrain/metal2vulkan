@@ -51,6 +51,7 @@ use super::dma_buf::DmaBufPages;
 use super::error::{internal, vulkan, Error, MemoryKind};
 use super::freed_memory::{Parked, Parking};
 use super::fresh_pages::OwnPages;
+use super::host_ram::RamChunk;
 use super::memory_log::{self, MemoryLog};
 use super::range::RangeAllocator;
 use super::read_only_view::ReadOnlyView;
@@ -854,6 +855,9 @@ pub(super) struct Placement {
     /// freed, the source dropped, when their last holder goes.
     #[cfg(unix)]
     dma_buf: Option<Arc<DmaBufPages>>,
+    /// The device's import of a chunk of a guest RAM the placement lies in (`host_ram.rs`), which
+    /// no block of the placement's holds: kept until the placement goes.
+    ram_chunk: Option<Arc<RamChunk>>,
 }
 
 impl Placement {
@@ -880,6 +884,35 @@ impl Placement {
             read_only_view: false,
             #[cfg(unix)]
             dma_buf: None,
+            ram_chunk: None,
+        }
+    }
+
+    /// The placement of a no-copy object's `size` bytes of host pages, from `offset` of the
+    /// memory of `chunk`, the device's import of the chunk of a guest RAM they lie in
+    /// (`host_ram.rs`), whose host address the caller reaches at `mapped` (its own view of the
+    /// pages). No block of the runtime's, so freeing it returns nothing; it keeps the chunk until
+    /// it goes.
+    pub(super) fn ram_chunk(
+        chunk: Arc<RamChunk>,
+        offset: u64,
+        size: u64,
+        mapped: Mapped,
+    ) -> Placement {
+        Placement {
+            type_index: chunk.type_index(),
+            holds: Holds::Buffers,
+            block: None,
+            size,
+            memory: chunk.memory(),
+            offset,
+            mapped: Some(mapped),
+            address: None,
+            own_pages: false,
+            read_only_view: false,
+            #[cfg(unix)]
+            dma_buf: None,
+            ram_chunk: Some(chunk),
         }
     }
 
@@ -909,6 +942,7 @@ impl Placement {
             own_pages: false,
             read_only_view: false,
             dma_buf: Some(pages),
+            ram_chunk: None,
         }
     }
 
@@ -983,6 +1017,7 @@ impl Placement {
             read_only_view: self.read_only_view,
             #[cfg(unix)]
             dma_buf: self.dma_buf.clone(),
+            ram_chunk: self.ram_chunk.clone(),
         }
     }
 }
@@ -1338,6 +1373,7 @@ impl Memory {
             read_only_view: payload.view.is_some(),
             #[cfg(unix)]
             dma_buf: None,
+            ram_chunk: None,
         }
     }
 

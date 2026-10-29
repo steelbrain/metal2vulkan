@@ -2443,6 +2443,7 @@ field	metal2vulkan-runtime::WorkCounts.calibration_readings	pub calibration_read
 field	metal2vulkan-runtime::WorkCounts.calibrations	pub calibrations: u64
 field	metal2vulkan-runtime::WorkCounts.chroma_device_decodes	pub chroma_device_decodes: u64
 field	metal2vulkan-runtime::WorkCounts.chroma_device_twins	pub chroma_device_twins: u64
+field	metal2vulkan-runtime::WorkCounts.chunk_bound_buffers_made	pub chunk_bound_buffers_made: u64
 field	metal2vulkan-runtime::WorkCounts.color_group_draws_skipped	pub color_group_draws_skipped: u64
 field	metal2vulkan-runtime::WorkCounts.color_group_passes	pub color_group_passes: u64
 field	metal2vulkan-runtime::WorkCounts.color_group_twins	pub color_group_twins: u64
@@ -2613,6 +2614,9 @@ field	metal2vulkan-runtime::WorkCounts.host_keep_alives_kept	pub host_keep_alive
 field	metal2vulkan-runtime::WorkCounts.host_mappings_queried	pub host_mappings_queried: u64
 field	metal2vulkan-runtime::WorkCounts.host_pointer_import_bytes_made	pub host_pointer_import_bytes_made: u64
 field	metal2vulkan-runtime::WorkCounts.host_pointer_imports_made	pub host_pointer_imports_made: u64
+field	metal2vulkan-runtime::WorkCounts.host_ram_chunk_bytes	pub host_ram_chunk_bytes: u64
+field	metal2vulkan-runtime::WorkCounts.host_ram_chunks_imported	pub host_ram_chunks_imported: u64
+field	metal2vulkan-runtime::WorkCounts.host_ram_chunks_live	pub host_ram_chunks_live: u64
 field	metal2vulkan-runtime::WorkCounts.host_range_lookups	pub host_range_lookups: u64
 field	metal2vulkan-runtime::WorkCounts.host_rebind_imports_covered	pub host_rebind_imports_covered: u64
 field	metal2vulkan-runtime::WorkCounts.host_rebind_imports_made	pub host_rebind_imports_made: u64
@@ -7685,6 +7689,7 @@ method	metal2vulkan-runtime::Device::system_default	pub fn system_default() -> R
 method	metal2vulkan-runtime::Device::system_default_identity_with	pub fn system_default_identity_with(options: &DeviceOptions) -> Result<PhysicalDeviceIdentity, Error>
 method	metal2vulkan-runtime::Device::system_default_with	pub fn system_default_with(options: &DeviceOptions) -> Result<Device, Error>
 method	metal2vulkan-runtime::Device::texture_level_info	pub fn texture_level_info(&self, query: &TextureLevelQuery) -> TextureLevelInfo
+method	metal2vulkan-runtime::Device::use_host_ram	pub fn use_host_ram(&self, ram: &Arc<HostRam>) -> Result<HostRamUse, Error>
 method	metal2vulkan-runtime::Device::vk_buffer_usage	pub fn vk_buffer_usage(&self) -> BufferUsageFlags
 method	metal2vulkan-runtime::Device::with_loader_word	pub fn with_loader_word<R>(&self, call: impl FnOnce() -> R) -> R
 method	metal2vulkan-runtime::Device::with_registry_id	pub fn with_registry_id(registry_id: u64, options: &DeviceOptions) -> Result<Device, Error>
@@ -7785,6 +7790,9 @@ method	metal2vulkan-runtime::HostMemory::pointer	pub fn pointer(&self) -> NonNul
 method	metal2vulkan-runtime::HostMemory::with_dirty_pages	pub fn with_dirty_pages<D>(self, source: Arc<D>) -> HostMemory where D: DirtyPages + ?Sized + 'static, D::Watch: 'static,
 method	metal2vulkan-runtime::HostMemory::with_dma_buf	#[cfg(unix)] pub unsafe fn with_dma_buf(pointer: NonNull<u8>, source: DmaBufSource) -> HostMemory
 method	metal2vulkan-runtime::HostMemory::with_import_gate	pub fn with_import_gate(self, gate: ImportGate) -> HostMemory
+method	metal2vulkan-runtime::HostMemory::with_runs	pub fn with_runs(self, resolver: RunResolver) -> HostMemory
+method	metal2vulkan-runtime::HostRam::new	pub unsafe fn new(ranges: &[(NonNull<u8>, u64)], keep_alive: Option<KeepAlive>) -> Result<HostRam, Error>
+method	metal2vulkan-runtime::HostRam::with_dirty_pages	pub fn with_dirty_pages<D>(mut self, source: Arc<D>) -> HostRam where D: DirtyPages + ?Sized + 'static, D::Watch: 'static,
 method	metal2vulkan-runtime::IndirectBufferBinding::new	pub fn new(address: GpuAddress, attribute_stride: Option<u64>) -> IndirectBufferBinding
 method	metal2vulkan-runtime::IndirectCommandBuffer::allocated_size	pub fn allocated_size(&self) -> u64
 method	metal2vulkan-runtime::IndirectCommandBuffer::as_resource	pub fn as_resource(&self) -> ResourceRef<'_>
@@ -9250,6 +9258,8 @@ struct	metal2vulkan-runtime::Heap	#[derive(Clone)] pub struct Heap(Arc<HeapShare
 struct	metal2vulkan-runtime::HeapDescriptor	#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub struct HeapDescriptor
 struct	metal2vulkan-runtime::HostBytes	#[derive(Clone, Copy, Debug)] pub struct HostBytes<'a>
 struct	metal2vulkan-runtime::HostMemory	pub struct HostMemory
+struct	metal2vulkan-runtime::HostRam	pub struct HostRam
+struct	metal2vulkan-runtime::HostRamUse	#[must_use = "dropping the use lets go of the RAM at once"] pub struct HostRamUse
 struct	metal2vulkan-runtime::ImportRequest	#[derive(Clone, Copy, Debug, PartialEq, Eq)] #[non_exhaustive] pub struct ImportRequest
 struct	metal2vulkan-runtime::IndirectBufferBinding	#[derive(Clone, Copy, Debug, PartialEq, Eq)] #[non_exhaustive] pub struct IndirectBufferBinding
 struct	metal2vulkan-runtime::IndirectCommandBuffer	#[derive(Clone)] pub struct IndirectCommandBuffer(Arc<IcbShared>)
@@ -9758,6 +9768,10 @@ trait-impl	metal2vulkan-runtime::HostBytes impl fe impl Sync	unsafe impl Sync fo
 trait-impl	metal2vulkan-runtime::HostMemory impl fe impl Send	unsafe impl Send for HostMemory
 trait-impl	metal2vulkan-runtime::HostMemory impl fe impl Sync	unsafe impl Sync for HostMemory
 trait-impl	metal2vulkan-runtime::HostMemory impl std::fmt::Debug	impl std::fmt::Debug for HostMemory
+trait-impl	metal2vulkan-runtime::HostRam impl Drop	impl Drop for HostRam
+trait-impl	metal2vulkan-runtime::HostRam impl std::fmt::Debug	impl std::fmt::Debug for HostRam
+trait-impl	metal2vulkan-runtime::HostRamUse impl Drop	impl Drop for HostRamUse
+trait-impl	metal2vulkan-runtime::HostRamUse impl std::fmt::Debug	impl std::fmt::Debug for HostRamUse
 trait-impl	metal2vulkan-runtime::ImportRequest impl fe impl Send	unsafe impl Send for ImportRequest
 trait-impl	metal2vulkan-runtime::ImportRequest impl fe impl Sync	unsafe impl Sync for ImportRequest
 trait-impl	metal2vulkan-runtime::IndirectCommandBuffer impl Eq	impl Eq for IndirectCommandBuffer
@@ -9913,6 +9927,7 @@ type	metal2vulkan-runtime::ImportGate	pub type ImportGate = Arc<dyn Fn(ImportReq
 type	metal2vulkan-runtime::IndirectCommandCheck	pub type IndirectCommandCheck = Box<dyn FnMut(u64, &IndirectCommand) + Send + 'static>
 type	metal2vulkan-runtime::KeepAlive	pub type KeepAlive = Box<dyn Send + 'static>
 type	metal2vulkan-runtime::RangeToken	pub type RangeToken = Box<dyn std::any::Any + Send + Sync>
+type	metal2vulkan-runtime::RunResolver	pub type RunResolver = Arc<dyn Fn(u64, u64) -> Option<Vec<Range<u64>>> + Send + Sync + 'static>
 type	metal2vulkan-runtime::SharedEventNotification	pub type SharedEventNotification = Box<dyn FnOnce(&SharedEvent, u64) + Send + 'static>
 type	metal2vulkan-runtime::SubmissionCheck	pub type SubmissionCheck = Arc<dyn Fn(&Submission<'_>) -> Option<NonZeroU64> + Send + Sync>
 type	metal2vulkan::cache::Hash256	pub type Hash256 = [u8; 32]
@@ -11599,6 +11614,7 @@ variant	metal2vulkan-runtime::Problem::ForeignObject	ForeignObject
 variant	metal2vulkan-runtime::Problem::FunctionTable	FunctionTable(FunctionTableProblem)
 variant	metal2vulkan-runtime::Problem::HandlerAfterCommit	HandlerAfterCommit
 variant	metal2vulkan-runtime::Problem::Heap	Heap(HeapProblem)
+variant	metal2vulkan-runtime::Problem::HostRam	HostRam
 variant	metal2vulkan-runtime::Problem::ImageblockSize	ImageblockSize { width: u64, height: u64 }
 variant	metal2vulkan-runtime::Problem::IndexOutOfRange	IndexOutOfRange { index: u32, limit: u32 }
 variant	metal2vulkan-runtime::Problem::IndirectCommandBuffer	IndirectCommandBuffer(IndirectCommandBufferProblem)

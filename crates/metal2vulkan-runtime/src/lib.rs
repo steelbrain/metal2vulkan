@@ -118,6 +118,7 @@ mod heap_sets;
 mod host_aliases;
 mod host_bytes;
 mod host_memory;
+mod host_ram;
 #[cfg(unix)]
 mod host_residency;
 #[cfg(unix)]
@@ -291,7 +292,8 @@ pub use function_table::{
 pub use gpu_time::host_time;
 pub use heap::{Heap, HeapDescriptor, HeapProblem, HeapType, SizeAndAlign};
 pub use host_bytes::HostBytes;
-pub use host_memory::{Deallocator, HostMemory, ImportGate, ImportRequest, KeepAlive};
+pub use host_memory::{Deallocator, HostMemory, ImportGate, ImportRequest, KeepAlive, RunResolver};
+pub use host_ram::{HostRam, HostRamUse};
 pub use indirect_command_buffer::{
     EncodedComputeCommand, EncodedRenderCommand, IndirectBufferBinding, IndirectCommand,
     IndirectCommandBuffer, IndirectCommandBufferDescriptor, IndirectCommandBufferProblem,

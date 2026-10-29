@@ -432,6 +432,8 @@ pub(super) struct DeviceShared {
     pub(super) rebinds: super::rebind::Rebinds,
     /// The no-copy buffers by the host memory they were made over (`host_aliases.rs`).
     pub(super) aliases: super::host_aliases::HostAliases,
+    /// The guest RAMs it uses, and their chunks it imported (`host_ram.rs`).
+    pub(crate) host_ram: super::host_ram::RamSource,
     /// Its copied host buffers, compared at each commit and each batch's completion
     /// (`copied.rs`).
     pub(crate) copied: Arc<super::copied::CopiedBuffers>,
@@ -1863,6 +1865,7 @@ impl Device {
             heap_keys: Default::default(),
             rebinds: Default::default(),
             aliases: Default::default(),
+            host_ram: Default::default(),
             copied: Default::default(),
             #[cfg(test)]
             failing_host_imports: Default::default(),

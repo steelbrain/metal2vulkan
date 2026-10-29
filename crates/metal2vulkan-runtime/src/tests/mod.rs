@@ -133,6 +133,8 @@ mod host_bytes;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod host_import_counts;
 mod host_memory;
+#[cfg(any(m2v_gpu, m2v_cpu_icd))]
+mod host_ram_device;
 #[cfg(all(any(m2v_gpu, m2v_cpu_icd), target_os = "linux"))]
 mod host_residency;
 mod host_settable_event_waits;

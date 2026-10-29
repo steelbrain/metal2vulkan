@@ -295,6 +295,11 @@ Calls Metal does not have, for a consumer that emulates a Metal device:
 - `HostMemory::with_import_gate` and its `ImportGate` (with `ImportRequest`): the consumer's
   gate over a no-copy buffer's, heap's or rebind's import of its pages; a refusal makes a copy of
   them.
+- `HostRam`, `Device::use_host_ram` (with `HostRamUse`) and `HostMemory::with_runs` (with
+  `RunResolver`): a guest's RAM imported whole, in 64 MiB chunks, for a device that refuses views
+  of guest pages made through dma-bufs; a no-copy object whose pages the consumer resolves to one
+  run inside one chunk is bound in the chunk, with no import of its own
+  ([HOWTO](../../docs/HOWTO.md#guest-ram-imported-whole)).
 - `HostBytes`: bytes at a pointer that may change while a call reads them (a guest's memory),
   which `Texture::replace_region_with_host_bytes` and `BufferContents::CopyHost` copy once through
   the pointer, where the slice forms would need the caller's own copy first.

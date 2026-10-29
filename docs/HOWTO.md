@@ -344,6 +344,40 @@ copy, and its textures are shadows of its bytes. `Buffer::rebind_bytes_no_copy` 
 copy of its new pages the same way (`copied_rebind_pages_made`), except over a buffer with a
 texture in place over it, which the rebind refuses (`NotImplemented(RebindTextures)`).
 
+### Guest RAM imported whole
+
+A VMM whose device refuses views of guest pages made through dma-bufs (each import of scattered
+pages then takes a kernel mapping per page) can give the device the guest's RAM once instead:
+
+- `unsafe HostRam::new(ranges, keep_alive)` takes the RAM's ranges of host memory (whole host pages,
+  mapped readable and writable until the keep-alive goes) and `Device::use_host_ram(&ram)` uses it
+  on a device, until the returned `HostRamUse` is dropped. A device may use several RAMs whose
+  ranges are apart, and a new one over the same ranges once the earlier use ended; ranges that
+  meet a used RAM's are misuse (`Invalid`, `Problem::HostRam`).
+- `HostMemory::with_runs(resolver)` gives each no-copy object a `RunResolver`: asked once, at the
+  object's making, on the calling thread with no lock of the runtime's held and before the import
+  gate, with the object's import window (whole host pages), it answers the host addresses of the
+  same bytes in the RAM's ranges, as runs of whole pages in the object's byte order, or `None`.
+  It is asked only on a device that uses a RAM, only where the object would import its pages
+  itself, never for memory whose GPU writes Metal's private option bit 24 drops. An answer that
+  does not cover the window in whole pages of one RAM the device uses is refused (`Invalid`,
+  `Problem::HostRam`).
+- One run inside one chunk: the device imports the RAM by host pointer in chunks of 64 MiB, never
+  across a range's end, each the first time an object over it is made, on that thread, once
+  (`WorkCounts::host_ram_chunks_imported`, `host_ram_chunk_bytes`, `host_ram_chunks_live`). The
+  object's `VkBuffer` is made as an import of its own pages would make it and bound in the chunk
+  at its run (`chunk_bound_buffers_made`): no import of its own, no gate asked, its `contents`
+  still the pointer, and its size reaching no page past its own, so neither its Metal range, a
+  robust descriptor range nor a root entry reaches the rest of the chunk. A no-copy heap's own
+  buffer takes the same path.
+- Any other answer (several runs, one run crossing a chunk's end, `None`) takes the paths above:
+  the gate, then the import or the copy. The runs are kept with the object.
+- The chunks are never released while idle. Once the use is dropped, each is freed when nothing
+  holds it (no buffer bound in it, no command buffer that used one), and the RAM's keep-alive is
+  dropped after the last.
+- `HostRam::with_dirty_pages` takes one `DirtyPages` log for the whole RAM, its offsets host
+  addresses.
+
 ## 7. Check the integration
 
 `spirv-val` checks structural validity, not agreement with Metal:

@@ -545,6 +545,15 @@ pub enum Problem {
     ///
     /// Basis: ours (a runtime extension's own contract: Metal imports no dma-buf).
     DmaBuf,
+    /// Guest RAM, or a run resolver's answer, that breaks its runtime extension's contract
+    /// (`HostRam::new`, `Device::use_host_ram`, `HostMemory::with_runs`; Metal has none). For the
+    /// RAM: no range, or a range that is empty, starts or ends off the host page, runs past the
+    /// address space's end or overlaps another (of the same RAM, or of another RAM the device
+    /// uses). For an answer: runs that are not whole host pages or do not cover exactly the pages
+    /// asked for.
+    ///
+    /// Basis: ours (a runtime extension's own contract: Metal imports no guest RAM).
+    HostRam,
     /// An image the caller made that cannot be wrapped as a texture of the descriptor
     /// (`new_texture_with_vk_image`).
     ///

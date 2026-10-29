@@ -297,6 +297,10 @@ pub(crate) struct Counters {
     copied_heaps_made: AtomicU64,
     copied_copy_in_bytes: AtomicU64,
     copied_merge_back_bytes: AtomicU64,
+    host_ram_chunks_imported: AtomicU64,
+    host_ram_chunk_bytes: AtomicU64,
+    host_ram_chunks_live: AtomicU64,
+    chunk_bound_buffers_made: AtomicU64,
     dma_buf_sparse_buffers: AtomicU64,
     dma_buf_images: AtomicU64,
     dma_buf_image_fallbacks: AtomicU64,
@@ -2022,6 +2026,24 @@ impl Counters {
     /// A rebind gave a buffer a copy of its new pages (`copied.rs`).
     pub(crate) fn copied_rebind_pages_made(&self) {
         (self.copied_rebind_pages_made).fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// The device imported a chunk of `bytes` of a guest RAM it uses (`host_ram.rs`).
+    pub(crate) fn host_ram_chunk_imported(&self, bytes: u64) {
+        (self.host_ram_chunks_imported).fetch_add(1, Ordering::Relaxed);
+        (self.host_ram_chunk_bytes).fetch_add(bytes, Ordering::Relaxed);
+        (self.host_ram_chunks_live).fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// The device freed a chunk of a guest RAM (`host_ram.rs`).
+    pub(crate) fn host_ram_chunk_freed(&self) {
+        (self.host_ram_chunks_live).fetch_sub(1, Ordering::Relaxed);
+    }
+
+    /// A no-copy buffer (or heap's own buffer) was bound in a chunk of a guest RAM
+    /// (`host_ram.rs`).
+    pub(crate) fn chunk_bound_buffer_made(&self) {
+        (self.chunk_bound_buffers_made).fetch_add(1, Ordering::Relaxed);
     }
 
     /// A commit copied `bytes` the CPU changed into copied host buffers (`copied.rs`).
@@ -4318,6 +4340,18 @@ pub struct WorkCounts {
     /// The bytes the GPU changed in copied host buffers' copies that batches' completions merged
     /// back into the caller's pages.
     pub copied_merge_back_bytes: u64,
+    /// The chunks of guest RAM the device imported (`Device::use_host_ram`): 64 MiB of a RAM's
+    /// range each (its last fewer), imported the first time a no-copy object over it was made.
+    pub host_ram_chunks_imported: u64,
+    /// Their bytes.
+    pub host_ram_chunk_bytes: u64,
+    /// The chunks of guest RAM imported and not yet freed (a gauge): a chunk is freed once the
+    /// device's use of its RAM ended and nothing holds it.
+    pub host_ram_chunks_live: u64,
+    /// The no-copy buffers (and no-copy heaps' own buffers) bound in a chunk of guest RAM, whose
+    /// pages their caller resolved to one run inside one chunk (`HostMemory::with_runs`): each
+    /// made with no import of its own, its import gate not asked.
+    pub chunk_bound_buffers_made: u64,
     /// The live host imports the device never releases while idle as a heap's own import (a
     /// no-copy heap's). With the next three and `host_imports_kept_for_fds`, they are every live
     /// no-copy import the device keeps imported whatever reads it.
@@ -5394,6 +5428,10 @@ impl Device {
             copied_heaps_made: counters.copied_heaps_made.load(Ordering::Relaxed),
             copied_copy_in_bytes: counters.copied_copy_in_bytes.load(Ordering::Relaxed),
             copied_merge_back_bytes: counters.copied_merge_back_bytes.load(Ordering::Relaxed),
+            host_ram_chunks_imported: counters.host_ram_chunks_imported.load(Ordering::Relaxed),
+            host_ram_chunk_bytes: counters.host_ram_chunk_bytes.load(Ordering::Relaxed),
+            host_ram_chunks_live: counters.host_ram_chunks_live.load(Ordering::Relaxed),
+            chunk_bound_buffers_made: counters.chunk_bound_buffers_made.load(Ordering::Relaxed),
             host_imports_lost: counters.host_imports_lost.load(Ordering::Relaxed),
             host_import_fds_kept: counters.host_import_fds_kept.load(Ordering::Relaxed),
             host_imports_kept_for_fds: counters.host_imports_kept_for_fds.load(Ordering::Relaxed),

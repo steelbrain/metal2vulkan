@@ -331,6 +331,13 @@ driver's. Each is open work.
   the event's semaphore, which the batch signals before its completion merges the GPU's writes
   back, so a CPU that waits for the value may read the pages before them, where Metal's writes are
   in the pages when the value is seen.
+- **On MoltenVK a kernel's out-of-bounds write through a buffer reaches other bytes of the
+  buffer's memory allocation**, where Metal's GPU faults past the pages of the resource: on the
+  M3 Max (MoltenVK 1.4.2) a dispatch writing three pages through a one-page buffer of the
+  runtime's own changed 32,720 bytes of the buffer made after it, and through a buffer bound in a
+  chunk of guest RAM (`Device::use_host_ram`) as many bytes of the chunk's next pages. A no-copy
+  buffer's own import ends at its last page, so nothing past it changed. On the RTX 5080 laptop
+  (NVIDIA 615.71.09) and lavapipe the same write left the chunk's pages untouched.
 - **A shadowed texture over an IOSurface plane's bytes is copied in whole for every command
   buffer that samples it**, where it is a shadow: one that only samples or reads is an image in
   place where its class's check passed (`in_place.rs`), so this holds for a plane that renders or

@@ -34,6 +34,7 @@ use super::generated_commands::PREPROCESS_BUFFER;
 use super::heap::{Heap, HeapType};
 use super::host_aliases::Alias;
 use super::host_memory::{HeldBack, KeepAlive, Release};
+use super::host_ram::RamOnDevice;
 #[cfg(unix)]
 use super::host_residency::{Again, Residency};
 use super::memory::{Mapped, MemoryClass, Placement, BLOCK_BYTES};
@@ -638,6 +639,9 @@ pub(super) struct HostPages {
     /// The caller's log of the writes to them, where it gave one with their memory
     /// (`HostMemory::with_dirty_pages`, `dirty_pages.rs`).
     dirty: OnceLock<Arc<DirtySource>>,
+    /// The guest RAM their caller resolved them to and the runs of it they are, in their byte
+    /// order (`HostMemory::with_runs`, `host_ram.rs`), kept until the rebind or the release.
+    ram_runs: OnceLock<(Arc<RamOnDevice>, Box<[Range<u64>]>)>,
 }
 
 impl HostPages {
@@ -653,6 +657,7 @@ impl HostPages {
             release: OnceLock::new(),
             listed: AtomicUsize::new(0),
             dirty: OnceLock::new(),
+            ram_runs: OnceLock::new(),
         }
     }
 
@@ -664,6 +669,11 @@ impl HostPages {
     /// Keep the caller's log of the writes to them (`dirty_pages.rs`), given with their memory.
     pub(super) fn keep_dirty(&self, dirty: Arc<DirtySource>) {
         let _kept = self.dirty.set(dirty);
+    }
+
+    /// Keep the guest RAM and the runs of it their caller resolved them to (`host_ram.rs`).
+    pub(super) fn keep_runs(&self, runs: (Arc<RamOnDevice>, Box<[Range<u64>]>)) {
+        let _kept = self.ram_runs.set(runs);
     }
 
     /// The caller's log of the writes to them, where it gave one.

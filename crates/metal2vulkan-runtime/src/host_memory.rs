@@ -113,6 +113,7 @@ use ash::vk;
 use metal2vulkan::device::{EnableSet, VkExtension};
 use metal2vulkan::error::{Feature, Unsupported};
 use std::ffi::c_void;
+use std::ops::Range;
 use std::ptr::NonNull;
 use std::sync::{Arc, Mutex};
 
@@ -131,7 +132,28 @@ pub struct HostMemory {
     dirty: Option<Arc<dyn DirtyHook>>,
     /// The caller's gate over the import of the pages ([`HostMemory::with_import_gate`]).
     gate: Option<ImportGate>,
+    /// The caller's resolver of the pages' runs in its guest RAM ([`HostMemory::with_runs`]).
+    runs: Option<RunResolver>,
 }
+
+/// A consumer's resolver of a no-copy object's pages to the runs of guest RAM they are views of
+/// (a runtime extension, [`HostMemory::with_runs`]): asked with the first byte and the length of
+/// the whole host pages the runtime would import for the object (its import window, as an
+/// [`ImportRequest`] names it), it answers the host addresses of the same bytes in the RAM's
+/// ranges ([`HostRam`](crate::HostRam)), in the object's byte order, as runs of whole host pages
+/// that together cover exactly the length asked; or `None` where the pages are no view of the
+/// RAM (or not all of them, or some are read-only), which leaves the object on the runtime's
+/// other paths. Asked at most once per object, as a no-copy buffer or heap is made over the
+/// pages (a rebind to them does not ask it: its pages take the rebind's other paths), on the
+/// calling thread, holding no lock of the runtime's, before the import gate ([`ImportGate`]);
+/// only on a device that uses a RAM
+/// ([`Device::use_host_ram`](crate::Device::use_host_ram)), and only where the object would import
+/// the pages itself (not one that lies in a live import of the same bytes, nor one whose GPU
+/// writes Metal's private option bit 24 drops). The answer is kept with the object until its
+/// rebind or release; a later remap of the view does not change it. An answer that breaks this
+/// contract is refused (`Invalid`, `Problem::HostRam`). No Metal counterpart: Metal wires the
+/// pages at the pointer.
+pub type RunResolver = Arc<dyn Fn(u64, u64) -> Option<Vec<Range<u64>>> + Send + Sync + 'static>;
 
 /// A consumer's gate over the import of a no-copy object's pages (a runtime extension,
 /// [`HostMemory::with_import_gate`]): asked once, just before the runtime imports the pages for a
@@ -192,6 +214,7 @@ impl std::fmt::Debug for HostMemory {
             .field("writable", &self.writable)
             .field("dirty_pages", &self.dirty.is_some())
             .field("import_gate", &self.gate.is_some())
+            .field("runs", &self.runs.is_some())
             .finish()
     }
 }
@@ -232,6 +255,7 @@ impl HostMemory {
             writable: false,
             dirty: None,
             gate: None,
+            runs: None,
         }
     }
 
@@ -279,6 +303,7 @@ impl HostMemory {
             writable: false,
             dirty: None,
             gate: None,
+            runs: None,
         }
     }
 
@@ -361,6 +386,24 @@ impl HostMemory {
         }
     }
 
+    /// This memory, with the caller's resolver of its pages to the runs of guest RAM they are
+    /// views of (a runtime extension, [`RunResolver`]). On a device that uses that RAM
+    /// ([`Device::use_host_ram`](crate::Device::use_host_ram)), a no-copy buffer or heap whose
+    /// pages the resolver answers as one run inside one of the device's chunks of the RAM is a
+    /// `VkBuffer` bound in that chunk's import, at the run, sized and bound against the object's
+    /// own pages as an import of them would be, so no access through the buffer reaches the rest
+    /// of the chunk: no import of its own, no kernel mapping of the pages, and the import gate
+    /// ([`HostMemory::with_import_gate`]) is not asked. Pages of more than one run, or of a run
+    /// crossing a chunk's end, take the runtime's other paths (the gate, then an import or a
+    /// copy), the runs kept with the object. Counted: `WorkCounts::chunk_bound_buffers_made`. No
+    /// Metal counterpart.
+    pub fn with_runs(self, resolver: RunResolver) -> HostMemory {
+        HostMemory {
+            runs: Some(resolver),
+            ..self
+        }
+    }
+
     /// The pointer.
     pub fn pointer(&self) -> NonNull<u8> {
         self.pointer
@@ -369,7 +412,8 @@ impl HostMemory {
     /// The pointer, the dma-buf source where the caller gave one, whether the caller vouched
     /// for the pages' write permission ([`HostMemory::assume_writable`]), and its log of the pages
     /// written ([`HostMemory::with_dirty_pages`]), kept with the pointer its offsets count from,
-    /// and its gate over their import ([`HostMemory::with_import_gate`]).
+    /// its gate over their import ([`HostMemory::with_import_gate`]), and its resolver of their
+    /// runs in guest RAM ([`HostMemory::with_runs`]).
     pub(super) fn into_parts(self) -> HostParts {
         let dirty = (self.dirty).map(|hook| DirtySource::new(hook, self.pointer.as_ptr() as u64));
         HostParts {
@@ -378,6 +422,7 @@ impl HostMemory {
             writable: self.writable,
             dirty,
             gate: self.gate,
+            runs: self.runs,
         }
     }
 }
@@ -389,6 +434,7 @@ pub(super) struct HostParts {
     pub(super) writable: bool,
     pub(super) dirty: Option<Arc<DirtySource>>,
     pub(super) gate: Option<ImportGate>,
+    pub(super) runs: Option<RunResolver>,
 }
 
 /// A no-copy buffer's deallocator (Metal's block): called once, with the pointer and the length,
