@@ -182,8 +182,9 @@ declare i32 @air.atomic.global.add.u.i32(ptr addrspace(1), i32, i32, i32, i1)
 !4 = !{i32 1, !"air.thread_index_in_threadgroup", !"air.arg_type_name", !"uint", !"air.arg_name", !"t"}
 "#;
 
-/// A slot reached through its device address (the PSB leaf): the atomic's word place, the sub-word
-/// store's two word atomics, and the root-table entries.
+/// A slot reached through its device address (the PSB leaf): the atomic's word place, the byte
+/// store's `uchar` place (`moltenvk-m3` has `storageBuffer8BitAccess`, so it is one narrow store,
+/// not the sub-word store's two word atomics), and the root-table entries.
 #[test]
 fn a_psb_leaf_compiles_as_moltenvk_msl() {
     let Some(bc) = assemble("psb_leaf", &format!("{HEADER}{PSB_LEAF}")) else {
@@ -197,8 +198,8 @@ fn a_psb_leaf_compiles_as_moltenvk_msl() {
         index: 0,
     });
     let words = final_words(&bc, "psb_leaf", &p, &inputs);
-    // The add, and the byte store's clear and set.
-    compiles_as_moltenvk_msl(&words, "psb_leaf", 3);
+    // The add; the byte store is a narrow store.
+    compiles_as_moltenvk_msl(&words, "psb_leaf", 1);
 }
 
 const DYNAMIC_STORE: &str = r#"define void @dynamic_store(ptr addrspace(1) noundef "air-buffer-no-alias" %0, ptr addrspace(1) noundef "air-buffer-no-alias" %1) {

@@ -694,6 +694,9 @@ pub struct AccessPlan {
     /// Device-address accesses are contained (robust buffer access does not cover them, so only
     /// `Containment::UnsafeOff` turns this off).
     pub psb_contained: bool,
+    /// The narrow units device-address accesses load and store directly (`psb::narrow_units` of
+    /// the profile): a sub-word store there is one narrow store instead of two word atomics.
+    pub psb_units: Units,
     /// The arenas the function uses.
     pub local: local::LocalPlan,
     /// The function's index extensions ([`index`]): planned before any instruction is selected
@@ -1506,6 +1509,7 @@ fn place_slots(cx: &mut SelectCx<'_>, m: &mut Meter) -> Result<Vec<Option<SlotCh
     cx.families.access.pulled = sourced;
     cx.families.access.slots = lowering;
     cx.families.access.psb_contained = p.fields().containment != Containment::UnsafeOff;
+    cx.families.access.psb_units = psb::narrow_units(p);
     Ok(slots)
 }
 

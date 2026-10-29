@@ -23,8 +23,16 @@
 //!
 //! The leaf itself (`memory::leaf`) sees a word memory based at the 4-aligned address below the
 //! access, and the access's byte offset within that word (0 to 3).
+//!
+//! **Narrow units.** Where the profile has the 8- or 16-bit storage access ([`narrow_units`]), the
+//! memory also loads and stores 1- and 2-byte units: a `u8` or `u16` place at the unit's device
+//! address, with the `Aligned` operand of its size, as a descriptor slot's narrow views do. Vulkan's
+//! `storageBuffer8BitAccess` and `storageBuffer16BitAccess` cover the `PhysicalStorageBuffer`
+//! storage class as they cover `StorageBuffer`. A sub-word store there is one narrow store; without
+//! the access it stays the two word atomics ([`PsbMem`]'s `write_bits`).
 
-use crate::memory::leaf::{WordMem, WordOps};
+use crate::device::DeviceProfile;
+use crate::memory::leaf::{Units, WordMem, WordOps};
 use crate::spirv::builder::FunctionBuilder;
 use crate::spirv::error::BResult;
 use crate::spirv::ids::{TypeId, Value};
@@ -156,26 +164,77 @@ pub fn prepare(
     })
 }
 
+/// The narrow units a device-address memory loads and stores directly on profile `p`: the 1- and
+/// 2-byte units of [`Units::storage_on`] (the width's storage access and integer type). No `uvec4`
+/// unit: a device address below an access is only 4-byte aligned.
+pub fn narrow_units(p: &DeviceProfile) -> Units {
+    Units {
+        vec4: false,
+        ..Units::storage_on(p)
+    }
+}
+
 /// Words at a 4-aligned device address (a `u64`), loaded and stored with memory operands (a
-/// coherence and `Volatile`).
+/// coherence and `Volatile`), and the narrow units ([`narrow_units`]) it also loads and stores
+/// directly.
 #[derive(Clone, Copy, Debug)]
 pub struct PsbMem {
     base: Value,
     ops: WordOps,
+    units: Units,
 }
 
 impl PsbMem {
-    /// The words at the 4-aligned device address `base` (a `u64`), with plain accesses.
+    /// The words at the 4-aligned device address `base` (a `u64`), with plain accesses and no
+    /// narrow unit.
     pub fn at(base: Value) -> PsbMem {
         PsbMem {
             base,
             ops: WordOps::default(),
+            units: Units::NONE,
         }
     }
 
     /// The same words, loaded and stored with `ops`.
     pub fn with(self, ops: WordOps) -> PsbMem {
         PsbMem { ops, ..self }
+    }
+
+    /// The same words, also loading and storing the narrow units of `units` (a subset of
+    /// [`narrow_units`] of the profile).
+    pub fn with_units(self, units: Units) -> PsbMem {
+        PsbMem {
+            units: Units {
+                vec4: false,
+                ..units
+            },
+            ..self
+        }
+    }
+
+    /// A `PhysicalStorageBuffer` place of the `bytes`-byte unit `index` (a `u32` index of such
+    /// units) of the memory, and the unit's type.
+    fn unit_ptr(
+        &self,
+        fb: &mut FunctionBuilder<'_>,
+        bytes: u32,
+        index: Value,
+    ) -> BResult<(Value, TypeId)> {
+        let u64_ = u64_ty(fb)?;
+        let i = fb.convert(ConvOp::UConvert, index, u64_)?;
+        let d = match bytes {
+            1 => i,
+            _ => {
+                let size = k64(fb, u64::from(bytes))?;
+                fb.binary(BinOp::IMul, i, size)?
+            }
+        };
+        let addr = fb.binary(BinOp::IAdd, self.base, d)?;
+        let ty = fb.module().ty(Type::Int {
+            width: if bytes == 1 { 8 } else { 16 },
+            signed: false,
+        })?;
+        Ok((fb.device_place(addr, ty)?, ty))
     }
 
     /// A `PhysicalStorageBuffer` place of word `word` (a `u32` index) of the memory.
@@ -245,5 +304,50 @@ impl WordMem for PsbMem {
         fb.atomic(AtomicOp::And, p, Scope::Device, Semantics::RELAXED, clear)?;
         fb.atomic(AtomicOp::Or, p, Scope::Device, Semantics::RELAXED, bits)?;
         Ok(())
+    }
+
+    fn units(&self) -> Units {
+        self.units
+    }
+
+    fn read_unit(
+        &mut self,
+        fb: &mut FunctionBuilder<'_>,
+        bytes: u32,
+        index: Value,
+    ) -> BResult<Value> {
+        let (p, _) = self.unit_ptr(fb, bytes, index)?;
+        let access = self.ops.access(fb, unit_access(bytes), false)?;
+        let x = fb.load(p, access)?;
+        let u32_ = fb.module().ty(Type::Int {
+            width: 32,
+            signed: false,
+        })?;
+        let y = fb.convert(ConvOp::UConvert, x, u32_)?;
+        if bytes == 2 {
+            fb.note_widened16(y, x);
+        }
+        Ok(y)
+    }
+
+    fn write_unit(
+        &mut self,
+        fb: &mut FunctionBuilder<'_>,
+        bytes: u32,
+        index: Value,
+        value: Value,
+    ) -> BResult<()> {
+        let (p, ty) = self.unit_ptr(fb, bytes, index)?;
+        let x = fb.convert(ConvOp::UConvert, value, ty)?;
+        let access = self.ops.access(fb, unit_access(bytes), true)?;
+        fb.store(p, x, access)
+    }
+}
+
+/// The plain memory operands of a `bytes`-byte unit: `Aligned` to its size.
+fn unit_access(bytes: u32) -> MemAccess {
+    MemAccess {
+        aligned: Some(bytes),
+        ..WORD
     }
 }

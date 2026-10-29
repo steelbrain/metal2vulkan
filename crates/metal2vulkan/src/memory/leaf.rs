@@ -40,26 +40,27 @@
 //! (one bitcast, one exact narrow-float conversion, one shift placing sub-word lanes), not lane by
 //! lane.
 //!
-//! **Sub-word stores** replace only the leaf's bits of a word through
+//! **Sub-word stores** without a narrow unit replace only the leaf's bits of a word through
 //! [`WordMem::write_bits`]: two relaxed word atomics in shared memory, `and(~mask | v)` then
 //! `or(v)`, so neighbouring bytes written concurrently by other invocations are never lost and
 //! no loop is emitted. Whole words are stored plainly.
 //!
 //! **Narrow units**. A word memory may also load and store 1- and 2-byte units through typed narrow
-//! views ([`WordMem::units`]; a descriptor slot's `u8[]`/`u16[]` views where the profile has the
-//! storage access, `memory::views`). There a [`Path::OneWord`] leaf of 1 or 2 bytes is its one unit
-//! at index `off / bytes` (its alignment makes the offset a multiple of its size), loaded or stored
-//! plainly, and the partial last word of an aligned store is stored as its units (a 2-byte part at
-//! its 4-aligned start, then a 1-byte part), instead of the word's shift and the sub-word store's
-//! two atomics. A unit holds exactly the leaf's bytes, so no byte outside the leaf is read or
-//! written, as on the word path; [`leaf_units`] names the units an access uses. Where another store
-//! to the same word still takes the sub-word path (a profile with one of the two widths, a
-//! [`Path::Bytes`] leaf, a 3-byte tail without both widths), a unit store and that store's atomics
-//! overlap at the unit's bytes: the Vulkan memory model calls such a pair from two invocations a
-//! data race, as it does a whole-word load beside a sub-word store. The atomics change no byte
-//! outside their mask, so either order keeps both stores' bytes where the device performs each
-//! atomic as one read-modify-write; the model does not promise that, and no device run has measured
-//! it.
+//! views ([`WordMem::units`]; a descriptor slot's `u8[]`/`u16[]` views, or a device address's
+//! `u8`/`u16` `PhysicalStorageBuffer` places, where the profile has the storage access,
+//! `memory::views` and `lower::access::psb`). There a [`Path::OneWord`] leaf of 1 or 2 bytes is its
+//! one unit at index `off / bytes` (its alignment makes the offset a multiple of its size), loaded
+//! or stored plainly, and the partial last word of an aligned store is stored as its units (a
+//! 2-byte part at its 4-aligned start, then a 1-byte part), instead of the word's shift and the
+//! sub-word store's two atomics. A unit holds exactly the leaf's bytes, so no byte outside the leaf
+//! is read or written, as on the word path; [`leaf_units`] names the units an access uses. Where
+//! another store to the same word still takes the sub-word path (a profile with one of the two
+//! widths, a [`Path::Bytes`] leaf, a 3-byte tail without both widths), a unit store and that
+//! store's atomics overlap at the unit's bytes: the Vulkan memory model calls such a pair from two
+//! invocations a data race, as it does a whole-word load beside a sub-word store. The atomics
+//! change no byte outside their mask, so either order keeps both stores' bytes where the device
+//! performs each atomic as one read-modify-write; the model does not promise that, and no device
+//! run has measured it.
 //!
 //! **`uvec4` units**. A word memory may also load and store 16-byte units through a typed `uvec4`
 //! view ([`WordMem::read_vec4`]; a descriptor slot's `{ uvec4[] }` view, or its uniform view's own

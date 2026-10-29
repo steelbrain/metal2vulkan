@@ -96,7 +96,7 @@ use crate::lower::arith::{Form, Held};
 use crate::lower::emit::EmitCx;
 use crate::lower::select::SelectCx;
 use crate::memory::contain;
-use crate::memory::leaf::{self, k32, Coherence, Leaf, Path, WordOps};
+use crate::memory::leaf::{self, k32, Coherence, Leaf, Path, Units, WordOps};
 use crate::memory::provenance::{Repr, RootSetId};
 use crate::memory::roots::{self, k64};
 use crate::pipeline::facts::RuntimeFact;
@@ -1073,6 +1073,8 @@ pub struct WideBase {
     /// The entry's `size` and the sink's address, under containment.
     bounds: Option<(SValue, SValue)>,
     ops: WordOps,
+    /// The narrow units the profile stores and loads directly (`psb::narrow_units`).
+    units: Units,
 }
 
 /// Resolve wide pointer value `p` (a `u64vec4`) for the accesses of `a`: with its coherence (a
@@ -1109,6 +1111,7 @@ fn base_with(
         host,
         at,
         bounds,
+        units: cx.plan.families.access.psb_units,
         ops: WordOps {
             coherence: ops
                 .0
@@ -1152,7 +1155,7 @@ pub(super) fn wide_at(
         }
         None => (base, low, None),
     };
-    let mut mem = PsbMem::at(base).with(b.ops);
+    let mut mem = PsbMem::at(base).with(b.ops).with_units(b.units);
     match stored {
         None => {
             let v = leaf::load(fb, &mut mem, leaf, low)?;

@@ -264,8 +264,9 @@ pub(super) fn prepare(
         let table = cx.push_field(fb, PushField::RootTableAddress)?;
         let contained = cx.plan.families.access.psb_contained;
         let a = psb::prepare(fb, table, t.root, m, start, n, contained)?;
+        let units = cx.plan.families.access.psb_units;
         return Ok(Prepared {
-            mem: Mem::Psb(a.mem.with(ops)),
+            mem: Mem::Psb(a.mem.with(ops).with_units(units)),
             off: a.off,
             inb: a.inb,
             guard_store: false,
