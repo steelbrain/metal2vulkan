@@ -128,10 +128,11 @@ pub fn requested_generated_commands() -> bool {
 
 /// The policy an engine `Device` of this process is created under: the default policy with
 /// Metal's answer wherever the policy offers the device's instead (`DevicePolicy::exact_answers`:
-/// the runtime's heap compression, completion, batch order, render lowering and host-page
-/// textures), as Metal's answers are what the candidate is compared with. It changes no
-/// translation: the device's arithmetic, sampling and conversions are the only forms, recorded as
-/// precision notes where they can differ from Metal's.
+/// the runtime's heap compression, completion, batch order, render lowering, host-page textures
+/// and pipeline waits, and each `half` operation rounded on a device without `shaderFloat16`), as
+/// Metal's answers are what the candidate is compared with. Where the device has a native form it
+/// changes no translation: the device's arithmetic, sampling and conversions are the only forms
+/// there, recorded as precision notes where they can differ from Metal's.
 pub fn requested_policy() -> DevicePolicy {
     DevicePolicy::default().exact_answers()
 }
