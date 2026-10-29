@@ -87,8 +87,10 @@
 //!   back as that code. A read decodes `c` by the device's arithmetic, `c` times the `f32` nearest
 //!   `1 / D` (a signed code's at least `-1`), within an `f32` rounding or two of `c / D`
 //!   (`PrecisionNote::DevicePackConversion`; Metal reads `c / D` correctly rounded).
-//! - `Half`: each lane's half-float code (`narrow::to_bits`, exact for every half value, a NaN's
-//!   payload included), in an `R16G16B16A16_UINT` image; a read widens it back as a `half` read
+//! - `Half`: each lane's half-float code (`narrow::to_bits`: the device's narrowing, every half
+//!   value's bits but a NaN's and, where the device may flush a 16-bit denormal, a denormal's,
+//!   each recorded, `narrow::encodes_bits`; a code loaded unchanged keeps its bits), in an
+//!   `R16G16B16A16_UINT` image; a read widens it back as a `half` read
 //!   from memory widens (`narrow::from_bits`): the device's widening on every device, every code's
 //!   value but a NaN's bits and, where the device may flush a 16-bit denormal, a denormal, each
 //!   recorded (`narrow::widens_bits`).

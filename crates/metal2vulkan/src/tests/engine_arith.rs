@@ -3226,13 +3226,13 @@ fn a_float_nan_is_the_device_s_on_every_profile() {
 /// Metal reads an `f32` denormal operand of `+ - *`, a comparison, `sqrt`, `floor`, `ceil` and
 /// `ldexp` as the zero of its sign and flushes a denormal result. The module leaves the reading to
 /// the device: where the profile takes its driver's measured deviation `MetalFloatDenormals` it
-/// requires the fact for `+ - *`, the comparison and `sqrt`, which then read them as Metal does;
+/// requires the fact for `+ - *`, the comparison, `sqrt` and `ldexp` (whose denormal operand and
+/// result are the device's products, `math::ldexp_bits`), which then read them as Metal does;
 /// elsewhere they are the device's, noted `DeviceDenormals` (`sqrt`, the device's maths function,
 /// off Metal's own functions notes them beside its precision on either). `floor` and `ceil` are
 /// the device's
-/// whatever the fact, noted: no device measured reads their operand as Metal does. `ldexp` is
-/// Metal's whatever the fact, computed on the operand's bits for every exponent. Flipping the fact
-/// changes the requirement and the note, never the module. The interpreter keeps denormals as
+/// whatever the fact, noted: no device measured reads their operand as Metal does. Flipping the
+/// fact changes the requirement and the note, never the module. The interpreter keeps denormals as
 /// lavapipe does. The operands are bits (`llvm.umin` of constants), so each kernel's float
 /// operation is its only one.
 #[test]
@@ -3370,7 +3370,6 @@ fn float_denormals_are_the_devices_and_noted_off_the_device_fact() {
                 let a = compile(&bitcode, kk.name, &p).unwrap_or_else(|e| panic!("{what}: {e:?}"));
                 let (_, words) =
                     link_and_validate(&a, &p).unwrap_or_else(|e| panic!("{what}: L3: {e}"));
-                let bits = matches!(kk.name, "den_ldexp" | "den_ldexp_tiny");
                 let never = matches!(kk.name, "den_floor" | "den_ceil");
                 // The device's `Sqrt`, a maths function off Metal's own functions, records its
                 // denormals with its precision.
@@ -3380,22 +3379,17 @@ fn float_denormals_are_the_devices_and_noted_off_the_device_fact() {
                     a.requirements
                         .properties
                         .contains(&crate::device::requirements::VkProperty::MetalFloatDenormals),
-                    fact && !bits && !never,
+                    fact && !never,
                     "{what}"
                 );
                 assert_eq!(
                     a.precision.contains(&PrecisionNote::DeviceDenormals),
-                    never || function || (!fact && !bits),
+                    never || function || !fact,
                     "{what}: {:?}",
                     a.precision
                 );
                 let got = interpret(&bitcode, kk.name, &p);
-                let want = if bits {
-                    kk.want.expect("Metal's word")
-                } else {
-                    *device
-                };
-                assert_eq!(got, want, "{what}: {got:#x} != {want:#x}");
+                assert_eq!(got, *device, "{what}: {got:#x} != {device:#x}");
                 per.push(words);
             }
             emitted.push(per);

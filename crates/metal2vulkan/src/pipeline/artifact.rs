@@ -613,15 +613,16 @@ pub enum PrecisionNote {
     /// to one, where a Vulkan device keeps or flushes them by its own float controls (this
     /// translation declares no `DenormFlushToZero`). Recorded where the module leaves an
     /// operation's denormals to a device not measured to read them as Metal does: `+ - *`, the
-    /// comparisons, `fma`, `dot`, `sqrt`, `rsqrt`, `trunc` and `rint` but on a device that takes
+    /// comparisons, `fma`, `dot`, `sqrt`, `rsqrt`, `trunc`, `rint` and `ldexp` on `float` (by the
+    /// device's products) but on a device that takes
     /// the measured `DriverDeviation::MetalFloatDenormals`; and on every device the divisions and
     /// the remainder, `floor`, `ceil` and `fneg`, the device's maths functions (`fast::fmod`'s
     /// fused multiply-add, `fabs`, `sign` and `fract` among them), `mix` by `FMix`, `fast::sqrt`
     /// by `Sqrt`, `dot` of vectors of other than two to four lanes, whose chunks' products the
     /// device sums where Metal flushes each one below `2^-126`, beside their own notes, and a
     /// conversion to or from `double`, whose reading Metal's is not measured. The operations that
-    /// read a denormal on its bits answer Metal on every device: `ldexp` and `copysign`; and so do
-    /// the functions the device answers as Metal's own. Where the minimum and maximum functions
+    /// read a denormal on its bits answer Metal on every device: `copysign`; and so do the
+    /// functions the device answers as Metal's own. Where the minimum and maximum functions
     /// (`llvm.minnum` and `llvm.maxnum` among them, with any flags) and `saturate` are the device's
     /// `NMin`, `NMax` and `NClamp`, their pick of a denormal is
     /// [`PrecisionNote::NativeMinMax`]'s. Validation derives no tolerance and no explanation from

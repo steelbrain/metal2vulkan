@@ -43,11 +43,16 @@ pub enum Covered {
 /// | `dot` | the deviation |
 /// | `fma`, `llvm.fmuladd` (`OpFmaKHR`) | the deviation |
 /// | `fast::atan2` | the deviation |
+/// | `ldexp` on `float` | the deviation |
 ///
 /// `fast::atan2(y, x)` reads a denormal `y` or `x` as the zero of its sign and answers no denormal
 /// (an Apple M3 Max under macOS 27.0.1: every pair of 28 patterns, in entries with and without fast
 /// math); its quotient is the device's division, whose operands are those two, and a denormal
 /// quotient reaches the fast `atan`, which reads it as a zero.
+///
+/// `ldexp` on `float` (`math::ldexp_bits`) reads a denormal operand and rounds a result below
+/// `2^-126` by the device's `float` multiply, which the deviation covers: a denormal operand times
+/// `2^64`, and a normal times `2^-126`.
 ///
 /// `trunc` and `rint` (`Trunc`, `RoundEven`) of a denormal answer the zero of its sign on every
 /// venue measured, as Metal does (the probes' words, both modes, all seven venues), but Vulkan
@@ -64,7 +69,8 @@ pub fn coverage(op: FloatFn) -> Option<Covered> {
         | F::Dot
         | F::Fma
         | F::MulAdd
-        | F::FastAtan2 { .. } => Covered::Deviation,
+        | F::FastAtan2 { .. }
+        | F::Ldexp => Covered::Deviation,
         _ => return None,
     })
 }

@@ -1,10 +1,11 @@
 //! `float-tininess-after-rounding`: where the device's own `float` multiply and fused multiply-add
-//! answer for Metal's. Metal flushes a `float` product or fused multiply-add whose exact value lies
-//! below `2^-126` to the zero of its sign, deciding tininess before rounding; every Vulkan device
-//! measured off MoltenVK (RADV, ANV, NVIDIA and lavapipe, whether they flush denormals or keep
-//! them) rounds before it decides, so an exact value within half a unit below `2^-126` answers
-//! `2^-126`. The translation takes the device's, which every pipeline of a `float` multiply may
-//! meet, so the device announces it once, as it is made, rather than each pipeline.
+//! answer for Metal's. Metal flushes a `float` product, fused multiply-add or `ldexp` whose exact
+//! value lies below `2^-126` to the zero of its sign, deciding tininess before rounding; every
+//! Vulkan device measured off MoltenVK (RADV, ANV, NVIDIA and lavapipe, whether they flush
+//! denormals or keep them) rounds before it decides, so an exact value within half a unit below
+//! `2^-126` answers `2^-126`. The translation takes the device's, which every pipeline of a `float`
+//! multiply may meet, and a `float` `ldexp`'s result below `2^-126` is the device's product, so the
+//! device announces it once, as it is made, rather than each pipeline.
 
 use crate::degradation::Degradation;
 use metal2vulkan::error::DriverDeviation;

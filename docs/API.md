@@ -2669,11 +2669,12 @@ bound.
   attachment, on ANV (`RuntimeDriverDefect::OcclusionCountPerColorOutput`). Cost: the result is
   Metal's count multiplied by the colors the draw writes; a `Boolean` result is Metal's.
 - `metal2vulkan-degrade-float-tininess-after-rounding` (precision). `FloatTininessAfterRounding`: A
-  device whose float functions are not Metal's own (not MoltenVK): Metal flushes a `float` product or fused
-  multiply-add whose exact value lies below `2^-126` to the zero of its sign, deciding tininess
-  before rounding, and the device rounds before it decides (measured on RADV, ANV, NVIDIA and
-  lavapipe, whether they flush denormals or keep them). Announced once, as the device is made. Cost:
-  a `float` product or fused multiply-add whose exact value lies within half a unit below `2^-126`
+  device whose float functions are not Metal's own (not MoltenVK): Metal flushes a `float` product,
+  fused multiply-add or `ldexp` whose exact value lies below `2^-126` to the zero of its sign,
+  deciding tininess before rounding, and the device rounds before it decides (measured on RADV,
+  ANV, NVIDIA and lavapipe, whether they flush denormals or keep them); a `float` `ldexp`'s result
+  below `2^-126` is the device's product. Announced once, as the device is made. Cost: a `float`
+  product, fused multiply-add or `ldexp` whose exact value lies within half a unit below `2^-126`
   answers `2^-126` of its sign where Metal answers the zero of its sign.
 - `metal2vulkan-degrade-shader-cache-entry-not-written` (performance).
   `ShaderCacheEntryNotWritten`: an entry of the device's shader cache directory was not written --
@@ -2708,18 +2709,20 @@ bound.
   Vulkan device keeps or flushes them by its own float controls (this translation declares no
   `DenormFlushToZero`). Recorded where the module leaves an operation's denormals to a device not
   measured to read them as Metal does: `+ - *`, the comparisons, `fma`, `dot`, `sqrt`, `rsqrt`,
-  `trunc` and `rint` but on a device that takes the measured
+  `trunc`, `rint` and `ldexp` on `float` (by the device's products) but on a device that takes the
+  measured
   `DriverDeviation::MetalFloatDenormals`; and on every device the divisions and the remainder,
   `floor`, `ceil` and `fneg`, the device's maths functions (`fast::fmod`'s fused multiply-add,
   `fabs`, `sign` and `fract` among them), `mix` by `FMix`, `fast::sqrt` by `Sqrt`, `dot` of
   vectors of other than two to four lanes, whose chunks' products the device sums where Metal
   flushes each one below `2^-126`, and a conversion to or from `double`, where Metal's reading is
   not measured. The operations that read a denormal on its bits answer Metal on every device:
-  `ldexp`, `copysign` and `atan2`; and so do the functions the device answers as Metal's own. Where the minimum and maximum
+  `copysign` and `atan2`; and so do the functions the device answers as Metal's own. Where the
+  minimum and maximum
   functions and `saturate` are the device's `NMin`, `NMax` and `NClamp`, their pick of a denormal
-  is `NativeMinMax`'s. Off MoltenVK the device's multiply and fused multiply-add round a result whose
-  exact value is below `2^-126` up to `2^-126`, which Metal flushes
-  (`float-tininess-after-rounding`).
+  is `NativeMinMax`'s. Off MoltenVK the device's multiply and fused multiply-add, and `ldexp` on
+  `float` by that multiply, round a result whose exact value is below `2^-126` up to `2^-126`, which
+  Metal flushes (`float-tininess-after-rounding`).
 - `metal2vulkan-degrade-pixel-sampler-scaling` (precision). `PrecisionNote::PixelSamplerScaling`:
   A pixel-coordinate sampler's coordinate reaches the device's sampler divided by the texture's
   level-0 size in the shader, on every device, and the device reads its texels from that coordinate

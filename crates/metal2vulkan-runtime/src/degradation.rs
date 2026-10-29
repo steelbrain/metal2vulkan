@@ -2073,15 +2073,17 @@ degradations! {
             "the result is Metal's count multiplied by the colors the draw writes; a `Boolean` \
              result is Metal's";
         /// A device whose float functions are not Metal's own (not MoltenVK,
-        /// `DriverDeviation::MetalFloatFunctions`): Metal flushes a `float` product or fused
-        /// multiply-add whose exact value lies below `2^-126` to the zero of its sign, deciding
-        /// tininess before rounding, and the device rounds before it decides (measured on RADV,
-        /// ANV, NVIDIA and lavapipe, whether they flush denormals or keep them), so the device's
-        /// multiply and fused multiply-add answer `2^-126` there (`device/float_tininess.rs`).
+        /// `DriverDeviation::MetalFloatFunctions`): Metal flushes a `float` product, fused
+        /// multiply-add or `ldexp` whose exact value lies below `2^-126` to the zero of its sign,
+        /// deciding tininess before rounding, and the device rounds before it decides (measured on
+        /// RADV, ANV, NVIDIA and lavapipe, whether they flush denormals or keep them), so the
+        /// device's multiply and fused multiply-add answer `2^-126` there, and so does `ldexp`,
+        /// whose result below `2^-126` is the device's product (`device/float_tininess.rs`).
         /// Announced once, as the device is made; the payload names the device.
         FloatTininessAfterRounding = "float-tininess-after-rounding", Precision,
-            "a `float` product or fused multiply-add whose exact value lies within half a unit \
-             below `2^-126` answers `2^-126` of its sign where Metal answers the zero of its sign";
+            "a `float` product, fused multiply-add or `ldexp` whose exact value lies within half a \
+             unit below `2^-126` answers `2^-126` of its sign where Metal answers the zero of its \
+             sign";
         /// An entry of the device's shader cache directory was not written: the directory, a
         /// temporary file in it or the rename over the entry failed, on the device's cache thread
         /// or on the thread that handed the entry over past the queue's bound

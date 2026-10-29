@@ -3243,12 +3243,15 @@ fn device_precision_float_functions(part: usize, of: usize) {
             false,
         );
     }));
-    // `ldexp` answers Metal's for every exponent: past GLSL's `[-126, 128]` and past the format's
-    // range, a denormal operand read as zero, a result below `2^-126` flushed, a NaN kept bit
-    // for bit (`math::ldexp_bits`); `half` rounds the exact product once.
+    // `ldexp` answers for every exponent, past GLSL's `[-126, 128]` and past the format's range,
+    // a NaN kept bit for bit (`math::ldexp_bits`), its denormals the device's: on the interpreter,
+    // which keeps them, a denormal operand scales as its value and a result below `2^-126` is the
+    // product rounded once (Metal flushes both: `PrecisionNote::DeviceDenormals`), and one within
+    // half a unit below `2^-126` rounds up to `2^-126` (Metal flushes it before rounding:
+    // `float-tininess-after-rounding`); `half` rounds the exact product once.
     checks.push(Box::new(|| {
         let f = float(32);
-        let bits: [u32; 12] = [
+        let bits: [u32; 13] = [
             0x3FC0_0000, // 1.5
             0xBFC0_0000, // -1.5
             0x7180_0000, // 2^100
@@ -3261,6 +3264,7 @@ fn device_precision_float_functions(part: usize, of: usize) {
             0x8000_0000, // -0
             0x7F7F_FFFF, // the greatest finite
             0x4040_0000, // 3.0
+            0x3FFF_FFFF, // 2 - 2^-23: times 2^-127, half a unit below 2^-126
         ];
         let exps: [i32; 16] = [
             0,
@@ -3287,22 +3291,22 @@ fn device_precision_float_functions(part: usize, of: usize) {
                     .map(move |&e| vec![vec![u64::from(x)], vec![u64::from(e as u32)]])
             })
             .collect();
-        // Metal's answer, from the exact product in `f64`.
+        // The answer with the device's denormals kept: the exact product in `f64` (a power of
+        // two's scaling, exact but where it is far below every `float`), rounded once to `f32`.
         let metal = |x: u32, e: i32| -> u32 {
-            let (sign, field) = (x & 0x8000_0000, (x >> 23) & 0xFF);
-            match field {
-                0 => sign,
+            match (x >> 23) & 0xFF {
                 0xFF => x,
                 _ => {
                     let v = f64::from(f32::from_bits(x)) * 2f64.powi(e.clamp(-1000, 1000));
-                    match v.abs() {
-                        a if a >= 2f64.powi(128) => sign | 0x7F80_0000,
-                        a if a < 2f64.powi(-126) => sign,
-                        _ => (v as f32).to_bits(),
-                    }
+                    (v as f32).to_bits()
                 }
             }
         };
+        // Metal's flush is not this answer: the least denormal doubled is `2^-148`, not zero.
+        assert_eq!(metal(0x0000_0001, 1), 0x0000_0002);
+        assert_eq!(metal(0x0080_0000, -1), 0x0040_0000);
+        // Rounded before any flush: `2^-126 - 2^-150` ties to even, `2^-126`, where Metal answers 0.
+        assert_eq!(metal(0x3FFF_FFFF, -127), 0x0080_0000);
         check_accept(
             "ldexp f32, every exponent",
             &[f, int(32)],

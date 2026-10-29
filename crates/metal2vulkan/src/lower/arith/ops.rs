@@ -758,7 +758,8 @@ fn lane(fb: &mut FunctionBuilder<'_>, f: Form, x: Value, i: u8) -> BResult<Value
 }
 
 /// A lane of form `lane` as its AIR bits in an unsigned integer of its container's width
-/// (a narrow float through its exact format bits).
+/// (a narrow float through its format bits, a `half`'s by the device's narrowing,
+/// `narrow::to_bits`).
 fn lane_bits(fb: &mut FunctionBuilder<'_>, lane: Form, v: Value) -> BResult<Value> {
     if lane.is_narrow() {
         narrow::to_bits(fb, lane, v)

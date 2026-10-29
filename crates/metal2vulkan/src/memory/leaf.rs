@@ -896,7 +896,8 @@ pub fn words_of(fb: &mut FunctionBuilder<'_>, leaf: &Leaf, v: Value) -> BResult<
                 }
             }
             Held::Float(FloatFmt::Half | FloatFmt::BFloat) => {
-                // A narrow float is held widened: encode its 16 format bits exactly.
+                // A narrow float is held widened: its 16 format bits, a `half`'s by the device's
+                // narrowing (`narrow::to_bits`).
                 let w = narrow::to_bits(fb, scalar, x)?;
                 put(fb, &mut out, 2 * i, w)?;
             }
@@ -973,7 +974,8 @@ fn vector_words(
     Ok(Some(match form.held {
         Held::Int { container: 32, .. } => placed(fb, v)?,
         Held::Float(FloatFmt::Half | FloatFmt::BFloat) => {
-            // A narrow float is held widened: one exact encode of every lane.
+            // A narrow float is held widened: one encode of every lane, a `half`'s by the
+            // device's narrowing (`narrow::to_bits`).
             let bits = narrow::to_bits(fb, form, v)?;
             placed(fb, bits)?
         }

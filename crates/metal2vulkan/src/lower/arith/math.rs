@@ -139,12 +139,12 @@ fn u32_form(f: Form) -> Form {
     })
 }
 
-/// `ldexp(x, k)` (`x` of form `f`, `k` a held `i32` of its lanes) as Metal answers it for every
-/// exponent. GLSL's `Ldexp` leaves an exponent past `+128` and a product past the format's range
-/// undefined, and may flush any result of an exponent below `-126`, so a `float`
-/// `ldexp(2^100, -150)` (`2^-50`) could read zero. A `float` (and a `bfloat`, held in its `f32`)
-/// is computed on the container's bits ([`ldexp_bits`]; a `bfloat`'s denormals, which Metal's
-/// `bfloat` environment leaves unmeasured, read and flush as a `float`'s); a `half`, held exactly
+/// `ldexp(x, k)` (`x` of form `f`, `k` a held `i32` of its lanes) for every exponent, as Metal
+/// answers it but for denormals, which are the device's. GLSL's `Ldexp` leaves an exponent past
+/// `+128` and a product past the format's range undefined, and may flush any result of an
+/// exponent below `-126`, so a `float` `ldexp(2^100, -150)` (`2^-50`) could read zero. A `float`
+/// (and a `bfloat`, held in its `f32`) is computed on the container's bits and the device's
+/// products ([`ldexp_bits`]; a `bfloat`'s denormals are the device's as a `float`'s); a `half`, held exactly
 /// in an `f32`, is
 /// scaled by `2^k` with `k` clamped to `[-64, 64]`, which keeps every product an exact normal
 /// `f32` and saturates it past `half`'s range, and the caller rounds it to `half` once. A
@@ -168,41 +168,69 @@ fn ldexp(fb: &mut FunctionBuilder<'_>, f: Form, x: Value, k: Value) -> BResult<V
     }
 }
 
-/// [`ldexp`] of an `f32` container on its bits, as Metal's `float` answers (the
-/// denormal probes): a zero or a denormal `x` (reads as zero) is the zero of its sign; an infinity
-/// or a NaN is `x`, bit for bit; otherwise the exponent field `e + k` (with `k` clamped to
-/// `[-512, 512]`, which saturates every answer) is an infinity of `x`'s sign from 255 up, the
-/// zero of its sign at 0 and below (a result below `2^-126` is flushed, tininess before
-/// rounding: the scaled significand is exact), and else replaces `x`'s exponent field.
+/// [`ldexp`] of an `f32` container for every exponent, its denormals the device's: an infinity
+/// or a NaN is `x`, bit for bit; a zero or a denormal `x` is first scaled by `2^64` by the device's
+/// product, so the device's own denormal mode reads it (preserved, or flushed to the zero of its
+/// sign, which stays that zero); otherwise the exponent field `e + k` (with `k` clamped to
+/// `[-512, 512]`, which saturates every answer) is an infinity of `x`'s sign from 255 up, replaces
+/// `x`'s exponent field from 1 to 254, and at 0 and below is the device's product of `x` scaled
+/// to the field `max(e + k + 126, 1)` and `2^-126`, which rounds a result below `2^-126` once to a
+/// denormal or flushes it as the device does. Metal flushes both a denormal operand and a denormal
+/// result: the device's multiply reads them so where it takes `DriverDeviation::MetalFloatDenormals`
+/// (`denormal::coverage`); elsewhere they are noted `PrecisionNote::DeviceDenormals`.
 fn ldexp_bits(fb: &mut FunctionBuilder<'_>, f: Form, x: Value, k: Value) -> BResult<Value> {
     let i = u32_form(f);
     let it = ty(fb, i)?;
-    let bits = fb.convert(ConvOp::Bitcast, x, it)?;
-    let sign = splat(fb, i, 0x8000_0000)?;
-    let sign = bin(fb, BinOp::BitwiseAnd, bits, sign)?;
+    let ft = ty(fb, f)?;
     let at = splat(fb, i, 23)?;
     let field = splat(fb, i, 0xFF)?;
-    let e = bin(fb, BinOp::ShiftRightLogical, bits, at)?;
-    let e = bin(fb, BinOp::BitwiseAnd, e, field)?;
+    let zero = splat(fb, i, 0)?;
+    let exponent = |fb: &mut FunctionBuilder<'_>, bits: Value| -> BResult<Value> {
+        let e = bin(fb, BinOp::ShiftRightLogical, bits, at)?;
+        bin(fb, BinOp::BitwiseAnd, e, field)
+    };
+    let given = fb.convert(ConvOp::Bitcast, x, it)?;
+    let e0 = exponent(fb, given)?;
     let (lo, hi) = (splat(fb, i, (-512i32) as u32 as u64)?, splat(fb, i, 512)?);
     let k = glsl(fb, GlslOp::SClamp, &[k, lo, hi])?;
+    // A zero or denormal operand, normalized by the device's product (or flushed by it).
+    let tiny = bin(fb, BinOp::IEqual, e0, zero)?;
+    let up = fsplat(fb, f, 2f64.powi(64))?;
+    let raised = bin(fb, BinOp::FMul, x, up)?;
+    let source = fb.select(tiny, raised, x)?;
+    let sixty_four = splat(fb, i, 64)?;
+    let lowered = bin(fb, BinOp::ISub, k, sixty_four)?;
+    let k = fb.select(tiny, lowered, k)?;
+    let bits = fb.convert(ConvOp::Bitcast, source, it)?;
+    let sign = splat(fb, i, 0x8000_0000)?;
+    let sign = bin(fb, BinOp::BitwiseAnd, bits, sign)?;
+    let e = exponent(fb, bits)?;
     let ne = bin(fb, BinOp::IAdd, e, k)?;
     let keep = splat(fb, i, 0x807F_FFFF)?;
     let kept = bin(fb, BinOp::BitwiseAnd, bits, keep)?;
     let moved = bin(fb, BinOp::ShiftLeftLogical, ne, at)?;
     let scaled = bin(fb, BinOp::BitwiseOr, kept, moved)?;
+    // A result below `2^-126`: the device's product rounds it once (or flushes it).
+    let bias = splat(fb, i, 126)?;
+    let low = bin(fb, BinOp::IAdd, ne, bias)?;
+    let one = splat(fb, i, 1)?;
+    let low = glsl(fb, GlslOp::SMax, &[low, one])?;
+    let low = bin(fb, BinOp::ShiftLeftLogical, low, at)?;
+    let low = bin(fb, BinOp::BitwiseOr, kept, low)?;
+    let low = fb.convert(ConvOp::Bitcast, low, ft)?;
+    let down = fsplat(fb, f, 2f64.powi(-126))?;
+    let low = bin(fb, BinOp::FMul, low, down)?;
+    let low = fb.convert(ConvOp::Bitcast, low, it)?;
+    let under = bin(fb, BinOp::SLessThanEqual, ne, zero)?;
+    let r = fb.select(under, low, scaled)?;
     let inf = splat(fb, i, 0x7F80_0000)?;
     let inf = bin(fb, BinOp::BitwiseOr, sign, inf)?;
-    let zero = splat(fb, i, 0)?;
-    let under = bin(fb, BinOp::SLessThanEqual, ne, zero)?;
-    let r = fb.select(under, sign, scaled)?;
     let over = bin(fb, BinOp::SGreaterThanEqual, ne, field)?;
     let r = fb.select(over, inf, r)?;
-    let special = bin(fb, BinOp::IEqual, e, field)?;
-    let r = fb.select(special, bits, r)?;
-    let small = bin(fb, BinOp::IEqual, e, zero)?;
-    let r = fb.select(small, sign, r)?;
-    let ft = ty(fb, f)?;
+    let nothing = bin(fb, BinOp::IEqual, e, zero)?;
+    let r = fb.select(nothing, bits, r)?;
+    let special = bin(fb, BinOp::IEqual, e0, field)?;
+    let r = fb.select(special, given, r)?;
     fb.convert(ConvOp::Bitcast, r, ft)
 }
 
@@ -995,8 +1023,7 @@ impl FloatFn {
 
     /// Whether the lowering answers Metal at `f32` denormal operands and results itself, whatever
     /// the device's denormal mode, or records the device's answer under another note, so it records
-    /// no `PrecisionNote::DeviceDenormals` of its own: `ldexp` (on `float`, [`ldexp_bits`]), which reads a denormal operand as the zero of
-    /// its sign and flushes a denormal result on the bits, `copysign`, which moves bits, and precise
+    /// no `PrecisionNote::DeviceDenormals` of its own: `copysign`, which moves bits, and precise
     /// `fmod` on `float`, the remainder's routine, which reads a denormal divisor as a zero on the
     /// bits and computes the remainder in integers (`libm::fmod`), or on MoltenVK Metal's own;
     /// `fmin`, `fmax`, `min3`, `max3`, `clamp`, `saturate` and `median3`, the device's `NMin`,
@@ -1017,7 +1044,6 @@ impl FloatFn {
         matches!(
             self,
             F::Abs
-                | F::Ldexp
                 | F::Round
                 | F::Fmod
                 | F::Sign
@@ -1215,8 +1241,9 @@ impl FloatFn {
             // `log10`'s composition of the device's `log2` (`log10`): the device's `log2` and
             // the product, the polynomial's fused steps, and the range test.
             FloatFn::Log10 => 200,
-            // The exponent's clamp and the bits' fields, tests and selects (`ldexp_bits`).
-            FloatFn::Ldexp => 160,
+            // The exponent's clamp, the bits' fields, the device's two products, tests and
+            // selects (`ldexp_bits`).
+            FloatFn::Ldexp => 320,
             _ => 48,
         };
         // Each function the call takes: the device's instruction, or precise `fmod`'s routine's
