@@ -3062,11 +3062,11 @@ A case whose difference from Metal is recorded rather than compared away. The le
 | `texel-swizzles-views` | A swizzled read of an `RGBA8Unorm` texel through the device's own conversion, its value doubled after the read: an 8-bit code's value is one `f32` ulp high (the… |
 | `texel-swizzles-views` | A swizzled read of an `RGBA8Unorm` texel through the device's own conversion, its value doubled after the read: an 8-bit code's value is one `f32` ulp high (the… |
 | `texel-swizzles-views` | A swizzled read of an `RGBA8Unorm` texel through the device's own conversion, its value doubled after the read: an 8-bit code's value is one `f32` ulp high (the… |
-| `vertex-format-constant-step` | A NaN of a narrow float attribute (`half`, or a small float of `FloatRG11B10`) fetched by fixed-function vertex input: Metal answers its canonical `0x7FC00000`,… |
-| `vertex-format-constant-step` | A NaN of a narrow float attribute (`half`, or a small float of `FloatRG11B10`) fetched by fixed-function vertex input: Metal answers its canonical `0x7FC00000`,… |
-| `vertex-format-constant-step` | A NaN of a narrow float attribute (`half`, or a small float of `FloatRG11B10`) fetched by fixed-function vertex input: Metal answers its canonical `0x7FC00000`,… |
-| `vertex-format-constant-step` | A NaN of a narrow float attribute (`half`, or a small float of `FloatRG11B10`) fetched by fixed-function vertex input: Metal answers its canonical `0x7FC00000`,… |
-| `vertex-format-constant-step` | A NaN of a narrow float attribute (`half`, or a small float of `FloatRG11B10`) fetched by fixed-function vertex input: Metal answers its canonical `0x7FC00000`,… |
+| `vertex-format-constant-step` | A NaN of a narrow float attribute (`half`, or a small float of `FloatRG11B10`) pulled by the vertex function (lavapipe reports no nonzero first instance, so a c… |
+| `vertex-format-constant-step` | A NaN of a narrow float attribute (`half`, or a small float of `FloatRG11B10`) pulled by the vertex function (lavapipe reports no nonzero first instance, so a c… |
+| `vertex-format-constant-step` | A NaN of a narrow float attribute (`half`, or a small float of `FloatRG11B10`) pulled by the vertex function (lavapipe reports no nonzero first instance, so a c… |
+| `vertex-format-constant-step` | A NaN of a narrow float attribute (`half`, or a small float of `FloatRG11B10`) pulled by the vertex function (lavapipe reports no nonzero first instance, so a c… |
+| `vertex-format-constant-step` | A NaN of a narrow float attribute (`half`, or a small float of `FloatRG11B10`) pulled by the vertex function (lavapipe reports no nonzero first instance, so a c… |
 | `vertex-format-constant-step` | Metal converts a normalized vertex field as `c / (2^b - 1)`, correctly rounded, and on this venue the constant step is the shader's own fetch (the portability s… |
 | `vertex-format-constant-step` | Metal converts a normalized vertex field as `c / (2^b - 1)`, correctly rounded, and on this venue the constant step is the shader's own fetch (the portability s… |
 | `vertex-format-constant-step` | Metal converts a normalized vertex field as `c / (2^b - 1)`, correctly rounded, and on this venue the constant step is the shader's own fetch (the portability s… |

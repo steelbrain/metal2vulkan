@@ -903,3 +903,15 @@ else.
   read settles nothing. A rotated plane never reaches any of this: its
   `bytesPerRow` must be a multiple of 16, so its GPU rows lie at the pitch itself and share no
   byte.
+- **A few maths and sampling paths still compute Metal's own answer where the device has one**:
+  `fast::atan2` flushes its reciprocal past 2^126 as Metal does (`FastAtan2` in
+  `lower/arith/math.rs`); a bicubic sample of an 8-bit sRGB format read through its UNORM twin
+  snaps each decoded tap to Metal's twelve-bit step (`lower/sampler/bicubic.rs`); and `half`
+  `fmod` gives a zero result Metal's sign on its exact remainder routine, where no note records the
+  device's yet. Each is open work toward the device's answer; none is announced.
+- **A shadow's merge back to host pages stores each changed word alone**, so over PCIe, where the
+  changed words alternate, the stores leave gaps the bus takes one at a time: on an RTX 5080 a
+  merge over 4 MiB of host pages with every other word changed took 150 ms of GPU time, against
+  0.40 ms with a 64x64 square changed and 0.86 ms with every word changed. Storing whole blocks
+  takes under 1 ms in each of those shapes, but would rewrite unchanged bytes a CPU may be writing
+  meanwhile, a write Metal keeps, so the merge does not. Not announced.
