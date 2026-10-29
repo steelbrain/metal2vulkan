@@ -91,7 +91,7 @@ fn settled(device: &Device) {
 }
 
 /// The shadows over host pages refused an image in place between `before` and `after`.
-fn refused(before: &WorkCounts, after: &WorkCounts) -> u64 {
+pub(super) fn refused(before: &WorkCounts, after: &WorkCounts) -> u64 {
     let of = |counts: &WorkCounts| {
         counts.host_texture_shadows_refused_rows
             + counts.host_texture_shadows_refused_detached

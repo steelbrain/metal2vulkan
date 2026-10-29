@@ -29,6 +29,7 @@ use super::host_memory::READ_ONLY_PAGES;
 use super::host_memory::{
     counting, gpu_fill, gpu_read, host_page, not_importable, on_device, run, Mapping,
 };
+use super::in_place_textures::refused;
 use super::keep_alives::eventually;
 use super::no_copy_heaps::{
     blit_into, blit_texels, encode_texels_in, encode_texels_out, shared, staged,
@@ -1586,11 +1587,16 @@ fn check_texture_request(
 /// runs than one udmabuf takes (a `page / 4`-wide `RGBA8Unorm` texture of a row a page, over
 /// `list_limit + 76` single pages, the guest surface whose pages are scattered), the source makes
 /// no one dma-buf, and the shadow is counted as the source's refusal
-/// (`host_texture_shadows_refused_source`). Where the device imports dma-bufs (RADV) and its check
-/// passed for them, the first is in place (`dma_buf_textures_in_place`) and the second the
-/// source's refusal; elsewhere the forms are printed. Either way a blit reads the CPU's bytes and
-/// the CPU's later bytes. Printed (`DMA-BUF-IN-PLACE`): each texture's form and the shadow's
-/// counted reasons.
+/// (`host_texture_shadows_refused_source`). An image in place is counted by its pages' class
+/// (`host_textures_in_place`): over a dma-buf of its own pages (`dma_buf_textures_in_place`)
+/// where the device imports dma-bufs (RADV), and over the pointer's import where the device
+/// imports the pointer (NVIDIA, lavapipe), whose buffer and texture never call the source. Where
+/// the device imports dma-bufs and its check passed for them, the first is in place and the
+/// second the source's refusal; where it imports the pointer and its check passed for that
+/// class, each is in place over the pointer's import or a shadow its refusal counts (as
+/// `in_place_textures.rs` holds any texture over host pages); elsewhere the forms are printed.
+/// Either way a blit reads the CPU's bytes and the CPU's later bytes. Printed
+/// (`DMA-BUF-IN-PLACE`): each texture's form, its class and the shadow's counted reasons.
 #[test]
 fn sampled_textures_over_dma_buf_pages_are_in_place_where_their_pages_make_one_dma_buf() {
     const TEST: &str = "DMA-BUF-IN-PLACE";
@@ -1607,8 +1613,12 @@ fn sampled_textures_over_dma_buf_pages_are_in_place_where_their_pages_make_one_d
         assert!(device.settle_in_place_checks(CHECK_WAIT));
         let report = device.in_place_check_report();
         eprintln!("{TEST} on {}: the check: {report:?}", device.name());
-        let passed = report.iter().any(|line| line == "DmaBuf: Passed");
-        let radv = imports_dma_buf(&device) == Some(true);
+        let passed = |class: &str| {
+            report
+                .iter()
+                .any(|line| *line == format!("{class}: Passed"))
+        };
+        let imports = imports_dma_buf(&device);
         let queue = device.new_command_queue().unwrap();
         let page = host_page();
         let runs = Limits::of_host().items + 76;
@@ -1645,7 +1655,8 @@ fn sampled_textures_over_dma_buf_pages_are_in_place_where_their_pages_make_one_d
             let after = device.work_counts();
             // SAFETY: the handle is only compared, while the texture lives.
             let aliased = unsafe { texture.vk_image() }.is_some();
-            let in_place = after.dma_buf_textures_in_place - before.dma_buf_textures_in_place;
+            let in_place = after.host_textures_in_place - before.host_textures_in_place;
+            let over_dma_buf = after.dma_buf_textures_in_place - before.dma_buf_textures_in_place;
             let source = after.host_texture_shadows_refused_source
                 - before.host_texture_shadows_refused_source;
             let pitched = after.host_texture_shadows_refused_pitch
@@ -1654,15 +1665,37 @@ fn sampled_textures_over_dma_buf_pages_are_in_place_where_their_pages_make_one_d
                 - before.host_texture_shadows_refused_dma_buf;
             eprintln!(
                 "{TEST} on {}: {what}, {width}x{height} rows {pitch} bytes apart: {} (in place \
-                 {in_place}, refused for the source {source}, the pitch {pitched}, other \
-                 dma-buf reasons {other}), the source's calls {:?}",
+                 {in_place}, of them over a dma-buf {over_dma_buf}; refused for the source \
+                 {source}, the pitch {pitched}, other dma-buf reasons {other}), the source's \
+                 calls {:?}",
                 device.name(),
                 if aliased { "in place" } else { "shadowed" },
                 calls.lock().unwrap(),
             );
-            assert_eq!(in_place, u64::from(aliased), "{TEST}: {what}");
-            if radv && passed {
-                assert_eq!((aliased, source), (one, u64::from(!one)), "{TEST}: {what}");
+            assert_eq!(in_place, u64::from(aliased), "{TEST}: {what}: in place");
+            match imports {
+                Some(true) => {
+                    assert_eq!(over_dma_buf, in_place, "{TEST}: {what}: over a dma-buf");
+                    if passed("DmaBuf") {
+                        assert_eq!((aliased, source), (one, u64::from(!one)), "{TEST}: {what}");
+                    }
+                }
+                Some(false) => {
+                    assert_eq!(over_dma_buf, 0, "{TEST}: {what}: over a dma-buf");
+                    let calls = calls.lock().unwrap();
+                    assert!(
+                        calls.is_empty(),
+                        "{TEST}: {what}: the source's calls {calls:?}"
+                    );
+                    if passed("Pointer") {
+                        assert_eq!(
+                            in_place + refused(&before, &after),
+                            1,
+                            "{TEST}: {what}: in place, or a shadow its refusal counts"
+                        );
+                    }
+                }
+                None => {}
             }
             let (row, rows) = (4 * width as usize, height as usize);
             let size = (width, height);
