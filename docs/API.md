@@ -3374,19 +3374,36 @@ each item named states the rule in full.
 - **A draw's `VkPipeline` is made while the draw goes on.** A draw whose pipeline is not made yet
   returns once encoded; the pipeline is made on the device's pool of at most four threads, and the
   command buffer's work waits for it in queue order.
-- **A draw can take its key's residual form while its own pipeline is made.** A state's creation
-  makes its predicted key with every constant buffer slot read through a uniform view read at the
-  slot's residual (`RangeAtBindOffset` 0), which reads the same bytes at every bind offset: the
-  binder writes the slot's descriptor range and residual from the bind offset alone, whichever form
-  the pipeline takes, and the residual is 0 wherever the range starts at the bind offset. A slot
-  bound to nothing is read at its residual too (0), so a draw that leaves such slots unbound takes
-  the creation's pipeline itself. A draw whose own pipeline (which reads such a slot at the bind
-  offset alone, the residual-free form) is not made, and whose key's residual form's is, draws with
-  that one at once; its own is made on the pool behind the makings something waits for, and later
-  draws take it. Only GPU time moves for the draws before it lands: on ANV the residual form's reads
-  are loads where the other form's are pushed constants (`WorkCounts::residual_form_draws`,
-  `residual_form_makings`). On MoltenVK every key is its residual form (the two forms measured
-  alike there), so a state's draws at every bind offset take the one pipeline its creation made.
+- **A draw can take its key's general form while its own pipeline is made.** A state's creation
+  makes its predicted key's general form: each specialization constant with an arm that serves
+  every binding exactly at that arm. Every constant buffer slot read through a uniform view is read
+  at the slot's residual (`RangeAtBindOffset` 0), which reads the same bytes at every bind offset:
+  the binder writes the slot's descriptor range and residual from the bind offset alone, whichever
+  form the pipeline takes, and the residual is 0 wherever the range starts at the bind offset. A
+  slot bound to nothing is read at its residual too (0), so a draw that leaves such slots unbound
+  takes the creation's pipeline itself. On MoltenVK a texture slot a function converts to `half`
+  converts its texels by the class routine (`PlainHalfTexels` 0, the bound class read from push
+  data), which rounds a plain class's `float` texel to nearest even as the plain arm does (the arm
+  Metal's compiler can fold into the image instruction, which a slot bound to nothing or to a plain
+  class takes: every class but a YCbCr field on the grid 8192), and its `UnmeasuredTexels`, which
+  no instruction reads, is at 0 (a class whose `half` conversion is not measured, BC4 to BC7 and
+  the linear ASTC formats among them, takes 1). Where the predicted key is not its own general form
+  (a slot of the plain arm), the creation hands it to the pool right after, behind the makings
+  something waits for, and a draw binding a plain, measured class takes it once made. A draw whose
+  own pipeline (which reads such a buffer slot at the bind offset alone, converts by the plain arm,
+  or names an unmeasured class) is not made, and whose key's general form's is, draws with that one
+  at once; its own is made on the pool behind the makings something waits for, and later draws
+  take it. So a draw binding a texture of an unmeasured class waits for no compile of its own.
+  Only GPU time moves for the draws before it lands (`WorkCounts::residual_form_draws`,
+  `residual_form_makings`): on ANV the residual form's reads are loads where the other form's are
+  pushed constants; on MoltenVK the class routine converts each `half` read in place of the image
+  instruction's own conversion. The creation of a state
+  whose predicted key is not its general form makes two pipelines, the second on the pool, nothing
+  waiting for it. On MoltenVK every key reads its buffer slots at their residual (the two forms
+  measured alike there), so a draw's bind offsets choose no pipeline there. A constant with no arm
+  that serves every binding stays a pipeline per value, made at the first draw of it: a sampler's
+  state (`SamplerState`, each sampler word a sampling emulation of its own) and how the bicubic
+  filter treats the bound format's texels (`BicubicTexels`).
 - **A dispatch's `VkPipeline` is made while the dispatch goes on**, the same way: one pipeline per
   threadgroup size and edge region, made on the pool. A compute state whose descriptor states
   `requiredThreadsPerThreadgroup` -- the threadgroup every dispatch of the state must have -- makes

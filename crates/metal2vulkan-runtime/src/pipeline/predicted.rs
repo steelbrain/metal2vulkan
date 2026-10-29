@@ -15,7 +15,13 @@
 //!   unbound one is. A draw that leaves those slots unbound takes this key itself; the draws that
 //!   bind them do so at offsets the creation cannot know, and the residual form reads the same
 //!   bytes at every one: a draw whose own key is not made takes it at once while its own is made.
-//!   On a device that reads every view at its residual (MoltenVK) it is their own key.
+//!   On a device that reads every view at its residual (MoltenVK) it is their own key. The key
+//!   made is the general form of that (`render/residual.rs`): each texture slot's
+//!   `SpecKey::PlainHalfTexels` at 0 too, the class routine that converts every bound class, and
+//!   its `SpecKey::UnmeasuredTexels` at 0, so a draw of any texture takes it at once while its own
+//!   key is made; the key with those slots' `PlainHalfTexels` at 1, as unbound ones take, which a
+//!   draw binding a plain, measured class takes, is handed to the pool right after, at the rank
+//!   nothing waits for, and nothing waits for it.
 //! - **The tests**: for a fragment function that stores a color through the interlocked storage
 //!   form before its depth and stencil tests (`RuntimeFact::TestedStorageWrites`) in a pipeline
 //!   with a depth or stencil attachment, tests that drop fragments but write neither attachment and
@@ -51,9 +57,10 @@
 //! A state the prediction cannot describe from itself alone (tessellated, a mesh pipeline,
 //! separate depth and stencil formats, a fragment function that writes depth) makes nothing here.
 //! The key is the draw's own key type: a draw that takes the same key takes the pipeline made, and
-//! so does a draw whose key differs only where it reads a uniform-view slot at the bind offset
-//! alone, until its own key's pipeline, made on the pool meanwhile, is made (`render/residual.rs`);
-//! any other draw makes its own, as before. Nothing an answer depends on changes, only when the
+//! so does a draw whose key differs only in constants the general form sets (a uniform-view slot
+//! read at the bind offset alone, a texture slot's plain `half` arm or its unmeasured class), until
+//! its own key's pipeline, made on the pool meanwhile, is made (`render/residual.rs`); any other
+//! draw makes its own, as before. Nothing an answer depends on changes, only when the
 //! driver is called. A failed making is not kept and refuses nothing: the draw that needs the key
 //! meets it as before.
 //!
@@ -68,11 +75,11 @@
 //! state. A draw whose key the creation did not make makes its own, as before's records of the
 //! driver's data still serve that making where the same pipeline was made before.
 //!
-//! Under `PipelineWaitPolicy::Exact` the predicted key's making runs on the creating thread,
-//! joined before the creation returns (`RenderVariant::make_at_creation`), at the rank of a
-//! making the program waits for. Under `PipelineWaitPolicy::Bounded` (the default) it is handed to
-//! the device's pool, kept by the state as a draw's making is, and the creation returns: a host
-//! that creates a state inside a command buffer's encoding (a guest's state looked up there
+//! Under `PipelineWaitPolicy::Exact` the making of the predicted key's general form runs on the
+//! creating thread, joined before the creation returns (`RenderVariant::make_at_creation`), at the
+//! rank of a making the program waits for. Under `PipelineWaitPolicy::Bounded` (the default) it is
+//! handed to the device's pool, kept by the state as a draw's making is, and the creation returns:
+//! a host that creates a state inside a command buffer's encoding (a guest's state looked up there
 //! first) is not held by a driver's cold compile, measured at 11.6 s on MoltenVK with a cold
 //! Metal compiler service. The first draw takes the making in flight, and its command buffer
 //! waits a bound for it (`render/pending.rs`). A key predicted on the early-tests variant (above)
@@ -100,15 +107,26 @@ use std::sync::Arc;
 
 impl GraphicsState {
     /// Make the `VkPipeline` of the key the state's first draw is predicted to take (the module
-    /// docs), now; a key whose pass is refused is left to its draw.
+    /// docs), now, in its general form, which a draw of every binding can take
+    /// (`render/residual.rs`); where the key differs from that form, hand the key itself to the
+    /// device's pool right after, at the rank nothing waits for, for the draws that bind what the
+    /// prediction names. A key whose pass is refused is left to its draw.
     pub(crate) fn make_at_creation(&self) {
         let Some((variant, key)) = self.predicted() else {
             return;
         };
-        let Ok(pass) = render_target::compatible_pass(self.device(), &key.pass) else {
+        let device = self.device();
+        let Ok(pass) = render_target::compatible_pass(device, &key.pass) else {
             return;
         };
-        RenderVariant::make_at_creation(vec![(variant, key, pass)], self);
+        let (made, ahead) = match variant.general_key(&key) {
+            None => (key, Vec::new()),
+            Some(general) => match render_target::compatible_pass(device, &key.pass) {
+                Ok(own) => (general, vec![(Arc::clone(&variant), key, own)]),
+                Err(_) => (general, Vec::new()),
+            },
+        };
+        RenderVariant::make_at_creation(vec![(variant, made, pass)], ahead, self);
     }
 
     /// The key of the predicted first draw (the module docs), where the state alone describes

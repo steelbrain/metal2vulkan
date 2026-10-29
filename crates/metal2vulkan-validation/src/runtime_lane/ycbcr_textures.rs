@@ -1430,6 +1430,10 @@ fn a_ycbcr_slot_takes_the_devices_filter_in_the_pipeline_its_creation_made() {
             .unwrap();
         for fragment in ["between_runtime_float", "between_runtime_half"] {
             let pipeline = between_state(device, &library, fragment);
+            // Where the device samples through Metal's texture unit, the `half` function's
+            // creation hands its predicted key's making to the pool after its general form's
+            // (`pipeline/render/residual.rs`): settled first, so the count below is the draw's.
+            super::pipelines_settled(device);
             let plain = drawn_with(device, &pipeline, (&twin, Some(&linear)), |_, _| {});
             let before = device.work_counts().variant_pipelines_made;
             let got = drawn_with(device, &pipeline, (&texture, Some(&linear)), |_, _| {});

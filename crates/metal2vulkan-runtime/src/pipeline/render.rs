@@ -86,6 +86,9 @@ use std::time::Instant;
 
 mod residual;
 
+/// The general form of a key, which `tests::general_form` reads from IDs and meanings alone.
+#[cfg(test)]
+pub(crate) use residual::general_form;
 #[cfg(test)]
 pub(crate) use residual::views_read_at_bind;
 pub(crate) use residual::{reads_views_at_bind, residual_form};
@@ -2698,7 +2701,7 @@ impl RenderVariant {
     /// The `VkPipeline` of `key`, from the memo or made now against `render_pass`, a pass of
     /// `key.pass`; made once, outside the memo's lock (`making.rs`), for a draw of `state` that
     /// binds `formats`, whose part of the pipeline creation log logs it. Where it is not made and
-    /// its residual form's is, the draw takes that one, and `key`'s is made on the device's pool
+    /// its general form's is, the draw takes that one, and `key`'s is made on the device's pool
     /// (`render/residual.rs`). A lookup by key (`WorkCounts::graphics_pipelines_looked_up`).
     pub(crate) fn graphics_pipeline(
         self: &Arc<Self>,
@@ -2712,6 +2715,7 @@ impl RenderVariant {
             .counts
             .graphics_pipeline_looked_up();
         self.made_or_make(key, render_pass, (state, formats))
+            .map(|(made, _)| made)
     }
 
     /// The `VkPipeline` of `key` for an execution's settle at commit, which records nothing
@@ -2743,17 +2747,18 @@ impl RenderVariant {
         })
     }
 
-    /// [`graphics_pipeline`](Self::graphics_pipeline)'s finding or making, uncounted.
+    /// [`graphics_pipeline`](Self::graphics_pipeline)'s finding or making, uncounted, with
+    /// whether it is `key`'s own `VkPipeline`, not its general form's.
     fn made_or_make(
         self: &Arc<Self>,
         key: &GraphicsKey,
         render_pass: &Arc<RenderPassObject>,
         (state, formats): (&GraphicsState, crate::degradation::BoundFormats<'_>),
-    ) -> Result<Arc<RawPipeline>, Error> {
-        if let Some(drawn) = self.residual_drawn(key, render_pass, (state, formats)) {
+    ) -> Result<(Arc<RawPipeline>, bool), Error> {
+        if let Some(drawn) = self.general_drawn(key, render_pass, (state, formats)) {
             return Ok(drawn);
         }
-        self.pipelines.get_or_make(key, || {
+        let made = self.pipelines.get_or_make(key, || {
             let make = || {
                 self.objects.graphics_pipeline(
                     &self.pipeline,
@@ -2770,7 +2775,8 @@ impl RenderVariant {
                     make,
                 ),
             }
-        })
+        })?;
+        Ok((made, true))
     }
 
     /// The libraries of `key`'s parts (`libraries.rs`), claimed on this thread: the device's
@@ -2802,10 +2808,13 @@ impl RenderVariant {
     /// thread, the others on the device's pool, joined (`Pool::join_all`, the owner's HITCH rules 1
     /// and 3). Each piece settles its own key's memo entry as its pipeline is made, a failed one
     /// not kept, and the join returns once every piece settled. The concurrent part only calls the
-    /// driver and settles its entries. Their specialized notices wait for their first draws
-    /// ([`first_use`](Self::first_use)). Each key is its variant's.
+    /// driver and settles its entries. The makings of `ahead`'s keys (a predicted key whose general
+    /// form is among `keys`, `render/residual.rs`) are handed to the pool right after, under either
+    /// policy, at the rank nothing waits for, and not waited for. Their specialized notices wait
+    /// for their first draws ([`first_use`](Self::first_use)). Each key is its variant's.
     pub(crate) fn make_at_creation(
         keys: Vec<(Arc<RenderVariant>, GraphicsKey, RenderPassObject)>,
+        ahead: Vec<(Arc<RenderVariant>, GraphicsKey, RenderPassObject)>,
         state: &GraphicsState,
     ) {
         let device = &state.0.device;
@@ -2871,6 +2880,24 @@ impl RenderVariant {
                 drop(ticket.settle(made));
             }));
         }
+        // Those made ahead of the draws that take them, right after: handed to the pool under
+        // either wait, at the rank nothing waits for until a draw does, and not waited for here.
+        for (variant, key, pass) in ahead {
+            let Begun::Yours(ticket) = variant.pipelines.begin(&key) else {
+                continue;
+            };
+            let line = state.0.log.as_ref().map(|log| {
+                log.begin((
+                    &variant.key,
+                    &variant.pipeline,
+                    &key,
+                    variant.logged_spirv(),
+                ))
+                .ahead_at_creation()
+            });
+            let claimed = variant.claim_libraries(&key);
+            drop(variant.pooled(state, (key, Arc::new(pass), ticket), (line, claimed), true));
+        }
         // Those handed to the pool, waited for a bound at most: a making still running then goes
         // on for the draws that take it.
         let deadline = Instant::now() + device.compile_device().policy().pipeline_creation_wait;
@@ -2928,9 +2955,9 @@ impl RenderVariant {
     /// the pool where a specialized note tests them, `VariantObjects::tested_formats`), whose part
     /// of the pipeline creation log logs it as [`graphics_pipeline`](Self::graphics_pipeline)
     /// does. The draw goes on meanwhile; its command buffer's batch is submitted once it is made
-    /// (`render/pending.rs`). Where it is not made and its residual form's is, the draw takes that
+    /// (`render/pending.rs`). Where it is not made and its general form's is, the draw takes that
     /// one, and nothing waits for `key`'s making (`render/residual.rs`). With whether it is
-    /// `key`'s own `VkPipeline`, made: not a residual form, nor being made, which a render encoder
+    /// `key`'s own `VkPipeline`, made: not a general form, nor being made, which a render encoder
     /// keeps no draw's shape with (`render/draw_shape.rs`).
     pub(crate) fn begin_graphics_pipeline(
         self: &Arc<Self>,
@@ -2951,9 +2978,9 @@ impl RenderVariant {
                 }
                 (DrawPipeline::Made(made), true)
             }
-            // A draw of a key another caller makes takes the key's residual form where it is made
+            // A draw of a key another caller makes takes the key's general form where it is made
             // (`render/residual.rs`).
-            (Begun::Pending(pending), _) => match self.residual_made(key) {
+            (Begun::Pending(pending), _) => match self.general_made(key) {
                 Some(drawn) => {
                     device.shared().counts.residual_form_drawn();
                     (DrawPipeline::Made(drawn), false)
@@ -2962,9 +2989,9 @@ impl RenderVariant {
             },
             (Begun::Yours(ticket), _) => {
                 match self.make_drawn(device, key, compatible, (state, formats), ticket) {
-                    // Handed to the pool: the draw takes the key's residual form where it is made,
+                    // Handed to the pool: the draw takes the key's general form where it is made,
                     // and nothing waits for the making (`render/residual.rs`).
-                    DrawPipeline::Making(pending) => match self.residual_made(key) {
+                    DrawPipeline::Making(pending) => match self.general_made(key) {
                         Some(drawn) => {
                             device.shared().counts.residual_form_making();
                             device.shared().counts.residual_form_drawn();
@@ -2983,21 +3010,25 @@ impl RenderVariant {
     /// a pass of custom sample positions), finding first, as
     /// [`begin_graphics_pipeline`](Self::begin_graphics_pipeline) does, an entry `state`'s last
     /// draws found made ([`last_made`](Self::last_made)), and keeping where one it looks up lies.
+    /// A key found neither way is made now, or, where its general form's is made, drawn with that
+    /// one while its own is made on the pool ([`general_drawn`](Self::general_drawn)). With
+    /// whether it is `key`'s own `VkPipeline`, not its general form's, as
+    /// [`begin_graphics_pipeline`](Self::begin_graphics_pipeline)'s.
     pub(crate) fn graphics_pipeline_now(
         self: &Arc<Self>,
         device: &Device,
         key: &DrawKey<'_>,
         render_pass: &Arc<RenderPassObject>,
         (state, formats): (&GraphicsState, crate::degradation::BoundFormats<'_>),
-    ) -> Result<Arc<RawPipeline>, Error> {
+    ) -> Result<(Arc<RawPipeline>, bool), Error> {
         if let Some(made) = self.last_made(state, key) {
-            return Ok(made);
+            return Ok((made, true));
         }
         device.shared().counts.graphics_pipeline_looked_up();
         let key = &key.key();
         if let Some((made, at)) = self.pipelines.made_with_at(key) {
             self.keep_last(state, key, at);
-            return Ok(made);
+            return Ok((made, true));
         }
         self.made_or_make(key, render_pass, (state, formats))
     }

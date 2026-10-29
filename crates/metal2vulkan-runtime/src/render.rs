@@ -8545,15 +8545,15 @@ impl RenderLowering {
                                     Some(Ok(made)) => (DrawPipeline::Made(made), true),
                                     // A failed making is made again here, as a caller after one
                                     // does (`making.rs`).
-                                    Some(Err(_)) => (
-                                        DrawPipeline::Made(variant.graphics_pipeline_now(
+                                    Some(Err(_)) => {
+                                        let (made, own) = variant.graphics_pipeline_now(
                                             &device,
                                             &key,
                                             &compatible,
                                             (&pipeline, &formats),
-                                        )?),
-                                        true,
-                                    ),
+                                        )?;
+                                        (DrawPipeline::Made(made), own)
+                                    }
                                     // Still being made at the bound: the draw records nothing,
                                     // before anything of it is tracked, as a draw whose pipeline
                                     // a capture misses does; later command buffers draw with it.
@@ -8566,17 +8566,17 @@ impl RenderLowering {
                             made => made,
                         }
                     }
-                    (false, None) => (
-                        DrawPipeline::Made(variant.graphics_pipeline_now(
+                    (false, None) => {
+                        let (made, own) = variant.graphics_pipeline_now(
                             &device,
                             &key,
                             &compatible,
                             (&pipeline, &formats),
-                        )?),
-                        true,
-                    ),
+                        )?;
+                        (DrawPipeline::Made(made), own)
+                    }
                 };
-                // Kept where it is the key's own, made: not a residual form; and where finding it
+                // Kept where it is the key's own, made: not its general form; and where finding it
                 // announced nothing at each occurrence.
                 if let (Some(token), DrawPipeline::Made(made), true, false) =
                     (token, &draw_pipeline, own, watch.met())

@@ -896,13 +896,13 @@ impl Counters {
         self.pipelines_pooled.fetch_add(1, Ordering::Relaxed);
     }
 
-    /// A draw or dispatch whose key's `VkPipeline` was not made took its residual form's
+    /// A draw or dispatch whose key's `VkPipeline` was not made took its general form's
     /// (`pipeline/render/residual.rs`).
     pub(crate) fn residual_form_drawn(&self) {
         self.residual_form_draws.fetch_add(1, Ordering::Relaxed);
     }
 
-    /// A draw or dispatch that began its key's making took its residual form's `VkPipeline`
+    /// A draw or dispatch that began its key's making took its general form's `VkPipeline`
     /// meanwhile (`pipeline/render/residual.rs`).
     pub(crate) fn residual_form_making(&self) {
         self.residual_form_makings.fetch_add(1, Ordering::Relaxed);
@@ -3052,11 +3052,12 @@ pub struct WorkCounts {
     /// rather than make it at the draw.
     pub pipelines_pooled: u64,
     /// Draws and dispatches whose key's `VkPipeline` was not made, which were recorded at once
-    /// with the made one of its residual form, each of the key's uniform-view slots read at its
-    /// residual (which reads the same bytes at every bind offset): none waited for its key's
-    /// making.
+    /// with the made one of its general form, each of the key's uniform-view slots read at its
+    /// residual (which reads the same bytes at every bind offset) and, for a draw on a device that
+    /// samples through Metal's own texture unit, each texture slot converted to `half` by its
+    /// class's routine (exact for every class): none waited for its key's making.
     pub residual_form_draws: u64,
-    /// Of the makings draws and dispatches began, those whose command took its key's residual
+    /// Of the makings draws and dispatches began, those whose command took its key's general
     /// form meanwhile: makings on the device's pool that nothing waits for.
     pub residual_form_makings: u64,
     /// The pieces the device's pipeline pool holds as the counts are read, waiting or running:

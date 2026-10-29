@@ -260,6 +260,13 @@ impl Line {
         self
     }
 
+    /// The line of a pipeline its state's creation hands the pool after its predicted key's
+    /// general form, nothing waiting for it: the predicted key itself (`render/residual.rs`).
+    pub(crate) fn ahead_at_creation(mut self) -> Line {
+        self.note = "; begun at its state's creation after its general form, the predicted key";
+        self
+    }
+
     /// Make the pipeline with `make` on this thread, and deliver the line.
     pub(crate) fn made<T, E>(
         self,

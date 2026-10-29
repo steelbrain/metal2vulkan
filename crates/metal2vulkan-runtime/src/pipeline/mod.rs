@@ -84,6 +84,9 @@ pub(super) use making::Pending;
 pub(super) use objects::ShaderModules;
 pub(super) use objects::{create_set_layout, set_needs, RawPipeline, VariantObjects};
 pub use options::{PipelineOption, PipelineOptions};
+/// The general form of a key (`render/residual.rs`), for `tests::general_form`.
+#[cfg(test)]
+pub(super) use render::general_form;
 /// The form a driver's facts choose, for the test that holds every committed profile to it
 /// (`tests::pipeline::every_committed_driver_reads_its_uniform_views_at_their_residuals`).
 #[cfg(test)]
