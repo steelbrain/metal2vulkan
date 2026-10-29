@@ -28,7 +28,7 @@
 //! format is a raw value — and nothing this case does is Apple SPI. The heap, the placed textures,
 //! the buffer over the heap, the texture-to-texture blit and the read-back are all public
 //! `objc2-metal` calls, which is what the probe used to take the table in the first place
-//! ([`crate::metal_work`]).
+//! (`metal_work`).
 //!
 //! The carried table stays, as a cross-check rather than as the answer
 //! ([`HeapBlits::carried_from_the_m4`]): the digests the probe printed on an Apple M4 under macOS

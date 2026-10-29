@@ -25,7 +25,7 @@
 //! A row pitch **below the texture's own row** is the one shape of this family that is not safe to
 //! hand to Metal: the AGX driver fails the assertion `bytes_per_row >= used_bytes_per_row` and ends
 //! the process. So the refusal lives in [`ends_metals_process`], decided from the request's own
-//! shape, and [`crate::metal_side::MetalSide`] calls it before it makes the call. A case of such a
+//! shape, and `metal_side::MetalSide` calls it before it makes the call. A case of such a
 //! shape says [`MetalSource::did_not_return`](crate::case::MetalSource::did_not_return) and record
 //! mode refuses the row before anything is made; the guard is the second line, so that a row
 //! somebody adds to a recorded table by mistake is refused by the side rather than by a convention.

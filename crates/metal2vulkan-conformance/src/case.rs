@@ -2037,7 +2037,7 @@ pub trait Side {
     /// [`Value`]: `Ok` where the wait returned, the typed error where it did not.
     ///
     /// **Metal has no side here, deliberately.** Metal does not come back from this call — the
-    /// probe that measured it ended with it — so [`crate::metal_side::MetalSide`] leaves this
+    /// probe that measured it ended with it — so `metal_side::MetalSide` leaves this
     /// default in place and must go on leaving it. A case over it says
     /// [`MetalSource::did_not_return`] and record mode refuses the row before anything is encoded.
     ///

@@ -874,7 +874,7 @@ impl Case for TwoPlaneHeapFill {
     }
 
     /// Metal runs this. `fillTexture:` is Apple SPI rather than absent, and
-    /// [`crate::metal_work`] reaches it by its selector after `respondsToSelector:`, so the answer
+    /// `metal_work` reaches it by its selector after `respondsToSelector:`, so the answer
     /// is measured on this chip instead of carried from somebody's terminal.
     fn metal_source(&self) -> MetalSource {
         MetalSource::Run

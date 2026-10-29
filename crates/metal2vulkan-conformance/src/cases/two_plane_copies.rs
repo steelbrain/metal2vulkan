@@ -20,7 +20,7 @@
 //! because of the fill.** The stated reason used to be that the two-plane formats are Apple's
 //! private ones. That is wrong: the *format* is not private — `MTLTextureDescriptor`'s pixel format
 //! is a raw value, and Metal makes, writes, blits and reads back 550 and 551 through entirely
-//! public `objc2-metal` calls ([`crate::metal_work`]). What is private is `fillTexture:`. So the
+//! public `objc2-metal` calls (`metal_work`). What is private is `fillTexture:`. So the
 //! announced blits, which fill nothing, run on Metal; `two-plane-row-blits` still carries its
 //! answer because two of its twenty-two blits fill first, and `two-plane-pad-fills` because every
 //! case of it is a fill.

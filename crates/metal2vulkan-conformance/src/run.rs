@@ -605,7 +605,7 @@ fn open(venues: Venues, policy: Policy) -> Result<Open, String> {
 /// descriptor sets across cases, and **a fresh device each round**, because a warm recycler is not
 /// what a first run meets.
 ///
-/// This leg and [`metal_times`] are run as two phases rather than case by case, and the reason is
+/// This leg and `metal_times` (macOS) are run as two phases rather than case by case, and the reason is
 /// a measurement hazard rather than tidiness: the `elsewhere` attribution reads the **whole
 /// process's** CPU, so interleaving the legs would put Metal's own threads inside our cases'
 /// readings and ours inside Metal's. Phases confine that to the first case or two of a phase. The

@@ -14,7 +14,7 @@
 //!
 //! # Nothing of this runs on Metal, ever
 //!
-//! [`crate::metal_side::MetalSide`] does not implement
+//! `metal_side::MetalSide` does not implement
 //! [`Side::handler_wait`] and must not: the call it would make is
 //! the call that takes Metal's process with it. Record mode refuses these three rows before
 //! anything is encoded ([`crate::case::MetalSource::forbidden`]), and their recordings are written

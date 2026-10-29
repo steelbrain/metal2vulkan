@@ -8,7 +8,7 @@
 //!
 //! A side with no public call for a step answers [`crate::case::Failure::unavailable`] for that
 //! step. On the Metal side that is the **fill** and the fill alone: `fillTexture:` and
-//! `fillTextureColor:` are Apple SPI ([`crate::metal_work`]). The *formats* a case names are not
+//! `fillTextureColor:` are Apple SPI (`metal_work`). The *formats* a case names are not
 //! private — a pixel format is a raw value in `MTLTextureDescriptor`, and Metal makes, writes,
 //! blits and reads back Apple's two-plane extended-range 550 and 551 through public calls like any
 //! other. So a program that fills carries its Metal answer

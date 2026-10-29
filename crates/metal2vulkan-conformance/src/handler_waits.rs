@@ -11,7 +11,7 @@
 //! [`MetalSource::did_not_return`](crate::case::MetalSource::did_not_return) and
 //! [`Verdict::MetalNeverReturned`](crate::verdict::Verdict::MetalNeverReturned).
 //!
-//! **Nothing here has a Metal side, by construction.** [`crate::metal_side::MetalSide`] does not
+//! **Nothing here has a Metal side, by construction.** `metal_side::MetalSide` does not
 //! implement [`Side::handler_wait`](crate::case::Side::handler_wait), and must not: the call it
 //! would make is the call that ends Metal's process. Record mode refuses the row before anything is
 //! encoded, and the recording is written from the probe that died.
