@@ -986,10 +986,12 @@ pub enum RuntimeDriverDefect {
     /// conversion.
     TwoPlaneChromaMisplaced,
     /// A sampler Y′CbCr conversion of a 10-bit multi-planar format (`..._3PACK16`) reads each
-    /// code's 16-bit word, its six unused low bits included, as a 16-bit unsigned normalized
-    /// value, where Vulkan converts the 10-bit code as `c / 1023`: a code reads up to one code
-    /// low (1023 as 0.999039). Nothing is refused: the runtime converts such a texture's planes
-    /// with its own kernel there, as on a device without the conversion.
+    /// code's 16-bit word, its six unused low bits included, where Vulkan converts the 10-bit
+    /// code as `c / 1023` and the unused bits have no effect: as a 16-bit unsigned normalized
+    /// value (lavapipe, RADV: a code reads up to one code low, 1023 as 0.999039), or the bits as
+    /// the code's fraction (NVIDIA: up to 63/64 of a code high). Nothing is refused: the runtime
+    /// converts such a texture's planes with its own kernel there, as on a device without the
+    /// conversion.
     TenBitCodesReadAsWords,
     /// An import of a host pointer (`VK_EXT_external_memory_host`) over pages the kernel cannot
     /// pin (a mapping of a dma-buf, `VM_PFNMAP`) fails as out of device memory, where Vulkan

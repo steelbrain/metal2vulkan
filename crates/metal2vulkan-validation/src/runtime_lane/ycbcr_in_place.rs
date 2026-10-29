@@ -8,15 +8,18 @@
 //! it binds a uniform texel buffer over the planes' bytes (`ycbcr_planes_bound`) and converts
 //! nothing (`ycbcr_refreshes`, `ycbcr_whole_conversions`). Any other device keeps the texture's
 //! image alone (`ycbcr_images_kept_device`) and converts it through the refresh. On either, a
-//! nearest sample and a linear one at a texel's centre read Metal's texel, and a linear one between
-//! texels Metal's filter of them; a `read()` takes the image on every device.
+//! nearest sample at a texel's centre reads the texel: Metal's, or where the device converts the
+//! texture's planes itself (`ycbcr_device_reads`), the device's conversion of them. Where the planes
+//! are read in place a linear sample at a texel's centre reads Metal's texel and one between
+//! texels Metal's filter of them; a texture that keeps its image is filtered by the device's own
+//! filter, which this module does not sample. A `read()` takes the image on every device.
 //!
 //! Each surface is a buffer standing for the IOSurface: the luma plane at byte 0, rows padded past
 //! their codes, the interleaved chroma plane after it; a 10-bit code in the high 10 bits of a
 //! little-endian word whose low 6 bits are noise, which Metal does not read.
 
 use super::degrade_notices::{counts, on_device, on_device_with};
-use super::ycbcr_device_reads::{assert_device_reads, vulkan_read};
+use super::ycbcr_device_reads::{assert_device_reads, device_conversions, vulkan_read};
 use super::{buffer_with, read_buffer, ycbcr_textures};
 use crate::air_library::AirLibrary;
 use metal2vulkan::bind::{
@@ -196,7 +199,7 @@ impl Surface {
     /// Vulkan's of the luma code and the chroma sums over 16, unrounded
     /// (`ycbcr_device_reads::vulkan_read`), which is Vulkan's midpoint reconstruction through a
     /// linear chroma filter at a luma texel's centre.
-    fn device_model(&self, bytes: &[u8]) -> Vec<[f64; 3]> {
+    pub(super) fn device_model(&self, bytes: &[u8]) -> Vec<[f64; 3]> {
         self.sums(bytes)
             .into_iter()
             .map(|(luma, sums)| {
@@ -204,6 +207,20 @@ impl Surface {
                 vulkan_read(self.codes(), self.conversion, [f64::from(luma), cb, cr])
             })
             .collect()
+    }
+
+    /// Asserts that the `float4`s `raw` (a `read()` of every texel, or a nearest sample at each
+    /// centre) of a texture of the surface over `bytes` are its texels: Metal's exactly
+    /// ([`Surface::model`]), or where the device converted the texture itself (`by_device`), the
+    /// device's conversion within its bound ([`Surface::device_model`], `ycbcr_device_reads`).
+    pub(super) fn assert_texels(&self, raw: &[u8], bytes: &[u8], by_device: bool, case: &str) {
+        match by_device {
+            true => {
+                let want = self.device_model(bytes);
+                assert_device_reads(raw, &want, (YCbCrOutput::Converted, false), case);
+            }
+            false => assert!(on_grid(raw) == self.model(bytes), "{case}: Metal's texels"),
+        }
     }
 
     /// Each texel's luma code and its four nearest chroma pairs' Cb and Cr codes weighted
@@ -352,7 +369,7 @@ fn on_grid(raw: &[u8]) -> Vec<[u16; 3]> {
 
 /// The `float4`s `state` writes of `texture` of `size` through `sampler`, one thread a texel, in a
 /// command buffer of its own, as their bytes.
-fn raw_texels(
+pub(super) fn raw_texels(
     device: &Device,
     state: &ComputePipelineState,
     (texture, size): (&Texture, [u64; 2]),
@@ -411,13 +428,14 @@ pub(super) fn reads_in_place(device: &Device) -> bool {
 }
 
 /// The samples of each surface, then of new codes the CPU wrote into its planes, and a `read()`:
-/// each texel Metal's, and on a device whose memory is the host's the samples read the planes in
-/// place, converting nothing, where any other device converts the image. A linear sample at a
-/// texel's centre and between texels is Metal's texel and Metal's filter of them under `exact` (the
-/// lane's policy) on every device, and under the defaults on a device that reads in place, where
-/// they are taken; a device that keeps the image filters it as the device does under the
-/// defaults, which this module does not sample.
-fn samples_read_the_planes(device: &Device, exact: bool) {
+/// each texel Metal's (or, where the device converted the texture itself, the device's conversion
+/// of the planes, [`Surface::assert_texels`]), and on a device whose memory is the host's the
+/// samples read the planes in place, converting nothing, where any other device converts the
+/// image. Where the planes are read in place a linear sample at a texel's centre and between
+/// texels is Metal's texel and Metal's filter of them; a device that keeps the image filters it as
+/// the device does under every policy (`PrecisionNote::DeviceSampling`), which this module does not
+/// sample. The textures the device converted itself are counted.
+fn samples_read_the_planes(device: &Device) -> u64 {
     let in_place = reads_in_place(device);
     eprintln!(
         "YCBCR-IN-PLACE {} ({:?}): in place {in_place}",
@@ -427,12 +445,16 @@ fn samples_read_the_planes(device: &Device, exact: bool) {
     let kernels = Kernels::new(device);
     let nearest = sampler(device, SamplerMinMagFilter::Nearest);
     let linear = sampler(device, SamplerMinMagFilter::Linear);
+    let mut by_devices = 0;
     for (seed, surface) in (1..).zip(SURFACES) {
         let what = format!("{:?} {:?}", surface.format, surface.conversion);
         let mut bytes = surface.bytes(seed);
         let buffer = buffer_with(device, &bytes).unwrap();
         let before = device.work_counts();
+        let converted = device_conversions(device);
         let texture = surface.texture(&buffer, 0).unwrap();
+        let by_device = device_conversions(device) > converted;
+        by_devices += u64::from(by_device);
         let made = ycbcr_work(&before, &device.work_counts());
         let want = if in_place { [1, 0] } else { [0, 1] };
         assert_eq!(made[..2], want, "{what}: in place, or kept for the device");
@@ -440,11 +462,14 @@ fn samples_read_the_planes(device: &Device, exact: bool) {
         for round in 0..2 {
             let model = surface.model(&bytes);
             let before = device.work_counts();
-            let centres = texels(device, &kernels.sample, (&texture, size), Some(&nearest));
-            assert!(centres == model, "{what} round {round}: nearest samples");
-            // Under the defaults a device that keeps the image filters it as the device does,
-            // off Metal's grid: its linear samples are another row's (docs/FAST-PATHS.md).
-            if exact || in_place {
+            let centres = raw_texels(device, &kernels.sample, (&texture, size), Some(&nearest));
+            // Read in place, through the texel buffer (these surfaces' rows are no driver's
+            // linear image's), the samples are Metal's; elsewhere the image's.
+            let case = format!("{what} round {round}: nearest samples");
+            surface.assert_texels(&centres, &bytes, by_device && !in_place, &case);
+            // A device that keeps the image filters it as the device does, off Metal's grid: its
+            // linear samples are another row's (docs/FAST-PATHS.md).
+            if in_place {
                 let half = texels(
                     device,
                     &kernels.sample_half,
@@ -478,28 +503,34 @@ fn samples_read_the_planes(device: &Device, exact: bool) {
             };
         }
         let before = device.work_counts();
-        let read = texels(device, &kernels.read, (&texture, size), None);
+        let read = raw_texels(device, &kernels.read, (&texture, size), None);
         let work = ycbcr_work(&before, &device.work_counts());
-        assert!(read == surface.model(&bytes), "{what}: read()");
+        surface.assert_texels(&read, &bytes, by_device, &format!("{what}: read()"));
         assert_eq!(work[2..], [0, 1, 0], "{what}: a read() converts the image");
     }
+    by_devices
 }
 
-/// Under the lane's policy (Metal's answers), a texture's samples are Metal's texels and Metal's
-/// filter of them on every device, read in place on a device whose memory is the host's
-/// ([`samples_read_the_planes`]), unannounced.
+/// Under the lane's policy (`DevicePolicy::exact_answers`), a texture's samples read its planes in
+/// place on a device whose memory is the host's, Metal's texels and Metal's filter of them there
+/// ([`samples_read_the_planes`]); no generic filter notice is announced, and `ycbcr-filter-not-exact`
+/// only where the device converted a texture itself (`ycbcr_device_reads`).
 #[test]
 fn a_ycbcr_texture_s_samples_read_its_planes_in_place_where_the_memory_is_the_host_s() {
     on_device(|device, messages| {
-        samples_read_the_planes(device, true);
+        let by_device = samples_read_the_planes(device);
         let notices = counts(&messages.take_notices());
         for kind in [
             Degradation::FloatSampleFilter,
             Degradation::HalfSampleFilter,
-            Degradation::YCbCrFilterNotExact,
         ] {
             assert_eq!(notices.get(&kind), None, "{notices:?}");
         }
+        assert_eq!(
+            notices.get(&Degradation::YCbCrFilterNotExact),
+            (by_device > 0).then_some(&1),
+            "{notices:?}"
+        );
     });
 }
 
@@ -512,7 +543,7 @@ fn a_ycbcr_texture_reads_its_planes_in_place_under_the_defaults() {
         options.policy = DevicePolicy::default();
     };
     on_device_with(defaults, |device, messages| {
-        samples_read_the_planes(device, false);
+        samples_read_the_planes(device);
         let notices = counts(&messages.take_notices());
         if reads_in_place(device) {
             for kind in [

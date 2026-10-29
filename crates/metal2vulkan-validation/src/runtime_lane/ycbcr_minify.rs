@@ -23,7 +23,13 @@
 //! Each output's hash is printed beside Metal's ([`METAL`]), which every one must equal. Metal's
 //! switches follow its rule in every band group that switches (4079 of 4096; the exact product
 //! misses about half), and MoltenVK on an M4 and lavapipe answered every output Metal's bytes,
-//! unannounced but for lavapipe's `shader-color-conversion`.
+//! unannounced but for lavapipe's `shader-color-conversion`. A device that samples natively
+//! (not through Metal's own sampler, `VkProperty::MetalSampler`) and keeps the image the reads
+//! converted filters that image's texels by its own filter (`device-sampling`) and converts the
+//! draw's colours by its own conversion (`device-color-conversion`), where no hash of Metal's
+//! holds: there `read` still equals Metal's, and the bands, the grid and the draw equal, bit for
+//! bit, the same kernels' and draw's of an `RGBA16Float` texture of the `read()` texels
+//! ([`twin_of`]), the device's filter of the same texels (NVIDIA's RTX 5080 Laptop GPU).
 //!
 //! A second `read` converts through the texture's refresh (`WorkCounts::ycbcr_refreshes`): the
 //! planes, unchanged, are compared with the staging buffer's copy, none of their bytes copied
@@ -35,7 +41,9 @@
 use super::argument_linear_samples::{kernel, LINEAR_EDGE};
 use super::degrade_notices::{counts, on_device};
 use super::depth_compares::{pipeline_of, run_held, Held, Through};
+use super::extended_range_targets::half_bits;
 use super::pixel_downscales::RENDER;
+use super::pixel_samplers::metal_sampler;
 use super::{buffer_with, read_buffer, ycbcr_in_place, ycbcr_textures, WAIT};
 use crate::air_library::AirLibrary;
 use metal2vulkan::bind::SamplerDescriptor;
@@ -228,6 +236,21 @@ fn read_all(device: &Device, texture: &Texture) -> Vec<u8> {
     command_buffer.wait_until_completed_for(WAIT).unwrap();
     assert_eq!(command_buffer.status(), CommandBufferStatus::Completed);
     read_buffer(&out, 0, 16 * W * H).unwrap()
+}
+
+/// An `RGBA16Float` texture of the `float4`s `texels` (`read()` of every texel, [`read_all`]),
+/// each value the `half` its image holds: the texels a natively sampling device filters where the
+/// YCbCr texture keeps the image its reads converted (an `R16G16B16A16_SFLOAT` one of them).
+fn twin_of(device: &Device, texels: &[u8]) -> Texture {
+    let d = TextureDescriptor::texture_2d(PixelFormat::RGBA16Float, W, H, false);
+    let twin = device.new_texture(&d).unwrap();
+    let halves: Vec<u8> = (texels.as_chunks::<4>().0.iter())
+        .map(|v| half_bits(f32::from_le_bytes(*v)))
+        .flat_map(u16::to_le_bytes)
+        .collect();
+    twin.replace_region(Region::new_2d(0, 0, W, H), 0, 0, &halves, 8 * W, 0)
+        .unwrap();
+    twin
 }
 
 /// The band along `axis` (0: x, 1: y): for place `m` of 64 (`7 + 59m` along x, `7 + 33m` along
@@ -485,14 +508,16 @@ fn a_ycbcr10_texture_over_planes_at_offsets_with_padded_rows_reads_as_metal_does
 }
 
 /// The texture over a surface at `layout` read and sampled, each output's hash printed after
-/// `what` and checked against Metal's.
+/// `what` and checked against Metal's, or the bands', the grid's and the draw's against the
+/// [`twin_of`]'s where the device filters the kept image natively (the module docs).
 fn samples_as_metal_does(layout: Layout, what: &str) {
     on_device(|device, messages| {
         eprintln!("{what} on {}", device.name());
         let texture = texture(device, layout);
         let state = sampler(device);
         let mut wrong = Vec::new();
-        let got = hash(&read_all(device, &texture));
+        let texels = read_all(device, &texture);
+        let got = hash(&texels);
         // A second read's conversion goes through the texture's refresh over unchanged planes:
         // no byte of them is copied (no long copy, so none split), and it reads the same texels.
         let before = device.work_counts();
@@ -525,8 +550,14 @@ fn samples_as_metal_does(layout: Layout, what: &str) {
             made(Through::Constexpr(LINEAR_EDGE)),
         );
         // The samples and the draw read the planes in place on a device whose memory is the
-        // host's, converting nothing; elsewhere the image the reads converted.
+        // host's, converting nothing; elsewhere the image the reads converted, which a natively
+        // sampling device filters as it filters the twin.
         let in_place = ycbcr_in_place::reads_in_place(device);
+        let twin = (!in_place && !metal_sampler(device)).then(|| twin_of(device, &texels));
+        let against = match twin {
+            Some(_) => "the twin's",
+            None => "Metal's",
+        };
         let before = device.work_counts();
         for (set, jobs) in [("bandx", band(0)), ("bandy", band(1)), ("grid", grid())] {
             for (name, kernel, sampler) in [
@@ -538,8 +569,21 @@ fn samples_as_metal_does(layout: Layout, what: &str) {
                 let bytes: Vec<u8> = out.iter().flat_map(|v| v.to_le_bytes()).collect();
                 let label = format!("{set} {name}");
                 let got = hash(&bytes);
-                let is = verdict(&label, &got);
-                eprintln!("{what} {label}: {is:?} hash {got}");
+                let is = match &twin {
+                    Some(twin) => {
+                        let mut plain =
+                            run_held(device, (twin, Held::Slot, sampler), kernel, &jobs, 1);
+                        plain.truncate(4 * jobs.len());
+                        Some(
+                            plain
+                                .iter()
+                                .map(|v| v.to_bits())
+                                .eq(out.iter().map(|v| v.to_bits())),
+                        )
+                    }
+                    None => verdict(&label, &got),
+                };
+                eprintln!("{what} {label}: {is:?} ({against}) hash {got}");
                 if set != "grid" {
                     let axis = usize::from(set == "bandy");
                     for line in analysed(&jobs, &out, axis) {
@@ -559,12 +603,15 @@ fn samples_as_metal_does(layout: Layout, what: &str) {
             false => assert_eq!(work[2], 0, "{what}: planes bound"),
         }
         let got = hash(&target);
-        let is = verdict("draw", &got);
-        eprintln!("{what} draw: {is:?} hash {got}");
+        let is = match &twin {
+            Some(twin) => Some(draw(device, twin, &state) == target),
+            None => verdict("draw", &got),
+        };
+        eprintln!("{what} draw: {is:?} ({against}) hash {got}");
         if is != Some(true) {
             wrong.push("draw".to_owned());
         }
         eprintln!("announced: {:?}", counts(&messages.take_notices()));
-        assert!(wrong.is_empty(), "not Metal's: {wrong:?}");
+        assert!(wrong.is_empty(), "not {against}: {wrong:?}");
     });
 }

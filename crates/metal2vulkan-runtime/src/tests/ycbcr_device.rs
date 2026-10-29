@@ -7,7 +7,8 @@
 //!
 //! Where the device converts the texture's format (`YCbCrSampler::of`), every texel is the
 //! conversion Vulkan states for the sampler's chroma location and filter, the format's range
-//! expansion and its model's matrix ([`spec_rgb`]), within [`SPEC_BOUND`]; the texture is
+//! expansion and its model's matrix ([`spec_rgb`]), within [`SPEC_BOUND`] (a code-reading
+//! format's, a nearest code of it, either at a tie); the texture is
 //! counted (`WorkCounts::ycbcr_device_conversions`, `ycbcr_device_samples`) and announced
 //! (`ycbcr-filter-not-exact`). Its distance from Metal's reads (`metal2vulkan::bind::ycbcr_read`
 //! after Metal's chroma filter) is printed, the note's measured bound. Everywhere else every
@@ -41,7 +42,10 @@ use std::sync::{Arc, Mutex};
 /// ([`spec_rgb`]; before the sRGB curve, for the formats read through it) the device's may take,
 /// past the `half` a converted format's image stores: at most 0.025 measured on lavapipe (Mesa
 /// 26.0.8, LLVM 21.1.8), whose 8-bit 4:4:4 layout is the one it converts (0.038 over the
-/// validation lanes' surfaces).
+/// validation lanes' surfaces), and 0.034 on NVIDIA's 615.71.09 (RTX 5080 Laptop GPU), which
+/// converts the 8-bit 4:2:0, 4:2:2 and 4:4:4 layouts. A code-reading format's channel is a code:
+/// the nearest to Vulkan's reconstruction within the bound, so at a tie either (NVIDIA's are
+/// Metal's, rounded up).
 const SPEC_BOUND: f64 = 0.04;
 
 /// A kernel that reads every texel of texture 0 into buffer 0, `float4`s in rows of the grid.
@@ -282,8 +286,9 @@ fn unsrgb(l: f64) -> f64 {
 
 /// Vulkan's conversion of texel `(x, y)` sampled at its centre (implicit reconstruction at the
 /// midpoint through a linear chroma filter, the only one the runtime takes of a subsampled
-/// format; the range expansion; the model's matrix), as the sample module writes it, unclamped,
-/// or rounded to codes; before the sRGB curve, for a format read through it.
+/// format; the range expansion; the model's matrix), as the sample module writes it, unclamped;
+/// a code-reading format's clamped into `[0, 1]`, which the sample module rounds to a code; before
+/// the sRGB curve, for a format read through it.
 fn spec_rgb(case: &Case, bytes: &[u8], (x, y): (u64, u64)) -> [f64; 3] {
     let codes = case.codes();
     let max = f64::from((1u32 << codes.bits) - 1);
@@ -314,8 +319,7 @@ fn spec_rgb(case: &Case, bytes: &[u8], (x, y): (u64, u64)) -> [f64; 3] {
     }
     let y_code = f64::from(luma(x, y));
     if codes.output == YCbCrOutput::Codes {
-        return [c[1], y_code / max, c[0]]
-            .map(|v| (v.clamp(0.0, 1.0) * max).round_ties_even() / max);
+        return [c[1], y_code / max, c[0]].map(|v| v.clamp(0.0, 1.0));
     }
     let n = codes.bits as i32;
     let scale = f64::from(1u32 << (n - 8));
@@ -446,8 +450,8 @@ fn cases() -> Vec<Case> {
 /// every texel, within [`SPEC_BOUND`], counted and announced; every other reads Metal's
 /// exactly. A 4:2:0 or 4:2:2 texture takes it only at Metal's midpoint chroma. On MoltenVK, whose
 /// two-plane chroma reconstruction is misplaced (`RuntimeDriverDefect::TwoPlaneChromaMisplaced`),
-/// no 4:2:0 or 4:2:2 texture takes it; on lavapipe, which reads 10-bit codes as 16-bit words
-/// (`RuntimeDriverDefect::TenBitCodesReadAsWords`), no 10-bit one.
+/// no 4:2:0 or 4:2:2 texture takes it; on lavapipe, RADV and NVIDIA, whose conversions read a
+/// 10-bit code's unused low bits (`RuntimeDriverDefect::TenBitCodesReadAsWords`), no 10-bit one.
 #[test]
 fn a_ycbcr_texture_reads_the_devices_conversion_where_it_converts_the_format() {
     let scratch = Scratch::new("ycbcr-device");
@@ -511,11 +515,15 @@ fn a_ycbcr_texture_reads_the_devices_conversion_where_it_converts_the_format() {
                         for c in 0..3 {
                             // A converted format's image holds `half`s: the device's value lies
                             // within one unit in the last place of the stored one
-                            // (`PrecisionNote::NativeHalfConversion`).
+                            // (`PrecisionNote::NativeHalfConversion`). A code-reading format's
+                            // holds codes: Vulkan's value lies within half a code of the nearest.
                             let ulp = match case.codes().output {
                                 YCbCrOutput::Converted => 2f64.powi(
                                     got[c].abs().max(2f64.powi(-14)).log2().floor() as i32 - 10,
                                 ),
+                                YCbCrOutput::Codes => {
+                                    0.5 / f64::from((1u32 << case.codes().bits) - 1)
+                                }
                                 _ => 0.0,
                             };
                             let far = ((decoded[c] - spec[c]).abs() - ulp).max(0.0);

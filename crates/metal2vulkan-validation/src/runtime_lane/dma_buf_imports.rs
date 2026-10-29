@@ -34,7 +34,8 @@ use super::keep_alives::eventually;
 use super::no_copy_heaps::{
     blit_into, blit_texels, encode_texels_in, encode_texels_out, shared, staged,
 };
-use super::ycbcr_in_place::{reads_in_place, sampler, texels, ycbcr_work, Kernels, Surface};
+use super::ycbcr_device_reads::device_conversions;
+use super::ycbcr_in_place::{raw_texels, reads_in_place, sampler, ycbcr_work, Kernels, Surface};
 use super::{
     layer_reported_nothing, layer_reported_nothing_at_all, read_buffer, validated_device,
     validated_device_with, Messages, ScratchCache,
@@ -696,7 +697,9 @@ fn a_view_past_one_udmabuf_s_limits_is_assembled_from_chunks() {
 /// (RADV), the buffer is assembled from chunks, counted, and the planes cross from one chunk into
 /// the next; where its memory is the host's (an integrated GPU, a CPU device), a kernel's samples
 /// read the planes in place across them (`WorkCounts::ycbcr_planes_bound`), converting nothing.
-/// Every nearest sample at a texel's centre is Metal's texel of the codes, on every device.
+/// Every nearest sample at a texel's centre is Metal's texel of the codes, but where a device that
+/// keeps the image converts the planes itself (`ycbcr_device_reads`): there it is the device's
+/// conversion of them.
 #[test]
 fn a_ycbcr_texture_over_a_buffer_of_chunks_reads_its_planes_in_place() {
     const TEST: &str = "dma-buf ycbcr planes";
@@ -748,11 +751,13 @@ fn a_ycbcr_texture_over_a_buffer_of_chunks_reads_its_planes_in_place() {
             assert_eq!(sparse - before.1, 1, "{TEST}: a sparse buffer");
         }
         let in_place = reads_in_place(device);
+        let converted = device_conversions(device);
         let texture = surface.texture(&buffer, 0).unwrap();
+        let by_device = device_conversions(device) > converted;
         let kernels = Kernels::new(device);
         let nearest = sampler(device, SamplerMinMagFilter::Nearest);
         let counted = device.work_counts();
-        let got = texels(
+        let got = raw_texels(
             device,
             &kernels.sample,
             (&texture, surface.size),
@@ -760,12 +765,10 @@ fn a_ycbcr_texture_over_a_buffer_of_chunks_reads_its_planes_in_place() {
         );
         let work = ycbcr_work(&counted, &device.work_counts());
         eprintln!(
-            "{TEST} on {}: in place {in_place}, work {work:?}",
+            "{TEST} on {}: in place {in_place}, by the device {by_device}, work {work:?}",
             device.name()
         );
-        let model = surface.model(&bytes);
-        let wrong = got.iter().zip(&model).filter(|(a, b)| a != b).count();
-        assert_eq!(wrong, 0, "{TEST}: texels not Metal's");
+        surface.assert_texels(&got, &bytes, by_device && !in_place, TEST);
         if in_place {
             assert_eq!(work[2..], [1, 0, 0], "{TEST}: the planes read in place");
         }

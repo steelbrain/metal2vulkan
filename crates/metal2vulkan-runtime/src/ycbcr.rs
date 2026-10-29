@@ -48,8 +48,8 @@
 //!   `ycbcr_device_samples`). A render shadow's load stays Metal's arithmetic, which the store
 //!   inverts (**Passes** below). Metal's fixed-point conversion converts every other texture, and
 //!   every texture of a device without the conversion or with a defect in it (MoltenVK's 4:2:0
-//!   and 4:2:2 formats, `RuntimeDriverDefect::TwoPlaneChromaMisplaced`; lavapipe's and RADV's
-//!   10-bit ones, `RuntimeDriverDefect::TenBitCodesReadAsWords`).
+//!   and 4:2:2 formats, `RuntimeDriverDefect::TwoPlaneChromaMisplaced`; lavapipe's, RADV's and
+//!   NVIDIA's 10-bit ones, `RuntimeDriverDefect::TenBitCodesReadAsWords`).
 //! - **When it converts.** Before an encoder's first command that uses the texture, and again
 //!   after a command of the encoder that writes the planes' bytes (through the buffer, a texture
 //!   over the planes such as a decoder's `R8Unorm` and `RG8Unorm` ones, or a blit): a use of the

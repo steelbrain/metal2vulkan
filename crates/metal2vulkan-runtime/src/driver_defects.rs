@@ -444,6 +444,19 @@ pub(super) struct Affected {
 ///   Nothing is refused: a 10-bit two-plane texture converts through Metal's arithmetic there, and
 ///   its planes read in place through the texel buffer (`ycbcr_device.rs`,
 ///   `texture/ycbcr_planes.rs`).
+/// - NVIDIA's (`NVIDIA_PROPRIETARY`): on the RTX 5080 Laptop GPU (`deviceID` 0x2c19) under Linux,
+///   a sampler Y′CbCr conversion of `G10X6_B10X6R10X6_2PLANE_420_UNORM_3PACK16` and its 4:2:2 and
+///   4:4:4 formats (optimal tiling, the image's own format, the surface's matrix and range) reads
+///   each code's six unused low bits too, where Vulkan has them "unused by format conversion" in
+///   a view of the image's own format ("If the VkImage format and VkImageView format are the same,
+///   these bits will be unused by format conversion and this will have no effect"): measured
+///   through the runtime's conversion of random planes (`tests::ycbcr_device`), every texel lay
+///   within 0.0001/2048 of Vulkan's conversion of the codes where the words' low bits were 0, and
+///   up to 6.43/2048 from it where they were random, within 0.034/2048 there of the word read as
+///   the code with six bits of fraction (`word / 64`) under a video range; its 8-bit formats lay
+///   within 0.034/2048 of Vulkan's. Measured on 615.71.09: known broken through 615.71.09. Every
+///   NVIDIA GPU takes it until a probe finds one clean. Nothing is refused: a 10-bit two-plane
+///   texture converts through Metal's arithmetic there (`ycbcr_device.rs`).
 ///
 /// `UnpinnablePagesBreakHostMemory`:
 /// - NVIDIA's (`NVIDIA_PROPRIETARY`): on the RTX 5080 Laptop GPU (`deviceID` 0x2c19) under Linux,
@@ -601,6 +614,11 @@ pub(super) const AFFECTED: &[Affected] = &[
     Affected {
         defect: RuntimeDriverDefect::TenBitCodesReadAsWords,
         driver: DriverId::MESA_RADV,
+        clean: &[],
+    },
+    Affected {
+        defect: RuntimeDriverDefect::TenBitCodesReadAsWords,
+        driver: DriverId::NVIDIA_PROPRIETARY,
         clean: &[],
     },
     Affected {

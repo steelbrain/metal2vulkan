@@ -1556,7 +1556,9 @@ pub enum PrecisionNote {
     /// largest difference of any channel, in codes of 1/255, is 1.183 on NVIDIA's 615.71.09 (RTX
     /// 3090), 0.877 on RADV (Mesa 26.0.8, Radeon 780M and RX 7900 XTX), 1.058 on ANV (Mesa 26.2.4,
     /// Iris Xe of RPL-P) and 0.872 on lavapipe (Mesa 26.2.4); at coordinates on the 1/256 grid,
-    /// 0.498, 0.125, 0.125 and 0.125.
+    /// 0.498, 0.125, 0.125 and 0.125, and 0.56 on NVIDIA's RTX 5080 Laptop GPU over 10-bit and
+    /// packed textures (615.71.09). Where the device converts the texels itself
+    /// (`ycbcr-filter-not-exact`), its filter's sum is of its own conversion's texels.
     ///
     /// Validation derives no tolerance from it.
     DeviceSampling,
@@ -1619,7 +1621,10 @@ pub enum PrecisionNote {
     /// - an 8-, 10- or 16-bit normalized code `c`: Metal's `c / (2^b - 1)` correctly rounded;
     ///   the device's within one `f32` ulp of it where measured (lavapipe multiplies by the
     ///   reciprocal: some 8-bit codes one ulp high, some 10-bit codes of `BGR10A2Unorm`, a 16-bit
-    ///   code and 512 `Depth16Unorm` codes one ulp low);
+    ///   code and 512 `Depth16Unorm` codes one ulp low), or a 10-bit code widened by replicating
+    ///   its bits to 16, `(c << 6 | c >> 4) / 65535` within one `f32` ulp, which lies within 0.015
+    ///   of a code of Metal's (NVIDIA's RTX 5080 Laptop GPU, a two-plane YCbCr texture's
+    ///   `A2B10G10R10_UNORM_PACK32` codes);
     /// - a 4-, 5- or 6-bit channel of a packed format: the device may widen it by replicating its
     ///   bits (ANV, NVIDIA), within 0.18 of a code (`1 / (2^b - 1)`) where it replicates a 5- or
     ///   6-bit channel to 8 bits and exactly for a 4-bit one; or convert it by the reciprocal,

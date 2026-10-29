@@ -2180,7 +2180,7 @@ bound.
   unpacked 8- or 10-bit codes of a 4:2:0, 4:2:2 or 4:4:4 layout over plane 0, a 4:4:4 one read as
   codes aside, on a device that reports the format's conversion features, Metal's midpoint chroma
   through a linear chroma filter among them for a 4:2:0 or 4:2:2 one, and has no defect in it:
-  MoltenVK's 4:2:0 and 4:2:2 formats and lavapipe's and RADV's 10-bit ones aside) reads the device's conversion
+  MoltenVK's 4:2:0 and 4:2:2 formats and lavapipe's, RADV's and NVIDIA's 10-bit ones aside) reads the device's conversion
   of its planes, announced where the texture is made; so do the samples of a texture whose planes
   are read in place through the device's conversion of a linear image of them (where the device's
   linear tiling of the 4:2:0 format has Metal's reconstruction), the device's filter of the codes
@@ -2194,7 +2194,11 @@ bound.
   filtered result can miss Metal's by a step of that grid or more. Measured on lavapipe (Mesa
   26.0.8; random planes, every texel), which converts the 8-bit 4:4:4 layout here: each channel
   within 0.04/2048 of Vulkan's conversion past the `half` its image stores, and of Metal's read
-  within 6/2048 where the result lies in `[0, 1]`; outside it by what Metal's clamp takes off. A
+  within 6/2048 where the result lies in `[0, 1]`; outside it by what Metal's clamp takes off. On
+  NVIDIA's 615.71.09 (RTX 5080 Laptop GPU), which converts the 8-bit 4:2:0, 4:2:2 and 4:4:4
+  layouts: within 0.034/2048 of Vulkan's conversion, and of Metal's read within 12.4/2048 in
+  `[0, 1]` (19.1 through an `_sRGB` twin's curve), Metal rounding each reconstructed chroma to a
+  code where the device does not; a code-reading format's codes are Metal's. A
   device that samples natively answers the device's filter, `metal2vulkan-degrade-device-sampling`;
   on MoltenVK, Metal's own sampler filters the converted texels as an `RGBA16Float` or `RGBA32Float`
   texture's, within one step of the grid (a `half` result within one `half` ulp, measured in plain
@@ -3234,7 +3238,8 @@ bound.
   texel read from one texel of one level: an 8-, 10- or 16-bit normalized code within one `f32`
   ulp of Metal's `c / (2^b - 1)` where measured (lavapipe multiplies by the reciprocal: some 8-bit
   codes one ulp high; some 10-bit `BGR10A2Unorm`, a 16-bit and 512 `Depth16Unorm` codes one ulp
-  low); a 4-, 5- or 6-bit channel of a packed format within one `f32` ulp where the device converts
+  low), and a 10-bit code within 0.015 of a code where the device widens it by replicating its
+  bits to 16, `(c << 6 | c >> 4) / 65535` (NVIDIA's RTX 5080 Laptop GPU); a 4-, 5- or 6-bit channel of a packed format within one `f32` ulp where the device converts
   it by the reciprocal (lavapipe: some `ABGR4Unorm` codes one ulp high), and within 0.18 of a code
   where it widens a 5- or 6-bit channel by replicating its bits (ANV, NVIDIA; a 4-bit channel's
   replication is exact); a half-float or small-float texel's NaN in the device's encoding, where

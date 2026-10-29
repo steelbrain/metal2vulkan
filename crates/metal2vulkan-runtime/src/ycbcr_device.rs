@@ -15,8 +15,8 @@
 //!   `MIDPOINT_CHROMA_SAMPLES`, for a 4:2:0 or 4:2:2 format; either for a 4:4:4 one, which
 //!   reconstructs nothing), a 4:4:4 format also Vulkan 1.3 or `VK_EXT_ycbcr_2plane_444_formats`,
 //!   and its driver has no defect in it (`RuntimeDriverDefect::TwoPlaneChromaMisplaced`, MoltenVK,
-//!   for the subsampled formats; `RuntimeDriverDefect::TenBitCodesReadAsWords`, lavapipe and RADV,
-//!   for the 10-bit ones). A 4:4:4 format read as codes (`RGB8_444_2P`, `RGB10_444_2P`) converts
+//!   for the subsampled formats; `RuntimeDriverDefect::TenBitCodesReadAsWords`, lavapipe, RADV and
+//!   NVIDIA, for the 10-bit ones). A 4:4:4 format read as codes (`RGB8_444_2P`, `RGB10_444_2P`) converts
 //!   nothing there (the identity model, which ignores the range, and no chroma to reconstruct),
 //!   so it reads its codes through ours, without a planes' image. Every other texture, and every
 //!   texture of another device, converts through Metal's arithmetic as before
@@ -59,7 +59,12 @@
 //!   `TenBitCodesReadAsWords`): each channel within 0.04/2048 of Vulkan's conversion past the
 //!   `half` the texture's image stores (0.038 at most), and of Metal's read within 6/2048 where
 //!   the result lies in `[0, 1]`; outside it, which lavapipe does not clamp, by what Metal's clamp
-//!   takes off. MoltenVK 1.4.2 converts no two-plane format here: its 4:2:0 and 4:2:2
+//!   takes off. On NVIDIA's 615.71.09 (RTX 5080 Laptop GPU), which converts the 8-bit 4:2:0,
+//!   4:2:2 and 4:4:4 layouts (its 10-bit ones read the codes' unused bits,
+//!   `TenBitCodesReadAsWords`): within 0.034/2048 of Vulkan's conversion, and of Metal's read within
+//!   12.4/2048 where it lies in `[0, 1]` (19.1 through an `_sRGB` twin's curve), Metal rounding each
+//!   reconstructed chroma to a code where the device does not; a code-reading format's codes are
+//!   Metal's. MoltenVK 1.4.2 converts no two-plane format here: its 4:2:0 and 4:2:2
 //!   reconstruction is misplaced (`TwoPlaneChromaMisplaced`), and it reports no 4:4:4 two-plane
 //!   format.
 //! - **4:2:2 pairs** (`GBGR422`, `BGRG422`, `chroma_pairs.rs`). The device converts a 4:2:2

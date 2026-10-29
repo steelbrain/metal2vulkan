@@ -2203,7 +2203,9 @@ degradations! {
         /// the pipeline's reads, samples and gathers with a `float` result, on a device whose
         /// sampler is not Metal's. Recorded bound, of a texel whose access reads one texel of one
         /// level: an 8-, 10- or 16-bit normalized code within one `f32` ulp of Metal's
-        /// `c / (2^b - 1)` where measured (lavapipe's reciprocal product); a 4-, 5- or 6-bit
+        /// `c / (2^b - 1)` where measured (lavapipe's reciprocal product), a 10-bit one within
+        /// 0.015 of a code where the device widens it by replicating its bits to 16 (NVIDIA); a
+        /// 4-, 5- or 6-bit
         /// channel within one `f32` ulp where the device converts it by the reciprocal (lavapipe),
         /// and within 0.18 of a code where it widens a 5- or 6-bit channel by replicating its bits
         /// (ANV, NVIDIA; a 4-bit channel's replication exact); a half-float or small-float NaN in
