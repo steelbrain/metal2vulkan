@@ -1252,9 +1252,9 @@ fn commands_read_back_their_type_and_slots_past_the_record() {
                 .unwrap()
         });
         assert_eq!(slots(&command(&made, 1)), kept, "carried by a GPU copy");
-        let before = device.work_counts().commands_replayed;
+        let before = device.work_counts().commands_recorded;
         blit(&|blit| blit.reset_commands_in_buffer(&made, 1..2).unwrap());
-        let after = device.work_counts().commands_replayed;
+        let after = device.work_counts().commands_recorded;
         assert_eq!(
             (
                 after.cmd_copy_buffer - before.cmd_copy_buffer,

@@ -25,7 +25,7 @@
 //! and fallbacks, shadows and those zeroed as made, images started on the host, internal
 //! submissions, shadows' copies and the texels their copies in and back move, the merges'
 //! scratches reused and zeroed, the merges that fetched their texels, the command buffers begun by
-//! what for, the render pass begins and secondary executions replayed, and the passes whose first
+//! what for, the render pass begins and secondary executions recorded, and the passes whose first
 //! instance recorded inline).
 //!
 //! [`surface_texture_cost_parts`] takes the frame apart over anonymous pages: the textures' making
@@ -290,7 +290,7 @@ fn counts_per_frame(before: &WorkCounts, after: &WorkCounts, frames: usize) -> S
          {:.2}; keeps and merges dispatched {:.2}, texels kept {:.0}; merge scratches reused \
          {:.2}, zeroed {:.2}; merges fetched {:.2}); command buffers begun {:.2} (encoders' own \
          {:.2}, segments {:.2}, draws' secondaries {:.2}, batches' {:.2}, barriers kept {:.2}, \
-         internal {:.2}), render pass begins replayed {:.2}, secondaries executed {:.2}, passes \
+         internal {:.2}), render pass begins recorded {:.2}, secondaries executed {:.2}, passes \
          recorded inline {:.2}",
         per(after.shadowed_textures, before.shadowed_textures),
         per(after.shadows_zeroed, before.shadows_zeroed),
@@ -359,12 +359,12 @@ fn counts_per_frame(before: &WorkCounts, after: &WorkCounts, frames: usize) -> S
             before.command_buffers_begun_internal
         ),
         per(
-            after.commands_replayed.cmd_begin_render_pass,
-            before.commands_replayed.cmd_begin_render_pass
+            after.commands_recorded.cmd_begin_render_pass,
+            before.commands_recorded.cmd_begin_render_pass
         ),
         per(
-            after.commands_replayed.cmd_execute_commands,
-            before.commands_replayed.cmd_execute_commands
+            after.commands_recorded.cmd_execute_commands,
+            before.commands_recorded.cmd_execute_commands
         ),
         per(after.inline_passes, before.inline_passes),
     )

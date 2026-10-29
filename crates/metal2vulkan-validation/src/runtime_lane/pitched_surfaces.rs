@@ -1382,7 +1382,7 @@ fn a_shadowed_color_beside_a_memoryless_scratch_blends_over_part_of_it() {
 /// loaded texture in and kept (it merges back), before it. The copies in of different textures
 /// share one barrier before them and one after; the keep, which reads the shadow its texture's
 /// copy in wrote, takes a barrier of its own. So the pass records as many pipeline barriers
-/// (`WorkCounts::commands_replayed`) whatever `n`, where a barrier before and one after each copy
+/// (`WorkCounts::commands_recorded`) whatever `n`, where a barrier before and one after each copy
 /// grew them by two a texture (counted after a first pass of the shape). The buffer holds each
 /// texture's texels inside its rectangle, as the draws read them, and every other byte as it
 /// was. Printed: `SHADOW-RUN`.
@@ -1440,9 +1440,9 @@ fn a_pass_s_copies_in_share_their_barriers() {
                     .unwrap();
             }
             encoder.end_encoding().unwrap();
-            let before = device.work_counts().commands_replayed.cmd_pipeline_barrier;
+            let before = device.work_counts().commands_recorded.cmd_pipeline_barrier;
             run(&command_buffer);
-            device.work_counts().commands_replayed.cmd_pipeline_barrier - before
+            device.work_counts().commands_recorded.cmd_pipeline_barrier - before
         };
         // A first pass makes what every pass of the shape needs (the textures' first moves, the
         // pipelines' sets), then the counted passes.

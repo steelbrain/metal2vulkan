@@ -98,6 +98,9 @@ fn run(device: &Device, state: &RenderPipelineState, commands: u64) -> (u64, Vec
             .draw_primitives(PrimitiveType::Triangle, 0, 3, 1, 0)
             .unwrap();
     }
+    // From before the command buffer's first encoder: each command is recorded at its call, so a
+    // window opened at the commit would see only what the commit path records.
+    let before = device.work_counts().commands_recorded.cmd_pipeline_barrier;
     let queue = device.new_command_queue().unwrap();
     let command_buffer = queue.command_buffer().unwrap();
     let mut encoder = command_buffer.compute_command_encoder().unwrap();
@@ -119,12 +122,11 @@ fn run(device: &Device, state: &RenderPipelineState, commands: u64) -> (u64, Vec
         .execute_commands_in_buffer(&buffer, 0..commands)
         .unwrap();
     encoder.end_encoding().unwrap();
-    let before = device.work_counts().commands_replayed.cmd_pipeline_barrier;
     command_buffer.commit().unwrap();
     command_buffer.wait_until_completed_for(WAIT).unwrap();
     assert_eq!(command_buffer.status(), CommandBufferStatus::Completed);
     assert_eq!(command_buffer.error(), None);
-    let barriers = device.work_counts().commands_replayed.cmd_pipeline_barrier - before;
+    let barriers = device.work_counts().commands_recorded.cmd_pipeline_barrier - before;
     let mut bytes = vec![0u8; (4 * SIDE * SIDE) as usize];
     target
         .get_bytes(
@@ -158,7 +160,9 @@ fn replayed_draws_of_functions_that_write_nothing_write_no_resident_buffer() {
             .new_render_pipeline_state(&descriptor, &PipelineOptions::default())
             .unwrap();
         let mut barriers = Vec::new();
-        for commands in [1, 16] {
+        // The first run on the device also records the device's own first-use work, which the
+        // count takes from every command buffer: measured twice, it is the later reading.
+        for commands in [1, 1, 16] {
             let (recorded, pixels) = run(device, &state, commands);
             assert!(
                 pixels.iter().all(|&p| p == GREEN),
@@ -167,7 +171,7 @@ fn replayed_draws_of_functions_that_write_nothing_write_no_resident_buffer() {
             barriers.push(recorded);
         }
         assert_eq!(
-            barriers[0], barriers[1],
+            barriers[1], barriers[2],
             "no draw waits on another's: {barriers:?}"
         );
         assert_made_once(messages, &HOST_STEPS, &forced_with(device, &[descriptor]));

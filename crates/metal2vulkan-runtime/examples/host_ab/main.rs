@@ -411,9 +411,9 @@ fn child(side: &str, options: &Options) {
                  pending_four_more {}",
                 c.queue_submissions,
                 c.command_buffers_submitted,
-                c.commands_replayed.cmd_pipeline_barrier,
-                c.commands_replayed.cmd_draw,
-                c.commands_replayed.cmd_dispatch,
+                c.commands_recorded.cmd_pipeline_barrier,
+                c.commands_recorded.cmd_draw,
+                c.commands_recorded.cmd_dispatch,
                 c.variant_pipelines_made,
                 c.device_memory_allocated,
                 c.host_pointer_imports_made,
@@ -455,7 +455,7 @@ fn child(side: &str, options: &Options) {
                 c.submits_behind_idle_stalls,
                 c.wait_behind_idle_stall_longest_nanos,
             );
-            eprintln!("runtime commands recorded: {:?}", c.commands_replayed);
+            eprintln!("runtime commands recorded: {:?}", c.commands_recorded);
             eprintln!(
                 "runtime notices: {} (bound notices made {}), other messages heard {}",
                 runtime::NOTICES.load(std::sync::atomic::Ordering::Relaxed),

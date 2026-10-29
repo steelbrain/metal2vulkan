@@ -107,12 +107,12 @@ fn ran_flat(command_buffer: &CommandBuffer) -> bool {
         })
 }
 
-/// The generated-commands executions and the indirect dispatches `device` replayed so far.
+/// The generated-commands executions and the indirect dispatches `device` recorded so far.
 fn recorded(device: &Device) -> (u64, u64) {
-    let replayed = device.work_counts().commands_replayed;
+    let commands = device.work_counts().commands_recorded;
     (
-        replayed.cmd_execute_generated_commands,
-        replayed.cmd_dispatch_indirect,
+        commands.cmd_execute_generated_commands,
+        commands.cmd_dispatch_indirect,
     )
 }
 

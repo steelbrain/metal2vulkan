@@ -1,12 +1,12 @@
 //! Device tests of the commands recorded, by kind (the runtime's `recorder`,
-//! `WorkCounts::commands_replayed`), on the device the cfg selects, under the validation layer: a
+//! `WorkCounts::commands_recorded`), on the device the cfg selects, under the validation layer: a
 //! command buffer of one blit encoder of fills and copies records each as one call of its own
 //! kind, counted exactly: a fill of one word as `vkCmdFillBuffer`, or as `vkCmdUpdateBuffer` where
 //! the runtime records fills as transfers (`WorkCounts::fills_by_transfers`, MoltenVK 1.4.1).
 
 use super::host_memory::on_device;
 use super::{read_buffer, WAIT};
-use metal2vulkan_runtime::{CommandBufferStatus, CommandsReplayed, ResourceOptions};
+use metal2vulkan_runtime::{CommandBufferStatus, CommandsRecorded, ResourceOptions};
 
 /// The fills and the copies the command buffer encodes, each of [`WORD`] bytes at a word of its
 /// own.
@@ -16,7 +16,7 @@ const WORD: u64 = 4;
 
 /// The counts `after` holds past `before`, of the fills', the updates', the copies' and the
 /// ends' kinds.
-fn added(before: &CommandsReplayed, after: &CommandsReplayed) -> [u64; 4] {
+fn added(before: &CommandsRecorded, after: &CommandsRecorded) -> [u64; 4] {
     [
         after.cmd_fill_buffer - before.cmd_fill_buffer,
         after.cmd_update_buffer - before.cmd_update_buffer,
@@ -60,12 +60,12 @@ fn each_command_recorded_counts_once_by_kind() {
             read_buffer(&copied, 0, WORD * COPIES).unwrap(),
             expected[..(WORD * COPIES) as usize]
         );
-        if after.commands_replayed == before.commands_replayed {
+        if after.commands_recorded == before.commands_recorded {
             eprintln!("COMMANDS-RECORDED {name}: took no slot, so counts nothing");
             return;
         }
         let [fills, updates, copies, ends] =
-            added(&before.commands_replayed, &after.commands_replayed);
+            added(&before.commands_recorded, &after.commands_recorded);
         let recorded = after.fills_recorded - before.fills_recorded;
         let by_transfers = after.fills_by_transfers - before.fills_by_transfers;
         eprintln!(

@@ -45,7 +45,7 @@
 //! first instance recorded inline and the others by the check that ruled it out
 //! (`WorkCounts::inline_passes`, `WorkCounts::passes_not_inline_actions` and kin)
 //! with the render pass begins and secondary executions recorded
-//! (`WorkCounts::commands_replayed`), and the device's live
+//! (`WorkCounts::commands_recorded`), and the device's live
 //! `VkDeviceMemory` by kind after the timed frames (ANV on i915 lists each in every kernel
 //! submission). Then the CPU time of the
 //! process's other threads over the timed frames, their waits included, per command buffer (on
@@ -1842,8 +1842,8 @@ fn measure(runs: &[Run]) {
             per_frame(|c| c.passes_not_inline_draws),
             per_frame(|c| c.inline_split_instances),
             per_frame(|c| c.unrun_instances_ended),
-            per_frame(|c| c.commands_replayed.cmd_begin_render_pass),
-            per_frame(|c| c.commands_replayed.cmd_execute_commands),
+            per_frame(|c| c.commands_recorded.cmd_begin_render_pass),
+            per_frame(|c| c.commands_recorded.cmd_execute_commands),
         );
         eprintln!(
             "FRAME-COST {name} {label}: a frame's command buffers: {:.1} begun ({:.2} a pass), \

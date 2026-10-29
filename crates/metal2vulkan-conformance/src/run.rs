@@ -332,7 +332,7 @@ pub fn cost_alone_on_under(
 ) -> Result<(String, Vec<CaseCost>), String> {
     // This is the leg that must not be chained onto a whole-set leg inside one process, however
     // convenient that looks: it inherits the other leg's threads and reads a different number.
-    // `bc1-rgba` reads `commands_replayed.cmd_dispatch` 4 and `command_buffers_deferred` 6 in
+    // `bc1-rgba` reads `commands_recorded.cmd_dispatch` 4 and `command_buffers_deferred` 6 in
     // three invocations out of three on its own, and 0 for both when this leg follows a whole-set
     // one, because whether a deferred replay lands inside a case's window is not the same question
     // after 393 cases have run. Measured that way the contrast called 6,843 counts

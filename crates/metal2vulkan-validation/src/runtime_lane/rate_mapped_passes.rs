@@ -875,7 +875,7 @@ fn a_pass_of_no_draw_call_over_a_mutable_map_hangs_until_one_drew() {
 /// 27.0.1): a pass over a mutable map not yet reset, and over a map of no layers made while no map
 /// of layers was released, mutable or not, runs its clear and store and each draw's vertex
 /// function (Metal's counted 3 runs for a triangle), and shades nothing. The runtime records the
-/// draw through an empty scissor: it records `vkCmdDraw` once (`commands_replayed`).
+/// draw through an empty scissor: it records `vkCmdDraw` once (`commands_recorded`).
 #[test]
 fn a_pass_over_a_map_of_no_compiled_layers_runs_its_vertex_function_alone() {
     let unset = |screen: u32, layers: &[(f32, f32)]| {
@@ -896,7 +896,7 @@ fn a_pass_over_a_map_of_no_compiled_layers_runs_its_vertex_function_alone() {
             fixture.draw(&map, &target, |_| {}).unwrap();
             let after = device.work_counts();
             assert!(cleared(&target), "{name}");
-            let draws = after.commands_replayed.cmd_draw - before.commands_replayed.cmd_draw;
+            let draws = after.commands_recorded.cmd_draw - before.commands_recorded.cmd_draw;
             assert_eq!(draws, 1, "{name}: the vertex function's draw");
             assert!(!announced_after_release(messages), "{name}");
         });

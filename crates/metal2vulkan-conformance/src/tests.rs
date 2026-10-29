@@ -4134,7 +4134,7 @@ fn the_cost_half_reads_every_count_the_runtime_keeps() {
     for name in [
         "queue_submissions",
         "variant_pipelines_made",
-        "commands_replayed.cmd_draw",
+        "commands_recorded.cmd_draw",
         "object_churn.images_parked",
         "shadow_keeps.render_cut",
     ] {
@@ -4177,7 +4177,7 @@ fn the_reading_follows_the_nesting_and_skips_the_site_tables() {
     let shape = "\
 WorkCounts {
     queue_submissions: 2,
-    commands_replayed: CommandsReplayed {
+    commands_recorded: CommandsRecorded {
         cmd_draw: 7,
     },
     copy_sites: [
@@ -4198,7 +4198,7 @@ WorkCounts {
 }";
     let read = crate::cost::Counts::read(shape).expect("the shape reads");
     assert_eq!(read.get("queue_submissions"), 2);
-    assert_eq!(read.get("commands_replayed.cmd_draw"), 7);
+    assert_eq!(read.get("commands_recorded.cmd_draw"), 7);
     assert_eq!(read.get("render_passes_made"), 1);
     assert_eq!(read.len(), 3, "{:?}", read);
 }
@@ -4266,7 +4266,7 @@ fn the_work_is_attributed_to_the_three_regions() {
         assert_eq!(region_of(name), Region::Translation, "{name}");
     }
     for name in [
-        "commands_replayed.cmd_draw",
+        "commands_recorded.cmd_draw",
         "queue_submissions",
         "command_buffers_submitted",
         "scheduler_passes",
@@ -4745,7 +4745,7 @@ fn a_count_that_says_which_thread_arrived_first_is_never_gated() {
     for count in [
         "command_buffers_submitted",
         "queue_submissions",
-        "commands_replayed.cmd_draw",
+        "commands_recorded.cmd_draw",
         "render_passes_made",
         "slot_returns",
         // The `_made` partner of a `_shared` or `_reused` count stays gated: finding one already
@@ -5068,7 +5068,7 @@ fn a_count_only_one_shape_moved_is_reported_as_well() {
         measured: "eight runs of the whole selection".to_owned(),
         contrasted: None,
         degraded: Vec::new(),
-        bounds: [("commands_replayed.cmd_dispatch".to_owned(), 4)]
+        bounds: [("commands_recorded.cmd_dispatch".to_owned(), 4)]
             .into_iter()
             .collect(),
         moving: Default::default(),
@@ -5092,7 +5092,7 @@ fn a_count_only_one_shape_moved_is_reported_as_well() {
     assert_eq!(
         apart.apart_from(&held),
         vec![
-            ("commands_replayed.cmd_dispatch", 4, 0),
+            ("commands_recorded.cmd_dispatch", 4, 0),
             ("inline_passes", 0, 1)
         ]
     );
@@ -5102,7 +5102,7 @@ fn a_count_only_one_shape_moved_is_reported_as_well() {
     // first to run would be held to zero.
     assert_eq!(record.bounds.get("inline_passes"), Some(&1));
     assert_eq!(
-        record.bounds.get("commands_replayed.cmd_dispatch"),
+        record.bounds.get("commands_recorded.cmd_dispatch"),
         Some(&4)
     );
 }

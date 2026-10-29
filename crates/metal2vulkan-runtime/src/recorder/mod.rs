@@ -12,7 +12,7 @@
 //!   names a command that is not routed.
 //! - **Counted by kind.** Each command recorded through a slot counts once for its kind, one
 //!   relaxed increment into a fixed array of the slot's indexed by the command, whatever the
-//!   command buffer and the thread (`WorkCounts::commands_replayed`). A device past the slots
+//!   command buffer and the thread (`WorkCounts::commands_recorded`). A device past the slots
 //!   records with its driver's commands, uncounted.
 
 mod thunks;
@@ -22,7 +22,7 @@ use std::ffi::{c_void, CStr};
 use std::sync::atomic::{AtomicBool, Ordering};
 
 pub(crate) use thunks::Command;
-pub use thunks::CommandsReplayed;
+pub use thunks::CommandsRecorded;
 
 /// How many devices route their commands here at once; one made past them keeps its driver's.
 pub(crate) const SLOTS: usize = 8;
@@ -99,7 +99,7 @@ impl Slot {
     }
 
     /// The commands recorded through the slot so far, by kind (the module docs).
-    pub(crate) fn counts(&self) -> CommandsReplayed {
+    pub(crate) fn counts(&self) -> CommandsRecorded {
         thunks::counts(self.index)
     }
 

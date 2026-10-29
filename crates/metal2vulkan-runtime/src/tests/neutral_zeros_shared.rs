@@ -206,12 +206,12 @@ fn draws_share_the_devices_one_zero_buffer() {
 #[test]
 fn draws_that_share_the_zero_buffer_bind_their_set_once() {
     let (_, before, after) = drawn(64);
-    let replayed = |of: fn(&crate::CommandsReplayed) -> u64| {
-        of(&after.commands_replayed) - of(&before.commands_replayed)
+    let recorded = |of: fn(&crate::CommandsRecorded) -> u64| {
+        of(&after.commands_recorded) - of(&before.commands_recorded)
     };
-    let binds = replayed(|c| c.cmd_bind_descriptor_sets);
-    let pushes = replayed(|c| c.cmd_push_descriptor_set);
-    let draws = replayed(|c| c.cmd_draw);
+    let binds = recorded(|c| c.cmd_bind_descriptor_sets);
+    let pushes = recorded(|c| c.cmd_push_descriptor_set);
+    let draws = recorded(|c| c.cmd_draw);
     let pushing = after.draws_pushing_set_zero - before.draws_pushing_set_zero;
     println!("NEUTRAL-ZEROS: 64 draws, {pushing} pushing set 0: {binds} binds, {pushes} pushes");
     assert!(

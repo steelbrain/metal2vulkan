@@ -1090,10 +1090,10 @@
         "command_buffers_deferred": 26,
         "command_buffers_replayed_inline": 26,
         "command_buffers_submitted": 26,
-        "commands_replayed.begin_command_buffer": 26,
-        "commands_replayed.cmd_copy_buffer": 38,
-        "commands_replayed.cmd_pipeline_barrier": 28,
-        "commands_replayed.end_command_buffer": 26,
+        "commands_recorded.begin_command_buffer": 26,
+        "commands_recorded.cmd_copy_buffer": 38,
+        "commands_recorded.cmd_pipeline_barrier": 28,
+        "commands_recorded.end_command_buffer": 26,
         "commits_handed_off": 26,
         "completed_waits": 29,
         "completed_where_seen": 26,
@@ -1130,7 +1130,7 @@
       },
       "moving": {
         "batches_submitted_by_waiters": 14,
-        "commands_replayed.begin_command_buffer": 21,
+        "commands_recorded.begin_command_buffer": 21,
         "gate_waits_slept": 22
       },
       "composed": {

@@ -347,7 +347,7 @@ nothing in company is a number no regression can reach. A name earns a row on it
 never by resembling one already there, and the code holds each row to its direction: a later
 measurement that reads the lone run *lower* reports that count like any other. Each shape is
 measured by its own command, into the same record, because one process cannot measure both cleanly:
-`bc1-rgba` run on its own reads `commands_replayed.cmd_dispatch` 4 in three invocations out of
+`bc1-rgba` run on its own reads `commands_recorded.cmd_dispatch` 4 in three invocations out of
 three, and 0 when the same leg runs after a whole-set leg in the same process.
 
 That is what stops a bound going stale on a landing, because a reading a landing can change is a

@@ -13,8 +13,8 @@ static COUNTS: [[AtomicU64; Command::COUNT]; SLOTS] =
     [const { [const { AtomicU64::new(0) }; Command::COUNT] }; SLOTS];
 
 /// Slot `index`'s counts.
-pub(super) fn counts(index: usize) -> CommandsReplayed {
-    CommandsReplayed::read(&COUNTS[index])
+pub(super) fn counts(index: usize) -> CommandsRecorded {
+    CommandsRecorded::read(&COUNTS[index])
 }
 
 /// Zero slot `index`'s counts, as a device takes it.
@@ -75,7 +75,7 @@ macro_rules! commands {
         /// any of its `VkCommandBuffer`s, on whichever thread recorded them, counted at the call.
         /// A field of `WorkCounts`, for the lanes: not part of the API.
         #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-        pub struct CommandsReplayed {
+        pub struct CommandsRecorded {
             $(
                 #[doc = concat!("The calls of `", stringify!($v0), "`.")]
                 pub $f0: u64,
@@ -90,10 +90,10 @@ macro_rules! commands {
             )*
         }
 
-        impl CommandsReplayed {
+        impl CommandsRecorded {
             /// The counts `counts` holds, one per command at its index.
-            fn read(counts: &[AtomicU64; Command::COUNT]) -> CommandsReplayed {
-                CommandsReplayed {
+            fn read(counts: &[AtomicU64; Command::COUNT]) -> CommandsRecorded {
+                CommandsRecorded {
                     $($f0: counts[Command::$v0 as usize].load(Ordering::Relaxed),)*
                     $($f3: counts[Command::$v3 as usize].load(Ordering::Relaxed),)*
                     $($fe: counts[Command::$ve as usize].load(Ordering::Relaxed),)*

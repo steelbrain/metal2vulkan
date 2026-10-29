@@ -337,7 +337,7 @@ pub(super) struct DeviceShared {
     pub(super) color_write_masks: Option<ColorWriteMasks>,
     /// The device's slot among those its commands go through (`recorder`), where it took one:
     /// let go of after `vkDestroyDevice` (it drops after the teardown, `Drop`). Its counts are
-    /// `WorkCounts::commands_replayed`.
+    /// `WorkCounts::commands_recorded`.
     recording: Option<Slot>,
     /// The reasons a draw that reads its pass's texture took the split that the device said
     /// already, where `METAL2VULKAN_LOG_PIPELINES` is set (`render/snapshot.rs`).
@@ -597,7 +597,7 @@ impl DeviceShared {
 
     /// The commands recorded through its slot so far, by kind (`recorder`); none where it took
     /// no slot.
-    pub(crate) fn commands_recorded(&self) -> crate::CommandsReplayed {
+    pub(crate) fn commands_recorded(&self) -> crate::CommandsRecorded {
         self.recording
             .as_ref()
             .map_or_else(Default::default, Slot::counts)

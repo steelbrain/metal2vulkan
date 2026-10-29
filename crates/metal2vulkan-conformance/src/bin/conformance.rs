@@ -313,7 +313,7 @@ fn cost(
     // `cost --write` taking the whole set and then each case alone, instead of two commands a
     // reader has to know to run in order -- and it silently measures the wrong thing. The second
     // leg inherits the first leg's threads: `bc1-rgba` run on its own reads
-    // `commands_replayed.cmd_dispatch` 4 and `command_buffers_deferred` 6 in three invocations out
+    // `commands_recorded.cmd_dispatch` 4 and `command_buffers_deferred` 6 in three invocations out
     // of three, and 0 for both when the same leg follows a whole-set leg in the same process,
     // because whether a deferred replay lands inside a case's window is not the same question
     // after 393 cases have run. Built that way, the contrast called 6,843 counts

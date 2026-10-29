@@ -401,7 +401,7 @@ const HELD: [(&str, &str, f64); 43] = [
     ("draw_triangles", "rt_draws_at_commit", 1.0),
     (
         "draw_indexed",
-        "rt_replayed_cmd_draw_indexed_at_commit",
+        "rt_recorded_cmd_draw_indexed_at_commit",
         1.0,
     ),
     // And it allocates about once in twenty draws (0.049 measured), nothing a draw of its own.

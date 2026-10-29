@@ -154,10 +154,10 @@
         "command_buffers_deferred": 2,
         "command_buffers_replayed_inline": 2,
         "command_buffers_submitted": 3,
-        "commands_replayed.begin_command_buffer": 2,
-        "commands_replayed.cmd_pipeline_barrier": 2,
-        "commands_replayed.cmd_update_buffer": 2,
-        "commands_replayed.end_command_buffer": 2,
+        "commands_recorded.begin_command_buffer": 2,
+        "commands_recorded.cmd_pipeline_barrier": 2,
+        "commands_recorded.cmd_update_buffer": 2,
+        "commands_recorded.end_command_buffer": 2,
         "commits_handed_off": 1,
         "completed_waits": 5,
         "completed_where_seen": 1,
@@ -195,7 +195,7 @@
         "wakes_spared": 11
       },
       "moving": {
-        "commands_replayed.begin_command_buffer": 1
+        "commands_recorded.begin_command_buffer": 1
       },
       "composed": {
         "addressable_buffers_made": 2,

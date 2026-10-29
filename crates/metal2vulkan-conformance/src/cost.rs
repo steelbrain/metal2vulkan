@@ -55,7 +55,7 @@ use std::collections::BTreeMap;
 /// A `*_sites` field is a table of the runtime's own source positions — a file, a line and what
 /// was recorded there — rather than a count, so the difference of two readings of it is not a
 /// case's cost. What those tables name is already counted elsewhere: `copy_sites` says *where* the
-/// copies were recorded, and the copies themselves are `commands_replayed.cmd_copy_*`. The rule is
+/// copies were recorded, and the copies themselves are `commands_recorded.cmd_copy_*`. The rule is
 /// a suffix rather than a list of names because the runtime keeps growing such tables.
 const NOT_A_COUNT: [(&str, &str); 1] = [(
     "_sites",
@@ -668,7 +668,7 @@ pub enum Region {
     Translation,
     /// What a call does on the calling thread: the region the plan names as the gap.
     DeviceApi,
-    /// What the commit path, our own other threads and the GPU do: the commands replayed into
+    /// What the commit path, our own other threads and the GPU do: the commands recorded into
     /// `VkCommandBuffer`s, the submissions, the scheduler's passes and the waits. Work a call
     /// queues for later is counted here, so a call that returns at once cannot score as a win.
     Submission,
@@ -736,7 +736,7 @@ const TRANSLATION: [&str; 19] = [
 /// The name prefixes that put a count in [`Region::Submission`]: the commit path, our own other
 /// threads and the GPU.
 const SUBMISSION: [&str; 48] = [
-    "commands_replayed.",
+    "commands_recorded.",
     "command_buffers_",
     "command_pools_made",
     "spare_command_pools_",
@@ -824,7 +824,7 @@ pub fn region_of(name: &str) -> Region {
 /// The counts one run moved, by name: the cost half's reading of [`WorkCounts`].
 ///
 /// The names are the runtime's own field names, nested ones joined with a dot
-/// (`commands_replayed.cmd_draw`), so a failure names the counter a reader can grep for.
+/// (`commands_recorded.cmd_draw`), so a failure names the counter a reader can grep for.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Counts(BTreeMap<String, u64>);
 
@@ -1838,7 +1838,7 @@ impl CaseCost {
     /// wrote: every count the two shapes read differently becomes one the selection decides.
     ///
     /// The two shapes are two commands and not two legs of one, because one process cannot measure
-    /// both cleanly. Measured: `bc1-rgba` run on its own reads `commands_replayed.cmd_dispatch` 4
+    /// both cleanly. Measured: `bc1-rgba` run on its own reads `commands_recorded.cmd_dispatch` 4
     /// and `command_buffers_deferred` 6 in three invocations out of three, and **0** for both when
     /// the same leg runs after a whole-set leg in the same process — the deferred replay is a
     /// thread of ours, and whether it lands inside a case's window is not the same question after
@@ -2415,7 +2415,7 @@ mod the_ratio {
 ///
 /// `creation_pipelines_made` is one count over the render prediction (`pipeline/predicted.rs`) and
 /// the compute one (`pipeline/dispatch_making.rs`), so 631 says nothing about either. Split by the
-/// commands each record's own counts say our leg replayed ([`Speculated`], and no new counter was
+/// commands each record's own counts say our leg recorded ([`Speculated`], and no new counter was
 /// needed for it), the two are nothing like each other: **the render prediction is taken 754 times
 /// in 799 over the 154 rows that draw and do not dispatch, and the compute prediction 0 times in
 /// 461 over the 277 rows that dispatch and do not draw.** 461 of the 631 is one prediction with no
@@ -2527,16 +2527,16 @@ mod the_creation_prediction {
     /// render prediction (`pipeline/predicted.rs`) and the compute one
     /// (`pipeline/dispatch_making.rs`) together.
     ///
-    /// It is read off the commands the record's own counts say our leg replayed, and from nothing
+    /// It is read off the commands the record's own counts say our leg recorded, and from nothing
     /// else — no case name, no family, no list. A `VkPipeline` made at a creation can only ever be
-    /// taken by a command of its own kind, so a record that replayed draws and no dispatch can
-    /// only hold the render prediction's pipelines, and one that replayed dispatches and no draw
+    /// taken by a command of its own kind, so a record that recorded draws and no dispatch can
+    /// only hold the render prediction's pipelines, and one that recorded dispatches and no draw
     /// only the compute one's. That is a structural fact about the record, available in every
     /// committed recording today, which is why this needed no new counter.
     ///
-    /// **The signal is `commands_replayed.cmd_draw*` and `cmd_dispatch*` and not
+    /// **The signal is `commands_recorded.cmd_draw*` and `cmd_dispatch*` and not
     /// `draw_states_recorded`**, which looks like the same question and is not: 22 of these rows
-    /// replay a `vkCmdDraw` while reading `draw_states_recorded` 0 — every `sample-fills-*` and
+    /// record a `vkCmdDraw` while reading `draw_states_recorded` 0 — every `sample-fills-*` and
     /// `buffer-depth-samples-*` row — so classifying by it would file a drawing case under
     /// [`Speculated::NoCommand`] and hide exactly the rows this family already knows mispredict.
     #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -2562,8 +2562,8 @@ mod the_creation_prediction {
                     .any(|(count, most)| count.starts_with(prefix) && *most > 0)
             };
             match (
-                any("commands_replayed.cmd_draw"),
-                any("commands_replayed.cmd_dispatch"),
+                any("commands_recorded.cmd_draw"),
+                any("commands_recorded.cmd_dispatch"),
             ) {
                 (true, false) => Speculated::Draws,
                 (false, true) => Speculated::Dispatches,
@@ -2798,16 +2798,16 @@ mod the_creation_prediction {
     /// The census above reads committed files, so a classifier that answered one class for
     /// everything would still make its ceilings add up. This is the input that says it does not.
     #[test]
-    fn a_record_is_classed_by_the_commands_it_replayed() {
+    fn a_record_is_classed_by_the_commands_it_recorded() {
         let bounds = |counts: &[(&str, u64)]| {
             counts
                 .iter()
                 .map(|(name, most)| ((*name).to_owned(), *most))
                 .collect::<std::collections::BTreeMap<String, u64>>()
         };
-        let draw = ("commands_replayed.cmd_draw_indexed_indirect", 1);
-        let dispatch = ("commands_replayed.cmd_dispatch_indirect", 1);
-        let other = ("commands_replayed.cmd_copy_buffer", 7);
+        let draw = ("commands_recorded.cmd_draw_indexed_indirect", 1);
+        let dispatch = ("commands_recorded.cmd_dispatch_indirect", 1);
+        let other = ("commands_recorded.cmd_copy_buffer", 7);
         assert_eq!(
             Speculated::of(&bounds(&[draw, other])),
             Speculated::Draws,
@@ -2826,18 +2826,18 @@ mod the_creation_prediction {
         );
         assert_eq!(Speculated::of(&bounds(&[])), Speculated::NoCommand);
         // A count present at zero is a count that did not happen: `bounds` holds the most a count
-        // reached, and a recording that carries the name at 0 replayed no such command.
+        // reached, and a recording that carries the name at 0 recorded no such command.
         assert_eq!(
-            Speculated::of(&bounds(&[("commands_replayed.cmd_draw", 0), dispatch])),
+            Speculated::of(&bounds(&[("commands_recorded.cmd_draw", 0), dispatch])),
             Speculated::Dispatches,
             "a draw count of zero is not a draw"
         );
         // `draw_states_recorded` is not the signal, and must not become one: 22 census rows read
-        // it at 0 while replaying a draw.
+        // it at 0 while recording a draw.
         assert_eq!(
             Speculated::of(&bounds(&[("draw_states_recorded", 4), dispatch])),
             Speculated::Dispatches,
-            "a recorded draw state is not a replayed draw command"
+            "a recorded draw state is not a draw command"
         );
     }
 

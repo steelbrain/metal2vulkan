@@ -659,17 +659,17 @@ fn row_copies_cost() {
         let (costs, counts, after) = frame_costs(&device, frame);
         eprintln!(
             "ROW-COPIES {}: {rows} rows: {costs}; a frame: {:.2} dispatched of {:.2} row copies, \
-             {:.2} vkCmdCopyBuffer, {:.2} vkCmdDispatch replayed",
+             {:.2} vkCmdCopyBuffer, {:.2} vkCmdDispatch recorded",
             device.name(),
             each(after.row_copies_dispatched, counts.row_copies_dispatched),
             each(after.row_copies, counts.row_copies),
             each(
-                after.commands_replayed.cmd_copy_buffer,
-                counts.commands_replayed.cmd_copy_buffer
+                after.commands_recorded.cmd_copy_buffer,
+                counts.commands_recorded.cmd_copy_buffer
             ),
             each(
-                after.commands_replayed.cmd_dispatch,
-                counts.commands_replayed.cmd_dispatch
+                after.commands_recorded.cmd_dispatch,
+                counts.commands_recorded.cmd_dispatch
             ),
         );
     }
@@ -721,11 +721,11 @@ fn span_copy_cost() {
         let (costs, counts, after) = frame_costs(&device, frame);
         eprintln!(
             "SPAN-COPY {}: a copy of {size} bytes as one region: {costs}; a frame: {:.2} \
-             vkCmdCopyBuffer replayed, {:.2} regions split",
+             vkCmdCopyBuffer recorded, {:.2} regions split",
             device.name(),
             each(
-                after.commands_replayed.cmd_copy_buffer,
-                counts.commands_replayed.cmd_copy_buffer
+                after.commands_recorded.cmd_copy_buffer,
+                counts.commands_recorded.cmd_copy_buffer
             ),
             each(after.copy_regions_split, counts.copy_regions_split),
         );
@@ -773,15 +773,15 @@ fn span_copy_cost() {
     let (costs, counts, after) = frame_costs(&device, frame);
     eprintln!(
         "SPAN-COPY {}: a read of a YCbCr texture whose planes span {SURFACE_SPAN} bytes: {costs}; \
-         a frame: {:.2} vkCmdCopyBuffer, {:.2} vkCmdDispatch replayed",
+         a frame: {:.2} vkCmdCopyBuffer, {:.2} vkCmdDispatch recorded",
         device.name(),
         each(
-            after.commands_replayed.cmd_copy_buffer,
-            counts.commands_replayed.cmd_copy_buffer
+            after.commands_recorded.cmd_copy_buffer,
+            counts.commands_recorded.cmd_copy_buffer
         ),
         each(
-            after.commands_replayed.cmd_dispatch,
-            counts.commands_replayed.cmd_dispatch
+            after.commands_recorded.cmd_dispatch,
+            counts.commands_recorded.cmd_dispatch
         ),
     );
 }

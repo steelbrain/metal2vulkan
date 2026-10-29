@@ -355,11 +355,11 @@
         "command_buffers_deferred": 4,
         "command_buffers_replayed_inline": 4,
         "command_buffers_submitted": 8,
-        "commands_replayed.begin_command_buffer": 4,
-        "commands_replayed.cmd_copy_buffer_to_image": 2,
-        "commands_replayed.cmd_copy_image_to_buffer": 2,
-        "commands_replayed.cmd_pipeline_barrier": 4,
-        "commands_replayed.end_command_buffer": 4,
+        "commands_recorded.begin_command_buffer": 4,
+        "commands_recorded.cmd_copy_buffer_to_image": 2,
+        "commands_recorded.cmd_copy_image_to_buffer": 2,
+        "commands_recorded.cmd_pipeline_barrier": 4,
+        "commands_recorded.end_command_buffer": 4,
         "commits_handed_off": 4,
         "completed_waits": 7,
         "completed_where_seen": 4,
@@ -408,7 +408,7 @@
       },
       "moving": {
         "batches_submitted_by_waiters": 2,
-        "commands_replayed.begin_command_buffer": 3,
+        "commands_recorded.begin_command_buffer": 3,
         "gate_waits_slept": 3
       },
       "composed": {

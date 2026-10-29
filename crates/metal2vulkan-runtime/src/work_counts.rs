@@ -10,7 +10,7 @@ use super::command_buffer::GroupEnd;
 use super::degradation::Degradation;
 use super::device::lock;
 use super::memory::FreeCause;
-use super::recorder::CommandsReplayed;
+use super::recorder::CommandsRecorded;
 use super::scheduler::HeldFor;
 use super::shadow::{Backing, CarryTally, CopyCause, Lost, ShadowCopy, ShadowSource};
 use super::Device;
@@ -471,7 +471,7 @@ impl Begun {
 
 /// Where the runtime began a render pass instance of a render encoder's pass
 /// (`WorkCounts::render_passes_begun_instances` and kin); every other `vkCmdBeginRenderPass` it
-/// records (clears, resolves and copies of its own) is among `commands_replayed`'s alone.
+/// records (clears, resolves and copies of its own) is among `commands_recorded`'s alone.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum PassBegun {
     /// An instance whose draws a secondary holds, begun where the pass is recorded
@@ -2862,7 +2862,7 @@ pub struct WorkCounts {
     /// (`recorder`): one per call, the begins and ends among them, whatever the command buffer
     /// (an encoder's, a batch's submission's, the device's own) and the thread; none on a device
     /// past the slots.
-    pub commands_replayed: CommandsReplayed,
+    pub commands_recorded: CommandsRecorded,
     /// The places in the runtime that recorded `vkCmdCopyBuffer`, `vkCmdCopyBufferToImage`,
     /// `vkCmdCopyImageToBuffer` and `vkCmdCopyImage` through the device's functions, as encoders
     /// and the runtime's own work recorded them: the first 32 places met, each with its calls,
@@ -3840,7 +3840,7 @@ pub struct WorkCounts {
     /// running a secondary of its draws (`render/pass_steps.rs`): an encoder's instances not
     /// recorded inline, and the runs of executions' commands. With the three fields after this
     /// one, every render pass instance of a render encoder's pass; the rest of
-    /// `commands_replayed.cmd_begin_render_pass` are the runtime's own clears, resolves and
+    /// `commands_recorded.cmd_begin_render_pass` are the runtime's own clears, resolves and
     /// copies.
     pub render_passes_begun_instances: u64,
     /// Passes' first instances begun at their first draw, recording their draws inline
@@ -4933,7 +4933,7 @@ impl Device {
         let dirty = self.shared().dirty.tally();
         WorkCounts {
             command_pools_made: counters.command_pools_made.load(Ordering::Relaxed),
-            commands_replayed: self.shared().commands_recorded(),
+            commands_recorded: self.shared().commands_recorded(),
             object_churn: churn.0,
             shadow_keeps: churn.1,
             copy_sites: self.shared().vk().copy_sites(),

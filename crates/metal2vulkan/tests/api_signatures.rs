@@ -57,7 +57,7 @@
 //!   records merge: twenty-one keys carry two. That over-reports — a change to the namesake shows
 //!   against the surface name — and never under-reports.
 //! - `#[doc(hidden)]`, which `api_surface` calls public but not API: the runtime's
-//!   `generated_commands`, `Execution` and `CommandsReplayed` are not pinned here.
+//!   `generated_commands`, `Execution` and `CommandsRecorded` are not pinned here.
 //! - `Send`, `Sync` and anything else the type system implies. `api_surface` and the runtime's
 //!   `consumer_auto_traits` own those.
 //!

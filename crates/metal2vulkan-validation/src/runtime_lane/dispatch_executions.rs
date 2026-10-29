@@ -348,12 +348,12 @@ fn on_device(test: impl FnOnce(&Device, &Messages)) {
 
 /// The indirect dispatches `device` replayed so far.
 fn dispatches_indirect(device: &Device) -> u64 {
-    device.work_counts().commands_replayed.cmd_dispatch_indirect
+    device.work_counts().commands_recorded.cmd_dispatch_indirect
 }
 
 /// The pipeline barriers `device` replayed so far.
 fn barriers(device: &Device) -> u64 {
-    device.work_counts().commands_replayed.cmd_pipeline_barrier
+    device.work_counts().commands_recorded.cmd_pipeline_barrier
 }
 
 /// Whether `command_buffer` ran a flat variant: the GPU-alone path's execution record, where the

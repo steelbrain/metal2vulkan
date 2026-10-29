@@ -1,6 +1,6 @@
 //! An encoder records each command into the driver's `VkCommandBuffer` at the call, on the
 //! program's thread (`command_buffer`'s `allocate_raw`): the device's count of the commands
-//! recorded (`WorkCounts::commands_replayed`, counted as each goes through its slot, `recorder`)
+//! recorded (`WorkCounts::commands_recorded`, counted as each goes through its slot, `recorder`)
 //! moves at the call itself, before the encoder ends and before the commit, where a command
 //! logged for a later recording would move it only after the commit.
 //!
@@ -8,11 +8,11 @@
 //! `m2v_cpu_icd`).
 
 use super::blit_holds::{device, Scratch, WAIT};
-use crate::{CommandBufferStatus, CommandsReplayed, ResourceOptions};
+use crate::{CommandBufferStatus, CommandsRecorded, ResourceOptions};
 
 /// The fills recorded so far, as `vkCmdFillBuffer` or, where the runtime records fills as
 /// transfers, `vkCmdUpdateBuffer` (`WorkCounts::fills_by_transfers`).
-fn fills(counts: &CommandsReplayed) -> u64 {
+fn fills(counts: &CommandsRecorded) -> u64 {
     counts.cmd_fill_buffer + counts.cmd_update_buffer
 }
 
@@ -27,14 +27,14 @@ fn a_fill_is_recorded_at_its_call() {
     let buffer = (device.new_buffer(16, ResourceOptions::shared())).unwrap();
     let command_buffer = queue.command_buffer().unwrap();
     let mut blit = command_buffer.blit_command_encoder().unwrap();
-    let before = device.work_counts().commands_replayed;
+    let before = device.work_counts().commands_recorded;
     blit.fill_buffer(&buffer, 4..8, 0x5a).unwrap();
-    let at_call = device.work_counts().commands_replayed;
+    let at_call = device.work_counts().commands_recorded;
     blit.end_encoding().unwrap();
     command_buffer.commit().unwrap();
     command_buffer.wait_until_completed_for(WAIT).unwrap();
     assert_eq!(command_buffer.status(), CommandBufferStatus::Completed);
-    let after = device.work_counts().commands_replayed;
+    let after = device.work_counts().commands_recorded;
     println!(
         "RECORDED-AT-THE-CALL {}: fills recorded at the call {}, after the commit {}",
         device.name(),
