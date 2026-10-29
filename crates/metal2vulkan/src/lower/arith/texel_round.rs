@@ -20,7 +20,7 @@
 //! - [`grid_value`]: a signed step's value `n / D` on a normalized format's grid exactly, the
 //!   bicubic sums'.
 //!
-//! Metal's texture reads and samples decode a raw sRGB code through its twelve-bit table, as
+//! Metal's texture reads and samples decode a raw sRGB code through its twelve-bit table, as its
 //! `air.unpack` does: the step `k` of [`srgb`](crate::lower::arith::srgb), then `k / 4095`
 //! ([`div_exact`](crate::lower::arith::exact_division::div_exact); every code of the authored case
 //! `half-conversion-of-wider-texels-by-read-and-sample`, and every bicubic sum of

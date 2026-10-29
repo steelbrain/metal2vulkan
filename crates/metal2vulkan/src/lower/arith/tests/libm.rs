@@ -204,11 +204,12 @@ fn fmod_routine_reads_metals_denormal_operands() {
 }
 
 /// A `half` call of `fmod` takes the `float` routine before its rounding (Metal's `half` functions
-/// are the same in both modes), so it is Metal's `half` `fmod` (MSL Table 8.3: exact) over a grid
+/// are the same in both modes), so it is Metal's exact `half` remainder (MSL Table 8.3) over a grid
 /// of pairs: the remainder of two `half` values is one. The half reading: `fmod(x, ±inf) = x`
 /// (where lavapipe, RADV, and NVIDIA answer a NaN) and `fmod(1.5, -0.75) = 0` (RADV: 0.75). A zero
-/// remainder is Metal's `half` one: `+0` for a nonzero dividend, the dividend itself for a zero
-/// one. Part `part` of `of` of the runs of 4,096 pairs.
+/// remainder is the `float` remainder's, with the dividend's sign, where Metal's `half` answers
+/// `+0` for a nonzero dividend (`PrecisionNote::NativeTranscendentals`). Part `part` of `of` of
+/// the runs of 4,096 pairs.
 fn half_fmod(part: usize, of: usize) {
     let h = float(16);
     let nan = |b: u64| b & 0x7C00 == 0x7C00 && b & 0x03FF != 0;
@@ -240,7 +241,6 @@ fn half_fmod(part: usize, of: usize) {
                 let x = f16_to_f64(c[0][0] as u16);
                 let y = f16_to_f64(c[1][0] as u16);
                 let r = (x as f32) % (y as f32);
-                let r = if r == 0.0 && x != 0.0 { 0.0 } else { r };
                 Some(vec![half_of(r)])
             },
             &|g, w| g == w || (nan(g) && nan(w)),

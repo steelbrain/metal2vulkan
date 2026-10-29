@@ -379,7 +379,7 @@ pub(super) fn word(
     word: WordAttachment,
 ) -> Option<vk::ClearColorValue> {
     if word == WordAttachment::Rgb9e5 {
-        let uint32 = [word.output_word(color.map(|c| c as f32)), 0, 0, 0];
+        let uint32 = [word.output_word(color.map(|c| c as f32))?, 0, 0, 0];
         return Some(vk::ClearColorValue { uint32 });
     }
     let channels = channels(pf)?;

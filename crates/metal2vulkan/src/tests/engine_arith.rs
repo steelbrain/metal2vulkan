@@ -4032,14 +4032,15 @@ fn float_min_max_are_the_device_s_on_every_profile() {
     }
 }
 
-/// Class H: Metal's `half` `fmod` answers `+0` for a zero remainder of a nonzero dividend and the
-/// dividend itself for a zero one, with or without fast-math flags (`nan_fmod_zero`,
-/// `nan_fmod_zero_fast`: `fmod(-2, 0.5)` is `+0`, `fmod(-0, 1)` is `-0`), on every profile; a
-/// nonzero remainder keeps the dividend's sign, and a `float` zero remainder too (Metal's
-/// `fmod(-2, 0.5)` on `float` is `-0`). The interpreter's `OpFRem` is C's `fmod`, the dividend's
-/// sign, so the stored bits show the select.
+/// Class H: a `half` `fmod` is its `float` remainder rounded on every profile, so a zero remainder
+/// of a nonzero dividend keeps the dividend's sign, with or without fast-math flags, where Metal
+/// answers `+0` (`nan_fmod_zero`, `nan_fmod_zero_fast`: Metal's `fmod(-2, 0.5)` is `+0`), noted
+/// `NativeTranscendentals` in every entry; a zero dividend's is the dividend itself (`fmod(-0, 1)`
+/// is `-0`) and a nonzero remainder keeps the dividend's sign, as Metal's do. A `float` zero
+/// remainder keeps it too (Metal's `fmod(-2, 0.5)` on `float` is `-0`), with no note. The
+/// interpreter's `OpFRem` is C's `fmod`, the dividend's sign.
 #[test]
-fn half_fmod_answers_metals_zero_remainder_on_every_profile() {
+fn half_fmod_is_its_float_remainder_on_every_profile() {
     let two = |a: u16, b: u16| format!("{}{}", oh("hx", a), oh("hy", b));
     let ks = [
         half_nan_kernel(
@@ -4048,7 +4049,7 @@ fn half_fmod_answers_metals_zero_remainder_on_every_profile() {
                 "{}  %s = call half @air.fmod.f16(half %hx, half %hy)\n",
                 two(0xC000, 0x3800)
             ),
-            Some(0),
+            Some(0x8000),
         ),
         half_nan_kernel(
             "half_fmod_negative_dividend_fast",
@@ -4056,7 +4057,7 @@ fn half_fmod_answers_metals_zero_remainder_on_every_profile() {
                 "{}  %s = call fast half @air.fmod.f16(half %hx, half %hy)\n",
                 two(0xFBFF, 0x7BFF)
             ),
-            Some(0),
+            Some(0x8000),
         ),
         half_nan_kernel(
             "half_fmod_of_negative_zero",
@@ -4101,6 +4102,13 @@ fn half_fmod_answers_metals_zero_remainder_on_every_profile() {
             link_and_validate(&a, &p).unwrap_or_else(|e| panic!("{what}: L3: {e}"));
             let got = interpret(&bitcode, kk.name, &p);
             assert_eq!(Some(got), kk.want, "{what}: {got:#x}");
+            // The `half` remainder's zero is the note's; the `float` one is Metal's.
+            assert_eq!(
+                a.precision.contains(&PrecisionNote::NativeTranscendentals),
+                kk.name.starts_with("half_"),
+                "{what}: {:?}",
+                a.precision
+            );
         }
     }
 }

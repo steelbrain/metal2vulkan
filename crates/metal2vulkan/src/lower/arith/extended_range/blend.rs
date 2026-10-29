@@ -2415,8 +2415,7 @@ pub fn blend_unorm8(
 /// Metal's blend `b` ([`Blend::srgb8`]) of a four-lane output `s` (a `vec4` of `f32`: a `half4`
 /// output's `half`s, or a `float4` one) over `decoded`, the 8-bit sRGB attachment's texel as a
 /// fetch reads it (a `vec4` of `f32`: each color byte's twelve-bit step over 4095 and the alpha
-/// byte over 255, correctly rounded, `math::unpack` of `unorm4x8_srgb`; a channel the format lacks
-/// 0, alpha 1), in `arith`: a `vec4` of `f32` holding each blended lane, a `half`
+/// byte over 255, correctly rounded; a channel the format lacks 0, alpha 1), in `arith`: a `vec4` of `f32` holding each blended lane, a `half`
 /// (`BlendArith::Half`) or a `float` (`BlendArith::Float`), which the caller stores by Metal's
 /// sRGB encode. The output, and `s1`, the second source (the function's second output, where `b`
 /// reads it, [`Blend::reads_second`]), are clamped to `[0, 1]` first, a NaN to 0, and the

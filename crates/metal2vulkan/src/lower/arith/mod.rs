@@ -652,11 +652,6 @@ pub struct ArithPlan {
     /// The `half` additions, subtractions and products held at `float` precision, unrounded,
     /// between a chain's roundings on a device without `shaderFloat16` ([`half_chain`]).
     pub held_at_float: BTreeSet<InstId>,
-    /// The direction of the first sRGB conversion that reads Metal's sRGB table (a tile's or a
-    /// color attachment's), which [`declare`] then declares once ([`srgb`]) and the census
-    /// charges once, to that direction's name ([`routine_words`]). `air.pack`/`air.unpack` of
-    /// `unorm4x8_srgb`, an sRGB storage texture's alias and a UNORM twin read none ([`pack`]).
-    pub srgb: Option<PackDir>,
     /// Whether a call takes Metal's precise `fmod` on `float` or `half` lanes ([`libm::uses`]),
     /// recorded at selection; [`finish`] decides [`ArithPlan::fmod`] from it.
     pub fmod_uses: bool,
@@ -752,13 +747,6 @@ impl ArithPlan {
 /// The words of the module-scope routines the plan's strategies call, each with the census name
 /// of the strategies that call it: counted once per module, not per use.
 pub fn routine_words(plan: &ArithPlan) -> impl Iterator<Item = (&'static str, u64)> + '_ {
-    let table = plan.srgb.map(|dir| {
-        let name = match dir {
-            PackDir::Pack => SRGB_PACK,
-            PackDir::Unpack => SRGB_UNPACK,
-        };
-        (name, u64::from(srgb::TABLE_WORDS))
-    });
     // The extended-range sRGB table, once, and each padded `_sRGB` form's.
     let extended = plan.extended_range_srgb.then_some((
         extended_range::CENSUS_NAME,
@@ -777,18 +765,12 @@ pub fn routine_words(plan: &ArithPlan) -> impl Iterator<Item = (&'static str, u6
         .iter()
         .map(|d| (wide::DIVIDE, u64::from(d.words())))
         .chain(fmod)
-        .chain(table)
         .chain(extended)
         .chain(padded)
 }
 
-/// The census names of Metal's sRGB table, which the module declares once and the census charges
-/// to the direction of the first conversion that reads it ([`ArithPlan::srgb`]).
-pub const SRGB_PACK: &str = "arith.pack.srgb";
 /// The census name of `air.fast_fmod` on `float` ([`ArithStrategy::FastFmod`]).
 pub const FAST_FMOD: &str = "arith.fmod.fast";
-/// See [`SRGB_PACK`].
-pub const SRGB_UNPACK: &str = "arith.unpack.srgb";
 /// The census name of an `arcp` division ([`ArithStrategy::FastDivide`]).
 pub const FAST_DIVIDE: &str = "arith.fdiv.fast";
 
@@ -864,8 +846,6 @@ pub fn finish(cx: &mut SelectCx<'_>) -> Result<(), Error> {
 pub struct Declared {
     /// The function of each of the plan's [`ArithPlan::divides`].
     pub divides: BTreeMap<wide::Divide, FuncId>,
-    /// The sRGB table, when [`ArithPlan::srgb`].
-    pub srgb: Option<GlobalId>,
     /// The extended-range sRGB table, when [`ArithPlan::extended_range_srgb`].
     pub extended_range_srgb: Option<GlobalId>,
     /// The table of each of the plan's [`ArithPlan::padded_srgb`].
@@ -891,9 +871,6 @@ pub fn declare(
     }
     if plan.families.arith.fmod {
         decl.fmod = Some(libm::define_fmod(mb)?);
-    }
-    if plan.families.arith.srgb.is_some() {
-        decl.srgb = Some(srgb::declare(mb)?);
     }
     if plan.families.arith.extended_range_srgb {
         decl.extended_range_srgb = Some(extended_range::declare(mb)?);
@@ -1809,7 +1786,8 @@ fn llvm_math(op: &LlvmIntrinsic) -> Result<Fun, Error> {
 /// A call's fast-math flags `fmf` do not change the function: Metal's `sign`, for one, answers
 /// `+0` for `-0` under fast math too (A1 case f9a12252). The exceptions measured are
 /// `fast_atan2`'s quotient beyond a divisor of `2^126`, which a call without every flag takes
-/// from a flushed reciprocal (probe cases 6802ab13 and c11eb8cb), and `fast_asinh` at
+/// from Metal's reciprocal, flushed there (probe cases 6802ab13 and c11eb8cb), and the device's
+/// reciprocal here (`FloatFn::FastAtan2`), and `fast_asinh` at
 /// infinities, which only a call with every flag answers as a NaN (A1 case aed3faaa without
 /// flags, our probe with them). The other flag combinations are not measured; they take the
 /// answer of a call without flags. A function the device has an instruction for answers its
@@ -1856,7 +1834,7 @@ fn refine_float(op: FloatFn, fast: bool, fmf: FastMath, f: Form) -> FloatFn {
         FloatFn::Log2 => FloatFn::FastLog2,
         FloatFn::Powr => FloatFn::FastPowr,
         FloatFn::Atan2 => FloatFn::FastAtan2 {
-            reciprocal_flushed: !every_flag(fmf),
+            by_reciprocal: !every_flag(fmf),
         },
         FloatFn::SinPi => FloatFn::FastSinPi,
         FloatFn::CosPi => FloatFn::FastCosPi,
@@ -2190,7 +2168,9 @@ impl MetalOwn {
 /// device (`denormals`, `nans`, [`device_float_notes`]).
 ///
 /// A call of precise `fmod` by its routine, whose answer is the one right value, Metal's on every
-/// device ([`libm::Fun::correctly_rounded`]), records no precision note. Where the profile's
+/// device ([`libm::Fun::correctly_rounded`]), records no precision note, but on `half`, whose zero
+/// remainder of a nonzero dividend is the `float` remainder's sign, where Metal answers `+0`, in
+/// every entry on every device ([`FloatFn::half_zero_of_float`], `NativeTranscendentals`). Where the profile's
 /// `float` functions are Metal's, a call
 /// that is Metal's own in a fast-math entry ([`MetalOwn`]) records its function's and its
 /// division's notes only outside one, and, where it is wholly Metal's own, its denormals' and
@@ -2237,8 +2217,14 @@ fn function_notes(
     } else {
         MetalOwn::No
     };
+    // A `half` `fmod`'s zero, the `float` remainder's sign in either math mode.
+    let half_zero = BTreeSet::from_iter(
+        op.half_zero_of_float(f)
+            .then_some(PrecisionNote::NativeTranscendentals),
+    );
     OpNotes::unless_own(function, own != MetalOwn::No)
         .with(OpNotes::unless_own(environment, own == MetalOwn::Wholly))
+        .with(OpNotes::everywhere(half_zero))
 }
 
 /// The note of fused multiply-add `fma`: `NativeFma` where it takes the device's `Fma`

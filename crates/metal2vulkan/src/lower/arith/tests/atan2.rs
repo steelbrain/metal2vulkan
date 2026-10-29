@@ -460,36 +460,63 @@ fn metal_read(b: u32) -> f32 {
 
 /// `fast::atan2(y, x)` with the stand-in `atan(q) = q + 1/8`, where the formula's special values do
 /// not decide it (`None` where they do): the quotient (divided over the whole range, or `y` times
-/// the flushed reciprocal), the stand-in, and the turn. A denormal operand or quotient is a value.
-fn fast_generic(y: u32, x: u32, reciprocal_flushed: bool) -> Option<u32> {
+/// the device's reciprocal of `x`, which the interpreter keeps where it is a denormal), the
+/// stand-in, and the turn. A denormal operand or quotient is a value.
+fn fast_generic(y: u32, x: u32, by_reciprocal: bool) -> Option<u32> {
     if f32_special(y) || f32_special(x) {
         return None;
     }
     let (yv, xv) = (f32::from_bits(y), f32::from_bits(x));
-    if reciprocal_flushed && xv.abs() > 2f32.powi(126) {
-        return None;
-    }
-    let q = (f64::from(yv) / f64::from(xv)) as f32;
+    let q = if by_reciprocal {
+        yv * (1.0 / xv)
+    } else {
+        (f64::from(yv) / f64::from(xv)) as f32
+    };
     if !q.is_finite() {
         return None;
     }
-    let a = q + 0.125;
+    Some(turned(q + 0.125, yv, xv).to_bits())
+}
+
+/// `a` turned by `±π` where `x` is below zero, by `π` where `y` is at least zero.
+fn turned(a: f32, y: f32, x: f32) -> f32 {
     let pi = std::f32::consts::PI;
-    let r = if xv < 0.0 {
-        a + if yv >= 0.0 { pi } else { -pi }
+    if x < 0.0 {
+        a + if y >= 0.0 { pi } else { -pi }
     } else {
         a
+    }
+}
+
+/// `fast::atan2(y, x)` of an infinite `y` and a finite `x` beyond `2^126` in a call without every
+/// flag, on the interpreter: `y` times the device's reciprocal, which the interpreter keeps as a
+/// denormal, is an infinite quotient, so the answer is `±π/2` (the quotient's sign) turned, where
+/// Metal, which flushes the reciprocal, answers NaN. `None` for any other pair.
+fn kept_reciprocal_infinite(y: u32, x: u32) -> Option<u32> {
+    let (yv, xv) = (f32::from_bits(y), f32::from_bits(x));
+    if !yv.is_infinite() || !xv.is_finite() || xv.abs() <= 2f32.powi(126) {
+        return None;
+    }
+    let half_pi = std::f32::consts::FRAC_PI_2;
+    let a = if (y ^ x) & 0x8000_0000 != 0 {
+        -half_pi
+    } else {
+        half_pi
     };
-    Some(r.to_bits())
+    Some(turned(a, yv, xv).to_bits())
 }
 
 /// `fast::atan2` (`math::fast_atan2`) with a stand-in `atan(q) = q + 1/8` the interpreter runs:
 /// every lane of the grid that the formula's special values decide is Metal's answer for the
-/// call's flags (the quotient's sign, `0 / 0` and `inf / inf`, the turn's comparisons, and the
-/// flushed reciprocal beyond `2^126` of a call without every flag), a NaN any NaN, and every other
-/// lane is the stand-in of the correctly rounded quotient, turned, a denormal quotient's included;
-/// operands beyond the grid check the scaled division near `2^126` and `FLT_MAX`. The lanes with
-/// a denormal operand, which Metal reads as a zero, are the device's reading and left out.
+/// call's flags (the quotient's sign, `0 / 0` and `inf / inf`, the turn's comparisons), a NaN any
+/// NaN, and every other lane is the stand-in of the quotient, turned, a denormal quotient's
+/// included: the correctly rounded quotient with every flag, and without it `y` times the device's
+/// reciprocal. Beyond `2^126` that reciprocal is an `f32` denormal, which the interpreter keeps
+/// and Metal flushes: there a finite `y` takes the stand-in of the product and an infinite one
+/// `±π/2` turned, where Metal answers a signed zero and NaN (`PrecisionNote::DeviceDenormals` off
+/// a device measured to flush as Metal does). Operands beyond the grid check the scaled division
+/// near `2^126` and `FLT_MAX`, and the reciprocal there. The lanes with a denormal operand, which
+/// Metal reads as a zero, are the device's reading and left out.
 #[test]
 fn fast_atan2_answers_as_metal_at_every_special_operand() {
     let f = float(32);
@@ -503,23 +530,32 @@ fn fast_atan2_answers_as_metal_at_every_special_operand() {
         (-5.0, -7.0),
         (6.5, 0.25),
     ];
-    for reciprocal_flushed in [false, true] {
-        let table = if reciprocal_flushed {
+    for by_reciprocal in [false, true] {
+        let table = if by_reciprocal {
             &FAST_ATAN2_F32_NO_FLAGS
         } else {
             &FAST_ATAN2_F32
         };
         let mut want: Vec<((u64, u64), u64)> = Vec::new();
-        let mut decided = 0;
+        let (mut decided, mut kept) = (0, 0);
         for j in 0..16 {
             for k in 0..16 {
                 let (y, x) = (F32_OPERANDS[j], F32_OPERANDS[k]);
                 if f32_denormal(y) || f32_denormal(x) {
                     continue;
                 }
-                let w = match fast_generic(y, x, reciprocal_flushed) {
-                    Some(g) => g,
-                    None => {
+                let device = if by_reciprocal {
+                    kept_reciprocal_infinite(y, x)
+                } else {
+                    None
+                };
+                let w = match (fast_generic(y, x, by_reciprocal), device) {
+                    (Some(g), _) => g,
+                    (None, Some(d)) => {
+                        kept += 1;
+                        d
+                    }
+                    (None, None) => {
                         decided += 1;
                         table[j][k]
                     }
@@ -528,22 +564,21 @@ fn fast_atan2_answers_as_metal_at_every_special_operand() {
             }
         }
         // The 196 lanes of operands that are not denormals, less those with a finite quotient of
-        // finite nonzero operands (and, with a flushed reciprocal, less beyond `2^126`).
+        // finite nonzero operands (and, by the reciprocal, less the four of an infinite `y` over
+        // `±FLT_MAX`, whose kept reciprocal makes the quotient infinite).
         assert_eq!(
-            decided,
-            if reciprocal_flushed {
-                196 - 31
+            (decided, kept),
+            if by_reciprocal {
+                (196 - 45 - 4, 4)
             } else {
-                196 - 45
+                (196 - 45, 0)
             },
-            "reciprocal flushed {reciprocal_flushed}"
+            "by reciprocal {by_reciprocal}"
         );
-        if !reciprocal_flushed {
-            for (y, x) in extra {
-                let (y, x) = (y.to_bits(), x.to_bits());
-                let w = fast_generic(y, x, false).expect("a generic lane");
-                want.push(((u64::from(y), u64::from(x)), u64::from(w)));
-            }
+        for (y, x) in extra {
+            let (y, x) = (y.to_bits(), x.to_bits());
+            let w = fast_generic(y, x, by_reciprocal).expect("a generic lane");
+            want.push(((u64::from(y), u64::from(x)), u64::from(w)));
         }
         // Metal reads denormal operands as zeros: the answers of the grid's flushed operands are
         // the answers of the zeros of their sign.
@@ -564,7 +599,7 @@ fn fast_atan2_answers_as_metal_at_every_special_operand() {
             .map(|((y, x), _)| vec![vec![*y], vec![*x]])
             .collect();
         check_accept(
-            &format!("fast atan2 f32 (reciprocal flushed {reciprocal_flushed}) against Metal"),
+            &format!("fast atan2 f32 (by reciprocal {by_reciprocal}) on the interpreter"),
             &[f, f],
             f,
             &|fb, a| {
@@ -574,7 +609,7 @@ fn fast_atan2_answers_as_metal_at_every_special_operand() {
                 };
                 let divide =
                     |fb: &mut FunctionBuilder<'_>, n: Value, d: Value| fb.binary(BinOp::FDiv, n, d);
-                math::fast_atan2(fb, f, a[0], a[1], reciprocal_flushed, &atan, &divide)
+                math::fast_atan2(fb, f, a[0], a[1], by_reciprocal, &atan, &divide)
             },
             &cases,
             &|c| {
@@ -602,10 +637,10 @@ fn special_value_functions_stay_within_their_word_estimate() {
     let fns = [
         FloatFn::Atan2,
         FloatFn::FastAtan2 {
-            reciprocal_flushed: false,
+            by_reciprocal: false,
         },
         FloatFn::FastAtan2 {
-            reciprocal_flushed: true,
+            by_reciprocal: true,
         },
     ];
     let mut out = Vec::new();

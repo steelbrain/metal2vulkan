@@ -557,14 +557,15 @@ const EVERY_ARITHMETIC_NOTE: [PrecisionNote; 4] = [
 /// Metal answers the canonical NaN reproducibly, so where both answers are NaNs of an operation
 /// whose lowering leaves the encoding to the device, and the row records `DeviceNanEncoding`, the
 /// value stays open with the exact path. On lavapipe, which is not measured to answer Metal's NaN,
-/// the product's `float` lowerings that leave a NaN's encoding to the device record the note:
-/// precise `pow`, and fast `sin` and `cos` (the device's instructions, whose NaN over an infinity
-/// is the device's). Every other operation this check reads answers a NaN whose encoding the
-/// product states (`NativeNanEncoding`) or none, so a differing NaN of `div` or `mul` is not the
-/// note's even where the row records it (another operation of the module may), and the verdict is
-/// Apple's bound's; Metal's precise and fast divisions answer `0x7fc00000` themselves. A differing
-/// NaN of fast `sin` is the note's; of precise `sin`, which does not record it, it is not. Two
-/// different answers, not both NaNs, are not the encoding's.
+/// the product's `float` lowerings that leave to the device a NaN Metal answers no NaN of record
+/// the note: fast `sin` and `cos` (the device's instructions, whose NaN over an infinity is the
+/// device's where Metal answers `+0`). Every other operation this check reads answers a NaN whose
+/// encoding the product states (`NativeNanEncoding`: precise `pow`, whose NaNs Metal answers as
+/// measured) or none, so a differing NaN of `div`, `mul` or precise `pow` is not the note's even
+/// where the row records it (another operation of the module may), and the verdict is Apple's
+/// bound's; Metal's precise and fast divisions answer `0x7fc00000` themselves. A differing NaN of
+/// fast `sin` is the note's; of precise `sin`, which does not record it, it is not. Two different
+/// answers, not both NaNs, are not the encoding's.
 #[test]
 fn a_nan_encoding_the_product_answers_is_not_a_near_equivalent() {
     let (metal, device) = (0x7fc0_0000, 0xffc0_0000);
@@ -573,7 +574,7 @@ fn a_nan_encoding_the_product_answers_is_not_a_near_equivalent() {
     let nan = [PrecisionNote::DeviceNanEncoding];
     for math in [Math::Precise, Math::Fast] {
         let device_nans: &[msl::Prim] = match math {
-            Math::Precise => &[msl::Prim::Pow],
+            Math::Precise => &[],
             Math::Fast => &[msl::Prim::Sin, msl::Prim::Cos],
         };
         for prim in msl::Prim::ALL {
@@ -613,7 +614,13 @@ fn a_nan_encoding_the_product_answers_is_not_a_near_equivalent() {
     // operation does not make this value the note's.
     let sin = verdict_of("sin(a)", Math::Precise, &[infinity], (metal, device), &nan);
     assert_ne!(sin.label(), "near_equivalent", "{sin:?}");
-    // Precise `pow` of a negative base and a non-integer exponent: a NaN the device encodes.
+    // Precise `pow` of a negative base and a non-integer exponent: a NaN whose encoding the
+    // product states (`NativeNanEncoding`), not the note's.
+    let (_, notes) = lowering_notes(msl::Prim::Pow, F32, Math::Precise, lavapipe()).unwrap();
+    assert!(
+        notes.contains(&PrecisionNote::NativeNanEncoding),
+        "{notes:?}"
+    );
     let pow = verdict_of(
         "pow(a, b)",
         Math::Precise,
@@ -621,7 +628,7 @@ fn a_nan_encoding_the_product_answers_is_not_a_near_equivalent() {
         (metal, device),
         &nan,
     );
-    assert_eq!(pow.label(), "near_equivalent", "{pow:?}");
+    assert_ne!(pow.label(), "near_equivalent", "{pow:?}");
     let one = 1.0f32.to_bits();
     let finite = verdict_of("div(a, b)", Math::Fast, &[one, one], (one, one + 1), &nan);
     assert_ne!(finite.label(), "near_equivalent", "{finite:?}");

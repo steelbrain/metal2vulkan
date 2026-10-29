@@ -363,35 +363,3 @@ fn ratio_to_half_rounds_once() {
     };
     assert!(twice(65455, 65535) && twice(65519, 65535) && twice(32759, 32767));
 }
-
-/// The sRGB table's step `k` of every code, divided exactly by 4095 (what texture reads and
-/// samples answer for a color channel), is `k / 4095` correctly rounded.
-#[test]
-fn srgb_steps_read_the_twelve_bit_table() {
-    use crate::lower::arith::{exact_division, srgb};
-    let u = int(32);
-    let decode = |b: u64| {
-        let c = b as f64 / 255.0;
-        let v = if c <= 0.04045 {
-            c / 12.92
-        } else {
-            ((c + 0.055) / 1.055).powf(2.4)
-        };
-        let k = (v * 4095.0).round_ties_even();
-        u64::from(((k / 4095.0) as f32).to_bits())
-    };
-    let cases: Vec<Case> = (0..256u64).map(|b| vec![vec![b]]).collect();
-    check(
-        "srgb_step",
-        &[u],
-        float(32),
-        &|fb, a| {
-            let t = srgb::declare(fb.module())?;
-            let k = srgb::step(fb, t, a[0])?;
-            exact_division::div_exact(fb, u, k, 4095)
-        },
-        &cases,
-        &|c| Some(vec![decode(arg(c, 0))]),
-        false,
-    );
-}

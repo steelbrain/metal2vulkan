@@ -243,11 +243,8 @@ fn bgra8_and_rgba8_storage_textures_compile_to_distinct_modules() {
                 );
             }
         }
-        let table = |a: &FunctionArtifact| {
-            a.strategies
-                .entries
-                .contains_key(crate::lower::arith::SRGB_PACK)
-        };
+        let table =
+            |a: &FunctionArtifact| super::engine_fragment::holds_srgb_table(&a.module.words);
         let srgb_rgba = variant(PixelFormat::RGBA8UnormSRGB);
         if let Some((choice, s)) = &srgb_rgba {
             if choice.class == StorageImageClass::SrgbEncode {

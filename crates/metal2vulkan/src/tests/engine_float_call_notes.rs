@@ -488,8 +488,10 @@ fn a_float_division_is_the_devices_arithmetic_unless_it_is_metals_precise_one() 
 
 /// Metal's precise `fmod`, on `float` and `half`, answers the one right value
 /// (`libm::Fun::correctly_rounded`: exact by MSL Tables 8.1 and 8.3), which its routine computes
-/// on every device: it records neither precision note on any profile class, in either mode, with
-/// or without flags. Precise `sqrt` and `rsqrt`, which Metal documents correctly rounded, are the
+/// on every device: it records no precision note of the function's value on any profile class, in
+/// either mode, with or without flags; a `half` one records `NativeTranscendentals` for its zero
+/// remainder's sign, its `float` remainder's, where Metal's `half` answers `+0`
+/// (`FloatFn::half_zero_of_float`). Precise `sqrt` and `rsqrt`, which Metal documents correctly rounded, are the
 /// device's `Sqrt` and `InverseSqrt`: off Metal's own functions they record the device's precision
 /// (`NativeTranscendentals`), as precise `exp`, which Apple bounds by ulps, does.
 #[test]
@@ -509,8 +511,12 @@ fn precise_fmod_records_no_precision_note_and_the_roots_the_devices() {
                 for math in [EntryMath::Fast, EntryMath::Precise] {
                     let notes = PrecisionNote::of_math_call(parse(name), fmf, &p, math)
                         .unwrap_or_else(|| panic!("{name} is a float function"));
+                    let half_zero = name.ends_with("f16");
                     assert!(
-                        function_notes.iter().all(|note| !notes.contains(note)),
+                        function_notes.iter().all(|note| {
+                            notes.contains(note)
+                                == (half_zero && *note == PrecisionNote::NativeTranscendentals)
+                        }),
                         "{name} under {fmf:?} on {stem}, {math:?}: {notes:?}"
                     );
                 }

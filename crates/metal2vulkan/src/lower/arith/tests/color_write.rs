@@ -463,7 +463,7 @@ fn word_attachments_store_metals_words() {
                     for (out, b) in rgba.iter_mut().zip(&c[0]) {
                         *out = f32::from_bits(*b as u32);
                     }
-                    Some(vec![u64::from(word.output_word(rgba))])
+                    word.output_word(rgba).map(|w| vec![u64::from(w)])
                 },
                 &|g, w| g == w,
             );

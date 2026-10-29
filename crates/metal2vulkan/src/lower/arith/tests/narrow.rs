@@ -1855,106 +1855,6 @@ fn fp8_to_integer_converts_every_pattern_as_its_value() {
     }
 }
 
-/// `air.unpack` follows Metal's normalized conversion: to a float by dividing, correctly rounded
-/// (snorm clamped at -1). The sRGB format is `srgb_unpack_answers_with_metals_table`'.
-#[test]
-fn unpack_follows_the_normalized_conversions() {
-    use crate::air::intrinsics::PackFormat as P;
-    let formats = [
-        P::Unorm4x8,
-        P::Snorm4x8,
-        P::Unorm2x16,
-        P::Snorm2x16,
-        P::UnormRgb10a2,
-        P::UnormRgb565,
-    ];
-    for format in formats {
-        let (widths, snorm) = math::pack_layout(format).expect("lowered");
-        let lanes = widths.len() as u8;
-        let word = int(math::packed_bits(format));
-        for lane in [float(32), half()] {
-            let f = vec(lane, lanes);
-            let mut rng = Rng(7);
-            let cases: Vec<Case> = (0..24)
-                .map(|_| vec![vec![rng.next() & mask(math::packed_bits(format))]])
-                .collect();
-            let accept = exact_ok(f);
-            check_accept(
-                &format!("unpack {format:?} to {lane:?}"),
-                &[word],
-                f,
-                &|fb, x| math::unpack(fb, format, f, x[0], None),
-                &cases,
-                &|c| {
-                    let mut at = 0;
-                    let mut out = Vec::new();
-                    for n in widths {
-                        let v = (c[0][0] >> at) & mask(*n as u8);
-                        let x = if snorm {
-                            let s = sext(v, *n as u8) as f32;
-                            (s / ((1u32 << (n - 1)) - 1) as f32).max(-1.0)
-                        } else {
-                            v as f32 / ((1u32 << n) - 1) as f32
-                        };
-                        out.push(nbits(lane, f64::from(x)));
-                        at += n;
-                    }
-                    Some(out)
-                },
-                &accept,
-            );
-        }
-    }
-    assert!(math::pack_layout(P::UnormRg11b10f).is_none());
-    assert!(math::pack_layout(P::UnormRgb9e5).is_none());
-}
-
-/// Metal's `snorm` `rgb10a2` unpack, as measured on Apple M3 Max (macOS 26.7) by the probe over
-/// every code of every field: `max(c * fl(1 / s), -1)` in `f32` (a `half` result rounds that
-/// `f32`), `s` being 511 for the 10-bit fields and 1 for the 2-bit alpha.
-fn snorm_10a2_unpack_ref(w: u64) -> [f32; 4] {
-    let mut out = [0.0f32; 4];
-    for (k, (at, n)) in [(0u32, 10u32), (10, 10), (20, 10), (30, 2)]
-        .iter()
-        .enumerate()
-    {
-        let c = sext((w >> at) & mask(*n as u8), *n as u8) as f32;
-        out[k] = (c * (1.0 / ((1u32 << (n - 1)) - 1) as f32)).max(-1.0);
-    }
-    out
-}
-
-/// `air.unpack.snorm.rgb10a2` computes Metal's measured rule ([`snorm_10a2_unpack_ref`]) on every
-/// code of every field, unpacked to `float` and `half`. Metal's own word pins the rule: 65 unpacks
-/// to `0x3E024120`, one ULP below the quotient `65 / 511`.
-#[test]
-fn snorm_rgb10a2_unpacks_as_metal_measures() {
-    use crate::air::intrinsics::PackFormat as P;
-    let word = int(32);
-    // Metal's words.
-    assert_eq!(snorm_10a2_unpack_ref(0x4411_0441)[0].to_bits(), 0x3E02_4120);
-    assert_eq!(snorm_10a2_unpack_ref(0x2008_0200), [-1.0, -1.0, -1.0, 0.0]);
-    // Unpack: every code of every field (r = g = b = k, a = k mod 4).
-    let codes: Vec<Case> = (0..1024u64)
-        .map(|k| vec![vec![k | k << 10 | k << 20 | (k & 3) << 30]])
-        .collect();
-    for lane in [float(32), half()] {
-        let f = vec(lane, 4);
-        check_accept(
-            &format!("unpack snorm rgb10a2 to {lane:?}"),
-            &[word],
-            f,
-            &|fb, x| math::unpack(fb, P::SnormRgb10a2, f, x[0], None),
-            &codes,
-            &|c| {
-                let v = snorm_10a2_unpack_ref(c[0][0]);
-                Some(v.iter().map(|x| nbits(lane, f64::from(*x))).collect())
-            },
-            &|g, w| g == w,
-        );
-    }
-}
-
 /// `k / d` is correctly rounded (the host's IEEE `f32` division) for every `k` in `[0, d]` of every
 /// normalized scale and the sRGB step scale 4095, and for every 97th `k` and both ends of the
 /// 16-bit scales.
@@ -1978,63 +1878,6 @@ fn normalized_division_is_correctly_rounded() {
             &|c| Some(vec![u64::from((arg(c, 0) as f32 / d as f32).to_bits())]),
             false,
         );
-    }
-}
-
-/// `unorm4x8_srgb` unpacks through Metal's twelve-bit decode table, on the interpreter: every byte
-/// in every lane gives, for a color byte `b`, the correctly rounded `round(decode(b / 255) * 4095)
-/// / 4095` of the MSL transfer (every step at least `1.6e-4` from a half step), and for the alpha
-/// byte `a / 255` correctly rounded; among them Metal's steps of the authored case
-/// `srgb-transfer-and-its-twelve-bit-table` (M3 Max, ORACLE_ABI v32): byte 1 (`0.000303527`, 1.243
-/// steps) is step 1, `0x39800801`; byte 137 is step 1024, `0x3E800801`; byte 255 is `1.0`.
-#[test]
-fn srgb_unpack_answers_with_metals_table() {
-    use crate::air::intrinsics::PackFormat as P;
-    use crate::lower::arith::srgb;
-    let word = int(32);
-    let decode = |b: u64| {
-        let c = b as f64 / 255.0;
-        let v = if c <= 0.04045 {
-            c / 12.92
-        } else {
-            ((c + 0.055) / 1.055).powf(2.4)
-        };
-        let k = (v * 4095.0).round_ties_even();
-        u64::from(((k / 4095.0) as f32).to_bits())
-    };
-    for lane in [float(32), half()] {
-        let f = vec(lane, 4);
-        let cases: Vec<Case> = (0..256u64)
-            .map(|b| {
-                let w = b | ((255 - b) << 8) | ((b ^ 0x5A) << 16) | (((7 * b + 3) & 255) << 24);
-                vec![vec![w]]
-            })
-            .collect();
-        check_accept(
-            &format!("unpack sRGB to {lane:?}"),
-            &[word],
-            f,
-            &|fb, x| {
-                let t = srgb::declare(fb.module())?;
-                math::unpack(fb, P::Unorm4x8Srgb, f, x[0], Some(t))
-            },
-            &cases,
-            &|c| {
-                let w = c[0][0];
-                let mut out: Vec<u64> = (0..3).map(|k| decode((w >> (8 * k)) & 255)).collect();
-                out.push(u64::from(((w >> 24) as f32 / 255.0).to_bits()));
-                Some(
-                    out.iter()
-                        .map(|b| nbits(lane, f64::from(f32::from_bits(*b as u32))))
-                        .collect(),
-                )
-            },
-            &exact_ok(f),
-        );
-    }
-    let metal: [(u64, u64); 3] = [(1, 0x3980_0801), (137, 0x3E80_0801), (255, 0x3F80_0000)];
-    for (b, want) in metal {
-        assert_eq!(decode(b), want, "byte {b}");
     }
 }
 
@@ -2137,7 +1980,7 @@ fn packed_float_formats_unpack_exactly() {
                 &format!("unpack {format:?} to {lane:?}"),
                 &[word],
                 f,
-                &|fb, x| math::unpack(fb, format, f, x[0], None),
+                &|fb, x| math::unpack_float(fb, format, f, x[0]),
                 &cases,
                 &|c| {
                     let w = arg(c, 0);
@@ -2161,105 +2004,13 @@ fn packed_float_formats_unpack_exactly() {
     }
 }
 
-/// An `air.unpack` of a normalized format converts its channels as one vector, so its code does not
-/// repeat a scalar sequence per channel. Previously a `float4` unpack was 779 words (955 snorm);
-/// after, 297 (358).
-#[test]
-fn normalized_unpacks_convert_their_channels_as_one_vector() {
-    use crate::air::intrinsics::PackFormat as P;
-    use crate::lower::arith::ops::splat;
-    use crate::spirv::serialize::serialize;
-    let word = int(32);
-    let size = |ins: &[Form], out: Form, body: Body<'_>| -> usize {
-        let m = kernel(ins, out, body).expect("build");
-        serialize(m).expect("serialize").words.len()
-    };
-    for (format, unpack_most) in [
-        (P::UnormRgb10a2, 310),
-        (P::Unorm4x8, 310),
-        (P::Snorm4x8, 370),
-    ] {
-        let fl = vec(float(32), 4);
-        let unpack = size(&[word], fl, &|fb, x| {
-            math::unpack(fb, format, fl, x[0], None)
-        }) - size(&[word], fl, &|fb, _| splat(fb, fl, 0));
-        assert!(unpack <= unpack_most, "{format:?} unpack: {unpack} words");
-    }
-}
-
-/// A vector unpack divides each lane by its own channel's scale: every value of every field of up
-/// to 10 bits in every lane (every 97th and both ends of a 16-bit field), against the host's
-/// correctly rounded quotient, to `float` and to `half`.
-#[test]
-fn a_vector_unpack_reads_every_field_value_of_every_channel() {
-    use crate::air::intrinsics::PackFormat as P;
-    let word = int(32);
-    for format in [
-        P::UnormRgb10a2,
-        P::UnormRgb565,
-        P::Unorm4x8,
-        P::Snorm4x8,
-        P::Unorm2x16,
-        P::Snorm2x16,
-    ] {
-        let (widths, snorm) = math::pack_layout(format).expect("lowered");
-        let most = widths.iter().map(|n| 1u64 << n).max().unwrap_or(1);
-        let step = if most > 1024 { 97 } else { 1 };
-        let vals: Vec<u64> = (0..most)
-            .step_by(step)
-            .chain([most - 2, most - 1])
-            .collect();
-        let cases: Vec<Case> = vals
-            .iter()
-            .map(|v| {
-                let mut w = 0u64;
-                let mut at = 0;
-                for (k, n) in widths.iter().enumerate() {
-                    w |= ((v + 5 * k as u64) & mask(*n as u8)) << at;
-                    at += n;
-                }
-                vec![vec![w]]
-            })
-            .collect();
-        for lane in [float(32), half()] {
-            let f = vec(lane, widths.len() as u8);
-            check_accept(
-                &format!("vector unpack {format:?} to {lane:?}"),
-                &[word],
-                f,
-                &|fb, x| math::unpack(fb, format, f, x[0], None),
-                &cases,
-                &|c| {
-                    let mut at = 0;
-                    let mut out = Vec::new();
-                    for n in widths {
-                        let v = (c[0][0] >> at) & mask(*n as u8);
-                        let x = if snorm {
-                            let s = sext(v, *n as u8) as f32;
-                            (s / ((1u32 << (n - 1)) - 1) as f32).max(-1.0)
-                        } else {
-                            v as f32 / ((1u32 << n) - 1) as f32
-                        };
-                        out.push(nbits(lane, f64::from(x)));
-                        at += n;
-                    }
-                    Some(out)
-                },
-                &exact_ok(f),
-            );
-        }
-    }
-}
-
 /// `air.pack` and `air.unpack` of `unorm4x8_srgb` read no table: the census names them as the
-/// other normalized formats, and charges Metal's sRGB table, which a tile's, attachment's or
-/// texture's conversion reads, once, to the direction that first reads it.
+/// other normalized formats, and a plan of no division, `fmod` routine or extended-range table
+/// charges no routine.
 #[test]
-fn srgb_packs_read_no_table_and_the_table_charges_once() {
+fn srgb_packs_read_no_table() {
     use crate::air::intrinsics::{PackDir, PackFormat as P};
-    use crate::lower::arith::{
-        routine_words, srgb, ArithPlan, ArithStrategy, SRGB_PACK, SRGB_UNPACK,
-    };
+    use crate::lower::arith::{routine_words, ArithPlan, ArithStrategy};
     use crate::lower::select::FamilyPlans;
     use crate::lower::strategy::FamilyStrategy;
     let name = |dir, format| {
@@ -2275,19 +2026,6 @@ fn srgb_packs_read_no_table_and_the_table_charges_once() {
     assert_eq!(name(PackDir::Unpack, P::Unorm4x8Srgb), "arith.unpack");
     assert_eq!(name(PackDir::Pack, P::Unorm4x8), "arith.pack");
     assert_eq!(name(PackDir::Unpack, P::UnormRgb10a2), "arith.unpack");
-    for (dir, table) in [(PackDir::Pack, SRGB_PACK), (PackDir::Unpack, SRGB_UNPACK)] {
-        let plan = ArithPlan {
-            srgb: Some(dir),
-            ..ArithPlan::default()
-        };
-        let charged: Vec<(String, u64)> = routine_words(&plan)
-            .map(|(name, words)| (name.to_owned(), words))
-            .collect();
-        assert_eq!(
-            charged,
-            vec![(table.to_owned(), u64::from(srgb::TABLE_WORDS))]
-        );
-    }
     assert_eq!(routine_words(&ArithPlan::default()).count(), 0);
 }
 

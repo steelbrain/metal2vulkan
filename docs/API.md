@@ -3190,10 +3190,12 @@ bound.
   `FAbs`, `FSign` and `Fract`, their special operands the instruction's (Metal's `sign` of a NaN,
   a zero and an `f32` denormal is `+0`, its `fract` of an infinity `+0`); a `half` function's
   signed zeros and NaN signs its `float` instruction's (`half` `sin(-0)` is `-0`, where Metal
-  answers `+0`); `pow`, `powr` and `atan2` C99's special values by the device's comparisons
-  around its instruction (`pow(x, 1)` the device's `Pow`, where Metal answers `x`; an `f32`
-  denormal operand as the device reads it); and `round` C99's from the device's `Trunc` on every
-  device (`round(-0.3)` is `-0`, where Metal answers `+0`).
+  answers `+0`), and on every device a `half` `fmod`'s zero remainder its `float` remainder's
+  (`half` `fmod(-2, 0.5)` is `-0`, where Metal answers `+0`); `pow`, `powr` and `atan2` C99's
+  special values by the device's comparisons around its instruction (`pow(x, 1)` the device's
+  `Pow`, where Metal answers `x`; an `f32` denormal operand as the device reads it); and `round`
+  C99's from the device's `Trunc` on every device (`round(-0.3)` is `-0`, where Metal answers
+  `+0`).
 - `metal2vulkan-degrade-native-division` (precision). `PrecisionNote::NativeDivision`: Native device
   maths: a precise `float` or `half` division, or Metal's fast division or reciprocal, is the
   device's `OpFDiv` where the device's division is not Metal's own: within Vulkan's 2.5 ulp, where
@@ -3259,8 +3261,9 @@ bound.
   device maths: a `float` or `half` operation's NaN result is the device's, its sign and payload
   unselected, where Metal answers a NaN the device is not measured to answer (every NaN but
   Metal's canonical one on a device measured to answer that, MoltenVK on an Apple GPU): a `float`
-  `fneg` and `fabs`, which keep a NaN operand's payload on Metal, and a `half` `fract`, which
-  returns it, among them. Also
+  `fneg` and `fabs`, which keep a NaN operand's payload on Metal, a `half` `fract`, which returns
+  it, and a precise `float` `pow` of a NaN base to the exponent one, which returns the base, among
+  them. Also
   recorded wherever a `half` is read from its bits, on every device, since the read is the
   device's widening (its conversion with `shaderFloat16`, `UnpackHalf2x16` without): a NaN's bits
   the device's, where Metal widens every `half` NaN to `0x7fc00000` and moves one it does not

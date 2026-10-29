@@ -1584,17 +1584,19 @@ pub enum PrecisionNote {
     /// `f32` denormal is `+0`, its `fract` of an infinity `+0`, where `FSign` keeps a zero's sign
     /// and leaves a NaN's answer undefined and `Fract` of an infinity is a NaN); a `half`
     /// function's zeros' and NaNs' signs its `float` instruction's (Metal's `half` `sin`, `tan`
-    /// and `asin` of `-0` are `+0`, its `half` `asin` NaN takes the operand's sign); `pow`,
-    /// `powr` and `atan2` C99's special values around the device's instruction, decided by the
-    /// device's comparisons, so `pow(x, 1)` is the device's `Pow` (Metal answers `x`) and an
-    /// `f32` denormal operand reads as the device reads it; and `round` C99's, from the device's
+    /// and `asin` of `-0` are `+0`, its `half` `asin` NaN takes the operand's sign), and on every
+    /// device a `half` `fmod`'s zero remainder its `float` remainder's, the dividend's sign
+    /// (`half` `fmod(-2, 0.5)` is `-0`, where Metal answers `+0`); `pow`, `powr` and `atan2`
+    /// C99's special values around the device's instruction, decided by the device's
+    /// comparisons, so `pow(x, 1)` is the device's `Pow` (Metal answers `x`) and an `f32`
+    /// denormal operand reads as the device reads it; and `round` C99's, from the device's
     /// `Trunc`, on every device (`round(-0.3)` is `-0`, where Metal answers `+0`).
     /// **Recorded bound:** Vulkan's precision table for the instruction, where Metal promises 4 to
     /// 6 ulp precise and its fast-math table fast (MSL Tables 8.1, 8.2): `Exp2` and `Exp` 3 + 2·|x|
     /// ulp; `Log2` and `Log` 3 ulp outside `[0.5, 2]` and `2^-21` absolute inside; `Pow` inherited
     /// from `Exp2(y · Log2(x))`; `Sqrt` inherited from `1 / InverseSqrt` (`fast::sqrt`'s too, where
     /// Metal's is `x · rsqrt(x)`); `FAbs` and `FSign` the correct result, `Fract` and `Trunc`
-    /// correctly rounded, `round`'s zero of either sign; `InverseSqrt` 2 ulp; `Sin` and `Cos` `2^-11` absolute in `[-π,
+    /// correctly rounded, `round`'s and a `half` `fmod`'s zero of either sign; `InverseSqrt` 2 ulp; `Sin` and `Cos` `2^-11` absolute in `[-π,
     /// π]` (both answers in `[-1, 1]` beyond); `Tan` inherited from `Sin / Cos`; `Asin`, `Acos`,
     /// `Atan` and `Atan2` 4096 ulp; the hyperbolic functions inherited from their `Exp` and `Log`
     /// formulas. A denormal operand and a NaN's encoding are the device's (`DeviceDenormals`,
@@ -1759,7 +1761,8 @@ pub enum PrecisionNote {
     /// Metal answers a NaN the device answers a NaN (the module keeps
     /// `SignedZeroInfNanPreserve` where Metal's entry keeps NaNs), its sign and payload the
     /// device's own (llvmpipe: `0xffc00000`), where Metal answers its canonical `0x7fc00000`
-    /// (`0x7e00` as `half`), an operand's bits (`round`, `ldexp`, `fast::tan`), or the canonical
+    /// (`0x7e00` as `half`), an operand's bits (`round`, `ldexp`, `fast::tan`, and precise `pow`
+    /// of a NaN base to the exponent one), or the canonical
     /// NaN with an operand's sign (`asin`, `atan`, `asinh`, `atanh`); a `float` `fneg` and `fabs`
     /// keep a NaN operand's payload on Metal, and a `half` `fract` returns it. Every non-NaN result
     /// is as without it. Also recorded by every module that reads a `half` from its bits (a load, a

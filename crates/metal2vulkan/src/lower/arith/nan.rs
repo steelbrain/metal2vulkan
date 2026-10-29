@@ -6,8 +6,9 @@
 //! functions answer the canonical NaN `0x7FC00000`, sign and payload dropped
 //! ([`NanAnswer::Canonical`]); `asin`, `atan`, `asinh`, and `atanh` keep a NaN operand's sign
 //! ([`NanAnswer::OperandSign`]); `fast::asin` gives a domain error the operand's sign
-//! ([`NanAnswer::DomainSign`]); and `round`, `ldexp`, and `fast::tan` return a NaN operand itself
-//! ([`NanAnswer::Operand`]). Its `half` `+`, `*`, and fused multiply-add, and its narrowing of a
+//! ([`NanAnswer::DomainSign`]); `round`, `ldexp`, and `fast::tan` return a NaN operand itself
+//! ([`NanAnswer::Operand`]); and precise `pow` returns a NaN base to the exponent one itself
+//! ([`NanAnswer::BaseToExponentOne`]). Its `half` `+`, `*`, and fused multiply-add, and its narrowing of a
 //! `float` to `half` (`fptrunc` and `air.convert`), answer the canonical `half` NaN `0x7E00`, held
 //! widened as `0x7FC00000`; its widening of a `half` NaN to `float`, and its `half` `fneg` and
 //! `fabs`, answer the canonical NaN too ([`NanAnswer::CanonicalExact`]). Its `float` `fneg` and
@@ -62,6 +63,10 @@ pub enum NanAnswer {
     /// and the canonical NaN for a NaN of another origin: `round`, `ldexp`, `fast::tan`, `float`
     /// `fneg` and `fabs`, and `half` `fract`.
     Operand,
+    /// The canonical NaN, but a NaN base to the exponent one, which is the base itself, bit for
+    /// bit (`pow(-NaN, 1)` is `0xffc00000`): precise `pow` on `float` (A1 case 116e052a, every
+    /// lane; `fast::pow` answers the canonical NaN there).
+    BaseToExponentOne,
 }
 
 impl NanAnswer {
@@ -180,8 +185,8 @@ fn precise_of(op: FloatFn) -> FloatFn {
 /// whose lowering answers it itself ([`FloatFn::metal_nans`]) are listed too. `None` where Metal
 /// answers a number for a NaN operand (`sign`, `saturate`, `fast::sin`, `fast::cos`), where the
 /// result is an operand the device's picks or bit moves return (`fmin`, `fmax`, `median3`,
-/// `copysign`, and precise `pow`, whose `pow(x, 1)` is `x`). `fabs` keeps its operand's payload
-/// with the sign cleared ([`NanAnswer::Operand`]).
+/// `copysign`). `fabs` keeps its operand's payload with the sign cleared ([`NanAnswer::Operand`]),
+/// and precise `pow` a NaN base to the exponent one ([`NanAnswer::BaseToExponentOne`]).
 /// `sinpi`, `cospi`, and `tanpi` answer the canonical NaN in both modes for an infinity or a NaN.
 /// The math-library branch's refinements of `fast_tan`, `fast_asin`, `fast_acos`,
 /// `fast_atan`, and `fast_rsqrt` answer as those calls were measured: a `fast_` symbol's state
@@ -249,6 +254,7 @@ fn measured(op: FloatFn, fast: bool) -> Option<NanAnswer> {
         F::FastAtan => A::Canonical,
         F::Asin | F::Atan | F::Asinh | F::Atanh => A::OperandSign,
         F::Round | F::Ldexp | F::Abs => A::Operand,
+        F::Pow if !fast => A::BaseToExponentOne,
         _ => return None,
     })
 }

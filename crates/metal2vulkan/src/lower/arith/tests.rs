@@ -2215,15 +2215,15 @@ fn nan_operands() -> Vec<u64> {
     ]
 }
 
-/// Class H: Metal's `half` `fmod` answers `+0` for a zero remainder of a nonzero dividend and the
-/// dividend itself for a zero one (`fmod(-2, 0.5)` and `fmod(-65504, 65504)` are `+0`, `fmod(-0,
-/// 1)` and `fmod(-0, inf)` are `-0`), as `nan_fmod_zero` and `nan_fmod_zero_fast` read on every
-/// lane; every other remainder is C's, with the dividend's sign, which the interpreter's `OpFRem`
-/// answers. Scalars and vectors, bit for bit but for a NaN's payload (the canonical NaN is selected
-/// beside the function), and within the word estimate. A `float` remainder keeps the dividend's
-/// sign (`fmod(-2, 0.5)` is `-0`), as Metal's does.
+/// Class H: a `half` `fmod` is its `float` remainder rounded, C's, with the dividend's sign, which
+/// the interpreter's `OpFRem` answers: a zero remainder of a nonzero dividend is the zero of the
+/// dividend's sign (`fmod(-2, 0.5)` and `fmod(-65504, 65504)` are `-0`), where Metal answers `+0`
+/// (`nan_fmod_zero`, `nan_fmod_zero_fast`, every lane; `PrecisionNote::NativeTranscendentals`),
+/// and a zero dividend's is the dividend itself (`fmod(-0, 1)` is `-0`), as Metal's is. Scalars
+/// and vectors, bit for bit but for a NaN's payload, and within the word estimate. A `float`
+/// remainder keeps the dividend's sign (`fmod(-2, 0.5)` is `-0`), as Metal's does.
 #[test]
-fn half_fmod_answers_metals_zero_remainder() {
+fn half_fmod_is_its_float_remainder_rounded() {
     let halves: Vec<u64> = vec![
         0, 0x8000, 0x3C00, 0xBC00, 0x4000, 0xC000, 0x4200, 0xC200, 0x3800, 0xB800, 0x3E00, 0xBE00,
         0x3A00, 0xBA00, 0x7BFF, 0xFBFF, 0x0001, 0x8001, 0x0002, 0x8002, 0x03FF, 0x7C00, 0xFC00,
@@ -2233,12 +2233,9 @@ fn half_fmod_answers_metals_zero_remainder() {
         let (a, b) = (c[0][0], c[1][0]);
         let (x, y) = (f16_to_f64(a as u16), f16_to_f64(b as u16));
         let r = x % y;
+        // A zero remainder keeps the dividend's sign; `f64_to_f16` keeps a zero's sign too.
         let bits = if r == 0.0 {
-            if x == 0.0 {
-                a
-            } else {
-                0
-            }
+            a & 0x8000
         } else {
             u64::from(f64_to_f16(r))
         };
@@ -2432,7 +2429,13 @@ fn half_nan_answers_follow_the_measured_states() {
     }
     use crate::device::profile::NanEncoding;
     assert!(A::Canonical.device_answers(NanEncoding::MetalCanonical));
-    for a in [A::CanonicalExact, A::Operand, A::OperandSign, A::DomainSign] {
+    for a in [
+        A::CanonicalExact,
+        A::Operand,
+        A::OperandSign,
+        A::DomainSign,
+        A::BaseToExponentOne,
+    ] {
         assert!(!a.device_answers(NanEncoding::MetalCanonical), "{a:?}");
     }
     // A device not measured to answer Metal's canonical NaN answers none of Metal's NaNs.
@@ -2442,6 +2445,7 @@ fn half_nan_answers_follow_the_measured_states() {
         A::Operand,
         A::OperandSign,
         A::DomainSign,
+        A::BaseToExponentOne,
     ] {
         assert!(!a.device_answers(NanEncoding::Native), "{a:?}");
     }
@@ -2459,6 +2463,61 @@ const KHR_FACTS: super::FloatFacts = super::FloatFacts {
     nans: crate::device::profile::NanEncoding::Native,
     native_min_max: false,
 };
+
+/// Precise `pow` on `float` leaves its NaNs to the device (the device's `Pow`, and the device's sum
+/// of NaN operands), where Metal's NaN is measured: the canonical NaN, but a NaN base to the
+/// exponent one, which is the base itself. It records `NativeNanEncoding` as fast `pow` and `atan2`
+/// do, on a device whose arithmetic answers Metal's canonical NaN too (its sum of `pow(NaN, 1)`'s
+/// operands is that NaN, not the base), and never `DeviceNanEncoding`, which is for a NaN Metal
+/// answers no NaN of (fast `sin` and `cos`).
+#[test]
+fn precise_pow_notes_its_measured_nan_as_the_devices() {
+    use super::nan::NanAnswer as A;
+    use crate::air::ir::FastMath;
+    use crate::device::profile::NanEncoding;
+    use crate::pipeline::artifact::PrecisionNote;
+    let f = Form {
+        held: Held::Float(FloatFmt::F32),
+        lanes: 1,
+    };
+    for nans in [NanEncoding::Native, NanEncoding::MetalCanonical] {
+        let facts = super::FloatFacts { nans, ..KHR_FACTS };
+        let call =
+            super::float_call(FloatFn::Pow, false, FastMath::NONE, f, facts).expect("float pow");
+        assert_eq!(call.nan, Some(A::BaseToExponentOne), "{nans:?}");
+        assert!(
+            call.notes
+                .always
+                .contains(&PrecisionNote::NativeNanEncoding),
+            "{nans:?}: {:?}",
+            call.notes
+        );
+        let every_note = call
+            .notes
+            .always
+            .iter()
+            .chain(&call.notes.unless_metal_fast);
+        assert!(
+            !every_note
+                .clone()
+                .any(|n| *n == PrecisionNote::DeviceNanEncoding),
+            "{nans:?}: {:?}",
+            call.notes
+        );
+        let sin =
+            super::float_call(FloatFn::Sin, true, FastMath::NONE, f, facts).expect("fast sin");
+        assert_eq!(sin.nan, None, "{nans:?}");
+        assert!(
+            sin.notes
+                .always
+                .iter()
+                .chain(&sin.notes.unless_metal_fast)
+                .any(|n| *n == PrecisionNote::DeviceNanEncoding),
+            "{nans:?}: {:?}",
+            sin.notes
+        );
+    }
+}
 
 /// Class E: Metal's `float` `fneg` and `fabs` flip or clear the sign bit alone, a NaN's payload and
 /// a denormal kept (`nan_signbits`, `nan_signbits_fast`). The lowering takes the device's
@@ -2607,6 +2666,7 @@ fn nan_answers_follow_the_measured_flag_states() {
         (FloatFn::Sin, false, true, Some(A::Canonical)),
         (FloatFn::Cos, false, true, Some(A::Canonical)),
         (FloatFn::Atan2, false, true, Some(A::Canonical)),
+        (FloatFn::Pow, false, false, Some(A::BaseToExponentOne)),
         (FloatFn::Pow, false, true, None),
         (FloatFn::FastSin, true, true, None),
         (FloatFn::Sign, false, false, None),
@@ -3107,7 +3167,7 @@ fn fast_variants_refine_float_functions() {
             (
                 FloatFn::Atan2,
                 FloatFn::FastAtan2 {
-                    reciprocal_flushed: fmf != every,
+                    by_reciprocal: fmf != every,
                 },
             ),
             (FloatFn::SinPi, FloatFn::FastSinPi),
@@ -3141,8 +3201,8 @@ fn fast_variants_refine_float_functions() {
         assert!(!op.divides(), "{op:?}");
     }
     assert!(!FloatFn::Tanh.divides());
-    for reciprocal_flushed in [false, true] {
-        assert!(FloatFn::FastAtan2 { reciprocal_flushed }.divides());
+    for by_reciprocal in [false, true] {
+        assert!(FloatFn::FastAtan2 { by_reciprocal }.divides());
     }
     assert!(!FloatFn::Atan2.divides());
 }
@@ -3195,10 +3255,10 @@ fn device_precision_float_functions(part: usize, of: usize) {
         FloatFn::FastPow,
         FloatFn::Atan2,
         FloatFn::FastAtan2 {
-            reciprocal_flushed: false,
+            by_reciprocal: false,
         },
         FloatFn::FastAtan2 {
-            reciprocal_flushed: true,
+            by_reciprocal: true,
         },
         FloatFn::Fmod,
         FloatFn::Fma,

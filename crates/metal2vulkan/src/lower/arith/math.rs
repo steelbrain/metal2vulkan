@@ -24,16 +24,15 @@
 //! selection, and so is every function whose Vulkan precision is looser than Metal's.
 
 use crate::air::intrinsics::PackFormat;
-use crate::lower::arith::exact_division::{div_exact_lanes, per_lane};
+use crate::lower::arith::exact_division::per_lane;
 use crate::lower::arith::legal::{FloatFmt, Form, Held};
 use crate::lower::arith::libm::{self, Lib};
 use crate::lower::arith::nan::{self, NanTest};
 use crate::lower::arith::narrow;
 use crate::lower::arith::ops::{fsplat, mask, ones, sext, splat, ty, CastKind};
-use crate::lower::arith::srgb;
 use crate::spirv::builder::FunctionBuilder;
 use crate::spirv::error::{BResult, BuildError, TypeRule};
-use crate::spirv::ids::{GlobalId, Value};
+use crate::spirv::ids::Value;
 use crate::spirv::ir::{BinOp, Contraction, ConvOp, GlslOp, UnOp};
 
 /// Whether an integer function reads its operands as signed.
@@ -917,10 +916,10 @@ pub enum FloatFn {
     /// 8.2's formula (`fast_atan2`): `0 / 0` and `inf / inf` are NaN, where `atan2` answers C99's
     /// values, and the turn follows `y`'s comparison with zero, so `fast::atan2(-0, -1)` is `+π`.
     FastAtan2 {
-        /// The quotient is `y` times `x`'s reciprocal flushed to zero beyond `2^126`, as Metal
-        /// answers a call that does not carry every fast-math flag; a call that does divides
-        /// over the whole range.
-        reciprocal_flushed: bool,
+        /// The quotient is `y` times the device's reciprocal of `x`, as Metal composes a call that
+        /// does not carry every fast-math flag (past `2^126` that reciprocal is an `f32` denormal,
+        /// the device's to keep or flush); a call that does divides over the whole range.
+        by_reciprocal: bool,
     },
 }
 
@@ -1038,7 +1037,8 @@ impl FloatFn {
     /// (the device's comparisons around the device's instruction), Metal's own where the device's
     /// functions are Metal's, and elsewhere recording the device's denormals with their precision
     /// (`PrecisionNote::NativeTranscendentals`). `fast::atan2` does not: its quotient is the
-    /// device's division, whose operands `denormal::coverage` reads.
+    /// device's division or its product with the device's reciprocal, whose operands and
+    /// reciprocal `denormal::coverage` reads.
     pub fn metal_denormals(self) -> bool {
         use FloatFn as F;
         matches!(
@@ -1126,6 +1126,16 @@ impl FloatFn {
         self == FloatFn::Round
     }
 
+    /// Whether a `half` call on form `f` answers a zero remainder of a nonzero dividend with its
+    /// `float` function's sign where Metal's `half` function answers another, on every device:
+    /// `fmod`, whose `float` remainder (the exact remainder's routine, or the device's where its
+    /// functions are Metal's) keeps the dividend's sign, as C's does, where Metal's `half` `fmod`
+    /// answers `+0` (`fmod(-2, 0.5)`; `nan_fmod_zero`, `nan_fmod_zero_fast`, with and without
+    /// fast-math flags) (`PrecisionNote::NativeTranscendentals`).
+    pub fn half_zero_of_float(self, f: Form) -> bool {
+        self == FloatFn::Fmod && f.float_fmt() == Some(FloatFmt::Half)
+    }
+
     /// Whether the lowering on lanes of format `fmt` records no NaN note of its own: `saturate`,
     /// which answers a number for one, `copysign`, which moves bits, `sign`, whose NaN answer is
     /// its instruction's
@@ -1206,8 +1216,6 @@ impl FloatFn {
             // And the infinite product's tests and select, on the same classification
             // (`fast_powr_special`).
             FloatFn::FastPowr => 208 + INFINITE_PRODUCT_WORDS,
-            // The device's remainder and, on `half`, the zero's tests and selects.
-            FloatFn::Fmod if f.float_fmt() == Some(FloatFmt::Half) => 192,
             // The device's four picks.
             FloatFn::Median3 | FloatFn::FastMedian3 => 64,
             // Metal's pick: the operands' NaN tests (the bits, 6 instructions each, where the
@@ -1266,8 +1274,8 @@ impl FloatFn {
 /// Emit float function `op` on `args` (floats of form `f`; `Ldexp`'s exponent is a held `i32` and
 /// `Dot` gives the scalar), by the device's instructions, and precise `fmod` by `lib`'s routine
 /// where the module defines it. A `half` function is its `float` function rounded, its zeros' signs
-/// and NaNs' signs that function's, but `fmod`, which answers Metal's zero remainder around the
-/// exact remainder's routine (`half_fmod_zero`).
+/// and NaNs' signs that function's: a `half` `fmod`'s zero remainder the dividend's sign, as the
+/// `float` remainder keeps it ([`FloatFn::half_zero_of_float`]).
 pub fn float_fn(
     fb: &mut FunctionBuilder<'_>,
     op: FloatFn,
@@ -1285,10 +1293,6 @@ pub fn float_fn(
         // Rounded per step below.
         F::Mix | F::MulAdd | F::Fract | F::FastFract => r,
         F::Dot => narrow::round(fb, f.scalar_form(), r)?,
-        F::Fmod => {
-            let r = narrow::round(fb, f, r)?;
-            half_fmod_zero(fb, f, arg(args, 0)?, r)?
-        }
         _ => narrow::round(fb, f, r)?,
     };
     Ok(r)
@@ -1510,14 +1514,14 @@ fn float_fn_core(
             let generic = glsl(fb, GlslOp::Atan2, &[a, x])?;
             atan2_special(fb, f, a, x, generic)
         }
-        F::FastAtan2 { reciprocal_flushed } => {
+        F::FastAtan2 { by_reciprocal } => {
             // Metal's fast `atan` of its fast quotient `y · rcp(x)`: the device's `Atan` and
             // division.
             let atan = |fb: &mut FunctionBuilder<'_>, q: Value| glsl(fb, GlslOp::Atan, &[q]);
             let divide = |fb: &mut FunctionBuilder<'_>, n: Value, d: Value| -> BResult<Value> {
                 bin(fb, BinOp::FDiv, n, d)
             };
-            fast_atan2(fb, f, a, arg(args, 1)?, reciprocal_flushed, &atan, &divide)
+            fast_atan2(fb, f, a, arg(args, 1)?, by_reciprocal, &atan, &divide)
         }
     }
 }
@@ -1560,31 +1564,6 @@ fn has_bits(fb: &mut FunctionBuilder<'_>, f: Form, x: Value, bits: u64) -> BResu
     let b = fb.convert(ConvOp::Bitcast, x, ut)?;
     let k = splat(fb, u, bits)?;
     bin(fb, BinOp::IEqual, b, k)
-}
-
-/// `r` (a `half` `fmod`'s remainder of `x`, floats of form `f`) with Metal's zero: a zero
-/// remainder of a nonzero dividend is `+0`, and a zero dividend's is the dividend itself
-/// (`fmod(-2, 0.5)` is `+0`, `fmod(-0, 1)` is `-0`), with or without fast-math flags
-/// (`nan_fmod_zero`, `nan_fmod_zero_fast`). A `float` remainder keeps the dividend's sign, as C's
-/// `fmod` does, and so does Metal's: it and every other format keep `r`. Tested on the bits, so no
-/// signed-zero mode folds it.
-fn half_fmod_zero(fb: &mut FunctionBuilder<'_>, f: Form, x: Value, r: Value) -> BResult<Value> {
-    if f.float_fmt() != Some(FloatFmt::Half) {
-        return Ok(r);
-    }
-    let u = u32_form(f);
-    let (ut, ft) = (ty(fb, u)?, ty(fb, f)?);
-    let magnitude = splat(fb, u, 0x7FFF_FFFF)?;
-    let zero = splat(fb, u, 0)?;
-    let rb = fb.convert(ConvOp::Bitcast, r, ut)?;
-    let rm = bin(fb, BinOp::BitwiseAnd, rb, magnitude)?;
-    let r_zero = bin(fb, BinOp::IEqual, rm, zero)?;
-    let xb = fb.convert(ConvOp::Bitcast, x, ut)?;
-    let xm = bin(fb, BinOp::BitwiseAnd, xb, magnitude)?;
-    let x_zero = bin(fb, BinOp::IEqual, xm, zero)?;
-    let z = fb.select(x_zero, xb, zero)?;
-    let b = fb.select(r_zero, z, rb)?;
-    fb.convert(ConvOp::Bitcast, b, ft)
 }
 
 /// The classes of `powr`'s operands `x` and `y` (floats of form `f`, a `float` or a `half` in its
@@ -2222,29 +2201,31 @@ pub(super) type AtanOf<'a> = &'a dyn Fn(&mut FunctionBuilder<'_>, Value) -> BRes
 /// Zeros are the device's comparisons, so an `f32` denormal operand is a zero where the device
 /// reads it so (`denormal::coverage`), and a denormal quotient is the device's `Atan` of it.
 ///
-/// Beyond `2^126` the quotient follows the call's fast-math flags. A call that carries every
-/// flag (case c11eb8cb, compiled with fast math) divides over the whole range
-/// (`fast::atan2(FLT_MAX, FLT_MAX)` is `atan(1)`): the division is scaled by `1/4` when `|x|` is
-/// at least `2^126`, an exact scaling that keeps the divisor in the range where Metal's fast
-/// division and Vulkan's `OpFDiv` bound their error. Any other call (`reciprocal_flushed`; case
-/// 6802ab13, compiled without fast math, measured with no flag) multiplies `y` by `x`'s
-/// reciprocal flushed to zero beyond `2^126` (the reciprocal is an `f32` denormal there), so the
-/// quotient is the signed zero, or NaN for an infinite `y` (`fast::atan2(FLT_MAX, FLT_MAX)` is
-/// `+0`, `fast::atan2(inf, FLT_MAX)` is NaN). A call with only some of the flags is not
-/// measured; it takes the second answer, which differs only where the divisor leaves the range
+/// The quotient follows the call's fast-math flags. A call that carries every flag (case
+/// c11eb8cb, compiled with fast math) divides over the whole range (`fast::atan2(FLT_MAX,
+/// FLT_MAX)` is `atan(1)`): the division is scaled by `1/4` when `|x|` is at least `2^126`, an
+/// exact scaling that keeps the divisor in the range where Metal's fast division and Vulkan's
+/// `OpFDiv` bound their error. Any other call (`by_reciprocal`; case 6802ab13, compiled without
+/// fast math, measured with no flag) multiplies `y` by the device's reciprocal of `x`, as Metal
+/// composes it. Beyond `2^126` that reciprocal is an `f32` denormal, the device's to keep or
+/// flush (`denormal::coverage`): Metal flushes it, so its quotient is the signed zero, or NaN for
+/// an infinite `y` (`fast::atan2(FLT_MAX, FLT_MAX)` is `+0`, `fast::atan2(inf, FLT_MAX)` is NaN),
+/// and so is the device's where it flushes; a device that keeps it answers `atan` of the product
+/// (`±π/2` for an infinite `y`). A quotient the device's product makes NaN (an infinite `y` times
+/// a flushed reciprocal) answers NaN, as `inf / inf` does. A call with only some of the flags is
+/// not measured; it takes the second answer, which differs only where the divisor leaves the range
 /// MSL bounds the fast division in.
 ///
 /// Every finite normal pair of our probe (16.7 million, the M4) is `atan(q)` of Metal's fast
 /// `atan` and its fast quotient `q = y · rcp(x)`, and `RN(atan(q) ± RN(π))` toward a negative
-/// `x`: `divide` gives `q` (Metal's reciprocal's routine, or the device's quotient where it is
-/// Metal's), `atan` the arc tangent (Metal's fast `atan`'s routine, or the device's where it is
-/// Metal's). Every special value above is exact.
+/// `x`: `divide` gives the quotient or the reciprocal (the device's division), `atan` the arc
+/// tangent (the device's `Atan`). Every special value above is exact.
 pub(super) fn fast_atan2(
     fb: &mut FunctionBuilder<'_>,
     f: Form,
     y: Value,
     x: Value,
-    reciprocal_flushed: bool,
+    by_reciprocal: bool,
     atan: AtanOf<'_>,
     divide: DivideOf<'_>,
 ) -> BResult<Value> {
@@ -2255,15 +2236,18 @@ pub(super) fn fast_atan2(
     let nan = c(fb, f64::NAN)?;
     let (yz, xz) = (is_zero(fb, f, y)?, is_zero(fb, f, x)?);
     let (yi, xi) = (fb.unary(UnOp::IsInf, y)?, fb.unary(UnOp::IsInf, x)?);
-    let ax = glsl(fb, GlslOp::FAbs, &[x])?;
-    let limit = c(fb, 2f64.powi(126))?;
-    // The quotient, and where the reciprocal is flushed (`None` when it is not).
-    let (q, beyond) = if reciprocal_flushed {
-        let q = divide(fb, y, x)?;
-        (q, Some(bin(fb, BinOp::FOrdGreaterThan, ax, limit)?))
+    let one = c(fb, 1.0)?;
+    // The quotient, and where the device's product makes it NaN (`None` for a division).
+    let (q, q_nan) = if by_reciprocal {
+        // `y` times the device's reciprocal of `x`, kept or flushed past 2^126 as the device does.
+        let r = divide(fb, one, x)?;
+        let q = bin(fb, BinOp::FMul, y, r)?;
+        (q, Some(fb.unary(UnOp::IsNan, q)?))
     } else {
         // Both operands scaled by 1/4 when the divisor is at least 2^126.
-        let (one, quarter) = (c(fb, 1.0)?, c(fb, 0.25)?);
+        let ax = glsl(fb, GlslOp::FAbs, &[x])?;
+        let limit = c(fb, 2f64.powi(126))?;
+        let quarter = c(fb, 0.25)?;
         let big = bin(fb, BinOp::FOrdGreaterThanEqual, ax, limit)?;
         let s = fb.select(big, quarter, one)?;
         let ys = bin(fb, BinOp::FMul, y, s)?;
@@ -2283,10 +2267,6 @@ pub(super) fn fast_atan2(
     let signed_half_pi = copysign(fb, f, half_pi, signed_zero)?;
     // A zero quotient: a zero y or an infinite x.
     let qz = bin(fb, BinOp::LogicalOr, yz, xi)?;
-    let qz = match beyond {
-        Some(b) => bin(fb, BinOp::LogicalOr, qz, b)?,
-        None => qz,
-    };
     // An infinite quotient: a zero x, an infinite y, or a quotient that overflows.
     let q_inf = fb.unary(UnOp::IsInf, q)?;
     let qi = bin(fb, BinOp::LogicalOr, xz, yi)?;
@@ -2300,14 +2280,14 @@ pub(super) fn fast_atan2(
     let turn = fb.select(ynonneg, pi, minus_pi)?;
     let turned = bin(fb, BinOp::FAdd, a, turn)?;
     let r = fb.select(xneg, turned, a)?;
-    // 0 / 0 and inf / inf (or an infinite y times a flushed reciprocal); then NaN operands.
+    // 0 / 0 and inf / inf (and a quotient the device's product makes NaN); then NaN operands.
     let zeros = bin(fb, BinOp::LogicalAnd, yz, xz)?;
-    let infinite_x = match beyond {
-        Some(b) => bin(fb, BinOp::LogicalOr, xi, b)?,
-        None => xi,
-    };
-    let infs = bin(fb, BinOp::LogicalAnd, yi, infinite_x)?;
+    let infs = bin(fb, BinOp::LogicalAnd, yi, xi)?;
     let undefined = bin(fb, BinOp::LogicalOr, zeros, infs)?;
+    let undefined = match q_nan {
+        Some(n) => bin(fb, BinOp::LogicalOr, undefined, n)?,
+        None => undefined,
+    };
     let r = fb.select(undefined, nan, r)?;
     let ynan = fb.unary(UnOp::IsNan, y)?;
     let xnan = fb.unary(UnOp::IsNan, x)?;
@@ -2528,27 +2508,6 @@ pub fn pack_layout(format: PackFormat) -> Option<(&'static [u32], bool)> {
     })
 }
 
-/// How a normalized `air.unpack` format converts a channel code `c` to a float.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum UnpackRounding {
-    /// `c / d` correctly rounded ([`div_exact`]; snorm: of the magnitude clamped to `d`).
-    ///
-    /// [`div_exact`]: crate::lower::arith::exact_division::div_exact
-    Quotient,
-    /// `max(c * fl(1/d), -1)`, the product with the `f32` reciprocal rounded to nearest even
-    /// ([`mul_exact`]): Metal's `snorm` `rgb10a2` on every code of every field, where the quotient
-    /// differs on 267,279 of 1,049,600 measured words by one ULP.
-    ReciprocalProduct,
-}
-
-/// The conversion of normalized unpack format `format`'s channels ([`UnpackRounding`]).
-pub fn unpack_rounding(format: PackFormat) -> UnpackRounding {
-    match format {
-        PackFormat::SnormRgb10a2 => UnpackRounding::ReciprocalProduct,
-        _ => UnpackRounding::Quotient,
-    }
-}
-
 /// The float lanes of a packed float format this family unpacks (`rg11b10f`, `rgb9e5`: 3), or
 /// `None` for a normalized one. Packing to them is not lowered (Metal's rounding, overflow, and NaN
 /// rules for these encodings are not established).
@@ -2565,15 +2524,6 @@ pub fn packed_bits(format: PackFormat) -> u8 {
         16
     } else {
         32
-    }
-}
-
-/// The error of an `air.pack`/`air.unpack` whose format the emission cannot take (a packed float
-/// format to pack to, or the sRGB format without the module's table): selection rules both out.
-fn unpackable() -> crate::spirv::error::BuildError {
-    crate::spirv::error::BuildError::Operand {
-        op: crate::spv::Op::ExtInst,
-        rule: crate::spirv::error::OperandRule::Arity,
     }
 }
 
@@ -2674,109 +2624,6 @@ pub fn round_exact_product_lanes(
     fb.select(neg, nr, r)
 }
 
-/// `air.unpack.<format>`: the packed integer `w` (a `u32`; a `ushort` for `rgb565`) to float
-/// lanes of form `f`. Each channel of a normalized format is converted as Metal converts a
-/// normalized integer to a float: `c / (2^N - 1)` (snorm: `max(c / (2^(N-1) - 1), -1)`), the
-/// quotient correctly rounded ([`div_exact`]), except the `snorm` `rgb10a2`, which multiplies by
-/// the `f32` reciprocal ([`unpack_rounding`]); the sRGB format decodes the color channels through
-/// Metal's twelve-bit table (`k / 4095` of the step [`srgb::step`]), which `srgb` (the module's
-/// table) holds. A narrow form rounds each lane (so rounds twice, as Metal's `half` answers do).
-/// The packed float formats decode exactly (`unpack_float`).
-///
-/// Every channel runs one lane of one vector sequence, its field and divisor per-lane constants:
-/// the instructions are lane-wise, so each lane computes exactly what it computed alone. Only the
-/// sRGB table reads are per channel.
-///
-/// [`div_exact`]: crate::lower::arith::exact_division::div_exact
-pub fn unpack(
-    fb: &mut FunctionBuilder<'_>,
-    format: PackFormat,
-    f: Form,
-    w: Value,
-    srgb: Option<GlobalId>,
-) -> BResult<Value> {
-    if float_unpack_lanes(format).is_some() {
-        return unpack_float(fb, format, f, w);
-    }
-    let Some((widths, snorm)) = pack_layout(format) else {
-        return Err(unpackable());
-    };
-    if usize::from(f.lanes) != widths.len() {
-        return Err(unpackable());
-    }
-    let s = f.with(Held::Float(FloatFmt::F32));
-    let u = narrow::u32_form(s);
-    let ut = ty(fb, u)?;
-    // Lane `i` holds field `i`: the word shifted down to the field and masked to its width.
-    let mut at = Vec::with_capacity(widths.len());
-    let mut next = 0u64;
-    for n in widths {
-        at.push(next);
-        next += u64::from(*n);
-    }
-    let spread = fb.composite_construct(ut, &vec![w; widths.len()])?;
-    let sh = per_lane(fb, u, &at)?;
-    let v = bin(fb, BinOp::ShiftRightLogical, spread, sh)?;
-    let m: Vec<u64> = widths.iter().map(|n| ones(*n as u8)).collect();
-    let m = per_lane(fb, u, &m)?;
-    let v = bin(fb, BinOp::BitwiseAnd, v, m)?;
-    let q = if format == PackFormat::Unorm4x8Srgb {
-        // The color channels' steps over 4095, the alpha channel's byte over 255.
-        let table = srgb.ok_or_else(unpackable)?;
-        let mut k = Vec::with_capacity(widths.len());
-        for i in 0..widths.len() {
-            let b = fb.composite_extract(v, &[i as u32])?;
-            k.push(if i < 3 { srgb::step(fb, table, b)? } else { b });
-        }
-        let k = fb.composite_construct(ut, &k)?;
-        let d: Vec<u32> = (0..widths.len())
-            .map(|i| if i < 3 { 4095 } else { 255 })
-            .collect();
-        div_exact_lanes(fb, u, k, &d)?
-    } else if snorm {
-        let d: Vec<u32> = widths.iter().map(|n| (1u32 << (n - 1)) - 1).collect();
-        let up: Vec<u64> = widths.iter().map(|n| u64::from(32 - n)).collect();
-        let up = per_lane(fb, u, &up)?;
-        let v = bin(fb, BinOp::ShiftLeftLogical, v, up)?;
-        let v = bin(fb, BinOp::ShiftRightArithmetic, v, up)?;
-        let z = splat(fb, u, 0)?;
-        let neg = bin(fb, BinOp::SLessThan, v, z)?;
-        let minus = bin(fb, BinOp::ISub, z, v)?;
-        let mag = fb.select(neg, minus, v)?;
-        match unpack_rounding(format) {
-            UnpackRounding::Quotient => {
-                // The magnitude, clamped to the scale (the most negative code is -1 exactly).
-                let dk: Vec<u64> = d.iter().map(|d| u64::from(*d)).collect();
-                let dk = per_lane(fb, u, &dk)?;
-                let mag = glsl(fb, GlslOp::UMin, &[mag, dk])?;
-                let q = div_exact_lanes(fb, u, mag, &d)?;
-                let nq = fb.unary(UnOp::FNegate, q)?;
-                fb.select(neg, nq, q)?
-            }
-            UnpackRounding::ReciprocalProduct => {
-                // `max(c * fl(1/d), -1)`: the magnitude's product with its lane's reciprocal,
-                // the code's sign, and the bound, which only the most negative code reaches
-                // (`-512 * fl(1/511)` is below -1). Comparing with -1 is exact on every device.
-                let r: Vec<u32> = d.iter().map(|d| (1.0f32 / *d as f32).to_bits()).collect();
-                let p = mul_exact(fb, u, mag, &r)?;
-                let pb = fb.convert(ConvOp::Bitcast, p, ut)?;
-                let sign = splat(fb, u, 0x8000_0000)?;
-                let nb = bin(fb, BinOp::BitwiseOr, pb, sign)?;
-                let b = fb.select(neg, nb, pb)?;
-                let st = ty(fb, s)?;
-                let q = fb.convert(ConvOp::Bitcast, b, st)?;
-                let m1 = fsplat(fb, s, -1.0)?;
-                let below = bin(fb, BinOp::FOrdLessThan, q, m1)?;
-                fb.select(below, m1, q)?
-            }
-        }
-    } else {
-        let d: Vec<u32> = widths.iter().map(|n| (1u32 << n) - 1).collect();
-        div_exact_lanes(fb, u, v, &d)?
-    };
-    narrow::round(fb, f, q)
-}
-
 /// `air.unpack` of a packed float format (the field layouts are the old engine's, device-measured
 /// against Metal's `rg11b10f<float3>` and `rgb9e5<float3>` reads):
 ///
@@ -2791,7 +2638,7 @@ pub fn unpack(
 /// widening where the module holds 16-bit floats, its NaN bits and a denormal as the module
 /// records), and the `rgb9e5` scale `2^(exponent - 24)` is a normal `f32` built from its bits, whose product with
 /// the mantissa is exact.
-fn unpack_float(
+pub fn unpack_float(
     fb: &mut FunctionBuilder<'_>,
     format: PackFormat,
     f: Form,
@@ -2850,82 +2697,4 @@ fn unpack_float(
     }
     let t = ty(fb, f)?;
     fb.composite_construct(t, &lanes)
-}
-
-/// `a * r` rounded to nearest even as an `f32`, for an integer `0 <= a < 2^10` (`u32` lanes of
-/// form `u`) and a positive normal `f32` constant `r` per lane (its bits `r_bits[i]` for lane
-/// `i`, at most `2^117`; a lane-wise sequence), with integer operations only, so it is exact on
-/// every device whatever its rounding mode and under every fast-math mode (Metal's `snorm`
-/// `rgb10a2` unpack multiplies by the reciprocal).
-///
-/// With `r = m * 2^er` (`m` its 24-bit significand, leading one included), the product `p = a *
-/// m` is below `2^34`: `UMulExtended` gives it as two words. Its leading one is at bit `b = 23 +
-/// s` with `s` in `[0, 10]` (`m >= 2^23`), so the significand is `p >> s`, rounded to nearest
-/// even on the `s` dropped bits (`s <= 10` keeps every shift below 32), and the biased exponent
-/// is `s + er + 150`. As in [`div_exact`], the bits are `((s + er + 149) << 23) + q` plus the
-/// rounding, which carries into the exponent when `q` is all ones. `a = 0` is `+0`.
-///
-/// [`div_exact`]: crate::lower::arith::exact_division::div_exact
-pub fn mul_exact(
-    fb: &mut FunctionBuilder<'_>,
-    u: Form,
-    a: Value,
-    r_bits: &[u32],
-) -> BResult<Value> {
-    let c = |fb: &mut FunctionBuilder<'_>, v: u64| splat(fb, u, v);
-    let m: Vec<u64> = r_bits
-        .iter()
-        .map(|r| u64::from((r & 0x7F_FFFF) | 0x80_0000))
-        .collect();
-    // er + 149 = (biased exponent - 150) + 149.
-    let bias: Vec<u64> = r_bits
-        .iter()
-        .map(|r| u64::from(((r >> 23) & 0xFF).saturating_sub(1)))
-        .collect();
-    let (z, one) = (c(fb, 0)?, c(fb, 1)?);
-    let zero = bin(fb, BinOp::IEqual, a, z)?;
-    let mk = per_lane(fb, u, &m)?;
-    let p = bin(fb, BinOp::UMulExtended, a, mk)?;
-    let lo = fb.composite_extract(p, &[0])?;
-    let hi = fb.composite_extract(p, &[1])?;
-    // The leading bit: 32 + msb(hi) when hi is nonzero, else msb(lo) (>= 23 unless a = 0).
-    let hi_set = bin(fb, BinOp::INotEqual, hi, z)?;
-    let hm = glsl(fb, GlslOp::FindUMsb, &[hi])?;
-    let k32 = c(fb, 32)?;
-    let hm = bin(fb, BinOp::IAdd, hm, k32)?;
-    let lm = glsl(fb, GlslOp::FindUMsb, &[lo])?;
-    let msb = fb.select(hi_set, hm, lm)?;
-    // s = msb - 23, in [0, 10]; t = max(s, 1) keeps the shifts below 32 when s = 0 (then hi = 0
-    // and nothing is dropped).
-    let k23 = c(fb, 23)?;
-    let s = bin(fb, BinOp::ISub, msb, k23)?;
-    let k10 = c(fb, 10)?;
-    let s = glsl(fb, GlslOp::UMin, &[s, k10])?;
-    let t = glsl(fb, GlslOp::UMax, &[s, one])?;
-    let q = bin(fb, BinOp::ShiftRightLogical, lo, s)?;
-    let up_sh = bin(fb, BinOp::ISub, k32, t)?;
-    let top = bin(fb, BinOp::ShiftLeftLogical, hi, up_sh)?;
-    let q = bin(fb, BinOp::BitwiseOr, q, top)?;
-    let unit = bin(fb, BinOp::ShiftLeftLogical, one, s)?;
-    let below = bin(fb, BinOp::ISub, unit, one)?;
-    let rem = bin(fb, BinOp::BitwiseAnd, lo, below)?;
-    let t1 = bin(fb, BinOp::ISub, t, one)?;
-    let half = bin(fb, BinOp::ShiftLeftLogical, one, t1)?;
-    let some = bin(fb, BinOp::INotEqual, s, z)?;
-    let gt = bin(fb, BinOp::UGreaterThan, rem, half)?;
-    let eq = bin(fb, BinOp::IEqual, rem, half)?;
-    let lsb = bin(fb, BinOp::BitwiseAnd, q, one)?;
-    let odd = bin(fb, BinOp::INotEqual, lsb, z)?;
-    let tie_up = bin(fb, BinOp::LogicalAnd, eq, odd)?;
-    let up = bin(fb, BinOp::LogicalOr, gt, tie_up)?;
-    let up = bin(fb, BinOp::LogicalAnd, some, up)?;
-    let inc = fb.select(up, one, z)?;
-    let kb = per_lane(fb, u, &bias)?;
-    let be = bin(fb, BinOp::IAdd, s, kb)?;
-    let be = bin(fb, BinOp::ShiftLeftLogical, be, k23)?;
-    let bits = bin(fb, BinOp::IAdd, be, q)?;
-    let bits = bin(fb, BinOp::IAdd, bits, inc)?;
-    let bits = fb.select(zero, z, bits)?;
-    let ft = ty(fb, u.with(Held::Float(FloatFmt::F32)))?;
-    fb.convert(ConvOp::Bitcast, bits, ft)
 }

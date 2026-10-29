@@ -12,7 +12,7 @@
 //! `1.055 c^(1/2.4) - 0.055` above, a decode `c / 12.92` up to `0.04045` and
 //! `((c + 0.055) / 1.055)^2.4` above; alpha is the plain 8-bit channel. A NaN channel is the
 //! device's instruction's answer. The packed float formats' unpack moves the fields' bits
-//! (`math::unpack`, exact: every field is a `half` value).
+//! (`math::unpack_float`, exact: every field is a `half` value).
 
 use crate::air::intrinsics::{PackDir, PackFormat};
 use crate::lower::arith::exact_division::per_lane;
@@ -118,7 +118,7 @@ pub fn unpack(
     w: Value,
 ) -> BResult<Value> {
     if math::float_unpack_lanes(format).is_some() {
-        return math::unpack(fb, format, f, w, None);
+        return math::unpack_float(fb, format, f, w);
     }
     let Some((widths, snorm)) = math::pack_layout(format) else {
         return Err(unpackable());
@@ -283,7 +283,7 @@ pub(crate) fn srgb_decode(fb: &mut FunctionBuilder<'_>, s: Form, c: Value) -> BR
 pub fn words(format: PackFormat, dir: PackDir, floats: Form) -> u32 {
     let lanes = u32::from(floats.lanes);
     let body = if math::float_unpack_lanes(format).is_some() {
-        // The packed float formats' bit moves (`math::unpack`).
+        // The packed float formats' bit moves (`math::unpack_float`).
         400
     } else if instruction(format, dir).is_some() {
         16

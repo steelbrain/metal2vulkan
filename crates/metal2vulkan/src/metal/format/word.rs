@@ -6,9 +6,9 @@
 //! holds such a texture in its UNORM twin). Such a texture's image is made mutable, with extended
 //! usage, and its attachment is a view of the same bits as the unsigned integer format of its word
 //! ([`WordAttachment::word_format`]), which every Vulkan device renders. The fragment function
-//! writes the word Metal stores for its output (`LoweringInputs::word_colors`), and a clear writes
-//! the word of Metal's clear (the runtime's clear values): both are exact, and the texture's other
-//! views read the same bits.
+//! writes its output's word (`LoweringInputs::word_colors`): the word Metal stores, but an 8-bit
+//! sRGB format's codes, which are the device's encode (below); and a clear writes the word of
+//! Metal's clear (the runtime's clear values). The texture's other views read the same bits.
 //!
 //! Metal's store into a packed 16-bit format (measured on an Apple M3 Max under macOS 27.0.1:
 //! every texel of 65,536 `float` and `half` outputs and 4,096 clear colors into each of
@@ -22,7 +22,9 @@
 //! Metal's store into an 8-bit sRGB format (`R8Unorm_sRGB`, `RG8Unorm_sRGB`; the lane's rule,
 //! `runtime_lane::color_writes`, and its in-guest probe's clears and draws on the M3 Max): each
 //! channel's value clamped to `[0, 1]` (a NaN 0), times 4095 exactly, rounded to nearest, encoded
-//! by Metal's twelve-bit table, as `pack_float_to_srgb_unorm4x8` encodes a color channel. A write
+//! by Metal's twelve-bit table, as `pack_float_to_srgb_unorm4x8` encodes a color channel. The
+//! fragment function encodes the channel by the MSL transfer through the device's `Pow`, as its
+//! `pack_float_to_srgb_unorm4x8` does (`lower::arith::pack`, `PrecisionNote::DevicePackConversion`). A write
 //! of some of its channels merges the word into the texel's: in the pixel interlock
 //! (`color_writes::stored_word`), or over the attachment's input attachment on a device that orders
 //! fetch through rasterization-order input attachments (`color_writes::merged_word`). A blend of
@@ -173,38 +175,27 @@ impl WordAttachment {
             .fold(0, |w, c| w | c)
     }
 
-    /// The word Metal stores for a `float` (or `half`) output `rgba`: a packed 16-bit format's
-    /// channel by `ChannelWrite::HalfUnorm`'s rule, an 8-bit sRGB format's by Metal's twelve-bit
-    /// encode (the module docs), a channel the format lacks ignored; `RGB9E5Float`'s word of a
-    /// `float` output (the module docs). The reference of the fragment function's encode.
-    pub fn output_word(self, rgba: [f32; 4]) -> u32 {
-        if self == WordAttachment::Rgb9e5 {
-            return rgb9e5_word([rgba[0], rgba[1], rgba[2]]);
-        }
-        let fields = self.fields();
-        let mut codes = [0u32; 4];
-        for (code, (f, x)) in codes.iter_mut().zip(fields.iter().zip(rgba)) {
-            if let Some(f) = f {
-                *code = match self {
-                    WordAttachment::Packed16 { .. } => half_unorm_code(x, f.bits),
-                    WordAttachment::Srgb8 { .. } => srgb_code(f64::from(x)),
-                    WordAttachment::Rgb9e5 => 0,
-                };
+    /// The word Metal stores for a `float` (or `half`) output `rgba`, which the fragment
+    /// function's encode stores too: a packed 16-bit format's channel by
+    /// `ChannelWrite::HalfUnorm`'s rule, a channel the format lacks ignored; `RGB9E5Float`'s word
+    /// of a `float` output (the module docs), which a clear stores as well. `None` for an 8-bit
+    /// sRGB format, whose codes the fragment function takes from the device's encode (the module
+    /// docs).
+    pub fn output_word(self, rgba: [f32; 4]) -> Option<u32> {
+        match self {
+            WordAttachment::Rgb9e5 => Some(rgb9e5_word([rgba[0], rgba[1], rgba[2]])),
+            WordAttachment::Srgb8 { .. } => None,
+            WordAttachment::Packed16 { fields } => {
+                let mut codes = [0u32; 4];
+                for (code, (f, x)) in codes.iter_mut().zip(fields.iter().zip(rgba)) {
+                    if let Some(f) = f {
+                        *code = half_unorm_code(x, f.bits);
+                    }
+                }
+                Some(self.pack(codes))
             }
         }
-        self.pack(codes)
     }
-}
-
-/// Metal's byte of an 8-bit sRGB channel's value `x`: clamped to `[0, 1]` (a NaN 0), the exact
-/// product with 4095 rounded to nearest (no `float` meets a tie: 4095 is odd), and the byte of the
-/// largest first index at most that (Metal's twelve-bit table, `lower::arith::srgb`'s, which its
-/// render writes and clears share with `pack_float_to_srgb_unorm4x8`).
-pub(crate) fn srgb_code(x: f64) -> u32 {
-    let x = if x.is_nan() { 0.0 } else { x.clamp(0.0, 1.0) };
-    let i = (x * 4095.0).round_ties_even() as u16;
-    let first = &crate::lower::arith::srgb::SRGB_ENCODE_FIRST;
-    (1..256).rev().find(|&b| first[b] <= i).unwrap_or(0) as u32
 }
 
 /// The `RGB9E5Float` word Metal stores for `float` channels `rgb` (a draw's output, a clear's
@@ -276,24 +267,18 @@ mod tests {
         // `half` 0.09998 times 15 is 1.4997: an ABGR4 alpha of 0.1 is 1.
         assert_eq!(half_unorm_code(0.1, 4), 1);
         let w = WordAttachment::layout(PixelFormat::A1BGR5Unorm).unwrap();
-        assert_eq!(w.output_word([1.0, 0.0, 1.0, 0.5]), 0xf83e);
+        assert_eq!(w.output_word([1.0, 0.0, 1.0, 0.5]), Some(0xf83e));
     }
 
-    /// The M3 Max's clears of the in-guest probe: an `R8Unorm_sRGB` clear of 0.2 stores 0x7c, an
-    /// `RG8Unorm_sRGB` one of (0.2, 0.4) 0x7c then 0xaa; NaN and negatives are 0, past one 0xff.
+    /// An 8-bit sRGB word's codes are the device's encode: no reference word.
     #[test]
-    fn srgb_words_take_metals_encode() {
-        assert_eq!(srgb_code(f64::from(0.2f32)), 0x7c);
-        assert_eq!(srgb_code(f64::from(0.4f32)), 0xaa);
-        assert_eq!(srgb_code(f64::NAN), 0);
-        assert_eq!(srgb_code(-1.0), 0);
-        assert_eq!(srgb_code(2.0), 0xff);
+    fn srgb_words_have_no_reference_word() {
         let r8 = WordAttachment::layout(PixelFormat::R8UnormSRGB).unwrap();
         assert_eq!(r8.word_format(), vk::Format::R8_UINT);
-        assert_eq!(r8.output_word([0.2, 0.4, 0.6, 0.8]), 0x7c);
+        assert_eq!(r8.output_word([0.2, 0.4, 0.6, 0.8]), None);
         let rg8 = WordAttachment::layout(PixelFormat::RG8UnormSRGB).unwrap();
         assert_eq!(rg8.word_format(), vk::Format::R16_UINT);
-        assert_eq!(rg8.output_word([0.2, 0.4, 0.6, 0.8]), 0xaa7c);
+        assert_eq!(rg8.output_word([0.2, 0.4, 0.6, 0.8]), None);
     }
 
     /// The format scout's draw on the M3 Max: (2.5, 0.375, -0.75) stores `0x88006140`; the
@@ -303,7 +288,7 @@ mod tests {
     fn rgb9e5_words_truncate_under_the_largest_exponent() {
         let w = WordAttachment::layout(PixelFormat::RGB9E5Float).unwrap();
         assert_eq!(w.word_format(), vk::Format::R32_UINT);
-        assert_eq!(w.output_word([2.5, 0.375, -0.75, 0.5]), 0x8800_6140);
+        assert_eq!(w.output_word([2.5, 0.375, -0.75, 0.5]), Some(0x8800_6140));
         assert_eq!(rgb9e5_word([0.25, 0.0, 1.125]), 0x8480_0040);
         assert_eq!(rgb9e5_word([70000.0, f32::NAN, -0.0]), (31 << 27) | 511);
         assert_eq!(rgb9e5_word([0.0; 3]), 0);

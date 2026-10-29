@@ -47,8 +47,9 @@ pub enum Covered {
 ///
 /// `fast::atan2(y, x)` reads a denormal `y` or `x` as the zero of its sign and answers no denormal
 /// (an Apple M3 Max under macOS 27.0.1: every pair of 28 patterns, in entries with and without fast
-/// math); its quotient is the device's division, whose operands are those two, and a denormal
-/// quotient reaches the fast `atan`, which reads it as a zero.
+/// math); its quotient is the device's division, whose operands are those two, or, in a call
+/// without every fast-math flag, `y` times the device's reciprocal of `x`, a denormal Metal flushes
+/// past `2^126`; a denormal quotient reaches the fast `atan`, which reads it as a zero.
 ///
 /// `ldexp` on `float` (`math::ldexp_bits`) reads a denormal operand and rounds a result below
 /// `2^-126` by the device's `float` multiply, which the deviation covers: a denormal operand times
