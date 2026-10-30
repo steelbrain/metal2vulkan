@@ -200,13 +200,15 @@ fn run(
             .map_err(|e| Failure::detailed("profile not read", e.to_string()))?;
     let device = Device::new(description, DevicePolicy::default())
         .map_err(|e| Failure::detailed("profile refused", e.to_string()))?;
-    let bitcode = if input.ends_with(".ll") {
-        assemble(source)?
+    let assembled;
+    let bitcode: &[u8] = if input.ends_with(".ll") {
+        assembled = assemble(source)?;
+        &assembled
     } else {
-        source.to_vec()
+        source
     };
     let library =
-        Library::parse(&bitcode).map_err(|e| Failure::detailed("input not read", e.to_string()))?;
+        Library::parse(bitcode).map_err(|e| Failure::detailed("input not read", e.to_string()))?;
     let compiled = compile(args, &device, &library)?;
 
     let stages = compiled.stages();

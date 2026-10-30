@@ -113,8 +113,8 @@ impl DynamicLibrary {
     }
 
     /// `serializeToURL:error:`: write the library to the file `url`, replacing what is there,
-    /// through a temporary file beside it and a rename. The file holds the bytes the library
-    /// was made from (its metallib, or the universal file it was loaded from), which
+    /// through a temporary file beside it and a rename. The file holds the library's metallib
+    /// (of one loaded from a universal file, that file's AIR slice), which
     /// [`Device::new_dynamic_library_with_url`] and the loading of an install name read back,
     /// and which Metal loads as it loads the offline `metal -dynamiclib` output: Metal's own
     /// file is a universal file with a slice of its GPU's code beside the AIR. A missing directory

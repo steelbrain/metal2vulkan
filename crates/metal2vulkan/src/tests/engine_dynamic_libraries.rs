@@ -12,7 +12,7 @@
 //! install name not loaded failing even what a preloaded library exports, a dead import needing
 //! nothing, and the universal file `serializeToURL:error:` writes. No GPU is used.
 
-use metal2vulkan_devtools::metallib::{metallib_linked, universal, wrap};
+use metal2vulkan_devtools::metallib::{metallib_linked, universal, wrap, UniversalHeader};
 use metal2vulkan_devtools::metallib::{MtlbFunction, MtlbLinkage};
 
 use crate::budget::Budget;
@@ -364,26 +364,32 @@ fn a_dynamic_library_is_made_as_metal_makes_one() {
     );
 }
 
-/// The file `serializeToURL:error:` writes, a universal file whose AIR slice is the library,
-/// loads back as the same dynamic library.
+/// A universal file, the one `serializeToURL:error:` writes or a Mach-O universal file of either
+/// width, is the dynamic library its AIR slice holds: the library keeps that slice alone, hashed
+/// as the bare metallib is, and loads and computes as it does.
 #[test]
 fn a_universal_file_is_the_dynamic_library_it_holds() {
     let Some(module) = library_module("universal", 3, 7, false) else {
         return;
     };
     let air = dylib_bytes("libA.metallib", &module);
+    let bare = Library::parse(&air).expect("metallib");
     let gpu = [0xCFu8, 0xFA, 0xED, 0xFE, 0, 0, 0, 0];
-    let bytes = universal(&[(0x0100_0013, &gpu), (0x0100_0017, &air)]);
-    let lib = Library::parse(&bytes).expect("universal");
-    assert_eq!(lib.library_type(), LibraryType::Dynamic);
-    assert_eq!(lib.install_name(), Some("libA.metallib"));
-    let made = DynamicLibrary::new(lib, &Budget::standard()).expect("dynamic");
     let Some(client) = client("universal-client", true, &[]) else {
         return;
     };
-    let fd = stage(&client, DynamicLibraries::new().with_preloaded(made));
     let want: Vec<u32> = (0..16).map(|i| 3 * i + 7).collect();
-    assert_eq!(computed(&fd), want);
+    for header in UniversalHeader::ALL {
+        let bytes = universal(header, &[(0x0100_0013, &gpu), (0x0100_0017, &air)]);
+        let lib = Library::parse(&bytes).expect("universal");
+        assert_eq!(lib.bytes(), &air[..], "{header:?}");
+        assert_eq!(lib.content_hash(), bare.content_hash(), "{header:?}");
+        assert_eq!(lib.library_type(), LibraryType::Dynamic, "{header:?}");
+        assert_eq!(lib.install_name(), Some("libA.metallib"), "{header:?}");
+        let made = DynamicLibrary::new(lib, &Budget::standard()).expect("dynamic");
+        let fd = stage(&client, DynamicLibraries::new().with_preloaded(made));
+        assert_eq!(computed(&fd), want, "{header:?}");
+    }
 }
 
 /// A kernel's imports resolve from a preloaded library, or from the library its install name

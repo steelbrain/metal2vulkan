@@ -84,6 +84,9 @@ pub struct MtlbHeader {
 /// A parsed metallib.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Metallib<'a> {
+    /// The metallib's own bytes, which its header's ranges count in and its functions' slices lie
+    /// in: the input, or a universal file's AIR slice (the module docs).
+    pub bytes: &'a [u8],
     /// The file header: its version, target, and section ranges.
     pub header: MtlbHeader,
     /// The function list's entries, in file order.
@@ -385,6 +388,7 @@ pub(super) fn parse(bytes: &[u8]) -> Result<Metallib<'_>, Error> {
     }
 
     Ok(Metallib {
+        bytes,
         header,
         functions,
         extended: extended.into_iter().map(|t| t.raw).collect(),

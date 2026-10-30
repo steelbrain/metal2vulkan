@@ -208,19 +208,57 @@ pub fn metallib_linked(functions: &[MtlbFunction<'_>], linkage: &MtlbLinkage<'_>
     out
 }
 
-/// `slices` (CPU type, bytes) in a universal file, as `serializeToURL:error:` writes a dynamic
-/// library (its AIR slice of CPU type `0x01000017`).
-pub fn universal(slices: &[(u32, &[u8])]) -> Vec<u8> {
-    let mut out = vec![0xCB, 0xFE, 0xBA, 0xBE];
+/// The header of a universal file ([`universal`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum UniversalHeader {
+    /// Metal's own (`0xCBFEBABE`), as `serializeToURL:error:` writes a dynamic library.
+    Metal,
+    /// A Mach-O universal file (`FAT_MAGIC`, `0xCAFEBABE`: `fat_arch` records), the form of the
+    /// system's universal metallibs.
+    MachO,
+    /// A Mach-O universal file of 64-bit records (`FAT_MAGIC_64`, `0xCAFEBABF`: `fat_arch_64`).
+    MachO64,
+}
+
+impl UniversalHeader {
+    /// Every header.
+    pub const ALL: [UniversalHeader; 3] = [
+        UniversalHeader::Metal,
+        UniversalHeader::MachO,
+        UniversalHeader::MachO64,
+    ];
+}
+
+/// `slices` (CPU type, bytes) in a universal file of `header`, each slice at a 16-byte boundary
+/// (the AIR slice is of CPU type `0x01000017`).
+pub fn universal(header: UniversalHeader, slices: &[(u32, &[u8])]) -> Vec<u8> {
+    let (magic, wide) = match header {
+        UniversalHeader::Metal => ([0xCB, 0xFE, 0xBA, 0xBE], false),
+        UniversalHeader::MachO => ([0xCA, 0xFE, 0xBA, 0xBE], false),
+        UniversalHeader::MachO64 => ([0xCA, 0xFE, 0xBA, 0xBF], true),
+    };
+    let record = if wide { 32 } else { 20 };
+    let mut out = magic.to_vec();
     out.extend_from_slice(&(slices.len() as u32).to_be_bytes());
-    let mut at = 8 + 20 * slices.len();
+    let mut at = (8 + record * slices.len()).next_multiple_of(16);
+    let mut starts = Vec::with_capacity(slices.len());
     for (cpu, bytes) in slices {
-        for v in [*cpu, 0, at as u32, bytes.len() as u32, 0] {
-            out.extend_from_slice(&v.to_be_bytes());
+        out.extend_from_slice(&cpu.to_be_bytes());
+        out.extend_from_slice(&0u32.to_be_bytes());
+        if wide {
+            out.extend_from_slice(&(at as u64).to_be_bytes());
+            out.extend_from_slice(&(bytes.len() as u64).to_be_bytes());
+            out.extend_from_slice(&[0; 8]);
+        } else {
+            out.extend_from_slice(&(at as u32).to_be_bytes());
+            out.extend_from_slice(&(bytes.len() as u32).to_be_bytes());
+            out.extend_from_slice(&[0; 4]);
         }
-        at += bytes.len();
+        starts.push(at);
+        at = (at + bytes.len()).next_multiple_of(16);
     }
-    for (_, bytes) in slices {
+    for ((_, bytes), start) in slices.iter().zip(starts) {
+        out.resize(start, 0);
         out.extend_from_slice(bytes);
     }
     out

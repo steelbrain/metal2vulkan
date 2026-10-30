@@ -118,10 +118,13 @@ struct MetallibTags {
 impl Library {
     /// Parse a metallib, a bitcode wrapper (`0x0b17c0de`), or a raw bitcode module. A metallib is
     /// parsed from its container tags alone (no bitcode is decoded); a wrapper or raw module is
-    /// decoded once to enumerate its entry points, as [`Library::from_air`].
+    /// decoded once to enumerate its entry points, as [`Library::from_air`]. A universal file
+    /// (Metal's own, or a Mach-O universal file) is the metallib its AIR slice holds: the library
+    /// keeps and hashes that slice alone ([`Library::bytes`]), and its slices of GPU code are not
+    /// read.
     pub fn parse(bytes: &[u8]) -> Result<Library, Error> {
         crate::pipeline::compile::guarded(|| match container::parse(bytes)? {
-            Container::Metallib(ml) => from_metallib(bytes, &ml),
+            Container::Metallib(ml) => from_metallib(&ml),
             Container::Module(module) => from_module(bytes, module.hash),
         })
     }
@@ -149,7 +152,7 @@ impl Library {
     /// metallib; [`Library::parse`] and [`Library::from_air`] take it.
     pub fn from_metallib(bytes: &[u8]) -> Result<Library, Error> {
         crate::pipeline::compile::guarded(|| match container::parse(bytes)? {
-            Container::Metallib(ml) => from_metallib(bytes, &ml),
+            Container::Metallib(ml) => from_metallib(&ml),
             Container::Module(_) => Err(InputError::new(
                 InputErrorKind::Container(ContainerError::BadMagic),
                 Location::container(0),
@@ -158,12 +161,12 @@ impl Library {
         })
     }
 
-    /// The container bytes the library was parsed from.
+    /// The container bytes the library was parsed from: of a universal file, its AIR slice.
     pub fn bytes(&self) -> &[u8] {
         &self.0.bytes
     }
 
-    /// SHA-256 of the whole container.
+    /// SHA-256 of [`Library::bytes`].
     pub fn content_hash(&self) -> &Hash256 {
         &self.0.content_hash
     }
@@ -278,7 +281,8 @@ fn range_in(whole: &[u8], part: &[u8]) -> Result<Range<usize>, Error> {
     }
 }
 
-fn from_metallib(bytes: &[u8], ml: &container::Metallib<'_>) -> Result<Library, Error> {
+fn from_metallib(ml: &container::Metallib<'_>) -> Result<Library, Error> {
+    let bytes = ml.bytes;
     let mut functions = Vec::with_capacity(ml.functions.len());
     for f in &ml.functions {
         let cnst = &f.public.constants;

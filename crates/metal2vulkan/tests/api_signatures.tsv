@@ -954,6 +954,8 @@ const	metal2vulkan-air::budget::STANDARD_DEADLINE	pub const STANDARD_DEADLINE: D
 const	metal2vulkan-air::budget::TYPE_COUNT	pub const TYPE_COUNT: u64
 const	metal2vulkan-air::budget::WORK_UNITS	pub const WORK_UNITS: u64
 const	metal2vulkan-air::container::BITCODE_MAGIC	pub const BITCODE_MAGIC: [u8; 4]
+const	metal2vulkan-air::container::FAT_MAGIC	pub const FAT_MAGIC: [u8; 4]
+const	metal2vulkan-air::container::FAT_MAGIC_64	pub const FAT_MAGIC_64: [u8; 4]
 const	metal2vulkan-air::container::MTLB_MAGIC	pub const MTLB_MAGIC: [u8; 4]
 const	metal2vulkan-air::container::UNIVERSAL_MAGIC	pub const UNIVERSAL_MAGIC: [u8; 4]
 const	metal2vulkan-air::container::WRAPPER_MAGIC	pub const WRAPPER_MAGIC: [u8; 4]
@@ -1021,6 +1023,8 @@ const-value	metal2vulkan-air::budget::STANDARD_DEADLINE	Duration::from_secs(20)
 const-value	metal2vulkan-air::budget::TYPE_COUNT	1 <<20
 const-value	metal2vulkan-air::budget::WORK_UNITS	1 <<27
 const-value	metal2vulkan-air::container::BITCODE_MAGIC	[b'B', b'C', 0xC0, 0xDE]
+const-value	metal2vulkan-air::container::FAT_MAGIC	[0xCA, 0xFE, 0xBA, 0xBE]
+const-value	metal2vulkan-air::container::FAT_MAGIC_64	[0xCA, 0xFE, 0xBA, 0xBF]
 const-value	metal2vulkan-air::container::MTLB_MAGIC	*b"MTLB"
 const-value	metal2vulkan-air::container::UNIVERSAL_MAGIC	[0xCB, 0xFE, 0xBA, 0xBE]
 const-value	metal2vulkan-air::container::WRAPPER_MAGIC	[0xDE, 0xC0, 0x17, 0x0B]
@@ -1744,6 +1748,7 @@ field	metal2vulkan-air::container::LibraryFunction.private	pub private: Vec<RawT
 field	metal2vulkan-air::container::LibraryFunction.public	pub public: FunctionPublicMetadata<'a>
 field	metal2vulkan-air::container::LibraryFunction.raw_tags	pub raw_tags: Vec<RawTag<'a>>
 field	metal2vulkan-air::container::LibraryFunction.stage	pub stage: FunctionStage
+field	metal2vulkan-air::container::Metallib.bytes	pub bytes: &'a [u8]
 field	metal2vulkan-air::container::Metallib.extended	pub extended: Vec<RawTag<'a>>
 field	metal2vulkan-air::container::Metallib.functions	pub functions: Vec<LibraryFunction<'a>>
 field	metal2vulkan-air::container::Metallib.header	pub header: MtlbHeader

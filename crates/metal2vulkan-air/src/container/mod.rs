@@ -1,21 +1,33 @@
 //! Metallib container layer: MTLB, bitcode wrapper, raw bitcode.
 //!
-//! [`parse`] accepts exactly four forms, told apart by the first four bytes (no scanning for a
+//! [`parse`] accepts exactly these forms, told apart by the first four bytes (no scanning for a
 //! magic inside the input):
 //!
 //! | Bytes | Form | Result |
 //! |---|---|---|
 //! | `MTLB` | Metal library, one bitcode module per function | [`Library::Metallib`] |
-//! | `CB FE BA BE` | a universal metallib: slices for the AIR and for GPUs | [`Library::Metallib`] of its AIR slice |
+//! | `CB FE BA BE` | Metal's own universal metallib: slices for the AIR and for GPUs | [`Library::Metallib`] of its AIR slice |
+//! | `CA FE BA BE`, `CA FE BA BF` | a Mach-O universal file of the same slices | [`Library::Metallib`] of its AIR slice |
 //! | `DE C0 17 0B` | bitcode wrapper (`0x0b17c0de`, an `.air` file) | [`Library::Module`] |
 //! | `BC C0 DE` | raw bitcode stream | [`Library::Module`] |
 //!
-//! A universal metallib is what `MTLDynamicLibrary`'s `serializeToURL:error:` writes (a probe, an
-//! M3 Max and an M4): the big-endian magic `0xCBFEBABE`, a big-endian `u32` slice count, and per
-//! slice five big-endian `u32`s (CPU type, subtype, offset, size, alignment). The slice of CPU type
-//! `0x01000017` is the library's AIR, a metallib; the others hold code compiled for one GPU, which
-//! is not read. One without an AIR slice is `Container(NoAirSlice)`, as Metal refuses it ("its AIR
-//! slice is missing").
+//! A universal metallib holds its slices behind a big-endian header: the magic, a `u32` slice
+//! count, and a record per slice, in one of three headers:
+//!
+//! - **Metal's own**, what `MTLDynamicLibrary`'s `serializeToURL:error:` writes (a probe, an M3 Max
+//!   and an M4): the magic `0xCBFEBABE`, and per slice five big-endian `u32`s (CPU type, subtype,
+//!   offset, size, alignment).
+//! - **A Mach-O universal file** (`<mach-o/fat.h>`), the form of the system's universal
+//!   metallibs: [`FAT_MAGIC`] with the same records (`fat_arch`), or [`FAT_MAGIC_64`], whose
+//!   records (`fat_arch_64`) hold the offset and size as big-endian `u64`s, then the alignment and
+//!   a reserved `u32`.
+//!
+//! The slice of CPU type `0x01000017` is the library's AIR, a metallib, which is then the result's
+//! [`Metallib::bytes`]; the others hold code compiled for one GPU, which is not read. Metal's own
+//! file without an AIR slice is `Container(NoAirSlice)`, as Metal refuses it ("its AIR slice is
+//! missing"). A Mach-O universal file is a metallib only through its AIR slice, since files that
+//! are no metallib share its magic (a CPU binary, a Java class): one whose records do not fit it,
+//! or that holds no AIR slice, is `Container(BadMagic)`, as any bytes that are no metallib are.
 //!
 //! A metallib's functions are enumerated from its function table, every known tag is validated
 //! strictly, unknown tags are kept as raw tags (translation semantics come from the bitcode and
@@ -55,13 +67,17 @@ pub const MTLB_MAGIC: [u8; 4] = *b"MTLB";
 pub const WRAPPER_MAGIC: [u8; 4] = [0xDE, 0xC0, 0x17, 0x0B];
 /// The LLVM bitcode magic `BC 0xC0DE`.
 pub const BITCODE_MAGIC: [u8; 4] = [b'B', b'C', 0xC0, 0xDE];
-/// The first four bytes of a universal metallib (`0xCBFEBABE`, big-endian).
+/// The first four bytes of Metal's own universal metallib (`0xCBFEBABE`, big-endian).
 pub const UNIVERSAL_MAGIC: [u8; 4] = [0xCB, 0xFE, 0xBA, 0xBE];
+/// The first four bytes of a Mach-O universal file (`FAT_MAGIC`, `0xCAFEBABE`, big-endian).
+pub const FAT_MAGIC: [u8; 4] = [0xCA, 0xFE, 0xBA, 0xBE];
+/// The first four bytes of a Mach-O universal file of 64-bit records (`FAT_MAGIC_64`,
+/// `0xCAFEBABF`, big-endian).
+pub const FAT_MAGIC_64: [u8; 4] = [0xCA, 0xFE, 0xBA, 0xBF];
 /// The CPU type of a universal metallib's AIR slice.
 const AIR_SLICE_CPU_TYPE: u32 = 0x0100_0017;
-/// The bytes of a universal metallib's header and of each of its slice records.
+/// The bytes of a universal metallib's header.
 const UNIVERSAL_HEADER_LEN: usize = 8;
-const UNIVERSAL_SLICE_LEN: usize = 20;
 /// Size of the bitcode wrapper header.
 const WRAPPER_HEADER_LEN: usize = 20;
 
@@ -156,12 +172,12 @@ impl FunctionStage {
 
 /// Parse `bytes` as a metallib, bitcode wrapper, or raw bitcode stream.
 pub fn parse(bytes: &[u8]) -> Result<Library<'_>, Error> {
+    if let Some(form) = bytes.get(..4).and_then(UniversalForm::of) {
+        // Offsets in an error inside the slice are the slice's own.
+        return Ok(Library::Metallib(mtlb::parse(air_slice(bytes, form)?)?));
+    }
     match bytes.get(..4) {
         Some(m) if m == MTLB_MAGIC => Ok(Library::Metallib(mtlb::parse(bytes)?)),
-        Some(m) if m == UNIVERSAL_MAGIC => {
-            // Offsets in an error inside the slice are the slice's own.
-            Ok(Library::Metallib(mtlb::parse(air_slice(bytes)?)?))
-        }
         Some(m) if m == WRAPPER_MAGIC || m == BITCODE_MAGIC => {
             let (wrapper, stream) = bitcode_stream(bytes)?;
             Ok(Library::Module(Module {
@@ -241,44 +257,92 @@ pub fn bitcode_stream(bytes: &[u8]) -> Result<(Option<WrapperHeader>, &[u8]), Er
     }
 }
 
-/// The AIR slice of a universal metallib (the module docs).
-fn air_slice(bytes: &[u8]) -> Result<&[u8], Error> {
-    let be = |at: usize| -> Result<u32, Error> {
-        at.checked_add(4)
+/// The header of a universal metallib (the module docs).
+#[derive(Clone, Copy)]
+enum UniversalForm {
+    /// Metal's own ([`UNIVERSAL_MAGIC`]): five big-endian `u32`s a slice.
+    Metal,
+    /// A Mach-O universal file ([`FAT_MAGIC`]): `fat_arch`, the same five `u32`s.
+    MachO,
+    /// A Mach-O universal file of 64-bit records ([`FAT_MAGIC_64`]): `fat_arch_64`, the CPU type
+    /// and subtype as `u32`s, the offset and size as `u64`s, then the alignment and a reserved
+    /// `u32`.
+    MachO64,
+}
+
+impl UniversalForm {
+    /// The header whose magic `head` is, if any.
+    fn of(head: &[u8]) -> Option<UniversalForm> {
+        match <[u8; 4]>::try_from(head).ok()? {
+            UNIVERSAL_MAGIC => Some(UniversalForm::Metal),
+            FAT_MAGIC => Some(UniversalForm::MachO),
+            FAT_MAGIC_64 => Some(UniversalForm::MachO64),
+            _ => None,
+        }
+    }
+
+    /// The bytes of one slice record.
+    fn record_len(self) -> usize {
+        match self {
+            UniversalForm::Metal | UniversalForm::MachO => 20,
+            UniversalForm::MachO64 => 32,
+        }
+    }
+
+    /// What a file of this header that yields no AIR slice is refused as: `error` in Metal's own,
+    /// and `BadMagic` in a Mach-O universal file, which is a metallib only through its AIR slice.
+    fn unread(self, error: Error) -> Error {
+        match self {
+            UniversalForm::Metal => error,
+            UniversalForm::MachO | UniversalForm::MachO64 => {
+                container_error(ContainerError::BadMagic, 0)
+            }
+        }
+    }
+}
+
+/// The AIR slice of a universal metallib of `form` (the module docs).
+fn air_slice(bytes: &[u8], form: UniversalForm) -> Result<&[u8], Error> {
+    let be = |at: usize, width: usize| -> Result<u64, Error> {
+        at.checked_add(width)
             .and_then(|e| bytes.get(at..e))
-            .and_then(|b| <[u8; 4]>::try_from(b).ok())
-            .map(u32::from_be_bytes)
+            .map(|b| b.iter().fold(0u64, |v, &byte| (v << 8) | u64::from(byte)))
             .ok_or_else(|| {
                 container_error(
                     ContainerError::Truncated {
-                        need: at as u64 + 4,
+                        need: (at as u64).saturating_add(width as u64),
                         have: bytes.len() as u64,
                     },
                     at as u64,
                 )
             })
     };
-    let count = usize::try_from(be(4)?).unwrap_or(usize::MAX);
-    if count > bytes.len().saturating_sub(UNIVERSAL_HEADER_LEN) / UNIVERSAL_SLICE_LEN {
-        return Err(container_error(ContainerError::BadOffset, 4));
+    let count = usize::try_from(be(4, 4).map_err(|e| form.unread(e))?).unwrap_or(usize::MAX);
+    if count > bytes.len().saturating_sub(UNIVERSAL_HEADER_LEN) / form.record_len() {
+        return Err(form.unread(container_error(ContainerError::BadOffset, 4)));
     }
     for k in 0..count {
-        let record = UNIVERSAL_HEADER_LEN + k * UNIVERSAL_SLICE_LEN;
-        if be(record)? != AIR_SLICE_CPU_TYPE {
+        let record = UNIVERSAL_HEADER_LEN + k * form.record_len();
+        if be(record, 4)? != u64::from(AIR_SLICE_CPU_TYPE) {
             continue;
         }
-        let (at, size) = (be(record + 8)?, be(record + 12)?);
+        let (at, size) = match form {
+            UniversalForm::Metal | UniversalForm::MachO => {
+                (be(record + 8, 4)?, be(record + 12, 4)?)
+            }
+            UniversalForm::MachO64 => (be(record + 8, 8)?, be(record + 16, 8)?),
+        };
         let start = usize::try_from(at).unwrap_or(usize::MAX);
         let slice = start
             .checked_add(usize::try_from(size).unwrap_or(usize::MAX))
             .and_then(|end| bytes.get(start..end))
             .ok_or_else(|| container_error(ContainerError::BadOffset, record as u64 + 8))?;
         if slice.get(..4) != Some(&MTLB_MAGIC[..]) {
-            return Err(container_error(ContainerError::BadMagic, u64::from(at)));
+            return Err(container_error(ContainerError::BadMagic, at));
         }
         return Ok(slice);
     }
-    Err(container_error(ContainerError::NoAirSlice, 0))
+    Err(form.unread(container_error(ContainerError::NoAirSlice, 0)))
 }
 
 /// SHA-256 of `bytes`.

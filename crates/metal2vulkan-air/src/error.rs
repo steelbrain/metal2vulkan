@@ -341,8 +341,9 @@ pub enum InputErrorKind {
 #[non_exhaustive]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ContainerError {
-    /// The input starts with no metallib, bitcode-wrapper, or bitcode magic, or a wrapper's
-    /// stream does not start with the bitcode magic.
+    /// The input starts with no metallib, bitcode-wrapper, or bitcode magic, a wrapper's stream
+    /// does not start with the bitcode magic, a universal file's AIR slice is no metallib, or a
+    /// Mach-O universal file yields no AIR slice (`container`'s module docs).
     BadMagic,
     /// The input ends before a structure it declares.
     Truncated {
@@ -370,7 +371,7 @@ pub enum ContainerError {
     DuplicateTag,
     /// A function entry lacks a required tag (`NAME`, `TYPE`, `HASH`, `MDSZ`, `OFFT`, `VERS`).
     MissingTag,
-    /// A universal metallib without the slice of its AIR.
+    /// Metal's own universal metallib (`0xCBFEBABE`) without the slice of its AIR.
     NoAirSlice,
 }
 

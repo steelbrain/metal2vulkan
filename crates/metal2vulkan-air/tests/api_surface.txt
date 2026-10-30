@@ -184,6 +184,8 @@ canon::rate_map_data tile_line fn
 container BITCODE_MAGIC const
 container ContainerConstant use(mtlb::ContainerConstant)
 container DynamicLinkage use(mtlb::DynamicLinkage)
+container FAT_MAGIC const
+container FAT_MAGIC_64 const
 container FunctionPublicMetadata use(mtlb::FunctionPublicMetadata)
 container FunctionStage enum(N)
 container Hash256 type

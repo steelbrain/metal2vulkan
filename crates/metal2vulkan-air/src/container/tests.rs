@@ -4,6 +4,7 @@ use crate::bitstream::{Entry, Reader};
 use crate::budget::{Budget, Meter};
 use crate::error::ContainerError;
 use crate::error::{Feature, Unsupported};
+use metal2vulkan_devtools::metallib::{universal, UniversalHeader};
 
 /// A small bitcode module whose content depends on `seed`: one block with one record.
 fn module_stream(seed: u64) -> Vec<u8> {
@@ -264,23 +265,6 @@ fn dylib(symbols: &[&str]) -> Builder {
     b
 }
 
-/// `slices` (CPU type, bytes) in a universal file.
-fn universal(slices: &[(u32, &[u8])]) -> Vec<u8> {
-    let mut out = UNIVERSAL_MAGIC.to_vec();
-    out.extend_from_slice(&(slices.len() as u32).to_be_bytes());
-    let mut at = 8 + 20 * slices.len();
-    for (cpu, bytes) in slices {
-        for v in [*cpu, 0, at as u32, bytes.len() as u32, 0] {
-            out.extend_from_slice(&v.to_be_bytes());
-        }
-        at += bytes.len();
-    }
-    for (_, bytes) in slices {
-        out.extend_from_slice(bytes);
-    }
-    out
-}
-
 /// A dynamic library's functions are its exports, over one module and one hash; its install
 /// name, its dependencies (in link order), and its imports are read from `HDYN` and `ILST`.
 #[test]
@@ -385,29 +369,73 @@ fn malformed_linkage_regions() {
     );
 }
 
-/// A universal file is read through its AIR slice (`serializeToURL:`'s output); without one, or
-/// with one that is no metallib, it is a container error.
+/// A universal file is read through its AIR slice, in each of the three headers, and the result's
+/// bytes are that slice. Metal's own file without an AIR slice is `NoAirSlice`; a Mach-O one is
+/// `BadMagic`, as other files of its magic are; an AIR slice that is no metallib is `BadMagic`; a
+/// file cut inside its records or its slice is an error.
 #[test]
 fn a_universal_metallib_is_read_through_its_air_slice() {
     let air = dylib(&["f"]).build();
     let gpu = vec![0xCF, 0xFA, 0xED, 0xFE, 1, 2, 3, 4];
-    let bytes = universal(&[(0x0100_0013, &gpu), (0x0100_0017, &air)]);
-    let lib = metallib(&bytes);
-    assert_eq!(lib.linkage.install_name, Some("libD"));
-    assert_eq!(lib.functions.len(), 1);
-    let none = universal(&[(0x0100_0013, &gpu)]);
-    assert_eq!(
-        container_kind(&parse(&none).unwrap_err()),
-        ContainerError::NoAirSlice
-    );
-    let not_mtlb = universal(&[(0x0100_0017, &gpu)]);
-    assert_eq!(
-        container_kind(&parse(&not_mtlb).unwrap_err()),
-        ContainerError::BadMagic
-    );
-    let mut cut = bytes.clone();
-    cut.truncate(40);
-    assert!(parse(&cut).is_err());
+    for header in UniversalHeader::ALL {
+        let bytes = universal(header, &[(0x0100_0013, &gpu), (0x0100_0017, &air)]);
+        let lib = metallib(&bytes);
+        assert_eq!(lib.bytes, &air[..], "{header:?}");
+        assert_eq!(lib.linkage.install_name, Some("libD"), "{header:?}");
+        assert_eq!(lib.functions.len(), 1, "{header:?}");
+        let missing = match header {
+            UniversalHeader::Metal => ContainerError::NoAirSlice,
+            UniversalHeader::MachO | UniversalHeader::MachO64 => ContainerError::BadMagic,
+        };
+        let none = universal(header, &[(0x0100_0013, &gpu)]);
+        assert_eq!(
+            container_kind(&parse(&none).unwrap_err()),
+            missing,
+            "{header:?}"
+        );
+        let not_mtlb = universal(header, &[(0x0100_0017, &gpu)]);
+        assert_eq!(
+            container_kind(&parse(&not_mtlb).unwrap_err()),
+            ContainerError::BadMagic,
+            "{header:?}"
+        );
+        for len in [6, 12, 40, bytes.len() - 1] {
+            let mut cut = bytes.clone();
+            cut.truncate(len);
+            assert!(parse(&cut).is_err(), "{header:?} cut at {len}");
+        }
+    }
+    // A Java class shares FAT_MAGIC: its version reads as a count of 65 records, which a short
+    // file cannot hold and a long one holds no AIR slice among.
+    for len in [8, 2048] {
+        let mut class = FAT_MAGIC.to_vec();
+        class.extend_from_slice(&[0, 0, 0, 65]);
+        class.resize(len, 0);
+        assert_eq!(
+            container_kind(&parse(&class).unwrap_err()),
+            ContainerError::BadMagic,
+            "{len} bytes"
+        );
+    }
+}
+
+/// A `fat_arch_64` record's offset and size are each read as a 64-bit value: a high word that is
+/// not zero in either puts the slice past the file.
+#[test]
+fn a_wide_universal_record_reads_64_bit_offsets_and_sizes() {
+    let air = dylib(&["f"]).build();
+    let bytes = universal(UniversalHeader::MachO64, &[(0x0100_0017, &air)]);
+    assert_eq!(metallib(&bytes).bytes, &air[..]);
+    // The record starts at byte 8: the offset's high word is bytes 16..20, the size's 24..28.
+    for high in [19, 27] {
+        let mut wide = bytes.clone();
+        wide[high] = 1;
+        assert_eq!(
+            container_kind(&parse(&wide).unwrap_err()),
+            ContainerError::BadOffset,
+            "byte {high}"
+        );
+    }
 }
 
 /// A three-function library with public metadata and unknown tags everywhere they occur.
