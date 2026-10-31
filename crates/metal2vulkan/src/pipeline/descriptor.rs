@@ -147,11 +147,25 @@ impl DynamicLibraries {
 /// A function calls a `[[visible]]` function it does not define through a visible-function
 /// reference (`!air.visible_function_references`), which names it. Compile resolves each
 /// reference against the functions of `functions`, `private_functions`, and `binary_functions`
-/// by [`FunctionInfo::name`](crate::library::FunctionInfo): the named function (a visible
+/// by [`LinkedFunction::name`]: its specialized name where it has one, else its library function's
+/// [`FunctionInfo::name`](crate::library::FunctionInfo). The named function (a visible
 /// function of its module, [`FunctionStage::Visible`](crate::library::FunctionStage) in a
 /// bitcode library) is linked statically and inlined, as are the functions it references in
 /// turn. A reference nothing names is `Error::NeedsInput(LinkedFunction)` if a call to it
-/// survives specialization. The functions of `functions` and `binary_functions` are also what a
+/// survives specialization.
+///
+/// A linked function whose module declares function constants (or defines a static initializer)
+/// is specialized with its own constant values before it is linked, as Metal specializes the
+/// `MTLFunction`: its module's static initializer runs over them. A function made specialized
+/// ([`LinkedFunction::specialized`]) then has what they decide folded, and a constant they give
+/// no value reads as an entry's undefined constants read. One made unspecialized
+/// (`newFunctionWithName:`) that reaches a constant refuses the link at a call that survives
+/// specialization (`DescriptorError::LinkedFunction` with
+/// [`LinkProblem::UnresolvedConstant`](crate::error::LinkProblem)), as Metal fails such a
+/// creation ("cannot lower module with unresolved function constants"); one that reaches none
+/// links.
+///
+/// The functions of `functions` and `binary_functions` are also what a
 /// visible-function table can hold: each has a [`FunctionHandle`](crate::pipeline::FunctionHandle)
 /// ([`LinkedFunctions::function_handle`]), and a call through a table compiles to a switch over
 /// those of the call's type. `groups` names the functions a call site through a function pointer
@@ -240,13 +254,34 @@ impl LinkedList<'_> {
     }
 }
 
-/// One function of [`LinkedFunctions`]: a library function and the constant values it was
-/// specialized with (`newFunctionWithDescriptor:`; none for `newFunctionWithName:`).
+/// One function of [`LinkedFunctions`]: a library function, the constant values it was
+/// specialized with (`newFunctionWithDescriptor:`; none for `newFunctionWithName:`), and the name
+/// it was made under.
+///
+/// A visible-function reference resolves against the function's [`name`](LinkedFunction::name):
+/// its specialized name where it has one (`MTLFunctionDescriptor.specializedName`), else its
+/// library function's own, as Metal resolves it (a probe on an M3 Max under macOS 27.0.1: `base_fn`
+/// made with the specialized name `custom_fn` answers `custom_fn` and resolves a reference to
+/// `custom_fn`; made without one, or with another, it resolves no such reference). Its definition
+/// is its library function's, whatever name it links under.
 #[non_exhaustive]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct LinkedFunction {
     pub function: Function,
     pub constants: FunctionConstantValues,
+    /// `MTLFunctionDescriptor.specializedName`: the name the function was made under, which it
+    /// answers and links under in place of its library function's own; `None` (nil) for the
+    /// function's own name. Part of the compile key; a specialized name equal to the function's own
+    /// is no other name.
+    pub specialized_name: Option<String>,
+    /// The function was made specialized: by `newFunctionWithName:constantValues:` or by
+    /// `newFunctionWithDescriptor:` (with constant values or without), as against
+    /// `newFunctionWithName:`. A constant of its module that `constants` gives no value is then
+    /// undefined, and reads as an entry's undefined constants read; in an unspecialized function
+    /// it is unresolved, and the link is refused where the function reaches it
+    /// ([`LinkProblem::UnresolvedConstant`](crate::error::LinkProblem)), as Metal refuses it. A
+    /// function with constant values is specialized whatever this says. Part of the compile key.
+    pub specialized: bool,
     /// The function was made compiled to a binary (`MTLFunctionOptionCompileToBinary`), as
     /// Metal requires of a function in `binary_functions` and of a binary function added to a
     /// made pipeline state; the runtime checks it, refusing one that is not as Metal does. The
@@ -255,18 +290,38 @@ pub struct LinkedFunction {
 }
 
 impl LinkedFunction {
-    /// `function` with no constant values, not compiled to a binary.
+    /// `function` as `newFunctionWithName:` makes it: no constant values, no specialized name,
+    /// unspecialized, not compiled to a binary.
     pub fn new(function: Function) -> LinkedFunction {
         LinkedFunction {
             function,
             constants: FunctionConstantValues::defaults(),
+            specialized_name: None,
+            specialized: false,
             precompiled: false,
         }
     }
 
-    /// This function specialized with `constants`.
+    /// This function specialized with `constants` (`newFunctionWithName:constantValues:`):
+    /// `specialized` too.
     pub fn with_constants(mut self, constants: FunctionConstantValues) -> LinkedFunction {
         self.constants = constants;
+        self.specialized = true;
+        self
+    }
+
+    /// This function made by `newFunctionWithDescriptor:` under the specialized name `name`
+    /// (`specializedName`), which it answers and links under: `specialized` too.
+    pub fn with_specialized_name(mut self, name: impl Into<String>) -> LinkedFunction {
+        self.specialized_name = Some(name.into());
+        self.specialized = true;
+        self
+    }
+
+    /// This function, made specialized when `specialized` (`specialized`): what
+    /// `newFunctionWithDescriptor:` makes without constant values is.
+    pub fn with_specialized(mut self, specialized: bool) -> LinkedFunction {
+        self.specialized = specialized;
         self
     }
 
@@ -274,6 +329,22 @@ impl LinkedFunction {
     pub fn with_precompiled(mut self, precompiled: bool) -> LinkedFunction {
         self.precompiled = precompiled;
         self
+    }
+
+    /// `name`: the specialized name where the function was made with one, else its library
+    /// function's own. A visible-function reference to this name resolves to the function.
+    pub fn name(&self) -> &str {
+        self.specialized_name
+            .as_deref()
+            .unwrap_or(self.function.info().name)
+    }
+
+    /// The specialized name, where it is a name other than the library function's own: what the
+    /// compile key and a function's identity record of it.
+    pub(crate) fn other_name(&self) -> Option<&str> {
+        self.specialized_name
+            .as_deref()
+            .filter(|&n| n != self.function.info().name)
     }
 }
 

@@ -88,6 +88,13 @@ pub struct Function {
     /// The options the function was made with (`newFunctionWithDescriptor:`); none for the
     /// other forms.
     options: FunctionOptions,
+    /// The specialized name the function was made with (`newFunctionWithDescriptor:`'s
+    /// `specializedName`), which it answers and links under; none for the other forms.
+    specialized_name: Option<String>,
+    /// Whether the function was made by `newFunctionWithDescriptor:`, which Metal makes a
+    /// specialized function of with constant values or without: a stage links it specialized
+    /// ([`LinkedFunction::specialized`]).
+    by_descriptor: bool,
     /// What the function object holds of the sampler IDs its function's pipeline states
     /// numbered, shared with every function object of the same function of its library
     /// (`resource_ids/numbered.rs`); held for its drop.
@@ -100,6 +107,10 @@ pub struct Function {
 pub struct FunctionDescriptor {
     /// `name`.
     pub name: String,
+    /// `specializedName`: the name the made function answers ([`Function::name`]) and links
+    /// under in place of `name`, where a visible-function reference names it; `None` (nil) for
+    /// `name` itself. The function's definition is still `name`'s.
+    pub specialized_name: Option<String>,
     /// `constantValues`: `None` for nil, the function as `newFunctionWithName:` makes it.
     pub constant_values: Option<FunctionConstantValues>,
     /// `options`. `COMPILE_TO_BINARY` makes a function a stage's `binary_functions` and a made
@@ -110,13 +121,21 @@ pub struct FunctionDescriptor {
 }
 
 impl FunctionDescriptor {
-    /// The descriptor of the function named `name`, with no constant values and no options.
+    /// The descriptor of the function named `name`, with no specialized name, no constant values
+    /// and no options.
     pub fn new(name: &str) -> FunctionDescriptor {
         FunctionDescriptor {
             name: name.to_string(),
+            specialized_name: None,
             constant_values: None,
             options: FunctionOptions::NONE,
         }
+    }
+
+    /// This descriptor with the specialized name `name` (`specializedName`).
+    pub fn with_specialized_name(mut self, name: impl Into<String>) -> FunctionDescriptor {
+        self.specialized_name = Some(name.into());
+        self
     }
 }
 
@@ -274,7 +293,11 @@ impl Library {
     /// [`new_function_with_name_constant_values`](Self::new_function_with_name_constant_values)
     /// makes it where the descriptor has constant values and as
     /// [`new_function_with_name`](Self::new_function_with_name) where it has none, refused as
-    /// they refuse; with the descriptor's options ([`Function::options`]). Made with
+    /// they refuse; with the descriptor's options ([`Function::options`]) and specialized name,
+    /// which the function answers as its [`name`](Function::name) and links under. Either way a
+    /// stage links it specialized, as Metal links what this call makes: a function constant it
+    /// was given no value for reads as undefined (measured with values and with none, an M3 Max
+    /// under macOS 27.0.1, `linked_function_specialized_name.m`). Made with
     /// `COMPILE_TO_BINARY`, its [`linked_function`](Function::linked_function) is precompiled, as
     /// a stage's `binary_functions` and a made state's added binary functions must be (Metal's
     /// API validation stops another, and its creation fails without validation; measured on an
@@ -304,6 +327,8 @@ impl Library {
             )?,
         };
         function.options = descriptor.options;
+        function.specialized_name = descriptor.specialized_name.clone();
+        function.by_descriptor = true;
         Ok(function)
     }
 
@@ -330,6 +355,8 @@ impl Library {
             properties: Arc::default(),
             constants_dictionary: Arc::default(),
             options: FunctionOptions::NONE,
+            specialized_name: None,
+            by_descriptor: false,
             _holds: holds,
         })
     }
@@ -366,9 +393,13 @@ impl Function {
         &self.device
     }
 
-    /// `name`.
+    /// `name`: the specialized name a [`FunctionDescriptor`] made the function with, else the
+    /// library function's own, as Metal answers it (`base_fn` made with the specialized name
+    /// `custom_fn` answers `custom_fn`, an M3 Max under macOS 27.0.1).
     pub fn name(&self) -> &str {
-        self.function.info().name
+        self.specialized_name
+            .as_deref()
+            .unwrap_or(self.function.info().name)
     }
 
     /// `options`: the options a [`FunctionDescriptor`] made the function with; none for a
@@ -499,16 +530,26 @@ impl Function {
         descriptor
     }
 
-    /// The function as a stage links it, with its constant values, and precompiled where it was
-    /// made compiled to a binary: an entry of [`LinkedFunctions`] (`MTLLinkedFunctions.functions`,
+    /// The function as a stage links it, with its constant values, under its specialized name
+    /// where it was made with one, specialized where it was made with constant values or by
+    /// [`Library::new_function_with_descriptor`], and precompiled where it was made compiled to a
+    /// binary: an entry of [`LinkedFunctions`] (`MTLLinkedFunctions.functions`,
     /// `.privateFunctions`, and the rest), which a stage's
     /// [`FunctionDescriptor`](metal2vulkan::pipeline::FunctionDescriptor) carries
-    /// (`with_linked`).
+    /// (`with_linked`). A visible-function reference resolves to it by [`name`](Self::name), as
+    /// Metal resolves it. A function constant of its module it was given no value for reads as
+    /// undefined where it is specialized; a function made by
+    /// [`Library::new_function_with_name`] that reaches one refuses the pipeline state
+    /// (`Compile`, `LinkProblem::UnresolvedConstant`), as Metal fails the creation ("cannot lower
+    /// module with unresolved function constants").
     ///
     /// [`LinkedFunctions`]: metal2vulkan::pipeline::LinkedFunctions
     pub fn linked_function(&self) -> LinkedFunction {
-        LinkedFunction::new(self.function.clone())
+        let mut linked = LinkedFunction::new(self.function.clone())
             .with_constants(self.constants.clone())
-            .with_precompiled(self.precompiled())
+            .with_specialized(self.specialized || self.by_descriptor)
+            .with_precompiled(self.precompiled());
+        linked.specialized_name = self.specialized_name.clone();
+        linked
     }
 }

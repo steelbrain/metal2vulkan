@@ -49,8 +49,9 @@ use crate::lower::select::{LowerInputs, Plan};
 use crate::pipeline::artifact::{PrecisionNote, StrategyCensus, StrategyUse};
 use crate::pipeline::compile::key::{DynamicKey, LinkedKey};
 use crate::pipeline::descriptor::{
-    ColorAttachmentDescriptor, DynamicLibraries, FunctionDescriptor, LinkedFunctions,
-    MeshPipelineDescriptor, RenderPipelineDescriptor, TessellationDescriptor, VertexDescriptor,
+    ColorAttachmentDescriptor, DynamicLibraries, FunctionDescriptor, LinkedFunction,
+    LinkedFunctions, LinkedList, MeshPipelineDescriptor, RenderPipelineDescriptor,
+    TessellationDescriptor, VertexDescriptor,
 };
 use crate::pipeline::interface::{SlotInterface, StageInterface};
 use crate::pipeline::sym::VaryingKey;
@@ -272,8 +273,8 @@ pub struct StageInputs {
     pub uniform: BTreeSet<VaryingKey>,
 }
 
-/// One linked function as a compile takes it: its key (the list it is in, its name, its AIR hash,
-/// its constant values) and its bitcode module.
+/// One linked function as a compile takes it: its key (the list it is in, its name, its
+/// specialized name, its AIR hash, its constant values) and its bitcode module.
 #[derive(Clone, Copy, Debug)]
 pub struct LinkedSource<'a> {
     pub(crate) key: LinkedKey<'a>,
@@ -282,7 +283,8 @@ pub struct LinkedSource<'a> {
 
 impl<'a> LinkedSource<'a> {
     /// The function `name` of `functions` (`MTLLinkedFunctions.functions`), defined in the module
-    /// `bitcode` (hashed here), specialized with `constants`.
+    /// `bitcode` (hashed here), specialized with `constants`, linked under its own name; made
+    /// specialized only where `constants` holds a value ([`LinkedFunction::specialized`]).
     pub fn new(
         name: &'a str,
         bitcode: &'a [u8],
@@ -290,13 +292,42 @@ impl<'a> LinkedSource<'a> {
     ) -> LinkedSource<'a> {
         LinkedSource {
             key: LinkedKey {
-                list: crate::pipeline::descriptor::LinkedList::Functions,
+                list: LinkedList::Functions,
                 name,
+                specialized_name: None,
+                specialized: !constants.is_empty(),
                 air_hash: container::sha256(bitcode),
                 constants,
             },
             bitcode,
         }
+    }
+
+    /// This function made under the specialized name `name` (`specializedName`), which it links
+    /// under in place of its own ([`LinkedFunction::name`]): specialized too.
+    pub fn with_specialized_name(mut self, name: &'a str) -> LinkedSource<'a> {
+        self.key.specialized_name = Some(name).filter(|&n| n != self.key.name);
+        self.key.specialized = true;
+        self
+    }
+
+    /// This function, made specialized when `specialized` ([`LinkedFunction::specialized`]).
+    pub fn with_specialized(mut self, specialized: bool) -> LinkedSource<'a> {
+        self.key.specialized = specialized;
+        self
+    }
+}
+
+/// The key of `f`, listed in `list`.
+pub(crate) fn linked_key<'a>(list: LinkedList<'a>, f: &'a LinkedFunction) -> LinkedKey<'a> {
+    let info = f.function.info();
+    LinkedKey {
+        list,
+        name: info.name,
+        specialized_name: f.other_name(),
+        specialized: f.specialized,
+        air_hash: info.air_hash,
+        constants: &f.constants,
     }
 }
 
@@ -304,15 +335,7 @@ impl<'a> LinkedSource<'a> {
 pub(crate) fn linked_keys(linked: &LinkedFunctions) -> Vec<LinkedKey<'_>> {
     linked
         .listed()
-        .map(|(list, f)| {
-            let info = f.function.info();
-            LinkedKey {
-                list,
-                name: info.name,
-                air_hash: info.air_hash,
-                constants: &f.constants,
-            }
-        })
+        .map(|(list, f)| linked_key(list, f))
         .collect()
 }
 
@@ -1670,7 +1693,7 @@ pub(crate) fn linked_modules(
     let keys: Vec<LinkedKey<'_>> = linked.iter().map(|s| s.key).collect();
     let handles = crate::pipeline::table::handles(&keys);
     let mut out: Vec<(Hash256, LinkedModule)> = Vec::new();
-    let mut listed: Vec<(Hash256, &str, &FunctionConstantValues)> = Vec::new();
+    let mut listed: Vec<LinkedKey<'_>> = Vec::new();
     let mut seen: BTreeSet<Box<[u8]>> = BTreeSet::new();
     let mut queue: VecDeque<Box<[u8]>> = VecDeque::new();
     let tables = abi.entries.iter().any(|e| {
@@ -1682,8 +1705,9 @@ pub(crate) fn linked_modules(
     if tables {
         for (s, h) in linked.iter().zip(&handles) {
             if h.is_some() {
-                m.charge(s.key.name.len())?;
-                queue.push_back(s.key.name.as_bytes().into());
+                let name = s.key.link_name();
+                m.charge(name.len())?;
+                queue.push_back(name.as_bytes().into());
             }
         }
     }
@@ -1705,18 +1729,15 @@ pub(crate) fn linked_modules(
         for (s, handle) in linked.iter().zip(&handles) {
             m.tick(1)?;
             let key = &s.key;
-            if !key.list.resolves_references() || key.name.as_bytes() != &*name {
+            if !key.list.resolves_references() || key.link_name().as_bytes() != &*name {
                 continue;
             }
             // The same function listed twice (in two lists, or twice in one) is one function.
-            if listed
-                .iter()
-                .any(|(h, n, c)| *h == key.air_hash && *n == key.name && *c == key.constants)
-            {
+            if listed.iter().any(|l| l.same_function(key)) {
                 continue;
             }
-            m.charge(std::mem::size_of::<(Hash256, &str, &FunctionConstantValues)>())?;
-            listed.push((key.air_hash, key.name, key.constants));
+            m.charge(std::mem::size_of::<LinkedKey<'_>>())?;
+            listed.push(*key);
             let at = match out.iter().position(|(h, _)| *h == key.air_hash) {
                 Some(at) => at,
                 None => {
@@ -1748,9 +1769,11 @@ pub(crate) fn linked_modules(
                 // Refused for the module's code first.
                 Err(_) => Ok(BTreeMap::new()),
             };
-            m.charge(std::mem::size_of::<LinkedName>())?;
+            m.charge(std::mem::size_of::<LinkedName>() + key.name.len())?;
             l.functions.push(LinkedName {
                 name: name.clone(),
+                function: key.name.as_bytes().into(),
+                specialized: key.specialized,
                 constants,
                 handle: handle.map(|h| h.word()),
             });
@@ -1763,9 +1786,7 @@ pub(crate) fn linked_modules(
     for (s, handle) in linked.iter().zip(&handles) {
         m.tick(1)?;
         let key = &s.key;
-        let reached = listed
-            .iter()
-            .any(|(h, n, c)| *h == key.air_hash && *n == key.name && *c == key.constants);
+        let reached = listed.iter().any(|l| l.same_function(key));
         if handle.is_none() || reached {
             continue;
         }
@@ -1798,11 +1819,14 @@ pub(crate) fn linked_modules(
             }
             _ => continue,
         };
-        m.charge(std::mem::size_of::<(Hash256, &str, &FunctionConstantValues)>())?;
-        listed.push((key.air_hash, key.name, key.constants));
-        m.charge(std::mem::size_of::<LinkedName>() + key.name.len())?;
+        m.charge(std::mem::size_of::<LinkedKey<'_>>())?;
+        listed.push(*key);
+        let link_name = key.link_name();
+        m.charge(std::mem::size_of::<LinkedName>() + link_name.len() + key.name.len())?;
         l.functions.push(LinkedName {
-            name: key.name.as_bytes().into(),
+            name: link_name.as_bytes().into(),
+            function: key.name.as_bytes().into(),
+            specialized: key.specialized,
             constants,
             handle: handle.map(|h| h.word()),
         });

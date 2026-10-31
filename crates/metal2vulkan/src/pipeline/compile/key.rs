@@ -7,9 +7,10 @@
 //! - [`function_key`] (`FunctionCompileKey`): the function's AIR hash, its entry name, the
 //!   function-constant values **as supplied** (by index and by name), the profile fingerprint
 //!   (policy included), the canonical lowering inputs ([`canonical_inputs`]), and, when the stage
-//!   links functions, each linked function's list, name, AIR hash, and constant values. A stage
-//!   without linked functions keeps the key it had before linking existed, and one compiled without
-//!   `emulated_simdgroups`, `dropped_vertex_layer`, `storage_view_slots`,
+//!   links functions, each linked function's list, name, specialized name, specialization, AIR
+//!   hash, and constant values. A stage without linked functions keeps the key it had before
+//!   linking existed, and one
+//!   compiled without `emulated_simdgroups`, `dropped_vertex_layer`, `storage_view_slots`,
 //!   `signed_color_attachments`, `multisampled`, `replay_bindings`, or `framebuffer_fetch` the key
 //!   it had before those inputs existed. A stage that links dynamic libraries records each library
 //!   its imports are searched in, in order (install name and content hash), and the install name
@@ -28,14 +29,39 @@ use crate::pipeline::descriptor::{
     StageInputDescriptor, StageSource, TessellationDescriptor,
 };
 
-/// What a compile key records of one linked function: the list it is in, its name, its AIR hash,
-/// and the constant values it was specialized with.
+/// What a compile key records of one linked function: the list it is in, its name, the
+/// specialized name it was made under, whether it was made specialized, its AIR hash, and the
+/// constant values it was specialized with.
 #[derive(Clone, Copy, Debug)]
 pub struct LinkedKey<'a> {
     pub list: LinkedList<'a>,
+    /// Its library function's name, which names its definition.
     pub name: &'a str,
+    /// Its specialized name (`MTLFunctionDescriptor.specializedName`), where it is another name
+    /// than `name`.
+    pub specialized_name: Option<&'a str>,
+    /// It was made specialized (`LinkedFunction::specialized`).
+    pub specialized: bool,
     pub air_hash: Hash256,
     pub constants: &'a FunctionConstantValues,
+}
+
+impl<'a> LinkedKey<'a> {
+    /// The name the function links under, which a visible-function reference names: its
+    /// specialized name, else its own.
+    pub fn link_name(&self) -> &'a str {
+        self.specialized_name.unwrap_or(self.name)
+    }
+
+    /// Whether `other` is the same function: the same AIR, name, specialized name, constant
+    /// values and specialization, in whichever list.
+    pub fn same_function(&self, other: &LinkedKey<'_>) -> bool {
+        self.air_hash == other.air_hash
+            && self.name == other.name
+            && self.specialized_name == other.specialized_name
+            && self.specialized == other.specialized
+            && self.constants == other.constants
+    }
 }
 
 /// What a compile key records of the dynamic libraries a stage links: each library its imports are
@@ -480,6 +506,11 @@ pub fn function_key(
                 LinkedList::Group(name) => h.u64(3).bytes(name.as_bytes()),
             };
             h.bytes(&l.air_hash).bytes(l.name.as_bytes());
+            match l.specialized_name {
+                None => h.u64(0),
+                Some(name) => h.u64(1).bytes(name.as_bytes()),
+            };
+            h.u64(u64::from(l.specialized));
             constants(&mut h, l.constants);
         }
     }

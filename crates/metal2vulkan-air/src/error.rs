@@ -903,6 +903,17 @@ pub enum LinkProblem {
     Signature,
     /// The linked function's module has another data layout than the module that references it.
     DataLayout,
+    /// The linked function was made unspecialized (`newFunctionWithName:`), and what it reaches
+    /// reads function constant `index` of its module, which then has no value: Metal fails the
+    /// pipeline's creation ("cannot lower module with unresolved function constants"), even for a
+    /// read only `is_function_constant_defined` guards. A specialized function
+    /// (`newFunctionWithName:constantValues:` or `newFunctionWithDescriptor:`) reads such a
+    /// constant as undefined instead, and links (`linked_function_specialized_name.m`, an M3 Max
+    /// under macOS 27.0.1).
+    UnresolvedConstant {
+        /// The constant's `[[function_constant(index)]]` index in the linked function's module.
+        index: u32,
+    },
 }
 
 /// A deterministic structural or accounting cap. Values live in `budget`.

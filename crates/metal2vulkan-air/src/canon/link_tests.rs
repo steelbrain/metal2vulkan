@@ -5,9 +5,9 @@ use std::collections::BTreeMap;
 
 use super::*;
 use crate::abi::{
-    AbiInt, Access, AirAbi, ArgTypeInfo, BufferArg, CompileOptions, EntryPoint,
-    FunctionConstantDecl, ModuleLimits, ParamBinding, ParamRole, Slot, Stage, VisibleFunction,
-    VisibleFunctionRef, VisibleSymbol, VisibleTarget,
+    AbiInt, Access, AirAbi, ArgTypeInfo, BufferArg, CompileOptions, EntryPoint, ModuleLimits,
+    ParamBinding, ParamRole, Slot, Stage, VisibleFunction, VisibleFunctionRef, VisibleSymbol,
+    VisibleTarget,
 };
 use crate::budget::{Budget, Meter};
 use crate::error::LinkProblem;
@@ -233,6 +233,8 @@ fn linked(name: &str, module: Module, abi: AirAbi) -> LinkedModule {
     LinkedModule {
         functions: vec![LinkedName {
             name: name.as_bytes().into(),
+            function: name.as_bytes().into(),
+            specialized: false,
             constants: Ok(BTreeMap::new()),
             handle: None,
         }],
@@ -390,50 +392,280 @@ fn a_linked_function_that_cannot_resolve_the_reference_is_a_typed_descriptor_err
     );
 }
 
-/// A linked module whose constants, static initializer, or linkage signature linking does not
-/// bind yet is refused at the surviving call, naming the linked function.
+/// A linked module whose linkage signature linking does not read yet is refused at the
+/// surviving call, naming the linked function.
 #[test]
-fn linked_module_features_not_implemented_are_refused_at_the_call() {
+fn a_linkage_signature_is_not_implemented_and_refused_at_the_call() {
     let at = Location::function(DiagName::new("k"), Some(0), Some(0));
-    let refused = |l: LinkedModule| match link(&[l]) {
-        Err(Error::Unsupported(u)) => u,
-        other => panic!("{other:?}"),
-    };
-    let mut constants = callee("f", &[]);
-    let i32t = code(&mut constants)
-        .module
-        .types()
-        .lookup(&Type::Int(32))
-        .unwrap();
-    code(&mut constants).abi.function_constants = vec![FunctionConstantDecl {
-        index: 0,
-        global: GlobalId::new(0),
-        ty: i32t,
-        flag: None,
-        data_type: None,
-        name: DiagName::new("c"),
-        type_name: DiagName::new("int"),
-    }];
     let mut signature = callee("f", &[]);
     code(&mut signature).abi.linkage_signature = Some(crate::abi::LinkageSignature {
         kind: crate::abi::LinkageSignatureKind::LinkedConstants,
         operands: 0,
     });
-    let mut init = callee("f", &[]);
-    let mut parts = code(&mut init).module.clone().into_parts();
-    let f = parts
-        .funcs
-        .values_mut()
-        .next()
-        .expect("the visible function");
-    f.section = Some(Section::StaticInit);
-    code(&mut init).module = Module::new(parts, &mut meter()).unwrap();
-    for l in [constants, signature, init] {
-        let u = refused(l);
-        assert_eq!(u.feature, Feature::Linking, "{u}");
-        assert_eq!(u.symbol, Some(DiagName::new("f")), "{u}");
-        assert_eq!(u.location, Some(at.clone()), "{u}");
+    let u = match link(&[signature]) {
+        Err(Error::Unsupported(u)) => u,
+        other => panic!("{other:?}"),
+    };
+    assert_eq!(u.feature, Feature::Linking, "{u}");
+    assert_eq!(u.symbol, Some(DiagName::new("f")), "{u}");
+    assert_eq!(u.location, Some(at), "{u}");
+}
+
+/// The visible functions of a linked module that declares the `i32` function constant `c`
+/// (index 0), each `i32 (i32 x)`, as Apple's compiler writes such a module: its static
+/// initializer copies `c` into the internal global `c.copy`, which the functions read.
+/// `reads`: `x * c`; `guarded`: `is_function_constant_defined(c) ? x * c : x + 1`; `free`:
+/// `x + 5`.
+fn constant_callee() -> LinkedCode {
+    let mut m = ModuleBuilder::new();
+    let i1 = m.int(1);
+    let i32t = m.int(32);
+    let cptr = m.ptr(AddrSpace::Constant);
+    let fty = m.fn_ty(i32t, &[i32t]);
+    let c = super::tests::fc_global(&mut m, "c", i32t);
+    let undef = m.constant(i32t, Const::Undef);
+    let copy_name = m.sym("c.copy");
+    let copy = m.global(Global {
+        name: copy_name,
+        value_ty: i32t,
+        space: AddrSpace::Constant,
+        constant: false,
+        init: Some(undef),
+        externally_initialized: false,
+        visibility: Default::default(),
+        unnamed_addr: Default::default(),
+        linkage: Linkage::Internal,
+        align: None,
+        section: None,
+    });
+    let (c, copy) = (m.global_addr(c), m.global_addr(copy));
+    let is_def_ty = m.fn_ty(i1, &[cptr]);
+    let is_def = m.declare("air.is_function_constant_defined", is_def_ty);
+    let (one, five) = (m.const_int(i32t, 1), m.const_int(i32t, 5));
+    let load = |f: &mut FunctionBuilder<'_>, ptr: Value| {
+        f.push(
+            i32t,
+            InstKind::Load {
+                ptr,
+                align: Align::from_bytes(4),
+                volatile: false,
+                atomic: None,
+                range: None,
+            },
+        )
+    };
+    let void = m.void();
+    let init_ty = m.fn_ty(void, &[]);
+    let mut init = m.define("init", init_ty);
+    let v = load(&mut init, c);
+    store(&mut init, v, copy);
+    init.ret(None);
+    let init = init.finish();
+    let init = m.func_mut(init).unwrap();
+    init.section = Some(Section::StaticInit);
+    init.linkage = Linkage::Internal;
+
+    let mut reads = m.define("reads", fty);
+    let v = load(&mut reads, copy);
+    let r = reads.bin(BinOp::Mul, arg(0), v);
+    reads.ret(Some(r));
+    let reads = reads.finish();
+
+    let mut guarded = m.define("guarded", fty);
+    let defined = guarded.push(
+        i1,
+        InstKind::Call(Box::new(Call {
+            callee: Callee::Air {
+                decl: is_def,
+                op: crate::intrinsics::AirIntrinsic::FunctionConstant(
+                    crate::intrinsics::FunctionConstant::IsDefined,
+                ),
+            },
+            args: vec![c].into(),
+            fmf: FastMath::NONE,
+            tail: TailKind::None,
+            attrs: None,
+            range: None,
+        })),
+    );
+    let v = load(&mut guarded, copy);
+    let t = guarded.bin(BinOp::Mul, arg(0), v);
+    let f = guarded.bin(BinOp::Add, arg(0), one);
+    let r = guarded.push(
+        i32t,
+        InstKind::Select {
+            c: defined,
+            t,
+            f,
+            fmf: FastMath::NONE,
+        },
+    );
+    guarded.ret(Some(r));
+    let guarded = guarded.finish();
+
+    let mut free = m.define("free", fty);
+    let r = free.bin(BinOp::Add, arg(0), five);
+    free.ret(Some(r));
+    let free = free.finish();
+
+    let module = m.finish().unwrap();
+    let mut abi = abi();
+    abi.visible_functions = vec![
+        visible(reads, "reads"),
+        visible(guarded, "guarded"),
+        visible(free, "free"),
+    ];
+    abi.function_constants = vec![super::tests::fc_decl(0, GlobalId::new(0), i32t)];
+    LinkedCode { module, abi }
+}
+
+/// The caller's reference `f` linked to `function` of [`constant_callee`], made specialized or
+/// not, with `c`'s value where `c` gives one.
+fn constant_link(function: &str, specialized: bool, c: Option<u32>) -> Result<Entry, Error> {
+    let constants = c
+        .map(|v| {
+            let value = ConstValue {
+                ty: DataType::Int,
+                bytes: v.to_le_bytes().into(),
+            };
+            BTreeMap::from([(0, value)])
+        })
+        .unwrap_or_default();
+    link(&[LinkedModule {
+        functions: vec![LinkedName {
+            name: b"f".as_slice().into(),
+            function: function.as_bytes().into(),
+            specialized,
+            constants: Ok(constants),
+            handle: None,
+        }],
+        code: Ok(constant_callee()),
+    }])
+}
+
+/// A specialized linked function is specialized with its own values before it is linked, as
+/// Metal specializes the `MTLFunction`: its module's static initializer copies the value, and the
+/// import computes with it, `is_function_constant_defined` true.
+#[test]
+fn a_specialized_linked_function_computes_with_its_constant_values() {
+    for function in ["reads", "guarded"] {
+        let e = constant_link(function, true, Some(7)).unwrap_or_else(|e| panic!("{e}"));
+        let t = text(&e);
+        assert!(!t.contains("call "), "{function}: {t}");
+        assert!(!t.contains("load "), "{function}: {t}");
+        assert!(t.contains("mul i32 %a1, i32 7"), "{function}: {t}");
+        assert!(!t.contains("add i32"), "{function}: {t}");
     }
+}
+
+/// A specialized linked function made without a value for the constant links, as Metal makes
+/// that pipeline: the constant is undefined (`is_function_constant_defined` false) and reads as
+/// an entry's undefined constants read, as zero.
+#[test]
+fn a_specialized_linked_function_without_a_value_reads_its_constant_as_undefined() {
+    let reads = text(&constant_link("reads", true, None).unwrap_or_else(|e| panic!("{e}")));
+    assert!(
+        reads.contains("mul i32 %a1, i32 zeroinitializer"),
+        "{reads}"
+    );
+    assert!(!reads.contains("load "), "{reads}");
+    let guarded = text(&constant_link("guarded", true, None).unwrap_or_else(|e| panic!("{e}")));
+    assert!(guarded.contains("add i32 %a1, i32 1"), "{guarded}");
+    assert!(!guarded.contains("mul i32"), "{guarded}");
+}
+
+/// An unspecialized linked function (`newFunctionWithName:`) that reaches a function constant
+/// refuses the link at the surviving call, guarded by `is_function_constant_defined` or not, as
+/// Metal fails the creation ("cannot lower module with unresolved function constants"); one that
+/// reaches none links, and a dead call needs nothing.
+#[test]
+fn an_unspecialized_linked_function_that_reaches_a_constant_is_refused() {
+    let unresolved = Error::InvalidRequest(RequestError::LinkedFunction {
+        name: DiagName::new("f"),
+        problem: LinkProblem::UnresolvedConstant { index: 0 },
+    });
+    for function in ["reads", "guarded"] {
+        assert_eq!(
+            constant_link(function, false, None).map(|_| ()),
+            Err(unresolved.clone()),
+            "{function}"
+        );
+    }
+    let free = text(&constant_link("free", false, None).unwrap_or_else(|e| panic!("{e}")));
+    assert!(free.contains("add i32 %a1, i32 5"), "{free}");
+    let (module, abi) = caller(true);
+    let dead = LinkedModule {
+        functions: vec![LinkedName {
+            name: b"f".as_slice().into(),
+            function: b"reads".as_slice().into(),
+            specialized: false,
+            constants: Ok(BTreeMap::new()),
+            handle: None,
+        }],
+        code: Ok(constant_callee()),
+    };
+    assert!(specialize_linked(module, &abi, &request(), &[dead], &mut meter()).is_ok());
+}
+
+/// A linked function links under its name (a specialized name, where it has one) and is defined
+/// by its function of another name: a reference to the function's own name it does not resolve.
+#[test]
+fn a_linked_function_links_under_its_name_not_its_function_s() {
+    let e = constant_link("free", true, None).unwrap_or_else(|e| panic!("{e}"));
+    assert!(text(&e).contains("add i32 %a1, i32 5"));
+    let own = LinkedModule {
+        functions: vec![LinkedName {
+            name: b"other".as_slice().into(),
+            function: b"f".as_slice().into(),
+            specialized: true,
+            constants: Ok(BTreeMap::new()),
+            handle: None,
+        }],
+        ..callee("f", &[])
+    };
+    assert_eq!(
+        link(&[own]).unwrap_err(),
+        Error::NeedsInput(MissingInput::LinkedFunction {
+            symbol: DiagName::new("f"),
+        })
+    );
+}
+
+/// A linked module's static initializer runs before the import, with no function constant too:
+/// what it stores is the global's value. Here `c` is an ordinary constant global holding 9.
+#[test]
+fn a_linked_module_s_static_initializer_runs_before_the_import() {
+    let mut code = constant_callee();
+    code.abi.function_constants.clear();
+    let mut parts = code.module.into_parts();
+    let i32t = parts.types.lookup(&Type::Int(32)).unwrap();
+    let nine = parts
+        .consts
+        .intern(
+            crate::ir::Constant {
+                ty: i32t,
+                value: Const::Int(9),
+            },
+            &mut meter(),
+        )
+        .unwrap();
+    let c = parts.globals.get_mut(GlobalId::new(0)).unwrap();
+    c.init = Some(nine);
+    c.externally_initialized = false;
+    c.section = None;
+    code.module = Module::new(parts, &mut meter()).unwrap();
+    let e = link(&[LinkedModule {
+        functions: vec![LinkedName {
+            name: b"f".as_slice().into(),
+            function: b"reads".as_slice().into(),
+            specialized: false,
+            constants: Ok(BTreeMap::new()),
+            handle: None,
+        }],
+        code: Ok(code),
+    }])
+    .unwrap_or_else(|e| panic!("{e}"));
+    assert!(text(&e).contains("mul i32 %a1, i32 9"), "{}", text(&e));
 }
 
 /// A call to a declaration no reference names is still a function to link from a dynamic

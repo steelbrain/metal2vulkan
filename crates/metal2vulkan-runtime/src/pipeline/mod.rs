@@ -866,7 +866,10 @@ pub(crate) fn warm(device: &Device, pipeline: &crate::warm::Pipeline) -> Result<
 /// The first name `linked` repeats where Metal's pipeline creation fails or was not measured: a
 /// name `functions` lists twice ("error: duplicated symbol", without validation too), or
 /// `binary_functions` twice, and a name both lists hold for two different functions (another
-/// AIR, name or constant values), in that order. Metal's API validation stops every repeat ("All
+/// AIR, library function or constant values), in that order. A function's name is the one it links
+/// under ([`LinkedFunction::name`]): its specialized name where it has one, so one library
+/// function linked under its own name and under a specialized one is no repeat, as Metal links
+/// both (`linked_function_specialized_name.m`, an M3 Max under macOS 27.0.1). Metal's API validation stops every repeat ("All
 /// linked functions must have unique names. Function 'add_one' is a duplicate symbol in
 /// binaryFunctions, symbol first found in functions"), but plain Metal takes one function listed
 /// in both lists, with one handle (a probe, an M3 and an M4), as the compile layer links it once.
@@ -874,7 +877,7 @@ pub(crate) fn warm(device: &Device, pipeline: &crate::warm::Pipeline) -> Result<
 /// left to it.
 pub(super) fn duplicate_linked_name(linked: &LinkedFunctions) -> Option<String> {
     fn name(f: &LinkedFunction) -> &str {
-        f.function.info().name
+        f.name()
     }
     fn repeated(list: &[LinkedFunction]) -> Option<&str> {
         let mut seen = HashSet::new();
@@ -882,8 +885,10 @@ pub(super) fn duplicate_linked_name(linked: &LinkedFunctions) -> Option<String> 
     }
     let same = |a: &LinkedFunction, b: &LinkedFunction| {
         name(a) == name(b)
+            && a.function.info().name == b.function.info().name
             && a.function.info().air_hash == b.function.info().air_hash
             && a.constants == b.constants
+            && a.specialized == b.specialized
     };
     repeated(&linked.functions)
         .or_else(|| repeated(&linked.binary_functions))

@@ -252,15 +252,15 @@ fn not_precompiled(call: &'static str, f: &LinkedFunction) -> Error {
     invalid(
         call,
         Problem::BinaryFunctions(BinaryFunctionProblem::NotPrecompiled {
-            name: f.function.info().name.to_owned(),
+            name: f.name().to_owned(),
         }),
     )
 }
 
 /// `stage` of a state, with `functions` added to its `binary_functions`, in `call` on `device`;
 /// `supported` is the stage's support flag. Each function must be of `device` and precompiled;
-/// one the stage's `functions` or `binary_functions` already link (the same name, AIR and
-/// constant values) keeps its entry and handle.
+/// one the stage's `functions` or `binary_functions` already link (the same name it links under,
+/// library function, AIR, constant values and specialization) keeps its entry and handle.
 fn added(
     device: &Device,
     call: &'static str,
@@ -294,9 +294,11 @@ fn added(
             return Err(not_precompiled(call, &linked));
         }
         let same = |f: &LinkedFunction| {
-            f.function.info().name == linked.function.info().name
+            f.name() == linked.name()
+                && f.function.info().name == linked.function.info().name
                 && f.function.info().air_hash == linked.function.info().air_hash
                 && f.constants == linked.constants
+                && f.specialized == linked.specialized
         };
         let held = descriptor.linked.functions.iter().any(same)
             || descriptor.linked.binary_functions.iter().any(same);

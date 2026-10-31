@@ -24,7 +24,6 @@
 //! whatever it is, so what it reads past the table's words is the buffer's (robust buffer access
 //! decides it). The consumer encodes a table's words with `bind::table::FunctionTableWords`.
 
-use crate::library::FunctionConstantValues;
 use crate::pipeline::compile::key::LinkedKey;
 use crate::pipeline::descriptor::{LinkedFunction, LinkedFunctions, LinkedList};
 
@@ -63,21 +62,18 @@ fn callable(list: LinkedList<'_>) -> bool {
 
 /// The handle of each of `keys` (a stage's linked functions in field order,
 /// [`LinkedFunctions`]): the callable functions (`functions`, then `binary_functions`) are
-/// numbered in order, one function (its AIR hash, name, and constants) listed twice having one
-/// handle. A function no callable list has has none.
+/// numbered in order, one function (its AIR hash, name, specialized name, specialization, and
+/// constants) listed twice having one handle. A function no callable list has has none.
 pub(crate) fn handles(keys: &[LinkedKey<'_>]) -> Vec<Option<FunctionHandle>> {
-    let mut callable_keys: Vec<(&[u8; 32], &str, &FunctionConstantValues)> = Vec::new();
+    let mut callable_keys: Vec<&LinkedKey<'_>> = Vec::new();
     for k in keys.iter().filter(|k| callable(k.list)) {
-        let id = (&k.air_hash, k.name, k.constants);
-        if !callable_keys.contains(&id) {
-            callable_keys.push(id);
+        if !callable_keys.iter().any(|c| c.same_function(k)) {
+            callable_keys.push(k);
         }
     }
     keys.iter()
         .map(|k| {
-            let at = callable_keys
-                .iter()
-                .position(|&(h, n, c)| h == &k.air_hash && n == k.name && c == k.constants)?;
+            let at = callable_keys.iter().position(|c| c.same_function(k))?;
             FunctionHandle::nth(at)
         })
         .collect()
@@ -90,13 +86,10 @@ impl LinkedFunctions {
     /// placed in a table).
     pub fn function_handle(&self, f: &LinkedFunction) -> Option<FunctionHandle> {
         let keys = crate::pipeline::compile::linked_keys(self);
-        let info = f.function.info();
-        let at = keys.iter().position(|k| {
-            callable(k.list)
-                && k.air_hash == info.air_hash
-                && k.name == info.name
-                && *k.constants == f.constants
-        })?;
+        let wanted = crate::pipeline::compile::linked_key(LinkedList::Functions, f);
+        let at = keys
+            .iter()
+            .position(|k| callable(k.list) && k.same_function(&wanted))?;
         handles(&keys).get(at).copied().flatten()
     }
 }
@@ -105,6 +98,7 @@ impl LinkedFunctions {
 mod tests {
     use super::*;
     use crate::bind::FunctionTableWords;
+    use crate::library::FunctionConstantValues;
 
     fn key<'a>(
         list: LinkedList<'a>,
@@ -115,6 +109,8 @@ mod tests {
         LinkedKey {
             list,
             name,
+            specialized_name: None,
+            specialized: false,
             air_hash: [hash; 32],
             constants,
         }
