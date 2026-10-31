@@ -385,11 +385,12 @@ fn llvm_text_is_assembled_by_llvm_as() {
         eprintln!("SKIPPED: llvm-as not on PATH and METAL2VULKAN_LLVM_AS unset");
         return;
     };
-    // The kernel reads a function constant: compiling asks for it, and its value compiles.
+    // The kernel reads a function constant: it compiles with the constant undefined, as Metal's
+    // does, and with its value.
     let result = cli(&scratch, &args, &[("METAL2VULKAN_LLVM_AS", &llvm_as)]);
-    let stderr = text(&result.stderr);
-    assert_eq!(result.status.code(), Some(2), "{stderr}");
-    assert!(stderr.contains("--constant 0:TYPE:VALUE"), "{stderr}");
+    assert!(result.status.success(), "{}", text(&result.stderr));
+    assert!(output.exists());
+    std::fs::remove_file(&output).unwrap();
     let mut supplied = args.to_vec();
     supplied.extend([os("--constant"), os("0:uint4:1,2,3,4")]);
     let result = cli(&scratch, &supplied, &[("METAL2VULKAN_LLVM_AS", &llvm_as)]);
