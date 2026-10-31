@@ -12,7 +12,13 @@
 //!   it did not. At 4x, the fullscreen triangle zeroes every sample of color 1, stored and
 //!   resolved, and the half zeroes its covered samples, which the resolve averages with the
 //!   green of the others; and in the consumer's pass (both colors 4x memoryless, color 0
-//!   resolved, color 1 stored `DontCare`) color 0 resolves white.
+//!   resolved, color 1 stored `DontCare`) color 0 resolves white. A fragment function that
+//!   writes such a color itself leaves the same zeros there: `fc_fragment_gated_color` with its
+//!   second output on (red to color 1) through a pipeline of color 0 alone, the half and, at 4x,
+//!   the fullscreen triangle resolved (measured on an M3 Max under macOS 27.0.1 with
+//!   `metal2vulkan-conformance/probes/written_color_the_pipeline_lacks.m`, over 8-bit, `half`,
+//!   `uint` and `int` formats, written in their own numeric class and in another, cleared and
+//!   loaded).
 //! - **A color of the pipeline the pass lacks** is dropped: `fc_fragment_gated_color` with both
 //!   outputs on, in a pass of color 0 alone, stores in color 0 what the same function with its
 //!   second output off stores.
@@ -322,6 +328,69 @@ fn a_pass_color_the_pipeline_lacks_is_zeroed_where_a_draw_covers_it() {
         "the consumer's pass on {name}"
     );
     eprintln!("a pass color the pipeline lacks on {name}: zeroed where covered, as Metal");
+    quiet(lane, &messages);
+}
+
+/// A color of the pass the pipeline lacks holds the same zeros where the fragment function writes
+/// it itself (the module docs): `fc_fragment_gated_color` with its second output on, red to
+/// color 1, through a pipeline of color 0 alone.
+#[test]
+fn a_pass_color_the_pipeline_lacks_is_zeroed_where_the_function_writes_it() {
+    let (messages, _cache, lane) = lane();
+    let name = lane.device.name().to_owned();
+    let writing = |vertex, samples| Pipe {
+        vertex,
+        fragment: Some(Fragment::Gated { second: true }),
+        colors: &[RGBA8],
+        blend: false,
+        samples,
+    };
+    let half = pipeline(&lane, &writing("rt6_resolve_half", 1)).unwrap();
+    let (color0, color1) = (target(&lane, ONE), target(&lane, ONE));
+    draw(
+        &lane,
+        &pass(&[
+            (&color0, black(), StoreAction::Store, None),
+            (&color1, green(), StoreAction::Store, None),
+        ]),
+        &[&half],
+    );
+    let drawn = texels(&lane, &color0);
+    let zeroed = texels(&lane, &color1);
+    let covered: Vec<bool> = drawn.iter().map(|t| t[3] == 0xff).collect();
+    let count = covered.iter().filter(|&&c| c).count();
+    assert!(
+        (6..=10).contains(&count),
+        "the half on {name}: {drawn:02x?}"
+    );
+    for (i, (&c, t)) in covered.iter().zip(&zeroed).enumerate() {
+        let want = if c { [0; 4] } else { [0, 0xff, 0, 0xff] };
+        assert_eq!(*t, want, "color 1's texel {i} on {name}: {zeroed:02x?}");
+    }
+    // 4x: the fullscreen triangle zeroes every sample of color 1, resolved.
+    let full4 = pipeline(&lane, &writing("rt6_resolve_full", 4)).unwrap();
+    let (msaa0, msaa1) = (target(&lane, MSAA), target(&lane, MSAA));
+    let (resolved0, resolved1) = (target(&lane, ONE), target(&lane, ONE));
+    draw(
+        &lane,
+        &pass(&[
+            (
+                &msaa0,
+                black(),
+                StoreAction::MultisampleResolve,
+                Some(&resolved0),
+            ),
+            (
+                &msaa1,
+                green(),
+                StoreAction::MultisampleResolve,
+                Some(&resolved1),
+            ),
+        ]),
+        &[&full4],
+    );
+    assert_eq!(texels(&lane, &resolved1), vec![[0; 4]; 16], "4x on {name}");
+    eprintln!("a pass color the pipeline lacks, written on {name}: zeroed where covered, as Metal");
     quiet(lane, &messages);
 }
 

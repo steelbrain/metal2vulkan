@@ -9,8 +9,8 @@
 //!   an output there of the format's numeric class (`float`, `uint`, `int`), four lanes; its
 //!   pipeline has the attachment in that format, every channel written, unblended; and its plan
 //!   settles on itself. Without the colors the variant asks for the base again.
-//! - A function that writes a color it would zero is not lowered (what Metal stores there is
-//!   unmeasured), refused at the entry's metadata tied to that color attachment.
+//! - A function that writes a color it would zero stores the zero there in place of its own
+//!   value, as plain Metal does (a Metal probe): its one output at that color is the zero's.
 //! - A render plan whose shape drops colors (`VariantKey::dropped_colors`: the pipeline's colors
 //!   the pass lacks) states the variant, which the base pipeline does not draw; compiled, it
 //!   passes L3, states `RuntimeFact::DroppedColor` for each color, written or not, and its
@@ -24,7 +24,7 @@ use std::path::Path;
 use crate::bind::{BindState, DrawCall};
 use crate::budget::Budget;
 use crate::device::{Device, DeviceDescription, DevicePolicy};
-use crate::error::{Attachment, BindError, Error, Feature, LowerFamily, Unsupported};
+use crate::error::BindError;
 use crate::library::Library;
 use crate::metal::PixelFormat;
 use crate::pipeline::descriptor::{
@@ -185,44 +185,50 @@ fn a_draw_into_colors_the_pipeline_lacks_runs_the_variant_writing_zero() {
 }
 
 /// A fragment function writing a color it would zero (`stage_io_fragment` writes colors 0 and
-/// 2) is not lowered; zeroing another of its colors is.
+/// 2, color 2 a `uint4`) stores the zero there in place of its own value, as plain Metal does: its
+/// one output at color 2 is the zero's, of the zeroed format's numeric class (a `float` one too,
+/// beside the `uint4` the function writes), and color 0 keeps its own output.
 #[test]
-fn a_function_writing_a_color_it_would_zero_is_not_lowered() {
+fn a_function_writing_a_color_it_would_zero_stores_the_zero_there() {
     let Some(bc) = fixture("stage_io") else {
         return;
     };
     let dev = Device::new(description("lavapipe"), DevicePolicy::default()).expect("device");
     let p = dev.profile();
-    let mut inputs = LoweringInputs::new();
-    inputs.zeroed_colors = BTreeMap::from([(2, PixelFormat::RGBA32Uint)]);
-    let refused = compile_with(&bc, "stage_io_fragment", p, &inputs).map(|_| ());
-    if let Err(Error::Unsupported(u)) = &refused {
-        let at = u.location.as_ref().expect("located");
-        assert_eq!(at.attachment(), Some(Attachment::Color(2)), "{at:?}");
-        let (entry, arg, _) = at.in_metadata().expect("at the entry's metadata");
-        assert_eq!(
-            (entry.map(|e| e.to_string()), arg),
-            (Some("stage_io_fragment".to_string()), None)
+    for (format, numeric) in [
+        (PixelFormat::RGBA32Uint, IoNumeric::Uint),
+        (PixelFormat::RGBA8Unorm, IoNumeric::Float),
+    ] {
+        let mut inputs = LoweringInputs::new();
+        inputs.zeroed_colors = BTreeMap::from([(2, format)]);
+        let a = compile_with(&bc, "stage_io_fragment", p, &inputs)
+            .unwrap_or_else(|e| panic!("{format:?}: {e}"));
+        let at = |color| {
+            a.interface
+                .io
+                .outputs
+                .iter()
+                .filter(|o| {
+                    o.role
+                        == IoRole::Color {
+                            attachment: color,
+                            index: 0,
+                        }
+                })
+                .collect::<Vec<_>>()
+        };
+        let zero = at(2);
+        assert!(
+            matches!(zero.as_slice(), [o] if o.ty.numeric == numeric && o.ty.components == 4),
+            "{format:?}: {zero:?}"
         );
+        let own = at(0);
+        assert!(
+            matches!(own.as_slice(), [o] if o.ty.numeric == IoNumeric::Float),
+            "{format:?}: {own:?}"
+        );
+        assert!(a.interface.io.unattached_colors.is_empty(), "{format:?}");
     }
-    let refused = match refused {
-        Err(Error::Unsupported(u)) => Err(Error::Unsupported(Unsupported {
-            location: None,
-            ..u
-        })),
-        other => other,
-    };
-    assert_eq!(
-        refused,
-        Err(Unsupported::not_implemented(Feature::Lowering(LowerFamily::StageIo)).into())
-    );
-    inputs.zeroed_colors = BTreeMap::from([(1, PixelFormat::RGBA8Unorm)]);
-    let a = compile_with(&bc, "stage_io_fragment", p, &inputs).expect("zeroing color 1");
-    assert!(a.interface.io.outputs.iter().any(|o| o.role
-        == IoRole::Color {
-            attachment: 1,
-            index: 0
-        }));
 }
 
 /// A draw whose pass lacks colors the pipeline has: the variant that drops what the fragment

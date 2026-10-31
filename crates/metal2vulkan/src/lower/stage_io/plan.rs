@@ -876,23 +876,15 @@ enum AmplifiedIndex {
 /// variable at that color of the format's numeric class, four lanes, stored zero at every return
 /// (`StageIoPlan::zeroed`). Its interface lists it as the color's output, so link gives the
 /// attachment a write of every channel. Zero is every format's zero code, so no lane rounds; the
-/// map of the attachment's color writes is recorded as a written attachment's is. A function
-/// that writes or reads `color` itself is not lowered (what Metal does there is unmeasured).
+/// map of the attachment's color writes is recorded as a written attachment's is. What the
+/// function writes to `color` itself is stored nowhere: plain Metal stores the zero there all the
+/// same (a Metal probe). A function that reads `color` is not lowered (what Metal reads there is
+/// unmeasured).
 fn zeroed_output(
     cx: &mut SelectCx<'_>,
-    outputs: &[OutputBinding],
     color: u32,
     format: crate::metal::PixelFormat,
 ) -> Result<(), Error> {
-    let writes = outputs.iter().any(|o| {
-        matches!(
-            o.role,
-            OutputRole::RenderTarget {
-                attachment: AbiInt::Const(a),
-                ..
-            } if a == color
-        )
-    });
     let reads = cx.entry.ep.params.iter().any(|b| {
         matches!(
             b.role,
@@ -902,7 +894,7 @@ fn zeroed_output(
             } if a == color
         )
     });
-    if writes || reads {
+    if reads {
         return Err(not_lowered());
     }
     // What Metal stores into an extended-range attachment the pipeline lacks is unmeasured (its
@@ -2178,13 +2170,16 @@ pub fn entry(cx: &mut SelectCx<'_>) -> Result<(), Error> {
         }
         // An output to a color the pass lacks is stored nowhere, as plain Metal drops it: no
         // output variable, so the pipeline writes no location without an attachment. So is one to a
-        // color the pipeline has no attachment for.
+        // color the pipeline has no attachment for, and one to a color of the pass the pipeline
+        // lacks, where plain Metal stores zero bytes whatever the function writes (a Metal probe):
+        // the zero `zeroed_output` writes there is the color's output.
         if let OutputRole::RenderTarget { attachment, .. } = &o.role {
-            if !dropped.is_empty() || !unattached.is_empty() {
+            if !dropped.is_empty() || !unattached.is_empty() || !cx.inputs.zeroed_colors.is_empty()
+            {
                 let AbiInt::Const(color) = attachment else {
                     return Err(not_lowered());
                 };
-                if dropped.contains(color) {
+                if dropped.contains(color) || cx.inputs.zeroed_colors.contains_key(color) {
                     continue;
                 }
                 if unattached.contains(color) {
@@ -2456,7 +2451,7 @@ pub fn entry(cx: &mut SelectCx<'_>) -> Result<(), Error> {
     if cx.stage == Stage::Fragment {
         let zeroed = cx.inputs.zeroed_colors.clone();
         for (color, format) in zeroed {
-            zeroed_output(cx, &outputs, color, format)
+            zeroed_output(cx, color, format)
                 .map_err(|e| e.at_attachment(Attachment::Color(color)))?;
         }
     }

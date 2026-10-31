@@ -449,9 +449,10 @@ pub struct LoweringInputs {
     /// (`VariantKey::zeroed_colors`): plain Metal stores zero bytes into each at every sample a
     /// draw covers (Metal probes). The function writes zero to each, through an output variable of
     /// the format's numeric class at that color, at every return; the pipeline compiled under the
-    /// key gives each attachment that format, written whole and unblended. A function that writes
-    /// or reads such a color itself is `NotImplemented` (unmeasured). Any other function compiles
-    /// as without it.
+    /// key gives each attachment that format, written whole and unblended. What the function
+    /// writes to such a color itself is stored nowhere, as plain Metal stores the zero there all
+    /// the same (a Metal probe); a function that reads such a color is `NotImplemented`
+    /// (unmeasured). Any other function compiles as without it.
     #[cfg_attr(feature = "serde", serde(default))]
     pub zeroed_colors: BTreeMap<u32, metal::PixelFormat>,
     /// Color attachments the fragment function's render pipeline has a pixel format for and the
