@@ -441,10 +441,7 @@ impl From<&Error> for Outcome {
                 }
             }
             Error::NeedsInput(input) => Outcome::NeedsInput {
-                kind: match input {
-                    RuntimeInput::FunctionConstant { .. } => "function_constant".into(),
-                    other => bounded(variant_path(&format!("{other:?}"), 1)),
-                },
+                kind: bounded(variant_path(&format!("{input:?}"), 1)),
             },
             Error::InvalidInput(e) => Outcome::InvalidInput {
                 kind: variant_path(&format!("{:?}", e.kind), 2),
@@ -1299,9 +1296,9 @@ mod tests {
                 "Int64Atomics needs Feature(ShaderInt64)",
             ),
             (
-                Error::NeedsInput(RuntimeInput::FunctionConstant { index: 3 }),
+                Error::NeedsInput(RuntimeInput::VertexDescriptor { attribute: 3 }),
                 "needs_input",
-                "function_constant",
+                "VertexDescriptor",
             ),
             (
                 Error::InvalidDescriptor(DescriptorError::EntryNotFound {

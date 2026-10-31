@@ -1,5 +1,5 @@
-//! A function constant reached through any pointer path is the same constant: omitted, it needs a
-//! value wherever its use survives; supplied, its value is what the shader reads.
+//! A function constant reached through any pointer path is the same constant: omitted, it is
+//! undefined and the function compiles; supplied, its value is what the shader reads.
 //!
 //! The old engine's `tests/function_constant_pointers.rs` (deleted with it in 0.2.0) pinned this
 //! for the paths a front end and
@@ -7,10 +7,10 @@
 //! takes the constant's address, and an address kept in a private slot. Before, a path the
 //! specializer did not follow left the load in place and the module read an undefined constant.
 //! The engine specializes in `air::canon`, whose own tests use a direct load
-//! (`a_surviving_value_use_of_an_unsupplied_constant_needs_input`); these tests run each path
+//! (`a_surviving_value_of_an_unsupplied_constant_is_zero`); these tests run each path
 //! through the public API:
 //!
-//! - Without a value, each path is `NeedsInput(FunctionConstant { index: 7 })`.
+//! - Without a value, each path compiles.
 //! - With the values 0 and 29, each path compiles, and what the two compiles read differs. Four
 //!   paths fold the value into the module's words. The address kept in a private slot does not
 //!   fold: the module reads the constant through the constant blob, whose bytes carry the supplied
@@ -27,7 +27,7 @@ use std::path::Path;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use crate::device::{Device, DeviceDescription, DevicePolicy};
-use crate::error::{Error, RuntimeInput};
+use crate::error::Error;
 use crate::library::{FunctionConstantValue, FunctionConstantValues, Library};
 use crate::metal::DataType;
 use crate::pipeline::testing::{link_standalone, llvm_assemble, AssembleError};
@@ -175,15 +175,14 @@ fn compile(bitcode: &[u8], device: &Device, values: Option<&[u32]>) -> Result<Ou
 }
 
 #[test]
-fn every_pointer_path_needs_the_omitted_constant_and_reads_the_supplied_one() {
+fn every_pointer_path_compiles_the_omitted_constant_and_reads_the_supplied_one() {
     let device = device();
     for (label, body, helper) in PATHS {
         let Some(bitcode) = assemble(&source(2, body, helper)) else {
             return;
         };
-        match compile(&bitcode, &device, None) {
-            Err(Error::NeedsInput(RuntimeInput::FunctionConstant { index: 7 })) => {}
-            other => panic!("{label}: an omitted constant must need its value: {other:?}"),
+        if let Err(e) = compile(&bitcode, &device, None) {
+            panic!("{label}: an omitted constant is undefined, not refused: {e:?}");
         }
         let outputs: Vec<Output> = [0u32, 29]
             .iter()

@@ -809,11 +809,6 @@ pub enum Feature {
 /// An input the request did not supply.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum MissingInput {
-    /// A value use of an unsupplied function constant survived SCCP.
-    FunctionConstant {
-        /// The constant's index.
-        index: u32,
-    },
     /// A call through a visible-function reference (`!air.visible_function_references`)
     /// survived specialization, and no linked function has the name it references. `symbol` is that
     /// name.

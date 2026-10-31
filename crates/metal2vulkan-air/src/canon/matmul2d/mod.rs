@@ -661,7 +661,6 @@ pub(super) fn expand(
         &mut parts.consts,
         func,
         m,
-        |_, _| Ok(()),
     )?
     .ok_or_else(|| invariant("a lowered matmul2d call was not inlined"))?;
     Ok((inlined, lanes))

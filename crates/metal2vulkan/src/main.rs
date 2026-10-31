@@ -420,9 +420,6 @@ fn constant_values(constants: &[(String, FunctionConstantValue)]) -> FunctionCon
 /// A compile error as a failure, naming the option that supplies a missing pipeline input.
 fn refusal(error: Error) -> Failure {
     let hint = match &error {
-        Error::NeedsInput(RuntimeInput::FunctionConstant { index }) => {
-            format!("; supply it with --constant {index}:TYPE:VALUE")
-        }
         Error::NeedsInput(RuntimeInput::StageInputDescriptor { .. }) => {
             "; supply a stage-input descriptor with --stage-input".to_string()
         }

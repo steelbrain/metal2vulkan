@@ -1151,18 +1151,10 @@ match floor.compile_function(&min_lod, &LoweringInputs::new(), &Budget::standard
 state names it (`location.attachment()`). [REFUSALS.md](REFUSALS.md) lists every refusal in the
 code, with its device condition.
 
-A compile that needs an input asks for it (`Error::NeedsInput`) instead of guessing: a
-function-constant value, a storage texture's format, a linked function, a kernel's stage-input
-descriptor. Supply it and compile again:
-
-```rust
-match device.compile_compute_pipeline(&descriptor, &budget) {
-    Err(Error::NeedsInput(RuntimeInput::FunctionConstant { index })) => {
-        let words = [1u32, 2, 3, 4].map(u32::to_le_bytes).concat();
-        let value = FunctionConstantValue::new(DataType::UInt4, words);
-        kernel.constants = FunctionConstantValues::defaults().with_index(index, value);
-    }
-```
+A compile that needs an input asks for it (`Error::NeedsInput`) instead of guessing: a storage
+texture's format, a linked function, a kernel's stage-input descriptor. Supply it and compile
+again. A function-constant value is no such input: a constant the request leaves undefined
+compiles, as plain Metal's does (section 10, "Function constants").
 
 A storage texture's format (`RuntimeInput::StorageTextureFormat { slot }`) comes from what is
 bound: `metal::format::storage_image_choice(pixel_format, device.profile())`, placed in a
@@ -3673,6 +3665,16 @@ each item named states the rule in full.
 - **A sparse texture on a device without shader residency holds all its texels' memory.**
 - **A heap's buffer and texture over the same bytes alias them, in the device's layout**, not
   Apple's tiled or compressed one.
+
+**Function constants**
+
+- **A function constant the request leaves undefined reads as zero.** A value computed from it
+  alone is its type's zero (an `and`, `or` or `mul` with a constant that decides it is that
+  constant), and a branch or `select` on one takes its false way; a value it meets with one the
+  run computes is computed with that zero. As Metal's, `is_function_constant_defined` is false for
+  it and an argument gated on it, negated or not, is absent. Metal makes the same pipeline, and its
+  reads of the constant vary from read to read: on an M3 Max under macOS 27.0.1 it read `u + 3` as
+  0, `u * 7 + 1` as 1, `u == 0 ? 111 : 222` as 222 and `b ? 5 : 6` as 5.
 
 **Kernels**
 

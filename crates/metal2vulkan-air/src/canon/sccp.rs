@@ -7,11 +7,18 @@
 //! - `air.is_function_constant_defined(@g)` folds to whether `@g`'s constant was supplied, and a
 //!   load from a bound (supplied) function constant folds to its value, like any load from a
 //!   constant global with a known initializer.
-//! - A value computed from an **unsupplied** function constant is [`Lat::Fc`]: the constant is
-//!   undefined, and the taint sticks through every pure operation. Pure uses of it may be deleted
-//!   when their result is unused (they become `undef`), but any other use surviving SCCP (a branch
-//!   on it, a store of it, a call argument, a return value) is
-//!   `Error::NeedsInput(FunctionConstant{index})`.
+//! - A value computed from an **unsupplied** function constant alone (with constants) is
+//!   [`Lat::Fc`]: the constant is undefined, and so is every pure operation on it but these: an
+//!   `and` with zero, an `or` with all ones and a `mul` by zero are that constant, a `select` on
+//!   an undefined condition is its false arm, and `air.normalize_function_constant_predicate`
+//!   makes it 0. A branch on an undefined condition takes its false way (its zero case or
+//!   default), and a pure instruction computing one is replaced by its type's zero (a pointer is
+//!   kept), so a use that survives (a store of it, a call argument, a return value) reads zero.
+//!   An operation that also reads a value only the run knows, and a PHI, keep what the run
+//!   computes, with that zero for the undefined operand.
+//!   Plain Metal makes such a function's pipeline, and its own
+//!   reads of an undefined constant vary from read to read, zero and the false way among them; its
+//!   predicate gates nothing, whether negated or not (Metal probes).
 //!
 //! Afterwards unreachable blocks are deleted, branches on constants become unconditional, PHIs
 //! keep one entry per remaining edge, and instructions with a constant value are replaced by it.
@@ -25,19 +32,14 @@
 //! pass over the executable entries computes: the worklists see the same values in the same
 //! order, and the fixed point, the folds, and the dead blocks are the same. Every meet, the
 //! index, and both worklists are metered.
-//!
-//! [`entry_block_refusal`] decides the one refusal the entry's own entry block settles before the
-//! entry is inlined, so a module that needs a caller's value there is refused without building its
-//! inlined body.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 
 use crate::budget::{vec_bytes, Meter};
-use crate::error::{AbiError, CanonError, DiagName, InputError, InputErrorKind, Location};
-use crate::error::{Error, MissingInput};
+use crate::error::{AbiError, CanonError, DiagName, Error, InputError, InputErrorKind, Location};
 use crate::intrinsics::{AirIntrinsic, FunctionConstant};
 use crate::ir::{Arena, BlockId, Body, Callee, Const, ConstId, ConstTable, Constant, Global};
-use crate::ir::{ArgIdx, GlobalId, Idx, InstId, InstKind, Value};
+use crate::ir::{ArgIdx, BinOp, GlobalId, Idx, InstId, InstKind, Type, Value};
 
 use super::fold::Folder;
 use super::rewrite::{apply, filled, invariant, scoped, BodyEdit};
@@ -53,14 +55,14 @@ pub(super) struct FcState {
     pub decl: bool,
 }
 
-/// The SCCP lattice. Ordered `Top < Const < Bottom < Fc`: an unsupplied-constant taint is the
-/// strongest fact, because every use of it must be accounted for.
+/// The SCCP lattice, flat: `Top`, then each constant and the undefined value of an unsupplied
+/// constant (`Fc`, one more value), then `Bottom`. Two different values meet as `Bottom`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Lat {
     Top,
     Const(ConstId),
-    Bottom,
     Fc(u32),
+    Bottom,
 }
 
 #[cfg(test)]
@@ -76,10 +78,26 @@ fn meet(a: Lat, b: Lat) -> Lat {
     match (a, b) {
         (Lat::Top, x) | (x, Lat::Top) => x,
         (Lat::Fc(i), Lat::Fc(j)) => Lat::Fc(i.min(j)),
-        (Lat::Fc(i), _) | (_, Lat::Fc(i)) => Lat::Fc(i),
-        (Lat::Bottom, _) | (_, Lat::Bottom) => Lat::Bottom,
         (Lat::Const(x), Lat::Const(y)) if x == y => Lat::Const(x),
-        (Lat::Const(_), Lat::Const(_)) => Lat::Bottom,
+        _ => Lat::Bottom,
+    }
+}
+
+/// Record that the body reads the unsupplied constant `k`.
+fn read(reads: &mut BTreeSet<u32>, k: u32, m: &mut Meter) -> Result<(), Error> {
+    if reads.insert(k) {
+        m.charge(std::mem::size_of::<u32>() * 4)?;
+    }
+    Ok(())
+}
+
+/// What a PHI merges an entry as: an undefined value as `Bottom`. The rewrite makes the entry its
+/// type's zero on its own way, and a value a loop carries is each turn's from the last, not
+/// undefined again, so it must not settle on the undefined value.
+fn merged(l: Lat) -> Lat {
+    match l {
+        Lat::Fc(_) => Lat::Bottom,
+        l => l,
     }
 }
 
@@ -91,19 +109,30 @@ pub(super) struct Context<'a> {
     pub name: DiagName,
 }
 
+/// SCCP's rebuilt body, and the unsupplied constants (by index) whose undefined values it reads:
+/// an instruction it keeps uses one, or a branch or `select` was decided on one.
+#[derive(Debug, PartialEq)]
+pub(super) struct Rebuilt {
+    pub body: Body,
+    pub reads: BTreeSet<u32>,
+}
+
 /// Run SCCP over `body` and rebuild it. The solver's scope ends with its edit, so its tables are
 /// back in the ledger before the new body is built: the rebuild holds only the body it reads,
 /// the edit, and the body it builds (with the solver held too, a 1.9M-instruction body that folds
 /// nothing passed the ledger here).
-pub(super) fn run(body: &Body, cx: &mut Context<'_>, m: &mut Meter) -> Result<Body, Error> {
+pub(super) fn run(body: &Body, cx: &mut Context<'_>, m: &mut Meter) -> Result<Rebuilt, Error> {
     let out = scoped(m, |m, edit_held| {
-        let edit = scoped(m, |m, held| {
+        let (edit, reads) = scoped(m, |m, held| {
             let mut s = Solver::new(body, cx, m, held)?;
             s.solve(cx, m, held)?;
             s.check(cx)?;
             s.edit(cx, m, edit_held)
         })?;
-        apply(body, &edit, &|c| c, m)
+        Ok(Rebuilt {
+            body: apply(body, &edit, &|c| c, m)?,
+            reads,
+        })
     });
     // Every SCCP a unit test runs is also solved by meeting each PHI's entries in full at every
     // visit, as before, and must agree.
@@ -116,8 +145,7 @@ pub(super) fn run(body: &Body, cx: &mut Context<'_>, m: &mut Meter) -> Result<Bo
 /// constants bound so far settle it, or make it one constant, or leave it to run time.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum Fact {
-    /// It is computed from an unsupplied constant, whose first use that is not pure SCCP
-    /// refuses.
+    /// It is computed from an unsupplied constant alone: undefined.
     Settled,
     /// It is this constant on every run that reaches it.
     Const(ConstId),
@@ -145,12 +173,12 @@ impl Facts {
 ///
 /// The fixpoint treats the result of each call the body still makes as varying, so a call that
 /// is inlined later can only refine the values its result reaches. A value it reaches computed
-/// from an unsupplied constant is settled. A value it does not reach varies: a block no edge
+/// from an unsupplied constant alone is settled. A value it does not reach varies: a block no edge
 /// reaches yet (a recursive function's copy, before its machine is assembled) or one only a branch
 /// it cannot decide leads to can run once the body is refined. A constant it finds is a fact only
-/// where its check passes: a branch on an unsupplied constant's value or on `undef` runs neither
-/// way in the fixpoint, so where the check would refuse one, a refinement that unties it can run a
-/// block the fixpoint found not running, and a constant met there can vary.
+/// where its check passes: a branch on `undef` runs neither way in the fixpoint, so where the
+/// check would refuse one, a refinement that unties it can run a block the fixpoint found not
+/// running, and a constant met there can vary.
 pub(super) fn facts(
     body: &Body,
     cx: &mut Context<'_>,
@@ -255,8 +283,8 @@ fn const_taint(
     }
 }
 
-/// Whether `kind` is `air.normalize_function_constant_predicate`, which SCCP folds: an undefined
-/// operand is a use it accounts for, not one that needs the caller's value.
+/// Whether `kind` is `air.normalize_function_constant_predicate`, which SCCP folds, an undefined
+/// operand to 0.
 fn is_normalize(kind: &InstKind) -> bool {
     matches!(
         kind,
@@ -273,10 +301,9 @@ fn is_normalize(kind: &InstKind) -> bool {
 /// What the lattice value of a branch condition decides.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Decision {
-    /// Not known yet (`Top`), or tainted by an unsupplied constant (`check` refuses it): no
-    /// edge is executable yet.
+    /// Not known yet (`Top`): no edge is executable yet.
     Wait,
-    /// A known integer: exactly one successor.
+    /// A known integer, or 0 for an undefined one (the false way): exactly one successor.
     Taken(u64),
     /// A literal `undef`/`poison`: no edge; `check` refuses it if the branch is reachable.
     Undef,
@@ -487,7 +514,7 @@ impl Phis {
         m.tick(units(entries.len()))?;
         for &(s, v) in entries {
             if let Some(a) = self.acc.get_mut(s as usize) {
-                *a = meet(*a, lat_of(val, taint, v));
+                *a = meet(*a, merged(lat_of(val, taint, v)));
             }
         }
         Ok(())
@@ -507,7 +534,7 @@ impl Phis {
         for &(s, e) in entries {
             if self.open.get(e as usize).copied().unwrap_or(false) {
                 if let Some(a) = self.acc.get_mut(s as usize) {
-                    *a = meet(*a, now);
+                    *a = meet(*a, merged(now));
                 }
             }
         }
@@ -646,7 +673,8 @@ impl<'b> Solver<'b> {
     /// What branching on `v` decides.
     fn decide(&self, v: Value, cx: &Context<'_>) -> Decision {
         match self.lat(v) {
-            Lat::Top | Lat::Fc(_) => Decision::Wait,
+            Lat::Top => Decision::Wait,
+            Lat::Fc(_) => Decision::Taken(0),
             Lat::Bottom => Decision::All,
             Lat::Const(k) => match cx.folder.int(k) {
                 Some(x) => Decision::Taken(x),
@@ -791,7 +819,10 @@ impl<'b> Solver<'b> {
             }
         }
         Ok(if let Some(i) = fc {
-            Lat::Fc(i)
+            match any_bottom {
+                true => Lat::Bottom,
+                false => Lat::Fc(i),
+            }
         } else if any_top {
             Lat::Top
         } else if any_bottom {
@@ -799,6 +830,23 @@ impl<'b> Solver<'b> {
         } else {
             fold(&mut cx.folder, &consts, m)?.map_or(Lat::Bottom, Lat::Const)
         })
+    }
+
+    /// `a op b` with one operand undefined, where the other can decide it: that operand when it
+    /// does ([`Folder::absorbs`]), and unknown while it is. `None` for every other pair.
+    fn absorbed(&self, op: BinOp, a: Value, b: Value, cx: &Context<'_>) -> Option<Lat> {
+        if !matches!(op, BinOp::And | BinOp::Or | BinOp::Mul) {
+            return None;
+        }
+        match (self.lat(a), self.lat(b)) {
+            (Lat::Fc(_), Lat::Top) | (Lat::Top, Lat::Fc(_)) => Some(Lat::Top),
+            (Lat::Fc(_), Lat::Const(k)) | (Lat::Const(k), Lat::Fc(_))
+                if cx.folder.absorbs(op, k) =>
+            {
+                Some(Lat::Const(k))
+            }
+            _ => None,
+        }
     }
 
     fn visit(
@@ -823,10 +871,13 @@ impl<'b> Solver<'b> {
         let new = match &inst.kind {
             InstKind::BinOp { op, a, b, .. } => {
                 let op = *op;
-                self.pure(&[*a, *b], cx, m, |f, c, m| match c {
-                    [x, y] => f.binop(op, ty, *x, *y, m),
-                    _ => Ok(None),
-                })?
+                match self.absorbed(op, *a, *b, cx) {
+                    Some(lat) => lat,
+                    None => self.pure(&[*a, *b], cx, m, |f, c, m| match c {
+                        [x, y] => f.binop(op, ty, *x, *y, m),
+                        _ => Ok(None),
+                    })?,
+                }
             }
             InstKind::ICmp { pred, a, b } => {
                 let pred = *pred;
@@ -884,15 +935,19 @@ impl<'b> Solver<'b> {
                     _ => Ok(None),
                 })?
             }
-            InstKind::Gep { base, indices, .. } => {
-                let mut ops = Vec::with_capacity(indices.len() + 1);
-                ops.push(*base);
-                ops.extend_from_slice(indices);
-                self.pure(&ops, cx, m, never)?
-            }
+            InstKind::Gep { base, indices, .. } => match self.lat(*base) {
+                // An address in an unsupplied constant's global, whatever its indices.
+                Lat::Fc(i) => Lat::Fc(i),
+                _ => {
+                    let mut ops = Vec::with_capacity(indices.len() + 1);
+                    ops.push(*base);
+                    ops.extend_from_slice(indices);
+                    self.pure(&ops, cx, m, never)?
+                }
+            },
             InstKind::Select { c, t, f, .. } => match self.lat(*c) {
                 Lat::Top => Lat::Top,
-                Lat::Fc(i) => Lat::Fc(i),
+                Lat::Fc(_) => self.lat(*f),
                 Lat::Const(k) => match cx.folder.int(k) {
                     Some(1) => self.lat(*t),
                     Some(0) => self.lat(*f),
@@ -995,8 +1050,9 @@ impl<'b> Solver<'b> {
         self.set(i, new, m, held)
     }
 
-    /// After the fixpoint: every reachable non-pure use of an unsupplied constant needs the
-    /// caller's value, and a reachable branch on a literal `undef`/`poison` is refused.
+    /// After the fixpoint: a reachable `air.is_function_constant_defined` of anything but a
+    /// declared constant is refused (`BadValue`), and so is a reachable branch on a literal
+    /// `undef`/`poison`.
     fn check(&self, cx: &Context<'_>) -> Result<(), Error> {
         let at = |b: BlockId, i: InstId| {
             Location::function(cx.name.clone(), Some(b.raw()), Some(i.raw()))
@@ -1031,18 +1087,49 @@ impl<'b> Solver<'b> {
                         )));
                     }
                 }
-                let mut needs = None;
-                inst.kind.for_each_value(|v| {
-                    if let Lat::Fc(index) = self.lat(v) {
-                        needs.get_or_insert(index);
-                    }
-                });
-                if let Some(index) = needs {
-                    return Err(Error::NeedsInput(MissingInput::FunctionConstant { index }));
-                }
             }
         }
         Ok(())
+    }
+
+    /// Whether `b`'s edge to `dest` is its only executable one among `succs`. A condition that
+    /// was a constant and then undefined opened its first way too; that branch stays.
+    fn only_edge(
+        &self,
+        b: BlockId,
+        dest: BlockId,
+        succs: impl IntoIterator<Item = BlockId>,
+    ) -> bool {
+        succs
+            .into_iter()
+            .all(|s| s == dest || !self.edges.contains(&(b, s)))
+    }
+
+    /// Record in `reads` each unsupplied constant whose undefined value a kept instruction of
+    /// block `b` uses (a PHI, only over an executable edge).
+    fn reads_of(
+        &self,
+        b: BlockId,
+        kind: &InstKind,
+        reads: &mut BTreeSet<u32>,
+        m: &mut Meter,
+    ) -> Result<(), Error> {
+        let mut found = Vec::new();
+        match kind {
+            InstKind::Phi { incoming, .. } => {
+                for &(v, p) in incoming.iter() {
+                    if let (true, Lat::Fc(k)) = (self.edges.contains(&(p, b)), self.lat(v)) {
+                        found.push(k);
+                    }
+                }
+            }
+            _ => kind.for_each_value(|v| {
+                if let Lat::Fc(k) = self.lat(v) {
+                    found.push(k);
+                }
+            }),
+        }
+        found.into_iter().try_for_each(|k| read(reads, k, m))
     }
 
     fn edit(
@@ -1050,8 +1137,9 @@ impl<'b> Solver<'b> {
         cx: &mut Context<'_>,
         m: &mut Meter,
         held: &mut usize,
-    ) -> Result<BodyEdit, Error> {
+    ) -> Result<(BodyEdit, BTreeSet<u32>), Error> {
         let mut edit = BodyEdit::keep_all(self.body, m, held)?;
+        let mut reads = BTreeSet::new();
         for (slot, &e) in edit.keep.iter_mut().zip(&self.exec) {
             *slot = e;
         }
@@ -1072,28 +1160,36 @@ impl<'b> Solver<'b> {
                     || is_defined_arg(&inst.kind, cx.folder.consts, cx.fcs).is_some();
                 match (&inst.kind, lat) {
                     (_, Lat::Const(c)) if deletable => edit.replace(i, Value::Const(c)),
-                    (_, Lat::Fc(_)) if deletable => {
-                        let undef = cx.folder.consts.intern(
+                    // An undefined value is its type's zero; an address computed from a constant's
+                    // global still names the global.
+                    (_, Lat::Fc(_))
+                        if deletable
+                            && !matches!(cx.folder.types.get(inst.ty), Some(Type::Ptr { .. })) =>
+                    {
+                        let zero = cx.folder.consts.intern(
                             Constant {
                                 ty: inst.ty,
-                                value: Const::Undef,
+                                value: Const::Null,
                             },
                             m,
                         )?;
-                        edit.replace(i, Value::Const(undef));
+                        edit.replace(i, Value::Const(zero));
                     }
-                    (InstKind::Select { c, t, f, .. }, _) => {
-                        if let Lat::Const(k) = self.lat(*c) {
-                            match cx.folder.int(k) {
-                                Some(1) => edit.replace(i, *t),
-                                Some(0) => edit.replace(i, *f),
-                                _ => {}
-                            }
-                        }
-                    }
+                    (InstKind::Select { c, t, f, .. }, _) => match self.lat(*c) {
+                        Lat::Const(k) => match cx.folder.int(k) {
+                            Some(1) => edit.replace(i, *t),
+                            Some(0) => edit.replace(i, *f),
+                            _ => {}
+                        },
+                        Lat::Fc(_) => edit.replace(i, *f),
+                        Lat::Top | Lat::Bottom => {}
+                    },
                     (InstKind::CondBr { c, t, f, hints }, _) => {
                         if let Decision::Taken(x) = self.decide(*c, cx) {
                             let dest = if x == 0 { *f } else { *t };
+                            if !self.only_edge(b, dest, [*t, *f]) {
+                                continue;
+                            }
                             edit.rewrite.insert(
                                 i,
                                 InstKind::Br {
@@ -1117,6 +1213,11 @@ impl<'b> Solver<'b> {
                                 .iter()
                                 .find(|&&(case, _)| case == x)
                                 .map_or(*default, |&(_, d)| d);
+                            let all =
+                                std::iter::once(*default).chain(cases.iter().map(|&(_, d)| d));
+                            if !self.only_edge(b, dest, all) {
+                                continue;
+                            }
                             edit.rewrite.insert(
                                 i,
                                 InstKind::Br {
@@ -1128,179 +1229,25 @@ impl<'b> Solver<'b> {
                     }
                     _ => {}
                 }
+                let replaced = edit.replace.get(i.index()).is_some_and(Option::is_some);
+                match (&inst.kind, replaced) {
+                    // A `select` decided on an undefined condition reads it.
+                    (InstKind::Select { c, .. }, true) => {
+                        if let Lat::Fc(k) = self.lat(*c) {
+                            read(&mut reads, k, m)?;
+                        }
+                    }
+                    // An undefined value kept as itself (an address) reads nothing until its own
+                    // kept uses do.
+                    (_, false) if !matches!(lat, Lat::Fc(_)) => {
+                        self.reads_of(b, &inst.kind, &mut reads, m)?;
+                    }
+                    _ => {}
+                }
             }
         }
-        Ok(edit)
+        Ok((edit, reads))
     }
-}
-
-/// What the entry block alone decides about the lattice value of one of its values.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Taint {
-    /// Not [`Lat::Fc`].
-    Clean,
-    /// [`Lat::Fc`] of this constant.
-    Fc(u32),
-    /// Not decided without folding (a select whose arms differ).
-    Unknown,
-}
-
-impl Taint {
-    /// A pure operation's taint from its operands' ([`Solver::pure`]): the lowest constant among
-    /// the tainted operands, which an undecided operand could lower.
-    fn of_pure(ops: impl Iterator<Item = Taint>) -> Taint {
-        let mut out = Taint::Clean;
-        for t in ops {
-            out = match (out, t) {
-                (Taint::Unknown, _) | (_, Taint::Unknown) => return Taint::Unknown,
-                (Taint::Fc(i), Taint::Fc(j)) => Taint::Fc(i.min(j)),
-                (Taint::Fc(i), Taint::Clean) | (Taint::Clean, Taint::Fc(i)) => Taint::Fc(i),
-                (Taint::Clean, Taint::Clean) => Taint::Clean,
-            };
-        }
-        out
-    }
-
-    /// A select's ([`Solver::visit`]): its condition's taint, else its arms' when they agree
-    /// (the value a folded condition picks, or their meet).
-    fn of_select(c: Taint, t: Taint, f: Taint) -> Taint {
-        match c {
-            Taint::Clean if t == f => t,
-            Taint::Fc(_) => c,
-            Taint::Clean | Taint::Unknown => Taint::Unknown,
-        }
-    }
-}
-
-/// The unsupplied function constant whose value SCCP over the inlined entry is certain to refuse
-/// first, when the entry's own entry block decides it: `Some(index)` exactly when [`Solver::check`]
-/// would return `NeedsInput(FunctionConstant{index})` at an instruction of `body`'s entry block
-/// before its first call that `inlined` says the inliner replaces.
-///
-/// Why the entry's own body decides it. The entry block has no predecessors and always executes.
-/// The inliner keeps its instructions up to that first inlined call, in order, as the start of
-/// the inlined body's first block, which `check` scans first; erasure only deletes no-op pointer
-/// casts, which are pure, and keeps every constant's taint. Those instructions' operands are
-/// arguments, constants, and each other, so their lattice values depend on no callee and on no
-/// other block. Their taint needs no folding (the constant table is only read): a pure result is
-/// tainted by its operands, a select by its condition or else by both arms alike, a normalized
-/// predicate never. The caller runs this once the inliner's own refusals are decided; what
-/// remains before `check` (building the inlined body, erasure, solving) refuses only budget and
-/// invariant failures.
-///
-/// Any instruction whose outcome in `check` the block does not decide ends the scan with `None`,
-/// and SCCP decides: a `BadValue` or `undef`-condition refusal, an operand whose taint is not
-/// decided, or the first inlined call.
-pub(super) fn entry_block_refusal(
-    body: &Body,
-    consts: &ConstTable,
-    fcs: &HashMap<GlobalId, FcState>,
-    inlined: &dyn Fn(&InstKind) -> bool,
-    m: &mut Meter,
-) -> Result<Option<u32>, Error> {
-    scoped(m, |m, held| {
-        let block = body
-            .blocks
-            .get(BlockId::new(0))
-            .copied()
-            .ok_or_else(|| invariant("a body without blocks"))?;
-        // Per instruction of the block, in order: its taint once visited.
-        let mut seen = filled(m, held, block.len(), Taint::Unknown)?;
-        let mut memo = HashMap::new();
-        let mut ops = Vec::new();
-        let mut taints = Vec::new();
-        for (at, i) in block.inst_ids().enumerate() {
-            m.tick(1)?;
-            let inst = body
-                .insts
-                .get(i)
-                .ok_or_else(|| invariant("instruction out of range"))?;
-            if inlined(&inst.kind) {
-                return Ok(None);
-            }
-            ops.clear();
-            inst.kind.for_each_value(|v| ops.push(v));
-            taints.clear();
-            for &v in &ops {
-                taints.push(match v {
-                    Value::Arg(_) => Taint::Clean,
-                    Value::Inst(j) => j
-                        .index()
-                        .checked_sub(block.start.index())
-                        .and_then(|k| seen.get(k).copied())
-                        .unwrap_or(Taint::Unknown),
-                    Value::Const(c) => match taint_of(c, consts, fcs, &mut memo, m, held)? {
-                        Some(index) => Taint::Fc(index),
-                        None => Taint::Clean,
-                    },
-                });
-            }
-            let taint = match is_defined_arg(&inst.kind, consts, fcs) {
-                // `check` refuses the argument as `BadValue` first.
-                Some(None) => return Ok(None),
-                Some(Some(_)) => Taint::Clean,
-                None => match (&inst.kind, taints.as_slice()) {
-                    (InstKind::Select { .. }, &[c, t, f]) => Taint::of_select(c, t, f),
-                    (InstKind::Phi { .. }, _) => Taint::Unknown,
-                    (kind, _) if is_normalize(kind) => Taint::Clean,
-                    (kind, _) if is_pure(kind) => Taint::of_pure(taints.iter().copied()),
-                    // Any other use: `check` refuses its first tainted operand. A tainted branch
-                    // condition waits, so it is not an `undef` condition first.
-                    _ => match taints.iter().find(|&&t| t != Taint::Clean) {
-                        Some(&Taint::Fc(index)) => return Ok(Some(index)),
-                        Some(_) => return Ok(None),
-                        None => Taint::Clean,
-                    },
-                },
-            };
-            if let Some(slot) = seen.get_mut(at) {
-                *slot = taint;
-            }
-        }
-        Ok(None)
-    })
-}
-
-/// [`const_taint`] of constant `c`, its operands first. An explicit stack, since constants nest
-/// deeply; `memo` keeps each constant's once computed.
-fn taint_of(
-    c: ConstId,
-    consts: &ConstTable,
-    fcs: &HashMap<GlobalId, FcState>,
-    memo: &mut HashMap<ConstId, Option<u32>>,
-    m: &mut Meter,
-    held: &mut usize,
-) -> Result<Option<u32>, Error> {
-    let mut stack = vec![c];
-    while let Some(&k) = stack.last() {
-        if memo.contains_key(&k) {
-            stack.pop();
-            continue;
-        }
-        m.tick(1)?;
-        let value = &consts
-            .get(k)
-            .ok_or_else(|| invariant("constant out of range"))?
-            .value;
-        let pending = stack.len();
-        for &ch in value.children() {
-            if !memo.contains_key(&ch) {
-                let bytes = std::mem::size_of::<ConstId>();
-                m.charge(bytes)?;
-                *held = held.saturating_add(bytes);
-                stack.push(ch);
-            }
-        }
-        if stack.len() == pending {
-            let t = const_taint(value, fcs, |ch| memo.get(&ch).copied().flatten());
-            let bytes = std::mem::size_of::<(ConstId, Option<u32>)>() * 2;
-            m.charge(bytes)?;
-            *held = held.saturating_add(bytes);
-            memo.insert(k, t);
-            stack.pop();
-        }
-    }
-    Ok(memo.get(&c).copied().flatten())
 }
 
 #[cfg(test)]

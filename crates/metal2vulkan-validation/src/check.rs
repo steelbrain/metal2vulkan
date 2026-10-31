@@ -561,8 +561,9 @@ pub(crate) fn case_constants(
 }
 
 /// An omitted function constant is undefined in the pipeline. The case is valid only when no
-/// value use of it survives specialization: the AIR layer's canonicalization proves that, or names
-/// the constant a use needs. Any other refusal leaves it unproven.
+/// value use of it survives specialization: the AIR layer's canonicalization names each undefined
+/// constant whose value the specialized body reads (`Entry::undefined_reads`). A refusal leaves it
+/// unproven.
 fn omitted_constants_error(
     module: &metal2vulkan_air::ir::Module,
     abi: &metal2vulkan_air::abi::AirAbi,
@@ -579,12 +580,12 @@ fn omitted_constants_error(
     match metal2vulkan_air::canon::specialize(module.clone(), abi, &request, &mut meter)
         .map_err(metal2vulkan::error::Error::from)
     {
-        Ok(_) => None,
-        Err(metal2vulkan::error::Error::NeedsInput(
-            metal2vulkan::error::RuntimeInput::FunctionConstant { index },
-        )) => Some(format!(
-            "function constant {index} is omitted, but a value use of it survives specialization"
-        )),
+        Ok(entry) => entry.undefined_reads.first().map(|index| {
+            format!(
+                "function constant {index} is omitted, but a value use of it survives \
+                 specialization"
+            )
+        }),
         Err(error) => Some(format!(
             "cannot validate omitted function-constant values: {error}"
         )),

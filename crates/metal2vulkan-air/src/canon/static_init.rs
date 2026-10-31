@@ -23,8 +23,10 @@
 //! operand to 0). Anything else (a loop, a load of an externally initialized global, a store
 //! outside the constant address space, an overlapping access of another type, an alloca, other
 //! float arithmetic, a call to a declaration) is `StaticInitNotEvaluable`. A branch on an
-//! unsupplied constant is `NeedsInput(FunctionConstant)`, a branch on `undef` is `UndefCondition`,
-//! and a call cycle is `Unsupported{Recursion}`.
+//! unsupplied constant takes its false way, a `select` on one is its false arm, and an `and` with
+//! zero, an `or` with all ones and a `mul` by zero are that constant whatever the other operand
+//! holds, as SCCP's are; a branch on `undef` is `UndefCondition`, and a call cycle is
+//! `Unsupported{Recursion}`.
 //!
 //! [`super::static_values`] evaluates under [`Unevaluable::Opaque`]: a pure operation the
 //! interpreter does not evaluate (float arithmetic outside the agreement, a conversion other than
@@ -47,7 +49,7 @@ use std::collections::{BTreeMap, HashMap};
 
 use crate::budget::Meter;
 use crate::error::{CanonError, DiagName, InputError, InputErrorKind, Location};
-use crate::error::{Error, Feature, MissingInput, Unsupported};
+use crate::error::{Error, Feature, Unsupported};
 use crate::intrinsics::{AirIntrinsic, FunctionConstant, LlvmIntOp, LlvmIntrinsic, NumKind};
 use crate::ir::layout::Endian;
 use crate::ir::{AddrSpace, Arena, BlockId, Body, Callee, CastOp, Const, ConstExpr, ConstId};
@@ -558,7 +560,14 @@ impl<'a> Eval<'a> {
             }
             InstKind::BinOp { op, a, b, .. } => {
                 let (op, a, b) = (*op, val(*a)?, val(*b)?);
-                self.pure2(a, b, &at, m, |f, x, y, m| f.binop(op, ty, x, y, m))?
+                match (a, b) {
+                    (SVal::Fc(_), SVal::C(k)) | (SVal::C(k), SVal::Fc(_))
+                        if self.folder.absorbs(op, k) =>
+                    {
+                        SVal::C(k)
+                    }
+                    _ => self.pure2(a, b, &at, m, |f, x, y, m| f.binop(op, ty, x, y, m))?,
+                }
             }
             InstKind::FNeg { v, .. } => {
                 let x = val(*v)?;
@@ -607,7 +616,7 @@ impl<'a> Eval<'a> {
             InstKind::Select { c, t, f, .. } => {
                 let (c, t, f) = (val(*c)?, val(*t)?, val(*f)?);
                 match c {
-                    SVal::Fc(i) => SVal::Fc(i),
+                    SVal::Fc(_) => f,
                     SVal::Opaque => SVal::Opaque,
                     SVal::C(k) => match self.folder.int(k) {
                         Some(0) => f,
@@ -727,10 +736,10 @@ impl<'a> Eval<'a> {
         Ok(Step::Jumped)
     }
 
-    /// The integer a branch condition holds.
+    /// The integer a branch condition holds: an undefined one's 0, its false way.
     fn decide(&self, v: SVal, at: &Location) -> Result<u64, Error> {
         match v {
-            SVal::Fc(index) => Err(Error::NeedsInput(MissingInput::FunctionConstant { index })),
+            SVal::Fc(_) => Ok(0),
             SVal::C(c) => match self.folder.int(c) {
                 Some(x) => Ok(x),
                 None => match self.folder.consts.get(c).map(|k| &k.value) {

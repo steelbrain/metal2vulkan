@@ -27,7 +27,7 @@ impl Solver<'_> {
         let mut acc = Lat::Top;
         for &(v, p) in incoming {
             if self.edges.contains(&(p, b)) {
-                acc = meet(acc, self.lat(v));
+                acc = meet(acc, merged(self.lat(v)));
             }
         }
         acc
@@ -77,7 +77,7 @@ struct Settled {
 /// work units.
 struct Solved {
     settled: Option<Result<Settled, Error>>,
-    out: Result<Body, Error>,
+    out: Result<Rebuilt, Error>,
     work: u64,
 }
 
@@ -100,8 +100,11 @@ fn solve_with(body: &Body, cx: &mut Context<'_>, full: bool, check: bool) -> Sol
         }));
         solved?;
         s.check(cx)?;
-        let edit = s.edit(cx, m, held)?;
-        apply(body, &edit, &|c| c, m)
+        let (edit, reads) = s.edit(cx, m, held)?;
+        Ok(Rebuilt {
+            body: apply(body, &edit, &|c| c, m)?,
+            reads,
+        })
     });
     Solved {
         settled,
@@ -126,7 +129,7 @@ fn entries(body: &Body) -> usize {
 pub(super) fn agrees_with_the_full_meet(
     body: &Body,
     cx: &mut Context<'_>,
-    out: &Result<Body, Error>,
+    out: &Result<Rebuilt, Error>,
 ) {
     if matches!(
         out,
@@ -971,7 +974,7 @@ fn the_rebuild_does_not_hold_the_solver() {
 
     let mut m = uncapped();
     let out = run(&body, &mut cx, &mut m).expect("sccp");
-    assert_eq!(out.insts.len(), body.insts.len(), "nothing folds");
+    assert_eq!(out.body.insts.len(), body.insts.len(), "nothing folds");
     let peak = m.ledger_peak();
     assert!(
         peak < solver + rebuild,

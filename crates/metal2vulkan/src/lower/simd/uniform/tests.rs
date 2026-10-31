@@ -164,6 +164,7 @@ fn entry(module: Module, func: FuncId, roles: Vec<ParamRole>) -> Entry {
         unnumbered_linked_samplers: false,
         intersection_candidates: false,
         function_constants: false,
+        undefined_reads: Vec::new(),
         function_tables: Default::default(),
         lockstep: Default::default(),
         call_stack: None,

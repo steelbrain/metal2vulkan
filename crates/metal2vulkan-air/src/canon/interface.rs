@@ -58,7 +58,7 @@ use crate::ir::{CastOp, FastMath, Inst, TailKind, TypeLayouts, Value};
 use crate::ir::{Global, GlobalId, Idx, InstId, InstKind, Layout, ModuleParts, Type, TypeId};
 use std::collections::HashMap;
 
-use crate::error::{Error, Feature, MissingInput, RequestError, Unsupported};
+use crate::error::{Error, Feature, RequestError, Unsupported};
 
 use super::rewrite::{apply, invariant, scoped, BodyEdit};
 use super::sccp::{is_pure, FcState};
@@ -87,13 +87,11 @@ pub(super) fn not_evaluable() -> Error {
 }
 
 impl Values<'_> {
-    /// The integer value global `g` holds.
+    /// The integer value global `g` holds: an undefined one's (an unsupplied constant's, or one
+    /// computed from it) is 0, as SCCP's is.
     pub(super) fn int(&self, g: GlobalId) -> Result<u64, Error> {
-        if let Some(f) = self.fcs.get(&g).filter(|f| !f.supplied) {
-            // An undefined value the interface depends on: the caller must supply it.
-            return Err(Error::NeedsInput(MissingInput::FunctionConstant {
-                index: f.index,
-            }));
+        if self.fcs.get(&g).is_some_and(|f| !f.supplied) {
+            return Ok(0);
         }
         let init = self
             .globals

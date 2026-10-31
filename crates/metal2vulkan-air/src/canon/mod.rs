@@ -223,6 +223,11 @@ pub struct Entry {
     /// out the threadgroup objects of the specialized function, whose references a constant may
     /// remove, so an integer threadgroup address is not translated in such a module.
     pub function_constants: bool,
+    /// The function constants (by index) the request leaves undefined whose values the body
+    /// reads: an instruction it keeps uses one (as its type's zero), or a branch or `select` was
+    /// decided on one (its false way). Metal makes such a pipeline too, and its reads of the
+    /// constant vary, so what a run computes from one is not Metal's answer.
+    pub undefined_reads: Vec<u32>,
     /// The Metal buffer indices of the visible-function-table parameters read as buffers of
     /// words: `ep` states each as a read-only device `Buffer`, and the interface says the slot
     /// holds a table.
@@ -512,27 +517,12 @@ pub fn specialize_dynamic(
     let emap = erase::erase_consts(&mut parts.consts, m)?;
     erase::erase_globals(parts.globals.values_mut(), &emap);
     erase_functions(&mut parts, &emap, m)?;
-    // The entry block always runs: a value use there of an unsupplied constant is SCCP's first
-    // refusal, known before the inlined body is built.
-    let entry_refusal = |consts: &ConstTable, m: &mut Meter| {
-        let body = parts
-            .funcs
-            .get(func)
-            .and_then(|f| f.body.as_ref())
-            .ok_or_else(|| invariant("the entry has no body"))?;
-        let inlined = |k: &InstKind| inline::inlined_callee(&parts.funcs, k).is_some();
-        match sccp::entry_block_refusal(body, consts, &fcs, &inlined, m)? {
-            Some(index) => Err(Error::NeedsInput(MissingInput::FunctionConstant { index })),
-            None => Ok(()),
-        }
-    };
     let inlined = inline::inline(
         &parts.funcs,
         (&parts.types, &parts.symbols),
         &mut parts.consts,
         func,
         m,
-        entry_refusal,
     );
     let body = inlined.and_then(|inlined| erased_entry(&parts, func, inlined, &emap, m));
     // Devirtualization: calls through constant function addresses and visible-function tables
@@ -594,7 +584,10 @@ pub fn specialize_dynamic(
         sccp::run(&body, &mut cx, m)?
     };
     body.release(m);
-    let body = solved;
+    let sccp::Rebuilt {
+        body,
+        reads: mut undefined_reads,
+    } = solved;
     // A pointer loaded from a field of a constant global is the field's constant: a `constexpr
     // sampler` that SCCP's folded select picked is its sampler state. SCCP runs again over a body
     // that changed, to fold what those constants decide.
@@ -614,7 +607,8 @@ pub fn specialize_dynamic(
             sccp::run(&body, &mut cx, m)?
         };
         body.release(m);
-        solved
+        undefined_reads.extend(solved.reads);
+        solved.body
     } else {
         body
     };
@@ -762,6 +756,7 @@ pub fn specialize_dynamic(
         unnumbered_linked_samplers,
         intersection_candidates,
         function_constants: !abi.function_constants.is_empty(),
+        undefined_reads: undefined_reads.into_iter().collect(),
         function_tables,
         lockstep: Lockstep::default(),
         call_stack,
@@ -935,7 +930,6 @@ fn reinline(
         &mut parts.consts,
         r.func,
         m,
-        |_, _| Ok(()),
     )?;
     let body = erased_entry(parts, r.func, inlined, r.emap, m)?;
     inline_rounds(body, parts, stubs, r, m)
@@ -999,7 +993,6 @@ fn inline_rounds(
             &mut parts.consts,
             r.func,
             m,
-            |_, _| Ok(()),
         )?;
         body = erased_entry(parts, r.func, inlined, r.emap, m)?;
     }

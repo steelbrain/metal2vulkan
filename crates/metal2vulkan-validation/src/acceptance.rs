@@ -1517,10 +1517,9 @@ mod tests {
             };
             compile_pipeline(&[&vector], &request, &device, None).map(|c| c.pipeline)
         };
+        // Undefined, the constant reads its type's zero: Metal makes this pipeline too.
         match kernel(FunctionConstantValues::defaults()) {
-            Err(PipelineCompileError::Product(Error::NeedsInput(
-                RuntimeInput::FunctionConstant { index: 0 },
-            ))) => {}
+            Ok(AcceptancePipeline::Compute(_)) => {}
             other => panic!("{other:?}"),
         }
         let lanes = [1u32, 2, 3, 4].iter().flat_map(|lane| lane.to_le_bytes());

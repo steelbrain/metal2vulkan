@@ -276,7 +276,7 @@ mod tests {
                 vec![vec![ray_query.clone()], vec![device_address.clone()]],
             )
             .into(),
-            Error::NeedsInput(RuntimeInput::FunctionConstant { index: 0 }),
+            Error::NeedsInput(RuntimeInput::VertexDescriptor { attribute: 0 }),
             Error::Cancelled,
         ];
         for error in &in_scope {

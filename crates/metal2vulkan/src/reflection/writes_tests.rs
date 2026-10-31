@@ -267,7 +267,6 @@ fn every_fixture_kernel_answers_and_agrees_with_its_reflection() {
     let mut answered = 0;
     let mut compared = 0;
     let mut refused_reflections = 0;
-    let mut unspecialized = 0;
     // The recorded fixtures, then the synthetic kernel whose argument type refuses a reflection:
     // the fixtures state the agreement over shapes Metal's answers are recorded for, and the
     // synthetic one makes the refused leg run, since no recorded fixture kernel refuses.
@@ -312,9 +311,8 @@ fn every_fixture_kernel_answers_and_agrees_with_its_reflection() {
                 ComputePipelineDescriptor::new(StageSource::Function(FunctionDescriptor::new(f)));
             let writes = match kernel.slot_writes(&Budget::standard()) {
                 Ok(writes) => writes,
-                // A function whose constants no caller gave a required value for: no pipeline of
-                // it compiles, and the reflection refuses it too. What must never happen is a
-                // refusal over a reflection gap, which is what this asserts.
+                // A function no pipeline of compiles: the reflection refuses it too. What must
+                // never happen is a refusal over a reflection gap, which is what this asserts.
                 Err(error) => {
                     assert!(
                         !matches!(&error, Error::Unsupported(u) if u.feature == Feature::Reflection),
@@ -324,7 +322,6 @@ fn every_fixture_kernel_answers_and_agrees_with_its_reflection() {
                         kernel.reflection(&Budget::standard()).is_err(),
                         "{at}: refused where the reflection answers: {error:?}"
                     );
-                    unspecialized += 1;
                     continue;
                 }
             };
@@ -379,11 +376,6 @@ fn every_fixture_kernel_answers_and_agrees_with_its_reflection() {
         }
     }
     assert!(answered >= 20, "{answered} kernels answered");
-    assert!(
-        unspecialized > 0,
-        "no kernel needed a constant value, so the leg that proves such a refusal is not a \
-         reflection gap never ran"
-    );
     assert!(compared >= 40, "{compared} bindings compared");
     assert!(
         refused_reflections > 0,

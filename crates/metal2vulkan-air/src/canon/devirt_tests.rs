@@ -1202,9 +1202,8 @@ fn a_loaded_pointer_no_function_can_answer_is_a_dynamic_call() {
 
 /// `kernel k(device i32* out, i32 tid)`: for an odd `tid`, `*out` is a call with `tid` through
 /// `mode == 1 ? &a : &b` ([`chosen_functions`]), `mode` function constant 3. The call is past the
-/// entry block, so the entry block's own refusal does not decide an unsupplied `mode` before
-/// inlining, as in a kernel of the corpus that chooses among 162 functions by its constants, behind
-/// a null check.
+/// entry block, as in a kernel of the corpus that chooses among 162 functions by its constants,
+/// behind a null check.
 fn constant_chosen_kernel() -> (Module, AirAbi, GlobalId) {
     let mut m = ModuleBuilder::new();
     let void = m.void();
@@ -1253,12 +1252,11 @@ fn constant_chosen_kernel() -> (Module, AirAbi, GlobalId) {
     (module, abi, mode)
 }
 
-/// A call through a pointer function constants choose is decided before it becomes a switch: with
-/// the constant supplied, a direct call to the function chosen, the only one
-/// inlined; unsupplied, the call is left as it was before item 27, so SCCP refuses the constant
-/// where the call stands and no switch inlines every function the pointer might be. The corpus's
-/// kernel choosing among 162 functions so inlined all of them, 2.5 times its memory, to refuse the
-/// same constant.
+/// A call through a pointer function constants choose is decided before it becomes a switch: a
+/// direct call to the function chosen, the only one inlined, and no switch inlines every function
+/// the pointer might be. Supplied as 1, `mode` chooses `a`; unsupplied, the `select` on its
+/// undefined comparison takes its false arm, `b`. The corpus's kernel choosing among 162 functions
+/// inlined all of them, 2.5 times its memory, where a switch was built.
 #[test]
 fn a_pointer_function_constants_choose_is_decided_before_its_switch() {
     for supplied in [true, false] {
@@ -1319,14 +1317,7 @@ fn a_pointer_function_constants_choose_is_decided_before_its_switch() {
         };
         let mut stubs = link::Stubs::default();
         let pass = devirt::pass(&body, &mut parts, &mut stubs, &cx, &mut m).unwrap();
-        if !supplied {
-            assert!(
-                pass.is_none(),
-                "an unsupplied constant's call is left as it was"
-            );
-            continue;
-        }
-        let pass = pass.expect("the supplied constant's call is decided");
+        let pass = pass.expect("the call is decided");
         assert!(pass.calls);
         let mut switches = 0;
         let mut direct = Vec::new();
@@ -1344,20 +1335,18 @@ fn a_pointer_function_constants_choose_is_decided_before_its_switch() {
             switches, 0,
             "no switch over the functions the pointer might be"
         );
-        assert_eq!(direct, vec![a], "the call is the chosen function's");
+        let chosen = if supplied { a } else { b };
+        assert_eq!(direct, vec![chosen], "the call is the chosen function's");
     }
-    // Through the whole specialization: unsupplied, the constant is refused, as before item 27;
-    // supplied as 1, the call is `a`'s (`x + 1`), and `b`'s `x << 1` is not inlined.
+    // Through the whole specialization: unsupplied, the call is `b`'s (`x << 1`), and `a`'s
+    // `x + 1` is not inlined; supplied as 1, the call is `a`'s.
     let (module, abi, _) = constant_chosen_kernel();
-    let refused = specialize(module, &abi, &request(), &mut meter()).map(|_| ());
+    let e = specialize(module, &abi, &request(), &mut meter()).unwrap_or_else(|e| panic!("{e}"));
+    let text = print(&e.module);
+    assert!(text.contains("shl i32"), "{text}");
     assert!(
-        matches!(
-            refused,
-            Err(Error::NeedsInput(MissingInput::FunctionConstant {
-                index: 3
-            }))
-        ),
-        "{refused:?}"
+        !text.contains("add i32") && !text.contains("call "),
+        "{text}"
     );
     let (module, abi, _) = constant_chosen_kernel();
     let mut req = request();

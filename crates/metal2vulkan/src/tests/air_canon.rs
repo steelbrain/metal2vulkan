@@ -10,7 +10,7 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use crate::air::error::{Error, MissingInput};
+use crate::air::error::Error;
 use crate::air::ir::print::print;
 use crate::air::{decode, specialize, ConstValue, Decoded, Entry, SpecRequest};
 use crate::budget::{Budget, Meter};
@@ -293,8 +293,8 @@ fn the_order_of_declarations_reaches_no_specialized_module() {
 }
 
 /// The frontend's function-constant shape copies the constant into an internal global in
-/// `air.static_init`. With no value, the kernel's branch on the copy needs the constant; with one,
-/// the static initializer bakes the copy and SCCP folds every branch on it.
+/// `air.static_init`. With no value, the copy is undefined and the kernel's branch on it takes its
+/// false way; with one, the static initializer bakes the copy and SCCP folds every branch on it.
 #[test]
 fn a_static_initializer_fixture_specializes_with_its_constant() {
     let Some(tool) = llvm_as() else {
@@ -304,10 +304,8 @@ fn a_static_initializer_fixture_specializes_with_its_constant() {
     let scratch = Scratch::new("m2v-air-canon");
     let ll = fixtures_dir().join("kernel_function_constant_gate_fold.ll");
     let bytes = llvm_assemble(&tool, &ll, &scratch).unwrap();
-    assert_eq!(
-        spec(&bytes, "fcfold").unwrap_err(),
-        Error::NeedsInput(MissingInput::FunctionConstant { index: 0 })
-    );
+    let undefined = print(&spec(&bytes, "fcfold").unwrap().module);
+    assert!(!undefined.contains("switch"), "{undefined}");
     let mut m = meter();
     let r = SpecRequest {
         call_stack_depth: 1,
@@ -332,8 +330,8 @@ fn a_static_initializer_fixture_specializes_with_its_constant() {
 /// A `uint4` function constant in the frontend's shape (the compiled
 /// `engine/kernel_vector_function_constant`): an `air.fc_initializer` global that
 /// `!air.function_constants` names, copied into a program-scope constant by `air.static_init`.
-/// With no value the entry needs the constant; with one, both spellings bake the copy and fold
-/// the sum of its lanes into the store.
+/// With no value the copy is undefined and the entry specializes; with one, both spellings bake
+/// the copy and fold the sum of its lanes into the store.
 #[test]
 fn a_vector_function_constant_bakes_through_the_static_initializer() {
     let Some(tool) = llvm_as() else {
@@ -355,10 +353,7 @@ fn a_vector_function_constant_bakes_through_the_static_initializer() {
         .collect();
     let mut printed = Vec::new();
     for bytes in &spellings {
-        assert_eq!(
-            spec(bytes, entry).unwrap_err(),
-            Error::NeedsInput(MissingInput::FunctionConstant { index: 0 })
-        );
+        spec(bytes, entry).unwrap();
         let mut m = meter();
         let r = SpecRequest {
             call_stack_depth: 1,

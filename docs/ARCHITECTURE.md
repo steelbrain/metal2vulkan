@@ -101,9 +101,10 @@ needs an internal item is one of the crate's own tests (`src/tests/`).
 - **Structure, not names.** Families decide from IR types, address spaces, the metadata ABI and the
   `air.*` and `llvm.*` intrinsic contract. No branch keys on a function, type or variable name.
 - **Typed refusals.** An input the device cannot run exactly is `Error::Unsupported`, naming the
-  Metal feature and what would make it translatable. A missing pipeline input (a function-constant
-  value, a stage-input or vertex descriptor, a storage texture's format) is `Error::NeedsInput`,
-  asked for and never guessed. A deterministic cap is `Error::LimitExceeded`. Only a deadline
+  Metal feature and what would make it translatable. A missing pipeline input (a stage-input or
+  vertex descriptor, a storage texture's format, a linked function) is `Error::NeedsInput`, asked
+  for and never guessed; a function constant left undefined is no such input, as in Metal
+  ([API.md](API.md), "Accepted differences"). A deterministic cap is `Error::LimitExceeded`. Only a deadline
   (`Error::Budget`) or a cancellation (`Error::Cancelled`) is transient.
 - **Recorded differences.** Where the output gives a near-equivalent of Metal's answer, the stage
   records a `PrecisionNote`, and `Reconvergence::ImplementationDefined` where the profile lacks

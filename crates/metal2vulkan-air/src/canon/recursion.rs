@@ -597,7 +597,6 @@ fn prepare_in(
             &mut parts.consts,
             f,
             m,
-            |_, _| Ok(()),
         )?;
         if let Some(body) = inlined {
             let func = parts

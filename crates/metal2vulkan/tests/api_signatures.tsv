@@ -1527,6 +1527,7 @@ field	metal2vulkan-air::Entry.lockstep	pub lockstep: Lockstep
 field	metal2vulkan-air::Entry.module	pub module: Module
 field	metal2vulkan-air::Entry.static_samplers	pub static_samplers: Vec<(GlobalId, SamplerState)>
 field	metal2vulkan-air::Entry.structs	pub structs: Vec<StructInfo>
+field	metal2vulkan-air::Entry.undefined_reads	pub undefined_reads: Vec<u32>
 field	metal2vulkan-air::Entry.unmeasured_speculation	pub unmeasured_speculation: bool
 field	metal2vulkan-air::Entry.unnumbered_linked_samplers	pub unnumbered_linked_samplers: bool
 field	metal2vulkan-air::LinkedCode.abi	pub abi: AirAbi
@@ -10277,7 +10278,6 @@ variant	metal2vulkan-air::error::LinkProblem::NotVisible	NotVisible
 variant	metal2vulkan-air::error::LinkProblem::Signature	Signature
 variant	metal2vulkan-air::error::MissingInput::DynamicLibrary	DynamicLibrary { install_name: DiagName }
 variant	metal2vulkan-air::error::MissingInput::DynamicSymbol	DynamicSymbol { symbol: DiagName }
-variant	metal2vulkan-air::error::MissingInput::FunctionConstant	FunctionConstant { index: u32 }
 variant	metal2vulkan-air::error::MissingInput::LinkedFunction	LinkedFunction { symbol: DiagName }
 variant	metal2vulkan-air::error::RequestError::AmbiguousEntry	AmbiguousEntry { requested: DiagName }
 variant	metal2vulkan-air::error::RequestError::DuplicateColorOutput	DuplicateColorOutput { color: u32, index: u32 }
@@ -13274,7 +13274,6 @@ variant	metal2vulkan::error::RuntimeInput::DepthCompareClamp	DepthCompareClamp
 variant	metal2vulkan::error::RuntimeInput::DynamicLibrary	DynamicLibrary { install_name: DiagName }
 variant	metal2vulkan::error::RuntimeInput::DynamicSymbol	DynamicSymbol { symbol: DiagName }
 variant	metal2vulkan::error::RuntimeInput::FramebufferFetch	FramebufferFetch
-variant	metal2vulkan::error::RuntimeInput::FunctionConstant	FunctionConstant { index: u32 }
 variant	metal2vulkan::error::RuntimeInput::LinkedFunction	LinkedFunction { symbol: DiagName }
 variant	metal2vulkan::error::RuntimeInput::Multisampled	Multisampled
 variant	metal2vulkan::error::RuntimeInput::ObjectPayload	ObjectPayload

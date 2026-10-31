@@ -195,6 +195,19 @@ impl Folder<'_> {
         }
     }
 
+    /// Whether the scalar integer `c` decides `c op x` and `x op c` whatever `x` holds: zero for
+    /// `and` and `mul`, all ones for `or`.
+    pub fn absorbs(&self, op: BinOp, c: ConstId) -> bool {
+        let (Some(w), Some(v)) = (self.ty(c).and_then(|t| self.int_bits(t)), self.int(c)) else {
+            return false;
+        };
+        match op {
+            BinOp::And | BinOp::Mul => v == 0,
+            BinOp::Or => v == mask(w),
+            _ => false,
+        }
+    }
+
     fn mk(&mut self, ty: TypeId, value: Const, m: &mut Meter) -> Result<ConstId, Error> {
         self.consts.intern(Constant { ty, value }, m)
     }

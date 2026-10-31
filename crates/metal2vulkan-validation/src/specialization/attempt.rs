@@ -437,12 +437,6 @@ impl<'a> Derivation<'a> {
             return Err("the compile asked again for an input the audit derived".into());
         }
         let supplied = match input {
-            RuntimeInput::FunctionConstant { index } => {
-                return Err(Unsupplied::Why(format!(
-                    "constant {index} is undefined in this set: the set is what the audit \
-                     measures"
-                )))
-            }
             RuntimeInput::StageInputDescriptor { .. } => {
                 let (_, interface) = self.interface()?;
                 let fetches = stage_inputs::implied(interface)?;
@@ -896,8 +890,8 @@ mod tests {
         RowPlan::of(&decoded, entry, &[])
     }
 
-    /// A kernel whose code uses a required constant's value stops at it undefined, with the
-    /// reason; every planned set supplies it, and the set of ones translates.
+    /// A kernel whose code uses a required constant's value translates with it undefined, as Metal
+    /// makes it; every planned set supplies it, and the set of ones translates.
     #[test]
     fn a_required_constant_is_supplied_by_every_planned_set() {
         let Some(bitcode) = bitcode(fixtures_dir().join("kernel_function_constant_gate_fold.ll"))
@@ -911,14 +905,11 @@ mod tests {
             "vk12-floor",
         );
         assert_eq!(
-            undefined.attempt.outcome.key(),
-            "function_constant",
+            undefined.attempt.outcome,
+            Outcome::Translated,
             "{undefined:?}"
         );
-        assert!(undefined
-            .unsupplied
-            .as_deref()
-            .is_some_and(|why| why.contains("constant 0 is undefined in this set")));
+        assert!(undefined.unsupplied.is_none(), "{undefined:?}");
         let row = row_plan(&bitcode, "fcfold");
         assert_eq!(row.facts.declared, 1);
         assert_eq!(row.facts.optional, 0);
@@ -927,11 +918,6 @@ mod tests {
         assert_eq!(row.specializations.len(), 2, "{row:#?}");
         for set in &row.specializations {
             let result = attempt(&bitcode, "fcfold", &set.values(), "vk12-floor");
-            assert_ne!(
-                result.attempt.outcome.key(),
-                "function_constant",
-                "{result:?}"
-            );
             if set.kinds.contains(&SpecKind::One) {
                 assert_eq!(result.attempt.outcome, Outcome::Translated, "{result:?}");
             }

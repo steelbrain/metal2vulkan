@@ -273,7 +273,6 @@ impl From<crate::air::error::Feature> for Feature {
 impl From<MissingInput> for RuntimeInput {
     fn from(i: MissingInput) -> RuntimeInput {
         match i {
-            MissingInput::FunctionConstant { index } => RuntimeInput::FunctionConstant { index },
             MissingInput::LinkedFunction { symbol } => RuntimeInput::LinkedFunction { symbol },
             MissingInput::DynamicSymbol { symbol } => RuntimeInput::DynamicSymbol { symbol },
             MissingInput::DynamicLibrary { install_name } => {
@@ -1622,8 +1621,6 @@ pub enum LowerFamily {
 #[non_exhaustive]
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum RuntimeInput {
-    /// A value use of an unsupplied function constant survived SCCP.
-    FunctionConstant { index: u32 },
     /// The format of a storage texture on a profile that cannot access it without one: the
     /// slot's `StorageImageChoice`.
     StorageTextureFormat { slot: SlotRef },

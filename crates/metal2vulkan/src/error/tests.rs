@@ -24,7 +24,7 @@ fn one_of_each() -> Vec<Error> {
             Feature::IndirectRenderState,
             1010,
         )),
-        Error::NeedsInput(RuntimeInput::FunctionConstant { index: 3 }),
+        Error::NeedsInput(RuntimeInput::VertexDescriptor { attribute: 3 }),
         Error::InvalidInput(InputError::new(
             InputErrorKind::Container(ContainerError::BadMagic),
             Location::container(0),
@@ -291,8 +291,12 @@ fn front_end_errors_map_one_to_one() {
             ),
         ),
         (
-            Air::NeedsInput(MissingInput::FunctionConstant { index: 3 }),
-            Error::NeedsInput(RuntimeInput::FunctionConstant { index: 3 }),
+            Air::NeedsInput(MissingInput::LinkedFunction {
+                symbol: DiagName::new("g"),
+            }),
+            Error::NeedsInput(RuntimeInput::LinkedFunction {
+                symbol: DiagName::new("g"),
+            }),
         ),
         (
             Air::InvalidRequest(RequestError::DuplicateFunctionConstant { index: 1 }),

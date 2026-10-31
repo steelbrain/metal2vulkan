@@ -39,19 +39,14 @@ use crate::ir::{Function, Idx, Inst, InstId, InstKind, Symbols, Type, TypeId, Ty
 use super::rewrite::{filled, invariant, scoped};
 
 /// Inline every direct call to a defined function into `entry`'s body. `None` when the body
-/// calls no defined function.
-///
-/// `gate` runs once the inliner's own refusals are decided (a call cycle, a callee it cannot
-/// take, the cap) and before anything proportional to the inlined body is built; an error from
-/// it is the result. A refused call is located in the function that makes it and names its callee
-/// (`symbols`).
+/// calls no defined function. A refused call is located in the function that makes it and names
+/// its callee (`symbols`).
 pub(super) fn inline(
     funcs: &Arena<FuncId, Function>,
     (types, symbols): (&TypeTable, &Symbols),
     consts: &mut ConstTable,
     entry: FuncId,
     m: &mut Meter,
-    gate: impl FnOnce(&ConstTable, &mut Meter) -> Result<(), Error>,
 ) -> Result<Option<Body>, Error> {
     scoped(m, |m, held| {
         let Some(sizes) = Sizes::measure(funcs, (types, symbols), entry, m, held)? else {
@@ -59,7 +54,6 @@ pub(super) fn inline(
         };
         let insts = sizes.insts(entry)?;
         m.cap(Limit::InlinedInstructions, insts)?;
-        gate(consts, m)?;
         let tables = Tables::build(funcs, types, &sizes, m, held)?;
         // The counts are exact: the inlined body holds no arena slack.
         let out = Body::with_capacity(usize_of(insts)?, usize_of(sizes.blocks(entry)?)?, m)?;

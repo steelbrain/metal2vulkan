@@ -254,7 +254,6 @@ pub(super) fn expand(
         &mut parts.consts,
         func,
         m,
-        |_, _| Ok(()),
     )?
     .ok_or_else(|| invariant("an expanded asynchronous copy was not inlined"))
 }

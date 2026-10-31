@@ -233,21 +233,19 @@ pub fn main() -> Result<()> {
         bytes.len()
     );
 
-    // 7. A pipeline input the compile asks for: a function-constant value.
+    // 7. A function-constant value, supplied by index. A constant left undefined compiles too, as
+    // Metal's does: `is_function_constant_defined` names it false, and a value of it alone is zero.
     let library = Library::from_air(&fixture_bitcode("kernel_vector_function_constant")?)?;
     let function = library.function("kernel_vector_function_constant")?;
     let mut kernel = FunctionDescriptor::new(function);
     let descriptor = ComputePipelineDescriptor::new(StageSource::Function(kernel.clone()));
-    match device.compile_compute_pipeline(&descriptor, &budget) {
-        Err(Error::NeedsInput(RuntimeInput::FunctionConstant { index })) => {
-            let words = [1u32, 2, 3, 4].map(u32::to_le_bytes).concat();
-            let value = FunctionConstantValue::new(DataType::UInt4, words);
-            kernel.constants = FunctionConstantValues::defaults().with_index(index, value);
-        }
-        other => return Err(format!("expected a function-constant request: {other:?}").into()),
-    }
+    let undefined = device.compile_compute_pipeline(&descriptor, &budget)?;
+    let words = [1u32, 2, 3, 4].map(u32::to_le_bytes).concat();
+    let value = FunctionConstantValue::new(DataType::UInt4, words);
+    kernel.constants = FunctionConstantValues::defaults().with_index(0, value);
     let descriptor = ComputePipelineDescriptor::new(StageSource::Function(kernel));
     let specialized = device.compile_compute_pipeline(&descriptor, &budget)?;
+    assert_ne!(undefined.key, specialized.key);
     println!("function constant supplied: {:?}", specialized.key);
 
     // 8. A typed refusal: fragment function `sample_min_lod` clamps its level of detail, which

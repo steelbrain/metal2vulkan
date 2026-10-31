@@ -703,9 +703,10 @@ pub struct FunctionConstant {
 }
 
 /// Function-constant values supplied with a function (`MTLFunctionConstantValues`), by index or by
-/// name. A constant with no value is "not defined": `is_function_constant_defined` folds to false
-/// and arguments gated on it are absent; a surviving value use is
-/// `Error::NeedsInput(FunctionConstant)`.
+/// name. A constant with no value is "not defined": `is_function_constant_defined` folds to false,
+/// arguments gated on it are absent, a branch or `select` on it takes its false way, and a value
+/// computed from it alone is its type's zero. Plain Metal makes such a function's pipeline too, and
+/// its own reads of the constant vary from read to read (docs/API.md, "Accepted differences").
 #[non_exhaustive]
 #[derive(Clone, Debug, Default, PartialEq, Eq, Hash)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
