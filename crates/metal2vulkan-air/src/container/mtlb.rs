@@ -4,7 +4,8 @@
 //! Layout (little-endian, packed), as observed in Apple output of formats 2.7–2.9:
 //!
 //! - Header (0x58 bytes): `MTLB`, `platform u16`, `version u16 u16`, `file_type u8` (0 an
-//!   executable library, 2 a dynamic library), `os u8`, `os_version u16 u16`, then `u64`
+//!   executable library, 1 a Core Image kernel library, 2 a dynamic library), `os u8`,
+//!   `os_version u16 u16`, then `u64`
 //!   `file_size` and `(offset, size)` pairs for the function list, public metadata, private
 //!   metadata, and bitcode sections.
 //! - Function list: `u32 count`, then `count` entries of `u32 entry_size` (counting itself) and a
@@ -16,9 +17,11 @@
 //! - No two functions share or overlap a public-metadata record, a private-metadata record, or a
 //!   bitcode range. Apple output never does, and requiring it keeps parsing (and the parsed
 //!   result) linear in the file size: otherwise many entries could re-parse one large record.
-//!   The one exception is a dynamic library (`MTLLibraryTypeDynamic`): Apple's toolchain lists each
-//!   function it exports (`TYPE` 3, its symbol as `NAME`) over the library's one module, so its
-//!   functions may share exactly one bitcode range, hashed once.
+//!   The exceptions are a dynamic library (`MTLLibraryTypeDynamic`), whose functions Apple's
+//!   toolchain lists as the symbols it exports (`TYPE` 3, each as `NAME`) over the library's one
+//!   module, and a Core Image kernel library (`metallib -cikernel`), whose kernels it lists as
+//!   extern functions (`TYPE` 5) over the one module `metal -fcikernel` compiled: their functions
+//!   may share exactly one bitcode range, hashed once.
 //! - The extended header's `HDYN` and `ILST` tags each hold an `(offset, size)` of a region of
 //!   the file. `HDYN`'s is a tag list: `NAME`, the library's install name (a dynamic library's
 //!   `installName`; an executable's file name), and one `DYNL` per dynamic library it was linked
@@ -39,6 +42,8 @@ const MIN_ENTRY_LEN: u64 = 8;
 const SUPPORTED_MAJOR: [u16; 2] = [1, 2];
 /// `file_type` of an executable library.
 const FILE_TYPE_EXECUTABLE: u8 = 0;
+/// `file_type` of a Core Image kernel library (`metallib -cikernel`).
+const FILE_TYPE_CORE_IMAGE: u8 = 1;
 /// `file_type` of a dynamic library (`MTLLibraryTypeDynamic`).
 const FILE_TYPE_DYNAMIC: u8 = 2;
 
@@ -46,7 +51,9 @@ const FILE_TYPE_DYNAMIC: u8 = 2;
 #[non_exhaustive]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum LibraryType {
-    /// `MTLLibraryTypeExecutable` (`file_type` 0): a library of entry points.
+    /// `MTLLibraryTypeExecutable` (`file_type` 0): a library of entry points. A Core Image kernel
+    /// library (`file_type` 1) is one too, as Metal answers it: its functions are extern functions
+    /// (`TYPE` 5), which Core Image links into a kernel of its own.
     Executable,
     /// `MTLLibraryTypeDynamic` (`file_type` 2): a library whose functions resolve other
     /// libraries' external symbols (`MTLDynamicLibrary`).
@@ -251,7 +258,10 @@ pub(super) fn parse(bytes: &[u8]) -> Result<Metallib<'_>, Error> {
             6,
         ));
     }
-    if header.file_type != FILE_TYPE_EXECUTABLE && header.file_type != FILE_TYPE_DYNAMIC {
+    if !matches!(
+        header.file_type,
+        FILE_TYPE_EXECUTABLE | FILE_TYPE_CORE_IMAGE | FILE_TYPE_DYNAMIC
+    ) {
         return Err(InputError::new(
             InputErrorKind::Unsupported(Feature::LibraryKind(header.file_type)),
             Location::container(10),
@@ -333,8 +343,9 @@ pub(super) fn parse(bytes: &[u8]) -> Result<Metallib<'_>, Error> {
     }
 
     // Function bitcode ranges are disjoint, so verifying every hash is linear in the file size. A
-    // dynamic library's functions may share one range exactly, which is hashed once.
-    let shared = header.file_type == FILE_TYPE_DYNAMIC;
+    // dynamic library's functions, and a Core Image kernel library's, may share one range exactly,
+    // which is hashed once.
+    let shared = matches!(header.file_type, FILE_TYPE_DYNAMIC | FILE_TYPE_CORE_IMAGE);
     let mut ranges: Vec<(u64, u64, u64, usize)> = parsed
         .iter()
         .enumerate()

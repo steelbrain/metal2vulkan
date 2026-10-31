@@ -123,8 +123,9 @@ pub struct WrapperHeader {
 /// `Other`; AIR metadata is the authority, this is cross-checked against it. The observed values,
 /// with the `MTLFunctionType` Metal answers for each
 /// (`validation/fixtures/public/reflection/metallib-tags.txt`): 0 vertex, 1 fragment, 2 kernel (a
-/// tile function too), 4 visible, 6 intersection, 7 mesh, 8 object; and 3, a function a dynamic
-/// library exports, for which Metal makes no `MTLFunction`.
+/// tile function too), 4 visible, 6 intersection, 7 mesh, 8 object; 3, a function a dynamic
+/// library exports, for which Metal makes no `MTLFunction`; and 5, a Core Image kernel library's
+/// extern function, which Metal answers as `functionType` 4.
 #[non_exhaustive]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum FunctionStage {
@@ -149,6 +150,12 @@ pub enum FunctionStage {
     /// external declaration names. Not a stage: Metal's `newFunctionWithName:` stops at an
     /// assertion for it (a probe, an M3 Max and an M4), even for a `kernel` its source defined.
     Exported,
+    /// An extern function (`TYPE` 5): a Core Image kernel that a Core Image kernel library holds
+    /// (`metal -fcikernel`, `!air.ci`), which Core Image links into a kernel of its own through
+    /// Metal. Not a stage: Metal's `functionNames` omits it, `newFunctionWithName:` answers it
+    /// with `functionType` 4 (which the SDK names no enumerator for), and a pipeline made from it
+    /// fails as one made from a name the library lacks (a probe, an M3 Max under macOS 27.0.1).
+    Extern,
     /// A `TYPE` value not observed in Apple's output, as read.
     Other(u8),
 }
@@ -162,6 +169,7 @@ impl FunctionStage {
             2 => FunctionStage::Kernel,
             3 => FunctionStage::Exported,
             4 => FunctionStage::Visible,
+            5 => FunctionStage::Extern,
             6 => FunctionStage::Intersection,
             7 => FunctionStage::Mesh,
             8 => FunctionStage::Object,

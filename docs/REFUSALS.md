@@ -55,7 +55,7 @@ Columns:
 
 | Variant | What it blocks | Where | Basis | Sites | Reach |
 |---|---|---|---|---|---|
-| `LibraryKind` | A metallib that is not an executable library (dynamic library, companion) | - | `-` | via a helper: 2: `crates/metal2vulkan-air/src/container/mtlb.rs (parse)`, `crates/metal2vulkan/src/error/mod.rs (from)` | `none`: a metallib that is not an executable library, loaded as one |
+| `LibraryKind` | A metallib of a kind the container does not read | - | `-` | via a helper: 2: `crates/metal2vulkan-air/src/container/mtlb.rs (parse)`, `crates/metal2vulkan/src/error/mod.rs (from)` | `none`: a metallib file type Apple's toolchain is not seen to write |
 | `Stage` | A function stage the model does not cover | - | `-` | via a helper: 2: `crates/metal2vulkan-air/src/abi/check.rs (unsupported_stage)`, `crates/metal2vulkan/src/error/mod.rs (from)` | `none`: a stage outside AIR's public stages |
 | `AddressSpace` | An LLVM address space the typed model does not define (it defines AIR's `thread` 0 through `threadgroup_imageblock` 4, `object_data` 6 and the... | every device (not implemented) | `ours` | 2: `crates/metal2vulkan-air/src/ir/types.rs (from_raw)`, `crates/metal2vulkan/src/memory/plan.rs (reprs)` | `none`: Apple's AGX library address spaces |
 | `ModuleRecord` | A module-level record outside the accepted subset (alias, ifunc, comdat, …) | - | `-` | via a helper: 4: `crates/metal2vulkan-air/src/bitcode/module.rs (function)`, `crates/metal2vulkan-air/src/bitcode/module.rs (global)` (+2) | `none`: LLVM constructs AIR does not emit |

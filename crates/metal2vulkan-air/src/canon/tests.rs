@@ -18,6 +18,7 @@ use crate::ir::{
     Linkage, Section, TailKind, Value,
 };
 
+mod aggregates;
 mod command_buffers;
 mod global_builtins;
 mod private_memory;

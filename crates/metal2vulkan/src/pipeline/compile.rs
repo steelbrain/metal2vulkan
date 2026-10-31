@@ -1426,6 +1426,7 @@ fn with_request_shared<'k, T>(
                         i.stage,
                         crate::library::FunctionStage::Visible
                             | crate::library::FunctionStage::Exported
+                            | crate::library::FunctionStage::Extern
                     )
                 })
                 .count();

@@ -208,6 +208,7 @@ pub(crate) fn metallib_properties(
         FunctionStage::Fragment => FunctionType::Fragment,
         FunctionStage::Kernel => FunctionType::Kernel,
         FunctionStage::Visible => FunctionType::Visible,
+        FunctionStage::Extern => FunctionType::Extern,
         FunctionStage::Intersection => FunctionType::Intersection,
         FunctionStage::Mesh => FunctionType::Mesh,
         FunctionStage::Object => FunctionType::Object,

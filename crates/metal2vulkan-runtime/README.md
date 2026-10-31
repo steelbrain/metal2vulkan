@@ -51,7 +51,10 @@ ash = { version = "0.38", default-features = false, features = ["std"] }
 - Shaders come in as a metallib (`Device::new_library_with_data`); there is no MSL compiler. Like
   Metal, `new_library_with_data` refuses bare AIR bitcode. For AIR bitcode, parse it with
   `metal2vulkan::library::Library::from_air` and pass the result to
-  `Device::new_library_with_compile_library`.
+  `Device::new_library_with_compile_library`. A Core Image kernel library (`metallib -cikernel`)
+  loads as Metal loads it: an executable library whose kernels are extern functions
+  (`Library::extern_function_names`), which Core Image links into an ordinary kernel library of
+  its own through Metal; that library's kernel is what a pipeline state compiles.
 - Every shader the runtime translates is kept on disk, by default in the platform's per-user cache
   directory, and in memory ([HOWTO](../../docs/HOWTO.md#the-runtimes-shader-cache)).
   `ShaderCacheOptions` names another directory; give each test its own.

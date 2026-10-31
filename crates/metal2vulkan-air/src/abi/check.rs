@@ -607,10 +607,13 @@ pub(super) fn container(
         // Intersection (`TYPE` 6) and every other stage are unmodeled, not malformed.
         FunctionStage::Intersection => return Err(unsupported_stage(6)),
         FunctionStage::Other(tag) => return Err(unsupported_stage(tag)),
-        // A visible function, or a function a dynamic library exports, is no entry point: its
-        // module declares none to match. A library never compiles one as a stage
-        // (`library::Function` refuses it as `EntryNotFound`).
-        FunctionStage::Visible | FunctionStage::Exported => return Err(mismatch()),
+        // A visible function, a function a dynamic library exports, or a Core Image kernel
+        // library's extern function, is no entry point: its module declares none to match. A
+        // library never compiles one as a stage (`library::Function` refuses it as
+        // `EntryNotFound`).
+        FunctionStage::Visible | FunctionStage::Exported | FunctionStage::Extern => {
+            return Err(mismatch())
+        }
     };
     // A metallib function's bitcode is its own module holding only that entry, its callees, and
     // the globals they need, so it declares exactly one entry point.

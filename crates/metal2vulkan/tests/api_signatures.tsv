@@ -5394,6 +5394,7 @@ macro-member	metal2vulkan::metal::FunctionOptions::PIPELINE_INDEPENDENT	PIPELINE
 macro-member	metal2vulkan::metal::FunctionOptions::STORE_FUNCTION_IN_METAL_PIPELINES_SCRIPT	STORE_FUNCTION_IN_METAL_PIPELINES_SCRIPT = 0x2, "MTLFunctionOptionStoreFunctionInMetalPipelinesScript";
 macro-member	metal2vulkan::metal::FunctionOptions::aliases	aliases
 macro-member	metal2vulkan::metal::FunctionOptions::dropped	dropped
+macro-member	metal2vulkan::metal::FunctionType::Extern	Extern = 4, "MTLFunctionTypeExtern";
 macro-member	metal2vulkan::metal::FunctionType::Fragment	Fragment = 2, "MTLFunctionTypeFragment";
 macro-member	metal2vulkan::metal::FunctionType::FunctionType	FunctionType = "MTLFunctionType"
 macro-member	metal2vulkan::metal::FunctionType::Intersection	Intersection = 6, "MTLFunctionTypeIntersection";
@@ -7913,9 +7914,11 @@ method	metal2vulkan-runtime::IoSurfaceYCbCr::new	pub const fn new(pixel_format: 
 method	metal2vulkan-runtime::IoSurfaceYCbCr::with_matrix	pub const fn with_matrix(mut self, matrix: SurfaceYCbCrMatrix) -> IoSurfaceYCbCr
 method	metal2vulkan-runtime::LayerSetting::new	pub fn new(layer: CString, name: CString, value: LayerSettingValue) -> LayerSetting
 method	metal2vulkan-runtime::Library::device	pub fn device(&self) -> &Device
+method	metal2vulkan-runtime::Library::extern_function_names	pub fn extern_function_names(&self) -> Vec<String>
 method	metal2vulkan-runtime::Library::function_names	pub fn function_names(&self) -> Vec<String>
 method	metal2vulkan-runtime::Library::install_name	pub fn install_name(&self) -> Option<&str>
 method	metal2vulkan-runtime::Library::library_type	pub fn library_type(&self) -> LibraryType
+method	metal2vulkan-runtime::Library::new_extern_function_with_name	pub fn new_extern_function_with_name(&self, name: &str) -> Result<Function, Error>
 method	metal2vulkan-runtime::Library::new_function_with_descriptor	pub fn new_function_with_descriptor(&self, descriptor: &FunctionDescriptor) -> Result<Function, Error>
 method	metal2vulkan-runtime::Library::new_function_with_name	pub fn new_function_with_name(&self, name: &str) -> Result<Function, Error>
 method	metal2vulkan-runtime::Library::new_function_with_name_constant_values	pub fn new_function_with_name_constant_values(&self, name: &str, constants: &FunctionConstantValues) -> Result<Function, Error>
@@ -10138,6 +10141,7 @@ variant	metal2vulkan-air::bitstream::AbbrevOp::Blob	Blob
 variant	metal2vulkan-air::bitstream::AbbrevOp::Literal	Literal(u64)
 variant	metal2vulkan-air::bitstream::AbbrevOp::Scalar	Scalar(ScalarOp)
 variant	metal2vulkan-air::container::FunctionStage::Exported	Exported
+variant	metal2vulkan-air::container::FunctionStage::Extern	Extern
 variant	metal2vulkan-air::container::FunctionStage::Fragment	Fragment
 variant	metal2vulkan-air::container::FunctionStage::Intersection	Intersection
 variant	metal2vulkan-air::container::FunctionStage::Kernel	Kernel
@@ -13296,6 +13300,7 @@ variant	metal2vulkan::error::VerifyError::Budget	Budget(Error)
 variant	metal2vulkan::error::VerifyError::ExceedsProfile	ExceedsProfile(Capability)
 variant	metal2vulkan::error::VerifyError::Rule	Rule(Violation)
 variant	metal2vulkan::library::FunctionStage::Exported	Exported
+variant	metal2vulkan::library::FunctionStage::Extern	Extern
 variant	metal2vulkan::library::FunctionStage::Fragment	Fragment
 variant	metal2vulkan::library::FunctionStage::Intersection	Intersection
 variant	metal2vulkan::library::FunctionStage::Kernel	Kernel

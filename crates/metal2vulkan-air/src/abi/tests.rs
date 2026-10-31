@@ -4035,7 +4035,7 @@ fn container_metadata_is_cross_checked() {
     // Unmodeled stages are unsupported, not a mismatch.
     for (stage, tag) in [
         (FunctionStage::Intersection, 6),
-        (FunctionStage::Other(5), 5),
+        (FunctionStage::Other(9), 9),
     ] {
         let err = check(&mut abi, &m, &library_function(stage, vec![])).unwrap_err();
         let Error::InvalidInput(i) = err else {

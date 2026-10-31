@@ -2,7 +2,7 @@
 # CoreAnimation, CoreImage or VideoToolbox plausibly reaches it), app (a typical Metal app from
 # public API), rare (specialized public API), none (no public API path). A judgment, kept by hand;
 # refusal_surface.py lists every variant that has none (--missing-reach).
-feature	LibraryKind	none	a metallib that is not an executable library, loaded as one
+feature	LibraryKind	none	a metallib file type Apple's toolchain is not seen to write
 feature	Stage	none	a stage outside AIR's public stages
 feature	AddressSpace	none	Apple's AGX library address spaces
 feature	ModuleRecord	none	LLVM constructs AIR does not emit

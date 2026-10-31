@@ -49,7 +49,10 @@
 //!    decoder of Metal's parameter data (`rate_map_data`) in plain AIR: word loads through the
 //!    call's map pointer and Apple's arithmetic. **AIR 2.7 simdgroup-matrix block loads and
 //!    stores** take their AIR 2.8 form, their extent, stride and origin built from the elements per
-//!    row, the origin and the constant transpose flag (`legacy_matrix`). **Global built-in
+//!    row, the origin and the constant transpose flag (`legacy_matrix`). **Aggregate accesses**: a
+//!    load or store of a whole array or struct in buffer or threadgroup memory becomes its scalar
+//!    and vector members' accesses, joined by `insertvalue` or split by `extractvalue`
+//!    (`aggregates`). **Global built-in
 //!    variables**: each `air.get_*` read of a program-scope built-in becomes a read of a built-in
 //!    parameter appended to the entry (`global_builtin`).
 //! 10. **ABI resolution and pruning**: predicate-gated parameters and outputs that are off
@@ -62,6 +65,7 @@
 //! Inlining runs before SCCP: SCCP over the one inlined body sees each call's constant arguments,
 //! which per-function SCCP could not, and deletes the callees' dead paths with the caller's.
 
+mod aggregates;
 mod async_copy;
 mod command_writes;
 mod const_loads;
@@ -636,6 +640,8 @@ pub fn specialize_dynamic(
     // Metal runtime routines: each `frexp` and `ilogb` call becomes the routine's measured answer
     // in plain AIR.
     let body = routine::expand(body, &mut parts, m)?;
+    // Aggregate loads and stores of buffer and threadgroup memory as their members' accesses.
+    let body = aggregates::expand(body, &mut parts, func, m)?;
     // A simdgroup reduction before a discard that Metal's compiler moves past it is placed after
     // the discard, where the fragment lowering gives Metal's lanes.
     let body = if matches!(ep.stage, Stage::Fragment { .. }) {

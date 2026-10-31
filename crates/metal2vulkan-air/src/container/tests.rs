@@ -584,7 +584,8 @@ fn stage_codes() {
         (7, FunctionStage::Mesh),
         (8, FunctionStage::Object),
         (3, FunctionStage::Exported),
-        (5, FunctionStage::Other(5)),
+        (5, FunctionStage::Extern),
+        (9, FunctionStage::Other(9)),
     ] {
         assert_eq!(FunctionStage::from_type_tag(code), stage);
     }
@@ -620,11 +621,19 @@ fn unsupported_versions_and_library_kinds() {
     let mut b = sample();
     b.version = (1, 2);
     assert!(parse(&b.build()).is_ok());
+    // A Core Image kernel library (`file_type` 1) is read; a kind Apple's toolchain is not seen
+    // to write is refused.
     let mut b = sample();
     b.file_type = 1;
+    match parse(&b.build()) {
+        Ok(Library::Metallib(ml)) => assert_eq!(ml.library_type(), LibraryType::Executable),
+        other => panic!("{other:?}"),
+    }
+    let mut b = sample();
+    b.file_type = 3;
     match parse(&b.build()).unwrap_err() {
         Error::Unsupported(Unsupported {
-            feature: Feature::LibraryKind(1),
+            feature: Feature::LibraryKind(3),
             ..
         }) => {}
         other => panic!("{other:?}"),

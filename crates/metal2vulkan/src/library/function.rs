@@ -607,9 +607,12 @@ impl Function {
             .ok_or_else(|| invariant("a function's bitcode outside its library"))?;
         Ok(match &e.source {
             // A metallib's visible function is no stage, as a module's is not; nor is a function
-            // a dynamic library exports.
+            // a dynamic library exports, or a Core Image kernel library's extern function.
             EntrySource::Metallib(_)
-                if matches!(e.stage, FunctionStage::Visible | FunctionStage::Exported) =>
+                if matches!(
+                    e.stage,
+                    FunctionStage::Visible | FunctionStage::Exported | FunctionStage::Extern
+                ) =>
             {
                 FunctionSource::Visible
             }
@@ -662,7 +665,8 @@ pub(crate) enum FunctionSource<'a> {
     Metallib(Box<LibraryFunction<'a>>),
     /// Entry `index` of a wrapper or raw module.
     Module { bitcode: &'a [u8], index: u32 },
-    /// A visible function, or a function a dynamic library exports: not a stage.
+    /// A visible function, a function a dynamic library exports, or a Core Image kernel
+    /// library's extern function: not a stage.
     Visible,
 }
 

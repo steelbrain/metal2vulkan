@@ -1033,7 +1033,8 @@ pub enum Capability {
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Feature {
     // ---- Input constructs outside the typed model ----
-    /// A metallib that is not an executable library (dynamic library, companion).
+    /// A metallib of a kind the container does not read: its header's `file_type` is none of 0 (an
+    /// executable library), 1 (a Core Image kernel library) and 2 (a dynamic library).
     LibraryKind(u8),
     /// A function stage the model does not cover.
     Stage(u8),

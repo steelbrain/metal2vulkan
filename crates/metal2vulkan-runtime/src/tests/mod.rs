@@ -54,6 +54,8 @@ mod copied_log_device;
 mod copy_bounds;
 mod copy_plan;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
+mod core_image_libraries;
+#[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod cpu_copy_layouts;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod creation_prediction_kinds;

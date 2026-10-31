@@ -18,7 +18,7 @@ use super::Error;
 use crate::derived::{Derived, DerivedMap};
 use crate::resource_ids::{function_name, FunctionHolds, LibraryHolds};
 use metal2vulkan::bind::ArgumentBufferLayout;
-use metal2vulkan::library::{FunctionConstantValues, LibraryType};
+use metal2vulkan::library::{FunctionConstantValues, FunctionStage, LibraryType};
 use metal2vulkan::metal::{FunctionOptions, FunctionType, PatchType};
 use metal2vulkan::pipeline::{FunctionDescriptor as StageFunction, LinkedFunction};
 use metal2vulkan::reflection::{
@@ -168,12 +168,32 @@ impl Library {
         &self.device
     }
 
-    /// `functionNames`, in the library's table order.
+    /// `functionNames`, in the library's table order. A Core Image kernel library's extern
+    /// functions are not among them, as Metal leaves them out
+    /// ([`extern_function_names`](Self::extern_function_names) lists them).
     pub fn function_names(&self) -> Vec<String> {
         self.library
             .functions()
+            .filter(|info| info.stage != FunctionStage::Extern)
             .map(|info| info.name.to_string())
             .collect()
+    }
+
+    /// `externFunctionNames` (private to Metal's own library class): the extern functions of a
+    /// Core Image kernel library (`metal -fcikernel`, `metallib -cikernel`), the kernels Core Image
+    /// takes with [`new_extern_function_with_name`](Self::new_extern_function_with_name) and links
+    /// into a kernel of its own; none for any other library. In the reverse of the library's table
+    /// order, as Metal answers (libraries of two and of four kernels, an M3 Max under macOS
+    /// 27.0.1).
+    pub fn extern_function_names(&self) -> Vec<String> {
+        let mut names: Vec<String> = self
+            .library
+            .functions()
+            .filter(|info| info.stage == FunctionStage::Extern)
+            .map(|info| info.name.to_string())
+            .collect();
+        names.reverse();
+        names
     }
 
     /// `type`: [`LibraryType::Dynamic`] for a dynamic library's metallib (or the universal file
@@ -197,10 +217,28 @@ impl Library {
     /// constant it declares is undefined). A name the library lacks, or names more than once, is
     /// refused (`Compile(InvalidDescriptor)`), where Metal answers nil. Every name of a dynamic
     /// library is refused (`Invalid(DynamicLibraryFunction)`): Metal stops at an assertion for
-    /// each, its functions being no stage.
+    /// each, its functions being no stage. A Core Image kernel library's extern function is made,
+    /// as Metal makes it ([`new_extern_function_with_name`](Self::new_extern_function_with_name)).
     pub fn new_function_with_name(&self, name: &str) -> Result<Function, Error> {
         self.function(
             "new_function_with_name",
+            name,
+            &FunctionConstantValues::defaults(),
+            false,
+        )
+    }
+
+    /// `newExternFunctionWithName:` (private to Metal's own library class): the function named
+    /// `name`, as [`new_function_with_name`](Self::new_function_with_name) makes and refuses it,
+    /// which is how Metal answers both for any library (measured with an executable library's
+    /// kernel and a Core Image kernel library's extern functions, an M3 Max under macOS 27.0.1).
+    /// A Core Image kernel library's function is an extern function
+    /// ([`Function::function_type`] answers [`FunctionType::Extern`]): a pipeline state made from
+    /// it is refused (`Compile(InvalidDescriptor)`), as Metal fails it ("Function ... was not
+    /// found in the module").
+    pub fn new_extern_function_with_name(&self, name: &str) -> Result<Function, Error> {
+        self.function(
+            "new_extern_function_with_name",
             name,
             &FunctionConstantValues::defaults(),
             false,

@@ -73,9 +73,9 @@ EXHAUSTIVE = {
 }
 
 # Enumerators the SDK headers do not declare but Metal makes on Apple GPUs, appended after a type's
-# header enumerators: each name is the one Metal prints in a texture's description for the raw
-# value (an Apple M3 Max on macOS 26.7 and an Apple M4 on macOS 27.0.1). Programs that page Core
-# Video surfaces create textures in them.
+# header enumerators: each name is the one Metal prints in an object's description for the raw
+# value, where it prints one (an Apple M3 Max on macOS 26.7 and an Apple M4 on macOS 27.0.1).
+# Programs that page Core Video surfaces create textures in the pixel formats.
 PRIVATE = {
     "MTLPixelFormat": [
         ("MTLPixelFormatARGB8Unorm", 84),
@@ -246,6 +246,11 @@ PRIVATE = {
     # a sampler state of it, and samples through it with its bicubic filter. The
     # descriptor keeps two bits; 3 stops the process in `newSamplerStateWithDescriptor:`.
     "MTLSamplerMinMagFilter": [("MTLSamplerMinMagFilterCubic", 2)],
+    # The `functionType` Metal answers for a Core Image kernel library's extern function (`TYPE` 5,
+    # from `newFunctionWithName:` or `newExternFunctionWithName:`), whose description prints
+    # "Unknown" (an Apple M3 Max on macOS 27.0.1): the name is the one Metal's
+    # `newExternFunctionWithName:` and `externFunctionNames` give the kind.
+    "MTLFunctionType": [("MTLFunctionTypeExtern", 4)],
     # Every texture creator takes these bits and the texture's usage keeps them, its views' and
     # shared opens' too; the names are the ones its description prints (an Apple
     # M4 on macOS 27.0.1, plain and validated).

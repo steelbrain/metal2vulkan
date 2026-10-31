@@ -65,6 +65,20 @@ pub fn metallib(functions: &[MtlbFunction<'_>]) -> Vec<u8> {
 
 /// [`metallib`] with `linkage`: its regions follow the bitcode, as in Apple's output.
 pub fn metallib_linked(functions: &[MtlbFunction<'_>], linkage: &MtlbLinkage<'_>) -> Vec<u8> {
+    let file_type = if linkage.dynamic { 2 } else { 0 };
+    write(functions, linkage, file_type)
+}
+
+/// A Core Image kernel library (`metal -fcikernel`, `metallib -cikernel`): file type 1, its
+/// functions (Apple's toolchain tags each `TYPE` 5) sharing the first one's bitcode, written once,
+/// as in Apple's output (a probe).
+pub fn core_image_metallib(functions: &[MtlbFunction<'_>]) -> Vec<u8> {
+    write(functions, &MtlbLinkage::default(), 1)
+}
+
+/// The metallib of `functions` and `linkage` with header `file_type`; every type but an
+/// executable library's (0) shares the first function's bitcode.
+fn write(functions: &[MtlbFunction<'_>], linkage: &MtlbLinkage<'_>, file_type: u8) -> Vec<u8> {
     let (mut public, mut private, mut bitcode, mut entries) =
         (Vec::new(), Vec::new(), Vec::new(), Vec::new());
     let md = |tags: &[([u8; 4], Vec<u8>)]| {
@@ -94,7 +108,7 @@ pub fn metallib_linked(functions: &[MtlbFunction<'_>], linkage: &MtlbLinkage<'_>
         let (pub_at, priv_at) = (public.len(), private.len());
         public.extend(md(&pub_tags));
         private.extend(md(&[]));
-        let bc_at = match (linkage.dynamic, bitcode.is_empty()) {
+        let bc_at = match (file_type != 0, bitcode.is_empty()) {
             (true, false) => 0,
             _ => {
                 let at = bitcode.len();
@@ -176,7 +190,7 @@ pub fn metallib_linked(functions: &[MtlbFunction<'_>], linkage: &MtlbLinkage<'_>
     out.extend_from_slice(&0x8001u16.to_le_bytes());
     out.extend_from_slice(&2u16.to_le_bytes());
     out.extend_from_slice(&9u16.to_le_bytes());
-    out.push(if linkage.dynamic { 2 } else { 0 });
+    out.push(file_type);
     out.push(0x81);
     out.extend_from_slice(&26u16.to_le_bytes());
     out.extend_from_slice(&0u16.to_le_bytes());

@@ -1,4 +1,4 @@
-// Generated from the macOS 27.0 SDK Metal.framework headers (names and values).
+// Generated from the macOS 27.2 SDK Metal.framework headers (names and values).
 // Regenerate with scripts/regen-metal-enums/regen_metal_enums.py; do not edit.
 
 metal_enum! {

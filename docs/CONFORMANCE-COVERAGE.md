@@ -79,18 +79,18 @@ What this axis cannot see, measured rather than asserted:
 | | |
 |---|---|
 | Metal enums and option sets with a generated value list | 59 |
-| their values | 757 |
+| their values | 758 |
 | of those, unreachable: no case can put them to Metal | 51 |
-| so reachable by some case | 706 |
+| so reachable by some case | 707 |
 | values compared | 675 |
-| share of the reachable compared | 96% |
+| share of the reachable compared | 95% |
 | values only the suite's shared sources name | 15 |
-| values no source names and no recording holds | 16 |
+| values no source names and no recording holds | 17 |
 | of the types above, those the suite also spells through its own vocabulary | 5 |
 | types every reachable value of which is compared | 44 |
 | types no value of which is compared | 2 |
 
-The share is weakly informative on its own: `MTLPixelFormat`, `MTLDataType`, `MTLAttributeFormat`, `MTLVertexFormat` hold 506 of the 757 values between them, so an aggregate over types this uneven is mostly theirs. The per-type table is the one to read.
+The share is weakly informative on its own: `MTLPixelFormat`, `MTLDataType`, `MTLAttributeFormat`, `MTLVertexFormat` hold 506 of the 758 values between them, so an aggregate over types this uneven is mostly theirs. The per-type table is the one to read.
 
 ### Depth by type
 
@@ -102,8 +102,8 @@ Deepest gap first, which is the order the work list reads in. *answered*, *at a 
 | `MTLStepFunction` | 9 | 5 | 0 | 0 | 5 | 0 | 0 | 4 |
 | `MTLBarrierScope` | 3 | 1 | 0 | 0 | 1 | 0 | 0 | 2 |
 | `MTLDataType` | 97 | 79 | 74 | 0 | 14 | 0 | 16 | 2 |
+| `MTLFunctionType` | 8 | 6 | 6 | 0 | 0 | 0 | 0 | 2 |
 | `MTLArgumentBuffersTier` | 2 | 1 | 1 | 0 | 0 | 0 | 0 | 1 |
-| `MTLFunctionType` | 7 | 6 | 6 | 0 | 0 | 0 | 0 | 1 |
 | `MTLReadWriteTextureTier` | 3 | 2 | 1 | 0 | 2 | 0 | 0 | 1 |
 | `MTLResourceUsage` | 3 | 2 | 0 | 0 | 2 | 0 | 0 | 1 |
 | `MTLCommandBufferStatus` | 6 | 0 | 0 | 0 | 0 | 6 | 0 | 0 |
@@ -282,7 +282,7 @@ The work list of this axis, and the shape of the answer to *is the depth suffici
 
 - **`MTLAttributeFormat`**, 54 of 54 compared
 - **`MTLBindingType`**, 8 of 12 compared
-- **`MTLFunctionType`**, 6 of 7 compared
+- **`MTLFunctionType`**, 6 of 8 compared
 - **`MTLFunctionOptions`**, 5 of 5 compared
 - **`MTLRenderStages`**, 5 of 5 compared
 - **`MTLStepFunction`**, 5 of 9 compared
@@ -326,8 +326,8 @@ The work list. A name here is a value of Metal's that no committed recording hol
 - **`MTLStepFunction`**, 4 of 9: `MTLStepFunctionPerVertex`, `MTLStepFunctionPerInstance`, `MTLStepFunctionPerPatch`, `MTLStepFunctionPerPatchControlPoint`
 - **`MTLBarrierScope`**, 2 of 3: `MTLBarrierScopeBuffers`, `MTLBarrierScopeRenderTargets`
 - **`MTLDataType`**, 2 of 97: `MTLDataTypeNone`, `MTLDataTypeTensor`
+- **`MTLFunctionType`**, 2 of 8: `MTLFunctionTypeIntersection`, `MTLFunctionTypeExtern`
 - **`MTLArgumentBuffersTier`**, 1 of 2: `MTLArgumentBuffersTier1`
-- **`MTLFunctionType`**, 1 of 7: `MTLFunctionTypeIntersection`
 - **`MTLReadWriteTextureTier`**, 1 of 3: `MTLReadWriteTextureTier1`
 - **`MTLResourceUsage`**, 1 of 3: `MTLResourceUsageSample`
 
