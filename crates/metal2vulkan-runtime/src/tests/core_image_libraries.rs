@@ -35,7 +35,7 @@ fn a_core_image_library_answers_its_extern_functions() {
     let bytes = core_image_metallib(&[function("tint", 5, &module), function("shift", 5, &module)]);
     let library = device.new_library_with_data(&bytes).expect("library");
     assert!(library.function_names().is_empty());
-    // The reverse of the table's order, as Metal lists them.
+    // The reverse of the table's order, which is Metal's order for these two names.
     assert_eq!(library.extern_function_names(), ["shift", "tint"]);
     for name in ["tint", "shift"] {
         for f in [

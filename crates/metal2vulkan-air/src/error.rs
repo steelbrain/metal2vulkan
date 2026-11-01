@@ -359,7 +359,8 @@ pub enum ContainerError {
         /// The header's minor version.
         minor: u16,
     },
-    /// A function's bitcode does not hash to its `HASH` tag (SHA-256).
+    /// A function's bitcode does not hash to its `HASH` tag (SHA-256), in any library but a Core
+    /// Image kernel library, whose `HASH` is not checked (`container`'s docs).
     HashMismatch,
     /// An offset or size that points outside the file or its section, or ranges of two
     /// functions' bitcode or metadata that overlap.

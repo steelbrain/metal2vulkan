@@ -32,8 +32,10 @@
 //! A metallib's functions are enumerated from its function table, every known tag is validated
 //! strictly, unknown tags are kept as raw tags (translation semantics come from the bitcode and
 //! AIR metadata, never from container tags), and every function's `HASH` is verified against its
-//! bitcode (linear: function bitcode ranges must be disjoint). Selecting a function by name is the
-//! Metal contract (`newFunctionWithName:`), not a name-keyed heuristic.
+//! bitcode (linear: function bitcode ranges must be disjoint), but a Core Image kernel library's:
+//! Apple's toolchain writes one that is not its module's SHA-256, so it is kept raw and the
+//! module's digest is computed (`mtlb`'s docs). Selecting a function by name is the Metal contract
+//! (`newFunctionWithName:`), not a name-keyed heuristic.
 //!
 //! A wrapper or raw module may hold several entry points; enumerating them needs its AIR metadata,
 //! which is decoded by `air::bitcode`/`air::abi`, so this layer only locates the stream.

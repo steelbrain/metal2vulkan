@@ -610,6 +610,89 @@ fn hash_is_verified() {
     );
 }
 
+/// A Core Image kernel library in `metallib -cikernel`'s layout (file type 1; extern functions,
+/// `TYPE` 5, over one module; `HDYN` naming the file and a `UUID`), every function's `HASH` set
+/// to `hash`.
+fn core_image(names: &[&str], hash: [u8; 32]) -> Builder {
+    let functions = names
+        .iter()
+        .map(|name| FnSpec {
+            hash: Some(hash),
+            ..FnSpec::new(name, 5, 4)
+        })
+        .collect();
+    let mut b = Builder::new(functions);
+    b.file_type = 1;
+    b.shared_bitcode = true;
+    b.inclusive_md_size = true;
+    b.regions = vec![(*b"HDYN", hdyn("ci.metallib", &[]))];
+    b.extended.push((*b"UUID", vec![7; 16]));
+    b
+}
+
+/// Apple's `metallib -cikernel` writes a `HASH` that, for some modules, is not the SHA-256 of the
+/// module the library's functions share, and Metal reads the library (the `mtlb` docs). The value
+/// is read as 32 bytes and kept raw; each function's content key is the module's SHA-256. Every
+/// other library's `HASH` stays verified.
+#[test]
+fn a_core_image_library_hash_is_kept_as_read() {
+    let module = FnSpec::new("m", 5, 4).bitcode;
+    let digest = sha256(&module);
+    let names = ["tint", "shift", "invert"];
+    let written = [0x5A; 32];
+    assert_ne!(written, digest);
+    for hash in [written, digest] {
+        let bytes = core_image(&names, hash).build();
+        let lib = metallib(&bytes);
+        assert_eq!(lib.library_type(), LibraryType::Executable);
+        let read: Vec<_> = lib.functions.iter().map(|f| (f.name, f.stage)).collect();
+        assert_eq!(read, names.map(|n| (n, FunctionStage::Extern)));
+        for f in &lib.functions {
+            assert_eq!(f.bitcode, module.as_slice());
+            assert_eq!(f.hash, digest, "{}: the module's own digest", f.name);
+            let kept: Vec<&[u8]> = f
+                .raw_tags
+                .iter()
+                .filter(|t| &t.fourcc == b"HASH")
+                .map(|t| t.bytes)
+                .collect();
+            assert_eq!(kept, [&hash[..]], "{}", f.name);
+        }
+        assert_eq!(lib.linkage.install_name, Some("ci.metallib"));
+    }
+    // The tag is still read strictly: 32 bytes, once, present.
+    let check = |edit: &dyn Fn(&mut FnSpec), want: ContainerError| {
+        let mut b = core_image(&names, written);
+        edit(&mut b.functions[1]);
+        let err = parse(&b.build()).unwrap_err();
+        assert_eq!(container_kind(&err), want, "{err:?}");
+    };
+    check(&|f| f.omit.push(*b"HASH"), ContainerError::MissingTag);
+    check(
+        &|f| f.extra.push((*b"HASH", vec![0; 32])),
+        ContainerError::DuplicateTag,
+    );
+    check(
+        &|f| {
+            f.omit.push(*b"HASH");
+            f.extra.push((*b"HASH", vec![0; 31]));
+        },
+        ContainerError::BadTag,
+    );
+    // The same table as a dynamic library's exports is verified, and refused.
+    let mut dynamic = core_image(&names, written);
+    dynamic.file_type = 2;
+    for f in &mut dynamic.functions {
+        f.type_code = 3;
+    }
+    let err = parse(&dynamic.build()).unwrap_err();
+    assert_eq!(
+        container_kind(&err),
+        ContainerError::HashMismatch,
+        "{err:?}"
+    );
+}
+
 #[test]
 fn unsupported_versions_and_library_kinds() {
     let mut b = sample();

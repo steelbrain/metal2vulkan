@@ -182,9 +182,12 @@ impl Library {
     /// `externFunctionNames` (private to Metal's own library class): the extern functions of a
     /// Core Image kernel library (`metal -fcikernel`, `metallib -cikernel`), the kernels Core Image
     /// takes with [`new_extern_function_with_name`](Self::new_extern_function_with_name) and links
-    /// into a kernel of its own; none for any other library. In the reverse of the library's table
-    /// order, as Metal answers (libraries of two and of four kernels, an M3 Max under macOS
-    /// 27.0.1).
+    /// into a kernel of its own; none for any other library. The names are Metal's; their order is
+    /// the reverse of the library's table order, which differs from Metal's: Metal answers that
+    /// order for some libraries (one of the kernels `tint` and `shift`), and for others (libraries
+    /// of 4 to 200 kernels written from scratch, and Core Image's own) an order of its own,
+    /// neither the table's, its reverse, nor sorted (an M3 Max under macOS 27.0.1, the
+    /// conformance crate's `probes/metallib_function_hashes.m`).
     pub fn extern_function_names(&self) -> Vec<String> {
         let mut names: Vec<String> = self
             .library

@@ -322,6 +322,16 @@ for info in sampling.functions() {
 
 - `library.function(name)` finds a function like `newFunctionWithName:`; a missing name is
   `Error::InvalidDescriptor(EntryNotFound)`.
+- A metallib function's `info.air_hash` is the SHA-256 of its bitcode, its content key. In every
+  library but a Core Image kernel library it is the function's `HASH` tag, checked against the
+  bitcode: a mismatch is `InvalidInput(Container(HashMismatch))`, though Metal checks no `HASH`
+  and loads such a library. A Core Image kernel library (file type 1, `metallib -cikernel`)
+  lists its kernels as extern functions (`FunctionStage::Extern`, no stage) over one module, and
+  Apple's toolchain writes them a `HASH` that, for some modules, is not that module's SHA-256
+  (what it digests is not known); Core Image's own libraries are such. Its `HASH` is read as 32
+  bytes and kept as read, and `air_hash` is the module's SHA-256, computed. The conformance
+  crate's `probes/metallib_function_hashes.m` measures what Metal answers for both kinds of
+  library.
 - `function.reflection(&budget)` answers as `reflectionForFunctionWithName:` does: the function's
   arguments in declaration order with their types, access, indices and use, in Metal's shape
   (module `reflection`). It is `None` for a metallib function whose library carries no reflection,

@@ -5,7 +5,9 @@
 //!
 //! - [`Library::parse`] accepts a metallib, a bitcode wrapper, or a raw bitcode module. A
 //!   metallib's table comes from its container tags (every function `HASH` is verified, linear in
-//!   the input); its bitcode and AIR metadata are decoded only when a function is compiled.
+//!   the input, but a Core Image kernel library's, which Apple's toolchain does not write as its
+//!   module's SHA-256: that digest is computed instead); its bitcode and AIR metadata are decoded
+//!   only when a function is compiled.
 //! - A wrapper or raw module ([`Library::from_air`]) is one bitcode module that may hold several
 //!   entry points. Enumerating them needs the module's AIR metadata, so construction decodes the
 //!   module once under the standard budget and records **every** entry.
@@ -677,7 +679,8 @@ pub struct FunctionInfo<'a> {
     pub name: &'a str,
     pub stage: FunctionStage,
     /// SHA-256 of the function's bitcode (its content key): a metallib function's verified
-    /// `HASH`, or the hash of the whole wrapper or raw module its entries share.
+    /// `HASH` (a Core Image kernel library's module's SHA-256, computed, since its `HASH` is not
+    /// that), or the hash of the whole wrapper or raw module its entries share.
     pub air_hash: Hash256,
     /// Function constants from the metallib `CNST` tag, or from the module's AIR metadata.
     pub constants: &'a [FunctionConstant],

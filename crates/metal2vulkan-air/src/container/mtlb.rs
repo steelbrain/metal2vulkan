@@ -13,7 +13,18 @@
 //!   list follows the last entry.
 //! - Per function, `OFFT` holds its public-metadata, private-metadata, and bitcode offsets relative
 //!   to their section bases. Each metadata record is `u32 size` and a tag list of exactly that
-//!   size. The bitcode is `MDSZ` bytes of wrapped bitcode, and `HASH` is its SHA-256.
+//!   size. The bitcode is `MDSZ` bytes of wrapped bitcode, and `HASH` is its SHA-256, except in a
+//!   Core Image kernel library (below).
+//! - A Core Image kernel library's `HASH` is 32 bytes that are not, in general, the SHA-256 of
+//!   the module its functions share. Apple's `metallib -cikernel` writes one value for every
+//!   function, which for some modules is the written module's SHA-256 and for others is not (the
+//!   same input gives the same value; observed with modules written from scratch under Xcode
+//!   27.2's toolchain, and in each of Core Image's own libraries on macOS 27.0.1); what it is a
+//!   digest of is not known. Metal does not check `HASH` (a probe, an M3 Max under macOS 27.0.1:
+//!   an executable library and a Core Image kernel library with one bit of every `HASH` flipped
+//!   load, and the executable library's kernel runs). So a Core Image kernel library's `HASH` is
+//!   read as 32 bytes and kept raw, uninterpreted, and each of its functions' content key is the
+//!   SHA-256 of its bitcode, computed here; every other library's `HASH` is verified.
 //! - No two functions share or overlap a public-metadata record, a private-metadata record, or a
 //!   bitcode range. Apple output never does, and requiring it keeps parsing (and the parsed
 //!   result) linear in the file size: otherwise many entries could re-parse one large record.
@@ -139,7 +150,10 @@ pub struct LibraryFunction<'a> {
     pub name: &'a str,
     /// `TYPE`: the function's stage.
     pub stage: FunctionStage,
-    /// The verified SHA-256 of [`LibraryFunction::bitcode`]: the function's content key.
+    /// The SHA-256 of [`LibraryFunction::bitcode`]: the function's content key. It is the
+    /// function's `HASH`, verified, in every library but a Core Image kernel library, whose
+    /// `HASH` is not its module's SHA-256 (the module docs): there it is computed, and `HASH` is
+    /// kept as read in [`LibraryFunction::raw_tags`].
     pub hash: Hash256,
     /// `VERS`: the AIR version, major and minor.
     pub air_version: (u16, u16),
@@ -151,7 +165,8 @@ pub struct LibraryFunction<'a> {
     pub public: FunctionPublicMetadata<'a>,
     /// Private metadata tags, kept raw (no content observed).
     pub private: Vec<RawTag<'a>>,
-    /// Function-table tags this layer does not interpret (`LAYR`, `TESS`, `RFLT`, …).
+    /// Function-table tags this layer does not interpret (`LAYR`, `TESS`, `RFLT`, …; a Core Image
+    /// kernel library's `HASH`).
     pub raw_tags: Vec<RawTag<'a>>,
 }
 
@@ -344,8 +359,10 @@ pub(super) fn parse(bytes: &[u8]) -> Result<Metallib<'_>, Error> {
 
     // Function bitcode ranges are disjoint, so verifying every hash is linear in the file size. A
     // dynamic library's functions, and a Core Image kernel library's, may share one range exactly,
-    // which is hashed once.
+    // which is hashed once. A Core Image kernel library's `HASH` is not its module's SHA-256 (the
+    // module docs), so its functions take the computed digest instead of having it verified.
     let shared = matches!(header.file_type, FILE_TYPE_DYNAMIC | FILE_TYPE_CORE_IMAGE);
+    let verified = header.file_type != FILE_TYPE_CORE_IMAGE;
     let mut ranges: Vec<(u64, u64, u64, usize)> = parsed
         .iter()
         .enumerate()
@@ -363,7 +380,7 @@ pub(super) fn parse(bytes: &[u8]) -> Result<Metallib<'_>, Error> {
     let mut hashed: Option<(u64, u64, Hash256)> = None;
     for &(start, len, entry, i) in &ranges {
         let p = parsed
-            .get(i)
+            .get_mut(i)
             .ok_or_else(|| container_error(ContainerError::BadOffset, entry))?;
         let digest = match hashed {
             Some((s, l, digest)) if s == start && l == len => digest,
@@ -373,7 +390,9 @@ pub(super) fn parse(bytes: &[u8]) -> Result<Metallib<'_>, Error> {
                 digest
             }
         };
-        if digest != p.function.hash {
+        if !verified {
+            p.function.hash = digest;
+        } else if digest != p.function.hash {
             return Err(container_error(ContainerError::HashMismatch, entry));
         }
     }
@@ -541,7 +560,15 @@ fn function<'a>(
         let slot_filled = match &tag.raw.fourcc {
             b"NAME" => set(&mut name, r.cstr()?),
             b"TYPE" => set(&mut stage, FunctionStage::from_type_tag(r.u8()?)),
-            b"HASH" => set(&mut hash, r.array::<32>()?),
+            b"HASH" => {
+                let value = r.array::<32>()?;
+                if header.file_type == FILE_TYPE_CORE_IMAGE {
+                    // Not the module's SHA-256 (the module docs): kept as read, and the content
+                    // key is computed once the bitcode ranges are checked.
+                    raw_tags.push(tag.raw);
+                }
+                set(&mut hash, value)
+            }
             b"MDSZ" => set(&mut size, r.u64()?),
             b"OFFT" => set(&mut offsets, (r.u64()?, r.u64()?, r.u64()?)),
             b"VERS" => set(&mut versions, ((r.u16()?, r.u16()?), (r.u16()?, r.u16()?))),
