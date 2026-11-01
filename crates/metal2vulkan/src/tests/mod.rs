@@ -142,6 +142,7 @@ mod engine_stage_io;
 mod engine_stage_io_tail;
 mod engine_stage_root_attributes;
 mod engine_stencil;
+mod engine_stitched;
 mod engine_storage_view_variant;
 mod engine_swizzled_storage;
 mod engine_table_copies;
