@@ -199,11 +199,13 @@ pub(super) fn check_stage(m: &TypedModule) -> Result<(), VerifyError> {
             // and an evaluation entry its per-vertex inputs so; no other model declares that
             // form.
             let per_element = m.entry.model == ExecModel::MeshEXT && dir == IoDir::Output;
-            let arrays_vertices = match (m.entry.model, dir) {
-                (ExecModel::Geometry | ExecModel::TessellationEvaluation, IoDir::Input) => true,
-                (ExecModel::TessellationControl, _) => true,
-                _ => false,
-            };
+            let arrays_vertices = matches!(
+                (m.entry.model, dir),
+                (
+                    ExecModel::Geometry | ExecModel::TessellationEvaluation,
+                    IoDir::Input
+                ) | (ExecModel::TessellationControl, _)
+            );
             let per_vertex = arrays_vertices && geometry_per_vertex(builtin);
             let vertex_form = arrays_vertices && element_array(m, builtin, g.pointee)?;
             // A control entry's arrayed outputs are its per-vertex form, checked above.

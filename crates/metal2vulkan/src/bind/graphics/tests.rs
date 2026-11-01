@@ -111,12 +111,27 @@ fn draws_map_to_the_vulkan_draw_of_the_same_arguments() {
 
 /// A render plan names only vertex and fragment stages; a tessellation pipeline's vertex
 /// function is its evaluation stage, and its synthesized vertex and control stages are none, as
-/// are the geometry stages of barycentric weights read as varyings.
+/// are the geometry stages of barycentric weights read as varyings and a band's control and
+/// evaluation stages.
 #[test]
 fn only_vertex_and_fragment_stages_are_render_stages() {
     use vk::ShaderStage as S;
-    let stages =
-        |modules: &[S], tessellated| metal_stages(modules.iter().copied(), tessellated, false);
+    let stages = |modules: &[S], tessellated| {
+        metal_stages(modules.iter().copied(), (tessellated, false), false)
+    };
+    let tessellation = [
+        S::VERTEX,
+        S::TESSELLATION_CONTROL,
+        S::TESSELLATION_EVALUATION,
+        S::FRAGMENT,
+    ];
+    assert_eq!(
+        metal_stages(tessellation.iter().copied(), (false, true), false),
+        Ok(vec![
+            (Stage::Vertex, S::VERTEX),
+            (Stage::Fragment, S::FRAGMENT)
+        ])
+    );
     assert_eq!(
         stages(&[S::VERTEX, S::FRAGMENT], false),
         Ok(vec![

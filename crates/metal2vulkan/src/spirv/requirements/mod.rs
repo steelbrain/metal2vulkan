@@ -722,11 +722,13 @@ impl Deriver<'_> {
         // evaluation entry's per-vertex inputs and a control entry's per-vertex inputs and
         // outputs per vertex: a builtin's own array, a clip or cull distance's, is that array's
         // element.
-        let arrays_vertices = match (self.model, dir) {
-            (ExecModel::Geometry | ExecModel::TessellationEvaluation, IoDir::Input) => true,
-            (ExecModel::TessellationControl, _) => true,
-            _ => false,
-        };
+        let arrays_vertices = matches!(
+            (self.model, dir),
+            (
+                ExecModel::Geometry | ExecModel::TessellationEvaluation,
+                IoDir::Input
+            ) | (ExecModel::TessellationControl, _)
+        );
         let arrayed = (self.model == ExecModel::MeshEXT && dir == IoDir::Output)
             || (arrays_vertices && crate::spirv::builder::geometry_per_vertex(b));
         let array_len = |d: &Self| -> BResult<Option<u32>> {
@@ -765,9 +767,17 @@ impl Deriver<'_> {
         if b == B::DrawIndex && matches!(self.model, ExecModel::TaskEXT | ExecModel::MeshEXT) {
             return Ok(());
         }
-        // A geometry stage's point size, input or output, is `GeometryPointSize`'s.
-        if b == B::PointSize && self.model == ExecModel::Geometry {
-            self.cap(Cap::GeometryPointSize);
+        // A geometry stage's point size, input or output, is `GeometryPointSize`'s, and a
+        // tessellation stage's `TessellationPointSize`'s.
+        let point_size = match self.model {
+            ExecModel::Geometry => Some(Cap::GeometryPointSize),
+            ExecModel::TessellationControl | ExecModel::TessellationEvaluation => {
+                Some(Cap::TessellationPointSize)
+            }
+            _ => None,
+        };
+        if let Some(cap) = point_size.filter(|_| b == B::PointSize) {
+            self.cap(cap);
             self.feat(VkFeature::ShaderTessellationAndGeometryPointSize);
             return Ok(());
         }

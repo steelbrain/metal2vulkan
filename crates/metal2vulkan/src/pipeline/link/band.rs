@@ -16,8 +16,11 @@
 //! stages:
 //!
 //! - the **control stage** ([`LineBand::control_module`]), one invocation per control point
-//!   (`OutputVertices` 2), copies its vertex's `Position`, clip distances and the varyings the
-//!   fragment stage reads, and writes every tessellation level 1 in the quad domain, so the
+//!   (`OutputVertices` 2), copies every per-vertex value its vertex writes (`Position`, clip
+//!   distances, `PointSize` where the device's tessellation stages take it, and every varying),
+//!   so its inputs are the vertex stage's outputs entire, as an implementation that lays a stage
+//!   interface out as one record needs (MoltenVK lays a vertex stage's outputs out so when
+//!   tessellation follows); and it writes every tessellation level 1 in the quad domain, so the
 //!   tessellator makes the patch's four corners and two triangles;
 //! - the **evaluation stage** ([`LineBand::evaluation_module`]) places corner `(u, v)` at endpoint
 //!   `u` (0 the first, 1 the second), offset across the segment by `(2v - 1) h` framebuffer pixels
@@ -37,8 +40,8 @@
 //!
 //! A corner's float varyings and clip distances are its endpoint's, so they interpolate along the
 //! segment and are constant across it; a varying the fragment stage reads flat (or an integer
-//! one) is the first control point's at every corner, the line's provoking vertex. What Metal's
-//! band fragments read is not measured.
+//! one), and the point size, is the first control point's at every corner, the line's provoking
+//! vertex. What Metal's band fragments read is not measured.
 //!
 //! Refused (`Unsupported{WideLines}`): a device without `tessellationShader` (needing it), and as
 //! not implemented a post-tessellation vertex function, a vertex function that writes
@@ -86,10 +89,13 @@ pub struct BandVarying {
 #[non_exhaustive]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct LineBand {
-    /// The vertex outputs the fragment stage reads, in output order.
+    /// The vertex stage's outputs, in output order.
     pub varyings: Vec<BandVarying>,
     /// The elements of the vertex function's `ClipDistance`, 0 for none.
     pub clip_distances: u32,
+    /// The stages carry the vertex stage's `PointSize`: it writes one and the device enables
+    /// `shaderTessellationAndGeometryPointSize`.
+    pub point_size: bool,
     /// The byte offset of the evaluation stage's push range ([`LineBand::PUSH_BYTES`]), a
     /// multiple of 16, the `vec4`'s base alignment, which link places.
     pub push_offset: u32,
@@ -160,25 +166,36 @@ pub fn plan(
             _ => None,
         })
         .unwrap_or(0);
+    let point_size = f
+        .enabled
+        .features
+        .contains(&VkFeature::ShaderTessellationAndGeometryPointSize)
+        && vertex
+            .io
+            .builtins
+            .iter()
+            .any(|b| matches!(b, StageBuiltin::PointSize { .. }));
     let varyings: Vec<BandVarying> = vertex
         .io
         .outputs
         .iter()
-        .filter_map(|o| {
-            let input = fragment?.io.inputs.iter().find(|i| i.key == o.key)?;
+        .map(|o| {
+            let input = fragment.and_then(|f| f.io.inputs.iter().find(|i| i.key == o.key));
             let flat = o.ty.numeric != IoNumeric::Float
-                || !matches!(
-                    input.role,
-                    IoRole::Varying {
-                        interpolation: Some(Interpolation::Smooth { .. }),
-                        ..
-                    } | IoRole::WindowDepth
-                );
-            Some(BandVarying {
+                || input.is_some_and(|input| {
+                    !matches!(
+                        input.role,
+                        IoRole::Varying {
+                            interpolation: Some(Interpolation::Smooth { .. }),
+                            ..
+                        } | IoRole::WindowDepth
+                    )
+                });
+            BandVarying {
                 key: o.key.clone(),
                 ty: o.ty,
                 flat,
-            })
+            }
         })
         .collect();
     // Every location the evaluation stage writes, counted in whole locations as link counts the
@@ -199,15 +216,17 @@ pub fn plan(
     Ok(LineBand {
         varyings,
         clip_distances,
+        point_size,
         push_offset: 0,
     })
 }
 
-/// A stage's per-vertex values: `Position`, `ClipDistance` where the vertex function writes it,
-/// then each varying, each an input and an output global.
+/// A stage's per-vertex values: `Position`, `ClipDistance` and `PointSize` where the stages carry
+/// them, then each varying, each an input and an output global.
 struct Carried {
     position: (GlobalId, GlobalId),
     clip: Option<(GlobalId, GlobalId)>,
+    point_size: Option<(GlobalId, GlobalId)>,
     varyings: Vec<(GlobalId, GlobalId)>,
 }
 
@@ -287,6 +306,17 @@ impl LineBand {
                 ))
             }
         };
+        let point_size = match self.point_size {
+            false => None,
+            true => {
+                let input = array(mb, f32_, INPUT_ARRAY)?;
+                let output = output_ty(mb, f32_)?;
+                Some((
+                    mb.builtin(B::PointSize, IoDir::Input, input)?,
+                    mb.builtin(B::PointSize, IoDir::Output, output)?,
+                ))
+            }
+        };
         let packed = IoDecor {
             packed: true,
             ..IoDecor::default()
@@ -304,6 +334,7 @@ impl LineBand {
         Ok(Carried {
             position,
             clip,
+            point_size,
             varyings,
         })
     }
@@ -335,6 +366,7 @@ impl LineBand {
         let at = fb.load(from, MemAccess::default())?;
         let pairs = std::iter::once(carried.position)
             .chain(carried.clip)
+            .chain(carried.point_size)
             .chain(carried.varyings);
         for (input, output) in pairs {
             let base = fb.module().global_value(input)?;
@@ -452,11 +484,14 @@ impl LineBand {
         let (_, output) = carried.position;
         let to = fb.module().global_value(output)?;
         fb.store(to, position, MemAccess::default())?;
-        // The clip distances and float varyings moved with the endpoint; the flat ones the first
-        // control point's.
+        // The clip distances and float varyings moved with the endpoint; the flat ones and the
+        // point size the first control point's.
         let mut values = Vec::new();
         if let Some((input, output)) = carried.clip {
             values.push((input, output, false, Some(self.clip_distances)));
+        }
+        if let Some((input, output)) = carried.point_size {
+            values.push((input, output, true, None));
         }
         for (v, &(input, output)) in self.varyings.iter().zip(&carried.varyings) {
             values.push((input, output, v.flat, None));

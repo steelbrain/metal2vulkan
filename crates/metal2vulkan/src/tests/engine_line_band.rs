@@ -8,14 +8,19 @@
 //!   synthesized control and evaluation stages right after the vertex stage, draws a
 //!   `PATCH_LIST` of two control points that no draw changes, places the evaluation stage's push
 //!   range where no other range lies, and every module passes L3 (`spirv-val` and requirements
-//!   within the profile). The pipeline without the variant has no tessellation stage.
+//!   within the profile); the binder plans it for a shape that draws bands. The pipeline without
+//!   the variant has no tessellation stage.
 //! - The band takes a varying the fragment stage reads flat, or an integer one, from the first
 //!   control point, and a smooth one from each corner's endpoint.
+//! - The control stage's per-vertex inputs and outputs, and the evaluation stage's inputs, are the
+//!   vertex stage's outputs entire, its point size included where the device's tessellation
+//!   stages take one.
 //! - Without `tessellationShader` the variant is refused needing it; a fragment function that
 //!   reads `[[barycentric_coord]]` is not implemented.
 //!
 //! `llvm-as` assembles the fixtures; a missing tool skips visibly. No GPU is used.
 
+use crate::bind::BindState;
 use crate::budget::Budget;
 use crate::cache::VariantKey;
 use crate::device::requirements::VkFeature as F;
@@ -187,6 +192,15 @@ fn the_band_variant_draws_patches_of_two_points_through_valid_stages() {
                 "{what}"
             );
             assert_ne!(banded.key, plain.key, "{what}: the variant's own key");
+            // The binder plans it for a shape that draws bands: its synthesized stages run no
+            // Metal function.
+            let state = BindState {
+                line_band: Some([8.0, -8.0, 1.0, 0.0]),
+                ..BindState::default()
+            };
+            banded
+                .plan(&dev, &state.shape())
+                .unwrap_or_else(|e| panic!("{what}: the band's plan: {e:?}"));
             drawn += 1;
         }
     }
@@ -258,4 +272,114 @@ fn a_band_needs_tessellation_and_no_barycentric_weights() {
         }
         other => panic!("{:?}", other.map(|p| p.key)),
     }
+}
+
+/// A per-vertex value a stage declares: its builtin or its location.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+enum Slot {
+    BuiltIn(u32),
+    Location(u32),
+}
+
+/// The per-vertex inputs (`Input`) or outputs (`Output`) module `words` declares: every
+/// location, and the builtins `Position`, `PointSize`, `ClipDistance` and `CullDistance`.
+fn per_vertex(words: &[u32], class: crate::spv::StorageClass) -> Vec<Slot> {
+    use crate::spirv_binary::{parse_bytes, Operand};
+    use crate::spv::{BuiltIn as B, Decoration as D, Op as O};
+    let bytes: Vec<u8> = words.iter().flat_map(|w| w.to_le_bytes()).collect();
+    let parsed = parse_bytes(&bytes).expect("parse");
+    let declared: Vec<u32> = (parsed.instructions.iter())
+        .filter(|i| {
+            i.opcode == O::Variable && i.operands.first() == Some(&Operand::Word(class as u32))
+        })
+        .filter_map(|i| i.result_id)
+        .collect();
+    let per_vertex =
+        [B::Position, B::PointSize, B::ClipDistance, B::CullDistance].map(|b| b as u32);
+    let mut slots: Vec<Slot> = (parsed.instructions.iter())
+        .filter(|i| i.opcode == O::Decorate)
+        .filter_map(|i| match i.operands.as_slice() {
+            [Operand::IdRef(id), Operand::Word(d), Operand::Word(v), ..]
+                if declared.contains(id) =>
+            {
+                match *d {
+                    d if d == D::BuiltIn as u32 && per_vertex.contains(v) => {
+                        Some(Slot::BuiltIn(*v))
+                    }
+                    d if d == D::Location as u32 => Some(Slot::Location(*v)),
+                    _ => None,
+                }
+            }
+            _ => None,
+        })
+        .collect();
+    slots.sort();
+    slots
+}
+
+/// The control stage's per-vertex inputs are the vertex stage's outputs entire, its point size
+/// and every varying included whether or not the fragment stage reads them, and the evaluation
+/// stage's inputs are the control stage's outputs: an implementation that lays each stage's
+/// interface out as one record (MoltenVK, under tessellation) reads the second control point
+/// from the wrong place otherwise.
+#[test]
+fn the_control_stage_takes_every_value_the_vertex_stage_writes() {
+    use crate::spv::StorageClass as C;
+    let Some(provoking) = assemble("rt6_provoking.ll") else {
+        return;
+    };
+    let Some(front) = assemble("a2_front_facing.ll") else {
+        return;
+    };
+    let lib = Library::from_air(&provoking).expect("library");
+    let front = Library::from_air(&front).expect("library");
+    let stage = |lib: &Library, name: &str| {
+        StageSource::Function(FunctionDescriptor::new(
+            lib.function(name).expect("function"),
+        ))
+    };
+    let mut unread = RenderPipelineDescriptor::new(stage(&lib, "pv_vertex"));
+    unread.fragment = Some(stage(&front, "a2_front_facing"));
+    unread.color_attachments[0] = Some(ColorAttachmentDescriptor::new(PixelFormat::RGBA8Unorm));
+    let pipelines = [
+        ("unread varyings", unread),
+        (
+            "read varyings",
+            render(&provoking, "pv_vertex", "pv_flat", PixelFormat::RGBA8Unorm),
+        ),
+    ];
+    let budget = Budget::standard();
+    let mut checked = 0;
+    let mut point_sizes = 0;
+    for (stem, dev) in committed_devices() {
+        if !(dev.profile().enabled().features).contains(&F::TessellationShader) {
+            continue;
+        }
+        for (what, d) in &pipelines {
+            let what = format!("{stem} {what}");
+            let p = dev
+                .compile_render_variant(d, &band_key(), &budget)
+                .unwrap_or_else(|e| panic!("{what}: {e}"));
+            let [vertex, control, evaluation, _] = &p.stages[..] else {
+                panic!(
+                    "{what}: {:?}",
+                    p.stages.iter().map(|m| m.stage).collect::<Vec<_>>()
+                );
+            };
+            // A device without `shaderTessellationAndGeometryPointSize` takes no point size in
+            // its tessellation stages.
+            let point_size = Slot::BuiltIn(crate::spv::BuiltIn::PointSize as u32);
+            let carries_size = (dev.profile().enabled().features)
+                .contains(&F::ShaderTessellationAndGeometryPointSize);
+            let mut written = per_vertex(&vertex.spirv, C::Output);
+            written.retain(|&s| carries_size || s != point_size);
+            assert!(written.len() > 2, "{what}: {written:?}");
+            assert_eq!(per_vertex(&control.spirv, C::Input), written, "{what}");
+            assert_eq!(per_vertex(&control.spirv, C::Output), written, "{what}");
+            assert_eq!(per_vertex(&evaluation.spirv, C::Input), written, "{what}");
+            point_sizes += usize::from(written.contains(&point_size));
+            checked += 1;
+        }
+    }
+    assert!(checked > 0 && point_sizes > 0, "{checked} {point_sizes}");
 }

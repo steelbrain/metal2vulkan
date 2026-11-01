@@ -893,10 +893,11 @@ impl RenderPipeline {
 /// stages, and an emulated pipeline's (`emulated`) are its compute stages, the object function's
 /// first where it has one, and its synthesized vertex stage runs none; the geometry stages link
 /// generates (`link::geometry`: barycentric weights read as varyings, a selected slice or
-/// viewport) run none and bind nothing.
+/// viewport) run none and bind nothing, nor do a band variant's (`banded`) control and evaluation
+/// stages (`link::band`).
 fn metal_stages(
     stages: impl ExactSizeIterator<Item = vk::ShaderStage>,
-    tessellated: bool,
+    (tessellated, banded): (bool, bool),
     emulated: bool,
 ) -> Result<Vec<(Stage, vk::ShaderStage)>, BindError> {
     let stages: Vec<vk::ShaderStage> = stages.collect();
@@ -921,6 +922,9 @@ fn metal_stages(
         } else if tessellated
             && (s == vk::ShaderStage::VERTEX || s == vk::ShaderStage::TESSELLATION_CONTROL)
             || s == vk::ShaderStage::GEOMETRY && !emulated
+            || banded
+                && (s == vk::ShaderStage::TESSELLATION_CONTROL
+                    || s == vk::ShaderStage::TESSELLATION_EVALUATION)
         {
             continue;
         } else {
@@ -1085,7 +1089,10 @@ fn plan(p: &RenderPipeline, device: &Device, shape: &BindShape) -> Result<Bindin
     let tessellation = p.graphics.tessellation.is_some() || emulated_tessellation.is_some();
     let modules = metal_stages(
         p.stages.iter().map(|m| m.stage),
-        p.graphics.tessellation.is_some(),
+        (
+            p.graphics.tessellation.is_some(),
+            p.graphics.line_band.is_some(),
+        ),
         records.is_some(),
     )?;
     let stages: Vec<Stage> = modules.iter().map(|(stage, _)| *stage).collect();
