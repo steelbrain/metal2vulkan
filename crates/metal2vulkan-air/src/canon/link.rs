@@ -1062,8 +1062,7 @@ fn copy_bytes(parts: &ModuleParts) -> usize {
         .fold(0usize, |n, b| n.saturating_add(b.footprint()));
     let consts = parts.consts.iter().fold(0usize, |n, (_, c)| {
         n.saturating_add(
-            std::mem::size_of::<crate::ir::Constant>()
-                + std::mem::size_of::<ConstId>() * c.value.children().len(),
+            std::mem::size_of::<crate::ir::Constant>() + std::mem::size_of_val(c.value.children()),
         )
     });
     let strings = (0..parts.symbols.len())
