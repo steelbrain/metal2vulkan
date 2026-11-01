@@ -1535,8 +1535,10 @@ field	metal2vulkan-air::LinkedCode.module	pub module: Module
 field	metal2vulkan-air::LinkedModule.code	pub code: Result<LinkedCode, Error>
 field	metal2vulkan-air::LinkedModule.functions	pub functions: Vec<LinkedName>
 field	metal2vulkan-air::LinkedName.constants	pub constants: Result<BTreeMap<u32, ConstValue>, Error>
+field	metal2vulkan-air::LinkedName.function	pub function: Box<[u8]>
 field	metal2vulkan-air::LinkedName.handle	pub handle: Option<u32>
 field	metal2vulkan-air::LinkedName.name	pub name: Box<[u8]>
+field	metal2vulkan-air::LinkedName.specialized	pub specialized: bool
 field	metal2vulkan-air::LinkedSamplerGroup.kept	pub kept: usize
 field	metal2vulkan-air::LinkedSamplerGroup.library	pub library: bool
 field	metal2vulkan-air::LinkedSamplerGroup.states	pub states: Vec<SamplerState>
@@ -2078,6 +2080,7 @@ field	metal2vulkan-runtime::FailedPipeline.variant	pub variant: metal2vulkan::ca
 field	metal2vulkan-runtime::FunctionDescriptor.constant_values	pub constant_values: Option<FunctionConstantValues>
 field	metal2vulkan-runtime::FunctionDescriptor.name	pub name: String
 field	metal2vulkan-runtime::FunctionDescriptor.options	pub options: FunctionOptions
+field	metal2vulkan-runtime::FunctionDescriptor.specialized_name	pub specialized_name: Option<String>
 field	metal2vulkan-runtime::HeapDescriptor.heap_type	pub heap_type: HeapType
 field	metal2vulkan-runtime::HeapDescriptor.placement	pub placement: AddressPlacement
 field	metal2vulkan-runtime::HeapDescriptor.resource_options	pub resource_options: ResourceOptions
@@ -4136,6 +4139,8 @@ field	metal2vulkan::pipeline::InputAttachmentUse.input_attachment_index	pub inpu
 field	metal2vulkan::pipeline::LinkedFunction.constants	pub constants: FunctionConstantValues
 field	metal2vulkan::pipeline::LinkedFunction.function	pub function: Function
 field	metal2vulkan::pipeline::LinkedFunction.precompiled	pub precompiled: bool
+field	metal2vulkan::pipeline::LinkedFunction.specialized	pub specialized: bool
+field	metal2vulkan::pipeline::LinkedFunction.specialized_name	pub specialized_name: Option<String>
 field	metal2vulkan::pipeline::LinkedFunctions.binary_functions	pub binary_functions: Vec<LinkedFunction>
 field	metal2vulkan::pipeline::LinkedFunctions.functions	pub functions: Vec<LinkedFunction>
 field	metal2vulkan::pipeline::LinkedFunctions.groups	pub groups: BTreeMap<String, Vec<LinkedFunction>>
@@ -7778,6 +7783,7 @@ method	metal2vulkan-runtime::Function::patch_type	pub fn patch_type(&self) -> Re
 method	metal2vulkan-runtime::Function::stage_input_attributes	pub fn stage_input_attributes(&self) -> Result<Option<Vec<Attribute>>, Error>
 method	metal2vulkan-runtime::Function::vertex_attributes	pub fn vertex_attributes(&self) -> Result<Option<Vec<Attribute>>, Error>
 method	metal2vulkan-runtime::FunctionDescriptor::new	pub fn new(name: &str) -> FunctionDescriptor
+method	metal2vulkan-runtime::FunctionDescriptor::with_specialized_name	pub fn with_specialized_name(mut self, name: impl Into<String>) -> FunctionDescriptor
 method	metal2vulkan-runtime::FunctionHandle::device	pub fn device(&self) -> &Device
 method	metal2vulkan-runtime::FunctionHandle::name	pub fn name(&self) -> &str
 method	metal2vulkan-runtime::GpuFamily::from_raw	pub fn from_raw(raw: i64) -> Option<GpuFamily>
@@ -8934,9 +8940,12 @@ method	metal2vulkan::pipeline::GraphicsState::new	pub fn new(topology: vk::Primi
 method	metal2vulkan::pipeline::HandleClass::sampler	pub fn sampler(use_: crate::metal::sampler::SamplerUse) -> HandleClass
 method	metal2vulkan::pipeline::HandleClass::sampler_use	pub fn sampler_use(self) -> Option<crate::metal::sampler::SamplerUse>
 method	metal2vulkan::pipeline::InputAttachmentUse::new	pub fn new(color_index: u32, input_attachment_index: u32, format_class: SampledType) -> InputAttachmentUse
+method	metal2vulkan::pipeline::LinkedFunction::name	pub fn name(&self) -> &str
 method	metal2vulkan::pipeline::LinkedFunction::new	pub fn new(function: Function) -> LinkedFunction
 method	metal2vulkan::pipeline::LinkedFunction::with_constants	pub fn with_constants(mut self, constants: FunctionConstantValues) -> LinkedFunction
 method	metal2vulkan::pipeline::LinkedFunction::with_precompiled	pub fn with_precompiled(mut self, precompiled: bool) -> LinkedFunction
+method	metal2vulkan::pipeline::LinkedFunction::with_specialized	pub fn with_specialized(mut self, specialized: bool) -> LinkedFunction
+method	metal2vulkan::pipeline::LinkedFunction::with_specialized_name	pub fn with_specialized_name(mut self, name: impl Into<String>) -> LinkedFunction
 method	metal2vulkan::pipeline::LinkedFunctions::function_handle	pub fn function_handle(&self, f: &LinkedFunction) -> Option<FunctionHandle>
 method	metal2vulkan::pipeline::LinkedFunctions::is_empty	pub fn is_empty(&self) -> bool
 method	metal2vulkan::pipeline::LinkedFunctions::new	pub fn new() -> LinkedFunctions
@@ -8944,6 +8953,8 @@ method	metal2vulkan::pipeline::LinkedFunctions::with_function	pub fn with_functi
 method	metal2vulkan::pipeline::LinkedFunctions::with_private_function	pub fn with_private_function(mut self, f: impl Into<LinkedFunction>) -> LinkedFunctions
 method	metal2vulkan::pipeline::LinkedList::resolves_references	pub fn resolves_references(self) -> bool
 method	metal2vulkan::pipeline::LinkedSource::new	pub fn new(name: &'a str, bitcode: &'a [u8], constants: &'a FunctionConstantValues) -> LinkedSource<'a>
+method	metal2vulkan::pipeline::LinkedSource::with_specialized	pub fn with_specialized(mut self, specialized: bool) -> LinkedSource<'a>
+method	metal2vulkan::pipeline::LinkedSource::with_specialized_name	pub fn with_specialized_name(mut self, name: &'a str) -> LinkedSource<'a>
 method	metal2vulkan::pipeline::LoweringInputs::new	pub fn new() -> LoweringInputs
 method	metal2vulkan::pipeline::MeshPipelineDescriptor::fragment_writes_depth_unattached	pub fn fragment_writes_depth_unattached(&self, budget: &crate::Budget, entries: &StageEntries) -> Result<bool, Error>
 method	metal2vulkan::pipeline::MeshPipelineDescriptor::new	pub fn new(mesh: StageSource) -> MeshPipelineDescriptor
@@ -10276,6 +10287,7 @@ variant	metal2vulkan-air::error::LinkProblem::Ambiguous	Ambiguous
 variant	metal2vulkan-air::error::LinkProblem::DataLayout	DataLayout
 variant	metal2vulkan-air::error::LinkProblem::NotVisible	NotVisible
 variant	metal2vulkan-air::error::LinkProblem::Signature	Signature
+variant	metal2vulkan-air::error::LinkProblem::UnresolvedConstant	UnresolvedConstant { index: u32 }
 variant	metal2vulkan-air::error::MissingInput::DynamicLibrary	DynamicLibrary { install_name: DiagName }
 variant	metal2vulkan-air::error::MissingInput::DynamicSymbol	DynamicSymbol { symbol: DiagName }
 variant	metal2vulkan-air::error::MissingInput::LinkedFunction	LinkedFunction { symbol: DiagName }
@@ -13209,6 +13221,7 @@ variant	metal2vulkan::error::LinkProblem::Ambiguous	Ambiguous
 variant	metal2vulkan::error::LinkProblem::DataLayout	DataLayout
 variant	metal2vulkan::error::LinkProblem::NotVisible	NotVisible
 variant	metal2vulkan::error::LinkProblem::Signature	Signature
+variant	metal2vulkan::error::LinkProblem::UnresolvedConstant	UnresolvedConstant { index: u32 }
 variant	metal2vulkan::error::LowerFamily::Access	Access
 variant	metal2vulkan::error::LowerFamily::Arith	Arith
 variant	metal2vulkan::error::LowerFamily::Barrier	Barrier
