@@ -607,6 +607,20 @@ impl Props<'_> {
         Ok(crate::device::whole_point_size(high as f32))
     }
 
+    /// The IEEE-754 bits of the 2-element range `name`'s bounds, `absent`'s where the document
+    /// omits it.
+    fn f32_pair_bits(&self, name: &str, absent: [f32; 2]) -> Result<[u32; 2], Error> {
+        let Some(v) = self.get(name) else {
+            return Ok(absent.map(f32::to_bits));
+        };
+        let pair = v
+            .as_array()
+            .filter(|l| l.len() == 2)
+            .and_then(|l| Some([l[0].as_f64()?, l[1].as_f64()?]))
+            .ok_or_else(|| invalid(format!("`{name}` is not a 2-element list of numbers")))?;
+        Ok(pair.map(|f| (f as f32).to_bits()))
+    }
+
     fn u32x3(&self, name: &str) -> Result<[u32; 3], Error> {
         let Some(v) = self.get(name) else {
             return Ok([0; 3]);
@@ -708,6 +722,8 @@ fn limits(p: &Props<'_>, api: ApiVersion, extensions: &BTreeSet<String>) -> Resu
     let sample_locations = Route::Ext(&["VK_EXT_sample_locations"], None).exposed(api, extensions);
     // The provoking-vertex property exists where `VK_EXT_provoking_vertex` is exposed.
     let provoking_vertex = Route::Ext(&["VK_EXT_provoking_vertex"], None).exposed(api, extensions);
+    // The parallelogram property exists where `VK_KHR_maintenance5` is exposed.
+    let maintenance5 = Route::Ext(&["VK_KHR_maintenance5"], Some(4)).exposed(api, extensions);
     let accel = Route::Ext(&["VK_KHR_acceleration_structure"], None).exposed(api, extensions);
     let accel_limit = |name: &str| -> Result<u32, Error> {
         if accel {
@@ -861,6 +877,12 @@ fn limits(p: &Props<'_>, api: ApiVersion, extensions: &BTreeSet<String>) -> Resu
             MeshLimits::default()
         },
         max_point_size: p.max_point_size("pointSizeRange")?,
+        line_width_range_bits: p.f32_pair_bits("lineWidthRange", [1.0, 1.0])?,
+        line_width_granularity_bits: p.f32_bits("lineWidthGranularity")?,
+        strict_lines: p.bool("strictLines")?,
+        non_strict_wide_lines_use_parallelogram: maintenance5
+            && p.bool("nonStrictWideLinesUseParallelogram")?,
+        sub_pixel_precision_bits: p.u32("subPixelPrecisionBits")?,
     })
 }
 
@@ -973,6 +995,8 @@ fn required_limits(version: ApiVersion) -> Vec<(&'static str, Value)> {
         ),
         ("maxSamplerLodBias", f(2.0)),
         ("maxSamplerAnisotropy", f(1.0)),
+        ("subPixelPrecisionBits", n(4)),
+        ("lineWidthGranularity", f(0.0)),
         ("minTexelBufferOffsetAlignment", n(256)),
         ("minUniformBufferOffsetAlignment", n(256)),
         ("minStorageBufferOffsetAlignment", n(256)),
@@ -1389,6 +1413,7 @@ pub(super) const FEATURE_MEMBERS: &[(&str, VkFeature)] = {
             F::ShaderTessellationAndGeometryPointSize,
         ),
         ("tessellationShader", F::TessellationShader),
+        ("wideLines", F::WideLines),
         ("sampleRateShading", F::SampleRateShading),
         ("dualSrcBlend", F::DualSrcBlend),
         ("logicOp", F::LogicOp),

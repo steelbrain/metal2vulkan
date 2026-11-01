@@ -70,7 +70,7 @@ pub const SEMANTICS_VERSION: u32 = 1935;
 /// re-typed in an encoded type, its `codec` body or its `envelope`. A variant removed while its tag
 /// stays unused needs no bump: an entry holding it fails to decode, which is a miss. The commit that
 /// bumps it says what changed; this comment keeps no history.
-pub const ARTIFACT_FORMAT_VERSION: u32 = 479;
+pub const ARTIFACT_FORMAT_VERSION: u32 = 480;
 
 /// The version of what this crate's runtime does with a compiled pipeline: instantiating a binding
 /// plan (`BindingPlan::instantiate_*`: descriptor ranges, push bytes, root, argument, and handle
@@ -326,6 +326,12 @@ pub struct VariantKey {
     /// (`RuntimeFact::MeshLastFirst`).
     #[cfg_attr(feature = "serde", serde(default))]
     pub mesh_last_first: bool,
+    /// The pipeline draws its lines as bands of triangles through synthesized tessellation stages
+    /// (`BindShape::line_band`, `pipeline::link::band`): the variant a draw of lines at an Apple
+    /// `setLineWidth:` width the device's own lines do not draw runs. Its graphics state states
+    /// it (`GraphicsState::line_band`).
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub line_band: bool,
     /// Storage-image texture slots bound to a texture with a swizzle (`MTLTexture.swizzle` other
     /// than the default) whose texels the function reads or writes
     /// (`LoweringInputs::swizzled_storage`): a Vulkan storage view takes no swizzle, so the
@@ -545,6 +551,7 @@ impl VariantKey {
             && !self.depth_clamp_range
             && !self.rotated_weights
             && !self.mesh_last_first
+            && !self.line_band
             && self.swizzled_storage.is_empty()
             && !self.addressed_function_tables
             && self.interlocked_colors.is_empty()

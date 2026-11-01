@@ -925,6 +925,20 @@ impl Device {
             }
             stages.splice(at..at, added);
         }
+        // A variant that draws its lines as bands: the band's control and evaluation stages,
+        // right after the vertex stage.
+        if let Some(band) = &linked.band {
+            let at = stages
+                .iter()
+                .position(|s| s.stage == vk::ShaderStage::VERTEX)
+                .map_or(0, |i| i + 1);
+            let mut added = Vec::with_capacity(2);
+            for (module, r) in band.stages(&linked, p, m)? {
+                requirements = p.union_requirements(&requirements, &r);
+                added.push(module);
+            }
+            stages.splice(at..at, added);
+        }
         let mut dependencies = dependencies(&artifacts, self);
         if let Some(g) = &linked.geometry {
             let fact = RuntimeFact::SynthesizedGeometry {
@@ -1422,8 +1436,8 @@ fn compute_fields(d: &ComputePipelineDescriptor) -> String {
 
 /// The pipeline key's fields of variant `v` past its stages' keys: its color group past the first
 /// (`VariantKey::color_group`), whose variant of a pipeline without a fragment function has no
-/// stage of its own, and its emulated mesh function's synthesized vertex stage. Empty for every
-/// other variant, so a pipeline keeps its key.
+/// stage of its own, its emulated mesh function's synthesized vertex stage, and a band variant's
+/// synthesized tessellation stages. Empty for every other variant, so a pipeline keeps its key.
 fn variant_fields(v: &VariantKey) -> String {
     let mut fields = String::new();
     // The group a pipeline without a fragment function keeps in no stage's key.
@@ -1433,6 +1447,10 @@ fn variant_fields(v: &VariantKey) -> String {
     // The synthesized vertex stage of an emulated mesh function's pipeline, in no stage's key.
     if v.mesh_last_first {
         fields.push_str(" mesh_last_first");
+    }
+    // The band's synthesized stages, in no stage's key.
+    if v.line_band {
+        fields.push_str(" line_band");
     }
     fields
 }

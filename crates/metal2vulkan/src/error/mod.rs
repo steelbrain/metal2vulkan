@@ -1465,6 +1465,10 @@ pub enum Feature {
     /// The coverage after the depth and stencil tests (`[[sample_mask, post_depth_coverage]]`),
     /// read through `VK_EXT_post_depth_coverage`.
     PostDepthCoverage,
+    /// Lines at a width other than 1 (Apple's `setLineWidth:`), drawn by the device's own wide
+    /// lines (`wideLines`) or as bands of triangles through synthesized tessellation stages
+    /// (`tessellationShader`, `pipeline::link::band`).
+    WideLines,
 }
 
 /// The part of a blend the shader computes that [`Feature::ExtendedRangeBlend`] refuses. An

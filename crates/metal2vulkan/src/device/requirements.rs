@@ -352,6 +352,11 @@ pub enum VkFeature {
     /// covers every pixel the line's rectangle contains and so covers pixels Metal leaves
     /// untouched (`pipeline/graphics.rs`).
     BresenhamLines,
+    /// `wideLines` (Vulkan 1.0): a line width other than 1
+    /// (`VUID-VkGraphicsPipelineCreateInfo-pDynamicStates-00749`), within `lineWidthRange`. The
+    /// runtime draws Apple's `setLineWidth:` widths through it where the device's own lines are
+    /// its route (`render/line_width.rs`).
+    WideLines,
 }
 
 /// A Vulkan device extension the new core can require.

@@ -193,18 +193,24 @@ pub(super) fn check_stage(m: &TypedModule) -> Result<(), VerifyError> {
             return Err(Violation::PayloadForModel(id).into());
         }
         if let GlobalKind::BuiltIn { builtin, dir } = g.kind {
-            // A mesh entry declares its outputs as arrays over its vertices or primitives, a
-            // geometry entry its per-vertex inputs as arrays over the input primitive's vertices,
-            // and no other model declares that form.
+            // A mesh entry declares its outputs as arrays over its vertices or primitives; a
+            // geometry entry its per-vertex inputs, and a tessellation control entry its
+            // per-vertex inputs and outputs, as arrays over the primitive's or patch's vertices,
+            // and an evaluation entry its per-vertex inputs so; no other model declares that
+            // form.
             let per_element = m.entry.model == ExecModel::MeshEXT && dir == IoDir::Output;
-            let per_vertex = m.entry.model == ExecModel::Geometry
-                && dir == IoDir::Input
-                && geometry_per_vertex(builtin);
-            let vertex_form = m.entry.model == ExecModel::Geometry
-                && dir == IoDir::Input
-                && element_array(m, builtin, g.pointee)?;
+            let arrays_vertices = match (m.entry.model, dir) {
+                (ExecModel::Geometry | ExecModel::TessellationEvaluation, IoDir::Input) => true,
+                (ExecModel::TessellationControl, _) => true,
+                _ => false,
+            };
+            let per_vertex = arrays_vertices && geometry_per_vertex(builtin);
+            let vertex_form = arrays_vertices && element_array(m, builtin, g.pointee)?;
+            // A control entry's arrayed outputs are its per-vertex form, checked above.
+            let mesh_form = m.entry.model != ExecModel::TessellationControl
+                && mesh_array_form(m, builtin, dir, g.pointee)?;
             if !builtin_in_model(builtin, dir, m.entry.model)
-                || per_element != mesh_array_form(m, builtin, dir, g.pointee)?
+                || per_element != mesh_form
                 || per_vertex != vertex_form
             {
                 return Err(Violation::BuiltInForModel(id).into());
@@ -228,8 +234,8 @@ fn mesh_array_form(
     element_array(m, b, ty)
 }
 
-/// Whether builtin `b`'s variable type `ty` is an array of the builtin's own type (`ClipDistance`
-/// and `CullDistance`, already arrays, as arrays of arrays).
+/// Whether builtin `b`'s variable type `ty` is an array of the builtin's own type (`ClipDistance`,
+/// `CullDistance` and the tessellation levels, already arrays, as arrays of arrays).
 fn element_array(
     m: &TypedModule,
     b: crate::spv::BuiltIn,
@@ -240,7 +246,9 @@ fn element_array(
         return Ok(false);
     };
     Ok(match b {
-        B::ClipDistance | B::CullDistance => matches!(m.types.get(*elem)?, Type::Array { .. }),
+        B::ClipDistance | B::CullDistance | B::TessLevelOuter | B::TessLevelInner => {
+            matches!(m.types.get(*elem)?, Type::Array { .. })
+        }
         _ => true,
     })
 }
@@ -306,7 +314,14 @@ fn builtin_in_model(b: crate::spv::BuiltIn, dir: IoDir, model: ExecModel) -> boo
         (ExecModel::TessellationEvaluation, IoDir::Input) => {
             matches!(
                 b,
-                B::TessCoord | B::PrimitiveId | B::PatchVertices | B::ViewIndex
+                B::TessCoord
+                    | B::PrimitiveId
+                    | B::PatchVertices
+                    | B::ViewIndex
+                    | B::Position
+                    | B::PointSize
+                    | B::ClipDistance
+                    | B::CullDistance
             )
         }
         (ExecModel::TessellationEvaluation, IoDir::Output) => matches!(
@@ -321,12 +336,25 @@ fn builtin_in_model(b: crate::spv::BuiltIn, dir: IoDir, model: ExecModel) -> boo
         (ExecModel::TessellationControl, IoDir::Input) => {
             matches!(
                 b,
-                B::InvocationId | B::PrimitiveId | B::PatchVertices | B::ViewIndex
+                B::InvocationId
+                    | B::PrimitiveId
+                    | B::PatchVertices
+                    | B::ViewIndex
+                    | B::Position
+                    | B::PointSize
+                    | B::ClipDistance
+                    | B::CullDistance
             )
         }
-        (ExecModel::TessellationControl, IoDir::Output) => {
-            matches!(b, B::TessLevelOuter | B::TessLevelInner)
-        }
+        (ExecModel::TessellationControl, IoDir::Output) => matches!(
+            b,
+            B::TessLevelOuter
+                | B::TessLevelInner
+                | B::Position
+                | B::PointSize
+                | B::ClipDistance
+                | B::CullDistance
+        ),
         // An object or mesh entry's workgroup builtins and draw parameters
         // (VUID-DrawIndex-DrawIndex-04207, VUID-ViewIndex-ViewIndex-04401).
         (ExecModel::TaskEXT | ExecModel::MeshEXT, IoDir::Input) => matches!(

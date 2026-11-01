@@ -231,6 +231,10 @@ pub struct GraphicsTemplate {
     /// write.
     #[cfg_attr(feature = "serde", serde(default))]
     pub(crate) storage_kept: u32,
+    /// A band variant's (`GraphicsState::line_band`): the byte offset of its evaluation stage's
+    /// push range, where its draws push `BindState::line_band` (`PushField::LineBand`).
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub(crate) line_band: Option<u32>,
 }
 
 /// What a mesh draw of a mesh render pipeline instantiates: the pipeline's specialization layout

@@ -1037,6 +1037,24 @@ pub struct Limits {
     /// is whole. 1 where a description omits the range: Vulkan's bound without `largePoints`,
     /// `pointSizeRange` (1.0, 1.0).
     pub max_point_size: u32,
+    /// `lineWidthRange`, as the IEEE-754 bits of its two `f32` bounds: the widths a line drawn
+    /// with `wideLines` takes, others clamped into it. `(1.0, 1.0)` where a description omits it,
+    /// Vulkan's bound without `wideLines`.
+    pub line_width_range_bits: [u32; 2],
+    /// `lineWidthGranularity`, as the IEEE-754 bits of the `f32` limit: the step between the
+    /// widths the device draws, a width between two drawn as "the nearest supported width" (the
+    /// Vulkan specification's line segments).
+    pub line_width_granularity_bits: u32,
+    /// `strictLines`: the device draws a wide line as the rectangle its width spans across it,
+    /// where a non-strict device may draw it otherwise (below).
+    pub strict_lines: bool,
+    /// `nonStrictWideLinesUseParallelogram` (`VkPhysicalDeviceMaintenance5Properties`): a
+    /// non-strict wide line is the parallelogram whose minor-axis edges pass through its
+    /// endpoints, Metal's (`setLineWidth:`); `false` where `VK_KHR_maintenance5` is not exposed.
+    pub non_strict_wide_lines_use_parallelogram: bool,
+    /// `subPixelPrecisionBits`: the bits of a framebuffer coordinate's fraction the rasterizer
+    /// keeps (4 at least).
+    pub sub_pixel_precision_bits: u32,
 }
 
 /// The limits of `VK_EXT_mesh_shader` (`VkPhysicalDeviceMeshShaderPropertiesEXT`) the task and mesh

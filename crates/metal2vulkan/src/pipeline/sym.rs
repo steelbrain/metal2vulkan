@@ -969,6 +969,12 @@ pub enum PushField {
     /// reads this field and the two before it in its own push window
     /// (`GraphicsState::emulated_tessellation`).
     ControlPointIndexOffset,
+    /// The draw's band of a pipeline variant that draws its lines as bands
+    /// (`VariantKey::line_band`, `link::band`): one `vec4` of the synthesized evaluation stage's
+    /// own push range, `[sx, sy, h, 0]`, the half extent of the draw's Vulkan viewport 0 (its
+    /// height negative, as the runtime's viewports are) and half the band's width in pixels
+    /// (`BindState::line_band`).
+    LineBand,
     /// The stride (`u32`) the compute encoder binds the kernel buffer at this Metal index with
     /// (`setBuffer:offset:attributeStride:atIndex:` and its forms), 0 where it binds none, which
     /// a `[[stage_in]]` layout of `MTLBufferLayoutStrideDynamic` fetches at

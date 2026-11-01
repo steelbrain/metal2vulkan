@@ -211,6 +211,13 @@ pub struct BindState {
     /// for every other draw.
     #[cfg_attr(feature = "serde", serde(default))]
     pub mesh_last_first: bool,
+    /// The draw's band where it draws its lines as bands of triangles (`PushField::LineBand`):
+    /// `[sx, sy, h, 0]`, the half extent of its Vulkan viewport 0 (its height negative, as the
+    /// viewport is) and half the band's width in pixels (`pipeline::link::band`). Its variant is
+    /// part of the shape (`BindShape::line_band`, `VariantKey::line_band`), its values only of the
+    /// draw's bytes; `None` for every other draw.
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub line_band: Option<[f32; 4]>,
     /// Allocations a pointer may reach that the consumer lists apart from `used_resources`, at
     /// their own lengths: the resident set holds them beside the bound buffers and the used
     /// resources, and a replay's extents count them (the runtime's live buffers of their own,
@@ -694,6 +701,7 @@ impl BindState {
             depth_clamp_range: self.depth_clamp_range.is_some(),
             rotated_weights: self.rotated_weights,
             mesh_last_first: self.mesh_last_first,
+            line_band: self.line_band.is_some(),
             interlocked_colors: self.interlocked_colors.clone(),
             fragment_tests: self.fragment_tests,
             extended_shadows: self.extended_shadows.clone(),
@@ -748,6 +756,7 @@ impl BindState {
             depth_clamp_range,
             rotated_weights,
             mesh_last_first,
+            line_band,
             interlocked_colors,
             fragment_tests,
             extended_shadows,
@@ -778,6 +787,7 @@ impl BindState {
             && self.depth_clamp_range.is_some() == *depth_clamp_range
             && self.rotated_weights == *rotated_weights
             && self.mesh_last_first == *mesh_last_first
+            && self.line_band.is_some() == *line_band
             && self.interlocked_colors == *interlocked_colors
             && self.fragment_tests == *fragment_tests
             && self.extended_shadows == *extended_shadows
@@ -1607,6 +1617,10 @@ pub struct BindShape {
     /// (`VariantKey::mesh_last_first`).
     #[cfg_attr(feature = "serde", serde(default))]
     pub mesh_last_first: bool,
+    /// Whether `BindState.line_band` is set: the variant that draws its lines as bands
+    /// (`VariantKey::line_band`).
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub line_band: bool,
     /// `BindState.interlocked_colors`: the variant whose fragment function writes those it writes
     /// through the interlocked storage form (`VariantKey::interlocked_colors`).
     #[cfg_attr(feature = "serde", serde(default))]

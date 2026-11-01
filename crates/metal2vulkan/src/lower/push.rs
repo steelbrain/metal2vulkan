@@ -139,6 +139,8 @@ pub const fn shape(f: PushField) -> FieldShape {
         | PushField::ControlPointIndexOffset => FieldShape::U32,
         // An emulated tessellation draw's chunk.
         PushField::TessellationChunk => FieldShape::U32,
+        // A band's viewport half extent and half width, four `f32`s.
+        PushField::LineBand => FieldShape::UVec4Array(1),
         // The whole indices from the bound index offset to the buffer's end, unsaturated:
         // `firstIndex + indexCount` reaches `2^33`.
         PushField::IndexCapacity => FieldShape::U64,

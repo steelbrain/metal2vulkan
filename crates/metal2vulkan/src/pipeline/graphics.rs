@@ -154,6 +154,12 @@ pub struct GraphicsState {
     /// other pipeline.
     #[cfg_attr(feature = "serde", serde(default))]
     pub emulated_tessellation: Option<EmulatedTessellation>,
+    /// A render pipeline variant that draws its lines as bands of triangles
+    /// (`VariantKey::line_band`, `pipeline::link::band`): its `topology` is `PATCH_LIST` (never
+    /// dynamic), its stages the vertex stage, the band's synthesized tessellation control and
+    /// evaluation stages, then the fragment stage. `None` for every other pipeline.
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub line_band: Option<LineBandState>,
     /// The vertex function writes `[[point_size]]` (as its compiled function's
     /// `writes_point_size` answers; a post-tessellation vertex function's is dropped and
     /// answers `false`). Metal sizes a point
@@ -346,6 +352,40 @@ pub struct TessellationState {
     pub control_point_index_type: metal::TessellationControlPointIndexType,
 }
 
+/// What a consumer and the binder need of a render pipeline variant that draws its lines as
+/// bands (`GraphicsState::line_band`): Apple's `setLineWidth:` at a width the device's own lines
+/// do not draw.
+///
+/// Draw each line as one patch of [`PATCH_CONTROL_POINTS`](Self::PATCH_CONTROL_POINTS) control
+/// points, the line's two vertices in order: a line list as it is, a strip, a loop or a list under
+/// Apple's last provoking vertex as the list of its segments the runtime writes, with primitive
+/// restart off. The band's two triangles cover the parallelogram Metal draws for the line; draw
+/// them with no culling and with front face [`FRONT_FACE`](Self::FRONT_FACE), so they are
+/// front-facing as a line is, in fill mode, and without depth bias, which Metal does not apply to
+/// lines. Push the band's `[sx, sy, h, 0]` (`f32`s; `PushField::LineBand`) at
+/// [`push_offset`](Self::push_offset) for stage `TESSELLATION_EVALUATION`: the half extent of the
+/// draw's Vulkan viewport 0, its height negative as a Y-flipped viewport's is, and half the
+/// width in framebuffer pixels (the binder writes it from `BindState::line_band`). Create the
+/// pipeline in Vulkan's default tessellation domain origin, `UPPER_LEFT`.
+#[non_exhaustive]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub struct LineBandState {
+    /// Byte offset of the evaluation stage's push range (`PipelineLayout::push_constants`, stage
+    /// `TESSELLATION_EVALUATION`, [`PUSH_BYTES`](Self::PUSH_BYTES)).
+    pub push_offset: u32,
+}
+
+impl LineBandState {
+    /// `VkPipelineTessellationStateCreateInfo::patchControlPoints`: a line's two vertices.
+    pub const PATCH_CONTROL_POINTS: u32 =
+        crate::pipeline::link::band::LineBand::PATCH_CONTROL_POINTS;
+    /// The push range's bytes: one `vec4`.
+    pub const PUSH_BYTES: u32 = crate::pipeline::link::band::LineBand::PUSH_BYTES;
+    /// The front face a draw of the band's triangles sets, under which they are front-facing.
+    pub const FRONT_FACE: vk::FrontFace = crate::pipeline::link::band::LineBand::FRONT_FACE;
+}
+
 /// What a consumer and the binder need of a tessellation pipeline on a device without
 /// `tessellationShader` (`GraphicsState::emulated_tessellation`).
 ///
@@ -417,6 +457,7 @@ impl GraphicsState {
             early_fragment_tests: false,
             mesh_records: None,
             emulated_tessellation: None,
+            line_band: None,
             writes_point_size: false,
             flat_fragment_inputs: false,
             clip_distances: 0,

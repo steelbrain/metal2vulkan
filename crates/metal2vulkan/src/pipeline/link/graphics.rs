@@ -679,6 +679,8 @@ pub fn graphics_state(
         // An emulated mesh function's pipeline states its records (`link`).
         mesh_records: None,
         emulated_tessellation: None,
+        // A band variant's pipeline states its band (`link`).
+        line_band: None,
         writes_point_size: vs.writes_point_size(),
         flat_fragment_inputs: fs.is_some_and(|fs| reads_flat_inputs(&fs.io)),
         clip_distances: vs

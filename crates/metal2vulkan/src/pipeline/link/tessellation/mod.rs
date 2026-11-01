@@ -65,7 +65,7 @@ use crate::pipeline::vertex::{PulledAttribute, VertexInputState, VertexStride};
 use crate::spirv::serialize::{SymbolTable, ENTRY_NAME};
 use crate::vk;
 
-use control::{Control, PUSH_BYTES};
+use control::Control;
 
 /// The projection of `attributes` (the Metal attribute indices a post-tessellation vertex
 /// function reads, with the numeric class it reads each as) for vertex descriptor `desc`: every
@@ -294,18 +294,25 @@ pub fn check_fragment(fs: Option<&StageInterface>) -> Result<(), Error> {
     Ok(())
 }
 
-/// The byte offset of the control stage's push range beside the stages' `ranges`: the first
-/// 4-byte-aligned offset whose [`PUSH_BYTES`] no range covers, within `maxPushConstantsSize`.
-pub fn push_offset(ranges: &[PushConstantRange], p: &DeviceProfile) -> Result<u32, Error> {
+/// The byte offset of a synthesized stage's push range of `bytes` beside the stages' `ranges`
+/// (the control stage's [`PUSH_BYTES`](control::PUSH_BYTES) of words, a band's evaluation
+/// stage's `vec4`): the first offset, a multiple of `align`, whose `bytes` no range covers, within
+/// `maxPushConstantsSize`; refused as `feature` needing a larger limit otherwise.
+pub fn push_offset(
+    ranges: &[PushConstantRange],
+    (bytes, align): (u32, u32),
+    feature: Feature,
+    p: &DeviceProfile,
+) -> Result<u32, Error> {
     let max = p.fields().limits.max_push_constants_size;
     let free = |at: u32| {
         ranges
             .iter()
-            .all(|r| at + PUSH_BYTES <= r.offset || at >= r.offset.saturating_add(r.size))
+            .all(|r| at + bytes <= r.offset || at >= r.offset.saturating_add(r.size))
     };
     (0..max)
-        .step_by(4)
-        .take_while(|&at| at + PUSH_BYTES <= max)
+        .step_by(align as usize)
+        .take_while(|&at| at + bytes <= max)
         .find(|&at| free(at))
         .ok_or_else(|| {
             let end = ranges
@@ -314,10 +321,10 @@ pub fn push_offset(ranges: &[PushConstantRange], p: &DeviceProfile) -> Result<u3
                 .max()
                 .unwrap_or(0);
             Unsupported::needs(
-                Feature::Tessellation,
+                feature,
                 Capability::Limit {
                     limit: VkLimit::MaxPushConstantsSize,
-                    required: end + u64::from(PUSH_BYTES),
+                    required: end + u64::from(bytes),
                     available: u64::from(max),
                 },
             )

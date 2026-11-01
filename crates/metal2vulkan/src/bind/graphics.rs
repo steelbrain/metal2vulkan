@@ -1421,6 +1421,10 @@ fn plan(p: &RenderPipeline, device: &Device, shape: &BindShape) -> Result<Bindin
         .dependencies
         .iter()
         .any(|d| d.fact == RuntimeFact::MeshLastFirst);
+    // A draw of lines as bands: the variant whose synthesized tessellation stages draw them so,
+    // which its graphics state states.
+    let line_band = shape.line_band;
+    let compiled_band = p.graphics.line_band.is_some();
     // A fragment function that stores a color through the interlocked storage form before the
     // depth and stencil tests, since it discards (`RuntimeFact::TestedStorageWrites`), in a
     // pipeline with a depth or stencil attachment: Metal's store, as compiled, where the draw's
@@ -2508,6 +2512,7 @@ fn plan(p: &RenderPipeline, device: &Device, shape: &BindShape) -> Result<Bindin
     variant.depth_clamp_range = depth_clamp_range;
     variant.rotated_weights = rotated_weights;
     variant.mesh_last_first = mesh_last_first;
+    variant.line_band = line_band;
     variant.read_only_tests = read_only_tests;
     variant.shader_tests = shader_tests;
     variant.shader_stencil = shader_stencil;
@@ -2548,6 +2553,7 @@ fn plan(p: &RenderPipeline, device: &Device, shape: &BindShape) -> Result<Bindin
                 || compiled_range != depth_clamp_range
                 || compiled_rotated != rotated_weights
                 || compiled_last_first != mesh_last_first
+                || compiled_band != line_band
                 || compiled_tests != read_only_tests
                 || compiled_shader_tests != shader_tests
                 || compiled_shader_stencil != shader_stencil
@@ -2587,6 +2593,7 @@ fn plan(p: &RenderPipeline, device: &Device, shape: &BindShape) -> Result<Bindin
             deindexed: primitive_id_indices,
             private_list,
             storage_kept: storage_kept(p)?,
+            line_band: p.graphics.line_band.map(|b| b.push_offset),
         }),
         views,
     })
@@ -4549,6 +4556,17 @@ fn instantiate(
     if let Some((push, ranges)) = control {
         push_constants.push(push);
         descriptor_ranges.extend(ranges);
+    }
+    // A band variant's draw pushes its band to the evaluation stage's own range.
+    if let Some(offset) = t.line_band {
+        let band = state
+            .line_band
+            .ok_or_else(|| internal("a draw of a band pipeline without its band"))?;
+        push_constants.push(PushConstantWrite {
+            stages: vk::ShaderStageFlags::TESSELLATION_EVALUATION,
+            offset,
+            bytes: band.iter().flat_map(|v| v.to_le_bytes()).collect(),
+        });
     }
     let tessellation_dispatch = match scan {
         Some((b, kernel)) => {

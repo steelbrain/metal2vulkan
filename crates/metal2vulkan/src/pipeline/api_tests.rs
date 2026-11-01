@@ -233,6 +233,7 @@ mod serde_round_trips {
             depth_clamp_range: true,
             rotated_weights: true,
             mesh_last_first: true,
+            line_band: true,
             swizzled_storage: BTreeSet::from([slot(Stage::Kernel, SlotClass::Texture, 6)]),
             addressed_function_tables: true,
             interlocked_colors: BTreeSet::from([1]),
@@ -681,6 +682,7 @@ mod serde_round_trips {
                 group: 0,
             }),
             logic_op: Some(vk::LogicOp::EQUIVALENT),
+            line_band: Some(crate::pipeline::LineBandState { push_offset: 112 }),
         });
         let mut slots = BTreeMap::new();
         slots.insert(
@@ -1009,6 +1011,7 @@ mod bind_serde_round_trips {
             depth_clamp_range: Some([0.25, 0.5]),
             rotated_weights: true,
             mesh_last_first: true,
+            line_band: Some([8.0, -8.0, 1.75, 0.0]),
             resident_ranges: vec![crate::bind::ResidentRange::new(0x9_0000, 0x3_0000, 100)],
             interlocked_colors: BTreeSet::from([0, 3]),
             fragment_tests: crate::bind::FragmentTests::Depth { writes: true },
@@ -1077,6 +1080,7 @@ mod bind_serde_round_trips {
             depth_clamp_range: true,
             rotated_weights: true,
             mesh_last_first: true,
+            line_band: true,
             interlocked_colors: BTreeSet::from([0, 3]),
             fragment_tests: crate::bind::FragmentTests::Pass,
             extended_shadows: BTreeSet::from([0]),

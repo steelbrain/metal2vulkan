@@ -718,13 +718,17 @@ impl Deriver<'_> {
         ty: TypeId,
     ) -> BResult<()> {
         use crate::spv::BuiltIn as B;
-        // A mesh entry's outputs are arrayed per vertex or per primitive, and a geometry entry's
-        // per-vertex inputs per vertex: a builtin's own array, a clip or cull distance's, is that
-        // array's element.
+        // A mesh entry's outputs are arrayed per vertex or per primitive, and a geometry or
+        // evaluation entry's per-vertex inputs and a control entry's per-vertex inputs and
+        // outputs per vertex: a builtin's own array, a clip or cull distance's, is that array's
+        // element.
+        let arrays_vertices = match (self.model, dir) {
+            (ExecModel::Geometry | ExecModel::TessellationEvaluation, IoDir::Input) => true,
+            (ExecModel::TessellationControl, _) => true,
+            _ => false,
+        };
         let arrayed = (self.model == ExecModel::MeshEXT && dir == IoDir::Output)
-            || (self.model == ExecModel::Geometry
-                && dir == IoDir::Input
-                && crate::spirv::builder::geometry_per_vertex(b));
+            || (arrays_vertices && crate::spirv::builder::geometry_per_vertex(b));
         let array_len = |d: &Self| -> BResult<Option<u32>> {
             let own = match (arrayed, d.ty(ty)?) {
                 (false, _) => ty,

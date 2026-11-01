@@ -543,7 +543,7 @@ impl GeometryStages {
 }
 
 /// An array of `n` elements of `elem`.
-fn array(mb: &mut ModuleBuilder, elem: TypeId, n: u32) -> BResult<TypeId> {
+pub(super) fn array(mb: &mut ModuleBuilder, elem: TypeId, n: u32) -> BResult<TypeId> {
     let u32_ = scalar(mb, IoNumeric::Uint)?;
     let len = mb.constant(Constant::Scalar {
         ty: u32_,
@@ -556,12 +556,14 @@ fn array(mb: &mut ModuleBuilder, elem: TypeId, n: u32) -> BResult<TypeId> {
     })
 }
 
-fn ku(fb: &mut FunctionBuilder<'_>, v: u32) -> BResult<Value> {
+/// The `uint` constant `v`.
+pub(super) fn ku(fb: &mut FunctionBuilder<'_>, v: u32) -> BResult<Value> {
     let c = fb.u32_const(v)?;
     fb.module().const_value(c)
 }
 
-fn kf(fb: &mut FunctionBuilder<'_>, v: f32) -> BResult<Value> {
+/// The `float` constant `v`.
+pub(super) fn kf(fb: &mut FunctionBuilder<'_>, v: f32) -> BResult<Value> {
     let ty = fb.module().ty(Type::Float { width: 32 })?;
     let c = fb.module().constant(Constant::Scalar {
         ty,
@@ -571,7 +573,7 @@ fn kf(fb: &mut FunctionBuilder<'_>, v: f32) -> BResult<Value> {
 }
 
 /// The scalar type of `numeric`.
-fn scalar(mb: &mut ModuleBuilder, numeric: IoNumeric) -> BResult<TypeId> {
+pub(super) fn scalar(mb: &mut ModuleBuilder, numeric: IoNumeric) -> BResult<TypeId> {
     match numeric {
         IoNumeric::Float => mb.ty(Type::Float { width: 32 }),
         IoNumeric::Sint => mb.ty(Type::Int {

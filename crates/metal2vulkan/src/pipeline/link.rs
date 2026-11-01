@@ -47,6 +47,7 @@
 //!   function's pipeline ([`mesh`]) adds a synthesized vertex stage, which reads the mesh
 //!   function's records binding too (its stage flags are both stages').
 
+pub mod band;
 pub mod contract;
 pub mod fetch;
 pub mod geometry;
@@ -156,6 +157,7 @@ impl LinkInputs {
         let mut r = RenderLinkInputs::from(desc);
         r.pulled_vertex_buffers = variant.pulled_vertex_buffers.clone();
         r.color_group = group;
+        r.line_band = variant.line_band;
         LinkInputs::Render(Box::new(r))
     }
 
@@ -193,6 +195,9 @@ pub struct RenderLinkInputs {
     /// alone [`color_attachments`](Self::color_attachments) holds, at their locations
     /// (`GraphicsState::color_group`); `None` where each attachment is at its own index.
     pub color_group: Option<ColorGroup>,
+    /// The variant draws its lines as bands through synthesized tessellation stages
+    /// (`VariantKey::line_band`, [`band`]).
+    pub line_band: bool,
 }
 
 impl RenderLinkInputs {
@@ -213,6 +218,7 @@ impl RenderLinkInputs {
             tessellation: None,
             texture_write_rounding_mode: metal::TextureWriteRoundingMode::TowardZero,
             color_group: None,
+            line_band: false,
         }
     }
 }
@@ -240,6 +246,7 @@ impl From<&RenderPipelineDescriptor> for RenderLinkInputs {
             tessellation: d.tessellation,
             texture_write_rounding_mode: d.texture_write_rounding_mode,
             color_group: None,
+            line_band: false,
         }
     }
 }
@@ -301,6 +308,9 @@ pub struct Linked {
     /// `[[barycentric_coord]]` as varyings, or whose vertex function selects its slice or
     /// viewport through them ([`geometry`]): the compile API builds them.
     pub geometry: Option<geometry::GeometryStages>,
+    /// The synthesized control and evaluation stages of a render pipeline variant that draws its
+    /// lines as bands ([`band`]), with their push range placed: the compile API builds them.
+    pub band: Option<band::LineBand>,
 }
 
 impl SymbolTable for Linked {
@@ -360,6 +370,16 @@ pub fn link(
         )?,
         LinkInputs::Standalone | LinkInputs::Compute => None,
     };
+    // A variant that draws its lines as bands draws them through synthesized tessellation stages.
+    let band = match inputs {
+        LinkInputs::Render(r) if r.line_band => Some(band::plan(
+            &ifaces,
+            geometry.is_some(),
+            r.max_vertex_amplification_count,
+            p,
+        )?),
+        _ => None,
+    };
     // A mesh function reads its payload within its object function's. An emulated mesh
     // function's pipeline draws through a synthesized vertex stage, which reads the records the
     // mesh stage writes.
@@ -386,13 +406,35 @@ pub fn link(
     count_variables(&mut layout, stages, &table);
     let control = match plan {
         Some(plan) => {
-            let offset = tessellation::push_offset(&layout.push_constants, p)?;
+            let offset = tessellation::push_offset(
+                &layout.push_constants,
+                (tessellation::control::PUSH_BYTES, 4),
+                Feature::Tessellation,
+                p,
+            )?;
             layout.push_constants.push(PushConstantRange {
                 stages: vk::ShaderStageFlags::TESSELLATION_CONTROL,
                 offset,
                 size: tessellation::control::PUSH_BYTES,
             });
             Some((plan, offset))
+        }
+        None => None,
+    };
+    let band = match band {
+        Some(mut b) => {
+            b.push_offset = tessellation::push_offset(
+                &layout.push_constants,
+                (band::LineBand::PUSH_BYTES, band::LineBand::PUSH_BYTES),
+                Feature::WideLines,
+                p,
+            )?;
+            layout.push_constants.push(PushConstantRange {
+                stages: vk::ShaderStageFlags::TESSELLATION_EVALUATION,
+                offset: b.push_offset,
+                size: band::LineBand::PUSH_BYTES,
+            });
+            Some(b)
         }
         None => None,
     };
@@ -436,6 +478,21 @@ pub fn link(
                     )
                 });
                 gs.emulated_tessellation = Some(e);
+            }
+            // A band variant draws each line as a patch of its two vertices, which no draw
+            // changes.
+            if let Some(b) = &band {
+                gs.topology = vk::PrimitiveTopology::PATCH_LIST;
+                gs.dynamic_states.retain(|d| {
+                    !matches!(
+                        *d,
+                        vk::DynamicState::PRIMITIVE_TOPOLOGY
+                            | vk::DynamicState::PRIMITIVE_RESTART_ENABLE
+                    )
+                });
+                gs.line_band = Some(crate::pipeline::graphics::LineBandState {
+                    push_offset: b.push_offset,
+                });
             }
             (vi, Some(gs))
         }
@@ -488,6 +545,7 @@ pub fn link(
         specialization,
         control: control.map(|(plan, offset)| plan.control(offset)),
         geometry,
+        band,
     })
 }
 

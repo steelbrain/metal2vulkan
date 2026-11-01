@@ -684,6 +684,20 @@ Where Metal's rules differ from Vulkan's, the pipeline gives Metal's answer:
   pipelines take no groups. The runtime draws such a pass group by group, each group's colors in
   a pass of its own over a twin of the depth and stencil (the runtime's `render/color_groups.rs`;
   what it refuses there is `RuntimeGap::ColorAttachmentGroups`).
+- A pipeline's band variant (`VariantKey::line_band`) draws each line as the parallelogram Metal
+  draws for a line under Apple's `setLineWidth:` at a width the device's own lines do not draw
+  (the runtime chooses where: its README's line widths). Link adds two stages after the vertex
+  stage (`pipeline::link::band`): a tessellation control stage that passes the line's two
+  vertices through, and an evaluation stage that places each corner of a quad patch at its
+  endpoint, moved across the segment along its minor axis by half the width in framebuffer
+  pixels. `graphics.line_band` (`LineBandState`) states the draw's contract: each line one patch
+  of two control points (`PATCH_LIST`), no culling, front face `LineBandState::FRONT_FACE`, and the
+  band's `[sx, sy, h, 0]` pushed to the evaluation stage at `push_offset` (`BindState::line_band`:
+  Vulkan viewport 0's half extent and the half width). A smooth varying and the clip distances are
+  each endpoint's, a flat or integer varying the first vertex's. It needs `tessellationShader`
+  (`Unsupported{WideLines}` needing it); a post-tessellation vertex function, a vertex function
+  that writes a layer or viewport index, synthesized geometry stages, a fragment function that
+  reads barycentric weights and multiview are not implemented.
 - `graphics` also states what the runtime needs to record draws correctly: whether the fragment
   function reads flat inputs, barycentrics or its position's depth, whether the vertex function
   writes memory or a layer or viewport index, and which colors the function may write.

@@ -759,6 +759,7 @@ feature_sources! { c, x;
     ShaderSubgroupRotate => on(c.rotate.shader_subgroup_rotate);
     ShaderSubgroupRotateClustered => on(c.rotate.shader_subgroup_rotate_clustered);
     MultiViewport => on(c.core.multi_viewport);
+    WideLines => on(c.core.wide_lines);
     Maintenance8 => on(c.maintenance8.maintenance8);
     BorderColorSwizzle => on(c.border_color_swizzle.border_color_swizzle);
     BorderColorSwizzleFromImage => on(c.border_color_swizzle.border_color_swizzle_from_image);
@@ -812,6 +813,7 @@ struct PropertyChain {
     sample_locations: avk::PhysicalDeviceSampleLocationsPropertiesEXT<'static>,
     mesh_shader: avk::PhysicalDeviceMeshShaderPropertiesEXT<'static>,
     provoking_vertex: avk::PhysicalDeviceProvokingVertexPropertiesEXT<'static>,
+    maintenance5: avk::PhysicalDeviceMaintenance5PropertiesKHR<'static>,
 }
 
 /// Which property structures are chained.
@@ -830,6 +832,7 @@ struct PropertiesChained {
     sample_locations: bool,
     mesh_shader: bool,
     provoking_vertex: bool,
+    maintenance5: bool,
 }
 
 impl PropertiesChained {
@@ -850,6 +853,7 @@ impl PropertiesChained {
             sample_locations: x.ext(EXT_SAMPLE_LOCATIONS),
             mesh_shader: x.ext(EXT_MESH_SHADER),
             provoking_vertex: x.ext(EXT_PROVOKING_VERTEX),
+            maintenance5: x.promoted(EXT_MAINTENANCE5, Some(4)),
         }
     }
 }
@@ -889,7 +893,8 @@ impl PropertyChain {
                 generated_commands,
                 sample_locations,
                 mesh_shader,
-                provoking_vertex
+                provoking_vertex,
+                maintenance5
             );
             // SAFETY: as in `FeatureChain::query`.
             unsafe { instance.get_physical_device_properties2(pd, &mut p2) };
@@ -1280,6 +1285,14 @@ fn limits(l: &avk::PhysicalDeviceLimits, p: &PropertyChain, chained: &Properties
         // Zero where `VK_EXT_mesh_shader` is not listed (the structure is not chained).
         mesh: mesh_limits(&p.mesh_shader),
         max_point_size: crate::device::whole_point_size(l.point_size_range[1]),
+        line_width_range_bits: l.line_width_range.map(f32::to_bits),
+        line_width_granularity_bits: l.line_width_granularity.to_bits(),
+        strict_lines: on(l.strict_lines),
+        // `false` where `VK_KHR_maintenance5` is not exposed (the structure is not chained).
+        non_strict_wide_lines_use_parallelogram: on(p
+            .maintenance5
+            .non_strict_wide_lines_use_parallelogram),
+        sub_pixel_precision_bits: l.sub_pixel_precision_bits,
     }
 }
 

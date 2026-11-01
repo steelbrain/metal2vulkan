@@ -176,22 +176,25 @@ fn the_control_push_range_takes_the_first_free_gap() {
         size,
     };
     let p = profile("lunarg-desktop-baseline-2023");
-    assert_eq!(push_offset(&[], &p).expect("empty"), 0);
-    assert_eq!(push_offset(&[range(0, 16)], &p).expect("after"), 16);
+    let control_offset = |ranges: &[PushConstantRange]| {
+        push_offset(ranges, (control::PUSH_BYTES, 4), Feature::Tessellation, &p)
+    };
+    assert_eq!(control_offset(&[]).expect("empty"), 0);
+    assert_eq!(control_offset(&[range(0, 16)]).expect("after"), 16);
     assert_eq!(
-        push_offset(&[range(0, 56), range(64, 8)], &p).expect("after fragment"),
+        control_offset(&[range(0, 56), range(64, 8)]).expect("after fragment"),
         72
     );
     assert_eq!(
-        push_offset(&[range(0, 40), range(64, 8)], &p).expect("gap"),
+        control_offset(&[range(0, 40), range(64, 8)]).expect("gap"),
         40
     );
     assert_eq!(
-        push_offset(&[range(0, 48), range(64, 8)], &p).expect("too small a gap"),
+        control_offset(&[range(0, 48), range(64, 8)]).expect("too small a gap"),
         72
     );
     // 128 bytes: a vertex window of 64 and a fragment range to 120 leave no 24-byte gap.
-    match push_offset(&[range(0, 64), range(64, 56)], &p) {
+    match control_offset(&[range(0, 64), range(64, 56)]) {
         Err(Error::Unsupported(u)) => assert_eq!(
             u.needs,
             Needs::AnyOf(vec![vec![Capability::Limit {
