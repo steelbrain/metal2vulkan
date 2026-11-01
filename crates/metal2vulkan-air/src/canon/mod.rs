@@ -413,6 +413,18 @@ pub fn specialize_linked(
     specialize_dynamic(module, abi, req, (linked, &DynamicLinks::default()), m)
 }
 
+/// Whether the linkage signature of a module (`abi`'s) has no reading: a linked-constants
+/// module that still declares function constants. Any other signature describes how a closed
+/// module was produced, and the module's own code is what runs, as the entry's module and as a
+/// linked module alike: a stitched module (Metal's stitcher, `newLibraryWithStitchedDescriptor:`)
+/// defines every stitched function, its graph's nodes inlined, and a linked-constants module was
+/// specialized with the constants it lists and declares none.
+fn unread_signature(abi: &AirAbi) -> bool {
+    abi.linkage_signature
+        .is_some_and(|s| s.kind == crate::abi::LinkageSignatureKind::LinkedConstants)
+        && !abi.function_constants.is_empty()
+}
+
 /// [`specialize_linked`], resolving the module's dynamic-library imports against the stage's
 /// `dynamic` libraries too.
 pub fn specialize_dynamic(
@@ -422,15 +434,9 @@ pub fn specialize_dynamic(
     (linked, dynamic): (&[LinkedModule], &DynamicLinks),
     m: &mut Meter,
 ) -> Result<Entry, Error> {
-    // A linkage signature describes how a closed module was produced: a stitched module defines
-    // every stitched function, and a linked-constants module was specialized with the constants it
-    // lists and declares none. What the module still needs from outside is what any module needs
-    // (constants, linked functions), refused or bound as usual. A linked-constants module that
-    // still declares constants has no reading.
-    let linked_constants = abi
-        .linkage_signature
-        .is_some_and(|s| s.kind == crate::abi::LinkageSignatureKind::LinkedConstants);
-    if linked_constants && !abi.function_constants.is_empty() {
+    // What the module still needs from outside is what any module needs (constants, linked
+    // functions), refused or bound as usual.
+    if unread_signature(abi) {
         let at = Location::metadata(None, None, Some("air.signature"));
         return Err(Unsupported::not_implemented(Feature::Linking).at(at).into());
     }

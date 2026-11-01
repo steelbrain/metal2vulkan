@@ -392,23 +392,53 @@ fn a_linked_function_that_cannot_resolve_the_reference_is_a_typed_descriptor_err
     );
 }
 
-/// A linked module whose linkage signature linking does not read yet is refused at the
-/// surviving call, naming the linked function.
+/// A linked module's linkage signature is read as the entry module's: a stitched module (the form
+/// Metal's stitcher writes) and a linked-constants module that declares no constant link like any
+/// other module, their own code imported. A linked-constants module that still declares a
+/// constant has no reading: refused at the surviving call, naming the linked function, where the
+/// same module with a stitching signature links (its function `free` reaches no constant).
 #[test]
-fn a_linkage_signature_is_not_implemented_and_refused_at_the_call() {
-    let at = Location::function(DiagName::new("k"), Some(0), Some(0));
-    let mut signature = callee("f", &[]);
-    code(&mut signature).abi.linkage_signature = Some(crate::abi::LinkageSignature {
-        kind: crate::abi::LinkageSignatureKind::LinkedConstants,
-        operands: 0,
-    });
-    let u = match link(&[signature]) {
+fn a_linked_module_s_signature_is_read_as_the_entry_s() {
+    use crate::abi::{LinkageSignature, LinkageSignatureKind};
+    let signed = |code: &mut LinkedCode, kind| {
+        code.abi.linkage_signature = Some(LinkageSignature { kind, operands: 2 });
+    };
+    for kind in [
+        LinkageSignatureKind::StitchingModules,
+        LinkageSignatureKind::LinkedConstants,
+    ] {
+        let mut l = callee("f", &[]);
+        signed(code(&mut l), kind);
+        let e = link(&[l]).unwrap_or_else(|e| panic!("{kind:?}: {e}"));
+        let t = text(&e);
+        assert!(!t.contains("call "), "{kind:?}: {t}");
+        assert!(t.contains("mul i32"), "{kind:?}: {t}");
+    }
+    let constants = |kind| {
+        let mut code = constant_callee();
+        signed(&mut code, kind);
+        link(&[LinkedModule {
+            functions: vec![LinkedName {
+                name: b"f".as_slice().into(),
+                function: b"free".as_slice().into(),
+                specialized: true,
+                constants: Ok(BTreeMap::new()),
+                handle: None,
+            }],
+            code: Ok(code),
+        }])
+    };
+    let u = match constants(LinkageSignatureKind::LinkedConstants) {
         Err(Error::Unsupported(u)) => u,
         other => panic!("{other:?}"),
     };
     assert_eq!(u.feature, Feature::Linking, "{u}");
     assert_eq!(u.symbol, Some(DiagName::new("f")), "{u}");
+    let at = Location::function(DiagName::new("k"), Some(0), Some(0));
     assert_eq!(u.location, Some(at), "{u}");
+    let stitched = constants(LinkageSignatureKind::StitchingModules);
+    let t = text(&stitched.unwrap_or_else(|e| panic!("{e}")));
+    assert!(t.contains("add i32 %a1, i32 5"), "{t}");
 }
 
 /// The visible functions of a linked module that declares the `i32` function constant `c`

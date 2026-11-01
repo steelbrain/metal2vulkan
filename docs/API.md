@@ -510,6 +510,14 @@ layout stride of `None` is `MTLBufferLayoutStrideDynamic`: the stride comes from
   `is_function_constant_defined` or not, as Metal fails the creation ("cannot lower module with
   unresolved function constants"); one that reaches none links. The specialized name and the
   specialization are part of the compile key.
+- **Stitched functions.** A function Metal's stitcher made (`newLibraryWithStitchedDescriptor:`)
+  links like any other visible function, in `functions` or in `privateFunctions`: hand the
+  stitched library's bytes to `Library::from_metallib`, and link its function. Each stitched
+  function is a module of its own whose `!air.signature` describes the graph it was made from;
+  the module's own code, the graph's nodes inlined, is what is linked. The translator makes no
+  stitched library itself. A module whose linkage signature has no reading (a linked-constants
+  signature on a module that still declares function constants) refuses the pipeline at a call
+  that survives specialization, `Unsupported` with `Feature::Linking`.
 - **Binary functions, required threadgroup sizes, buffer mutability.** These descriptor fields
   change no translation and are in no compile key; the runtime checks them as Metal does.
 - **Dynamic libraries.** `DynamicLibrary::new(library, &budget)` checks a dynamic metallib as

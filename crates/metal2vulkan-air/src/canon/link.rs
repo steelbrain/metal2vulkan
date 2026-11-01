@@ -13,13 +13,20 @@
 //! a struct `%struct.T.153` in one module and `%struct.T` in another), and any other identified
 //! struct is the module's first struct of the same body.
 //!
+//! A linked module's linkage signature (`!air.signature`) is read as the entry module's is: it
+//! describes how a closed module was produced, and the module's own code is what is imported. A
+//! function Metal's stitcher made (`newLibraryWithStitchedDescriptor:`) is such a module's visible
+//! function, its graph's nodes inlined into its body, and links like any other (a probe,
+//! `stitched_function_linked.m`: linked privately or not, it computes its graph).
+//!
 //! Nothing here refuses: a call to a stub may be dead once constants are bound, and Metal links
 //! what the specialized function calls. Each stub that is not resolved keeps a [`Stub`] state,
 //! and the post-check refuses a call to it that survives SCCP: `NeedsInput(LinkedFunction)` when
 //! no linked function has its name, and otherwise the reason the named function cannot resolve
 //! it (another function type, a function that is not visible, two linked functions of that name,
-//! another data layout, or a module feature linking does not implement yet: function constants,
-//! a static initializer, a linkage signature, or a global it only declares and does not import).
+//! another data layout, a function constant an unspecialized function reaches, or a module
+//! feature linking does not implement yet: a linked-constants signature on a module that still
+//! declares constants, or a global it only declares and does not import).
 //!
 //! When the entry takes a visible-function table, every function the pipeline can place in one (a
 //! [`LinkedName`] with a table word) is imported the same way, after the stubs, as a [`Candidate`]
@@ -828,9 +835,10 @@ fn refusal<T>(e: Error) -> Result<Result<T, Error>, Error> {
 /// Decide the import of `f` from `l` (whose dynamic-library imports are `imports`): the code it
 /// imports from and what it brings, `Ok(Err(refusal))` when it cannot be linked (the stub's
 /// state), an outer error for a budget stop. Its definition is the visible function of `l` named
-/// `f.function`, whatever name it links under. A module that declares function constants or
-/// defines a static initializer is specialized for `f` first ([`specialize`]). The destination
-/// ids are assigned by [`import`].
+/// `f.function`, whatever name it links under. A linkage signature refuses only where it has no
+/// reading (`unread_signature`). A module that declares function constants or defines a static
+/// initializer is specialized for `f` first ([`specialize`]). The destination ids are assigned by
+/// [`import`].
 fn plan<'c>(
     l: &'c LinkedCode,
     f: &LinkedName,
@@ -840,7 +848,7 @@ fn plan<'c>(
     held: &mut usize,
 ) -> Result<Result<(Source<'c>, Plan), Error>, Error> {
     let name = &*f.name;
-    if l.abi.linkage_signature.is_some() {
+    if super::unread_signature(&l.abi) {
         return Ok(Err(not_implemented(name, "air.signature")));
     }
     let constants = match &f.constants {

@@ -116,7 +116,8 @@ pub struct AirAbi {
     pub visible_functions: Vec<VisibleFunction>,
     /// `!air.ci`: the Core Image kernels this module exports, in list order.
     pub core_image_kernels: Vec<CoreImageKernel>,
-    /// `!air.signature`: stitching or linked-constant signatures (decoded; lowering refuses them).
+    /// `!air.signature`: stitching or linked-constant signatures (how the module was produced;
+    /// see [`LinkageSignature`]).
     pub linkage_signature: Option<LinkageSignature>,
     /// Every `air.struct_type_info` layout, shared by the [`StructRef`]s that name it.
     pub structs: Vec<StructInfo>,
@@ -1304,10 +1305,11 @@ pub enum LinkageSignatureKind {
 
 /// `!air.signature`. Only its kind and operand count are decoded. It describes how a closed
 /// module was produced (the constants a linked-constants module was specialized with, the graph
-/// a stitched module was built from); the module's own code is what runs. A linked-constants module
-/// that still declares function constants is refused (`Feature::Linking`), as is a linked function
-/// module with a signature. An `air.rename_qualified_function_signature` (a function renamed to its
-/// qualified name after it was produced) is read as the signature it wraps.
+/// a stitched module was built from); the module's own code is what runs, whether the module is
+/// the entry's or a linked function's. A linked-constants module that still declares function
+/// constants is refused (`Feature::Linking`). An `air.rename_qualified_function_signature` (a
+/// function renamed to its qualified name after it was produced) is read as the signature it
+/// wraps.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct LinkageSignature {
     /// Which signature the node's leading string names.
