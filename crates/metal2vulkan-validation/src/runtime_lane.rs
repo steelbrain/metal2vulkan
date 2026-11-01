@@ -567,6 +567,8 @@ mod level_writes_by_usage;
 #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
 mod linear_attachments;
 #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+mod linked_functions;
+#[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
 mod logic_ops;
 #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
 mod made_at_creation;

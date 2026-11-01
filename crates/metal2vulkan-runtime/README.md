@@ -89,6 +89,16 @@ command_buffer.wait_until_completed()?;
 Creating a pipeline state translates its functions, each under the 20-second translation budget.
 A function the device cannot run exactly is refused there, typed, naming what is missing.
 
+A `[[visible]]` function a stage calls but does not define comes from the functions it links:
+`Function::linked_function` of each, in the stage's `LinkedFunctions`
+(`function.function_descriptor().with_linked(linked)`, `MTLLinkedFunctions`). A call resolves to
+the linked function of its name, `Function::name`: the specialized name
+`Library::new_function_with_descriptor` made it with (`FunctionDescriptor::specialized_name`,
+Metal's `specializedName`), else its own. A linked function computes with the constant values it
+was made with, and a constant it was given no value for reads as undefined, as Metal's does; one
+made by `new_function_with_name` that reaches a constant of its module refuses the pipeline state
+(`Compile`, `LinkProblem::UnresolvedConstant`), as Metal fails its creation.
+
 Creating a render pipeline state also makes the `VkPipeline` its first draw is predicted to take,
 before it returns, where Metal compiles. The prediction comes from the descriptor and the device
 alone: the pass of its attachments, its input primitive class, each vertex-descriptor layout's

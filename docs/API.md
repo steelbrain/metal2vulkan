@@ -496,6 +496,20 @@ layout stride of `None` is `MTLBufferLayoutStrideDynamic`: the stride comes from
 - **Visible functions and recursion.** Linked visible functions, function tables and
   intersection function tables compile; recursion through visible functions runs on a stack of
   frames sized by `max_call_stack_depth`. A call that finds the stack full returns zero.
+- **Linked functions: names and constants.** A visible-function reference resolves to the linked
+  function whose `LinkedFunction::name` it names: its specialized name where it was made with one
+  (`with_specialized_name`, Metal's `MTLFunctionDescriptor.specializedName`), else its library
+  function's own; its body is still that library function's. A linked function whose module
+  declares function constants is specialized with its own values before it is linked, its
+  module's static initializer run over them. A function made specialized
+  (`LinkedFunction::specialized`: with constant values, or by `newFunctionWithDescriptor:` with or
+  without them) reads a constant it was given no value for as an entry's undefined constants read
+  (section 10, "Function constants"). One made unspecialized (`newFunctionWithName:`) that reaches
+  one of its module's constants refuses the pipeline at a call that survives specialization,
+  `DescriptorError::LinkedFunction` with `LinkProblem::UnresolvedConstant { index }`, guarded by
+  `is_function_constant_defined` or not, as Metal fails the creation ("cannot lower module with
+  unresolved function constants"); one that reaches none links. The specialized name and the
+  specialization are part of the compile key.
 - **Binary functions, required threadgroup sizes, buffer mutability.** These descriptor fields
   change no translation and are in no compile key; the runtime checks them as Metal does.
 - **Dynamic libraries.** `DynamicLibrary::new(library, &budget)` checks a dynamic metallib as
@@ -3685,6 +3699,10 @@ each item named states the rule in full.
   it and an argument gated on it, negated or not, is absent. Metal makes the same pipeline, and its
   reads of the constant vary from read to read: on an M3 Max under macOS 27.0.1 it read `u + 3` as
   0, `u * 7 + 1` as 1, `u == 0 ? 111 : 222` as 222 and `b ? 5 : 6` as 5.
+- **A linked function's constant without a value reads as zero too**, where the function was made
+  specialized (section 3, "Linked functions: names and constants"). Metal makes that pipeline,
+  and its read is undefined: a kernel storing `x * scale + 1` of such a function stored nothing on
+  an M3 Max under macOS 27.0.1.
 
 **Kernels**
 

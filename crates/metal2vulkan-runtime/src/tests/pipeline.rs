@@ -1,5 +1,5 @@
 //! The checks a compute pipeline state's descriptor passes before its compile
-//! (`pipeline::duplicate_linked_name`), the imageblock length it answers
+//! (`pipeline::duplicate_linked_name`, by the name each linked function links under), the imageblock length it answers
 //! (`pipeline::imageblock_memory_length`), the specialization values a failed draw's
 //! pipeline names (`pipeline::specialization_values`), and which form of a key a driver's facts
 //! choose (`pipeline::views_read_at_bind`).
@@ -85,6 +85,34 @@ fn a_name_the_numbered_lists_repeat_is_found() {
     different.binary_functions.push(other);
     assert_eq!(
         duplicate_linked_name(&different),
+        Some("ob3_stage_input".to_owned())
+    );
+}
+
+/// The name a list repeats is the one each function links under, its specialized name where it
+/// has one: one library function linked under a specialized name and under its own is no repeat,
+/// as plain Metal links both (`linked_function_specialized_name.m`'s `both`, an M3 Max under macOS
+/// 27.0.1), and two functions under one specialized name are.
+#[test]
+fn a_repeated_name_is_the_name_a_function_links_under() {
+    let (first, second) = (linked("ob3_stage_input"), linked("ob3_index_buffer"));
+    let both = LinkedFunctions::new()
+        .with_function(first.clone().with_specialized_name("custom_fn"))
+        .with_function(first.clone());
+    assert_eq!(duplicate_linked_name(&both), None);
+    let one_name = LinkedFunctions::new()
+        .with_function(first.clone().with_specialized_name("custom_fn"))
+        .with_function(second.with_specialized_name("custom_fn"));
+    assert_eq!(
+        duplicate_linked_name(&one_name),
+        Some("custom_fn".to_owned())
+    );
+    // Under its own name as a specialized name, a function's name is its own.
+    let own = LinkedFunctions::new()
+        .with_function(first.clone().with_specialized_name("ob3_stage_input"))
+        .with_function(first);
+    assert_eq!(
+        duplicate_linked_name(&own),
         Some("ob3_stage_input".to_owned())
     );
 }
