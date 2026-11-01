@@ -102,7 +102,10 @@ the linked function of its name, `Function::name`: the specialized name
 Metal's `specializedName`), else its own. A linked function computes with the constant values it
 was made with, and a constant it was given no value for reads as undefined, as Metal's does; one
 made by `new_function_with_name` that reaches a constant of its module refuses the pipeline state
-(`Compile`, `LinkProblem::UnresolvedConstant`), as Metal fails its creation.
+(`Compile`, `LinkProblem::UnresolvedConstant`), as Metal fails its creation. A function Metal's
+stitcher made links the same way, privately or not, from the stitched library's bytes
+(`Device::new_library_with_data`); the runtime makes no stitched library itself
+(`newLibraryWithStitchedDescriptor:` is not built).
 
 Creating a render pipeline state also makes the `VkPipeline` its first draw is predicted to take,
 before it returns, where Metal compiles. The prediction comes from the descriptor and the device

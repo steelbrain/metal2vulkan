@@ -769,6 +769,8 @@ mod stage_in_strides;
 #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
 mod state_ids;
 #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+mod stitched_functions;
+#[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
 mod submission_checks;
 #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
 mod submission_handlers;
