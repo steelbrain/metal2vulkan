@@ -42,7 +42,7 @@ use std::collections::{BTreeMap, HashMap};
 pub(crate) const MAGIC: &[u8; 8] = b"M2VPREC\0";
 
 /// The record format: bumped whenever a record's bytes change meaning (the module docs).
-pub(crate) const RECORD_FORMAT: u32 = 1;
+pub(crate) const RECORD_FORMAT: u32 = 2;
 
 /// The length of a record's header (magic and format) and of its checksum.
 const HEADER: usize = 8 + 4;
@@ -283,6 +283,11 @@ impl Writer {
         for f in v {
             self.function(&f.function)?;
             self.constants(&f.constants)?;
+            self.bool(f.specialized_name.is_some());
+            if let Some(name) = &f.specialized_name {
+                self.bytes(name.as_bytes())?;
+            }
+            self.bool(f.specialized);
             self.bool(f.precompiled);
         }
         Ok(())
@@ -661,12 +666,18 @@ impl<'a> Reader<'a> {
         for _ in 0..n {
             let function = self.function()?;
             let constants = self.constants()?;
+            let specialized_name = match self.bool()? {
+                true => Some(self.string()?),
+                false => None,
+            };
+            let specialized = self.bool()?;
             let precompiled = self.bool()?;
-            out.push(
-                LinkedFunction::new(function)
-                    .with_constants(constants)
-                    .with_precompiled(precompiled),
-            );
+            let mut linked = LinkedFunction::new(function)
+                .with_constants(constants)
+                .with_specialized(specialized)
+                .with_precompiled(precompiled);
+            linked.specialized_name = specialized_name;
+            out.push(linked);
         }
         Ok(out)
     }

@@ -45,11 +45,13 @@ fn constants() -> FunctionConstantValues {
         )
 }
 
-/// A stage of `f` with constants and linked functions in every list and a group.
+/// A stage of `f` with constants and linked functions in every list and a group, one under a
+/// specialized name.
 fn stage(f: Function) -> StageSource {
     let linked = function("ob3_texture_array", "ob3_texture_array");
     let mut functions = LinkedFunctions::new()
         .with_function(LinkedFunction::new(linked.clone()).with_constants(constants()))
+        .with_function(LinkedFunction::new(linked.clone()).with_specialized_name("custom_fn"))
         .with_private_function(linked.clone());
     functions
         .binary_functions
