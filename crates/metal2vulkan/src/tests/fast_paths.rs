@@ -7,7 +7,7 @@
 
 use crate::device::{
     BatchOrderPolicy, CompletionPolicy, DevicePolicy, HalfChainPolicy, HeapCompressionPolicy,
-    HostPageTexturePolicy, PipelineWaitPolicy, RenderLoweringPolicy,
+    HostPageTexturePolicy, PipelineWaitPolicy, RenderLoweringPolicy, WideLinePolicy,
 };
 use crate::pipeline::PrecisionNote;
 use std::collections::BTreeSet;
@@ -59,9 +59,9 @@ fn choices() -> Vec<Choice> {
         // The accuracy choices, below.
         // The runtime's: a heap's compressed texture's image, when the host sees a command buffer
         // complete, how a batch begins after the earlier ones of its queue, where a render
-        // encoder's calls are lowered, what holds a sampled texture over host pages, and whether and
+        // encoder's calls are lowered, what holds a sampled texture over host pages, whether and
         // how long a pipeline being made is waited for (the bounds' values:
-        // `the_ledger_states_the_pipeline_wait_bounds`).
+        // `the_ledger_states_the_pipeline_wait_bounds`), and which lines draw a wide line.
         heap_compression: _,
         completion: _,
         batch_order: _,
@@ -70,6 +70,7 @@ fn choices() -> Vec<Choice> {
         pipeline_waits: _,
         pipeline_creation_wait: _,
         pipeline_commit_wait: _,
+        wide_lines: _,
         // The translator's: how a `half` chain rounds without `shaderFloat16`.
         half_chains: _,
     } = p;
@@ -81,6 +82,7 @@ fn choices() -> Vec<Choice> {
         choice!(p.host_page_textures: HostPageTexturePolicy { InPlace, Shadow }),
         choice!(p.half_chains: HalfChainPolicy { AtExits, EachOperation }),
         choice!(p.pipeline_waits: PipelineWaitPolicy { Bounded, Exact }),
+        choice!(p.wide_lines: WideLinePolicy { Device, Exact }),
     ]
 }
 
@@ -499,6 +501,35 @@ fn exact_answers_wait_for_every_pipeline() {
     assert_eq!(
         DevicePolicy::UNTRUSTED.exact_answers().pipeline_waits,
         PipelineWaitPolicy::Exact
+    );
+}
+
+/// The runtime's choice of which lines draw a wide line (`wide_lines`) moves no committed
+/// profile's fingerprint: no profile carries it, so no translation follows it.
+#[test]
+fn the_runtime_s_wide_lines_choice_keys_no_profile() {
+    use crate::spirv::testing::committed_profiles_with;
+    let device = committed_profiles_with(DevicePolicy::UNTRUSTED).expect("profiles");
+    let exact = committed_profiles_with(DevicePolicy {
+        wide_lines: WideLinePolicy::Exact,
+        ..DevicePolicy::UNTRUSTED
+    })
+    .expect("profiles");
+    assert_eq!(device.len(), exact.len());
+    for ((stem, d), (other, e)) in device.iter().zip(&exact) {
+        assert_eq!(stem, other);
+        assert_eq!(d.fingerprint(), e.fingerprint(), "{stem}");
+    }
+}
+
+/// `DevicePolicy::exact_answers()` draws a wide line as Metal's parallelogram where the device's
+/// own line differs, and the default draws the device's own.
+#[test]
+fn exact_answers_draw_wide_lines_as_metal_s_parallelogram() {
+    assert_eq!(DevicePolicy::UNTRUSTED.wide_lines, WideLinePolicy::Device);
+    assert_eq!(
+        DevicePolicy::UNTRUSTED.exact_answers().wide_lines,
+        WideLinePolicy::Exact
     );
 }
 

@@ -102,6 +102,11 @@ impl Amplification {
         self.count == 0
     }
 
+    /// Whether a draw draws more than one amplification.
+    pub(super) fn amplifies(&self) -> bool {
+        self.count > 1
+    }
+
     /// Whether a mapping moves an amplification to another viewport.
     pub(super) fn offsets_viewports(&self) -> bool {
         self.mappings

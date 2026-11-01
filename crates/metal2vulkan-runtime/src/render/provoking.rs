@@ -332,12 +332,15 @@ impl RenderLowering {
 
     /// How `call`'s `draw` of `pipeline` as `assembly` takes the encoder's provoking vertex (the
     /// module docs), announcing what a listed draw cannot draw as Metal does. A draw that makes
-    /// no primitive draws nothing, as on Metal, and announces nothing ([`makes_none`]).
+    /// no primitive draws nothing, as on Metal, and announces nothing ([`makes_none`]). A draw of
+    /// lines as bands (`band`, `render/line_width.rs`), whose every corner takes a flat input
+    /// from its line's first vertex, takes Metal's last vertex from the list led by each line's
+    /// last vertex on every device, silently: the band covers the same pixels drawn either way.
     pub(super) fn provoking(
         &self,
         call: &'static str,
         pipeline: &DrawingState,
-        assembly: Assembly,
+        (assembly, band): (Assembly, bool),
         draw: &DrawCall,
     ) -> Provoking {
         if !self.state.provoking_last() || makes_none(assembly, draw) {
@@ -352,6 +355,12 @@ impl RenderLowering {
         let (flat, weights) = reads(pipeline);
         if !(flat || weights) {
             return Provoking::AsIs;
+        }
+        if band {
+            return match flat {
+                true => Provoking::Listed(RewriteOrder::LastFirst),
+                false => Provoking::AsIs,
+            };
         }
         let device = self.core.device();
         if native(device) {

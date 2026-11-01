@@ -747,6 +747,8 @@
         "VkPhysicalDeviceProperties.limits.framebufferDepthSampleCounts",
         "VkPhysicalDeviceProperties.limits.framebufferNoAttachmentsSampleCounts",
         "VkPhysicalDeviceProperties.limits.framebufferStencilSampleCounts",
+        "VkPhysicalDeviceProperties.limits.lineWidthGranularity",
+        "VkPhysicalDeviceProperties.limits.lineWidthRange",
         "VkPhysicalDeviceProperties.limits.maxBoundDescriptorSets",
         "VkPhysicalDeviceProperties.limits.maxClipDistances",
         "VkPhysicalDeviceProperties.limits.maxCombinedClipAndCullDistances",
@@ -789,6 +791,8 @@
         "VkPhysicalDeviceProperties.limits.minUniformBufferOffsetAlignment",
         "VkPhysicalDeviceProperties.limits.pointSizeRange",
         "VkPhysicalDeviceProperties.limits.storageImageSampleCounts",
+        "VkPhysicalDeviceProperties.limits.strictLines",
+        "VkPhysicalDeviceProperties.limits.subPixelPrecisionBits",
         "VkPhysicalDeviceVulkan11Properties.maxMemoryAllocationSize",
         "VkPhysicalDeviceVulkan11Properties.subgroupQuadOperationsInAllStages",
         "VkPhysicalDeviceVulkan12Properties.filterMinmaxSingleComponentFormats",
@@ -2149,7 +2153,14 @@
             "pointSizeRange": [
               1.0,
               1.0
-            ]
+            ],
+            "subPixelPrecisionBits": 4,
+            "lineWidthRange": [
+              1.0,
+              1.0
+            ],
+            "lineWidthGranularity": 0.0,
+            "strictLines": false
           }
         },
         "VkPhysicalDeviceVulkan11Properties": {

@@ -231,6 +231,7 @@ surface! {
         enum HostPageTexturePolicy N;
         enum HalfChainPolicy N;
         enum PipelineWaitPolicy N;
+        enum WideLinePolicy N;
         struct DeviceProfile O;
         struct SpirvValidation N;
         struct EnabledCaps N;
@@ -362,6 +363,7 @@ surface! {
         struct GraphicsState N;
         enum ImageblockMechanism N;
         struct InputAttachmentUse N;
+        struct LineBandState N;
         struct ShaderTestsUse N;
         struct ShadowStencilUse N;
         struct StandInUse N;

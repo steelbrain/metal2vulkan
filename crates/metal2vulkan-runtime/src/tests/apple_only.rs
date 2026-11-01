@@ -9,7 +9,7 @@ use crate::{AppleOnly, AppleOnlyCall, DEFAULT_PROTECTION_OPTIONS};
 #[test]
 fn every_apple_only_call_answers_typed() {
     use AppleOnlyCall as C;
-    let table: [(&str, AppleOnlyCall, Result<(), AppleOnly>); 28] = [
+    let table: [(&str, AppleOnlyCall, Result<(), AppleOnly>); 30] = [
         // Compressed-texture controls: no compression is visible on Vulkan.
         (
             "invalidateCompressedTexture:",
@@ -32,22 +32,14 @@ fn every_apple_only_call_answers_typed() {
             C::SetAlphaTestReferenceValue(0.5),
             Ok(()),
         ),
+        // Every width: the encoder's lines are drawn at Metal's quantized width
+        // (`render/line_width.rs`).
         ("setLineWidth:", C::SetLineWidth(1.0), Ok(())),
-        (
-            "setLineWidth:",
-            C::SetLineWidth(2.0),
-            Err(AppleOnly::LineWidth),
-        ),
-        (
-            "setLineWidth:",
-            C::SetLineWidth(0.5),
-            Err(AppleOnly::LineWidth),
-        ),
-        (
-            "setLineWidth:",
-            C::SetLineWidth(f32::NAN),
-            Err(AppleOnly::LineWidth),
-        ),
+        ("setLineWidth:", C::SetLineWidth(2.0), Ok(())),
+        ("setLineWidth:", C::SetLineWidth(0.5), Ok(())),
+        ("setLineWidth:", C::SetLineWidth(f32::NAN), Ok(())),
+        ("setLineWidth:", C::SetLineWidth(-1.0), Ok(())),
+        ("setLineWidth:", C::SetLineWidth(f32::INFINITY), Ok(())),
         ("setPointSize:", C::SetPointSize(1.0), Ok(())),
         ("setPointSize:", C::SetPointSize(f32::NAN), Ok(())),
         (
@@ -173,7 +165,6 @@ fn each_apple_only_refusal_names_its_gap() {
     use crate::AppleOnlyGap::Unmeasured;
     let table = [
         (AppleOnly::ProtectedContent, Unmeasured),
-        (AppleOnly::LineWidth, Unmeasured),
         (AppleOnly::ViewportTransformDisabled, Unmeasured),
         (AppleOnly::VertexAmplificationMode, Unmeasured),
         (AppleOnly::SurfaceClientDirection, Unmeasured),

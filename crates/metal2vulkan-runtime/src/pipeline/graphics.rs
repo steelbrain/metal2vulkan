@@ -185,6 +185,10 @@ pub(crate) struct FixedState {
     /// `VkPipelineRasterizationProvokingVertexStateCreateInfoEXT` with
     /// `VK_PROVOKING_VERTEX_MODE_LAST_VERTEX_EXT`, never dynamic.
     pub(crate) provoking_last: bool,
+    /// The `lineWidth` the draw rasterizes lines at, as `f32` bits: 1 but where a line Apple's
+    /// `setLineWidth:` widens is drawn by the device's own lines (`render/line_width.rs`), never
+    /// dynamic. A pipeline of another width than 1 chains no Bresenham line mode.
+    pub(crate) line_width: u32,
 }
 
 /// The depth clip and clamp of a draw through a viewport depth range past `[0, 1]`
@@ -320,6 +324,8 @@ pub(crate) struct GraphicsContent {
     ///
     /// [`bresenham_lines`]: metal2vulkan::device::VkFeature::BresenhamLines
     bresenham_lines: bool,
+    /// `lineWidth` ([`FixedState::line_width`]).
+    line_width: f32,
     cull_mode: vk::CullModeFlags,
     front_face: vk::FrontFace,
     depth_bias: bool,
@@ -599,6 +605,7 @@ impl GraphicsContent {
                     key.fixed.depth_clamp,
                     key.fixed.polygon_mode,
                     key.fixed.provoking_last,
+                    key.fixed.line_width,
                     key.fixed.cull_mode,
                     key.fixed.front_face,
                     depth_bias,
@@ -753,7 +760,7 @@ impl GraphicsContent {
             .cull_mode(self.cull_mode)
             .front_face(self.front_face)
             .depth_bias_enable(self.depth_bias)
-            .line_width(1.0);
+            .line_width(self.line_width);
         if self.depth_clip.is_some() {
             raster = raster.push_next(&mut depth_clip);
         }
@@ -772,12 +779,14 @@ impl GraphicsContent {
         // takes the rectangle's own fill rule at the ends, so a line's first and last pixels and
         // every boundary pixel differ from Metal's (measured on llvmpipe and on an RTX 5080,
         // which both set it; MoltenVK does not, and its lines are Metal's own). Bresenham's mode
-        // is Metal's rule, and every device profile this tree holds offers it.
+        // is Metal's rule, and every device profile this tree holds offers it. A wider line is
+        // the device's own (`render/line_width.rs`), in Vulkan's default mode.
         let mut line = vk::PipelineRasterizationLineStateCreateInfoEXT::default()
             .line_rasterization_mode(vk::LineRasterizationModeEXT::BRESENHAM);
         let multisample_allows_bresenham =
             !self.alpha_to_coverage && !self.alpha_to_one && !self.sample_shading;
         if self.bresenham_lines
+            && self.line_width == 1.0
             && multisample_allows_bresenham
             && rasterizes_lines(self.topology, self.polygon_mode)
         {
@@ -995,9 +1004,13 @@ impl VariantObjects {
             })
             .collect();
         // Metal biases triangles only: the bias is enabled by the topology, and its factors are
-        // dynamic state (`metal::state::depth_bias`).
+        // dynamic state (`metal::state::depth_bias`). A band's patches are lines.
+        let biased = match graphics.line_band {
+            Some(_) => metal2vulkan::vk::PrimitiveTopology::LINE_LIST,
+            None => key.topology,
+        };
         let bias = metal2vulkan::metal::state::depth_bias(
-            key.topology,
+            biased,
             0.0,
             0.0,
             0.0,
@@ -1077,6 +1090,7 @@ impl VariantObjects {
                 .enabled()
                 .features
                 .contains(&metal2vulkan::device::VkFeature::BresenhamLines),
+            line_width: f32::from_bits(key.fixed.line_width),
             cull_mode: key.fixed.cull_mode.into(),
             front_face: key.fixed.front_face.into(),
             depth_bias: bias.enable,
@@ -1101,7 +1115,11 @@ impl VariantObjects {
             blends,
             blend_flags,
             logic_op: graphics.logic_op.map(Into::into),
-            patch_control_points: graphics.tessellation.map(|t| t.patch_control_points),
+            // A band's patches are each line's two vertices.
+            patch_control_points: match graphics.line_band {
+                Some(_) => Some(metal2vulkan::pipeline::LineBandState::PATCH_CONTROL_POINTS),
+                None => graphics.tessellation.map(|t| t.patch_control_points),
+            },
             meshes: pipeline
                 .stages
                 .iter()
@@ -1378,6 +1396,7 @@ mod tests {
             depth_range: None,
             masks_color: false,
             provoking_last: false,
+            line_width: 1.0_f32.to_bits(),
         }
     }
 

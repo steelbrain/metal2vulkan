@@ -73,6 +73,7 @@ use std::ops::Range;
 use std::sync::Arc;
 
 use super::super::bound::{Bound, Recorded};
+use super::super::line_width::LineRoute;
 use super::super::pass_start_reads::PassStartTables;
 use super::super::provoking::ProvokingForms;
 use super::super::{Assembly, DrawBuffers, PrivateForm, Recording, RenderLowering};
@@ -700,6 +701,12 @@ impl RenderLowering {
         }
         let settings =
             self.draw_settings(CALL, state, Assembly::Primitives(primitive_type), false)?;
+        // Lines at a width other than 1 are the host replay's to refuse (`render/line_width.rs`).
+        if settings.line != LineRoute::Plain {
+            return Ok(Err(HostStepCause::Rule(
+                "the encoder's line width is not 1",
+            )));
+        }
         if *self.current.shape.locations != *settings.routing.locations {
             let rule = "the inherited state's color outputs go to other locations than the pass's";
             return Ok(Err(HostStepCause::Rule(rule)));

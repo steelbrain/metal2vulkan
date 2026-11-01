@@ -1472,8 +1472,10 @@ fn passes_and_draws_are_refused_as_metal_refuses_them() {
     // The render encoder's Apple-only setters (step 12's table): Metal's defaults are accepted.
     let apple = |feature| Err(Error::AppleOnly(feature));
     assert_eq!(encoder.set_alpha_test_reference_value(0.5), Ok(()));
+    // Every width is accepted (`runtime_lane::line_widths` draws them); the encoder's width is
+    // set back to Metal's default for the draws below.
+    assert_eq!(encoder.set_line_width(2.0), Ok(()));
     assert_eq!(encoder.set_line_width(1.0), Ok(()));
-    assert_eq!(encoder.set_line_width(2.0), apple(AppleOnly::LineWidth));
     // `setPointSize:` changes nothing Metal draws, at every size (088029d75).
     assert_eq!(encoder.set_point_size(4.0), Ok(()));
     // Every mode is drawn, as Metal draws every one; a mode past 1, which Metal draws a third

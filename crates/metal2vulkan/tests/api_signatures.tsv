@@ -470,6 +470,9 @@ assoc-const	metal2vulkan::pipeline::CommandWrites::STAGE_IN_REGION	pub const STA
 assoc-const	metal2vulkan::pipeline::CommandWrites::THREADGROUP_MEMORY	pub const THREADGROUP_MEMORY: u32
 assoc-const	metal2vulkan::pipeline::FunctionHandle::NULL_WORD	pub const NULL_WORD: u32
 assoc-const	metal2vulkan::pipeline::FunctionHandle::RESERVED_WORD	pub const RESERVED_WORD: u32
+assoc-const	metal2vulkan::pipeline::LineBandState::FRONT_FACE	pub const FRONT_FACE: vk::FrontFace
+assoc-const	metal2vulkan::pipeline::LineBandState::PATCH_CONTROL_POINTS	pub const PATCH_CONTROL_POINTS: u32
+assoc-const	metal2vulkan::pipeline::LineBandState::PUSH_BYTES	pub const PUSH_BYTES: u32
 assoc-const	metal2vulkan::vk::ComponentMapping::IDENTITY	pub const IDENTITY: ComponentMapping
 assoc-const-value	metal2vulkan-air::bitcode::EnumAttrs::MAX_KIND	127
 assoc-const-value	metal2vulkan-air::bitcode::EnumAttrs::MUST_PROGRESS	70
@@ -936,6 +939,9 @@ assoc-const-value	metal2vulkan::pipeline::CommandWrites::STAGE_IN_REGION	1 <<11
 assoc-const-value	metal2vulkan::pipeline::CommandWrites::THREADGROUP_MEMORY	1 <<10
 assoc-const-value	metal2vulkan::pipeline::FunctionHandle::NULL_WORD	0
 assoc-const-value	metal2vulkan::pipeline::FunctionHandle::RESERVED_WORD	1
+assoc-const-value	metal2vulkan::pipeline::LineBandState::FRONT_FACE	crate::pipeline::link::band::LineBand::FRONT_FACE
+assoc-const-value	metal2vulkan::pipeline::LineBandState::PATCH_CONTROL_POINTS	crate::pipeline::link::band::LineBand::PATCH_CONTROL_POINTS
+assoc-const-value	metal2vulkan::pipeline::LineBandState::PUSH_BYTES	crate::pipeline::link::band::LineBand::PUSH_BYTES
 assoc-const-value	metal2vulkan::vk::ComponentMapping::IDENTITY	ComponentMapping
 const	metal2vulkan-air::bitstream::BLOCKINFO_BLOCK_ID	pub const BLOCKINFO_BLOCK_ID: u32
 const	metal2vulkan-air::bitstream::TOP_LEVEL_ABBREV_WIDTH	pub const TOP_LEVEL_ABBREV_WIDTH: u32
@@ -1406,6 +1412,7 @@ enum	metal2vulkan::device::VkExtension	#[cfg_attr(feature = "serde", derive(serd
 enum	metal2vulkan::device::VkFeature	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] #[non_exhaustive] pub enum VkFeature
 enum	metal2vulkan::device::VkLimit	#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] #[non_exhaustive] pub enum VkLimit
 enum	metal2vulkan::device::VkProperty	#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] #[non_exhaustive] pub enum VkProperty
+enum	metal2vulkan::device::WideLinePolicy	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum WideLinePolicy
 enum	metal2vulkan::error::AbiError	#[derive(Clone, Debug, PartialEq, Eq)] #[non_exhaustive] pub enum AbiError
 enum	metal2vulkan::error::Attachment	#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum Attachment
 enum	metal2vulkan::error::BindError	#[derive(Clone, Debug, PartialEq, Eq)] #[non_exhaustive] pub enum BindError
@@ -2522,6 +2529,7 @@ field	metal2vulkan-runtime::WorkCounts.descriptor_keys_built	pub descriptor_keys
 field	metal2vulkan-runtime::WorkCounts.detached_storage_reaches	pub detached_storage_reaches: u64
 field	metal2vulkan-runtime::WorkCounts.device_copy_textures	pub device_copy_textures: u64
 field	metal2vulkan-runtime::WorkCounts.device_memory_allocated	pub device_memory_allocated: u64
+field	metal2vulkan-runtime::WorkCounts.device_wide_line_draws	pub device_wide_line_draws: u64
 field	metal2vulkan-runtime::WorkCounts.dirty_copies_in_gated	pub dirty_copies_in_gated: u64
 field	metal2vulkan-runtime::WorkCounts.dirty_copies_in_skipped	pub dirty_copies_in_skipped: u64
 field	metal2vulkan-runtime::WorkCounts.dirty_copies_in_whole	pub dirty_copies_in_whole: u64
@@ -2695,6 +2703,7 @@ field	metal2vulkan-runtime::WorkCounts.instance_splits_visibility	pub instance_s
 field	metal2vulkan-runtime::WorkCounts.internal_submissions	pub internal_submissions: u64
 field	metal2vulkan-runtime::WorkCounts.kept_backings_made	pub kept_backings_made: u64
 field	metal2vulkan-runtime::WorkCounts.kept_bytes_passes	pub kept_bytes_passes: u64
+field	metal2vulkan-runtime::WorkCounts.line_band_draws	pub line_band_draws: u64
 field	metal2vulkan-runtime::WorkCounts.linear_passes_in_place	pub linear_passes_in_place: u64
 field	metal2vulkan-runtime::WorkCounts.linear_passes_through_copies	pub linear_passes_through_copies: u64
 field	metal2vulkan-runtime::WorkCounts.linked_use_questions_asked	pub linked_use_questions_asked: u64
@@ -2982,6 +2991,7 @@ field	metal2vulkan::bind::BindShape.function_tables	pub function_tables: Functio
 field	metal2vulkan::bind::BindShape.imageblock_size	pub imageblock_size: ImageblockSize
 field	metal2vulkan::bind::BindShape.interlocked_colors	pub interlocked_colors: BTreeSet<u32>
 field	metal2vulkan::bind::BindShape.kept_imageblock_bytes	pub kept_imageblock_bytes: Option<u32>
+field	metal2vulkan::bind::BindShape.line_band	pub line_band: bool
 field	metal2vulkan::bind::BindShape.mesh_last_first	pub mesh_last_first: bool
 field	metal2vulkan::bind::BindShape.primitive_id_indices	pub primitive_id_indices: Option<metal::IndexType>
 field	metal2vulkan::bind::BindShape.private_list	pub private_list: bool
@@ -3012,6 +3022,7 @@ field	metal2vulkan::bind::BindState.heap_placement	pub heap_placement: HeapPlace
 field	metal2vulkan::bind::BindState.imageblock_size	pub imageblock_size: ImageblockSize
 field	metal2vulkan::bind::BindState.interlocked_colors	pub interlocked_colors: BTreeSet<u32>
 field	metal2vulkan::bind::BindState.kept_imageblock_bytes	pub kept_imageblock_bytes: Option<u32>
+field	metal2vulkan::bind::BindState.line_band	pub line_band: Option<[f32; 4]>
 field	metal2vulkan::bind::BindState.mesh_last_first	pub mesh_last_first: bool
 field	metal2vulkan::bind::BindState.primitive_id_indices	pub primitive_id_indices: Option<metal::IndexType>
 field	metal2vulkan::bind::BindState.primitive_type	pub primitive_type: Option<metal::PrimitiveType>
@@ -3608,6 +3619,7 @@ field	metal2vulkan::cache::VariantKey.flat_grid	pub flat_grid: bool
 field	metal2vulkan::cache::VariantKey.folded_groups	pub folded_groups: bool
 field	metal2vulkan::cache::VariantKey.interlocked_colors	pub interlocked_colors: BTreeSet<u32>
 field	metal2vulkan::cache::VariantKey.kept_imageblock_bytes	pub kept_imageblock_bytes: Option<u32>
+field	metal2vulkan::cache::VariantKey.line_band	pub line_band: bool
 field	metal2vulkan::cache::VariantKey.merged_draws	pub merged_draws: bool
 field	metal2vulkan::cache::VariantKey.mesh_last_first	pub mesh_last_first: bool
 field	metal2vulkan::cache::VariantKey.primitive_id_indices	pub primitive_id_indices: Option<crate::metal::IndexType>
@@ -3683,6 +3695,7 @@ field	metal2vulkan::device::DevicePolicy.pipeline_creation_wait	pub pipeline_cre
 field	metal2vulkan::device::DevicePolicy.pipeline_waits	pub pipeline_waits: PipelineWaitPolicy
 field	metal2vulkan::device::DevicePolicy.pointer_domain	pub pointer_domain: PointerDomain
 field	metal2vulkan::device::DevicePolicy.render_lowering	pub render_lowering: RenderLoweringPolicy
+field	metal2vulkan::device::DevicePolicy.wide_lines	pub wide_lines: WideLinePolicy
 field	metal2vulkan::device::DriverDiagnostic.id	pub id: i32
 field	metal2vulkan::device::DriverDiagnostic.id_name	pub id_name: &'static str
 field	metal2vulkan::device::DriverDiagnostic.text	pub text: Cow<'static, str>
@@ -3754,6 +3767,8 @@ field	metal2vulkan::device::Limits.framebuffer_no_attachments_sample_counts	pub 
 field	metal2vulkan::device::Limits.framebuffer_stencil_sample_counts	pub framebuffer_stencil_sample_counts: vk::SampleCountFlags
 field	metal2vulkan::device::Limits.independent_resolve	pub independent_resolve: bool
 field	metal2vulkan::device::Limits.independent_resolve_none	pub independent_resolve_none: bool
+field	metal2vulkan::device::Limits.line_width_granularity_bits	pub line_width_granularity_bits: u32
+field	metal2vulkan::device::Limits.line_width_range_bits	pub line_width_range_bits: [u32; 2]
 field	metal2vulkan::device::Limits.max_bound_descriptor_sets	pub max_bound_descriptor_sets: u32
 field	metal2vulkan::device::Limits.max_clip_distances	pub max_clip_distances: u32
 field	metal2vulkan::device::Limits.max_color_attachments	pub max_color_attachments: u32
@@ -3833,9 +3848,12 @@ field	metal2vulkan::device::Limits.min_texel_gather_offset	pub min_texel_gather_
 field	metal2vulkan::device::Limits.min_texel_offset	pub min_texel_offset: i32
 field	metal2vulkan::device::Limits.min_uniform_buffer_offset_alignment	pub min_uniform_buffer_offset_alignment: u64
 field	metal2vulkan::device::Limits.min_vertex_input_binding_stride_alignment	pub min_vertex_input_binding_stride_alignment: Option<u32>
+field	metal2vulkan::device::Limits.non_strict_wide_lines_use_parallelogram	pub non_strict_wide_lines_use_parallelogram: bool
 field	metal2vulkan::device::Limits.provoking_vertex_mode_per_pipeline	pub provoking_vertex_mode_per_pipeline: bool
 field	metal2vulkan::device::Limits.sample_location_sample_counts	pub sample_location_sample_counts: vk::SampleCountFlags
 field	metal2vulkan::device::Limits.storage_image_sample_counts	pub storage_image_sample_counts: vk::SampleCountFlags
+field	metal2vulkan::device::Limits.strict_lines	pub strict_lines: bool
+field	metal2vulkan::device::Limits.sub_pixel_precision_bits	pub sub_pixel_precision_bits: u32
 field	metal2vulkan::device::Limits.supported_depth_resolve_modes	pub supported_depth_resolve_modes: vk::ResolveModeFlags
 field	metal2vulkan::device::Limits.supported_stencil_resolve_modes	pub supported_stencil_resolve_modes: vk::ResolveModeFlags
 field	metal2vulkan::device::Limits.supports_non_zero_first_instance	pub supports_non_zero_first_instance: bool
@@ -4105,6 +4123,7 @@ field	metal2vulkan::pipeline::GraphicsState.flat_fragment_inputs	pub flat_fragme
 field	metal2vulkan::pipeline::GraphicsState.fragment_imageblock	pub fragment_imageblock: Option<FragmentImageblock>
 field	metal2vulkan::pipeline::GraphicsState.fragment_writes_memory	pub fragment_writes_memory: bool
 field	metal2vulkan::pipeline::GraphicsState.input_attachments	pub input_attachments: Vec<InputAttachmentUse>
+field	metal2vulkan::pipeline::GraphicsState.line_band	pub line_band: Option<LineBandState>
 field	metal2vulkan::pipeline::GraphicsState.logic_op	pub logic_op: Option<vk::LogicOp>
 field	metal2vulkan::pipeline::GraphicsState.max_vertex_amplification_count	pub max_vertex_amplification_count: u32
 field	metal2vulkan::pipeline::GraphicsState.mesh_records	pub mesh_records: Option<MeshRecords>
@@ -4137,6 +4156,7 @@ field	metal2vulkan::pipeline::ImageHandleClass.sampled_type	pub sampled_type: Sa
 field	metal2vulkan::pipeline::InputAttachmentUse.color_index	pub color_index: u32
 field	metal2vulkan::pipeline::InputAttachmentUse.format_class	pub format_class: SampledType
 field	metal2vulkan::pipeline::InputAttachmentUse.input_attachment_index	pub input_attachment_index: u32
+field	metal2vulkan::pipeline::LineBandState.push_offset	pub push_offset: u32
 field	metal2vulkan::pipeline::LinkedFunction.constants	pub constants: FunctionConstantValues
 field	metal2vulkan::pipeline::LinkedFunction.function	pub function: Function
 field	metal2vulkan::pipeline::LinkedFunction.precompiled	pub precompiled: bool
@@ -4945,6 +4965,7 @@ macro-member	metal2vulkan-runtime::Degradation::DeviceSignedZeroInfNan	DeviceSig
 macro-member	metal2vulkan-runtime::Degradation::DeviceTexelConversion	DeviceTexelConversion = "device-texel-conversion";
 macro-member	metal2vulkan-runtime::Degradation::DeviceTranscendentals	DeviceTranscendentals = "device-transcendentals";
 macro-member	metal2vulkan-runtime::Degradation::DeviceVertexConversion	DeviceVertexConversion = "device-vertex-conversion";
+macro-member	metal2vulkan-runtime::Degradation::DeviceWideLines	DeviceWideLines = "device-wide-lines", Precision,
 macro-member	metal2vulkan-runtime::Degradation::DiscardDropsSimdgroupStores	DiscardDropsSimdgroupStores = "discard-drops-simdgroup-stores";
 macro-member	metal2vulkan-runtime::Degradation::DispatchDroppedStillMaking	DispatchDroppedStillMaking = "dispatch-dropped-still-making", Precision,
 macro-member	metal2vulkan-runtime::Degradation::DontCareLoadTiles	DontCareLoadTiles = "dont-care-load-tiles", Precision,
@@ -9660,6 +9681,7 @@ struct	metal2vulkan::pipeline::FunctionHandle	#[cfg_attr(feature = "serde", deri
 struct	metal2vulkan::pipeline::GraphicsState	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub struct GraphicsState
 struct	metal2vulkan::pipeline::ImageHandleClass	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] #[non_exhaustive] pub struct ImageHandleClass
 struct	metal2vulkan::pipeline::InputAttachmentUse	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub struct InputAttachmentUse
+struct	metal2vulkan::pipeline::LineBandState	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub struct LineBandState
 struct	metal2vulkan::pipeline::LinkedFunction	#[derive(Clone, Debug, PartialEq, Eq)] #[non_exhaustive] pub struct LinkedFunction
 struct	metal2vulkan::pipeline::LinkedFunctions	#[derive(Clone, Debug, Default, PartialEq, Eq)] #[non_exhaustive] pub struct LinkedFunctions
 struct	metal2vulkan::pipeline::LinkedSource	#[derive(Clone, Copy, Debug)] pub struct LinkedSource<'a>
@@ -10995,7 +11017,6 @@ variant	metal2vulkan-air::tensor_ops::TensorSpace::Threadgroup	Threadgroup
 variant	metal2vulkan-runtime::AddressPlacement::Any	Any
 variant	metal2vulkan-runtime::AddressPlacement::At	At(GpuAddress)
 variant	metal2vulkan-runtime::AddressPlacement::Outside	Outside
-variant	metal2vulkan-runtime::AppleOnly::LineWidth	LineWidth
 variant	metal2vulkan-runtime::AppleOnly::ProtectedContent	ProtectedContent
 variant	metal2vulkan-runtime::AppleOnly::SurfaceClientDirection	SurfaceClientDirection
 variant	metal2vulkan-runtime::AppleOnly::VertexAmplificationMode	VertexAmplificationMode
@@ -11875,6 +11896,7 @@ variant	metal2vulkan-runtime::RuntimeGap::TileAndFragmentImageblocks	TileAndFrag
 variant	metal2vulkan-runtime::RuntimeGap::TileAtSampleCount	TileAtSampleCount
 variant	metal2vulkan-runtime::RuntimeGap::VertexFetchPast4GiB	VertexFetchPast4GiB { buffer_index: u32, reach: u64 }
 variant	metal2vulkan-runtime::RuntimeGap::ViewportDepthRange	ViewportDepthRange
+variant	metal2vulkan-runtime::RuntimeGap::WideLines	WideLines
 variant	metal2vulkan-runtime::RuntimeGap::WriteSwizzle	WriteSwizzle
 variant	metal2vulkan-runtime::SemaphoreProblem::Null	Null
 variant	metal2vulkan-runtime::SemaphoreProblem::Timeline	Timeline
@@ -12738,6 +12760,7 @@ variant	metal2vulkan::device::VkFeature::VertexAttributeInstanceRateZeroDivisor	
 variant	metal2vulkan::device::VkFeature::VertexPipelineStoresAndAtomics	VertexPipelineStoresAndAtomics
 variant	metal2vulkan::device::VkFeature::VulkanMemoryModel	VulkanMemoryModel
 variant	metal2vulkan::device::VkFeature::VulkanMemoryModelDeviceScope	VulkanMemoryModelDeviceScope
+variant	metal2vulkan::device::VkFeature::WideLines	WideLines
 variant	metal2vulkan::device::VkFeature::WorkgroupMemoryExplicitLayout	WorkgroupMemoryExplicitLayout
 variant	metal2vulkan::device::VkFeature::WorkgroupMemoryExplicitLayout16BitAccess	WorkgroupMemoryExplicitLayout16BitAccess
 variant	metal2vulkan::device::VkFeature::WorkgroupMemoryExplicitLayout8BitAccess	WorkgroupMemoryExplicitLayout8BitAccess
@@ -12894,6 +12917,8 @@ variant	metal2vulkan::device::VkProperty::SubgroupOperation	SubgroupOperation(Su
 variant	metal2vulkan::device::VkProperty::SubgroupQuadOperationsInAllStages	SubgroupQuadOperationsInAllStages
 variant	metal2vulkan::device::VkProperty::SubgroupStage	SubgroupStage(Stage)
 variant	metal2vulkan::device::VkProperty::VariableSampleLocations	VariableSampleLocations
+variant	metal2vulkan::device::WideLinePolicy::Device	Device
+variant	metal2vulkan::device::WideLinePolicy::Exact	Exact
 variant	metal2vulkan::error::AbiError::BadSamplerState	BadSamplerState
 variant	metal2vulkan::error::AbiError::BadValue	BadValue
 variant	metal2vulkan::error::AbiError::ContainerMismatch	ContainerMismatch
@@ -13179,6 +13204,7 @@ variant	metal2vulkan::error::Feature::VertexAmplification	VertexAmplification
 variant	metal2vulkan::error::Feature::ViewFormatReinterpretation	ViewFormatReinterpretation
 variant	metal2vulkan::error::Feature::ViewportDepthRange	ViewportDepthRange
 variant	metal2vulkan::error::Feature::VulkanVersion	VulkanVersion
+variant	metal2vulkan::error::Feature::WideLines	WideLines
 variant	metal2vulkan::error::Feature::WideSwitchLiteral	WideSwitchLiteral
 variant	metal2vulkan::error::InputErrorKind::Abi	Abi(AbiError)
 variant	metal2vulkan::error::InputErrorKind::Bitcode	Bitcode(BitcodeError)
@@ -13560,6 +13586,7 @@ variant	metal2vulkan::pipeline::PushField::ExecutionStatusAddress	ExecutionStatu
 variant	metal2vulkan::pipeline::PushField::HalfBlendColor	HalfBlendColor
 variant	metal2vulkan::pipeline::PushField::IndexCapacity	IndexCapacity
 variant	metal2vulkan::pipeline::PushField::InstanceCount	InstanceCount(SlotRef)
+variant	metal2vulkan::pipeline::PushField::LineBand	LineBand
 variant	metal2vulkan::pipeline::PushField::MergedDrawAddress	MergedDrawAddress
 variant	metal2vulkan::pipeline::PushField::PatchIndexBound	PatchIndexBound
 variant	metal2vulkan::pipeline::PushField::PatchIndexOffset	PatchIndexOffset

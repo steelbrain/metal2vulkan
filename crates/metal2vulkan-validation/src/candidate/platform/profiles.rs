@@ -913,7 +913,8 @@ enum Bound {
     Implies,
     /// A `VkShaderFloatControlsIndependence`: no more independent than the device's.
     Independence,
-    /// Describes execution, not capacity (the subgroup size): not compared.
+    /// Describes execution, not capacity (the subgroup size; how lines rasterize, which the
+    /// runtime reads to choose how it draws a wide line and never to refuse one): not compared.
     Execution,
     /// A size-control bound that a device without subgroup size control reports as 0 (no value):
     /// the profile's range must lie within the device's.
@@ -964,6 +965,11 @@ fn bound(path: &[String]) -> Option<Bound> {
 fn limit_bound(name: &str) -> Option<Bound> {
     Some(match name {
         "min_interpolation_offset_bits" => Bound::FloatAtLeast,
+        "line_width_range_bits"
+        | "line_width_granularity_bits"
+        | "strict_lines"
+        | "non_strict_wide_lines_use_parallelogram"
+        | "sub_pixel_precision_bits" => Bound::Execution,
         "min_texel_offset" | "min_texel_gather_offset" => Bound::AtLeast,
         "supports_non_zero_first_instance"
         | "independent_resolve_none"

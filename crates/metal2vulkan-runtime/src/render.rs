@@ -352,6 +352,8 @@ pub(super) use executions::DeferredPass;
 use executions::{PassInstance, PassStorage, RenderExecution, RunPasses};
 use extended_shadow::ExtendedShadows;
 pub use late_resolve::ResolveTarget;
+use line_width::LineRoute;
+pub(crate) use line_width::LineWidth;
 use metal2vulkan::bind::BindingPlan;
 use metal2vulkan::bind::VertexAmplification;
 use metal2vulkan::bind::{
@@ -395,6 +397,7 @@ mod extended_shadow;
 mod inline_first;
 mod inline_splits;
 mod late_resolve;
+mod line_width;
 mod lowering_worker;
 mod mesh;
 mod mesh_arguments;
@@ -888,6 +891,11 @@ struct DrawSettings {
     /// Its `VkPipeline` takes the last provoking vertex (`render/provoking.rs`,
     /// `FixedState::provoking_last`).
     provoking_last: bool,
+    /// How it draws its lines at the encoder's width (`render/line_width.rs`).
+    line: LineRoute,
+    /// The band its band variant pushes (`BindState::line_band`): its Vulkan viewport 0's half
+    /// extent and the band's half width, in pixels.
+    line_band: Option<[f32; 4]>,
 }
 
 /// The render encoder state one draw takes, statically or as dynamic state, in Vulkan's terms
@@ -7237,9 +7245,16 @@ impl RenderLowering {
         // (`render/restart.rs`).
         // A draw under the last provoking vertex is drawn as a list on a device without it
         // (`render/provoking.rs`).
-        let provoking = self.provoking(call, &pipeline, assembly, &draw);
+        // A line Apple's `setLineWidth:` widens is drawn by the device's lines or as the
+        // pipeline's band, a strip or loop listed as its segments (`render/line_width.rs`); an
+        // execution's command is the runtime's gap there.
+        let line = (self.shape_inputs()).line_route(call, (&pipeline, assembly), false)?;
+        if self.replaying && line != LineRoute::Plain {
+            return Err(Error::NotImplemented(RuntimeGap::WideLines));
+        }
+        let provoking = self.provoking(call, &pipeline, (assembly, line.band()), &draw);
         let provoking_forms = provoking.forms(assembly, &pipeline);
-        let restarted = self.restarted(assembly, &draw, provoking);
+        let restarted = self.restarted(assembly, &draw, (provoking, line.band()));
         let private = match (assembly, restarted) {
             (Assembly::Private(program), _) => PrivateForm::of(&pipeline, program, &draw),
             (_, Some(_)) => PrivateForm::listed(&draw),
@@ -7329,6 +7344,11 @@ impl RenderLowering {
             provoking::Provoking::Listed(_) | provoking::Provoking::LastCorners => {
                 self.core.device().shared().counts.provoking_listed_draw()
             }
+        }
+        match settings.line {
+            LineRoute::Plain => {}
+            LineRoute::Device { .. } => self.core.device().shared().counts.device_wide_line_draw(),
+            LineRoute::Band { .. } => self.core.device().shared().counts.line_band_draw(),
         }
         self.give_up_extended_shadows(&pipeline, &live.state);
         // The draw's primitive type: a vertex function that writes the primitive ID divides by its
@@ -8412,7 +8432,12 @@ impl RenderLowering {
             Next::Current => &self.current,
             Next::New { instance, .. } => &**instance,
         };
-        // The class's list topology where the pipeline makes the topology dynamic.
+        // The class's list topology where the pipeline makes the topology dynamic; a band's
+        // patches of each line's two vertices (`render/line_width.rs`).
+        let (topology, primitive_restart) = match settings.line {
+            LineRoute::Band { .. } => (metal2vulkan::vk::PrimitiveTopology::PATCH_LIST, false),
+            _ => (topology, primitive_restart),
+        };
         let (keyed_topology, keyed_restart) =
             super::pipeline::keyed_assembly(topology, primitive_restart, &graphics.dynamic_states);
         // A mesh draw's own complete key (its threadgroup size), else the plan's.
@@ -9780,6 +9805,7 @@ impl RenderLowering {
                 settings.written_clamp.map(|w| w.range),
                 Option::is_some,
             );
+            reshape.shaped(&mut state.line_band, settings.line_band, Option::is_some);
             let colors = &settings.routed_colors;
             reshape.field_from(&mut state.zeroed_colors, &colors.zeroed);
             reshape.field(&mut state.primitive_id_indices, primitive_id_indices);

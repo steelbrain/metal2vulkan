@@ -36,6 +36,7 @@
 //!   `WorkCounts::draw_shapes_reused` counts the draws that reused all three.
 
 use super::draw_problem;
+use super::line_width::LineRoute;
 use super::provoking;
 use super::{Assembly, DrawSettings, DrawState, Routed, RoutedColors};
 use crate::amplification::Amplification;
@@ -420,7 +421,21 @@ impl ShapeInputs<'_> {
         // range (`clamp_draw_depth`).
         let compensated = compensation.is_some_and(|c| c.depth.is_some());
         let native = native && !compensated;
-        let provoking_last = provoking::natively_last(device, self.state, (pipeline, assembly));
+        // How it draws its lines at the encoder's width, and a band's push: Vulkan viewport 0's
+        // half extent, its height negative as the Y-flipped viewport's is, and the half width
+        // (`render/line_width.rs`). A band takes its flat inputs from its first vertex.
+        let line = self.line_route(call, (pipeline, assembly), announce)?;
+        let line_band = match line {
+            LineRoute::Band { half } => {
+                let viewports =
+                    EncoderState::vk_viewports(&self.state.used_viewports(false)[..1], None, None);
+                let v = viewports[0];
+                Some([v.width / 2.0, v.height / 2.0, half, 0.0])
+            }
+            _ => None,
+        };
+        let provoking_last =
+            !line.band() && provoking::natively_last(device, self.state, (pipeline, assembly));
         Ok(DrawSettings {
             unsized_points,
             topology,
@@ -436,6 +451,8 @@ impl ShapeInputs<'_> {
             routing,
             routed_colors,
             provoking_last,
+            line,
+            line_band,
         })
     }
 
@@ -530,6 +547,7 @@ impl ShapeInputs<'_> {
         let bias_effect = settings.bias;
         let mut fixed = self.draw_fixed(graphics, failing, (shadow, tests))?;
         fixed.provoking_last = settings.provoking_last;
+        settings.line.fix(&mut fixed);
         // The depth the draw renders against: the pass's attachment's, or the hidden one's,
         // which Metal biases as the 32-bit float depth it is.
         let depth_format = self

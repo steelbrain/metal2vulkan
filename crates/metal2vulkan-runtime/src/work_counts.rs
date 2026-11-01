@@ -238,6 +238,8 @@ pub(crate) struct Counters {
     two_plane_draws: AtomicU64,
     provoking_last_pipeline_draws: AtomicU64,
     provoking_listed_draws: AtomicU64,
+    device_wide_line_draws: AtomicU64,
+    line_band_draws: AtomicU64,
     gathered_draws: AtomicU64,
     bounded_run_draws: AtomicU64,
     bound_notices_made: AtomicU64,
@@ -1700,6 +1702,18 @@ impl Counters {
     /// order or led by their last vertices (`render/provoking.rs`).
     pub(crate) fn provoking_listed_draw(&self) {
         self.provoking_listed_draws.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// A draw of lines at a width other than 1 ran the device's own lines at it
+    /// (`render/line_width.rs`).
+    pub(crate) fn device_wide_line_draw(&self) {
+        self.device_wide_line_draws.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// A draw of lines at a width other than 1 ran the pipeline's band variant
+    /// (`render/line_width.rs`).
+    pub(crate) fn line_band_draw(&self) {
+        self.line_band_draws.fetch_add(1, Ordering::Relaxed);
     }
 
     /// A direct indexed draw drawn as a list joined a run of the index gather pass, which writes
@@ -4123,6 +4137,13 @@ pub struct WorkCounts {
     /// without it, which drew the list of their primitives a GPU pass (or the CPU) wrote, in
     /// Metal's mode-1 order or led by each primitive's last vertex.
     pub provoking_listed_draws: u64,
+    /// Draws of lines at a width other than 1 (Apple's `setLineWidth:`) that ran the device's own
+    /// lines at that width (`lineWidth`), a triangle's edges in fill mode `Lines` and mesh draws
+    /// among them.
+    pub device_wide_line_draws: u64,
+    /// Draws of lines at a width other than 1 that ran the pipeline's band variant
+    /// (`VariantKey::line_band`): each line two triangles over Metal's parallelogram.
+    pub line_band_draws: u64,
     /// Draws drawn as a list (a restarted strip's, a private primitive type's, or one led by its
     /// primitives' last vertices) whose list a run wrote: the index gather pass's (one dispatch
     /// for a run of direct indexed draws over one index buffer, or of indirect draws after one
@@ -5422,6 +5443,8 @@ impl Device {
                 .provoking_last_pipeline_draws
                 .load(Ordering::Relaxed),
             provoking_listed_draws: counters.provoking_listed_draws.load(Ordering::Relaxed),
+            device_wide_line_draws: counters.device_wide_line_draws.load(Ordering::Relaxed),
+            line_band_draws: counters.line_band_draws.load(Ordering::Relaxed),
             gathered_draws: counters.gathered_draws.load(Ordering::Relaxed),
             bounded_run_draws: counters.bounded_run_draws.load(Ordering::Relaxed),
             bound_notices_made: counters.bound_notices_made.load(Ordering::Relaxed),

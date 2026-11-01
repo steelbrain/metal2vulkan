@@ -181,6 +181,12 @@ CORE_PROPERTIES = {
         # Without `largePoints` a device's points are 1.0 (`pointSizeRange` (1.0, 1.0)), the
         # bound the reader takes for an absent range.
         "pointSizeRange": [1.0, 1.0],
+        # Without `wideLines` a device's lines are 1.0 (`lineWidthRange` (1.0, 1.0),
+        # `lineWidthGranularity` 0.0); subPixelPrecisionBits' guarantee is 4; strictLines none.
+        "subPixelPrecisionBits": 4,
+        "lineWidthRange": [1.0, 1.0],
+        "lineWidthGranularity": 0.0,
+        "strictLines": False,
     }}),
     "VkPhysicalDeviceVulkan11Properties": (1, {
         "subgroupSize": 1,

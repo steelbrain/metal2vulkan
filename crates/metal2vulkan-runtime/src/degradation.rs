@@ -2044,6 +2044,17 @@ degradations! {
             "the points rasterize nothing, the vertex function run for each, where what Metal \
              draws is undefined: most of its draws draw nothing, and some a few of the points \
              or a box";
+        /// A draw of lines at a width other than 1 (Apple's `setLineWidth:`), or of a triangle's
+        /// edges in fill mode `Lines` or of a mesh draw, drawn by the device's own lines
+        /// (`render/line_width.rs`) where they are not Metal's parallelogram: strict lines (the
+        /// rectangle the width spans across the segment, square ends), lines Vulkan does not state
+        /// as parallelograms (`nonStrictWideLinesUseParallelogram` unset, or a width below 1), or a
+        /// width off the device's `lineWidthGranularity`, which rounds it. Under
+        /// `WideLinePolicy::Exact` a draw of lines takes the band variant there instead, on a
+        /// device with `tessellationShader`.
+        DeviceWideLines = "device-wide-lines", Precision,
+            "the lines can cover pixels Metal's parallelogram does not, and miss others, at each \
+             end and along each edge";
         /// A draw of lines, or an emulated mesh draw of lines, under Apple's last provoking vertex
         /// (`setProvokingVertexMode:` 1), of a pipeline state that reads it (a flat input, or a
         /// slice or viewport its vertex function selects), on a device without

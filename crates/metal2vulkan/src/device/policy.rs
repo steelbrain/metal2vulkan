@@ -6,12 +6,13 @@ use std::time::Duration;
 
 /// Policy inputs of `Device::new`. Every field but `heap_compression`, `completion`,
 /// `batch_order`, `render_lowering`, `host_page_textures`, `pipeline_waits`,
-/// `pipeline_creation_wait` and `pipeline_commit_wait` can change emitted code, so the profile
-/// carries it (containment as the encoding it selects) and its fingerprint covers it; those eight
-/// are the runtime's alone (a heap's compressed texture's image, when the host sees a command
-/// buffer complete, how a batch begins after the earlier ones of its queue, where a render
-/// encoder's calls are lowered, what holds a sampled texture over host pages, and whether and how
-/// long a pipeline the driver is still making is waited for), and no profile carries them.
+/// `pipeline_creation_wait`, `pipeline_commit_wait` and `wide_lines` can change emitted code, so
+/// the profile carries it (containment as the encoding it selects) and its fingerprint covers it;
+/// those nine are the runtime's alone (a heap's compressed texture's image, when the host sees a
+/// command buffer complete, how a batch begins after the earlier ones of its queue, where a render
+/// encoder's calls are lowered, what holds a sampled texture over host pages, whether and how
+/// long a pipeline the driver is still making is waited for, and which lines draw a wide line),
+/// and no profile carries them.
 #[non_exhaustive]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
@@ -74,6 +75,12 @@ pub struct DevicePolicy {
     /// each such command records as nothing. 4.5 s by default (as the creation wait, above). Unread
     /// under `Exact`. The runtime's alone: no emitted code changes.
     pub pipeline_commit_wait: Duration,
+    /// Whether a line Apple's `setLineWidth:` widens, at a width the device's own lines draw
+    /// otherwise than Metal (strict lines, lines that are not parallelograms, a width off the
+    /// device's granularity or below 1), is the device's own line at that width (the default) or
+    /// the pipeline's band variant, two triangles that cover Metal's parallelogram. The runtime's
+    /// choice alone: no emitted code of a pipeline changes, the band being a variant of its own.
+    pub wide_lines: WideLinePolicy,
 }
 
 impl DevicePolicy {
@@ -81,8 +88,9 @@ impl DevicePolicy {
     /// compressed image of a heap's texture Metal keeps compressed, command buffers ready together
     /// in one kernel submission, batches of one queue ordered by their ends where the driver runs
     /// them one after another, and a sampled
-    /// texture over host pages in place where the device's check passed, and a pipeline still
-    /// being made waited for a bound (4.5 s at a state's creation, and 4.5 s from a commit).
+    /// texture over host pages in place where the device's check passed, a pipeline still
+    /// being made waited for a bound (4.5 s at a state's creation, and 4.5 s from a commit), and
+    /// a wide line the device's own wherever it draws the width.
     pub const UNTRUSTED: DevicePolicy = DevicePolicy {
         pointer_domain: PointerDomain::ResidentTable,
         handle_domain: HandleDomain::Table,
@@ -97,6 +105,7 @@ impl DevicePolicy {
         pipeline_waits: PipelineWaitPolicy::Bounded,
         pipeline_creation_wait: Duration::from_millis(4500),
         pipeline_commit_wait: Duration::from_millis(4500),
+        wide_lines: WideLinePolicy::Device,
     };
 
     /// This policy with Metal's answer wherever the choices offer it: a heap's texture whose bytes
@@ -109,8 +118,10 @@ impl DevicePolicy {
     /// ([`RenderLoweringPolicy::AtCall`]), every texture over host pages a shadow, whose
     /// copies touch its texels alone ([`HostPageTexturePolicy::Shadow`]), each `half`
     /// operation rounded on a device without `shaderFloat16` ([`HalfChainPolicy::EachOperation`]),
-    /// and a render state's predicted pipeline made at its creation, each draw's pipeline waited
-    /// for until it is made ([`PipelineWaitPolicy::Exact`]). Every other field is kept.
+    /// a render state's predicted pipeline made at its creation, each draw's pipeline waited
+    /// for until it is made ([`PipelineWaitPolicy::Exact`]), and every wide line Metal's
+    /// parallelogram where the device's own line differs ([`WideLinePolicy::Exact`]). Every other
+    /// field is kept.
     pub const fn exact_answers(self) -> DevicePolicy {
         DevicePolicy {
             heap_compression: HeapCompressionPolicy::Uncompressed,
@@ -120,6 +131,7 @@ impl DevicePolicy {
             host_page_textures: HostPageTexturePolicy::Shadow,
             half_chains: HalfChainPolicy::EachOperation,
             pipeline_waits: PipelineWaitPolicy::Exact,
+            wide_lines: WideLinePolicy::Exact,
             ..self
         }
     }
@@ -336,5 +348,28 @@ pub enum PipelineWaitPolicy {
     /// A render or compute state's creation makes its predicted pipeline before it returns, as
     /// Metal compiles there, and a committed command buffer waits for each of its draws' and
     /// dispatches' pipelines until it is made: no command is dropped for its making's time.
+    Exact,
+}
+
+/// Which lines draw a line Apple's `setLineWidth:` widens (a width other than 1, quantized as
+/// Metal quantizes it), where the device's own lines draw that width otherwise than Metal's
+/// parallelogram: its lines are strict (rectangles), or not parallelograms
+/// (`nonStrictWideLinesUseParallelogram` unset or unknown), or the width is off the device's
+/// `lineWidthGranularity` (which rounds it) or below 1 (where Vulkan promises no shape). Where the
+/// device's lines draw the width as Metal does, they draw it under either value; where they cannot
+/// draw it at all (no `wideLines`, or a width outside `lineWidthRange`), and at width 0, the band
+/// draws it under either value. The runtime's choice alone: no emitted code changes.
+#[non_exhaustive]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub enum WideLinePolicy {
+    /// The device's own line at the width (the default): its rectangle, its Bresenham columns, or
+    /// its width rounded to the granularity, which can cover pixels Metal's parallelogram does not
+    /// and miss others. Announced `device-wide-lines` at the first such draw.
+    #[default]
+    Device,
+    /// The pipeline's band variant (needs `tessellationShader`): each line two triangles over
+    /// Metal's parallelogram. On a device without `tessellationShader`, the device's own line,
+    /// announced as under `Device`.
     Exact,
 }

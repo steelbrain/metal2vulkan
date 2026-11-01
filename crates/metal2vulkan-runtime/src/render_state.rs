@@ -102,6 +102,7 @@ use super::degradation::Degradation;
 use super::depth_stencil::{DepthStencilState, DepthUse};
 use super::error::{internal, invalid, Error, Problem, RuntimeGap};
 use super::pipeline::{DepthRange, FixedState};
+use super::render::LineWidth;
 use super::render_values::{ScissorRect, Viewport};
 use super::Device;
 use ash::vk;
@@ -210,6 +211,9 @@ pub(super) struct EncoderState {
     /// The mode is past 1, which Metal draws a third way, the runtime as mode 1 but for patches
     /// (`render/provoking.rs`).
     provoking_third: bool,
+    /// Apple's `setLineWidth:`, as Metal quantizes it (`render/line_width.rs`). Metal's default,
+    /// and every new encoder's, is 1.
+    line_width: LineWidth,
 }
 
 impl EncoderState {
@@ -247,6 +251,7 @@ impl EncoderState {
             clip_mode: DepthClipMode::Clip,
             provoking_last: false,
             provoking_third: false,
+            line_width: LineWidth::ONE,
         }
     }
 
@@ -344,6 +349,21 @@ impl EncoderState {
     /// Whether the mode is past 1, which Metal draws a third way.
     pub(super) fn provoking_third(&self) -> bool {
         self.provoking_third
+    }
+
+    /// `setLineWidth:`, as Metal quantizes it (`render/line_width.rs`).
+    pub(super) fn set_line_width(&mut self, width: LineWidth) {
+        self.line_width = width;
+    }
+
+    /// The width the encoder's lines are drawn at.
+    pub(super) fn line_width(&self) -> LineWidth {
+        self.line_width
+    }
+
+    /// `setTriangleFillMode:`'s mode.
+    pub(super) fn fill_mode(&self) -> TriangleFillMode {
+        self.fill_mode
     }
 
     pub(super) fn set_winding(&mut self, winding: Winding) {
@@ -1123,6 +1143,7 @@ impl EncoderState {
             depth_range: None,
             masks_color: false,
             provoking_last: false,
+            line_width: 1.0_f32.to_bits(),
         })
     }
 }

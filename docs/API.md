@@ -100,8 +100,8 @@ compile does. `DevicePolicy::default()` is `DevicePolicy::UNTRUSTED`:
   with their bounds. On MoltenVK on an Apple GPU, whose sampler and `float` functions are Metal's
   own, most of them change nothing.
 - `DevicePolicy::exact_answers()` selects Metal's answer for each of the runtime's choices that
-  offers one (the batch order and render lowering below, the heap texture compression, command
-  buffer completion and textures over host pages) and the AIR's rounding of each `half` operation
+  offers one (the batch order, render lowering and wide lines below, the heap texture
+  compression, command buffer completion and textures over host pages) and the AIR's rounding of each `half` operation
   on a device without `shaderFloat16` (below), each listed in [FAST-PATHS.md](FAST-PATHS.md)
   with its bound and the measured cost of its exact form.
 - **`half` chains held at `float` precision without `shaderFloat16`** (`HalfChainPolicy::AtExits`,
@@ -193,6 +193,15 @@ compile does. `DevicePolicy::default()` is `DevicePolicy::UNTRUSTED`:
   recording. `pipeline_waits = PipelineWaitPolicy::Exact`, which `exact_answers()` selects, makes
   the predicted pipeline before the creation returns, as Metal compiles there, and waits for
   every draw's and dispatch's until made.
+- **A wide line the device's own** (`WideLinePolicy::Device`, the default; the runtime's choice,
+  no pipeline's code differs). A line Apple's `setLineWidth:` widens is drawn by the device's own
+  lines wherever it draws the width (`wideLines`, inside `lineWidthRange`), exact where they are
+  Metal's parallelogram (`strictLines` unset, `nonStrictWideLinesUseParallelogram` set, the width
+  on `lineWidthGranularity` and above 1), announced `device-wide-lines` where not.
+  `wide_lines = WideLinePolicy::Exact`, which `exact_answers()` selects, draws those as the
+  pipeline's band variant instead (section 4), two triangles over Metal's parallelogram, on a
+  device with `tessellationShader`. Every other width other than 1 is the band under either value
+  (the runtime's README, line widths).
 
 Loops run as written: no execution bound is translated in.
 
@@ -2705,6 +2714,15 @@ bound.
   direct draw, an indirect one, or an indirect command's in an execution. Cost: the points rasterize
   nothing, the vertex function run for each, where what Metal draws is undefined: most of its draws
   draw nothing, and some a few of the points or a box.
+- `metal2vulkan-degrade-device-wide-lines` (precision). `DeviceWideLines`: A draw of lines at a
+  width other than 1 (Apple's `setLineWidth:`), or of a triangle's edges in fill mode `Lines` or of
+  a mesh draw, drawn by the device's own lines where they are not Metal's parallelogram: strict
+  lines (the rectangle the width spans across the segment, square ends), lines Vulkan does not
+  state as parallelograms (`nonStrictWideLinesUseParallelogram` unset, or a width below 1), or a
+  width off the device's `lineWidthGranularity`, which rounds it. Under `WideLinePolicy::Exact` a
+  draw of lines takes the band variant there instead, on a device with `tessellationShader`.
+  Cost: the lines can cover pixels Metal's parallelogram does not, and miss others, at each end
+  and along each edge.
 - `metal2vulkan-degrade-provoking-vertex-lines` (precision). `ProvokingVertexLines`: A draw of
   lines, or an emulated mesh draw of lines, under Apple's last provoking vertex
   (`setProvokingVertexMode:` 1), of a pipeline state that reads it (a flat input, or a slice or
