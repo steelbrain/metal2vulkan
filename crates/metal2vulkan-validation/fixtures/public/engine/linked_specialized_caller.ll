@@ -11,7 +11,7 @@ define void @linked_specialized_caller(ptr addrspace(1) noundef writeonly captur
   %5 = tail call fast float @custom_fn.MTL_VISIBLE_FN_REF(float noundef %4) #3
   %6 = zext i32 %1 to i64
   %7 = getelementptr inbounds float, ptr addrspace(1) %0, i64 %6
-  store float %5, ptr addrspace(1) %7, align 4, !tbaa !21, !alias.scope !25
+  store float %5, ptr addrspace(1) %7, align 4, !tbaa !27, !alias.scope !31
   ret void
 }
 
@@ -20,18 +20,57 @@ declare float @custom_fn.MTL_VISIBLE_FN_REF(float) local_unnamed_addr section "a
 ; Function Attrs: mustprogress nofree nosync nounwind willreturn memory(none)
 declare float @air.convert.f.f32.u.i32(i32) local_unnamed_addr #1
 
+; Function Attrs: mustprogress nounwind
+define void @linked_specialized_base(ptr addrspace(1) noundef writeonly captures(none) "air-buffer-no-alias" %0, i32 noundef %1) local_unnamed_addr #0 {
+  %3 = tail call fast float @air.convert.f.f32.u.i32(i32 %1) #2
+  %4 = fadd fast float %3, 5.000000e+00
+  %5 = tail call fast float @base_fn.MTL_VISIBLE_FN_REF(float noundef %4) #3
+  %6 = zext i32 %1 to i64
+  %7 = getelementptr inbounds float, ptr addrspace(1) %0, i64 %6
+  store float %5, ptr addrspace(1) %7, align 4, !tbaa !27, !alias.scope !34
+  ret void
+}
+
+declare float @base_fn.MTL_VISIBLE_FN_REF(float) local_unnamed_addr section "air.externally_defined"
+
+; Function Attrs: mustprogress nounwind
+define void @linked_specialized_guarded(ptr addrspace(1) noundef writeonly captures(none) "air-buffer-no-alias" %0, i32 noundef %1) local_unnamed_addr #0 {
+  %3 = tail call fast float @air.convert.f.f32.u.i32(i32 %1) #2
+  %4 = fadd fast float %3, 5.000000e+00
+  %5 = tail call fast float @guarded_fn.MTL_VISIBLE_FN_REF(float noundef %4) #3
+  %6 = zext i32 %1 to i64
+  %7 = getelementptr inbounds float, ptr addrspace(1) %0, i64 %6
+  store float %5, ptr addrspace(1) %7, align 4, !tbaa !27, !alias.scope !37
+  ret void
+}
+
+declare float @guarded_fn.MTL_VISIBLE_FN_REF(float) local_unnamed_addr section "air.externally_defined"
+
+; Function Attrs: mustprogress nounwind
+define void @linked_specialized_free(ptr addrspace(1) noundef writeonly captures(none) "air-buffer-no-alias" %0, i32 noundef %1) local_unnamed_addr #0 {
+  %3 = tail call fast float @air.convert.f.f32.u.i32(i32 %1) #2
+  %4 = fadd fast float %3, 5.000000e+00
+  %5 = tail call fast float @plain_fn.MTL_VISIBLE_FN_REF(float noundef %4) #3
+  %6 = zext i32 %1 to i64
+  %7 = getelementptr inbounds float, ptr addrspace(1) %0, i64 %6
+  store float %5, ptr addrspace(1) %7, align 4, !tbaa !27, !alias.scope !40
+  ret void
+}
+
+declare float @plain_fn.MTL_VISIBLE_FN_REF(float) local_unnamed_addr section "air.externally_defined"
+
 attributes #0 = { mustprogress nounwind "approx-func-fp-math"="true" "frame-pointer"="all" "min-legal-vector-width"="0" "no-builtins" "no-infs-fp-math"="true" "no-nans-fp-math"="true" "no-signed-zeros-fp-math"="true" "no-trapping-math"="true" "stack-protector-buffer-size"="8" "unsafe-fp-math"="true" }
 attributes #1 = { mustprogress nofree nosync nounwind willreturn memory(none) }
 attributes #2 = { nounwind willreturn memory(none) }
 attributes #3 = { nobuiltin nounwind "no-builtins" }
 
 !llvm.module.flags = !{!0, !1, !2, !3, !4, !5, !6, !7, !8}
-!air.kernel = !{!9}
-!air.compile_options = !{!14, !15, !16}
-!air.visible_function_references = !{!17}
-!llvm.ident = !{!18}
-!air.version = !{!19}
-!air.language_version = !{!20}
+!air.kernel = !{!9, !14, !15, !16}
+!air.compile_options = !{!17, !18, !19}
+!air.visible_function_references = !{!20, !21, !22, !23}
+!llvm.ident = !{!24}
+!air.version = !{!25}
+!air.language_version = !{!26}
 
 !0 = !{i32 2, !"SDK Version", [2 x i32] [i32 27, i32 2]}
 !1 = !{i32 1, !"wchar_size", i32 4}
@@ -47,17 +86,32 @@ attributes #3 = { nobuiltin nounwind "no-builtins" }
 !11 = !{!12, !13}
 !12 = !{i32 0, !"air.buffer", !"air.location_index", i32 0, i32 1, !"air.read_write", !"air.address_space", i32 1, !"air.arg_type_size", i32 4, !"air.arg_type_align_size", i32 4, !"air.arg_type_name", !"float", !"air.arg_name", !"out"}
 !13 = !{i32 1, !"air.thread_position_in_grid", !"air.arg_type_name", !"uint", !"air.arg_name", !"tid"}
-!14 = !{!"air.compile.denorms_disable"}
-!15 = !{!"air.compile.fast_math_enable"}
-!16 = !{!"air.compile.framebuffer_fetch_enable"}
-!17 = !{!"air.visible_function_reference", ptr @custom_fn.MTL_VISIBLE_FN_REF, !"custom_fn"}
-!18 = !{!"Apple metal version 32023.922 (metalfe-32023.922.4)"}
-!19 = !{i32 2, i32 8, i32 0}
-!20 = !{!"Metal", i32 4, i32 0, i32 0}
-!21 = !{!22, !22, i64 0}
-!22 = !{!"float", !23, i64 0}
-!23 = !{!"omnipotent char", !24, i64 0}
-!24 = !{!"Simple C++ TBAA"}
-!25 = !{!26}
-!26 = distinct !{!26, !27, !"air-alias-scope-arg(0)"}
-!27 = distinct !{!27, !"air-alias-scopes(linked_specialized_caller)"}
+!14 = !{ptr @linked_specialized_base, !10, !11}
+!15 = !{ptr @linked_specialized_guarded, !10, !11}
+!16 = !{ptr @linked_specialized_free, !10, !11}
+!17 = !{!"air.compile.denorms_disable"}
+!18 = !{!"air.compile.fast_math_enable"}
+!19 = !{!"air.compile.framebuffer_fetch_enable"}
+!20 = !{!"air.visible_function_reference", ptr @custom_fn.MTL_VISIBLE_FN_REF, !"custom_fn"}
+!21 = !{!"air.visible_function_reference", ptr @base_fn.MTL_VISIBLE_FN_REF, !"base_fn"}
+!22 = !{!"air.visible_function_reference", ptr @guarded_fn.MTL_VISIBLE_FN_REF, !"guarded_fn"}
+!23 = !{!"air.visible_function_reference", ptr @plain_fn.MTL_VISIBLE_FN_REF, !"plain_fn"}
+!24 = !{!"Apple metal version 32023.922 (metalfe-32023.922.4)"}
+!25 = !{i32 2, i32 8, i32 0}
+!26 = !{!"Metal", i32 4, i32 0, i32 0}
+!27 = !{!28, !28, i64 0}
+!28 = !{!"float", !29, i64 0}
+!29 = !{!"omnipotent char", !30, i64 0}
+!30 = !{!"Simple C++ TBAA"}
+!31 = !{!32}
+!32 = distinct !{!32, !33, !"air-alias-scope-arg(0)"}
+!33 = distinct !{!33, !"air-alias-scopes(linked_specialized_caller)"}
+!34 = !{!35}
+!35 = distinct !{!35, !36, !"air-alias-scope-arg(0)"}
+!36 = distinct !{!36, !"air-alias-scopes(linked_specialized_base)"}
+!37 = !{!38}
+!38 = distinct !{!38, !39, !"air-alias-scope-arg(0)"}
+!39 = distinct !{!39, !"air-alias-scopes(linked_specialized_guarded)"}
+!40 = !{!41}
+!41 = distinct !{!41, !42, !"air-alias-scope-arg(0)"}
+!42 = distinct !{!42, !"air-alias-scopes(linked_specialized_free)"}
