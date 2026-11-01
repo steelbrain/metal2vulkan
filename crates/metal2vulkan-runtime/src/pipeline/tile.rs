@@ -56,7 +56,9 @@ impl Device {
     /// `FAIL_ON_BINARY_ARCHIVE_MISS`, a pipeline no listed archive holds is `BinaryArchiveMiss`
     /// (a tile pipeline's archive key). What the compile refuses is `Compile` or `Unsupported`. The
     /// tile function's imports come from its dynamic libraries, as a compute state's do
-    /// ([`Device::new_compute_pipeline_state`]).
+    /// ([`Device::new_compute_pipeline_state`]). A tile function made by
+    /// `Library::new_function_with_name` whose function declares function constants is
+    /// `Invalid(UnspecializedFunction)`, as plain Metal ends its process at its creation.
     pub fn new_tile_render_pipeline_state(
         &self,
         descriptor: &TileRenderPipelineDescriptor,

@@ -34,7 +34,7 @@ Columns:
 | Translation caps | 14 | 14 | 0 | 0 | 7 | 7 | 0 |
 | Rate maps the compile layer does not compile | 5 | 5 | 0 | 0 | 4 | 1 | 0 |
 | The translation deadline | 1 | 1 | 0 | 0 | 0 | 1 | 0 |
-| What a call did wrong | 64 | 64 | 0 | 0 | 0 | 0 | 0 |
+| What a call did wrong | 65 | 65 | 0 | 0 | 0 | 0 | 0 |
 | What a call did wrong, in detail | 164 | 149 | 0 | 0 | 0 | 0 | 0 |
 
 ## Totals by basis
@@ -48,7 +48,7 @@ Columns:
 | Translation caps | 0 | 0 | 0 | 0 | 14 | 0 | 0 | 0 |
 | Rate maps the compile layer does not compile | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 5 |
 | The translation deadline | 0 | 0 | 0 | 0 | 1 | 0 | 0 | 0 |
-| What a call did wrong | 20 | 3 | 5 | 0 | 11 | 8 | 17 | 0 |
+| What a call did wrong | 21 | 3 | 5 | 0 | 11 | 8 | 17 | 0 |
 | What a call did wrong, in detail | 57 | 27 | 23 | 0 | 31 | 26 | 0 | 0 |
 
 ## 1. Translator and front-end refusals (`Unsupported`: a `Feature` and its `Needs`)
@@ -356,6 +356,7 @@ Columns:
 | `PointSizeTopology` | `new_render_pipeline_state` | every device (a public call's own check of its arguments) | `metal-measured`: an M3 Max and an M4: Metal's pipeline creation answers an error, with and without API validation | 1: `crates/metal2vulkan-runtime/src/pipeline/render.rs (create_checked)` | `-` |
 | `IndirectScaledTessellation` | `new_render_pipeline_state` | every device (a public call's own check of its arguments) | `metal-measured`: an M3 Max, macOS 27.0.1: plain Metal ends its process, the API validation layer off | 1: `crates/metal2vulkan-runtime/src/pipeline/render.rs (create_reflecting)` | `-` |
 | `CompiledKernel` | `new_compute_pipeline_state` | every device (a public call's own check of its arguments) | `ours`: this crate's already-compiled stage: Metal's descriptor takes a function | 1: `crates/metal2vulkan-runtime/src/pipeline/mod.rs (of_kernel)` | `-` |
+| `UnspecializedFunction` | `new_compute_pipeline_state`, `new_render_pipeline_state`, `new_tile_render_pipeline_state` and `new_mesh_render_pipeline_state` | every device (a public call's own check of its arguments) | `metal-measured`: an M3 Max, macOS 27.0.1: plain Metal ends its process at a compute, render, tile and mesh state of each stage, `MTL_DEBUG_LAYER` unset | 1: `crates/metal2vulkan-runtime/src/pipeline/unspecialized.rs (check)` | `-` |
 | `DuplicateLinkedFunction` | `new_compute_pipeline_state` | every device (a public call's own check of its arguments) | `metal-measured`: an M3 Max and an M4: plain Metal's creation fails on a name the linked functions repeat | 1: `crates/metal2vulkan-runtime/src/pipeline/mod.rs (of_kernel)` | `-` |
 | `RenderState` | A viewport, scissor rectangle or other render encoder state Metal stops at its setter | every device (a public call's own check of its arguments) | `delegated`: RenderStateProblem, section 9 | 3: `crates/metal2vulkan-runtime/src/render_state.rs (check_count)`, `crates/metal2vulkan-runtime/src/render_state.rs (set_scissors)` (+1) | `-` |
 | `Visibility` | A `set_visibility_result_mode` Metal stops | every device (a public call's own check of its arguments) | `delegated`: VisibilityProblem, section 9 | 1: `crates/metal2vulkan-runtime/src/visibility.rs (check_mode)` | `-` |
@@ -823,6 +824,7 @@ Each refusal's sites, with the function that builds it.
 - `invalid::PointSizeTopology`: `crates/metal2vulkan-runtime/src/pipeline/render.rs (create_checked)`
 - `invalid::IndirectScaledTessellation`: `crates/metal2vulkan-runtime/src/pipeline/render.rs (create_reflecting)`
 - `invalid::CompiledKernel`: `crates/metal2vulkan-runtime/src/pipeline/mod.rs (of_kernel)`
+- `invalid::UnspecializedFunction`: `crates/metal2vulkan-runtime/src/pipeline/unspecialized.rs (check)`
 - `invalid::DuplicateLinkedFunction`: `crates/metal2vulkan-runtime/src/pipeline/mod.rs (of_kernel)`
 - `invalid::RenderState`: `crates/metal2vulkan-runtime/src/render_state.rs (check_count)`; `crates/metal2vulkan-runtime/src/render_state.rs (set_scissors)`; `crates/metal2vulkan-runtime/src/render_state.rs (set_viewports)`
 - `invalid::Visibility`: `crates/metal2vulkan-runtime/src/visibility.rs (check_mode)`

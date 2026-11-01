@@ -520,12 +520,18 @@ impl Function {
     /// linked functions (`FunctionDescriptor::with_linked` adds them): a stage of a
     /// [`RenderPipelineDescriptor`] or the kernel of a [`ComputePipelineDescriptor`] as
     /// `StageSource::Function` (`MTLRenderPipelineDescriptor.vertexFunction` and
-    /// `.fragmentFunction`, `MTLComputePipelineDescriptor.computeFunction`).
+    /// `.fragmentFunction`, `MTLComputePipelineDescriptor.computeFunction`). It is specialized
+    /// (`FunctionDescriptor::specialized`) where the function was made with constant values or by
+    /// [`Library::new_function_with_descriptor`]; a pipeline state of one made by
+    /// [`Library::new_function_with_name`] whose function declares function constants is refused
+    /// (`Invalid` with [`Problem::UnspecializedFunction`](crate::Problem::UnspecializedFunction)),
+    /// as plain Metal ends its process at the creation.
     ///
     /// [`RenderPipelineDescriptor`]: metal2vulkan::pipeline::RenderPipelineDescriptor
     /// [`ComputePipelineDescriptor`]: metal2vulkan::pipeline::ComputePipelineDescriptor
     pub fn function_descriptor(&self) -> StageFunction {
-        let mut descriptor = StageFunction::new(self.function.clone());
+        let mut descriptor = StageFunction::new(self.function.clone())
+            .with_specialized(self.specialized || self.by_descriptor);
         descriptor.constants = self.constants.clone();
         descriptor
     }

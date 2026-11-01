@@ -42,7 +42,7 @@ use std::collections::{BTreeMap, HashMap};
 pub(crate) const MAGIC: &[u8; 8] = b"M2VPREC\0";
 
 /// The record format: bumped whenever a record's bytes change meaning (the module docs).
-pub(crate) const RECORD_FORMAT: u32 = 2;
+pub(crate) const RECORD_FORMAT: u32 = 3;
 
 /// The length of a record's header (magic and format) and of its checksum.
 const HEADER: usize = 8 + 4;
@@ -326,6 +326,7 @@ impl Writer {
         };
         self.function(&f.function)?;
         self.constants(&f.constants)?;
+        self.bool(f.specialized);
         self.linked(&f.linked)?;
         self.dynamic(&f.libraries)
     }
@@ -713,6 +714,7 @@ impl<'a> Reader<'a> {
     fn stage(&mut self) -> Result<StageSource, Unreadable> {
         let mut f = FunctionDescriptor::new(self.function()?);
         f.constants = self.constants()?;
+        f.specialized = self.bool()?;
         f.linked = self.linked()?;
         f.libraries = self.dynamic()?;
         Ok(StageSource::Function(f))

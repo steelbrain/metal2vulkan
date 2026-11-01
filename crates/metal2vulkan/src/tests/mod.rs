@@ -161,6 +161,7 @@ mod engine_typed_clamp;
 mod engine_typed_threadgroup;
 mod engine_uniform_varyings;
 mod engine_unmeasured_speculation;
+mod engine_unspecialized;
 mod engine_vertex_fetch;
 mod engine_vertex_variants;
 mod engine_viewport_compensation;

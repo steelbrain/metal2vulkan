@@ -75,8 +75,8 @@ use metal2vulkan::library::{CompiledFunction, FunctionCompileKey};
 use metal2vulkan::metal::{BindingAccess, PixelFormat, PrimitiveTopologyClass, RenderStages};
 use metal2vulkan::pipeline::{
     ColorAttachmentDescriptor, CommandWrites, MeshPipelineDescriptor, PipelineInterface,
-    RenderPipeline, RenderPipelineDescriptor, RuntimeFact, SpecKey, StageEntries, StageModule,
-    StageSource, TessellationDescriptor,
+    RenderPipeline, RenderPipelineDescriptor, RuntimeFact, SpecKey, Stage, StageEntries,
+    StageModule, StageSource, TessellationDescriptor,
 };
 use metal2vulkan::reflection::{LinkedUseAnswers, RenderPipelineReflection};
 use std::any::Any;
@@ -567,7 +567,10 @@ impl Device {
     /// ([`Device::new_compute_pipeline_state`]). A fragment function that reads a program-scope
     /// `thread_index_in_quadgroup` is `Unsupported{GlobalBuiltinInFragment}` with
     /// `Needs::MetalRefuses` (an M3 Max and an M4) on a device that does not claim Apple10, as
-    /// Metal's creation refuses it there, and `NotImplemented` on one that does.
+    /// Metal's creation refuses it there, and `NotImplemented` on one that does. A vertex or
+    /// fragment function made by `Library::new_function_with_name` whose function declares
+    /// function constants is `Invalid(UnspecializedFunction)`, as plain Metal ends its process at
+    /// its creation.
     pub fn new_render_pipeline_state(
         &self,
         descriptor: &RenderPipelineDescriptor,
@@ -628,7 +631,10 @@ impl Device {
     /// `Compile` or `Unsupported`, as [`Device::new_render_pipeline_state`] says, and so is an
     /// archive of another device; no binary archive holds a mesh render pipeline, so
     /// `FAIL_ON_BINARY_ARCHIVE_MISS` with archives listed is `BinaryArchiveMiss`. Each stage's
-    /// imports come from its own dynamic libraries, as a render state's do.
+    /// imports come from its own dynamic libraries, as a render state's do. An object, mesh or
+    /// fragment function made by `Library::new_function_with_name` whose function declares
+    /// function constants is `Invalid(UnspecializedFunction)`, as plain Metal ends its process at
+    /// its creation, before the device's mesh shading is asked.
     ///
     /// [`RenderCommandEncoder::draw_mesh_threadgroups`]: crate::RenderCommandEncoder::draw_mesh_threadgroups
     pub fn new_mesh_render_pipeline_state(
@@ -1285,6 +1291,25 @@ impl GraphicsState {
         // Metal answers nil for a `rasterSampleCount` an Apple GPU does not take, whatever the
         // device rasterizes (`raster_samples.rs`).
         super::raster_samples::check("new_render_pipeline_state", descriptor.raster_sample_count)?;
+        // Metal's descriptor validation ends the process for a stage function made by name whose
+        // function declares function constants (`unspecialized.rs`).
+        let budget = options.budget();
+        super::unspecialized::check(
+            device,
+            "new_render_pipeline_state",
+            Stage::Vertex,
+            &descriptor.vertex,
+            &budget,
+        )?;
+        if let Some(fragment) = &descriptor.fragment {
+            super::unspecialized::check(
+                device,
+                "new_render_pipeline_state",
+                Stage::Fragment,
+                fragment,
+                &budget,
+            )?;
+        }
         let scaled = descriptor
             .tessellation
             .as_ref()
@@ -1614,6 +1639,16 @@ impl GraphicsState {
             descriptor.stencil_format,
         )?;
         super::raster_samples::check(CALL, descriptor.raster_sample_count)?;
+        // Metal's descriptor validation ends the process for a stage function made by name whose
+        // function declares function constants (`unspecialized.rs`).
+        let budget = options.budget();
+        if let Some(object) = &descriptor.object {
+            super::unspecialized::check(device, CALL, Stage::Object, object, &budget)?;
+        }
+        super::unspecialized::check(device, CALL, Stage::Mesh, &descriptor.mesh, &budget)?;
+        if let Some(fragment) = &descriptor.fragment {
+            super::unspecialized::check(device, CALL, Stage::Fragment, fragment, &budget)?;
+        }
         // A state an indirect command buffer's commands may set takes its ID where the options
         // place it, as a render state's does.
         let placement = if descriptor.support_indirect_command_buffers {
@@ -1638,7 +1673,6 @@ impl GraphicsState {
         binary_archive::check(device, options, CALL, ArchivedPipeline::Render, |_, _| {
             Some(&descriptor.mesh)
         })?;
-        let budget = options.budget();
         // As a render state's, in Metal's order: a fragment function writing
         // depth without a depth attachment, the indirect command buffers' refusal, then the
         // fragment function's stage inputs the linking keeps that the mesh function does not

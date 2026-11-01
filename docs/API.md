@@ -3696,9 +3696,19 @@ each item named states the rule in full.
   alone is its type's zero (an `and`, `or` or `mul` with a constant that decides it is that
   constant), and a branch or `select` on one takes its false way; a value it meets with one the
   run computes is computed with that zero. As Metal's, `is_function_constant_defined` is false for
-  it and an argument gated on it, negated or not, is absent. Metal makes the same pipeline, and its
-  reads of the constant vary from read to read: on an M3 Max under macOS 27.0.1 it read `u + 3` as
-  0, `u * 7 + 1` as 1, `u == 0 ? 111 : 222` as 222 and `b ? 5 : 6` as 5.
+  it and an argument gated on it, negated or not, is absent. Metal makes the same pipeline of a
+  specialized function (made with constant values, none among them too, or by
+  `newFunctionWithDescriptor:`), and its reads of the constant vary from read to read: on an M3
+  Max under macOS 27.0.1 it read `u + 3` as 0, `u * 7 + 1` as 1, `u == 0 ? 111 : 222` as 222 and
+  `b ? 5 : 6` as 5. The compile is the same for a function made by `newFunctionWithName:`, which
+  Metal makes no pipeline state of where its function declares a constant: its creation ends the
+  process at every stage ("function ko cannot be used to build a pipeline state. Use
+  newFunctionWithName:constantValues:... to get the specialized function"), whether the constant
+  is required, read only where `is_function_constant_defined` says, or only gates an argument.
+  `FunctionDescriptor::needs_specialization` answers it (`FunctionDescriptor::specialized` and the
+  function's `function_constants_dictionary`), and the runtime refuses such a state as Metal does
+  (`Invalid` with `Problem::UnspecializedFunction`). A linked function keeps its own rule (section
+  3, "Linked functions: names and constants").
 - **A linked function's constant without a value reads as zero too**, where the function was made
   specialized (section 3, "Linked functions: names and constants"). Metal makes that pipeline,
   and its read is undefined: a kernel storing `x * scale + 1` of such a function stored nothing on

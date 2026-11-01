@@ -567,6 +567,17 @@ impl Function {
     pub fn function_constants_dictionary(
         &self,
     ) -> Result<BTreeMap<String, ReflectedConstant>, Error> {
+        let mut m = Meter::new(&Budget::standard());
+        self.constants_dictionary_with(|bitcode, m| Ok(crate::air::decode(bitcode, m)?), &mut m)
+    }
+
+    /// [`Function::function_constants_dictionary`] under `m`, a module function's AIR decoded by
+    /// `decode` (`pipeline::compile`'s stage entries copy a decode they keep).
+    pub(crate) fn constants_dictionary_with(
+        &self,
+        decode: impl FnOnce(&[u8], &mut Meter) -> Result<crate::air::Decoded, Error>,
+        m: &mut Meter,
+    ) -> Result<BTreeMap<String, ReflectedConstant>, Error> {
         let e = self.entry()?;
         let index = match &e.source {
             EntrySource::Metallib(tags) => {
@@ -576,9 +587,8 @@ impl Function {
             EntrySource::Module { index } | EntrySource::Visible { index } => *index,
         };
         let bitcode = self.bitcode()?;
-        let mut m = Meter::new(&Budget::standard());
         crate::pipeline::compile::guarded(|| {
-            let decoded = crate::air::decode(bitcode, &mut m)?;
+            let decoded = decode(bitcode, m)?;
             let abi = &decoded.abi;
             let i = usize::try_from(index).ok();
             let func = match &e.source {
@@ -588,7 +598,7 @@ impl Function {
                 _ => i.and_then(|i| abi.entries.get(i)).map(|ep| ep.func),
             }
             .ok_or_else(|| invariant("a library function outside its module"))?;
-            crate::reflection::module_constants(&decoded.module, abi, func, &e.name, &mut m)
+            crate::reflection::module_constants(&decoded.module, abi, func, &e.name, m)
         })
     }
 
@@ -708,8 +718,13 @@ pub struct FunctionConstant {
 /// Function-constant values supplied with a function (`MTLFunctionConstantValues`), by index or by
 /// name. A constant with no value is "not defined": `is_function_constant_defined` folds to false,
 /// arguments gated on it are absent, a branch or `select` on it takes its false way, and a value
-/// computed from it alone is its type's zero. Plain Metal makes such a function's pipeline too, and
-/// its own reads of the constant vary from read to read (docs/API.md, "Accepted differences").
+/// computed from it alone is its type's zero. It compiles for a specialized function (made with
+/// constant values, none among them too, or by `newFunctionWithDescriptor:`), whose pipeline plain
+/// Metal makes too, its own reads of the constant varying from read to read (docs/API.md,
+/// "Accepted differences"). Metal makes no pipeline state of a function made by
+/// `newFunctionWithName:` whose function declares a constant: its creation ends the process
+/// ([`FunctionDescriptor::needs_specialization`](crate::pipeline::FunctionDescriptor::needs_specialization)),
+/// and the runtime refuses it as Metal does.
 #[non_exhaustive]
 #[derive(Clone, Debug, Default, PartialEq, Eq, Hash)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]

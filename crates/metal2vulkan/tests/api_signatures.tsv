@@ -4089,6 +4089,7 @@ field	metal2vulkan::pipeline::FunctionDescriptor.constants	pub constants: Functi
 field	metal2vulkan::pipeline::FunctionDescriptor.function	pub function: Function
 field	metal2vulkan::pipeline::FunctionDescriptor.libraries	pub libraries: DynamicLibraries
 field	metal2vulkan::pipeline::FunctionDescriptor.linked	pub linked: LinkedFunctions
+field	metal2vulkan::pipeline::FunctionDescriptor.specialized	pub specialized: bool
 field	metal2vulkan::pipeline::GraphicsState.alpha_to_coverage	pub alpha_to_coverage: bool
 field	metal2vulkan::pipeline::GraphicsState.alpha_to_one	pub alpha_to_one: bool
 field	metal2vulkan::pipeline::GraphicsState.clip_distances	pub clip_distances: u32
@@ -8930,10 +8931,12 @@ method	metal2vulkan::pipeline::EntryDescriptor::new	pub fn new(bitcode: &'a [u8]
 method	metal2vulkan::pipeline::ExtendedRangeColor::new	pub fn new(form: metal::format::ExtendedRange, blended: bool) -> ExtendedRangeColor
 method	metal2vulkan::pipeline::ExtendedRangeColor::with_rounding	pub fn with_rounding(self, rounding: metal::TextureWriteRoundingMode) -> ExtendedRangeColor
 method	metal2vulkan::pipeline::FramebufferFetchInputs::of	pub fn of(read: impl IntoIterator<Item = u32>, colors: &[Option<crate::pipeline::descriptor::ColorAttachmentDescriptor>], depth_or_stencil: bool, alpha_to_coverage: bool, max_vertex_amplification_count: u32) -> FramebufferFetchInputs
+method	metal2vulkan::pipeline::FunctionDescriptor::needs_specialization	pub fn needs_specialization(&self, budget: &Budget, entries: &StageEntries) -> Result<bool, Error>
 method	metal2vulkan::pipeline::FunctionDescriptor::new	pub fn new(function: Function) -> FunctionDescriptor
 method	metal2vulkan::pipeline::FunctionDescriptor::with_libraries	pub fn with_libraries(mut self, libraries: DynamicLibraries) -> FunctionDescriptor
 method	metal2vulkan::pipeline::FunctionDescriptor::with_linked	pub fn with_linked(mut self, linked: LinkedFunctions) -> FunctionDescriptor
 method	metal2vulkan::pipeline::FunctionDescriptor::with_loaded_dependencies	pub fn with_loaded_dependencies(mut self, mut load: impl FnMut(&str) -> Option<DynamicLibrary>) -> FunctionDescriptor
+method	metal2vulkan::pipeline::FunctionDescriptor::with_specialized	pub fn with_specialized(mut self, specialized: bool) -> FunctionDescriptor
 method	metal2vulkan::pipeline::FunctionHandle::word	pub fn word(self) -> u32
 method	metal2vulkan::pipeline::GraphicsState::color_blend_attachments	pub fn color_blend_attachments(&self) -> Vec<(vk::ColorComponentFlags, Option<BlendState>)>
 method	metal2vulkan::pipeline::GraphicsState::new	pub fn new(topology: vk::PrimitiveTopology, rasterization_samples: vk::SampleCountFlags) -> GraphicsState
@@ -11713,6 +11716,7 @@ variant	metal2vulkan-runtime::Problem::Texture	Texture(TextureProblem)
 variant	metal2vulkan-runtime::Problem::TextureView	TextureView(ViewProblem)
 variant	metal2vulkan-runtime::Problem::UndefinedValue	UndefinedValue { ty: &'static str, raw: u64 }
 variant	metal2vulkan-runtime::Problem::UnrasterizedVertexReturn	UnrasterizedVertexReturn
+variant	metal2vulkan-runtime::Problem::UnspecializedFunction	UnspecializedFunction { stage: Stage, name: String }
 variant	metal2vulkan-runtime::Problem::UnwrittenFragmentInputs	UnwrittenFragmentInputs { inputs: Box<[String]> }
 variant	metal2vulkan-runtime::Problem::UnwrittenFragmentInputsUnproven	UnwrittenFragmentInputsUnproven { inputs: Box<[String]>, reason: LinkedUseGap }
 variant	metal2vulkan-runtime::Problem::Visibility	Visibility(VisibilityProblem)

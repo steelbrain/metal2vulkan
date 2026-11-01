@@ -1154,6 +1154,23 @@ pub(crate) fn stage_returns_value(
     entries.returns_value(fd, |shared| stage_returns_value_read(fd, shared, m))
 }
 
+/// [`FunctionDescriptor::needs_specialization`] under `m`: a module function's constants read
+/// through `entries`' module decodes, which a compile of the stage through the same object copies.
+pub(crate) fn stage_needs_specialization(
+    fd: &FunctionDescriptor,
+    entries: &StageEntries,
+    m: &mut Meter,
+) -> Result<bool, Error> {
+    if fd.specialized || !fd.constants.is_empty() {
+        return Ok(false);
+    }
+    let air_hash = fd.function.info().air_hash;
+    let constants = fd
+        .function
+        .constants_dictionary_with(|bitcode, m| entries.module(&air_hash, bitcode, m), m)?;
+    Ok(!constants.is_empty())
+}
+
 /// [`stage_returns_value`]'s own read of the AIR, which [`StageEntries`] keeps the answer of. It
 /// reads the module's decode from `shared`, the same object, so the answer and the stage's entry
 /// decode the module once between them.

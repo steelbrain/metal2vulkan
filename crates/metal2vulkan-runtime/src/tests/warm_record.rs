@@ -45,8 +45,8 @@ fn constants() -> FunctionConstantValues {
         )
 }
 
-/// A stage of `f` with constants and linked functions in every list and a group, one under a
-/// specialized name.
+/// A stage of `f`, specialized, with constants and linked functions in every list and a group,
+/// one under a specialized name.
 fn stage(f: Function) -> StageSource {
     let linked = function("ob3_texture_array", "ob3_texture_array");
     let mut functions = LinkedFunctions::new()
@@ -59,7 +59,7 @@ fn stage(f: Function) -> StageSource {
     functions
         .groups
         .insert("group".into(), vec![LinkedFunction::new(linked)]);
-    let mut descriptor = FunctionDescriptor::new(f);
+    let mut descriptor = FunctionDescriptor::new(f).with_specialized(true);
     descriptor.constants = constants();
     descriptor.linked = functions;
     StageSource::Function(descriptor)

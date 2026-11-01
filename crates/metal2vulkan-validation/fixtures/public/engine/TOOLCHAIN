@@ -331,6 +331,7 @@ fixture unk_size_queries: metal: Apple metal version 32023.921 (metalfe-32023.92
 fixture unk_ulong_atomics: metal: Apple metal version 32023.921 (metalfe-32023.921.6); macosx-sdk: 27.0 (26A425)
 fixture unk_ulong_rw: metal: Apple metal version 32023.921 (metalfe-32023.921.6); macosx-sdk: 27.0 (26A425)
 fixture unmeasured_speculation: metal: Apple metal version 32023.921 (metalfe-32023.921.6); macosx-sdk: 27.0 (26A425)
+fixture unspecialized_stage_functions: metal: Apple metal version 32023.922 (metalfe-32023.922.4); macosx-sdk: 27.2 (26B118)
 fixture unv_runtime_levels: metal: Apple metal version 32023.921 (metalfe-32023.921.6); macosx-sdk: 27.0 (26A425)
 fixture vft_tile_caller: metal: Apple metal version 32023.921 (metalfe-32023.921.6); macosx-sdk: 27.0 (26A425)
 fixture vft_vertex_caller: metal: Apple metal version 32023.921 (metalfe-32023.921.6); macosx-sdk: 27.0 (26A425)

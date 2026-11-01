@@ -839,6 +839,8 @@ mod uniform_varyings;
 #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
 mod unorm_depth_bias;
 #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+mod unspecialized_functions;
+#[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
 mod used_resources;
 #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
 mod vertex_cost;

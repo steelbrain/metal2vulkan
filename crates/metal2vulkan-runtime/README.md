@@ -87,7 +87,12 @@ command_buffer.wait_until_completed()?;
 ```
 
 Creating a pipeline state translates its functions, each under the 20-second translation budget.
-A function the device cannot run exactly is refused there, typed, naming what is missing.
+A function the device cannot run exactly is refused there, typed, naming what is missing. A stage
+function made by `Library::new_function_with_name` whose function declares function constants is
+refused before anything is translated (`Invalid`, `Problem::UnspecializedFunction`), as Metal ends
+its process for it; make it with `new_function_with_name_constant_values` (no values are needed)
+or `new_function_with_descriptor`, and a constant without a value is undefined (read as
+[docs/API.md](../../docs/API.md)'s accepted differences, "Function constants", say).
 
 A `[[visible]]` function a stage calls but does not define comes from the functions it links:
 `Function::linked_function` of each, in the stage's `LinkedFunctions`

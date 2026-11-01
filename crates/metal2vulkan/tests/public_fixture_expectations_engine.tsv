@@ -2551,6 +2551,28 @@ engine/unmeasured_speculation.air.ll	quad_first_in_an_unmeasured_arm	ok	ok	ok	ok
 engine/unmeasured_speculation.air.ll	sin_in_an_unmeasured_arm	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
 engine/unmeasured_speculation.ll	quad_first_in_an_unmeasured_arm	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
 engine/unmeasured_speculation.ll	sin_in_an_unmeasured_arm	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
+engine/unspecialized_stage_functions.air.ll	unspecialized_guarded	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
+engine/unspecialized_stage_functions.air.ll	unspecialized_free	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
+engine/unspecialized_stage_functions.air.ll	unspecialized_gate	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
+engine/unspecialized_stage_functions.air.ll	unspecialized_tile	NeedsInput{TileAttachments}	NeedsInput{TileAttachments}	NeedsInput{TileAttachments}	NeedsInput{TileAttachments}	NeedsInput{TileAttachments}	NeedsInput{TileAttachments}	NeedsInput{TileAttachments}	NeedsInput{TileAttachments}	NeedsInput{TileAttachments}	NeedsInput{TileAttachments}	NeedsInput{TileAttachments}	NeedsInput{TileAttachments}	NeedsInput{TileAttachments}	NeedsInput{TileAttachments}	NeedsInput{TileAttachments}	NeedsInput{TileAttachments}	NeedsInput{TileAttachments}	NeedsInput{TileAttachments}	NeedsInput{TileAttachments}
+engine/unspecialized_stage_functions.air.ll	unspecialized_vertex	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
+engine/unspecialized_stage_functions.air.ll	unspecialized_vertex_free	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
+engine/unspecialized_stage_functions.air.ll	unspecialized_fragment	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
+engine/unspecialized_stage_functions.air.ll	unspecialized_fragment_free	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
+engine/unspecialized_stage_functions.air.ll	unspecialized_object	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
+engine/unspecialized_stage_functions.air.ll	unspecialized_mesh	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
+engine/unspecialized_stage_functions.air.ll	unspecialized_mesh_free	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
+engine/unspecialized_stage_functions.ll	unspecialized_guarded	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
+engine/unspecialized_stage_functions.ll	unspecialized_free	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
+engine/unspecialized_stage_functions.ll	unspecialized_gate	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
+engine/unspecialized_stage_functions.ll	unspecialized_tile	NeedsInput{TileAttachments}	NeedsInput{TileAttachments}	NeedsInput{TileAttachments}	NeedsInput{TileAttachments}	NeedsInput{TileAttachments}	NeedsInput{TileAttachments}	NeedsInput{TileAttachments}	NeedsInput{TileAttachments}	NeedsInput{TileAttachments}	NeedsInput{TileAttachments}	NeedsInput{TileAttachments}	NeedsInput{TileAttachments}	NeedsInput{TileAttachments}	NeedsInput{TileAttachments}	NeedsInput{TileAttachments}	NeedsInput{TileAttachments}	NeedsInput{TileAttachments}	NeedsInput{TileAttachments}	NeedsInput{TileAttachments}
+engine/unspecialized_stage_functions.ll	unspecialized_vertex	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
+engine/unspecialized_stage_functions.ll	unspecialized_vertex_free	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
+engine/unspecialized_stage_functions.ll	unspecialized_fragment	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
+engine/unspecialized_stage_functions.ll	unspecialized_fragment_free	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
+engine/unspecialized_stage_functions.ll	unspecialized_object	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
+engine/unspecialized_stage_functions.ll	unspecialized_mesh	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
+engine/unspecialized_stage_functions.ll	unspecialized_mesh_free	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
 engine/unv_runtime_levels.air.ll	unv_rlvl2d	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	Unsupported{ArgumentBufferTextures; AnyOf[[Feature(RuntimeDescriptorArray), Feature(DescriptorBindingPartiallyBound), Feature(ShaderSampledImageArrayNonUniformIndexing), Feature(DescriptorBindingSampledImageUpdateAfterBind)]]}
 engine/unv_runtime_levels.air.ll	unv_rpos2d	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
 engine/unv_runtime_levels.ll	unv_rlvl2d	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	Unsupported{ArgumentBufferTextures; AnyOf[[Feature(RuntimeDescriptorArray), Feature(DescriptorBindingPartiallyBound), Feature(ShaderSampledImageArrayNonUniformIndexing), Feature(DescriptorBindingSampledImageUpdateAfterBind)]]}

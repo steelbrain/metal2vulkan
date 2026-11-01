@@ -70,6 +70,7 @@ pub(super) mod stand_in;
 mod texture_access;
 mod tile;
 mod unrasterized;
+mod unspecialized;
 
 pub use additions::{
     BinaryFunctionProblem, BinaryFunctionStage, RenderPipelineFunctionsDescriptor,
@@ -549,7 +550,10 @@ impl Device {
     /// another device (`Invalid(ForeignObject)`). Under `FAIL_ON_BINARY_ARCHIVE_MISS`, a pipeline
     /// no listed archive holds is `BinaryArchiveMiss`. What the compile refuses is `Compile` or
     /// `Unsupported`: constant values that do not fit the function's constants, and a call to a
-    /// visible function no linked function supplies, among it. A kernel that sets a render state on
+    /// visible function no linked function supplies, among it. A kernel made by
+    /// [`Library::new_function_with_name`](crate::Library::new_function_with_name) whose function
+    /// declares function constants is `Invalid(UnspecializedFunction)`, as plain Metal ends its
+    /// process at its creation. A kernel that sets a render state on
     /// a render command is `Unsupported{IndirectRenderState}` with `Needs::MetalGpuFamily` of
     /// Apple10 on a device that does not claim Apple10, as Metal's compiler refuses it on an M4 and
     /// an M3 Max, and `NotImplemented(IndirectRenderCommands)` on one that does.
@@ -691,6 +695,13 @@ impl ComputePipelineState {
         if let Some(name) = duplicate_linked_name(&function.linked) {
             return Err(invalid(call, Problem::DuplicateLinkedFunction { name }));
         }
+        unspecialized::check(
+            device,
+            call,
+            Stage::Kernel,
+            kernel.stage(),
+            &options.budget(),
+        )?;
         additions::check_kernel(device, &kernel, function, call)?;
         // A tile pipeline's descriptor has no `supportIndirectCommandBuffers`, and no
         // `resourceIndex`.

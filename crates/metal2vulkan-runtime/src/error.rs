@@ -760,6 +760,27 @@ pub enum Problem {
     ///
     /// Basis: ours (this crate's already-compiled stage: Metal's descriptor takes a function).
     CompiledKernel,
+    /// `new_compute_pipeline_state`, `new_render_pipeline_state`, `new_tile_render_pipeline_state`
+    /// and `new_mesh_render_pipeline_state`: a stage function made by `newFunctionWithName:`, not
+    /// specialized (`FunctionDescriptor::specialized`), whose function declares function constants
+    /// (its `functionConstantsDictionary` is not empty), whether each is required, or optional and
+    /// read only where `is_function_constant_defined` says, or only gates an argument. Plain Metal's
+    /// creation ends its process at its descriptor validation ("Compute Pipeline Descriptor
+    /// Validation / function ko cannot be used to build a pipeline state. Use
+    /// newFunctionWithName:constantValues:... to get the specialized function"; a render or mesh
+    /// state's names `vertexFunction`, `fragmentFunction`, `objectFunction` or `meshFunction`, and
+    /// a tile state's says "without setting constant values first"). The function made with
+    /// constant values, none among them too, or by `newFunctionWithDescriptor:`, is made
+    /// (`pipeline/unspecialized.rs`).
+    ///
+    /// Basis: metal-measured (an M3 Max, macOS 27.0.1: plain Metal ends its process at a compute,
+    /// render, tile and mesh state of each stage, `MTL_DEBUG_LAYER` unset).
+    UnspecializedFunction {
+        /// The function's stage: `Kernel` for a compute or tile state's.
+        stage: Stage,
+        /// The function's name.
+        name: String,
+    },
     /// `new_compute_pipeline_state`: the kernel's linked `functions`, or its `binary_functions`,
     /// list this name twice, or both lists hold it for two different functions. Metal's API
     /// validation stops every repeat ("All linked functions must have unique names"); plain

@@ -10,10 +10,13 @@
 
 use std::collections::BTreeMap;
 
+use crate::budget::{Budget, Meter};
+use crate::error::Error;
 use crate::library::compiled::CompiledFunction;
 use crate::library::dynamic::DynamicLibrary;
 use crate::library::function::{Function, FunctionConstantValues};
 use crate::metal;
+use crate::pipeline::compile::StageEntries;
 
 /// A function plus its constant values and the functions its pipeline links
 /// (`MTLFunctionDescriptor` and the stage's `MTLLinkedFunctions`).
@@ -22,6 +25,14 @@ use crate::metal;
 pub struct FunctionDescriptor {
     pub function: Function,
     pub constants: FunctionConstantValues,
+    /// Whether the function is specialized: made with constant values
+    /// (`newFunctionWithName:constantValues:error:`, none among them too) or by
+    /// `newFunctionWithDescriptor:error:`; `false`, the default, for one made by
+    /// `newFunctionWithName:`. A descriptor with `constants` is specialized whatever this says.
+    /// The compile is the same either way, a constant without a value undefined; Metal makes no
+    /// pipeline state of an unspecialized function that declares constants
+    /// ([`FunctionDescriptor::needs_specialization`]).
+    pub specialized: bool,
     /// The functions the stage links: each visible-function reference of `function` (and of each
     /// linked function) calls the linked function of the name it references.
     pub linked: LinkedFunctions,
@@ -36,9 +47,36 @@ impl FunctionDescriptor {
         FunctionDescriptor {
             function,
             constants: FunctionConstantValues::defaults(),
+            specialized: false,
             linked: LinkedFunctions::default(),
             libraries: DynamicLibraries::default(),
         }
+    }
+
+    /// This descriptor with `specialized` as whether its function is specialized
+    /// ([`FunctionDescriptor::specialized`]).
+    pub fn with_specialized(mut self, specialized: bool) -> FunctionDescriptor {
+        self.specialized = specialized;
+        self
+    }
+
+    /// Whether Metal makes no pipeline state of this stage: its function is not specialized
+    /// ([`specialized`](Self::specialized) false, and no `constants`) and declares function
+    /// constants (its [`Function::function_constants_dictionary`] is not empty), whether each is
+    /// required or optional, read or only gating an argument. Plain Metal's creation ends its
+    /// process for one at its descriptor validation, at every pipeline creator ("function ko
+    /// cannot be used to build a pipeline state. Use newFunctionWithName:constantValues:... to get
+    /// the specialized function", an M3 Max under macOS 27.0.1). A module function's constants are
+    /// read of its AIR under `budget` through `entries`' module decodes, which a compile of the
+    /// stage through the same object copies; refused as
+    /// [`Function::function_constants_dictionary`] refuses.
+    pub fn needs_specialization(
+        &self,
+        budget: &Budget,
+        entries: &StageEntries,
+    ) -> Result<bool, Error> {
+        let mut m = Meter::new(budget);
+        crate::pipeline::compile::stage_needs_specialization(self, entries, &mut m)
     }
 
     /// This descriptor with `linked` as its linked functions.
