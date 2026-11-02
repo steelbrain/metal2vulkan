@@ -6,30 +6,39 @@
 //! Each case is one of the probe's, drawn as the probe draws it: the owned fixture
 //! `rt6_provoking`'s `pv_vertex_smooth` places each point at the clip-space position the probe's
 //! vertex function computes from its pixel coordinates (`(x / (S / 2) - 1, 1 - y / (S / 2))`, the
-//! same two `f32` operations), and `a2_front_facing`'s fragment function writes one color for a
-//! front-facing fragment and another for a back-facing one, into an `RGBA8Unorm` target: white,
-//! or `1/255` added for each fragment where the probe counts them. The map of what drew is printed
-//! as the probe prints it and compared with its map, and every fragment must be front-facing, as
-//! a line's is. The cases: the lane's 16x16 list of two lines and three-vertex strip at widths 0,
-//! 0.5, 1, 2, 3.5 and 8; the widths Metal quantizes; the width's encoder state; the band's edges
-//! and ends; width 0, on the centres and off them (lines offset by steps of 1/512 pixel, scattered
-//! endpoints as lists, reversed, instanced and a strip, clip-space positions), which Metal draws
-//! as 1/16; strips' overlaps counted; filled triangles; and 4 samples at widths 0.5 and 2.
+//! same two `f32` operations, at the probe's `z`), and `a2_front_facing`'s fragment function writes
+//! one color for a front-facing fragment and another for a back-facing one, into an `RGBA8Unorm`
+//! target: white, or `1/255` added for each fragment where the probe counts them. The map of what
+//! drew is printed as the probe prints it and compared with its map: a line's fragments are all
+//! front-facing, and a triangle's edges' front- and back-facing fragments are each compared with
+//! the probe's map of them. The cases: the lane's 16x16 list of two lines and three-vertex strip at
+//! widths 0, 0.5, 1, 2, 3.5 and 8; the widths Metal quantizes; the width's encoder state; the
+//! band's edges and ends; width 0, on the centres and off them (lines offset by steps of 1/512
+//! pixel, scattered endpoints as lists, reversed, instanced and a strip, clip-space positions),
+//! which Metal draws as 1/16; strips' overlaps counted; filled triangles; 4 samples at widths 0.5
+//! and 2; and the probe's `edges`, triangles in fill mode `Lines`: facing either way under each
+//! cull mode and winding, at widths 0, 1, 2.5 and 4, a square of two, a strip of three,
+//! zero-area ones and scattered ones; the flat vertex ID and primitive ID their fragments read
+//! (`rt6_provoking`'s `pv_vertex` and `pv_flat`, its third color) at either provoking vertex;
+//! which of their fragments pass a depth test only their own depth or a depth bias passes; and 4
+//! samples at width 2.
 //!
 //! The work counts show which route each draw took (`WorkCounts::line_band_draws`,
 //! `device_wide_line_draws`, `nearest_width_line_draws`): every draw at a width other than 1 takes
-//! one of the three, and on a device without `wideLines` a line takes the band. A draw the
-//! device's own lines draw otherwise than Metal is announced (`device-wide-lines`, at every
-//! occurrence here) and left unchecked; under `DevicePolicy::exact_answers()` no line draw is,
-//! where the device has `tessellationShader`. What neither the device's lines nor the band draw (a
-//! triangle's edges in fill mode `Lines` the device's lines do not draw; a line without
-//! `tessellationShader` the device's lines do not draw) runs the device's lines at the nearest
-//! width they draw, announced (`lines-at-nearest-width`) and counted at each draw; where that
-//! width is 1 it is compared with Metal's map of the same geometry at width 1. Nothing is refused.
-//! A draw of no complete primitive (the consumer's triangles of 1 and 2 vertices, by vertices and
-//! by indices, under the last provoking vertex) draws nothing and takes no route. Not covered:
+//! one of the three, and on a device without `wideLines` that tessellates, a line and a triangle's
+//! edges take the band. A draw the device's own lines draw otherwise than Metal is announced
+//! (`device-wide-lines`, at every occurrence here) and left unchecked; under
+//! `DevicePolicy::exact_answers()` no draw is, where the device has `tessellationShader`. The band
+//! of a triangle's edges under a depth bias that can bias them otherwise than Metal is announced
+//! (`wide-edge-depth-bias`) and left unchecked. What neither the device's lines nor the band draw
+//! (lines and edges without `tessellationShader` the device's lines do not draw, and those of a
+//! pipeline state whose band the translator refuses) runs the device's lines at the nearest width
+//! they draw, announced (`lines-at-nearest-width`) and counted at each draw; where that width is 1
+//! it is compared with Metal's map of the same geometry at width 1. Nothing is refused. A draw of
+//! no complete primitive (the consumer's triangles of 1 and 2 vertices, by vertices and by
+//! indices, under the last provoking vertex) draws nothing and takes no route. Not covered:
 //! Metal's width-1 lines on 4 samples (the probe's `msaa` width 1 and diagonal cases) where the
-//! device's lines are not Metal's own.
+//! device's lines are not Metal's own, and its filled triangles' depth bias, the device's own.
 
 use super::{
     buffer_with, layer_reported_nothing_at_all, validated_device_with, Messages, ScratchCache, WAIT,
@@ -37,8 +46,9 @@ use super::{
 use crate::air_library::AirLibrary;
 use crate::gpu::TEST_DEVICE;
 use metal2vulkan::device::{DevicePolicy, VkFeature};
-use metal2vulkan::metal::{BlendFactor, IndexType, TriangleFillMode};
-use metal2vulkan::metal::{PixelFormat, PrimitiveType, TextureType, TextureUsage};
+use metal2vulkan::metal::state::DepthStencilDescriptor;
+use metal2vulkan::metal::{BlendFactor, CompareFunction, CullMode, IndexType, TriangleFillMode};
+use metal2vulkan::metal::{PixelFormat, PrimitiveType, TextureType, TextureUsage, Winding};
 use metal2vulkan::pipeline::{ColorAttachmentDescriptor, RenderPipelineDescriptor, StageSource};
 use metal2vulkan_devtools::{engine_dir, llvm_assemble};
 use metal2vulkan_runtime::{
@@ -59,6 +69,16 @@ pub(super) const WIDE_LINES: [Degradation; 2] = [
     Degradation::LinesAtNearestWidth,
 ];
 
+/// Metal's maps the lane does not draw: its width-1 lines on 4 samples, which the device's lines
+/// draw as the runtime's every line, and its filled triangles' depth bias, the device's own.
+const NOT_DRAWN: [&str; 5] = [
+    "4 samples diagonal width 1, samples",
+    "4 samples horizontal y=16 width 1, samples",
+    "depth bias by the largest exponent: filled triangle",
+    "depth bias slope 4: filled triangle",
+    "depth bias: filled triangle",
+];
+
 /// The probe's widths of the lane's draws.
 const LANE_WIDTHS: [f32; 6] = [0.0, 0.5, 1.0, 2.0, 3.5, 8.0];
 
@@ -72,17 +92,21 @@ enum Shade {
 }
 
 /// One draw of an encoder: its primitive type, its points in pixel coordinates (y down), or
-/// clip-space `x` and `y` (`z` 0, `w` 1) where `clip`, the width set before it (`None`: none), its
-/// triangle fill mode, whether it sets the other of the probe's two pipeline states first, its
-/// instances, whether it draws through 16-bit indices `0..n` (`indexed`), and whether it sets
-/// Apple's last provoking vertex first (`provoking_last`).
+/// clip-space `x` and `y` (`w` 1) where `clip`, each at clip-space `z` (0 past the end of `z`), the
+/// width set before it (`None`: none), its triangle fill mode, cull mode and front-facing winding,
+/// whether it sets the other of the probe's two pipeline states first, its instances, whether it
+/// draws through 16-bit indices `0..n` (`indexed`), and whether it sets Apple's last provoking
+/// vertex first (`provoking_last`).
 #[derive(Clone, Debug)]
 struct Draw {
     primitive: PrimitiveType,
     points: Vec<[f32; 2]>,
     clip: bool,
+    z: Vec<f32>,
     width: Option<f32>,
     fill: TriangleFillMode,
+    cull: CullMode,
+    winding: Winding,
     other_pipeline: bool,
     instances: u32,
     indexed: bool,
@@ -95,12 +119,31 @@ impl Draw {
             primitive,
             points: points.chunks(2).map(|p| [p[0], p[1]]).collect(),
             clip: false,
+            z: Vec::new(),
             width: Some(width),
             fill: TriangleFillMode::Fill,
+            cull: CullMode::None,
+            winding: Winding::Clockwise,
             other_pipeline: false,
             instances: 1,
             indexed: false,
             provoking_last: false,
+        }
+    }
+
+    /// The draw of a triangle's edges of `primitive` over `points` at `width`, under `cull` and
+    /// `winding`.
+    fn edges(
+        primitive: PrimitiveType,
+        points: &[f32],
+        width: f32,
+        (cull, winding): (CullMode, Winding),
+    ) -> Draw {
+        Draw {
+            fill: TriangleFillMode::Lines,
+            cull,
+            winding,
+            ..Draw::line(primitive, points, width)
         }
     }
 
@@ -165,13 +208,31 @@ impl LineFacts {
     }
 }
 
-/// One of the probe's renders: an `S x S` target of `samples` samples, cleared to zero, and the
-/// draws of each of its encoders, in one command buffer.
+/// What a shot's fragments write, and what the lane reads of them.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Read {
+    /// `a2_front_facing`: a front-facing fragment's color in red, a back-facing one's in green.
+    Facing,
+    /// `pv_vertex` and `rt6_provoking`'s fragment function of this name, into three colors: the
+    /// third's flat vertex ID and primitive ID, an `RGBA8Uint`.
+    Ids(&'static str),
+    /// [`Read::Facing`]'s, against a `Depth32Float` cleared to `clear`, compared `Greater`
+    /// unwritten, under the depth bias of `constant` and `slope` factors.
+    Depth {
+        clear: f32,
+        constant: f32,
+        slope: f32,
+    },
+}
+
+/// One of the probe's renders: an `S x S` target of `samples` samples, cleared to zero, what its
+/// fragments write, and the draws of each of its encoders, in one command buffer.
 #[derive(Clone, Debug)]
 struct Shot {
     side: u64,
     samples: u32,
     shade: Shade,
+    read: Read,
     encoders: Vec<Vec<Draw>>,
 }
 
@@ -181,7 +242,20 @@ impl Shot {
             side,
             samples,
             shade,
+            read: Read::Facing,
             encoders: vec![vec![draw]],
+        }
+    }
+
+    /// One draw on the probe's `edges` 32x32 target, single-sampled, read as `read`.
+    fn edges(read: Read, draw: Draw) -> Shot {
+        let shade = match read {
+            Read::Depth { .. } => Shade::White,
+            _ => Shade::Count,
+        };
+        Shot {
+            read,
+            ..Shot::one(32, 1, shade, draw)
         }
     }
 
@@ -233,6 +307,27 @@ fn map(title: &str, side: usize, red: &[u8], shade: Shade, samples: u32) -> Stri
         }
         out.push_str(&format!("{y:3} "));
         out.extend(row.iter().map(|&v| cell(v, shade, samples)));
+        out.push('\n');
+    }
+    out
+}
+
+/// The probe's `MAP` block of the IDs of `rgba` (an `RGBA8Uint`'s texels) in `channel`: `.` where no
+/// fragment wrote (alpha 0), else the ID as a digit, `*` from 10.
+fn id_map(title: &str, side: usize, rgba: &[u8], channel: usize) -> String {
+    let texels: Vec<&[u8]> = rgba.chunks(4).collect();
+    let covered = texels.iter().filter(|t| t[3] != 0).count();
+    let mut out = format!("MAP {title} ({covered} pixels)\n");
+    for (y, row) in texels.chunks(side).enumerate() {
+        if row.iter().all(|t| t[3] == 0) {
+            continue;
+        }
+        out.push_str(&format!("{y:3} "));
+        out.extend(row.iter().map(|t| match (t[3], t[channel]) {
+            (0, _) => '.',
+            (_, id @ 0..=9) => char::from(b'0' + id),
+            _ => '*',
+        }));
         out.push('\n');
     }
     out
@@ -591,6 +686,7 @@ fn map_cases() -> Vec<(String, Shot)> {
             side: 32,
             samples: 1,
             shade: Shade::White,
+            read: Read::Facing,
             encoders: vec![vec![upper.clone(), lower]],
         },
     ));
@@ -600,25 +696,296 @@ fn map_cases() -> Vec<(String, Shot)> {
             side: 32,
             samples: 1,
             shade: Shade::White,
+            read: Read::Facing,
             encoders: vec![vec![upper], vec![unset(&[4.0, 14.0, 28.0, 14.0])]],
         },
     ));
     out
 }
 
-/// The lane's device, queue and the probe's two pipeline states of each shade and sample count.
+/// The key of a shot's pipeline states: its shade and samples, its vertex and fragment functions,
+/// and whether it has a depth attachment.
+type PipelineKey = (Shade, u32, &'static str, &'static str, bool);
+
+/// How a case's drawing is compared with Metal's maps.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Check {
+    /// The lane's `LANE` block of its name at this width, every fragment front-facing.
+    Lane(f32),
+    /// The `MAP` of its title, every fragment front-facing.
+    Map,
+    /// The maps of its front- and back-facing fragments: `<title>, front fragments` and
+    /// `<title>, back fragments`.
+    Faces,
+    /// The maps of its flat vertex IDs and primitive IDs: `<title>, flat vertex IDs` and
+    /// `<title>, primitive IDs`.
+    Ids,
+}
+
+impl Check {
+    /// The keys of Metal's blocks a case of `key` is compared with.
+    fn blocks(self, key: &str) -> Vec<String> {
+        match self {
+            Check::Lane(_) | Check::Map => vec![key.to_owned()],
+            Check::Faces => vec![
+                format!("{key}, front fragments"),
+                format!("{key}, back fragments"),
+            ],
+            Check::Ids => vec![
+                format!("{key}, flat vertex IDs"),
+                format!("{key}, primitive IDs"),
+            ],
+        }
+    }
+}
+
+/// The probe's `edges` cases, each by its title: triangles in fill mode `Lines` on a 32x32 target,
+/// their front- and back-facing fragments counted, under each cull mode and winding; their flat
+/// vertex IDs and primitive IDs at either provoking vertex; which of their fragments pass a depth
+/// test, biased or not; and 4 samples at width 2.
+fn edge_cases() -> Vec<(String, Shot, Check)> {
+    use PrimitiveType::{Line, Triangle, TriangleStrip};
+    let cw = [4.0, 4.0, 28.0, 4.0, 16.0, 28.0];
+    let ccw = [4.0, 4.0, 16.0, 28.0, 28.0, 4.0];
+    // A square as two clockwise triangles sharing its diagonal; a strip of three; zero-area
+    // triangles on a row and on a diagonal.
+    let square = [
+        4.0, 4.0, 28.0, 4.0, 28.0, 28.0, 4.0, 4.0, 28.0, 28.0, 4.0, 28.0,
+    ];
+    let strip = [4.0, 8.0, 10.0, 26.0, 16.0, 8.0, 22.0, 26.0, 28.0, 8.0];
+    let row = [4.0, 16.0, 16.0, 16.0, 28.0, 16.0];
+    let diagonal = [4.0, 8.0, 16.0, 16.0, 28.0, 24.0];
+    let (none, back, front) = (CullMode::None, CullMode::Back, CullMode::Front);
+    let (cwise, ccwise) = (Winding::Clockwise, Winding::CounterClockwise);
+    let facing: [(&str, PrimitiveType, &[f32], f32, (CullMode, Winding)); 18] = [
+        ("edges clockwise width 4", Triangle, &cw, 4.0, (none, cwise)),
+        (
+            "edges counter-clockwise width 4",
+            Triangle,
+            &ccw,
+            4.0,
+            (none, cwise),
+        ),
+        (
+            "edges clockwise width 4 cull back",
+            Triangle,
+            &cw,
+            4.0,
+            (back, cwise),
+        ),
+        (
+            "edges counter-clockwise width 4 cull back",
+            Triangle,
+            &ccw,
+            4.0,
+            (back, cwise),
+        ),
+        (
+            "edges clockwise width 4 cull front",
+            Triangle,
+            &cw,
+            4.0,
+            (front, cwise),
+        ),
+        (
+            "edges counter-clockwise width 4 winding counter-clockwise",
+            Triangle,
+            &ccw,
+            4.0,
+            (none, ccwise),
+        ),
+        (
+            "edges counter-clockwise width 4 winding counter-clockwise cull back",
+            Triangle,
+            &ccw,
+            4.0,
+            (back, ccwise),
+        ),
+        ("edges clockwise width 1", Triangle, &cw, 1.0, (none, cwise)),
+        ("edges clockwise width 0", Triangle, &cw, 0.0, (none, cwise)),
+        (
+            "edges clockwise width 2.5",
+            Triangle,
+            &cw,
+            2.5,
+            (none, cwise),
+        ),
+        (
+            "edges counter-clockwise width 2.5",
+            Triangle,
+            &ccw,
+            2.5,
+            (none, cwise),
+        ),
+        (
+            "edges square width 3",
+            Triangle,
+            &square,
+            3.0,
+            (none, cwise),
+        ),
+        (
+            "edges strip width 2.5",
+            TriangleStrip,
+            &strip,
+            2.5,
+            (none, cwise),
+        ),
+        (
+            "edges strip width 2.5 cull back",
+            TriangleStrip,
+            &strip,
+            2.5,
+            (back, cwise),
+        ),
+        (
+            "edges zero-area row width 3",
+            Triangle,
+            &row,
+            3.0,
+            (none, cwise),
+        ),
+        (
+            "edges zero-area diagonal width 3",
+            Triangle,
+            &diagonal,
+            3.0,
+            (none, cwise),
+        ),
+        (
+            "edges zero-area row width 3 cull back",
+            Triangle,
+            &row,
+            3.0,
+            (back, cwise),
+        ),
+        (
+            "edges zero-area row width 3 cull front",
+            Triangle,
+            &row,
+            3.0,
+            (front, cwise),
+        ),
+    ];
+    let mut out = Vec::new();
+    for (title, primitive, points, width, faces) in facing {
+        let draw = Draw::edges(primitive, points, width, faces);
+        out.push((
+            title.to_owned(),
+            Shot::edges(Read::Facing, draw),
+            Check::Faces,
+        ));
+    }
+    // Eight scattered triangles, facing either way.
+    let scattered = scatter(24, 32, 3);
+    for width in [0.0f32, 0.5, 2.5] {
+        let draw = Draw::edges(Triangle, &scattered, width, (none, cwise));
+        out.push((
+            format!("edges scattered width {width}"),
+            Shot::edges(Read::Facing, draw),
+            Check::Faces,
+        ));
+    }
+    // Two triangles apart, and a strip of two sharing an edge: the flat vertex IDs and primitive
+    // IDs, at either provoking vertex.
+    let apart = [
+        3.0, 3.0, 29.0, 3.0, 16.0, 13.0, 3.0, 29.0, 16.0, 18.0, 29.0, 29.0,
+    ];
+    let pair = [4.0, 4.0, 4.0, 28.0, 28.0, 4.0, 28.0, 28.0];
+    for (title, primitive, points) in [
+        ("edges apart width 3", Triangle, &apart[..]),
+        ("edges pair strip width 3", TriangleStrip, &pair[..]),
+    ] {
+        for last in [false, true] {
+            let draw = Draw {
+                provoking_last: last,
+                ..Draw::edges(primitive, points, 3.0, (none, cwise))
+            };
+            let title = match last {
+                false => title.to_owned(),
+                true => format!("{title} provoking last"),
+            };
+            out.push((title, Shot::edges(Read::Ids("pv_flat"), draw), Check::Ids));
+        }
+    }
+    // Which fragments pass `Greater` against the depth cleared to `clear`, each vertex at its
+    // `z`, under the bias of `constant` and `slope` factors: a constant of 2^20 at z = 0.5 (2^-4
+    // there); a slope factor of 4 on a triangle whose top edge lies at z = 0.2 and third vertex
+    // at 0.8; a constant of 2^20 on one whose top edge lies at z = 0.3 and third vertex at 0.9 (by
+    // the triangle's largest exponent); a line, which takes no bias; and the depth across that
+    // sloped triangle's top edge, unbiased.
+    let half = [0.5; 3];
+    let tilted = [0.2, 0.2, 0.8];
+    let steep = [0.3, 0.3, 0.9];
+    let k = 1_048_576.0;
+    let biased: [(&str, PrimitiveType, &[f32], f32, f32, f32); 5] = [
+        ("depth bias: edges width 3", Triangle, &half, 0.5, k, 0.0),
+        ("depth bias: line width 3", Line, &half, 0.5, k, 0.0),
+        (
+            "depth bias slope 4: edges width 3",
+            Triangle,
+            &tilted,
+            0.25,
+            0.0,
+            4.0,
+        ),
+        (
+            "depth bias by the largest exponent: edges width 3",
+            Triangle,
+            &steep,
+            0.34,
+            k,
+            0.0,
+        ),
+        (
+            "depth across an edge: edges width 3",
+            Triangle,
+            &tilted,
+            0.21,
+            0.0,
+            0.0,
+        ),
+    ];
+    for (title, primitive, z, clear, constant, slope) in biased {
+        let points = match primitive {
+            Line => &cw[..4],
+            _ => &cw[..],
+        };
+        let draw = Draw {
+            z: z.to_vec(),
+            ..Draw::edges(primitive, points, 3.0, (none, cwise))
+        };
+        let read = Read::Depth {
+            clear,
+            constant,
+            slope,
+        };
+        out.push((title.to_owned(), Shot::edges(read, draw), Check::Map));
+    }
+    let draw = Draw::edges(Triangle, &cw, 2.0, (none, cwise));
+    out.push((
+        "4 samples edges clockwise width 2, samples".to_owned(),
+        Shot::one(32, 4, Shade::White, draw),
+        Check::Map,
+    ));
+    out
+}
+
+/// The lane's device, queue and the probe's two pipeline states of each [`PipelineKey`].
 struct Lane {
     device: Device,
     queue: CommandQueue,
     vertex: Library,
     fragment: Library,
-    pipelines: BTreeMap<(Shade, u32), [RenderPipelineState; 2]>,
+    pipelines: BTreeMap<PipelineKey, [RenderPipelineState; 2]>,
 }
 
-/// What a shot drew: each pixel's red (front-facing fragments) and green (back-facing ones).
+/// What a shot drew: each pixel's red (front-facing fragments) and green (back-facing ones); and
+/// for [`Read::Ids`] the third color's texels, else nothing.
 struct Drawn {
     red: Vec<u8>,
     green: Vec<u8>,
+    ids: Vec<u8>,
 }
 
 impl Lane {
@@ -636,9 +1003,8 @@ impl Lane {
         }
     }
 
-    /// The probe's two pipeline states of `shade` and `samples` (alike, as the probe's `a` and
-    /// `b` are).
-    fn pipelines(&mut self, shade: Shade, samples: u32) -> [RenderPipelineState; 2] {
+    /// The probe's two pipeline states of `shot` (alike, as the probe's `a` and `b` are).
+    fn pipelines(&mut self, shot: &Shot) -> [RenderPipelineState; 2] {
         let function = |library: &Library, name| {
             StageSource::Function(
                 library
@@ -647,20 +1013,45 @@ impl Lane {
                     .function_descriptor(),
             )
         };
-        let mut descriptor =
-            RenderPipelineDescriptor::new(function(&self.vertex, "pv_vertex_smooth"));
-        descriptor.fragment = Some(function(&self.fragment, "a2_front_facing"));
+        let (shade, samples) = (shot.shade, shot.samples);
+        let (vertex, fragment) = match shot.read {
+            Read::Ids(fragment) => ("pv_vertex", fragment),
+            _ => ("pv_vertex_smooth", "a2_front_facing"),
+        };
+        let depth = matches!(shot.read, Read::Depth { .. });
+        let mut descriptor = RenderPipelineDescriptor::new(function(&self.vertex, vertex));
         descriptor.raster_sample_count = samples;
-        let mut color = ColorAttachmentDescriptor::new(PixelFormat::RGBA8Unorm);
-        if shade == Shade::Count {
-            color.blending_enabled = true;
-            color.destination_rgb_blend_factor = BlendFactor::One;
-            color.destination_alpha_blend_factor = BlendFactor::One;
+        match shot.read {
+            Read::Ids(_) => {
+                descriptor.fragment = Some(function(&self.vertex, fragment));
+                for (at, format) in [
+                    PixelFormat::RGBA8Unorm,
+                    PixelFormat::RGBA8Unorm,
+                    PixelFormat::RGBA8Uint,
+                ]
+                .into_iter()
+                .enumerate()
+                {
+                    descriptor.color_attachments[at] = Some(ColorAttachmentDescriptor::new(format));
+                }
+            }
+            _ => {
+                descriptor.fragment = Some(function(&self.fragment, fragment));
+                let mut color = ColorAttachmentDescriptor::new(PixelFormat::RGBA8Unorm);
+                if shade == Shade::Count {
+                    color.blending_enabled = true;
+                    color.destination_rgb_blend_factor = BlendFactor::One;
+                    color.destination_alpha_blend_factor = BlendFactor::One;
+                }
+                descriptor.color_attachments[0] = Some(color);
+            }
         }
-        descriptor.color_attachments[0] = Some(color);
+        if depth {
+            descriptor.depth_format = Some(PixelFormat::Depth32Float);
+        }
         let device = &self.device;
         self.pipelines
-            .entry((shade, samples))
+            .entry((shade, samples, vertex, fragment, depth))
             .or_insert_with(|| {
                 [0, 1].map(|_| {
                     device
@@ -673,12 +1064,38 @@ impl Lane {
 
     /// `shot` drawn, or the first refusal of its calls.
     fn draw(&mut self, shot: &Shot) -> Result<Drawn, Error> {
-        let [a, b] = self.pipelines(shot.shade, shot.samples);
+        let [a, b] = self.pipelines(shot);
         let side = shot.side;
         let mut t = TextureDescriptor::texture_2d(PixelFormat::RGBA8Unorm, side, side, false);
         t.usage = TextureUsage::RENDER_TARGET;
         t.resource_options = ResourceOptions::shared();
         let resolved = self.device.new_texture(&t).unwrap();
+        // `pv_flat`'s other two colors, and its IDs'.
+        let ids = matches!(shot.read, Read::Ids(_)).then(|| {
+            [PixelFormat::RGBA8Unorm, PixelFormat::RGBA8Uint].map(|format| {
+                let mut d = t.clone();
+                d.pixel_format = format;
+                self.device.new_texture(&d).unwrap()
+            })
+        });
+        // The depth a `Read::Depth` shot tests against, and its test.
+        let depth = match shot.read {
+            Read::Depth { clear, .. } => {
+                let mut d =
+                    TextureDescriptor::texture_2d(PixelFormat::Depth32Float, side, side, false);
+                d.usage = TextureUsage::RENDER_TARGET;
+                d.resource_options = ResourceOptions::private();
+                let mut test = DepthStencilDescriptor::default();
+                test.depth_compare_function = CompareFunction::Greater;
+                test.depth_write_enabled = false;
+                Some((
+                    self.device.new_texture(&d).unwrap(),
+                    self.device.new_depth_stencil_state(&test).unwrap(),
+                    clear,
+                ))
+            }
+            _ => None,
+        };
         let target = match shot.samples {
             1 => resolved.clone(),
             n => {
@@ -717,10 +1134,34 @@ impl Lane {
                     color.store_action = StoreAction::MultisampleResolve;
                 }
             }
+            for (at, texture) in (1..).zip(ids.iter().flatten()) {
+                let color = &mut pass.color_attachments[at];
+                color.texture = Some(texture.clone());
+                color.load_action = LoadAction::Clear;
+                color.clear_color = ClearColor::new(0.0, 0.0, 0.0, 0.0);
+                color.store_action = StoreAction::Store;
+            }
+            if let Some((texture, _, clear)) = &depth {
+                let attachment = &mut pass.depth_attachment;
+                attachment.texture = Some(texture.clone());
+                attachment.load_action = LoadAction::Clear;
+                attachment.clear_depth = f64::from(*clear);
+                attachment.store_action = StoreAction::DontCare;
+            }
             let mut encoder = command_buffer.render_command_encoder(&pass)?;
             let drawn = (|| {
                 encoder.set_render_pipeline_state(&a)?;
                 encoder.set_fragment_bytes(&colors, 0)?;
+                if let (
+                    Some((_, test, _)),
+                    Read::Depth {
+                        constant, slope, ..
+                    },
+                ) = (&depth, shot.read)
+                {
+                    encoder.set_depth_stencil_state(test)?;
+                    encoder.set_depth_bias(constant, slope, 0.0)?;
+                }
                 for draw in draws {
                     if let Some(width) = draw.width {
                         encoder.set_line_width(width)?;
@@ -729,17 +1170,20 @@ impl Lane {
                         encoder.set_render_pipeline_state(if index & 1 == 1 { &b } else { &a })?;
                     }
                     encoder.set_triangle_fill_mode(draw.fill)?;
+                    encoder.set_cull_mode(draw.cull);
+                    encoder.set_front_facing_winding(draw.winding);
                     if draw.provoking_last {
                         encoder.set_provoking_vertex_mode(1)?;
                     }
                     // The probe's vertex function's arithmetic, in the same `f32` operations;
                     // clip-space positions as they are.
-                    let positions: Vec<u8> = draw
-                        .points
-                        .iter()
-                        .flat_map(|&[x, y]| match draw.clip {
-                            true => [x, y, 0.0, 1.0],
-                            false => [x / half_side - 1.0, 1.0 - y / half_side, 0.0, 1.0],
+                    let positions: Vec<u8> = (draw.points.iter().enumerate())
+                        .flat_map(|(i, &[x, y])| {
+                            let z = draw.z.get(i).copied().unwrap_or(0.0);
+                            match draw.clip {
+                                true => [x, y, z, 1.0],
+                                false => [x / half_side - 1.0, 1.0 - y / half_side, z, 1.0],
+                            }
                         })
                         .flat_map(f32::to_le_bytes)
                         .collect();
@@ -781,20 +1225,25 @@ impl Lane {
             "{shot:?}: {:?}",
             command_buffer.error()
         );
-        let mut rgba = vec![0u8; (side * side * 4) as usize];
-        resolved
-            .get_bytes(
-                &mut rgba,
-                side * 4,
-                0,
-                Region::new_2d(0, 0, side, side),
-                0,
-                0,
-            )
-            .unwrap();
+        let texels = |texture: &metal2vulkan_runtime::Texture| {
+            let mut rgba = vec![0u8; (side * side * 4) as usize];
+            texture
+                .get_bytes(
+                    &mut rgba,
+                    side * 4,
+                    0,
+                    Region::new_2d(0, 0, side, side),
+                    0,
+                    0,
+                )
+                .unwrap();
+            rgba
+        };
+        let rgba = texels(&resolved);
         Ok(Drawn {
             red: rgba.chunks(4).map(|p| p[0]).collect(),
             green: rgba.chunks(4).map(|p| p[1]).collect(),
+            ids: ids.map_or_else(Vec::new, |[_, ids]| texels(&ids)),
         })
     }
 }
@@ -802,16 +1251,19 @@ impl Lane {
 /// What a run found.
 #[derive(Debug, Default)]
 struct Found {
-    /// Cases run: the lane's, the maps' and the quantized widths'.
+    /// Cases run: the lane's, the maps', the edges' and the quantized widths'.
     cases: usize,
     /// Of them, the cases that draw a triangle's edges at a width other than 1.
     edges: usize,
     /// Cases drawn as Metal drew them, pixel for pixel.
     matched: usize,
+    /// Of them, the cases of a triangle's edges at a width other than 1.
+    edges_matched: usize,
     /// Cases a device line drew otherwise than Metal, announced: left unchecked.
     announced: usize,
-    /// Of them, the cases of a triangle's edges, which the band does not draw.
-    announced_edges: usize,
+    /// Cases of a band of edges whose depth bias can differ from Metal's, announced: left
+    /// unchecked.
+    biased: usize,
     /// Cases drawn at the nearest width the device's lines draw, announced.
     nearest: usize,
     /// Of them, the cases drawn at width 1 as Metal drew the same geometry at width 1, pixel for
@@ -821,19 +1273,22 @@ struct Found {
     facts: Option<LineFacts>,
 }
 
-/// The `DeviceWideLines` and `LinesAtNearestWidth` notices among `messages`' since the last take.
-fn announced_lines(messages: &Messages) -> (usize, usize) {
+/// The notices among `messages`' since the last take: the `DeviceWideLines` and
+/// `LinesAtNearestWidth` ones, and no other, and the reasons of the nearest-width ones.
+fn announced_lines(messages: &Messages) -> ([usize; 3], Vec<String>) {
     let notices = messages.take_notices();
-    let kinds: Vec<Degradation> = notices
+    let notices: Vec<_> = notices
         .iter()
         .filter_map(|m| m.degradation.as_ref())
-        .map(|notice| notice.degradation)
         .collect();
-    let count = |kind| kinds.iter().filter(|&&k| k == kind).count();
-    (
-        count(Degradation::DeviceWideLines),
-        count(Degradation::LinesAtNearestWidth),
-    )
+    let count = |kind| notices.iter().filter(|n| n.degradation == kind).count();
+    let reasons = notices
+        .iter()
+        .filter(|n| n.degradation == Degradation::LinesAtNearestWidth)
+        .map(|n| n.reason.clone())
+        .collect();
+    let [device, nearest] = WIDE_LINES.map(count);
+    ([device, nearest, 0], reasons)
 }
 
 /// The draws of each route between two work counts: the band's, the device's lines' at Metal's
@@ -859,10 +1314,33 @@ fn width_one_twin(key: &str, width: f32, blocks: &BTreeMap<String, String>) -> O
     blocks.contains_key(&twin).then_some(twin)
 }
 
+/// What `drawn` of `shot` prints as each block `check` compares with Metal's, titled as `blocks`
+/// (`Check::blocks`) are.
+fn printed(drawn: &Drawn, shot: &Shot, check: Check, blocks: &[String]) -> Vec<String> {
+    let side = shot.side as usize;
+    match check {
+        Check::Lane(width) => {
+            let name = blocks[0].split(' ').nth(1).unwrap();
+            vec![lane_block(name, width, &drawn.red)]
+        }
+        Check::Map => vec![map(&blocks[0], side, &drawn.red, shot.shade, shot.samples)],
+        Check::Faces => [&drawn.red, &drawn.green]
+            .iter()
+            .zip(blocks)
+            .map(|(channel, title)| map(title, side, channel, Shade::Count, 1))
+            .collect(),
+        Check::Ids => (0..2)
+            .zip(blocks)
+            .map(|(channel, title)| id_map(title, side, &drawn.ids, channel))
+            .collect(),
+    }
+}
+
 /// Every case of [`MEASURED`] on the cfg's device under `policy`: drawn as Metal drew it, or
-/// announced (where the device's lines draw it at another width than Metal's, compared with
-/// Metal's map at width 1 where that width is 1); and each draw at a width other than 1 counted by
-/// a route. Nothing is refused.
+/// announced (where the device's lines draw it otherwise than Metal, where a band of edges takes
+/// a depth bias that can differ from Metal's, or where the device's lines draw it at another width
+/// than Metal's, compared with Metal's map at width 1 where that width is 1); and each draw at a
+/// width other than 1 counted by a route. Nothing is refused.
 fn run(policy: DevicePolicy) -> Found {
     let cache = ScratchCache::new().unwrap();
     let messages = Messages::default();
@@ -883,7 +1361,7 @@ fn run(policy: DevicePolicy) -> Found {
         let name = device.name().to_owned();
         let mut lane = Lane::new(device);
         let (blocks, quantized) = measured();
-        let mut cases: Vec<(String, Shot, Option<f32>)> = Vec::new();
+        let mut cases: Vec<(String, Shot, Check)> = Vec::new();
         let lines = [1.0, 3.0, 15.0, 3.0, 1.0, 8.0, 15.0, 15.0];
         let strip = [3.5, 1.0, 3.5, 9.5, 13.5, 14.5];
         for (lane_name, primitive, points) in [
@@ -893,22 +1371,33 @@ fn run(policy: DevicePolicy) -> Found {
             for width in LANE_WIDTHS {
                 let draw = Draw::line(primitive, points, width);
                 let key = format!("LANE {lane_name} {width}");
-                cases.push((key, Shot::one(16, 1, Shade::White, draw), Some(width)));
+                let shot = Shot::one(16, 1, Shade::White, draw);
+                cases.push((key, shot, Check::Lane(width)));
             }
         }
         cases.extend(
             map_cases()
                 .into_iter()
-                .map(|(title, shot)| (title, shot, None)),
+                .map(|(title, shot)| (title, shot, Check::Map)),
         );
+        cases.extend(edge_cases());
         let mut bands = 0;
         let mut device_lines = 0;
         let mut nearest_lines = 0;
         let mut wide = 0;
-        let mut checked = std::collections::BTreeSet::new();
-        for (key, shot, lane_width) in &cases {
-            let edges = shot.encoders[0][0].fill == TriangleFillMode::Lines;
-            found.edges += usize::from(edges && shot.wide_draws() > 0);
+        // Metal's blocks compared, or left unchecked as announced.
+        let mut accounted = std::collections::BTreeSet::new();
+        for (key, shot, check) in &cases {
+            let draw = &shot.encoders[0][0];
+            let edges = draw.fill == TriangleFillMode::Lines
+                && !matches!(
+                    draw.primitive,
+                    PrimitiveType::Line | PrimitiveType::LineStrip
+                )
+                && shot.wide_draws() > 0;
+            found.edges += usize::from(edges);
+            let titles = check.blocks(key);
+            accounted.extend(titles.iter().cloned());
             let before = lane.device.work_counts();
             let drawn = lane
                 .draw(shot)
@@ -918,7 +1407,7 @@ fn run(policy: DevicePolicy) -> Found {
             bands += band;
             device_lines += own;
             nearest_lines += nearest;
-            let (announced, announced_nearest) = announced_lines(&messages);
+            let ([announced, announced_nearest, biased], _) = announced_lines(&messages);
             assert_eq!(
                 band + own + nearest,
                 shot.wide_draws(),
@@ -933,48 +1422,59 @@ fn run(policy: DevicePolicy) -> Found {
                 announced_nearest as u64, nearest,
                 "{name}: {key}: nearest-width draws and their notices"
             );
-            assert!(
-                drawn.green.iter().all(|&g| g == 0),
-                "{name}: {key}: back-facing fragments"
-            );
+            if matches!(check, Check::Lane(_) | Check::Map) {
+                assert!(
+                    drawn.green.iter().all(|&g| g == 0),
+                    "{name}: {key}: back-facing fragments"
+                );
+            }
             if announced > 0 {
                 found.announced += 1;
-                found.announced_edges += usize::from(edges);
                 continue;
             }
-            let side = shot.side as usize;
+            // A band of edges alone announces their depth bias.
+            if biased > 0 {
+                assert!(band > 0 && edges, "{name}: {key}: a depth bias notice");
+                found.biased += 1;
+                continue;
+            }
             if nearest > 0 {
                 found.nearest += 1;
                 // At width 1, Metal's own map of the geometry at width 1, where the probe has it.
-                let draw = &shot.encoders[0][0];
                 let width = draw.width.unwrap_or(1.0);
-                let twin = (shot.encoders.len() == 1 && shot.encoders[0].len() == 1)
-                    .then(|| width_one_twin(key, width, &blocks))
-                    .flatten()
-                    .filter(|_| facts.nearest(width) == 1.0);
-                if let Some(twin) = twin {
-                    let ours = match lane_width {
-                        Some(_) => lane_block(key.split(' ').nth(1).unwrap(), 1.0, &drawn.red),
-                        None => map(&twin, side, &drawn.red, shot.shade, shot.samples),
+                let twins: Option<Vec<String>> = (shot.encoders.len() == 1
+                    && shot.encoders[0].len() == 1
+                    && facts.nearest(width) == 1.0)
+                    .then(|| {
+                        (titles.iter())
+                            .map(|title| width_one_twin(title, width, &blocks))
+                            .collect()
+                    })
+                    .flatten();
+                if let Some(twins) = twins {
+                    let check = match check {
+                        Check::Lane(_) => Check::Lane(1.0),
+                        &other => other,
                     };
-                    assert_eq!(
-                        &ours, &blocks[&twin],
-                        "{name}: {key}: drawn at width 1 otherwise than Metal's {twin}"
-                    );
+                    let ours = printed(&drawn, shot, check, &twins);
+                    for (ours, twin) in ours.iter().zip(&twins) {
+                        assert_eq!(
+                            ours, &blocks[twin],
+                            "{name}: {key}: drawn at width 1 otherwise than Metal's {twin}"
+                        );
+                    }
                     found.nearest_matched += 1;
                 }
                 continue;
             }
-            let ours = match lane_width {
-                Some(width) => lane_block(key.split(' ').nth(1).unwrap(), *width, &drawn.red),
-                None => map(key, side, &drawn.red, shot.shade, shot.samples),
-            };
-            let metal = blocks
-                .get(key)
-                .unwrap_or_else(|| panic!("{key}: not among Metal's answers"));
-            assert_eq!(&ours, metal, "{name}: {key}: drawn otherwise than Metal");
-            checked.insert(key.clone());
+            for (ours, title) in printed(&drawn, shot, *check, &titles).iter().zip(&titles) {
+                let metal = blocks
+                    .get(title)
+                    .unwrap_or_else(|| panic!("{title}: not among Metal's answers"));
+                assert_eq!(ours, metal, "{name}: {key}: drawn otherwise than Metal");
+            }
             found.matched += 1;
+            found.edges_matched += usize::from(edges);
         }
         // The quantized widths: the rows a horizontal line at y = 32 covers in column 32 of a
         // 64x64 target, and a vertical one at x = 16.5 in column 16 of a 32x32 one.
@@ -1003,9 +1503,9 @@ fn run(policy: DevicePolicy) -> Found {
                 };
                 first_last.push((first, last));
             }
-            match announced_lines(&messages) {
-                (0, 0) => {}
-                (_, 0) => {
+            match announced_lines(&messages).0 {
+                [0, 0, 0] => {}
+                [_, 0, _] => {
                     found.announced += 1;
                     continue;
                 }
@@ -1021,29 +1521,32 @@ fn run(policy: DevicePolicy) -> Found {
         }
         found.cases = cases.len() + quantized.len();
         assert_eq!(
-            found.matched + found.announced + found.nearest,
+            found.matched + found.announced + found.biased + found.nearest,
             found.cases,
             "{found:?}"
         );
-        // Every measured map was drawn or accounted for.
-        assert!(
-            checked.len() + found.announced + found.nearest >= blocks.len() - 2,
-            "{found:?}"
-        );
+        // Every measured map was drawn, but those the lane leaves to other lanes.
+        let undrawn: Vec<&str> = (blocks.keys())
+            .filter(|key| !accounted.contains(*key))
+            .map(String::as_str)
+            .collect();
+        assert_eq!(undrawn, NOT_DRAWN, "{found:?}");
         eprintln!(
             "{name} (wideLines {wide_lines}, tessellationShader {tessellates}, {policy:?}): {found:?}; \
              {bands} draws as bands, {device_lines} by the device's lines, {nearest_lines} by them \
              at the nearest width"
         );
-        // The routes ran: every wide draw took one; wherever the device has no wide lines and
-        // tessellates, a line the band and a triangle's edges the nearest width.
+        // The routes ran: every wide draw took one; on a device that tessellates none takes the
+        // nearest width, and without wide lines every one is a band.
         assert!(
             wide > 0 && bands + device_lines + nearest_lines == wide,
             "{bands} {device_lines} {nearest_lines} {wide}"
         );
-        if !wide_lines && tessellates {
-            assert_eq!(nearest_lines as usize, found.edges, "{found:?}");
-            assert_eq!(bands + nearest_lines, wide);
+        if tessellates {
+            assert_eq!(nearest_lines, 0, "{found:?}");
+        }
+        if tessellates && !wide_lines {
+            assert_eq!(bands, wide, "{found:?}");
         }
     }
     layer_reported_nothing_at_all(&messages);
@@ -1051,39 +1554,41 @@ fn run(policy: DevicePolicy) -> Found {
 }
 
 /// Every case under the default policy: the device's own lines where they draw the width,
-/// announced where they draw it otherwise than Metal, else the band.
+/// announced where they draw it otherwise than Metal, else the band, a triangle's edges as a
+/// line's.
 #[test]
 fn wide_lines_draw_metal_s_parallelograms() {
     let found = run(DevicePolicy::default());
-    // Width 1 draws as Metal's on every device; on one whose own lines differ from Metal's at
-    // no width drawn, every case but the edges does.
     assert!(found.matched > 0, "{found:?}");
     let facts = found.facts.unwrap();
-    if facts.tessellates && found.announced == found.announced_edges {
-        assert_eq!(found.matched, found.cases - found.edges, "{found:?}");
+    // On a device that tessellates nothing is drawn at the nearest width, and where its own
+    // lines differ from Metal's at no width drawn (none without `wideLines`: MoltenVK), every
+    // case is drawn as Metal's, the edges at their width too, but a band of edges under a depth
+    // bias that can differ.
+    if facts.tessellates {
+        assert_eq!(found.nearest, 0, "{found:?}");
     }
-    // Without `wideLines` (MoltenVK) the edges are drawn 1 pixel wide, as Metal's at width 1.
+    if facts.tessellates && found.announced == 0 {
+        assert_eq!(found.matched, found.cases - found.biased, "{found:?}");
+        assert!(found.edges_matched > 0, "{found:?}");
+        assert_eq!(found.edges_matched + found.biased, found.edges, "{found:?}");
+    }
     if facts.tessellates && !facts.wide_lines {
-        assert_eq!(found.nearest, found.edges, "{found:?}");
-        assert_eq!(found.nearest_matched, found.edges, "{found:?}");
+        assert!(found.biased > 0, "{found:?}");
     }
 }
 
 /// Every case under `DevicePolicy::exact_answers()`: the band wherever the device's lines differ
-/// from Metal's, so no draw of lines is announced on a device with `tessellationShader`.
+/// from Metal's, so no draw of lines or edges is announced on a device with `tessellationShader`.
 #[test]
 fn wide_lines_draw_metal_s_parallelograms_under_exact_answers() {
     let found = run(DevicePolicy::default().exact_answers());
     assert!(found.matched > 0, "{found:?}");
-    // Edges aside, which the band does not draw: drawn by the device's lines (announced) where
-    // they draw the width, else by them at the nearest width (announced).
     let facts = found.facts.unwrap();
     if facts.tessellates {
-        assert_eq!(found.announced, found.announced_edges, "{found:?}");
-        assert_eq!(found.matched, found.cases - found.edges, "{found:?}");
-    }
-    if facts.tessellates && !facts.wide_lines {
-        assert_eq!(found.nearest_matched, found.edges, "{found:?}");
+        assert_eq!((found.announced, found.nearest), (0, 0), "{found:?}");
+        assert_eq!(found.matched, found.cases - found.biased, "{found:?}");
+        assert_eq!(found.edges_matched + found.biased, found.edges, "{found:?}");
     }
 }
 
@@ -1145,7 +1650,7 @@ fn without_tessellation_lines_draw_at_the_nearest_width() {
                 .draw(&shot)
                 .unwrap_or_else(|e| panic!("{name}: width {width}: {e}"));
             let [band, own, nearest] = routed(&before, &lane.device.work_counts());
-            let (_, announced) = announced_lines(&messages);
+            let ([_, announced, _], _) = announced_lines(&messages);
             assert_eq!(band, 0, "{name}: a band without tessellationShader");
             let drawable = facts.draws(width);
             let (expected_own, expected_nearest) = if width == 1.0 {
@@ -1212,7 +1717,7 @@ fn a_draw_of_no_complete_primitive_draws_nothing() {
                         "{name}: {shot:?}: drew"
                     );
                     assert_eq!(routes, [0, 0, 0], "{name}: {shot:?}: a route of the width");
-                    assert_eq!(announced_lines(&messages), (0, 0), "{name}: {shot:?}");
+                    assert_eq!(announced_lines(&messages).0, [0; 3], "{name}: {shot:?}");
                 }
             }
         }
@@ -1220,53 +1725,123 @@ fn a_draw_of_no_complete_primitive_draws_nothing() {
     layer_reported_nothing_at_all(&messages);
 }
 
-/// A whole triangle's edges in fill mode `Lines` at width 2 draw: by the device's own lines where
-/// they draw width 2, else by them at the nearest width they draw, announced once per device and
-/// counted at each draw; at width 1 (no `wideLines`: MoltenVK) as Metal's edges of the same
-/// triangle at width 1, pixel for pixel.
+/// A whole triangle's edges in fill mode `Lines`, drawn twice. At width 4: by the device's own
+/// lines where they draw width 4 (compared with Metal's where they draw it as Metal does), else as
+/// the band, silent; as Metal's edges at width 4, pixel for pixel. Without `tessellationShader`, at
+/// width 2: by the device's own lines where they draw it, else by them at the nearest width they
+/// draw, announced and counted at each draw, at width 1 (no `wideLines`: MoltenVK) as Metal's
+/// edges at width 1.
 #[test]
-fn edges_draw_at_the_nearest_width_the_device_s_lines_draw() {
+fn edges_draw_as_bands_or_at_the_nearest_width() {
+    let triangle = [4.0, 4.0, 28.0, 4.0, 16.0, 28.0];
+    let (blocks, _) = measured();
+    for (tessellated, width) in [(true, 4.0f32), (false, 2.0)] {
+        let cache = ScratchCache::new().unwrap();
+        let messages = Messages::default();
+        {
+            let device = validated_device_with(TEST_DEVICE, &messages, cache.path(), |options| {
+                if !tessellated {
+                    options
+                        .withheld_features
+                        .insert(VkFeature::TessellationShader);
+                }
+                options.announce_each = WIDE_LINES.into_iter().collect();
+            })
+            .unwrap();
+            let name = device.name().to_owned();
+            let facts = LineFacts::of(&device);
+            assert_eq!(facts.tessellates, tessellated, "{name}");
+            let mut lane = Lane::new(device);
+            let draw = Draw::edges(
+                PrimitiveType::Triangle,
+                &triangle,
+                width,
+                (CullMode::None, Winding::Clockwise),
+            );
+            let shot = Shot::one(32, 1, Shade::Count, draw);
+            for round in 0..2 {
+                let what = format!("{name}: width {width}, round {round}");
+                let before = lane.device.work_counts();
+                let drawn = lane.draw(&shot).unwrap_or_else(|e| panic!("{what}: {e}"));
+                let routes = routed(&before, &lane.device.work_counts());
+                let ([differs, nearest, biased], _) = announced_lines(&messages);
+                assert_eq!(biased, 0, "{what}");
+                // The width drawn, where it is Metal's map's.
+                let drawn_at = match (facts.draws(width), tessellated) {
+                    (true, _) => {
+                        assert_eq!((routes, nearest), ([0, 1, 0], 0), "{what}");
+                        (differs == 0).then_some(width)
+                    }
+                    (false, true) => {
+                        assert_eq!((routes, differs, nearest), ([1, 0, 0], 0, 0), "{what}");
+                        Some(width)
+                    }
+                    (false, false) => {
+                        assert_eq!((routes, differs, nearest), ([0, 0, 1], 0, 1), "{what}");
+                        (facts.nearest(width) == 1.0).then_some(1.0)
+                    }
+                };
+                let title = drawn_at.map(|w| format!("triangle fill Lines width {w}, fragments"));
+                if let Some(metal) = title.as_ref().and_then(|title| blocks.get(title)) {
+                    let title = title.as_ref().unwrap();
+                    assert_eq!(
+                        &map(title, 32, &drawn.red, Shade::Count, 1),
+                        metal,
+                        "{what}"
+                    );
+                }
+            }
+        }
+        layer_reported_nothing_at_all(&messages);
+    }
+}
+
+/// A pipeline state whose band the translator refuses (`rt6_provoking`'s `pv_weights` reads the
+/// barycentric weights) draws its lines and its triangle's edges at width 0, which no device's own
+/// lines draw, by the device's lines at the nearest width they draw, announced at each draw with
+/// why and counted, its draws not refused; on a device that tessellates, the refusal is the why.
+#[test]
+fn a_refused_band_draws_at_the_nearest_width() {
     let cache = ScratchCache::new().unwrap();
     let messages = Messages::default();
     {
-        let device = validated_device_with(TEST_DEVICE, &messages, cache.path(), |_| {}).unwrap();
+        let device = validated_device_with(TEST_DEVICE, &messages, cache.path(), |options| {
+            options.announce_each = WIDE_LINES.into_iter().collect();
+        })
+        .unwrap();
         let name = device.name().to_owned();
         let facts = LineFacts::of(&device);
         let mut lane = Lane::new(device);
-        let (blocks, _) = measured();
         let triangle = [4.0, 4.0, 28.0, 4.0, 16.0, 28.0];
-        let draw = Draw {
-            fill: TriangleFillMode::Lines,
-            ..Draw::line(PrimitiveType::Triangle, &triangle, 2.0)
-        };
-        let shot = Shot::one(32, 1, Shade::Count, draw);
-        let title = "triangle fill Lines width 1, fragments";
         for round in 0..2 {
-            let before = lane.device.work_counts();
-            let drawn = lane
-                .draw(&shot)
-                .unwrap_or_else(|e| panic!("{name}: round {round}: {e}"));
-            let [band, own, nearest] = routed(&before, &lane.device.work_counts());
-            let (_, announced) = announced_lines(&messages);
-            assert!(drawn.red.iter().any(|&v| v != 0), "{name}: drew nothing");
-            assert_eq!(band, 0, "{name}: the band does not draw edges");
-            if facts.draws(2.0) {
-                assert_eq!((own, nearest, announced), (1, 0, 0), "{name}");
-                continue;
-            }
-            // Announced at the first draw alone, counted at each.
-            let first = usize::from(round == 0);
-            assert_eq!(
-                (own, nearest, announced),
-                (0, 1, first),
-                "{name}: round {round}"
-            );
-            if facts.nearest(2.0) == 1.0 {
-                assert_eq!(
-                    map(title, 32, &drawn.red, Shade::Count, 1),
-                    blocks[title],
-                    "{name}: round {round}"
+            for draw in [
+                Draw::line(PrimitiveType::Line, &triangle[..4], 0.0),
+                Draw::edges(
+                    PrimitiveType::Triangle,
+                    &triangle,
+                    0.0,
+                    (CullMode::None, Winding::Clockwise),
+                ),
+            ] {
+                let what = format!("{name}: round {round}, {:?}", draw.primitive);
+                let shot = Shot::edges(Read::Ids("pv_weights"), draw);
+                let before = lane.device.work_counts();
+                let drawn = lane
+                    .draw(&shot)
+                    .unwrap_or_else(|e| panic!("{what}: refused: {e}"));
+                let routes = routed(&before, &lane.device.work_counts());
+                let ([_, announced, _], reasons) = announced_lines(&messages);
+                assert_eq!((routes, announced), ([0, 0, 1], 1), "{what}");
+                assert!(
+                    drawn.ids.chunks(4).any(|t| t[3] != 0),
+                    "{what}: drew nothing"
                 );
+                if facts.tessellates {
+                    assert!(
+                        reasons.iter().all(|r| r.contains("refuses")),
+                        "{what}: {reasons:?}"
+                    );
+                }
             }
         }
     }

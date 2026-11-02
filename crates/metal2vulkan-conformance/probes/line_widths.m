@@ -24,7 +24,16 @@
 //              list and a strip;
 //   strips     fragments counted where a strip's segments overlap, at widths 1, 3.5 and 8;
 //   fill       triangles under the fill mode Lines at widths 1 and 4, and Fill at 4, counted;
-//   msaa       4 samples, resolved: a horizontal line at y = 16 at widths 0.5, 1 and 2.
+//   msaa       4 samples, resolved: a horizontal line at y = 16 at widths 0.5, 1 and 2;
+//   edges      triangles in fill mode Lines (32 x 32): front- and back-facing fragments counted
+//              apart for a clockwise and a counter-clockwise triangle under each cull mode and
+//              winding, at widths 0, 1, 2.5 and 4, a square of two triangles sharing an edge, a strip
+//              of three, two zero-area triangles, and eight scattered triangles at 0, 0.5 and 2.5;
+//              the flat vertex ID and primitive ID each fragment reads, for two triangles and a strip
+//              of two at provoking vertex modes 0 and 1; which fragments a depth bias passes (a
+//              constant, a slope factor, a constant by the largest exponent), against a filled
+//              triangle and a line, and which pass unbiased across a sloped triangle's edge; and 4
+//              samples at width 2.
 //
 // WHAT IT MEASURED, Apple M3 Max, macOS 27.0.1 (every case's output is
 // `metal2vulkan-validation`'s `runtime_lane/line_widths_m3_max.txt`):
@@ -45,6 +54,18 @@
 //     shared vertex is drawn once).
 //   - Triangles in fill mode Lines draw their edges so; fill mode Fill ignores the width.
 //   - At 4 samples every width, 1 included, is the parallelogram at the sample positions.
+//   - A triangle in fill mode Lines draws each of its three edges as that parallelogram, no joins:
+//     where two overlap a pixel takes two fragments (its corners; an edge two triangles share, as
+//     the strip's and the square's do, twice). Its fragments read the triangle's facing
+//     (`[[front_facing]]`), and the cull mode culls it by that facing, under either winding; a
+//     zero-area triangle is back-facing, drawn under cull modes none and front and culled under
+//     back. A strip's triangles face alike. Every fragment reads the triangle's flat input from its
+//     provoking vertex (its first at mode 0, its last at mode 1) and its primitive ID, the
+//     triangle's index. A fragment's depth is its edge's where it lies along the edge, the same
+//     across the width (a horizontal edge at z = 0.2 of a sloped triangle draws nothing past 0.21).
+//     The depth bias applies (a line takes none), by the triangle's slope and its largest depth's
+//     exponent: that horizontal edge is biased by the triangle's slope, and an edge at z = 0.3 of a
+//     triangle whose third vertex is at 0.9 by 2^-4 for a constant of 2^20.
 //
 // Run it WITHOUT MTL_DEBUG_LAYER, each case on the Mac's GPU lock:
 //
@@ -74,7 +95,29 @@ static NSString *kSource =
    "  return o;\n"
    "}\n"
    "fragment float4 white() { return float4(1.0); }\n"
-   "fragment float4 one_count() { return float4(1.0 / 255.0); }\n";
+   "fragment float4 one_count() { return float4(1.0 / 255.0); }\n"
+   "struct Ids { float4 position [[position]]; uint id [[flat]]; };\n"
+   "vertex Ids place_ids(uint v [[vertex_id]], const device float2 *at [[buffer(0)]],\n"
+   "                     constant float &half_side [[buffer(1)]]) {\n"
+   "  Ids o; float2 p = at[v];\n"
+   "  o.position = float4(p.x / half_side - 1.0, 1.0 - p.y / half_side, 0.0, 1.0);\n"
+   "  o.id = v;\n"
+   "  return o;\n"
+   "}\n"
+   "vertex Out place_z(uint v [[vertex_id]], const device float2 *at [[buffer(0)]],\n"
+   "                   constant float &half_side [[buffer(1)]],\n"
+   "                   const device float *z [[buffer(2)]]) {\n"
+   "  Out o; float2 p = at[v];\n"
+   "  o.position = float4(p.x / half_side - 1.0, 1.0 - p.y / half_side, z[v], 1.0);\n"
+   "  return o;\n"
+   "}\n"
+   "fragment float4 facing(bool front [[front_facing]]) {\n"
+   "  float c = 1.0 / 255.0;\n"
+   "  return front ? float4(c, 0.0, 0.0, c) : float4(0.0, c, 0.0, c);\n"
+   "}\n"
+   "fragment uint4 ids(Ids in [[stage_in]], uint p [[primitive_id]]) {\n"
+   "  return uint4(in.id, p, 0u, 1u);\n"
+   "}\n";
 
 static id<MTLDevice> gDevice;
 static id<MTLCommandQueue> gQueue;
@@ -522,6 +565,290 @@ static void msaa(void) {
   free(r);
 }
 
+// What an `edges` draw reads: its fragments' facing, counted (red front, green back); its flat
+// vertex ID and primitive ID; or whether its fragments pass a depth test only a bias passes.
+typedef enum { kFacing, kIds, kBiased } EdgeRead;
+
+// One draw of the `edges` case, in fill mode Lines unless `filled`.
+typedef struct {
+  MTLPrimitiveType type;
+  const float *points;
+  int count;
+  float width;
+  MTLCullMode cull;
+  MTLWinding winding;
+  int last; // setProvokingVertexMode: 1 before the draw
+  int filled;
+  // kBiased: each vertex's z, the depth cleared to, and the bias's constant and slope factors.
+  const float *z;
+  float clear;
+  float constant;
+  float slope;
+} EdgeDraw;
+
+// Draws `d` alone on a 32 x 32 target cleared to zero and returns its RGBA bytes:
+//   kFacing  RGBA8Unorm, added: each front-facing fragment 1/255 red, each back-facing one green;
+//   kIds     RGBA8Uint: each fragment writes its flat vertex ID, its primitive ID, 0 and 1;
+//   kBiased  RGBA8Unorm: white where a fragment passes `greater` against a Depth32Float attachment
+//            cleared to `clear`, drawn at the vertices' `z` with the bias `constant` and `slope`.
+static uint8_t *edge_render(EdgeRead read, const EdgeDraw *d) {
+  const int side = 32;
+  MTLRenderPipelineDescriptor *pd = [MTLRenderPipelineDescriptor new];
+  MTLPixelFormat format = MTLPixelFormatRGBA8Unorm;
+  switch (read) {
+    case kFacing:
+      pd.vertexFunction = [gLibrary newFunctionWithName:@"place"];
+      pd.fragmentFunction = [gLibrary newFunctionWithName:@"facing"];
+      break;
+    case kIds:
+      pd.vertexFunction = [gLibrary newFunctionWithName:@"place_ids"];
+      pd.fragmentFunction = [gLibrary newFunctionWithName:@"ids"];
+      format = MTLPixelFormatRGBA8Uint;
+      break;
+    case kBiased:
+      pd.vertexFunction = [gLibrary newFunctionWithName:@"place_z"];
+      pd.fragmentFunction = [gLibrary newFunctionWithName:@"white"];
+      pd.depthAttachmentPixelFormat = MTLPixelFormatDepth32Float;
+      break;
+  }
+  pd.colorAttachments[0].pixelFormat = format;
+  if (read == kFacing) {
+    MTLRenderPipelineColorAttachmentDescriptor *c = pd.colorAttachments[0];
+    c.blendingEnabled = YES;
+    c.sourceRGBBlendFactor = c.sourceAlphaBlendFactor = MTLBlendFactorOne;
+    c.destinationRGBBlendFactor = c.destinationAlphaBlendFactor = MTLBlendFactorOne;
+  }
+  NSError *error = nil;
+  id<MTLRenderPipelineState> state = [gDevice newRenderPipelineStateWithDescriptor:pd
+                                                                              error:&error];
+  if (!state) {
+    fprintf(stderr, "pipeline: %s\n", error.localizedDescription.UTF8String);
+    exit(1);
+  }
+  MTLTextureDescriptor *td = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:format
+                                                                                width:side
+                                                                               height:side
+                                                                            mipmapped:NO];
+  td.usage = MTLTextureUsageRenderTarget;
+  td.storageMode = MTLStorageModeShared;
+  id<MTLTexture> target = [gDevice newTextureWithDescriptor:td];
+  MTLRenderPassDescriptor *rp = [MTLRenderPassDescriptor renderPassDescriptor];
+  rp.colorAttachments[0].texture = target;
+  rp.colorAttachments[0].loadAction = MTLLoadActionClear;
+  rp.colorAttachments[0].clearColor = MTLClearColorMake(0, 0, 0, 0);
+  rp.colorAttachments[0].storeAction = MTLStoreActionStore;
+  id<MTLDepthStencilState> depth = nil;
+  if (read == kBiased) {
+    MTLTextureDescriptor *dd =
+        [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatDepth32Float
+                                                           width:side
+                                                          height:side
+                                                       mipmapped:NO];
+    dd.usage = MTLTextureUsageRenderTarget;
+    dd.storageMode = MTLStorageModePrivate;
+    rp.depthAttachment.texture = [gDevice newTextureWithDescriptor:dd];
+    rp.depthAttachment.loadAction = MTLLoadActionClear;
+    rp.depthAttachment.clearDepth = d->clear;
+    rp.depthAttachment.storeAction = MTLStoreActionDontCare;
+    MTLDepthStencilDescriptor *ds = [MTLDepthStencilDescriptor new];
+    ds.depthCompareFunction = MTLCompareFunctionGreater;
+    ds.depthWriteEnabled = NO;
+    depth = [gDevice newDepthStencilStateWithDescriptor:ds];
+  }
+  float half_side = side / 2.0f;
+  id<MTLCommandBuffer> cb = [gQueue commandBuffer];
+  id<MTLRenderCommandEncoder> enc = [cb renderCommandEncoderWithDescriptor:rp];
+  [enc setRenderPipelineState:state];
+  [enc setVertexBytes:&half_side length:sizeof half_side atIndex:1];
+  if (depth) {
+    [enc setDepthStencilState:depth];
+    [enc setDepthBias:d->constant slopeScale:d->slope clamp:0];
+    [enc setVertexBytes:d->z length:sizeof(float) * d->count atIndex:2];
+  }
+  set_width(enc, d->width);
+  [enc setTriangleFillMode:d->filled ? MTLTriangleFillModeFill : MTLTriangleFillModeLines];
+  [enc setCullMode:d->cull];
+  [enc setFrontFacingWinding:d->winding];
+  if (d->last) {
+    SEL mode = sel_registerName("setProvokingVertexMode:");
+    if (![(id)enc respondsToSelector:mode]) {
+      fprintf(stderr, "no setProvokingVertexMode:\n");
+      exit(1);
+    }
+    ((void (*)(id, SEL, NSUInteger))objc_msgSend)(enc, mode, 1);
+  }
+  id<MTLBuffer> points = [gDevice newBufferWithBytes:d->points
+                                              length:sizeof(float) * 2 * d->count
+                                             options:MTLResourceStorageModeShared];
+  [enc setVertexBuffer:points offset:0 atIndex:0];
+  [enc drawPrimitives:d->type vertexStart:0 vertexCount:d->count];
+  [enc endEncoding];
+  [cb commit];
+  [cb waitUntilCompleted];
+  if (cb.error) {
+    fprintf(stderr, "command buffer: %s\n", cb.error.localizedDescription.UTF8String);
+    exit(1);
+  }
+  uint8_t *rgba = malloc((size_t)side * side * 4);
+  [target getBytes:rgba
+       bytesPerRow:side * 4
+        fromRegion:MTLRegionMake2D(0, 0, side, side)
+       mipmapLevel:0];
+  return rgba;
+}
+
+// A map of one channel of `rgba`, 32 x 32: `.` where it is 0, else its value as a digit (`*` from
+// 10), or `#` for 255 where `white`.
+static void print_channel(const char *title, const uint8_t *rgba, int channel, int white) {
+  uint8_t r[32 * 32];
+  for (int i = 0; i < 32 * 32; i++) r[i] = rgba[4 * i + channel];
+  print_map(title, 32, r, white ? kWhite : kCount, 1);
+}
+
+// The flat vertex IDs (or primitive IDs, channel 1) a kIds draw wrote: `.` where no fragment
+// wrote (alpha 0), else the ID as a digit (`*` from 10).
+static void print_ids(const char *title, const uint8_t *rgba, int channel) {
+  int covered = 0;
+  for (int i = 0; i < 32 * 32; i++) covered += rgba[4 * i + 3] != 0;
+  printf("MAP %s (%d pixels)\n", title, covered);
+  for (int y = 0; y < 32; y++) {
+    int any = 0;
+    for (int x = 0; x < 32; x++) any |= rgba[4 * (y * 32 + x) + 3];
+    if (!any) continue;
+    printf("%3d ", y);
+    for (int x = 0; x < 32; x++) {
+      const uint8_t *p = &rgba[4 * (y * 32 + x)];
+      putchar(!p[3] ? '.' : p[channel] < 10 ? (char)('0' + p[channel]) : '*');
+    }
+    putchar('\n');
+  }
+}
+
+static void edges(void) {
+  static const float cw[] = {4, 4, 28, 4, 16, 28};
+  static const float ccw[] = {4, 4, 16, 28, 28, 4};
+  // A square as two triangles, both clockwise, sharing its diagonal.
+  static const float square[] = {4, 4, 28, 4, 28, 28, 4, 4, 28, 28, 4, 28};
+  // A strip of three triangles.
+  static const float strip[] = {4, 8, 10, 26, 16, 8, 22, 26, 28, 8};
+  // Zero-area triangles: three distinct points on a row and on a diagonal.
+  static const float row[] = {4, 16, 16, 16, 28, 16};
+  static const float diagonal[] = {4, 8, 16, 16, 28, 24};
+  // Two triangles apart, and a strip of two sharing an edge, for the IDs.
+  static const float apart[] = {3, 3, 29, 3, 16, 13, 3, 29, 16, 18, 29, 29};
+  static const float pair[] = {4, 4, 4, 28, 28, 4, 28, 28};
+  const MTLCullMode none = MTLCullModeNone, back = MTLCullModeBack, front = MTLCullModeFront;
+  const MTLWinding cwise = MTLWindingClockwise, ccwise = MTLWindingCounterClockwise;
+  const MTLPrimitiveType tri = MTLPrimitiveTypeTriangle, tstrip = MTLPrimitiveTypeTriangleStrip;
+  struct {
+    const char *name;
+    EdgeDraw d;
+  } facing_cases[] = {
+      {"edges clockwise width 4", {tri, cw, 3, 4, none, cwise, 0, 0}},
+      {"edges counter-clockwise width 4", {tri, ccw, 3, 4, none, cwise, 0, 0}},
+      {"edges clockwise width 4 cull back", {tri, cw, 3, 4, back, cwise, 0, 0}},
+      {"edges counter-clockwise width 4 cull back", {tri, ccw, 3, 4, back, cwise, 0, 0}},
+      {"edges clockwise width 4 cull front", {tri, cw, 3, 4, front, cwise, 0, 0}},
+      {"edges counter-clockwise width 4 winding counter-clockwise",
+       {tri, ccw, 3, 4, none, ccwise, 0, 0}},
+      {"edges counter-clockwise width 4 winding counter-clockwise cull back",
+       {tri, ccw, 3, 4, back, ccwise, 0, 0}},
+      {"edges clockwise width 1", {tri, cw, 3, 1, none, cwise, 0, 0}},
+      {"edges clockwise width 0", {tri, cw, 3, 0, none, cwise, 0, 0}},
+      {"edges clockwise width 2.5", {tri, cw, 3, 2.5f, none, cwise, 0, 0}},
+      {"edges counter-clockwise width 2.5", {tri, ccw, 3, 2.5f, none, cwise, 0, 0}},
+      {"edges square width 3", {tri, square, 6, 3, none, cwise, 0, 0}},
+      {"edges strip width 2.5", {tstrip, strip, 5, 2.5f, none, cwise, 0, 0}},
+      {"edges strip width 2.5 cull back", {tstrip, strip, 5, 2.5f, back, cwise, 0, 0}},
+      {"edges zero-area row width 3", {tri, row, 3, 3, none, cwise, 0, 0}},
+      {"edges zero-area diagonal width 3", {tri, diagonal, 3, 3, none, cwise, 0, 0}},
+      {"edges zero-area row width 3 cull back", {tri, row, 3, 3, back, cwise, 0, 0}},
+      {"edges zero-area row width 3 cull front", {tri, row, 3, 3, front, cwise, 0, 0}},
+  };
+  for (size_t i = 0; i < sizeof facing_cases / sizeof facing_cases[0]; i++) {
+    uint8_t *rgba = edge_render(kFacing, &facing_cases[i].d);
+    char title[128];
+    snprintf(title, sizeof title, "%s, front fragments", facing_cases[i].name);
+    print_channel(title, rgba, 0, 0);
+    snprintf(title, sizeof title, "%s, back fragments", facing_cases[i].name);
+    print_channel(title, rgba, 1, 0);
+    free(rgba);
+  }
+  // Eight scattered triangles (`scatter`, seed 3) at widths 0, 0.5 and 2.5, facing either way.
+  static float scattered[24 * 2];
+  scatter(scattered, 24, 32, 3);
+  float widths[] = {0, 0.5f, 2.5f};
+  for (size_t w = 0; w < sizeof widths / sizeof widths[0]; w++) {
+    EdgeDraw d = {tri, scattered, 24, widths[w], none, cwise, 0, 0};
+    uint8_t *rgba = edge_render(kFacing, &d);
+    char title[128];
+    snprintf(title, sizeof title, "edges scattered width %g, front fragments", widths[w]);
+    print_channel(title, rgba, 0, 0);
+    snprintf(title, sizeof title, "edges scattered width %g, back fragments", widths[w]);
+    print_channel(title, rgba, 1, 0);
+    free(rgba);
+  }
+  struct {
+    const char *name;
+    EdgeDraw d;
+  } id_cases[] = {
+      {"edges apart width 3", {tri, apart, 6, 3, none, cwise, 0, 0}},
+      {"edges apart width 3 provoking last", {tri, apart, 6, 3, none, cwise, 1, 0}},
+      {"edges pair strip width 3", {tstrip, pair, 4, 3, none, cwise, 0, 0}},
+      {"edges pair strip width 3 provoking last", {tstrip, pair, 4, 3, none, cwise, 1, 0}},
+  };
+  for (size_t i = 0; i < sizeof id_cases / sizeof id_cases[0]; i++) {
+    uint8_t *rgba = edge_render(kIds, &id_cases[i].d);
+    char title[128];
+    snprintf(title, sizeof title, "%s, flat vertex IDs", id_cases[i].name);
+    print_ids(title, rgba, 0);
+    snprintf(title, sizeof title, "%s, primitive IDs", id_cases[i].name);
+    print_ids(title, rgba, 1);
+    free(rgba);
+  }
+  // Depth bias: a constant 2^20 at z = 0.5 against 0.5 (2^-4 there); a slope factor of 4 on a
+  // triangle whose top edge lies at z = 0.2 and whose third vertex is at 0.8 (the triangle's slope
+  // 0.025 a pixel, its top edge's own 0) against 0.25; and a constant 2^20 on a triangle whose top
+  // edge lies at z = 0.3 and whose third vertex is at 0.9 (2^-4 by the triangle's largest
+  // exponent, 2^-5 by the top edge's own) against 0.34.
+  static const float half[] = {0.5f, 0.5f, 0.5f};
+  static const float tilted[] = {0.2f, 0.2f, 0.8f};
+  static const float steep[] = {0.3f, 0.3f, 0.9f};
+  const float k = 1048576.0f;
+  struct {
+    const char *name;
+    EdgeDraw d;
+  } biased[] = {
+      {"depth bias: edges width 3", {tri, cw, 3, 3, none, cwise, 0, 0, half, 0.5f, k, 0}},
+      {"depth bias: filled triangle", {tri, cw, 3, 3, none, cwise, 0, 1, half, 0.5f, k, 0}},
+      {"depth bias: line width 3",
+       {MTLPrimitiveTypeLine, cw, 2, 3, none, cwise, 0, 0, half, 0.5f, k, 0}},
+      {"depth bias slope 4: edges width 3",
+       {tri, cw, 3, 3, none, cwise, 0, 0, tilted, 0.25f, 0, 4}},
+      {"depth bias slope 4: filled triangle",
+       {tri, cw, 3, 3, none, cwise, 0, 1, tilted, 0.25f, 0, 4}},
+      {"depth bias by the largest exponent: edges width 3",
+       {tri, cw, 3, 3, none, cwise, 0, 0, steep, 0.34f, k, 0}},
+      {"depth bias by the largest exponent: filled triangle",
+       {tri, cw, 3, 3, none, cwise, 0, 1, steep, 0.34f, k, 0}},
+      // No bias: the depth across the top edge of the sloped triangle, against 0.21 (its plane
+      // passes the row below the edge, 0.2125; the edge's own depth, 0.2, none).
+      {"depth across an edge: edges width 3",
+       {tri, cw, 3, 3, none, cwise, 0, 0, tilted, 0.21f, 0, 0}},
+  };
+  for (size_t i = 0; i < sizeof biased / sizeof biased[0]; i++) {
+    uint8_t *rgba = edge_render(kBiased, &biased[i].d);
+    print_channel(biased[i].name, rgba, 0, 1);
+    free(rgba);
+  }
+  // 4 samples, resolved: the clockwise triangle's edges at width 2.
+  Draw d = {tri, cw, 3, 1, 2, MTLTriangleFillModeLines, 0, 0, 0};
+  int starts[2] = {0, 1};
+  uint8_t *r = render(32, 4, kWhite, &d, starts, 1);
+  print_map("4 samples edges clockwise width 2, samples", 32, r, kWhite, 4);
+  free(r);
+}
+
 int main(int argc, char **argv) {
   @autoreleasepool {
     struct {
@@ -529,7 +856,7 @@ int main(int argc, char **argv) {
       void (*run)(void);
     } cases[] = {{"lane", lane},       {"quantize", quantize}, {"state", state},
                  {"ties", ties},       {"zero", zero},         {"strips", strips},
-                 {"fill", fill},       {"msaa", msaa}};
+                 {"fill", fill},       {"msaa", msaa},         {"edges", edges}};
     size_t n = sizeof cases / sizeof cases[0];
     if (argc < 2) {
       for (size_t i = 0; i < n; i++) printf("%s\n", cases[i].name);
