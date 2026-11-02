@@ -60,6 +60,10 @@
 //!
 //! A failed query of the device's limits answers no image, so it claims nothing.
 //!
+//! `supports32BitMSAA` ([`Device::supports_32bit_msaa`], [`msaa_32bit`]) is answered by the same
+//! probes: a `RenderTarget | ShaderRead` multisample texture of each 32-bit integer and float
+//! format at every sample count the device's textures take, and each float format's Resolve.
+//!
 //! **At most the presented GPU's**. A format a row of Apple's tables lists answers at most that
 //! row's Apple9 cell, the column of the Apple GPU every device presents (an M3 Max and an M4): a
 //! capability the cell does not list answers no, as on that GPU, whatever the device makes (the M3
@@ -86,7 +90,7 @@ use metal2vulkan::metal::format::{
 use metal2vulkan::metal::sampler::{check_border_view, opaque_black_reads_transparent};
 use metal2vulkan::metal::{PixelFormat, TextureSwizzleChannels, TextureType, TextureUsage};
 use metal2vulkan::pipeline::SampledType;
-use metal2vulkan::vk::Format;
+use metal2vulkan::vk::{Format, SampleCountFlags};
 use std::collections::BTreeSet;
 
 /// A texture capability of Apple's tables' legend.
@@ -254,6 +258,55 @@ fn stencil_view(plan: &ImagePlan) -> bool {
 /// gives them (all 0 where it makes no such image).
 pub(crate) type ImageLimits<'a> = &'a dyn Fn(&ImagePlan) -> vk::ImageFormatProperties;
 
+/// A planned texture of `pf` of `texture_type`, `samples` and `usage` (16 x 16, and 4 deep for
+/// a 3D one, of one level), planned as [`Device::new_texture`] plans it, whose image fits the
+/// device's limits `limits` gives (the module docs' probes).
+fn probe(
+    pf: PixelFormat,
+    facts: &ImageFacts<'_>,
+    limits: ImageLimits<'_>,
+    texture_type: TextureType,
+    samples: u32,
+    usage: TextureUsage,
+) -> Result<ImagePlan, Missing> {
+    // A texture of a type Metal makes none of in the format answers no, as `new_texture`
+    // refuses it: the two-plane extended-range and YCbCr formats' multisample textures.
+    if type_refused(pf, texture_type) {
+        return Err(Missing::Refused(Unsupported::not_representable(
+            Feature::Format,
+        )));
+    }
+    let depth = if texture_type == TextureType::Type3D {
+        4
+    } else {
+        1
+    };
+    let layout = TextureLayout {
+        texture_type,
+        pixel_format: pf,
+        extent: [16, 16, depth],
+        levels: 1,
+        layers: 1,
+        samples,
+    };
+    let plan = plan_image(&layout, usage, false, facts).map_err(|refusal| match refusal {
+        ImageRefusal::Unsupported(unsupported) => Missing::Refused(unsupported),
+        ImageRefusal::NotAFormat | ImageRefusal::TextureBuffer => {
+            Missing::Refused(Unsupported::not_representable(Feature::Format))
+        }
+    })?;
+    if plan.unavailable.intersects(usage) {
+        return Err(Missing::Refused(lacking(
+            pf,
+            usage,
+            plan.format,
+            facts.profile,
+        )));
+    }
+    check_image_limits(&plan, texture_type, &limits(&plan)).map_err(Missing::Refused)?;
+    Ok(plan)
+}
+
 /// The answers of `pf` on a device of `facts`, whose limits for an image `limits` gives, and
 /// whose Sparse answer is `sparse` (the module docs).
 pub(crate) fn answers(
@@ -263,40 +316,8 @@ pub(crate) fn answers(
     sparse: Result<(), Missing>,
 ) -> FormatAnswers {
     let profile = facts.profile;
-    // A planned texture of `pf` of `usage` (the probe's `bit` of it available) whose image fits
-    // the device's limits.
     let probe = |texture_type: TextureType, samples: u32, usage: TextureUsage| {
-        // A texture of a type Metal makes none of in the format answers no, as `new_texture`
-        // refuses it: the two-plane extended-range and YCbCr formats' multisample textures.
-        if type_refused(pf, texture_type) {
-            return Err(Missing::Refused(Unsupported::not_representable(
-                Feature::Format,
-            )));
-        }
-        let depth = if texture_type == TextureType::Type3D {
-            4
-        } else {
-            1
-        };
-        let layout = TextureLayout {
-            texture_type,
-            pixel_format: pf,
-            extent: [16, 16, depth],
-            levels: 1,
-            layers: 1,
-            samples,
-        };
-        let plan = plan_image(&layout, usage, false, facts).map_err(|refusal| match refusal {
-            ImageRefusal::Unsupported(unsupported) => Missing::Refused(unsupported),
-            ImageRefusal::NotAFormat | ImageRefusal::TextureBuffer => {
-                Missing::Refused(Unsupported::not_representable(Feature::Format))
-            }
-        })?;
-        if plan.unavailable.intersects(usage) {
-            return Err(Missing::Refused(lacking(pf, usage, plan.format, profile)));
-        }
-        check_image_limits(&plan, texture_type, &limits(&plan)).map_err(Missing::Refused)?;
-        Ok(plan)
+        probe(pf, facts, limits, texture_type, samples, usage)
     };
     let depth_stencil = is_depth_stencil(pf);
     let reads_integers = matches!(
@@ -453,6 +474,93 @@ fn presented_cell(pf: PixelFormat) -> Option<FormatCapabilities> {
         .into_iter()
         .find(|row| row.formats().contains(&pf))
         .map(|row| row.listed(PRESENTED))
+}
+
+/// The 32-bit integer color formats of `supports32BitMSAA`, which it lets a multisample texture
+/// take (`MTLDevice.h`: "allocating 32-bit Integer format textures (R32Uint, R32Sint, RG32Uint,
+/// RG32Sint, RGBA32Uint, and RGBA32Sint)" with MSAA).
+pub(crate) const MSAA_32BIT_INTEGER: [PixelFormat; 6] = [
+    PixelFormat::R32Uint,
+    PixelFormat::R32Sint,
+    PixelFormat::RG32Uint,
+    PixelFormat::RG32Sint,
+    PixelFormat::RGBA32Uint,
+    PixelFormat::RGBA32Sint,
+];
+
+/// The 32-bit float color formats of `supports32BitMSAA`, which it lets a multisample attachment
+/// resolve ("resolving 32-bit Float format textures (R32Float, RG32Float, and RGBA32Float)").
+pub(crate) const MSAA_32BIT_FLOAT: [PixelFormat; 3] = [
+    PixelFormat::R32Float,
+    PixelFormat::RG32Float,
+    PixelFormat::RGBA32Float,
+];
+
+/// What keeps `supports32BitMSAA` from being true on a device ([`msaa_32bit`]).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum NotMsaa32 {
+    /// The device's textures take no 4 samples (`supportsTextureSampleCount:` answers no to 4),
+    /// the count every Apple GPU that answers yes multisamples these formats at.
+    NoFourSamples,
+    /// No 2D multisample `RenderTarget | ShaderRead` texture of `format` of `samples` is made:
+    /// what it lacks.
+    Texture {
+        format: PixelFormat,
+        samples: u32,
+        missing: Missing,
+    },
+    /// `format`'s multisample attachment resolves into no texture of its format: what the resolve
+    /// lacks.
+    Resolve {
+        format: PixelFormat,
+        missing: Missing,
+    },
+}
+
+/// `supports32BitMSAA` on a device of `facts`, whose limits for an image `limits` gives and whose
+/// textures take `counts` samples (`supportsTextureSampleCount:`): every texture and resolve the
+/// answer promises, each probed as [`answers`] probes a capability ([`Device::new_texture`]'s
+/// plan within the device's limits for its image), or the first one missing:
+/// - the counts hold 4;
+/// - a 2D multisample `RenderTarget | ShaderRead` texture of each of the nine formats
+///   ([`MSAA_32BIT_INTEGER`], [`MSAA_32BIT_FLOAT`]) at each count above 1 in `counts`;
+/// - each float format's resolve, as its Resolve capability: one the render pass models, into a
+///   single-sample `RenderTarget` texture of the format.
+pub(crate) fn msaa_32bit(
+    facts: &ImageFacts<'_>,
+    limits: ImageLimits<'_>,
+    counts: SampleCountFlags,
+) -> Result<(), NotMsaa32> {
+    if !counts.contains(SampleCountFlags::from_raw(4)) {
+        return Err(NotMsaa32::NoFourSamples);
+    }
+    let usage = TextureUsage::RENDER_TARGET | TextureUsage::SHADER_READ;
+    let multisampled = (1..7)
+        .map(|shift| 1u32 << shift)
+        .filter(|&n| counts.contains(SampleCountFlags::from_raw(n)));
+    for format in MSAA_32BIT_INTEGER.into_iter().chain(MSAA_32BIT_FLOAT) {
+        for samples in multisampled.clone() {
+            let texture = TextureType::Type2DMultisample;
+            probe(format, facts, limits, texture, samples, usage).map_err(|missing| {
+                NotMsaa32::Texture {
+                    format,
+                    samples,
+                    missing,
+                }
+            })?;
+        }
+    }
+    for format in MSAA_32BIT_FLOAT {
+        let resolve = match unmodelled_resolve(format) {
+            Some(unsupported) => Err(Missing::Refused(unsupported)),
+            None => {
+                let target = TextureUsage::RENDER_TARGET;
+                probe(format, facts, limits, TextureType::Type2D, 1, target).map(drop)
+            }
+        };
+        resolve.map_err(|missing| NotMsaa32::Resolve { format, missing })?;
+    }
+    Ok(())
 }
 
 /// What a texture atomic on a texture of `pf` lacks on `profile`, if anything (the module docs).
@@ -1590,15 +1698,57 @@ impl Device {
             return answers.clone();
         }
         let facts = textures.facts(self.compile_device().profile());
-        let limits = |plan: &ImagePlan| {
-            let view_formats = plan.ash_view_formats();
-            let mut list = vk::ImageFormatListCreateInfo::default();
-            let info = plan.create_info(self.shared().sharing(), &view_formats, &mut list);
-            self.image_limits(&info, &view_formats).unwrap_or_default()
-        };
+        let limits = |plan: &ImagePlan| self.plan_limits(plan);
         let answers = answers(pf, &facts, &limits, self.sparse_answer(pf));
         lock(&textures.format_answers).insert(pf, answers.clone());
         answers
+    }
+
+    /// The device's limits for the image of `plan` (`vkGetPhysicalDeviceImageFormatProperties2`),
+    /// all 0 where the query fails, which so claims no image.
+    fn plan_limits(&self, plan: &ImagePlan) -> vk::ImageFormatProperties {
+        let view_formats = plan.ash_view_formats();
+        let mut list = vk::ImageFormatListCreateInfo::default();
+        let info = plan.create_info(self.shared().sharing(), &view_formats, &mut list);
+        self.image_limits(&info, &view_formats).unwrap_or_default()
+    }
+
+    /// `supports32BitMSAA`: yes where this device makes every texture and resolve Metal's answer
+    /// promises, as an Apple GPU answering yes makes them (an Apple M3 Max under macOS 27.0.1,
+    /// our probe `msaa_32bit_formats.m`, at 2 and 4 samples):
+    /// - a multisample texture of each 32-bit integer format (`R32Uint`, `R32Sint`, `RG32Uint`,
+    ///   `RG32Sint`, `RGBA32Uint`, `RGBA32Sint`) and 32-bit float format (`R32Float`,
+    ///   `RG32Float`, `RGBA32Float`): a 2D multisample `RenderTarget | ShaderRead` texture at
+    ///   every sample count above 1 that
+    ///   [`supports_texture_sample_count`](crate::DeviceProperties::supports_texture_sample_count)
+    ///   answers yes for, 4 among them, planned as [`new_texture`](Device::new_texture) plans it
+    ///   and within the device's limits for its image (`vkGetPhysicalDeviceImageFormatProperties2`
+    ///   with the color attachment and sampled usages: an integer format's counts are at least
+    ///   `framebufferIntegerColorSampleCounts` and `sampledImageIntegerSampleCounts`, and a
+    ///   device may take more for one format). Its samples hold what a draw writes, every bit,
+    ///   and read back through `texture2d_ms`, as Metal's do;
+    /// - the resolve of a multisample attachment of each float format
+    ///   ([`StoreAction::MultisampleResolve`](crate::StoreAction::MultisampleResolve),
+    ///   [`StoreAction::StoreAndMultisampleResolve`](crate::StoreAction::StoreAndMultisampleResolve))
+    ///   into a texture of its format: the device's `AVERAGE` resolve, Metal's own where the
+    ///   driver's is measured to be (MoltenVK's), elsewhere the device's native answer, announced
+    ///   as [`Degradation::DeviceRoundedResolve`](crate::Degradation::DeviceRoundedResolve).
+    ///
+    /// No where one is missing: a device whose integer formats take one sample answers no where
+    /// Metal's GPUs answer yes, and a texture of such a format at a count it lacks is refused
+    /// (`Unsupported`, `Feature::TextureSampleCount`). An integer format's resolve stays refused
+    /// on every device, as Metal stops it ("cannot be a MSAA resolve target"): `Invalid`, with
+    /// [`RenderPassProblem::ResolveFormat`](crate::RenderPassProblem::ResolveFormat). A texture's
+    /// [`Device::pixel_format_capabilities`] gives each of these formats `Msaa`, and each float
+    /// format `Resolve`, wherever this answers yes.
+    pub fn supports_32bit_msaa(&self) -> bool {
+        let facts = self
+            .shared()
+            .textures
+            .facts(self.compile_device().profile());
+        let limits = |plan: &ImagePlan| self.plan_limits(plan);
+        let counts = self.properties().texture_rules().sample_counts;
+        msaa_32bit(&facts, &limits, counts).is_ok()
     }
 
     /// The Sparse answer of `pf` on this device (the module docs): a sparse heap's, where the

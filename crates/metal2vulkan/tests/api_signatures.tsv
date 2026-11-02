@@ -7744,6 +7744,7 @@ method	metal2vulkan-runtime::Device::sparse_tile_size	pub fn sparse_tile_size(&s
 method	metal2vulkan-runtime::Device::sparse_tile_size_for_page	pub fn sparse_tile_size_for_page(&self, _texture_type: TextureType, pixel_format: PixelFormat, sample_count: u64, page: SparsePageSize) -> Size
 method	metal2vulkan-runtime::Device::sparse_tile_size_in_bytes	pub fn sparse_tile_size_in_bytes(&self) -> u64
 method	metal2vulkan-runtime::Device::sparse_tile_size_in_bytes_for_page	pub fn sparse_tile_size_in_bytes_for_page(&self, page: SparsePageSize) -> u64
+method	metal2vulkan-runtime::Device::supports_32bit_msaa	pub fn supports_32bit_msaa(&self) -> bool
 method	metal2vulkan-runtime::Device::supports_family	pub fn supports_family(&self, family: i64) -> bool
 method	metal2vulkan-runtime::Device::system_default	pub fn system_default() -> Result<Device, Error>
 method	metal2vulkan-runtime::Device::system_default_identity_with	pub fn system_default_identity_with(options: &DeviceOptions) -> Result<PhysicalDeviceIdentity, Error>

@@ -597,6 +597,8 @@ mod mirror_clamp;
 #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
 mod moved_writers;
 #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+mod msaa_32bit;
+#[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
 mod msaa_depth_moves;
 #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
 mod nan_resolves;

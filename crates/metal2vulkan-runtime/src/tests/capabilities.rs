@@ -39,7 +39,7 @@ pub(super) fn committed_descriptions() -> Vec<(String, DeviceDescription)> {
 
 /// The sample counts the profile `stem` states under the `VkPhysicalDeviceLimits` member `key`;
 /// none where it states none (the roadmap profiles), as the description reads its own counts.
-fn profile_counts(stem: &str, key: &str) -> SampleCountFlags {
+pub(super) fn profile_counts(stem: &str, key: &str) -> SampleCountFlags {
     fn find<'a>(value: &'a serde_json::Value, key: &str) -> Option<&'a serde_json::Value> {
         match value {
             serde_json::Value::Object(map) => map

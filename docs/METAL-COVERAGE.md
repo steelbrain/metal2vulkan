@@ -10,12 +10,12 @@ Every public item of the macOS 27.0 SDK (Xcode 27.0, 27A266a)'s Metal headers, b
 
 | Status | Items | Of which deprecated |
 |---|---|---|
-| implemented | 958 | 36 |
-| missing | 828 | 27 |
+| implemented | 959 | 36 |
+| missing | 827 | 27 |
 | out of scope | 349 | 5 |
 | all | 2135 | 68 |
 
-Implemented by the runtime: 635; by the translator's values: 323. Missing by size: S 145, M 147, L 160, XL 376.
+Implemented by the runtime: 636; by the translator's values: 323. Missing by size: S 144, M 147, L 160, XL 376.
 
 ## Missing, in build order
 
@@ -28,7 +28,7 @@ Cheap items a plain app calls first, then medium pieces by how often a plain app
 | command queue descriptor | S | 3 | `MTLCommandQueueDescriptor`, `MTLCommandQueueDescriptor.maxCommandBufferCount`, `MTLDevice.newCommandQueueWithDescriptor:` |
 | compute, blit and resource-state pass descriptors | S | 10 | `MTLBlitPassDescriptor`, `MTLBlitPassDescriptor.blitPassDescriptor`, `MTLCommandBuffer.computeCommandEncoderWithDescriptor:`, ... |
 | libraries from a file path or URL | S | 2 | `MTLDevice.newLibraryWithFile:error:`, `MTLDevice.newLibraryWithURL:error:` |
-| device, state and resource queries | S | 54 | `MTLAllocation.allocatedSize`, `MTLBuffer.sparseBufferTier`, `MTLArchitecture`, ... |
+| device, state and resource queries | S | 53 | `MTLAllocation.allocatedSize`, `MTLBuffer.sparseBufferTier`, `MTLArchitecture`, ... |
 | `textureBarrier` and queue-stage barriers | S/M | 2 | `MTLCommandEncoder.barrierAfterQueueStages:beforeStages:`, `MTLRenderCommandEncoder.textureBarrier` |
 | a pipeline state's reflection after creation | S | 2 | `MTLComputePipelineState.reflection`, `MTLRenderPipelineState.reflection` |
 | function handles by name, and a handle's type and ID | S | 4 | `MTLComputePipelineState.functionHandleWithName:`, `MTLFunctionHandle.functionType`, `MTLFunctionHandle.gpuResourceID`, ... |
@@ -1388,7 +1388,7 @@ Cheap items a plain app calls first, then medium pieces by how often a plain app
 | `MTLDevice.argumentBuffersSupport` | property | implemented | `DeviceProperties.argument_buffers_support` (runtime) |
 | `MTLDevice.rasterOrderGroupsSupported` | property | implemented | `DeviceProperties::are_raster_order_groups_supported` (runtime) |
 | `MTLDevice.supports32BitFloatFiltering` | property | implemented | `DeviceProperties.supports_32bit_float_filtering` (runtime) |
-| `MTLDevice.supports32BitMSAA` | property | missing | S: capability query; the family rows hold the answer |
+| `MTLDevice.supports32BitMSAA` | property | implemented | `Device::supports_32bit_msaa` (runtime) |
 | `MTLDevice.supportsQueryTextureLOD` | property | missing | S: capability query; the family rows hold the answer (`FeatureRow::QueryTextureLod`) |
 | `MTLDevice.supportsBCTextureCompression` | property | missing | S: capability query; the family rows hold the answer (`FeatureRow::BcPixelFormats`) |
 | `MTLDevice.supportsPullModelInterpolation` | property | missing | S: capability query |

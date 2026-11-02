@@ -181,6 +181,7 @@ mod mipmap_plan;
 mod mipmap_scratch;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod missing_layer;
+mod msaa_32bit;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod multisample_buffer_copy;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]

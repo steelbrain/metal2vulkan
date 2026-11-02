@@ -496,6 +496,14 @@ tables for it (features, limits and pixel-format capabilities) is exact on the d
 possible on this device (a refusal), or Metal's own answer is no. Run it on the device for its
 list.
 
+`Device::supports_32bit_msaa` (`supports32BitMSAA`) answers yes where the device makes a
+multisample texture of each 32-bit integer and float color format at every sample count its
+textures take, 4 among them, and resolves the float ones, each planned as `Device::new_texture`
+plans it within the device's own limits for the format. Vulkan guarantees an integer format only
+`framebufferIntegerColorSampleCounts`, one sample on some drivers, but a driver may take more for
+one format (RADV does), so the answer follows the device's per-format limits. A float resolve is
+the device's own average, announced as `device-rounded-resolve` where it is not Metal's.
+
 Where Metal's answers differ by macOS release (which pixel formats it describes, how a heap
 texture's blocks lie, its private device properties),
 every device answers as one release, `MACOS_RELEASE` (macOS 27.0.1, measured on an Apple M3 Max),

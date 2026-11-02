@@ -1064,7 +1064,7 @@ MTLDevice.h	MTLDevice	property	readWriteTextureSupport		I	runtime	DeviceProperti
 MTLDevice.h	MTLDevice	property	argumentBuffersSupport		I	runtime	DeviceProperties.argument_buffers_support			
 MTLDevice.h	MTLDevice	property	rasterOrderGroupsSupported		I	runtime	DeviceProperties::are_raster_order_groups_supported			
 MTLDevice.h	MTLDevice	property	supports32BitFloatFiltering		I	runtime	DeviceProperties.supports_32bit_float_filtering			
-MTLDevice.h	MTLDevice	property	supports32BitMSAA		M			capability query; the family rows hold the answer	S	queries
+MTLDevice.h	MTLDevice	property	supports32BitMSAA		I	runtime	Device::supports_32bit_msaa			
 MTLDevice.h	MTLDevice	property	supportsQueryTextureLOD		M			capability query; the family rows hold the answer (`FeatureRow::QueryTextureLod`)	S	queries
 MTLDevice.h	MTLDevice	property	supportsBCTextureCompression		M			capability query; the family rows hold the answer (`FeatureRow::BcPixelFormats`)	S	queries
 MTLDevice.h	MTLDevice	property	supportsPullModelInterpolation		M			capability query	S	queries
