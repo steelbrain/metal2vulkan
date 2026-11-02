@@ -43,7 +43,9 @@ pub struct DeviceHandles<'a> {
 /// ([`DeviceOptions::extra_queues`](super::DeviceOptions::extra_queues)), which
 /// [`DeviceHandles::extra_queues`] returns. The runtime never submits to it: the caller is its
 /// only submitter, and synchronizes its submissions to it externally, as Vulkan requires. It
-/// lives as long as the device.
+/// lives as long as the device. Where its family is not one of
+/// [`DeviceHandles::queue_families`], the device's own buffers and images are not shared with
+/// it: a submission to it uses only the caller's objects made to be shared with its family.
 #[non_exhaustive]
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub struct ExtraQueue {

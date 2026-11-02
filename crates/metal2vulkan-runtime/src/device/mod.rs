@@ -21,7 +21,7 @@ mod compiles;
 pub(super) mod create;
 pub(super) mod float_tininess;
 pub(super) mod functions;
-mod handles;
+pub(crate) mod handles;
 pub(super) mod instance_requirements;
 pub(super) mod keeper;
 pub(super) mod prime;

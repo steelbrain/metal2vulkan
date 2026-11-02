@@ -230,7 +230,11 @@ pub struct DeviceOptions {
     /// [`SharedEvent::vk_wait`](crate::SharedEvent::vk_wait)). The runtime's own buffers and
     /// images stay shared among its own queue families
     /// ([`DeviceHandles::queue_families`](crate::DeviceHandles::queue_families)), which need not
-    /// include an extra queue's. Empty by default. No Metal counterpart: a Vulkan-side option.
+    /// include an extra queue's: a submission to an extra queue of another family uses only
+    /// objects made to be shared with that family, the caller's own (which Metal-side code
+    /// reaches through [`Device::new_buffer_with_vk_buffer`](crate::Device::new_buffer_with_vk_buffer)
+    /// or [`Device::new_texture_with_vk_image_plane`](crate::Device::new_texture_with_vk_image_plane)).
+    /// Empty by default. No Metal counterpart: a Vulkan-side option.
     pub extra_queues: Vec<vk::QueueFlags>,
 }
 
