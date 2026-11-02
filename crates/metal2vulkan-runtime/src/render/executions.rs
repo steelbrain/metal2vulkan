@@ -269,7 +269,6 @@
 //!   the encoder's own draw reads such a buffer at stride 0 (`render/vertex_strides.rs`).
 
 use super::bound::Bound;
-use super::line_width::LineRoute;
 use super::mesh::MeshGrid;
 use super::pass_start_reads::{PassStartReads, PassStartTables};
 use super::pass_steps::PassSteps;
@@ -1857,12 +1856,9 @@ impl RenderLowering {
         primitive_type: PrimitiveType,
     ) -> Result<SettledDraw, Error> {
         let assembly = Assembly::Primitives(primitive_type);
+        // A command's lines at a width other than 1 are the device's own at the nearest width they
+        // draw, never the band (`render/line_width.rs`).
         let settings = self.draw_settings(CALL, state, assembly, false)?;
-        // A command's lines at a width other than 1 are the runtime's gap (`render/line_width.rs`),
-        // which its replay refuses: nothing to make for it.
-        if settings.line != LineRoute::Plain {
-            return Err(Error::NotImplemented(RuntimeGap::WideLines));
-        }
         let mut argument_samplers = ArgumentSamplers::taken(self.core.device());
         let function_tables = state.function_tables();
         let live = Arc::clone(&self.live);

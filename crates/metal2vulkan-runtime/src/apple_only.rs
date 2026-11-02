@@ -8,7 +8,8 @@
 //!   transform on;
 //! - the call sets encoder state the runtime draws as Metal does: a provoking vertex mode of 0
 //!   or 1, `render/provoking.rs`; a line width, `render/line_width.rs` (the device's own lines
-//!   where they differ from Metal's are announced, `device-wide-lines`);
+//!   where they differ from Metal's are announced, `device-wide-lines`, and those at the nearest
+//!   width they draw where neither they nor the band draw Metal's, `lines-at-nearest-width`);
 //! - the call acts on state no runtime object has: Vulkan shows no texture compression, so a
 //!   reinterpretation flush has nothing to flush, and after an invalidation Metal leaves the
 //!   contents undefined, so keeping them is one of the outcomes Metal allows;
@@ -354,11 +355,14 @@ impl RenderCommandEncoder {
     /// device's own lines where they draw it (announced `device-wide-lines` where they differ
     /// from Metal's, or under `WideLinePolicy::Exact` the band below where they do), else the
     /// pipeline's band variant, two triangles over the parallelogram, which needs
-    /// `tessellationShader` (refused `Unsupported` without it). Refused at the draw
-    /// (`NotImplemented(WideLines)`): a triangle's edges in fill mode `Lines` and a mesh draw
-    /// where the device's lines do not draw the width, a line in a rasterization-rate-mapped
-    /// pass or of an execution's command, and a band under vertex amplification above 1. The
-    /// runtime's README states the route each device takes.
+    /// `tessellationShader`. What neither draws runs the device's own lines at the width nearest
+    /// Metal's they draw (1 without `wideLines`), announced `lines-at-nearest-width`: a
+    /// triangle's edges in fill mode `Lines` and a mesh draw where the device's lines do not draw
+    /// the width, a line without `tessellationShader`, a line in a rasterization-rate-mapped
+    /// pass or of an execution's command, and a band under vertex amplification above 1. A draw
+    /// of no complete primitive draws nothing, as Metal's. Refused at the draw
+    /// (`NotImplemented(WideLines)`): a strip's band whose list of segments the runtime cannot
+    /// draw. The runtime's README states the route each device takes.
     pub fn set_line_width(&mut self, width: f32) -> Result<(), Error> {
         match self.lowers_at_call() {
             true => self.at_call(|lowering| lowering.set_line_width(width)),

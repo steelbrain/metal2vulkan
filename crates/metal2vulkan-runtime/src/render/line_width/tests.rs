@@ -1,10 +1,12 @@
-//! The line width's quantization and each committed device's route (`render/line_width.rs`).
+//! The line width's quantization, each committed device's route, and the draws that draw no
+//! primitive (`render/line_width.rs`).
 
-use super::{drawn, route, Assembly, Drawn, LineRoute, LineWidth};
-use crate::error::{Error, RuntimeGap};
-use metal2vulkan::device::{Device, DeviceDescription, DevicePolicy, VkFeature, WideLinePolicy};
-use metal2vulkan::error::{Capability, Feature, Needs};
+use super::{drawn, draws_primitives, route, Assembly, Drawn, LineRoute, LineWidth, Unrouted};
+use metal2vulkan::bind::{DrawCall, IndexBufferRef, IndirectRef, RewriteProgram};
+use metal2vulkan::device::WideLinePolicy;
+use metal2vulkan::device::{Device, DeviceDescription, DevicePolicy, DeviceProfile, VkFeature};
 use metal2vulkan::metal::{PrimitiveType, TriangleFillMode};
+use metal2vulkan::vk;
 
 /// A route as the table below writes it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -17,10 +19,10 @@ enum Cell {
     Announced,
     /// `B`: the band.
     Band,
-    /// `T`: refused `Unsupported(WideLines)`, needing `tessellationShader`.
-    NeedsTessellation,
-    /// `N`: refused `NotImplemented(WideLines)`.
-    Gap,
+    /// `T`, `U`, `V`: the device's own lines at the nearest width they draw, announced, the band
+    /// lacking `tessellationShader`, not drawing the draw's lines (edges, mesh lines), or not its
+    /// amplified views.
+    Nearest(Unrouted),
 }
 
 impl Cell {
@@ -31,49 +33,69 @@ impl Cell {
                 "E" => Cell::Exact,
                 "A" => Cell::Announced,
                 "B" => Cell::Band,
-                "T" => Cell::NeedsTessellation,
-                "N" => Cell::Gap,
+                "T" => Cell::Nearest(Unrouted::Untessellated),
+                "U" => Cell::Nearest(Unrouted::Unbanded),
+                "V" => Cell::Nearest(Unrouted::Amplified),
                 other => panic!("no cell {other}"),
             })
             .collect()
     }
 }
 
+/// A profile of the repository's, read as the runtime reads its device
+/// (`DeviceDescription::from_khronos_json`), so this runs from the workspace checkout.
+fn device(stem: &str) -> Device {
+    let path = format!(
+        "{}/../metal2vulkan-validation/profiles/{stem}.json",
+        env!("CARGO_MANIFEST_DIR")
+    );
+    let text = std::fs::read_to_string(&path).unwrap();
+    let description = DeviceDescription::from_khronos_json(&text, None).unwrap();
+    Device::new(description, DevicePolicy::default()).unwrap()
+}
+
+/// The width nearest the one Metal draws for `w` (`w`, 1/16 at 0) the device's lines draw: that
+/// clamped into `lineWidthRange` where the device enables `wideLines`, else 1 (the module docs,
+/// written apart from the route).
+fn nearest(profile: &DeviceProfile, w: f32) -> f32 {
+    let [low, high] = profile.limits().line_width_range_bits.map(f32::from_bits);
+    let w = if w == 0.0 { 1.0 / 16.0 } else { w };
+    match profile.enabled().features.contains(&VkFeature::WideLines) {
+        true if w < low => low,
+        true if w > high => high,
+        true => w,
+        false => 1.0,
+    }
+}
+
 /// The cell of `drawn` at `width` on `profile`'s device under `policy`, amplified where
-/// `amplifies`; each route's own value checked (the device's width, the band's half width).
+/// `amplifies`; each route's own value checked (the device's width, the band's half width, the
+/// nearest width).
 fn cell(
-    profile: &metal2vulkan::device::DeviceProfile,
+    profile: &DeviceProfile,
     policy: WideLinePolicy,
     width: LineWidth,
     drawn: Drawn,
     amplifies: bool,
 ) -> Cell {
     let w = width.pixels();
-    match route(profile, policy, width, drawn, (amplifies, false)) {
-        Ok((LineRoute::Plain, false)) => Cell::Plain,
-        Ok((LineRoute::Device { width }, differs)) => {
+    match route(profile, policy, width, drawn, (amplifies, false, false)) {
+        LineRoute::Plain => Cell::Plain,
+        LineRoute::Device { width, differs } => {
             assert_eq!(width, w);
             match differs {
                 false => Cell::Exact,
                 true => Cell::Announced,
             }
         }
-        Ok((LineRoute::Band { half }, false)) => {
+        LineRoute::Band { half } => {
             assert_eq!(half, if w == 0.0 { 1.0 / 32.0 } else { w / 2.0 });
             Cell::Band
         }
-        Err(Error::Unsupported(u)) => {
-            assert_eq!(u.feature, Feature::WideLines);
-            assert_eq!(
-                u.needs,
-                Needs::AnyOf(vec![vec![Capability::Feature(
-                    VkFeature::TessellationShader
-                )]])
-            );
-            Cell::NeedsTessellation
+        LineRoute::Nearest { width, why } => {
+            assert_eq!(width, nearest(profile, w), "the nearest width to {w}");
+            Cell::Nearest(why)
         }
-        Err(Error::NotImplemented(RuntimeGap::WideLines)) => Cell::Gap,
-        other => panic!("{other:?}"),
     }
 }
 
@@ -83,9 +105,10 @@ fn cell(
 /// value), and a list of lines under vertex amplification above 1. The widths: 0, 0.5, 1,
 /// 1.5, a width on the device's `lineWidthGranularity` and one off it where Metal has one
 /// (every sixteenth is on a granularity of 1/16 or finer), the top of `lineWidthRange` and a
-/// sixteenth above it where Metal draws them, and 16. Read from the profiles as the runtime
-/// reads its device (`DeviceDescription::from_khronos_json`); the repository's profiles, so
-/// this runs from the workspace checkout.
+/// sixteenth above it where Metal draws them, and 16. Where neither the device's lines nor the
+/// band draw the width, the device's lines at the nearest width they draw: no draw is refused.
+/// A rate-mapped pass's lines and an execution's command's, whose width Metal's answer is not
+/// measured for, take the nearest width at every width other than 1.
 #[test]
 fn each_device_routes_each_width_as_its_lines_allow() {
     // (profile, widths, list Device, list Exact, edges and mesh lines, amplified list)
@@ -97,8 +120,8 @@ fn each_device_routes_each_width_as_its_lines_allow() {
             [
                 "B A P E E A E B B",
                 "B B P E E B E B B",
-                "N A P E E A E N N",
-                "N A P E E A E N N",
+                "U A P E E A E U U",
+                "V A P E E A E V V",
             ],
         ),
         (
@@ -107,8 +130,8 @@ fn each_device_routes_each_width_as_its_lines_allow() {
             [
                 "B A P E E A E B B",
                 "B B P E E B E B B",
-                "N A P E E A E N N",
-                "N A P E E A E N N",
+                "U A P E E A E U U",
+                "V A P E E A E V V",
             ],
         ),
         // wideLines, [0, 8] by 1/128, not stated as parallelograms.
@@ -118,48 +141,48 @@ fn each_device_routes_each_width_as_its_lines_allow() {
             [
                 "B A P A A A B B",
                 "B B P B B B B B",
-                "N A P A A A N N",
-                "N A P A A A N N",
+                "U A P A A A U U",
+                "V A P A A A V V",
             ],
         ),
         // wideLines, [1, 255] by 1/128, strict.
         (
             "lavapipe",
             &[0.0, 0.5, 1.0, 1.5, 2.0625, 16.0],
-            ["B B P A A A", "B B P B B B", "N N P A A A", "N N P A A A"],
+            ["B B P A A A", "B B P B B B", "U U P A A A", "V V P A A A"],
         ),
         // wideLines, [1, 64] by 1/16, strict.
         (
             "nvidia-rtx5080-laptop",
             &[0.0, 0.5, 1.0, 1.5, 2.0625, 16.0],
-            ["B B P A A A", "B B P B B B", "N N P A A A", "N N P A A A"],
+            ["B B P A A A", "B B P B B B", "U U P A A A", "V V P A A A"],
         ),
         // No wideLines ([1, 1]), tessellation.
         (
             "moltenvk-m3",
             &[0.0, 0.5, 1.0, 1.0625, 1.5, 16.0],
-            ["B B P B B B", "B B P B B B", "N N P N N N", "N N P N N N"],
+            ["B B P B B B", "B B P B B B", "U U P U U U", "V V P V V V"],
         ),
         // No wideLines, no tessellation.
         (
             "swiftshader",
             &[0.0, 0.5, 1.0, 1.0625, 1.5, 16.0],
-            ["T T P T T T", "T T P T T T", "N N P N N N", "T T P T T T"],
+            ["T T P T T T", "T T P T T T", "U U P U U U", "T T P T T T"],
         ),
         (
             "vk12-floor",
             &[0.0, 0.5, 1.0, 1.0625, 1.5, 16.0],
-            ["T T P T T T", "T T P T T T", "N N P N N N", "T T P T T T"],
+            ["T T P T T T", "T T P T T T", "U U P U U U", "T T P T T T"],
         ),
         (
             "roadmap-2022",
             &[0.0, 0.5, 1.0, 1.0625, 1.5, 16.0],
-            ["T T P T T T", "T T P T T T", "N N P N N N", "T T P T T T"],
+            ["T T P T T T", "T T P T T T", "U U P U U U", "T T P T T T"],
         ),
         (
             "lunarg-desktop-baseline-2023",
             &[0.0, 0.5, 1.0, 1.0625, 1.5, 16.0],
-            ["B B P B B B", "B B P B B B", "N N P N N N", "N N P N N N"],
+            ["B B P B B B", "B B P B B B", "U U P U U U", "V V P V V V"],
         ),
         (
             "amd-780m-hawkpoint-radv",
@@ -167,8 +190,8 @@ fn each_device_routes_each_width_as_its_lines_allow() {
             [
                 "B A P E E A E B B",
                 "B B P E E B E B B",
-                "N A P E E A E N N",
-                "N A P E E A E N N",
+                "U A P E E A E U U",
+                "V A P E E A E V V",
             ],
         ),
     ];
@@ -177,26 +200,28 @@ fn each_device_routes_each_width_as_its_lines_allow() {
         TriangleFillMode::Fill,
         false,
         None,
+        true,
     );
     let edges = drawn(
         Assembly::Primitives(PrimitiveType::Triangle),
         TriangleFillMode::Lines,
         false,
         None,
+        true,
     );
-    let mesh_lines = drawn(Assembly::Meshes, TriangleFillMode::Fill, false, Some(2));
+    let mesh_lines = drawn(
+        Assembly::Meshes,
+        TriangleFillMode::Fill,
+        false,
+        Some(2),
+        true,
+    );
     assert_eq!(
         (lines, edges, mesh_lines),
         (Drawn::Lines, Drawn::Other, Drawn::Other)
     );
     for (stem, widths, rows) in table {
-        let path = format!(
-            "{}/../metal2vulkan-validation/profiles/{stem}.json",
-            env!("CARGO_MANIFEST_DIR")
-        );
-        let text = std::fs::read_to_string(&path).unwrap();
-        let description = DeviceDescription::from_khronos_json(&text, None).unwrap();
-        let device = Device::new(description, DevicePolicy::default()).unwrap();
+        let device = device(stem);
         let profile = device.profile();
         let limits = profile.limits();
         let features = &profile.enabled().features;
@@ -264,31 +289,141 @@ fn each_device_routes_each_width_as_its_lines_allow() {
                 "{stem}, {what}, widths {widths:?} ({facts})"
             );
         }
-        // A rate-mapped pass draws no line at a width other than 1, and every one at 1.
-        for w in [0.0, 2.0] {
-            let routed = route(
-                profile,
-                WideLinePolicy::Device,
-                LineWidth::of(w),
-                lines,
-                (false, true),
-            );
-            assert!(
-                matches!(routed, Err(Error::NotImplemented(RuntimeGap::WideLines))),
-                "{stem}: {routed:?}"
-            );
+        // A rate-mapped pass and an execution's command draw every line at a width other than 1
+        // at the nearest width, edges too, and every one at 1 as every line.
+        for (place, why) in [
+            ((false, true, false), Unrouted::RateMapped),
+            ((false, false, true), Unrouted::Executed),
+        ] {
+            for drawn in [lines, edges] {
+                for w in [0.0, 0.5, 2.0, 16.0] {
+                    let routed = route(
+                        profile,
+                        WideLinePolicy::Exact,
+                        LineWidth::of(w),
+                        drawn,
+                        place,
+                    );
+                    let width = nearest(profile, w);
+                    assert_eq!(routed, LineRoute::Nearest { width, why }, "{stem}: {w}");
+                }
+                let routed = route(profile, WideLinePolicy::Exact, LineWidth::ONE, drawn, place);
+                assert_eq!(routed, LineRoute::Plain, "{stem}");
+            }
         }
-        assert!(matches!(
-            route(
-                profile,
-                WideLinePolicy::Device,
-                LineWidth::ONE,
-                lines,
-                (false, true)
-            ),
-            Ok((LineRoute::Plain, false))
-        ));
     }
+}
+
+/// A direct draw whose vertices or indices complete no primitive of its type draws nothing at
+/// any width, as Metal's: of every line and triangle type and each private one, list or strip,
+/// indexed or not, of one instance or several, in either fill mode. One primitive's vertices
+/// draw it; an indirect draw's count, a patch draw's and a mesh draw's are the GPU's, so each
+/// may draw one. The route is the plain one on every device, where a draw of one primitive at
+/// that width takes another.
+#[test]
+fn a_draw_of_no_complete_primitive_draws_nothing() {
+    // (assembly, the vertices of its first primitive)
+    let assemblies = [
+        (Assembly::Primitives(PrimitiveType::Line), 2),
+        (Assembly::Primitives(PrimitiveType::LineStrip), 2),
+        (Assembly::Primitives(PrimitiveType::Triangle), 3),
+        (Assembly::Primitives(PrimitiveType::TriangleStrip), 3),
+        (Assembly::Private(RewriteProgram::LineLoop), 2),
+        (Assembly::Private(RewriteProgram::TriangleFan), 3),
+        (Assembly::Private(RewriteProgram::Quads), 4),
+        (Assembly::Private(RewriteProgram::QuadStrip), 4),
+    ];
+    let direct = |count, instance_count| {
+        [
+            DrawCall::Primitives {
+                vertex_start: 5,
+                vertex_count: count,
+                instance_count,
+                base_instance: 0,
+            },
+            DrawCall::Indexed {
+                index_type: vk::IndexType::UINT16,
+                index_buffer: IndexBufferRef::new(0, 64),
+                index_count: count,
+                index_offset: 0,
+                instance_count,
+                base_vertex: 0,
+                base_instance: 0,
+            },
+        ]
+    };
+    let indirect = [
+        DrawCall::Indirect {
+            indirect: IndirectRef::new(0, 0),
+            indexed: None,
+        },
+        DrawCall::Indirect {
+            indirect: IndirectRef::new(0, 0),
+            indexed: Some((vk::IndexType::UINT32, IndexBufferRef::new(0, 64), 0)),
+        },
+    ];
+    let devices = ["moltenvk-m3", "swiftshader", "amd-780m-radv", "lavapipe"].map(device);
+    let wide = LineWidth::of(2.0);
+    for (assembly, first) in assemblies {
+        for instances in [1, 3] {
+            for count in 1..first {
+                for draw in direct(count, instances) {
+                    assert!(!draws_primitives(assembly, &draw), "{draw:?}");
+                    for fill in [TriangleFillMode::Fill, TriangleFillMode::Lines] {
+                        let drawn = drawn(assembly, fill, false, None, false);
+                        assert_eq!(drawn, Drawn::Nothing, "{draw:?}");
+                        for device in &devices {
+                            for policy in [WideLinePolicy::Device, WideLinePolicy::Exact] {
+                                let routed = route(
+                                    device.profile(),
+                                    policy,
+                                    wide,
+                                    drawn,
+                                    (true, false, false),
+                                );
+                                assert_eq!(routed, LineRoute::Plain, "{draw:?}");
+                            }
+                        }
+                    }
+                }
+            }
+            for draw in direct(first, instances) {
+                assert!(draws_primitives(assembly, &draw), "{draw:?}");
+                let edges = drawn(assembly, TriangleFillMode::Lines, false, None, true);
+                assert_ne!(edges, Drawn::Nothing, "{draw:?}");
+                for device in &devices {
+                    let routed = route(
+                        device.profile(),
+                        WideLinePolicy::Device,
+                        wide,
+                        edges,
+                        (false, false, false),
+                    );
+                    assert_ne!(routed, LineRoute::Plain, "{draw:?}");
+                }
+            }
+        }
+        for draw in &indirect {
+            assert!(draws_primitives(assembly, draw), "{draw:?}");
+        }
+    }
+    // Points draw from one vertex; patches and meshes count on the GPU.
+    for count in [1, 2] {
+        for draw in direct(count, 1) {
+            let points = Assembly::Primitives(PrimitiveType::Point);
+            assert!(draws_primitives(points, &draw));
+        }
+    }
+    let patches = DrawCall::Patches {
+        control_points: 3,
+        patch_start: 0,
+        patch_count: 1,
+        patch_index: None,
+        instance_count: 1,
+        base_instance: 0,
+        control_point_index: None,
+    };
+    assert!(draws_primitives(Assembly::Patches, &patches));
 }
 
 /// The widths Metal draws for the widths measured (the module docs): floored to sixteenths,

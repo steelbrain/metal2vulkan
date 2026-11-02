@@ -5,17 +5,20 @@
 //!
 //! - **Inputs.** The derivation reads [`ShapeInputs`] alone: the device, the pass's layout, the
 //!   encoder's state and vertex amplification, whether a visibility query counts the draws, the
-//!   pass's rasterization-rate map, and the routing the encoder kept for its drawing state (a
-//!   cache of a function of the state and the pass's colors, which changes no piece). Beside them
-//!   each piece takes the draw's own: its drawing state and assembly; for the draw state its
+//!   pass's rasterization-rate map, whether the encoder records an execution's commands, and the
+//!   routing the encoder kept for its drawing state (a cache of a function of the state and the
+//!   pass's colors, which changes no piece). Beside them each piece takes the draw's own: its
+//!   drawing state, assembly and whether it may draw a primitive
+//!   (`line_width::draws_primitives`); for the draw state its
 //!   variant's compiled state and what the draw's failing depth and shader-side tests make of it;
 //!   for the pipeline its graphics key (`DrawKey`) and variant.
 //! - **Reuse.** A draw takes a piece an earlier draw of the encoder derived where every input is
-//!   the same: the drawing state and variant by identity (each held), the assembly and whether a
-//!   query counts by value, and the layout, the state and the amplification by version
-//!   (`versioned.rs`: any mutable access moves it); its pipeline where each field of its key is,
-//!   by value or by what it is made of ([`PipelineInputs`]). The device and the rate map do not
-//!   change in an encoder, whose memo this is; what the pieces read of the device is fixed at its
+//!   the same: the drawing state and variant by identity (each held), the assembly, whether it
+//!   may draw a primitive and whether a query counts by value, and the layout, the state and the
+//!   amplification by version (`versioned.rs`: any mutable access moves it); its pipeline where
+//!   each field of its key is, by value or by what it is made of ([`PipelineInputs`]). The device,
+//!   the rate map and whether it records an execution's commands do not change in an encoder,
+//!   whose memo this is; what the pieces read of the device is fixed at its
 //!   creation (its profile, its depth ranges, its depth bias command, its region limits). Only a
 //!   piece derived without a refusal is kept, and each is taken at the step of the draw that
 //!   derives it, so a refused draw is refused by the same step as before.
@@ -70,6 +73,8 @@ pub(super) struct ShapeInputs<'a> {
     /// (`RenderCommandEncoder::counts_visibility`).
     pub(super) counts_visibility: bool,
     pub(super) rate_map: Option<&'a RateMappedPass>,
+    /// Whether the encoder records an execution's commands (`render/executions.rs`).
+    pub(super) executes: bool,
     /// The routing the encoder kept as its drawing state was set: a cache of a function of the
     /// state and the pass's colors alone ([`routing`](Self::routing)).
     pub(super) routed: Option<&'a Routed>,
@@ -218,9 +223,10 @@ impl ShapeInputs<'_> {
         dropped
     }
 
-    /// What a draw of `pipeline` as `assembly` settles from the encoder's state before its bind
-    /// state ([`DrawSettings`]), as a draw settles it and as an execution's precompile at commit
-    /// does (`render/executions.rs`), `hidden` where the draw gives the pass its hidden depth and
+    /// What a draw of `pipeline` as `assembly`, which may draw a primitive where `primitives`
+    /// (`line_width::draws_primitives`), settles from the encoder's state before its bind state
+    /// ([`DrawSettings`]), as a draw settles it and as an execution's precompile at commit does
+    /// (`render/executions.rs`), `hidden` where the draw gives the pass its hidden depth and
     /// stencil (`RenderCommandEncoder::needed_hidden`). Where the draw keeps Vulkan's clipping of
     /// points, or a depth the fragment function writes past Metal's clamp, that is announced
     /// once where `announce`: the precompile, which draws nothing, announces nothing. Refused
@@ -228,7 +234,7 @@ impl ShapeInputs<'_> {
     pub(super) fn settings(
         &self,
         call: &'static str,
-        (pipeline, assembly): (&DrawingState, Assembly),
+        (pipeline, assembly, primitives): (&DrawingState, Assembly, bool),
         hidden: bool,
         announce: bool,
     ) -> Result<DrawSettings, Error> {
@@ -424,7 +430,7 @@ impl ShapeInputs<'_> {
         // How it draws its lines at the encoder's width, and a band's push: Vulkan viewport 0's
         // half extent, its height negative as the Y-flipped viewport's is, and the half width
         // (`render/line_width.rs`). A band takes its flat inputs from its first vertex.
-        let line = self.line_route(call, (pipeline, assembly), announce)?;
+        let line = self.line_route(call, (pipeline, assembly, primitives), announce);
         let line_band = match line {
             LineRoute::Band { half } => {
                 let viewports =
@@ -632,6 +638,8 @@ struct Entry {
     /// The drawing state, held: compared by identity.
     pipeline: DrawingState,
     assembly: Assembly,
+    /// Whether the draw may draw a primitive (`line_width::draws_primitives`).
+    primitives: bool,
     /// [`ShapeInputs::versions`] and [`ShapeInputs::counts_visibility`].
     versions: [u64; 3],
     counts_visibility: bool,
@@ -692,11 +700,12 @@ impl FoundPipeline {
 }
 
 impl ShapeMemo {
-    /// The settings an earlier draw of `pipeline` as `assembly` derived under the encoder's
-    /// `versions` and query count, with the token of their entry, which is used now.
+    /// The settings an earlier draw of `pipeline` as `assembly`, which may draw a primitive where
+    /// `primitives`, derived under the encoder's `versions` and query count, with the token of
+    /// their entry, which is used now.
     pub(super) fn settings(
         &mut self,
-        (pipeline, assembly): (&DrawingState, Assembly),
+        (pipeline, assembly, primitives): (&DrawingState, Assembly, bool),
         (versions, counts_visibility): ([u64; 3], bool),
     ) -> Option<(DrawSettings, ShapeToken)> {
         self.ticks += 1;
@@ -704,6 +713,7 @@ impl ShapeMemo {
             let entry = entry.as_mut().filter(|entry| {
                 entry.pipeline.same(pipeline)
                     && entry.assembly == assembly
+                    && entry.primitives == primitives
                     && entry.versions == versions
                     && entry.counts_visibility == counts_visibility
             })?;
@@ -714,12 +724,12 @@ impl ShapeMemo {
         Some((entry.settings.clone(), token))
     }
 
-    /// Keep `settings`, derived for a draw of `pipeline` as `assembly` under the encoder's
-    /// `versions` and query count, in a new entry, in place of the least recently used of
-    /// [`ENTRIES`]: its token.
+    /// Keep `settings`, derived for a draw of `pipeline` as `assembly`, which may draw a
+    /// primitive where `primitives`, under the encoder's `versions` and query count, in a new
+    /// entry, in place of the least recently used of [`ENTRIES`]: its token.
     pub(super) fn keep_settings(
         &mut self,
-        (pipeline, assembly): (&DrawingState, Assembly),
+        (pipeline, assembly, primitives): (&DrawingState, Assembly, bool),
         (versions, counts_visibility): ([u64; 3], bool),
         settings: &DrawSettings,
     ) -> ShapeToken {
@@ -732,6 +742,7 @@ impl ShapeMemo {
             used: self.ticks,
             pipeline: pipeline.clone(),
             assembly,
+            primitives,
             versions,
             counts_visibility,
             settings: settings.clone(),

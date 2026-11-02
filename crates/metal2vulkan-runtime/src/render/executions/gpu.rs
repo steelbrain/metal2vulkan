@@ -701,7 +701,8 @@ impl RenderLowering {
         }
         let settings =
             self.draw_settings(CALL, state, Assembly::Primitives(primitive_type), false)?;
-        // Lines at a width other than 1 are the host replay's to refuse (`render/line_width.rs`).
+        // Lines at a width other than 1 are the host replay's to draw, which announces their width
+        // (`render/line_width.rs`).
         if settings.line != LineRoute::Plain {
             return Ok(Err(HostStepCause::Rule(
                 "the encoder's line width is not 1",

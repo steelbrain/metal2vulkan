@@ -7246,12 +7246,11 @@ impl RenderLowering {
         // A draw under the last provoking vertex is drawn as a list on a device without it
         // (`render/provoking.rs`).
         // A line Apple's `setLineWidth:` widens is drawn by the device's lines or as the
-        // pipeline's band, a strip or loop listed as its segments (`render/line_width.rs`); an
-        // execution's command is the runtime's gap there.
-        let line = (self.shape_inputs()).line_route(call, (&pipeline, assembly), false)?;
-        if self.replaying && line != LineRoute::Plain {
-            return Err(Error::NotImplemented(RuntimeGap::WideLines));
-        }
+        // pipeline's band, a strip or loop listed as its segments, else by the device's lines at
+        // the nearest width they draw (`render/line_width.rs`); a draw of no complete primitive
+        // as every line.
+        let primitives = line_width::draws_primitives(assembly, &draw);
+        let line = (self.shape_inputs()).line_route(call, (&pipeline, assembly, primitives), false);
         let provoking = self.provoking(call, &pipeline, (assembly, line.band()), &draw);
         let provoking_forms = provoking.forms(assembly, &pipeline);
         let restarted = self.restarted(assembly, &draw, (provoking, line.band()));
@@ -7263,7 +7262,8 @@ impl RenderLowering {
         let assembly = restarted.map_or(assembly, |r| r.assembly());
         // Its settings, and the memo entry its draw state and pipeline are found and kept in
         // (`render/draw_shape.rs`).
-        let (settings, hidden, shape_token) = self.shaped_settings(call, &pipeline, assembly)?;
+        let (settings, hidden, shape_token) =
+            self.shaped_settings(call, &pipeline, (assembly, primitives))?;
         // A direct indexed draw of a pipeline that writes the primitive ID runs its de-indexed
         // variant; a restarted strip's list keeps the strip's indices, which it does not run.
         let primitive_id_indices = match restarted {
@@ -7349,6 +7349,9 @@ impl RenderLowering {
             LineRoute::Plain => {}
             LineRoute::Device { .. } => self.core.device().shared().counts.device_wide_line_draw(),
             LineRoute::Band { .. } => self.core.device().shared().counts.line_band_draw(),
+            LineRoute::Nearest { .. } => {
+                self.core.device().shared().counts.nearest_width_line_draw()
+            }
         }
         self.give_up_extended_shadows(&pipeline, &live.state);
         // The draw's primitive type: a vertex function that writes the primitive ID divides by its
@@ -9669,6 +9672,7 @@ impl RenderLowering {
             amplification: &self.amplification,
             counts_visibility: self.counts_visibility(),
             rate_map: self.rate_map.as_ref(),
+            executes: self.replaying,
             routed: self.routed.as_ref(),
             versions: [
                 self.layout.version(),
@@ -9679,7 +9683,8 @@ impl RenderLowering {
     }
 
     /// [`ShapeInputs::settings`] of a draw of `pipeline` as `assembly`, which gives the pass its
-    /// hidden depth and stencil where its state needs them ([`needed_hidden`](Self::needed_hidden)).
+    /// hidden depth and stencil where its state needs them ([`needed_hidden`](Self::needed_hidden)):
+    /// an execution's command's, which may draw a primitive (its record holds its count).
     fn draw_settings(
         &self,
         call: &'static str,
@@ -9689,10 +9694,11 @@ impl RenderLowering {
     ) -> Result<DrawSettings, Error> {
         let hidden = self.needed_hidden()?.is_some();
         self.shape_inputs()
-            .settings(call, (pipeline, assembly), hidden, announce)
+            .settings(call, (pipeline, assembly, true), hidden, announce)
     }
 
-    /// A draw's settings ([`draw_settings`](Self::draw_settings)), with the hidden depth and
+    /// A draw's settings ([`draw_settings`](Self::draw_settings), of a draw of `assembly` that may
+    /// draw a primitive where `primitives`), with the hidden depth and
     /// stencil it gives the pass: those an earlier draw of the encoder derived from the same
     /// inputs, else derived and kept (`render/draw_shape.rs`); with the token of their memo
     /// entry, `None` where their derivation met a notice the device announces at every
@@ -9701,30 +9707,29 @@ impl RenderLowering {
         &mut self,
         call: &'static str,
         pipeline: &DrawingState,
-        assembly: Assembly,
+        (assembly, primitives): (Assembly, bool),
     ) -> Result<(DrawSettings, Option<Target>, Option<ShapeToken>), Error> {
         let hidden = self.needed_hidden()?;
         let given = hidden.is_some();
         let inputs = self.shape_inputs();
         let inputs = (inputs.versions, inputs.counts_visibility);
-        if let Some((kept, token)) = self.shape_memo.settings((pipeline, assembly), inputs) {
+        let drawn = (pipeline, assembly, primitives);
+        if let Some((kept, token)) = self.shape_memo.settings(drawn, inputs) {
             debug_assert!(
                 (self.shape_inputs())
-                    .settings(call, (pipeline, assembly), given, false)
+                    .settings(call, drawn, given, false)
                     .is_ok_and(|fresh| fresh == kept),
                 "a draw's settings derived again differ from those kept for its inputs"
             );
             return Ok((kept, hidden, Some(token)));
         }
         let watch = EachWatch::start();
-        let settings = self
-            .shape_inputs()
-            .settings(call, (pipeline, assembly), given, true)?;
+        let settings = self.shape_inputs().settings(call, drawn, given, true)?;
         // Derived again at each draw, which announces it again.
         if watch.met() {
             return Ok((settings, hidden, None));
         }
-        let token = (self.shape_memo).keep_settings((pipeline, assembly), inputs, &settings);
+        let token = (self.shape_memo).keep_settings(drawn, inputs, &settings);
         Ok((settings, hidden, Some(token)))
     }
 

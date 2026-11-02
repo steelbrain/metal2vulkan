@@ -424,6 +424,7 @@ impl CallChecks {
             // Which reads no refusal: `ShapeInputs::settings` reads it after its last.
             counts_visibility: false,
             rate_map: self.rate_map.as_ref(),
+            executes: false,
             routed: None,
             versions: [0, self.state.version(), self.amplification.version()],
         }
@@ -514,8 +515,15 @@ impl CallChecks {
             .is_some_and(|(kept, kept_assembly, kept_versions)| {
                 kept.same(&pipeline) && *kept_assembly == assembly && *kept_versions == versions
             });
+        // Its count changes how it draws its lines alone, which refuses nothing
+        // (`render/line_width.rs`).
         if !settled {
-            (self.shape_inputs(device)).settings(call, (&pipeline, assembly), false, false)?;
+            (self.shape_inputs(device)).settings(
+                call,
+                (&pipeline, assembly, true),
+                false,
+                false,
+            )?;
             self.settled = Some((pipeline, assembly, versions));
         }
         Ok(Checked::Logged)

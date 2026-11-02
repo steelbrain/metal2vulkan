@@ -200,8 +200,9 @@ compile does. `DevicePolicy::default()` is `DevicePolicy::UNTRUSTED`:
   on `lineWidthGranularity` and above 1), announced `device-wide-lines` where not.
   `wide_lines = WideLinePolicy::Exact`, which `exact_answers()` selects, draws those as the
   pipeline's band variant instead (section 4), two triangles over Metal's parallelogram, on a
-  device with `tessellationShader`. Every other width other than 1 is the band under either value
-  (the runtime's README, line widths).
+  device with `tessellationShader`. Every other width other than 1 is the band under either value,
+  and what neither draws the device's lines at the nearest width they draw, announced
+  `lines-at-nearest-width` (the runtime's README, line widths).
 
 Loops run as written: no execution bound is translated in.
 
@@ -2731,6 +2732,17 @@ bound.
   draw of lines takes the band variant there instead, on a device with `tessellationShader`.
   Cost: the lines can cover pixels Metal's parallelogram does not, and miss others, at each end
   and along each edge.
+- `metal2vulkan-degrade-lines-at-nearest-width` (precision). `LinesAtNearestWidth`: A draw of lines
+  at a width other than 1 (Apple's `setLineWidth:`), or of a triangle's edges in fill mode `Lines`
+  or of a mesh draw, that neither the device's own lines at that width nor the band variant draws,
+  drawn by the device's own lines at the width nearest it they draw: the width clamped into
+  `lineWidthRange` where the device enables `wideLines`, else 1. That is a triangle's edges and a
+  mesh draw's lines where the device's lines do not draw the width (every such draw on MoltenVK), a
+  line on a device without `tessellationShader` whose lines do not draw it, a band under vertex
+  amplification above 1, and every line in a rasterization-rate-mapped pass or of an execution's
+  command, whose width Metal's answer is not measured for. The reason names which, and both
+  widths. Cost: the lines are drawn at another width than Metal's: thinner (1 pixel without
+  wideLines) or wider, so they cover fewer or more pixels across each line.
 - `metal2vulkan-degrade-provoking-vertex-lines` (precision). `ProvokingVertexLines`: A draw of
   lines, or an emulated mesh draw of lines, under Apple's last provoking vertex
   (`setProvokingVertexMode:` 1), of a pipeline state that reads it (a flat input, or a slice or

@@ -28,7 +28,11 @@
 //!
 //! The runtime draws each draw of lines by a route ([`LineRoute`]):
 //!
-//! - **Plain** at `w' = 1`, and for draws that draw no lines: as every line the runtime draws.
+//! - **Plain** at `w' = 1`, and for draws that draw no lines: as every line the runtime draws. A
+//!   draw that rasterizes nothing is one, and so is a direct draw whose vertices or indices
+//!   complete no primitive of its type (a list of lines of one vertex, triangles of two), which
+//!   Metal draws as nothing ([`draws_primitives`]); an indirect draw's count is the GPU's, so it
+//!   takes its route as any other.
 //! - **Device**: the device's own lines at `w'` (`lineWidth`), where it enables `wideLines` and
 //!   `w'` lies in its `lineWidthRange` and above 0. Exact where they are Metal's parallelogram:
 //!   `strictLines` unset, `nonStrictWideLinesUseParallelogram` set (Vulkan states the shape only
@@ -44,13 +48,23 @@
 //!   at 1/16, as Metal does. A strip or a loop is drawn as the list of its segments
 //!   (`render/restart.rs`); a flat input under the last provoking vertex reads the
 //!   list led by each line's last vertex (`render/provoking.rs`), which covers the same pixels, as
-//!   the parallelogram is the same either way. Refused (`Unsupported`, `Feature::WideLines`,
-//!   needing `tessellationShader`) without it.
+//!   the parallelogram is the same either way.
+//! - **Nearest**: the device's own lines at the width nearest Metal's they draw (`w'`, 1/16 at 0,
+//!   clamped into `lineWidthRange` where it enables `wideLines`, else 1), where neither route above
+//!   draws `w'`,
+//!   announced (`Degradation::LinesAtNearestWidth`, with why): a triangle's edges in fill mode
+//!   `Lines` and a mesh draw's lines, which the band does not draw; a line without
+//!   `tessellationShader`; a band under vertex amplification above 1 (its viewports); and every
+//!   line drawn in a rasterization-rate-mapped pass or as an execution's command, whose width
+//!   Metal's answer is not measured for (the band takes viewport 0's extent and lists its strips
+//!   before the pass, which neither has). Thinner than Metal's line above the range or without
+//!   `wideLines`, wider below it. A later band of the edges would take them from this route.
 //!
-//! Refused (`NotImplemented(RuntimeGap::WideLines)`) at a width other than 1: the band of a
-//! triangle's edges in fill mode `Lines`, and of a mesh draw's lines, where the device's own lines
-//! do not draw the width; any line drawn in a rasterization-rate-mapped pass or as an execution's
-//! command (unmeasured); and a band under vertex amplification above 1 (its viewports).
+//! Refused (`NotImplemented(RuntimeGap::WideLines)`): a line strip's band whose list of segments
+//! the runtime cannot draw (`render/restart.rs`, as for a list of the last provoking vertex); and
+//! as the translator refuses the band variant (`pipeline::link::band`: a vertex function that
+//! selects a slice or viewport, a fragment function that reads barycentric weights, synthesized
+//! geometry, multiview, stages past `maxTessellationEvaluationOutputComponents`).
 //!
 //! A multisampled target is drawn by the same routes: the band's triangles cover Metal's
 //! parallelogram at each sample, as a non-strict device's lines do (the Vulkan specification's
@@ -60,11 +74,9 @@
 use super::draw_shape::ShapeInputs;
 use super::{Assembly, RenderLowering};
 use crate::degradation::Degradation;
-use crate::error::{Error, RuntimeGap};
 use crate::pipeline::{FixedState, GraphicsState as DrawingState};
-use metal2vulkan::bind::RewriteProgram;
+use metal2vulkan::bind::{DrawCall, RewriteProgram};
 use metal2vulkan::device::{DeviceProfile, VkFeature, WideLinePolicy};
-use metal2vulkan::error::{Capability, Feature, Unsupported};
 use metal2vulkan::metal::{PrimitiveType, TriangleFillMode};
 use metal2vulkan::pipeline::LineBandState;
 use metal2vulkan::vk;
@@ -101,10 +113,30 @@ impl LineWidth {
 pub(super) enum LineRoute {
     /// As every line the runtime draws: Metal's width 1, or a draw of no lines.
     Plain,
-    /// The device's own lines `width` pixels wide (`lineWidth`).
-    Device { width: f32 },
+    /// The device's own lines `width` pixels wide (`lineWidth`), Metal's width, which differ from
+    /// Metal's parallelogram where `differs` (announced).
+    Device { width: f32, differs: bool },
     /// The pipeline's band variant, `half` pixels to each side of the segment.
     Band { half: f32 },
+    /// The device's own lines `width` pixels wide, the width nearest Metal's they draw, where
+    /// neither route above draws Metal's, for `why` (announced).
+    Nearest { width: f32, why: Unrouted },
+}
+
+/// Why a draw's lines take the nearest width the device's lines draw (the module docs).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum Unrouted {
+    /// A triangle's edges in fill mode `Lines` or a mesh draw's lines, which the band does not
+    /// draw.
+    Unbanded,
+    /// No `tessellationShader`, which the band needs.
+    Untessellated,
+    /// Vertex amplification above 1, whose views the band does not draw.
+    Amplified,
+    /// A rasterization-rate-mapped pass, whose lines Metal's answer is not measured for.
+    RateMapped,
+    /// An execution's command, whose lines Metal's answer is not measured for.
+    Executed,
 }
 
 impl LineRoute {
@@ -118,7 +150,9 @@ impl LineRoute {
     pub(super) fn fix(self, fixed: &mut FixedState) {
         match self {
             LineRoute::Plain => {}
-            LineRoute::Device { width } => fixed.line_width = width.to_bits(),
+            LineRoute::Device { width, .. } | LineRoute::Nearest { width, .. } => {
+                fixed.line_width = width.to_bits()
+            }
             LineRoute::Band { .. } => {
                 fixed.cull_mode = vk::CullModeFlags::NONE;
                 fixed.front_face = LineBandState::FRONT_FACE;
@@ -131,7 +165,7 @@ impl LineRoute {
 /// What of a draw the width changes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Drawn {
-    /// Nothing: points, filled triangles, a draw that rasterizes nothing.
+    /// Nothing: points, filled triangles, a draw that rasterizes nothing or draws no primitive.
     Nothing,
     /// Line primitives, which the band draws.
     Lines,
@@ -140,16 +174,32 @@ enum Drawn {
     Other,
 }
 
+/// Whether `draw` of `assembly` may draw a primitive: every draw but a direct one whose vertices
+/// or indices complete no primitive of its type (`RewriteProgram::capacity`: a list of lines of
+/// one vertex, a strip of triangles of two, quads of three), which Metal draws as nothing. An
+/// indirect draw's count is the GPU's, a patch draw's patches are drawn or culled by the GPU's
+/// factors, and a mesh draw's primitives are its mesh function's: each may draw one.
+pub(super) fn draws_primitives(assembly: Assembly, draw: &DrawCall) -> bool {
+    let count = match *draw {
+        DrawCall::Primitives { vertex_count, .. } => vertex_count,
+        DrawCall::Indexed { index_count, .. } => index_count,
+        _ => return true,
+    };
+    (assembly.program()).is_none_or(|program| program.capacity(u64::from(count)) > 0)
+}
+
 /// What `assembly` draws that the width changes, in fill mode `fill`, under a pipeline that
 /// rasterizes nothing where `discards`, whose emulated meshes' primitives have `mesh_corners`
-/// corners (`None` for a mesh draw the device draws).
+/// corners (`None` for a mesh draw the device draws), of a draw that may draw a primitive where
+/// `primitives` ([`draws_primitives`]).
 fn drawn(
     assembly: Assembly,
     fill: TriangleFillMode,
     discards: bool,
     mesh_corners: Option<u32>,
+    primitives: bool,
 ) -> Drawn {
-    if discards {
+    if discards || !primitives {
         return Drawn::Nothing;
     }
     let edges = match fill {
@@ -172,29 +222,41 @@ fn drawn(
 }
 
 /// The route a draw of `drawn` at Metal's width `width` takes on a device of `profile` under
-/// `policy` (the module docs), drawn with vertex amplification above 1 where `amplifies` and in a
-/// rasterization-rate-mapped pass where `rate_mapped`; with whether the device's lines it draws
-/// differ from Metal's parallelogram, which the draw announces. Refused as the module docs say.
+/// `policy` (the module docs), drawn with vertex amplification above 1 where `amplifies`, in a
+/// rasterization-rate-mapped pass where `rate_mapped`, and as an execution's command where
+/// `executes`.
 fn route(
     profile: &DeviceProfile,
     policy: WideLinePolicy,
     width: LineWidth,
     drawn: Drawn,
-    (amplifies, rate_mapped): (bool, bool),
-) -> Result<(LineRoute, bool), Error> {
+    (amplifies, rate_mapped, executes): (bool, bool, bool),
+) -> LineRoute {
     if width == LineWidth::ONE || drawn == Drawn::Nothing {
-        return Ok((LineRoute::Plain, false));
-    }
-    if rate_mapped {
-        return Err(Error::NotImplemented(RuntimeGap::WideLines));
+        return LineRoute::Plain;
     }
     let enabled = profile.enabled();
     let limits = profile.limits();
     let w = width.pixels();
     let [low, high] = limits.line_width_range_bits.map(f32::from_bits);
     let granularity = f32::from_bits(limits.line_width_granularity_bits);
-    let drawable =
-        enabled.features.contains(&VkFeature::WideLines) && w > 0.0 && (low..=high).contains(&w);
+    let wide_lines = enabled.features.contains(&VkFeature::WideLines);
+    // The width nearest the one Metal draws (`w'`, 1/16 at 0) the device's lines draw: in their
+    // range, else 1.
+    let nearest = |why| LineRoute::Nearest {
+        width: match wide_lines {
+            true => w.max(1.0 / 16.0).max(low).min(high),
+            false => 1.0,
+        },
+        why,
+    };
+    if rate_mapped {
+        return nearest(Unrouted::RateMapped);
+    }
+    if executes {
+        return nearest(Unrouted::Executed);
+    }
+    let drawable = wide_lines && w > 0.0 && (low..=high).contains(&w);
     // On the granularity's grid from the range's bottom: the widths the device draws without
     // rounding.
     let on_grid = granularity > 0.0 && {
@@ -210,52 +272,65 @@ fn route(
     // Where the band can draw the draw's lines.
     let band = drawn == Drawn::Lines && tessellates && !amplifies;
     if exact || (drawable && (policy == WideLinePolicy::Device || !band)) {
-        return Ok((LineRoute::Device { width: w }, !exact));
+        return LineRoute::Device {
+            width: w,
+            differs: !exact,
+        };
     }
     if !band {
-        return Err(match drawn == Drawn::Lines && !tessellates {
-            true => Error::Unsupported(Unsupported::needs(
-                Feature::WideLines,
-                Capability::Feature(VkFeature::TessellationShader),
-            )),
-            false => Error::NotImplemented(RuntimeGap::WideLines),
+        return nearest(match drawn {
+            Drawn::Lines if !tessellates => Unrouted::Untessellated,
+            Drawn::Lines => Unrouted::Amplified,
+            _ => Unrouted::Unbanded,
         });
     }
     // Metal draws `w' = 0` as 1/16 (the module docs).
     let half = w.max(1.0 / 16.0) / 2.0;
-    Ok((LineRoute::Band { half }, false))
+    LineRoute::Band { half }
 }
 
 impl ShapeInputs<'_> {
     /// The route `call`'s draw of `pipeline` as `assembly` draws its lines by at the encoder's
-    /// width (the module docs), announcing a device line that differs from Metal's where
-    /// `announce`. Refused as the module docs say.
+    /// width (the module docs), of a draw that may draw a primitive where `primitives`
+    /// ([`draws_primitives`]); announcing a device line that differs from Metal's, and one at
+    /// the nearest width, where `announce`.
     pub(super) fn line_route(
         &self,
         call: &'static str,
-        (pipeline, assembly): (&DrawingState, Assembly),
+        (pipeline, assembly, primitives): (&DrawingState, Assembly, bool),
         announce: bool,
-    ) -> Result<LineRoute, Error> {
+    ) -> LineRoute {
         let graphics = &pipeline.base().graphics;
         let drawn = drawn(
             assembly,
             self.state.fill_mode(),
             graphics.rasterizer_discard,
             graphics.mesh_records.as_ref().map(|r| r.corners),
+            primitives,
         );
         let compile = self.device.compile_device();
         let width = self.state.line_width();
-        let (route, differs) = route(
+        let route = route(
             compile.profile(),
             compile.policy().wide_lines,
             width,
             drawn,
-            (self.amplification.amplifies(), self.rate_map.is_some()),
-        )?;
-        if differs && announce {
-            announce_device_lines(self.device, call, width.pixels());
+            (
+                self.amplification.amplifies(),
+                self.rate_map.is_some(),
+                self.executes,
+            ),
+        );
+        match route {
+            LineRoute::Device { differs: true, .. } if announce => {
+                announce_device_lines(self.device, call, width.pixels());
+            }
+            LineRoute::Nearest { width: drawn, why } if announce => {
+                announce_nearest_lines(self.device, call, (width.pixels(), drawn), why);
+            }
+            _ => {}
         }
-        Ok(route)
+        route
     }
 }
 
@@ -279,6 +354,47 @@ fn announce_device_lines(device: &crate::Device, call: &'static str, w: f32) {
                 "the device draws them as its own {shape} (lineWidthRange [{low}, {high}], \
                  lineWidthGranularity {granularity}), where Metal draws the parallelogram whose \
                  minor-axis edges pass through the endpoints"
+            ),
+        )
+    });
+}
+
+/// Announce `call`'s draw of lines at Metal's width `w` by the device's own lines `drawn` pixels
+/// wide, the nearest width they draw, for `why` (the module docs).
+fn announce_nearest_lines(
+    device: &crate::Device,
+    call: &'static str,
+    (w, drawn): (f32, f32),
+    why: Unrouted,
+) {
+    let limits = device.compile_device().profile().limits();
+    let [low, high] = limits.line_width_range_bits.map(f32::from_bits);
+    let wide_lines =
+        (device.compile_device().profile().enabled().features).contains(&VkFeature::WideLines);
+    let lines = match wide_lines {
+        true => format!("its lines draw widths in [{low}, {high}] (lineWidthRange)"),
+        false => "it draws lines 1 pixel wide alone (no wideLines)".to_owned(),
+    };
+    let why = match why {
+        Unrouted::Unbanded => {
+            "a triangle's edges in fill mode Lines or a mesh draw's lines, which the runtime's \
+             band does not draw"
+        }
+        Unrouted::Untessellated => "the band of two triangles needs tessellationShader",
+        Unrouted::Amplified => "the band of two triangles does not draw amplified views",
+        Unrouted::RateMapped => {
+            "a rasterization-rate-mapped pass, whose lines Metal's width is not measured for"
+        }
+        Unrouted::Executed => {
+            "an execution's command, whose lines Metal's width is not measured for"
+        }
+    };
+    device.degrade(Degradation::LinesAtNearestWidth, || {
+        (
+            format!("{call}: a draw of lines at setLineWidth: {w}"),
+            format!(
+                "the device draws them as its own lines {drawn} pixels wide, the width nearest \
+                 Metal's {w} it draws: {lines}, and {why}"
             ),
         )
     });

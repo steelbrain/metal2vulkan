@@ -2055,6 +2055,20 @@ degradations! {
         DeviceWideLines = "device-wide-lines", Precision,
             "the lines can cover pixels Metal's parallelogram does not, and miss others, at each \
              end and along each edge";
+        /// A draw of lines at a width other than 1 (Apple's `setLineWidth:`), or of a triangle's
+        /// edges in fill mode `Lines` or of a mesh draw, that neither the device's own lines at
+        /// that width nor the band variant draws (`render/line_width.rs`), drawn by the device's
+        /// own lines at the width nearest it they draw: the width clamped into `lineWidthRange`
+        /// where the device enables `wideLines`, else 1. A triangle's edges and a mesh draw's
+        /// lines, which the band does not draw, where the device's lines do not draw the width
+        /// (every such draw on a device without `wideLines`, MoltenVK among them); a line on a
+        /// device without `tessellationShader` whose lines do not draw it; a band under vertex
+        /// amplification above 1; and every line in a rasterization-rate-mapped pass or of an
+        /// execution's command, whose width Metal's answer is not measured for. The reason names
+        /// which, and both widths.
+        LinesAtNearestWidth = "lines-at-nearest-width", Precision,
+            "the lines are drawn at another width than Metal's: thinner (1 pixel without \
+             wideLines) or wider, so they cover fewer or more pixels across each line";
         /// A draw of lines, or an emulated mesh draw of lines, under Apple's last provoking vertex
         /// (`setProvokingVertexMode:` 1), of a pipeline state that reads it (a flat input, or a
         /// slice or viewport its vertex function selects), on a device without
