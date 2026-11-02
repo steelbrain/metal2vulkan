@@ -59,7 +59,7 @@ use super::chroma_pairs::{is_four_two_two, TEXEL_BYTES};
 use super::host_bytes::HostBytes;
 use super::pvrtc::{is_pvrtc, BLOCK_BYTES};
 use super::view_plan::ViewRecord;
-use metal2vulkan::bind::YCbCrCodes;
+use metal2vulkan::bind::{AstcDecode, YCbCrCodes};
 use metal2vulkan::error::{Feature, Unsupported};
 use metal2vulkan::metal::format::{
     aspects, byte_format, is_depth_stencil, ycbcr_format, FormatMapping,
@@ -204,11 +204,17 @@ pub(super) struct CopyUnit {
 pub(super) use metal2vulkan::metal::format::block_extent;
 
 /// The bytes of a block (a texel, uncompressed) of the colour format `pf`: its byte format's
-/// (`metal::format::byte_format`, the format whose image holds Metal's bytes), and a PVRTC
-/// block's 8, which the device may hold in a carrier of no PVRTC format (`pvrtc.rs`).
+/// (`metal::format::byte_format`, the format whose image holds Metal's bytes), a PVRTC block's 8
+/// and an ASTC block's 16, which the device may hold in a carrier of no PVRTC or ASTC format
+/// (`pvrtc.rs`, `astc.rs`).
 pub(super) fn block_bytes(pf: PixelFormat) -> Option<u32> {
     if is_pvrtc(pf) {
         return Some(BLOCK_BYTES);
+    }
+    // An ASTC block is 16 bytes at every footprint, Apple's 4x2 and 8x4 among them, which no
+    // Vulkan format holds (their carrier does, `astc.rs`).
+    if AstcDecode::of(pf).is_some() {
+        return Some(AstcDecode::BLOCK_BYTES);
     }
     // Plain Metal copies a 4:2:2 texture's 2-byte texels at any x, width, offset and pitch (its
     // validation asks for 2 x 1 blocks of 4 bytes), which its carrier holds

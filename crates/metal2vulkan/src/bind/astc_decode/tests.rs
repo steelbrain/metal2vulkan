@@ -10,15 +10,15 @@ use crate::metal::PixelFormat;
 use crate::spirv::interp::{run, Buffer, Config, Order, Resources};
 use crate::spirv::testing::{assert_valid, committed_profiles};
 
-/// The fourteen 2D footprints, linear, sRGB and HDR, decode, and no other format does (Apple's
-/// 4x2 and 8x4 footprints among them).
+/// Every ASTC format decodes, linear, sRGB and HDR, of the fourteen 2D footprints Vulkan's ASTC
+/// formats have and of Apple's 4x2 and 8x4, and no other format does.
 #[test]
-fn the_fourteen_footprints_of_every_profile_alone_decode() {
+fn every_astc_format_of_every_profile_alone_decodes() {
     let decoded: Vec<(PixelFormat, AstcDecode)> = PixelFormat::ALL
         .iter()
         .filter_map(|&pf| AstcDecode::of(pf).map(|d| (pf, d)))
         .collect();
-    assert_eq!(decoded.len(), 42);
+    assert_eq!(decoded.len(), 16 * 3);
     for (pf, d) in decoded {
         let name = pf.name();
         let footprint = format!("_{}x{}_", d.width, d.height);
@@ -28,10 +28,9 @@ fn the_fourteen_footprints_of_every_profile_alone_decode() {
         assert!(name.ends_with("_LDR") || d.srgb || d.hdr, "{name}");
     }
     for pf in [
-        PixelFormat::ASTC4x2HDR,
-        PixelFormat::ASTC4x2LDR,
-        PixelFormat::ASTC8x4SRGB,
         PixelFormat::BC7RGBAUnorm,
+        PixelFormat::PVRTCRGBA4BPP,
+        PixelFormat::RGBA8Unorm,
     ] {
         assert_eq!(AstcDecode::of(pf), None, "{pf:?}");
     }
@@ -145,13 +144,14 @@ fn fnv1a(bytes: &[u8]) -> u64 {
 }
 
 /// Every texel of 1024 seeded blocks (32 x 32 of them, seeded by the LDR form's raw value) of each
-/// footprint, linear and sRGB, is Metal's read: the `float` texels' FNV-1a digest equals the
-/// digest of what an Apple M3 Max (macOS 27.0.1) read of the same blocks (`texture.read` into
-/// `float4`, our probe). Of each footprint 117 to 283 blocks are valid, the rest error blocks of
-/// every kind; the probe's wider run (4096 valid-biased blocks a footprint) matched as well.
+/// footprint, linear and sRGB, Apple's 4x2 and 8x4 among them, is Metal's read: the `float`
+/// texels' FNV-1a digest equals the digest of what an Apple M3 Max (macOS 27.0.1) read of the same
+/// blocks (`texture.read` into `float4`, our probes). Of each footprint 86 (Apple's 4x2) to 283
+/// blocks are valid, the rest error blocks of every kind; the probe's wider run (4096 valid-biased
+/// blocks a footprint) matched as well.
 #[test]
 fn seeded_blocks_read_as_metal_read_them() {
-    const DIGESTS: [(u32, u64, u64); 14] = [
+    const DIGESTS: [(u32, u64, u64); 16] = [
         (204, 0x1ec2_3532_f7f1_3267, 0xeac0_f14e_3953_0337),
         (205, 0x8e4e_246a_e848_6e2a, 0xb1cf_2627_d93f_c546),
         (206, 0xc623_781c_7ea9_9899, 0xdfe3_b392_ea47_125d),
@@ -166,6 +166,9 @@ fn seeded_blocks_read_as_metal_read_them() {
         (216, 0xe5eb_eef0_6b57_ea2c, 0x979d_0419_fa81_a371),
         (217, 0x3473_96ec_0297_8568, 0x4533_32fd_ec0e_d21b),
         (218, 0xa285_9133_6da5_5eff, 0x87a5_68d7_f82c_594a),
+        // Apple's 4x2 and 8x4 footprints (the probe `astc_passes_writes_footprints`, `digest`).
+        (203, 0x0ce8_1b3e_88fe_e772, 0x0e48_5529_95cd_c8c2),
+        (209, 0x5acd_5090_d21d_770b, 0x3663_c642_a5fa_92aa),
     ];
     for (raw, linear, srgb) in DIGESTS {
         let blocks = seeded_blocks(u64::from(raw), 1024);
@@ -181,7 +184,7 @@ fn seeded_blocks_read_as_metal_read_them() {
                 .iter()
                 .filter(|b| d.block_values(b).is_some())
                 .count();
-            assert!(valid > 100, "{pf:?}: {valid} valid blocks");
+            assert!(valid > 80, "{pf:?}: {valid} valid blocks");
         }
     }
 }
@@ -216,7 +219,12 @@ fn the_eight_bit_twin_holds_the_nearest_codes() {
 #[test]
 fn the_astc_decode_kernels_are_valid_on_every_committed_profile() {
     let profiles = committed_profiles().expect("profiles");
-    for pf in [PixelFormat::ASTC4x4LDR, PixelFormat::ASTC12x12SRGB] {
+    for pf in [
+        PixelFormat::ASTC4x4LDR,
+        PixelFormat::ASTC12x12SRGB,
+        PixelFormat::ASTC4x2LDR,
+        PixelFormat::ASTC8x4SRGB,
+    ] {
         let decode = AstcDecode::of(pf).expect("a decode");
         for texels in [AstcTexels::Unorm8, AstcTexels::Float] {
             for (_, p) in &profiles {

@@ -200,7 +200,7 @@ fn view_formats_follow_metals_measured_verdicts() {
     );
     match check_view(
         &source,
-        &ViewRequest::of_format(&source, P::ASTC4x2HDR),
+        &ViewRequest::of_format(&source, P::RGB8Unorm),
         device.profile(),
     ) {
         Err(ViewRefusal::Unsupported(u)) => assert_eq!(u.feature, Feature::Format),

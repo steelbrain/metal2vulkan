@@ -11,7 +11,7 @@ use crate::spirv::interp::Order;
 use crate::spirv::testing::{assert_valid, committed_profiles};
 use crate::vk::Format;
 
-/// The fourteen `_HDR` formats.
+/// The sixteen `_HDR` formats.
 fn hdr_formats() -> Vec<PixelFormat> {
     (PixelFormat::ALL.iter().copied())
         .filter(|&pf| AstcDecode::of(pf).is_some_and(|d| d.hdr))
@@ -57,7 +57,7 @@ const DOWN: u32 = 32;
 
 /// The FNV-1a digest of the `float` texels Metal read of `hdr_seeded_blocks(raw · 7919, 2048)`,
 /// 64 x 32 blocks of each `_HDR` format, row-major.
-const DIGESTS: [(u32, u64); 14] = [
+const DIGESTS: [(u32, u64); 16] = [
     (222, 0x6a09_0dd1_d708_385e),
     (223, 0x5133_22f1_31e3_5360),
     (224, 0xe57f_f92a_3ad4_6a73),
@@ -72,11 +72,14 @@ const DIGESTS: [(u32, u64); 14] = [
     (234, 0x7bed_6c2f_1759_6320),
     (235, 0x5952_aae3_8906_bbe0),
     (236, 0x57c9_02f4_a42a_e0d1),
+    // Apple's 4x2 and 8x4 footprints (the probe `astc_passes_writes_footprints`, `digest`).
+    (221, 0x4273_ba75_4057_14f4),
+    (227, 0xd465_4f44_6d5e_52ba),
 ];
 
-/// Every texel of 2048 seeded blocks of each footprint (340 to 629 of them valid, decoding
-/// through every colour endpoint mode, two to four partitions and two planes; 1 in 16 an HDR
-/// void-extent block and 1 in 16 an LDR one) reads as Metal read it, bit for bit.
+/// Every texel of 2048 seeded blocks of each footprint (270, Apple's 4x2, to 629 of them valid,
+/// decoding through every colour endpoint mode, two to four partitions and two planes; 1 in 16 an
+/// HDR void-extent block and 1 in 16 an LDR one) reads as Metal read it, bit for bit.
 #[test]
 fn hdr_seeded_blocks_read_as_metal_read_them() {
     for (raw, digest) in DIGESTS {
@@ -89,7 +92,7 @@ fn hdr_seeded_blocks_read_as_metal_read_them() {
         let valid = (blocks.as_chunks::<16>().0.iter())
             .filter(|b| d.block_values(b).is_some())
             .count();
-        assert!(valid > 300, "{pf:?}: {valid} valid blocks");
+        assert!(valid > 250, "{pf:?}: {valid} valid blocks");
     }
 }
 
@@ -350,7 +353,7 @@ fn the_astc_hdr_decode_kernels_are_valid_on_every_committed_profile() {
 fn covering_hdr_blocks(decode: AstcDecode, seed: u64, each: usize, invalid: usize) -> Vec<u8> {
     let (mut modes, mut partitions, mut planes, mut void) = ([0; 16], [0; 5], 0, [0; 2]);
     let (mut good, mut bad) = (Vec::new(), Vec::new());
-    for block in hdr_seeded_blocks(seed, 8192).as_chunks::<16>().0 {
+    for block in hdr_seeded_blocks(seed, 32768).as_chunks::<16>().0 {
         if decode.block_values(block).is_none() {
             if bad.len() < invalid * 16 {
                 bad.extend_from_slice(block);
@@ -396,7 +399,10 @@ fn the_astc_hdr_kernel_is_the_decode_on_every_texel() {
     let (blocks, size) = two_layers(four, covering_hdr_blocks(four, 222, 2, 4), 8);
     assert_kernel_decodes(four, AstcTexels::Half, &blocks, size, &both);
     assert_kernel_decodes(four, AstcTexels::Float, &blocks, size, &both[..1]);
-    for pf in hdr_formats().into_iter().skip(1) {
+    for pf in hdr_formats()
+        .into_iter()
+        .filter(|&pf| pf != PixelFormat::ASTC4x4HDR)
+    {
         let decode = AstcDecode::of(pf).expect("a decode");
         let mut blocks = covering_hdr_blocks(decode, u64::from(pf.as_raw()), 1, 1);
         blocks.drain(16 * 4..blocks.len() - 16);

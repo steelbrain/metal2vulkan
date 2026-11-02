@@ -2,8 +2,9 @@
 //! decode (`metal2vulkan::bind::AstcDecode`, matched bit for bit against an Apple M3 Max by its
 //! own tests).
 //!
-//! On a device without a format's ASTC block ([`decodes_astc`]) the texture holds its blocks in a
-//! carrier and its reads go through a decoded twin, announced `carried-decoded-twin` once and
+//! On a device without a format's ASTC block ([`decodes_astc`]; on every device for Apple's 4x2 and
+//! 8x4 footprints, which no Vulkan format holds) the texture holds its blocks in a carrier and its
+//! reads go through a decoded twin, announced `carried-decoded-twin` once and
 //! `decoded-texel-precision` once ([`ASTC_TWINS`]). Every format's texels read as Metal's after
 //! every kind of write ([`astc_texels_read_as_metal_s`]): an LDR form's within 1/510, an sRGB
 //! form's as the device decodes its twin's 8-bit codes, Metal's own 8-bit codes (through Metal's
@@ -58,12 +59,14 @@ pub(super) const ASTC_TWINS: [Degradation; 2] = [
 pub(super) const CPU_DECODES: [Degradation; 1] = [Degradation::CpuBlockDecode];
 
 /// Every ASTC LDR format, linear and sRGB.
-const FORMATS: [PixelFormat; 28] = [
+const FORMATS: [PixelFormat; 32] = [
     PixelFormat::ASTC4x4LDR,
+    PixelFormat::ASTC4x2LDR,
     PixelFormat::ASTC5x4LDR,
     PixelFormat::ASTC5x5LDR,
     PixelFormat::ASTC6x5LDR,
     PixelFormat::ASTC6x6LDR,
+    PixelFormat::ASTC8x4LDR,
     PixelFormat::ASTC8x5LDR,
     PixelFormat::ASTC8x6LDR,
     PixelFormat::ASTC8x8LDR,
@@ -74,10 +77,12 @@ const FORMATS: [PixelFormat; 28] = [
     PixelFormat::ASTC12x10LDR,
     PixelFormat::ASTC12x12LDR,
     PixelFormat::ASTC4x4SRGB,
+    PixelFormat::ASTC4x2SRGB,
     PixelFormat::ASTC5x4SRGB,
     PixelFormat::ASTC5x5SRGB,
     PixelFormat::ASTC6x5SRGB,
     PixelFormat::ASTC6x6SRGB,
+    PixelFormat::ASTC8x4SRGB,
     PixelFormat::ASTC8x5SRGB,
     PixelFormat::ASTC8x6SRGB,
     PixelFormat::ASTC8x8SRGB,
@@ -642,6 +647,8 @@ fn astc_views_in_the_other_colour_space_read_as_metal_s() {
             PixelFormat::ASTC6x5LDR,
             PixelFormat::ASTC12x12SRGB,
             PixelFormat::ASTC8x8LDR,
+            PixelFormat::ASTC4x2SRGB,
+            PixelFormat::ASTC8x4LDR,
         ];
         for (f, pf) in formats.into_iter().enumerate() {
             if decodes_astc(device, pf) {
@@ -794,9 +801,9 @@ fn astc_views_in_the_other_colour_space_read_as_metal_s() {
 }
 
 /// Every level and slice of a mipmapped 2D array (two slices) and cube of sides no multiple of the
-/// block, of a square, an oblong and an sRGB footprint: blocks blitted in from a buffer at the
-/// level's texel size come back bit for bit from blits into a buffer and from `get_bytes` (the
-/// module docs).
+/// block, of square, oblong and sRGB footprints, Apple's 4x2 and 8x4 among them (one HDR): blocks
+/// blitted in from a buffer at the level's texel size come back bit for bit from blits into a
+/// buffer and from `get_bytes` (the module docs).
 #[test]
 fn astc_blocks_round_trip_at_every_level_and_slice() {
     on_device(|device, _messages| {
@@ -806,6 +813,9 @@ fn astc_blocks_round_trip_at_every_level_and_slice() {
             PixelFormat::ASTC8x8LDR,
             PixelFormat::ASTC6x5LDR,
             PixelFormat::ASTC12x10SRGB,
+            PixelFormat::ASTC4x2LDR,
+            PixelFormat::ASTC8x4SRGB,
+            PixelFormat::ASTC8x4HDR,
         ];
         for (f, pf) in formats.into_iter().enumerate() {
             let decode = AstcDecode::of(pf).unwrap();

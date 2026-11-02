@@ -1,6 +1,8 @@
-//! `heapTextureSizeAndAlignWithDescriptor:` for the 32 formats this crate holds no image of
-//! (`metal::format::footprint`): Metal's size and alignment against the runtime's, over two
-//! declared descriptor spaces enumerated whole, plus the rows that name each family's rule.
+//! `heapTextureSizeAndAlignWithDescriptor:` for the 26 formats this crate holds no image of
+//! (`metal::format::footprint`) and ASTC's 4x2 and 8x4 formats, whose blocks the runtime holds
+//! in a carrier and whose heap textures it answers Metal's model for (`heap_tiled::modelled_size`,
+//! as for every ASTC texture in a carrier): Metal's size and alignment against the runtime's, over
+//! two declared descriptor spaces enumerated whole, plus the rows that name each family's rule.
 //!
 //! **Measured** on an Apple M3 Max under macOS 27.0.1 (26A434), plain Metal with no API
 //! validation layer, by a probe that forks per (format, texture type) so a descriptor Metal's
@@ -25,14 +27,18 @@
 //! (`TextureDescriptor::check_made`, whose `Nil` is Metal's "no texture of this shape" and
 //! answers 0 bytes at [`no_texture_alignment`]) and then
 //! [`footprint_answer`](crate::texture::heap::footprint_answer). `Device::heap_texture_size_and_align`
-//! calls exactly those two, in that order, before it plans any image.
+//! calls exactly those two, in that order, before it plans any image; for an ASTC 4x2 or 8x4
+//! texture, whose heap texture the runtime refuses its making (`DecodedHeapTexture`), it then
+//! answers [`modelled_size`](crate::texture::heap_tiled::modelled_size).
 
 use super::super::texture::heap::{footprint_answer, no_texture_alignment};
+use super::super::texture::heap_tiled::modelled_size;
 use super::super::texture_descriptor::{
     effective_usage, Creator, Refused, TextureDescriptor, TextureRules,
 };
 use super::super::values::{ResourceOptions, StorageMode};
 use crate::heap::SizeAndAlign;
+use metal2vulkan::bind::AstcDecode;
 use metal2vulkan::metal::{PixelFormat as P, TextureType as T, TextureUsage};
 
 /// The device the probe ran on, as the descriptor rules see it: an Apple GPU.
@@ -94,7 +100,7 @@ const fn row(format: PixelFormat, sides: (usize, u64), usages: (usize, u64)) -> 
     }
 }
 
-/// Metal's answers, by format: the six ASTC footprints, the two plain stragglers, the nine
+/// Metal's answers, by format: ASTC's six 4x2 and 8x4 formats, the two plain stragglers, the nine
 /// one-plane YCbCr formats, the ten padded 10- and 12-bit display formats, the four two-plane
 /// ones and the two packed ones Metal makes no texture of.
 const ROWS: &[Row] = &[
@@ -297,11 +303,13 @@ fn answer(d: &TextureDescriptor) -> SizeAndAlign {
             align: no_texture_alignment(d.pixel_format, d.texture_type),
         },
         Err(refused) => panic!("{:?} {:?}: {refused:?}", d.pixel_format, d.texture_type),
-        Ok(layout) => footprint_answer(
-            &layout,
-            effective_usage(d.usage),
-            d.allow_gpu_optimized_contents,
-        )
+        Ok(layout) => {
+            let usage = effective_usage(d.usage);
+            let optimized = d.allow_gpu_optimized_contents;
+            let carried = AstcDecode::of(d.pixel_format).is_some();
+            footprint_answer(&layout, usage, optimized)
+                .or_else(|| carried.then(|| modelled_size(&layout, usage, optimized))?)
+        }
         .unwrap_or_else(|| {
             panic!(
                 "{:?} {:?} {}x{}: the footprint has no answer",

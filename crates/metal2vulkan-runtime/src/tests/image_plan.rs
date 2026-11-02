@@ -1385,33 +1385,67 @@ fn compressed_formats_are_compatible_only_within_their_family() {
     assert_eq!(block_family(PixelFormat::R32Float), PixelFormat::R32Float);
 }
 
-/// A texture of ASTC's 4x2 or 8x4 formats, which Metal makes and no Vulkan block holds, is
-/// refused `NotImplemented(Format)` on every committed device, sampled or rendered to.
+/// A texture of ASTC's 4x2 or 8x4 formats, which Metal makes and no Vulkan block holds, plans its
+/// blocks in a carrier on every committed device that copies one (MoltenVK's among them), of
+/// every type Metal makes of one and every usage (`ShaderWrite` and `RenderTarget` unavailable),
+/// its decoded twin the profile's: 8-bit codes (`R8G8B8A8_UNORM`) for an LDR or sRGB form, halves
+/// (`R16G16B16A16_SFLOAT`) for an HDR one.
 #[test]
-fn astc_4x2_and_8x4_textures_are_refused_typed() {
+fn astc_4x2_and_8x4_textures_plan_in_a_carrier() {
+    use super::super::astc::{decode_of, CARRIERS as ASTC_CARRIERS};
+    use super::super::texture::decoded_twin::{twin_plan, TwinDecode};
+    use metal2vulkan::bind::{AstcDecode, AstcTexels};
     use PixelFormat as P;
+    let mut carried = 0;
     for (name, desc, device) in committed() {
         let facts = facts(&desc, &device);
-        for pf in [
-            P::ASTC4x2LDR,
-            P::ASTC4x2SRGB,
-            P::ASTC4x2HDR,
-            P::ASTC8x4LDR,
-            P::ASTC8x4SRGB,
-            P::ASTC8x4HDR,
+        let copies = FormatFeatureFlags2::TRANSFER_SRC | FormatFeatureFlags2::TRANSFER_DST;
+        if !(ASTC_CARRIERS.iter()).any(|&f| facts.optimal(f).contains(copies)) {
+            continue;
+        }
+        for (pf, twin) in [
+            (P::ASTC4x2LDR, Format::R8G8B8A8_UNORM),
+            (P::ASTC4x2SRGB, Format::R8G8B8A8_UNORM),
+            (P::ASTC4x2HDR, Format::R16G16B16A16_SFLOAT),
+            (P::ASTC8x4LDR, Format::R8G8B8A8_UNORM),
+            (P::ASTC8x4SRGB, Format::R8G8B8A8_UNORM),
+            (P::ASTC8x4HDR, Format::R16G16B16A16_SFLOAT),
         ] {
-            let l = layout(TextureType::Type2D, pf, 1, 1);
-            for usage in [TextureUsage::SHADER_READ, TextureUsage::RENDER_TARGET] {
-                match plan_image(&l, usage, false, &facts) {
-                    Err(ImageRefusal::Unsupported(u)) => {
-                        assert_eq!(u.feature, Feature::Format, "{name}: {pf:?}");
-                        assert_eq!(u.needs, Needs::NotImplemented, "{name}: {pf:?}: {u:?}");
-                    }
-                    other => panic!("{name}: {pf:?} {usage:?}: {other:?}"),
-                }
+            let decode = AstcDecode::of(pf).expect("a decode");
+            for ty in [
+                TextureType::Type2D,
+                TextureType::Type2DArray,
+                TextureType::Cube,
+                TextureType::Type3D,
+            ] {
+                let what = format!("{name} {pf:?} {ty:?}");
+                let l = layout(ty, pf, 1, 1);
+                let usage = TextureUsage::SHADER_READ
+                    | TextureUsage::SHADER_WRITE
+                    | TextureUsage::RENDER_TARGET;
+                let plan = plan_image(&l, usage, false, &facts).expect(&what);
+                assert!(
+                    ASTC_CARRIERS.contains(&plan.format),
+                    "{what}: {:?}",
+                    plan.format
+                );
+                assert_eq!(decode_of(&plan), Some(decode), "{what}");
+                assert!(
+                    plan.unavailable
+                        .contains(TextureUsage::SHADER_WRITE | TextureUsage::RENDER_TARGET),
+                    "{what}: {:?}",
+                    plan.unavailable
+                );
+                let texels = TwinDecode::Astc(decode, decode.form(AstcTexels::Unorm8));
+                assert_eq!(twin_plan(&plan, &l, texels, false).format, twin, "{what}");
             }
         }
+        carried += 1;
     }
+    assert!(
+        carried >= 5,
+        "{carried} committed devices hold them in a carrier"
+    );
 }
 
 /// Apple's extended-range formats are held raw in the unsigned integer format of their bytes,
@@ -2079,15 +2113,16 @@ fn astc_carriers_hold_each_level_s_blocks() {
 /// array, 3D) and every usage (`ShaderWrite` and `RenderTarget` too, unavailable), plans on every
 /// committed device that holds ASTC LDR in a carrier: in its own `SFLOAT` block where the device
 /// samples it (MoltenVK on the M3 Max, its `textureCompressionASTC_HDR`), else its blocks in a
-/// carrier whose decoded twin holds Metal's halves (`R16G16B16A16_SFLOAT`) — the RTX 5080's among
-/// them, which refused it before the decode.
+/// carrier whose decoded twin holds Metal's halves (`R16G16B16A16_SFLOAT`), the RTX 5080's among
+/// them. (ASTC's 4x2 and 8x4 HDR formats, which no Vulkan block has, lie in a carrier everywhere:
+/// `astc_4x2_and_8x4_textures_plan_in_a_carrier`.)
 #[test]
 fn astc_hdr_textures_plan_natively_or_in_a_carrier() {
     use super::super::astc::{decode_of, CARRIERS as ASTC_CARRIERS};
     use super::super::texture::decoded_twin::{twin_plan, TwinDecode};
     use metal2vulkan::bind::{AstcDecode, AstcTexels};
     let hdr: Vec<PixelFormat> = (PixelFormat::ALL.iter().copied())
-        .filter(|&pf| AstcDecode::of(pf).is_some_and(|d| d.hdr))
+        .filter(|&pf| AstcDecode::of(pf).is_some_and(|d| d.hdr) && direct_format(pf).is_some())
         .collect();
     assert_eq!(hdr.len(), 14);
     let (mut native, mut carried) = (Vec::new(), Vec::new());

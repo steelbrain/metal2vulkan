@@ -75,7 +75,6 @@ fn refused_formats_are_exactly_the_documented_set() {
     // The two-plane extended-range pair is held raw, the 4:2:2 pair through its decoded twin.
     // The 68 two-plane YCbCr formats but `YCBCR8_420_2P`, and the 3 others Metal makes no
     // texture of from a descriptor alone.
-    // + ASTC's 6 formats of a 4x2 or 8x4 footprint, which no Vulkan block has.
     // - `YCBCR10_420_2P`, `RGB10_420_2P` and the `_sRGB` twins of the 4:2:0 converted pair, made
     // over a surface.
     // - `RGB8_420_2P`, made over a surface.
@@ -89,11 +88,10 @@ fn refused_formats_are_exactly_the_documented_set() {
     // - the three bfloat formats, held raw.
     // - `RGB10A2Unorm_sRGB`, held raw.
     // - `BGRA4Unorm`, held in the 4-bit word of its bits.
-    assert_eq!(count("not_implemented"), 45 + 3 + 6 + 60, "{refused:?}");
+    assert_eq!(count("not_implemented"), 45 + 3 + 60, "{refused:?}");
     assert!(refused["not_implemented"].iter().all(|&pf| {
         (ycbcr_format(pf).is_some() && !ycbcr(pf))
             || matches!(pf, P::RGBA16FloatXR | P::AnyDepth | P::AnyStencil)
-            || matches!(pf, astc_without_a_vulkan_block!())
             || matches!(pf, formats_named_not_held!())
     }));
 }
@@ -114,13 +112,15 @@ fn direct_formats_round_trip() {
             assert!(c.format.is_known(), "{pf:?} -> {:?}", c.format);
             assert_ne!(c.format, vk::Format::UNDEFINED, "{pf:?}");
         }
-        // A PVRTC RGB or 4:2:2 format, held through its decoded twin's view alone, has no
-        // direct format: no Vulkan format holds its blocks as Metal reads them.
+        // A PVRTC RGB, 4:2:2 or ASTC 4x2 or 8x4 format, held through its decoded twin's view
+        // alone, has no direct format: no Vulkan format holds its blocks as Metal reads them.
         if candidates[0].emulation == FormatEmulation::Decoded {
             assert_eq!(direct_format(pf), None, "{pf:?}");
             let pvrtc = crate::bind::PvrtcDecode::of(pf).is_some();
             assert!(
-                pvrtc || crate::bind::ChromaDecode::of(pf).is_some(),
+                pvrtc
+                    || crate::bind::ChromaDecode::of(pf).is_some()
+                    || crate::bind::AstcDecode::of(pf).is_some(),
                 "{pf:?}"
             );
             continue;
@@ -990,33 +990,38 @@ fn compressed_extension_formats_follow_exposure() {
 }
 
 /// ASTC's 4x2 and 8x4 formats take the raw values and names Metal gave them in our census, so a
-/// consumer holds each, and every usage of each is refused `NotImplemented(Format)` on every
-/// committed device: no Vulkan block has their footprints.
+/// consumer holds each. No Vulkan block has their footprints, so on every committed device each is
+/// sampled through its decoded twin's view alone (`R8G8B8A8_UNORM`, `_SRGB` for an sRGB form,
+/// `R16G16B16A16_SFLOAT` for an HDR one), and an attachment or storage use of one is refused as
+/// the device lacking the format: the runtime keeps its blocks in a carrier.
 #[test]
-fn astc_4x2_and_8x4_are_named_and_refused_typed() {
+fn astc_4x2_and_8x4_are_named_and_read_through_their_twin() {
+    use vk::Format as F;
     use FormatUsage as U;
     let named = [
-        (185, "MTLPixelFormatASTC_4x2_sRGB"),
-        (191, "MTLPixelFormatASTC_8x4_sRGB"),
-        (203, "MTLPixelFormatASTC_4x2_LDR"),
-        (209, "MTLPixelFormatASTC_8x4_LDR"),
-        (221, "MTLPixelFormatASTC_4x2_HDR"),
-        (227, "MTLPixelFormatASTC_8x4_HDR"),
+        (185, "MTLPixelFormatASTC_4x2_sRGB", F::R8G8B8A8_SRGB),
+        (191, "MTLPixelFormatASTC_8x4_sRGB", F::R8G8B8A8_SRGB),
+        (203, "MTLPixelFormatASTC_4x2_LDR", F::R8G8B8A8_UNORM),
+        (209, "MTLPixelFormatASTC_8x4_LDR", F::R8G8B8A8_UNORM),
+        (221, "MTLPixelFormatASTC_4x2_HDR", F::R16G16B16A16_SFLOAT),
+        (227, "MTLPixelFormatASTC_8x4_HDR", F::R16G16B16A16_SFLOAT),
     ];
-    for (raw, name) in named {
+    for (raw, name, twin) in named {
         let pf = PixelFormat::try_from(raw).unwrap_or_else(|e| panic!("{raw}: {e}"));
         assert_eq!(pf.name(), name);
         assert_eq!(PixelFormat::from_name(name), Some(pf));
-        assert!(matches!(pf, astc_without_a_vulkan_block!()), "{name}");
+        assert_eq!(direct_format(pf), None, "{name}");
         for (stem, device) in committed_devices() {
-            for u in [
-                U::SampledImage,
-                U::SampledImageFilterLinear,
-                U::ColorAttachment,
-            ] {
-                assert_eq!(
-                    vk_format(pf, &usages(&[u]), device.profile()),
-                    Err(Unsupported::not_implemented(Feature::Format).into()),
+            let sampled = vk_format(pf, &usages(&[U::SampledImage]), device.profile())
+                .unwrap_or_else(|e| panic!("{name} on {stem}: {e:?}"));
+            assert_eq!(
+                (sampled.format, sampled.emulation),
+                (twin, FormatEmulation::Decoded),
+                "{name} on {stem}"
+            );
+            for u in [U::ColorAttachment, U::StorageImage] {
+                assert!(
+                    vk_format(pf, &usages(&[u]), device.profile()).is_err(),
                     "{name} {u:?} on {stem}"
                 );
             }
@@ -2213,7 +2218,6 @@ fn out_of_bounds_alpha_follows_the_measured_formats() {
         let placeholder = matches!(pf, P::Invalid | P::Unspecialized);
         let held_none = (ycbcr_format(pf).is_some() && !ycbcr(pf))
             || matches!(pf, P::RGBA16FloatXR | P::AnyDepth | P::AnyStencil)
-            || matches!(pf, astc_without_a_vulkan_block!())
             || matches!(pf, formats_named_not_held!());
         assert_eq!(
             out_of_bounds_alpha_one(pf).is_none(),
@@ -2863,7 +2867,6 @@ fn every_block_extent_is_the_vulkan_blocks() {
     for &pf in &unchecked {
         assert!(
             pvrtc(pf)
-                || matches!(pf, astc_without_a_vulkan_block!())
                 || matches!(
                     repr(pf),
                     Repr::Candidates(_, ref candidates)
@@ -2921,29 +2924,21 @@ fn footprint_answers_where_no_image_does() {
             );
         }
     }
-    // The 32 formats of which Metal answers `heapTextureSizeAndAlignWithDescriptor:` and this
-    // crate holds no image: the six ASTC footprints, `ARGB8Unorm_sRGB`, nine one-plane YCbCr
-    // formats, ten padded 10- and 12-bit display formats, four two-plane ones and two packed
-    // ones Metal makes no texture of.
-    assert_eq!(answered, 6 + 1 + 9 + 10 + 4 + 2);
+    // The 26 formats of which Metal answers `heapTextureSizeAndAlignWithDescriptor:` and this
+    // crate holds no image: `ARGB8Unorm_sRGB`, nine one-plane YCbCr formats, ten padded 10- and
+    // 12-bit display formats, four two-plane ones and two packed ones Metal makes no texture of.
+    assert_eq!(answered, 1 + 9 + 10 + 4 + 2);
 }
 
 /// Every byte count [`footprint`] states is the bytes of a format the crate **does** hold whose
 /// element is the same size: a padded 12-bit channel takes the 16-bit word a padded 10-bit one
-/// takes, a transfer-function twin's is its base format's, a 4:2:2 texel is a luma byte and a chroma byte (`RG8Unorm`'s two), and an ASTC block
-/// is 16 bytes at every footprint. So no number in the table is one nobody checked: each is held
+/// takes, a transfer-function twin's is its base format's, and a 4:2:2 texel is a luma byte and a chroma byte (`RG8Unorm`'s two). So no number in the table is one nobody checked: each is held
 /// to a Vulkan block size the mapping already answers.
 #[test]
 fn footprint_bytes_match_a_held_twin() {
     use PixelFormat as P;
     // (the format with no image, the format the crate holds whose element is the same size).
     const TWINS: &[(PixelFormat, PixelFormat)] = &[
-        (P::ASTC4x2LDR, P::ASTC4x4LDR),
-        (P::ASTC4x2SRGB, P::ASTC4x4SRGB),
-        (P::ASTC4x2HDR, P::ASTC4x4HDR),
-        (P::ASTC8x4LDR, P::ASTC4x4LDR),
-        (P::ASTC8x4SRGB, P::ASTC4x4SRGB),
-        (P::ASTC8x4HDR, P::ASTC4x4HDR),
         (P::ARGB8UnormSRGB, P::ARGB8Unorm),
         (P::R12UnormX4, P::R10UnormX6),
         (P::R12UnormX4PQ, P::R10UnormX6),

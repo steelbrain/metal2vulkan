@@ -782,14 +782,15 @@ fn heap_textures_are_tiled_where_metal_s_layout_is_measured() {
         Some((3200, 128))
     );
     assert!(matches!(m4_pvrtc.layout, HeapLayout::Tiled(_)));
-    // ASTC 4 x 2: a family whose blocks' placement is not measured, untiled and unanswered.
+    // ASTC 4 x 2: Metal's answer, its family's placement (the footprint rows of
+    // `heap_footprint_formats`), untiled where no image holds its blocks (a carrier's do).
     let astc = texture(T::Type2D, PixelFormat::ASTC4x2LDR, [64, 64, 1], (1, 1, 1));
-    let unmeasured = metal_heap_layout(&astc, read, true, Format::UNDEFINED);
-    assert_eq!(unmeasured.answer, None);
-    let HeapLayout::Untiled(untiled) = unmeasured.layout else {
+    let carried = metal_heap_layout(&astc, read, true, Format::UNDEFINED);
+    assert_eq!(carried.answer.map(|a| (a.size, a.align)), Some((8192, 128)));
+    let HeapLayout::Untiled(untiled) = carried.layout else {
         panic!("an ASTC 4 x 2 texture is tiled");
     };
-    assert_eq!(untiled.kind, D::HeapTextureBlockCompressedLayout);
+    assert_eq!(untiled.kind, D::HeapTextureUntiledLayout);
     let decoded = metal_heap_layout(&bc1, read, true, Format::R8G8B8A8_UNORM);
     assert_eq!(decoded.answer, blocks.answer);
     let HeapLayout::Untiled(untiled) = decoded.layout else {

@@ -1555,7 +1555,7 @@ fn a_texture_without_a_representation_is_refused_only_where_its_function_reads_i
     ) else {
         return;
     };
-    let unheld = || texture(TextureType::Type2D, PixelFormat::ASTC4x2HDR);
+    let unheld = || texture(TextureType::Type2D, PixelFormat::RGB8Unorm);
     let rgba = || texture(TextureType::Type2D, PixelFormat::RGBA8Unorm);
     let linear = || sampler(true, SamplerReductionMode::WeightedAverage);
     let refused = |r: &Result<BindingPlan, BindError>| matches!(r, Err(BindError::Unsupported(u)) if u.feature == Feature::Format);

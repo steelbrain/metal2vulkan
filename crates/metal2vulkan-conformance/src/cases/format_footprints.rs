@@ -144,10 +144,10 @@
 //!
 //! # Why a case stops at its first refusal
 //!
-//! The runtime holds **no image of 32 of the 33** (`BGRA4Unorm` is the one it holds, in the
-//! Vulkan word of its bits): every other one is refused
-//! `Unsupported { feature: Format, needs: NotImplemented }`, measured over every descriptor of
-//! every case of this family. A case that recorded a refusal at each site and went on — which is
+//! The runtime holds **no image of 26 of the 33** (it holds `BGRA4Unorm`, in the Vulkan word of
+//! its bits, and ASTC's six 4x2 and 8x4 forms, whose blocks lie in a carrier with a decoded twin):
+//! every other one is refused `Unsupported { feature: Format, needs: NotImplemented }`, measured
+//! over every descriptor of every case of this family. A case that recorded a refusal at each site and went on — which is
 //! what `heap_metal_sizes` does, because the runtime answers all of its descriptors — would print
 //! some 2900 `Refused` rows and need a `known-gaps.tsv` row for each, which is a ledger nobody
 //! reads and therefore no ledger. So each case stops at the first site it is refused, and the
@@ -163,10 +163,13 @@
 //! the point: the gap was a number in a generated document and it is now a row of the report
 //! naming the format, the descriptor and both answers.
 
+use crate::allowance::Allowance;
 use crate::case::{Abort, Case, Input, MetalSource, Side, TextureRole, TextureSpec};
 use crate::texture_query::{HeapTextureQuery as Q, Storage};
 use crate::transcript::{Aspect, ByteLayout, Element, Gaps, Node, Observed, Region, Sites, Value};
+use metal2vulkan::bind::AstcDecode;
 use metal2vulkan::metal::{PixelFormat, TextureType};
+use metal2vulkan_runtime::Degradation;
 
 /// The two storage modes every case of the family sweeps.
 const BOTH_STORAGE: [Storage; 2] = [Storage::Shared, Storage::Private];
@@ -546,6 +549,29 @@ impl Case for FootprintCase {
 
     fn metal_source(&self) -> MetalSource {
         MetalSource::Run
+    }
+
+    fn allowances(&self) -> Vec<Allowance> {
+        // An ASTC 4x2 or 8x4 texture lies in a carrier image with a decoded twin on every device
+        // (no Vulkan format holds such a block), announced `carried-decoded-twin`; the round
+        // trip's `replaceRegion` decodes its blocks into the twin on the CPU (`cpu-block-decode`);
+        // an LDR form's twin holds 8-bit codes (`decoded-texel-precision`). Metal announces
+        // nothing, so the notices are declared by their codes. They loosen the notices site alone:
+        // the case reads bytes, every one compared with Metal's exactly. Measured: lavapipe
+        // announced all three, MoltenVK over an M3 Max the first and the last, and every other
+        // field was Metal's on both.
+        let astc = self.round_trips.iter().any(|&pf| AstcDecode::of(pf).is_some());
+        if !astc {
+            return Vec::new();
+        }
+        [
+            Degradation::CarriedDecodedTwin,
+            Degradation::CpuBlockDecode,
+            Degradation::DecodedTexelPrecision,
+        ]
+        .into_iter()
+        .map(|kind| crate::replay::notice_allowance(kind.code()))
+        .collect()
     }
 
     fn inputs(&self) -> Result<Vec<Input>, String> {

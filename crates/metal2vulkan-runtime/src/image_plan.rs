@@ -340,7 +340,7 @@ pub(super) fn sample_count(samples: u32) -> Option<SampleCountFlags> {
 
 /// Metal's sRGB pairs: the linear format, then the format whose texels are the same bytes read
 /// through sRGB encoding.
-const SRGB_PAIRS: [(PixelFormat, PixelFormat); 31] = [
+const SRGB_PAIRS: [(PixelFormat, PixelFormat); 33] = [
     (PixelFormat::R8Unorm, PixelFormat::R8UnormSRGB),
     (PixelFormat::RG8Unorm, PixelFormat::RG8UnormSRGB),
     (PixelFormat::RGBA8Unorm, PixelFormat::RGBA8UnormSRGB),
@@ -372,6 +372,8 @@ const SRGB_PAIRS: [(PixelFormat, PixelFormat); 31] = [
     (PixelFormat::ASTC10x10LDR, PixelFormat::ASTC10x10SRGB),
     (PixelFormat::ASTC12x10LDR, PixelFormat::ASTC12x10SRGB),
     (PixelFormat::ASTC12x12LDR, PixelFormat::ASTC12x12SRGB),
+    (PixelFormat::ASTC4x2LDR, PixelFormat::ASTC4x2SRGB),
+    (PixelFormat::ASTC8x4LDR, PixelFormat::ASTC8x4SRGB),
 ];
 
 /// The other member of `pf`'s sRGB pair (`RGBA8Unorm` and `RGBA8Unorm_sRGB`): Metal views a
@@ -419,6 +421,8 @@ pub(super) fn block_family(pf: PixelFormat) -> PixelFormat {
         P::ASTC10x10HDR => P::ASTC10x10LDR,
         P::ASTC12x10HDR => P::ASTC12x10LDR,
         P::ASTC12x12HDR => P::ASTC12x12LDR,
+        P::ASTC4x2HDR => P::ASTC4x2LDR,
+        P::ASTC8x4HDR => P::ASTC8x4LDR,
         other => other,
     }
 }

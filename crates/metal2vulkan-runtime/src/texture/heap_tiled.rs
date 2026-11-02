@@ -345,7 +345,9 @@ impl BlockFamily {
             | P::ASTC10x8LDR
             | P::ASTC10x10LDR
             | P::ASTC12x10LDR
-            | P::ASTC12x12LDR => BlockFamily::Astc,
+            | P::ASTC12x12LDR
+            | P::ASTC4x2LDR
+            | P::ASTC8x4LDR => BlockFamily::Astc,
             P::PVRTCRGB2BPP | P::PVRTCRGB4BPP | P::PVRTCRGBA2BPP | P::PVRTCRGBA4BPP => {
                 BlockFamily::Pvrtc
             }

@@ -123,7 +123,7 @@ fn fit_is_shape_samples_numeric_type_usage_and_aspect() {
     // A format the table holds no representation of fits no class: the heap does not know which
     // of its textures the function reads, so a resident one it cannot view is the neutral, and
     // nothing is refused.
-    let unheld = PixelFormat::ASTC4x2HDR;
+    let unheld = PixelFormat::RGB8Unorm;
     assert_eq!(fit(&shape(T::Type2D, unheld, 1, READ), &f2d), Fit::No);
     assert_eq!(
         fit(

@@ -9,9 +9,11 @@
 //! for an `_sRGB` format; an HDR mode's 12-bit ones (an `_HDR` format's alone, `hdr.rs`) `e · 16`.
 //!
 //! **Metal's answers** (an Apple M3 Max under macOS 27.0.1, our own probe: 4096 blocks of each of
-//! the fourteen footprints, about 70% valid blocks of random modes, void-extent blocks and error
-//! blocks, every texel read as `float` and `half` and sampled at its centre, linear and sRGB,
-//! every channel equal to this decode's):
+//! the fourteen footprints Vulkan's ASTC formats have, about 70% valid blocks of random modes,
+//! void-extent blocks and error blocks, every texel read as `float` and `half` and sampled at its
+//! centre, linear and sRGB, every channel equal to this decode's; and Apple's 4x2 and 8x4
+//! footprints, which no Vulkan format has, in every profile, the probe
+//! `astc_passes_writes_footprints`'s seeded blocks read alike):
 //!
 //! - **Linear:** each channel reads `(C >> 4) / 4095`, a 12-bit value, correctly rounded to `f32`
 //!   (a `half` read rounds that to nearest even).
@@ -112,24 +114,6 @@ pub enum AstcTexels {
     Half,
 }
 
-/// The 2D footprints Vulkan's ASTC formats have, in Metal's raw-value order.
-const FOOTPRINTS: [[u32; 2]; 14] = [
-    [4, 4],
-    [5, 4],
-    [5, 5],
-    [6, 5],
-    [6, 6],
-    [8, 5],
-    [8, 6],
-    [8, 8],
-    [10, 5],
-    [10, 6],
-    [10, 8],
-    [10, 10],
-    [12, 10],
-    [12, 12],
-];
-
 /// The most texels a block holds (12 x 12).
 const MOST_TEXELS: usize = 144;
 
@@ -137,77 +121,73 @@ impl AstcDecode {
     /// The bytes of every block.
     pub const BLOCK_BYTES: u32 = 16;
 
-    /// The decode of `pf`'s blocks: the ASTC formats of the fourteen 2D footprints, LDR, `_sRGB`
-    /// and `_HDR`; `None` for every other format (Apple's 4x2 and 8x4 footprints included).
+    /// The decode of `pf`'s blocks: every ASTC format, LDR, `_sRGB` and `_HDR`, of the fourteen 2D
+    /// footprints Vulkan's ASTC formats have and of Apple's 4x2 and 8x4, which no Vulkan format
+    /// has; `None` for every other format.
     pub fn of(pf: PixelFormat) -> Option<AstcDecode> {
-        use PixelFormat as P;
-        if let Some(index) = Self::hdr_index(pf) {
-            let [width, height] = FOOTPRINTS[index];
-            return Some(AstcDecode {
-                width,
-                height,
-                srgb: false,
-                hdr: true,
-            });
-        }
-        let (srgb, index) = match pf {
-            P::ASTC4x4SRGB => (true, 0),
-            P::ASTC5x4SRGB => (true, 1),
-            P::ASTC5x5SRGB => (true, 2),
-            P::ASTC6x5SRGB => (true, 3),
-            P::ASTC6x6SRGB => (true, 4),
-            P::ASTC8x5SRGB => (true, 5),
-            P::ASTC8x6SRGB => (true, 6),
-            P::ASTC8x8SRGB => (true, 7),
-            P::ASTC10x5SRGB => (true, 8),
-            P::ASTC10x6SRGB => (true, 9),
-            P::ASTC10x8SRGB => (true, 10),
-            P::ASTC10x10SRGB => (true, 11),
-            P::ASTC12x10SRGB => (true, 12),
-            P::ASTC12x12SRGB => (true, 13),
-            P::ASTC4x4LDR => (false, 0),
-            P::ASTC5x4LDR => (false, 1),
-            P::ASTC5x5LDR => (false, 2),
-            P::ASTC6x5LDR => (false, 3),
-            P::ASTC6x6LDR => (false, 4),
-            P::ASTC8x5LDR => (false, 5),
-            P::ASTC8x6LDR => (false, 6),
-            P::ASTC8x8LDR => (false, 7),
-            P::ASTC10x5LDR => (false, 8),
-            P::ASTC10x6LDR => (false, 9),
-            P::ASTC10x8LDR => (false, 10),
-            P::ASTC10x10LDR => (false, 11),
-            P::ASTC12x10LDR => (false, 12),
-            P::ASTC12x12LDR => (false, 13),
-            _ => return None,
-        };
-        let [width, height] = FOOTPRINTS[index];
+        let (srgb, hdr) = Self::profile(pf)?;
+        let [width, height] = crate::metal::format::block_extent(pf)?;
         Some(AstcDecode {
             width,
             height,
             srgb,
-            hdr: false,
+            hdr,
         })
     }
 
-    /// The footprint's place in [`FOOTPRINTS`] of an `_HDR` format of one.
-    fn hdr_index(pf: PixelFormat) -> Option<usize> {
+    /// Whether the ASTC format `pf` is an `_sRGB` one and whether an `_HDR` one; `None` for any
+    /// other format.
+    fn profile(pf: PixelFormat) -> Option<(bool, bool)> {
         use PixelFormat as P;
         Some(match pf {
-            P::ASTC4x4HDR => 0,
-            P::ASTC5x4HDR => 1,
-            P::ASTC5x5HDR => 2,
-            P::ASTC6x5HDR => 3,
-            P::ASTC6x6HDR => 4,
-            P::ASTC8x5HDR => 5,
-            P::ASTC8x6HDR => 6,
-            P::ASTC8x8HDR => 7,
-            P::ASTC10x5HDR => 8,
-            P::ASTC10x6HDR => 9,
-            P::ASTC10x8HDR => 10,
-            P::ASTC10x10HDR => 11,
-            P::ASTC12x10HDR => 12,
-            P::ASTC12x12HDR => 13,
+            P::ASTC4x2SRGB
+            | P::ASTC4x4SRGB
+            | P::ASTC5x4SRGB
+            | P::ASTC5x5SRGB
+            | P::ASTC6x5SRGB
+            | P::ASTC6x6SRGB
+            | P::ASTC8x4SRGB
+            | P::ASTC8x5SRGB
+            | P::ASTC8x6SRGB
+            | P::ASTC8x8SRGB
+            | P::ASTC10x5SRGB
+            | P::ASTC10x6SRGB
+            | P::ASTC10x8SRGB
+            | P::ASTC10x10SRGB
+            | P::ASTC12x10SRGB
+            | P::ASTC12x12SRGB => (true, false),
+            P::ASTC4x2LDR
+            | P::ASTC4x4LDR
+            | P::ASTC5x4LDR
+            | P::ASTC5x5LDR
+            | P::ASTC6x5LDR
+            | P::ASTC6x6LDR
+            | P::ASTC8x4LDR
+            | P::ASTC8x5LDR
+            | P::ASTC8x6LDR
+            | P::ASTC8x8LDR
+            | P::ASTC10x5LDR
+            | P::ASTC10x6LDR
+            | P::ASTC10x8LDR
+            | P::ASTC10x10LDR
+            | P::ASTC12x10LDR
+            | P::ASTC12x12LDR => (false, false),
+            P::ASTC4x2HDR
+            | P::ASTC4x4HDR
+            | P::ASTC5x4HDR
+            | P::ASTC5x5HDR
+            | P::ASTC6x5HDR
+            | P::ASTC6x6HDR
+            | P::ASTC8x4HDR
+            | P::ASTC8x5HDR
+            | P::ASTC8x6HDR
+            | P::ASTC8x8HDR
+            | P::ASTC10x5HDR
+            | P::ASTC10x6HDR
+            | P::ASTC10x8HDR
+            | P::ASTC10x10HDR
+            | P::ASTC12x10HDR
+            | P::ASTC12x12HDR => (false, true),
             _ => return None,
         })
     }

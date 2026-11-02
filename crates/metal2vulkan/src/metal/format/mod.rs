@@ -1066,20 +1066,6 @@ fn decoded(block: vk::Format, twin: vk::Format) -> Repr {
     ])
 }
 
-/// The pattern of ASTC's 4x2 and 8x4 formats, LDR, sRGB and HDR: Metal makes a 2D texture of
-/// each from a descriptor alone (an Apple M4 under macOS 27.0.1), and no Vulkan
-/// ASTC block has either footprint, so this crate holds none of them (`repr`'s `NotImplemented`).
-macro_rules! astc_without_a_vulkan_block {
-    () => {
-        PixelFormat::ASTC4x2LDR
-            | PixelFormat::ASTC4x2SRGB
-            | PixelFormat::ASTC4x2HDR
-            | PixelFormat::ASTC8x4LDR
-            | PixelFormat::ASTC8x4SRGB
-            | PixelFormat::ASTC8x4HDR
-    };
-}
-
 /// The pattern of the formats Metal names that this crate holds no texture of yet (`repr`'s
 /// `NotImplemented`): every raw value from 0 to 1100 a texture descriptor's description names on
 /// an Apple M4 under macOS 27.0.1 that no format above takes. Every Vulkan format of each is
@@ -1679,9 +1665,19 @@ fn make_repr(pf: PixelFormat) -> Repr {
         // Formats Metal makes no texture of from a descriptor alone; one over
         // an IOSurface plane is not modelled.
         P::RGBA16FloatXR | P::AnyDepth | P::AnyStencil => Repr::NotImplemented,
-        // ASTC's 4x2 and 8x4 footprints, which Metal makes textures of: no
-        // Vulkan ASTC block has them, and decoding their blocks is not built.
-        astc_without_a_vulkan_block!() => Repr::NotImplemented,
+        // ASTC's 4x2 and 8x4 footprints, which Metal makes textures of: no Vulkan ASTC block has
+        // them, so their blocks lie in a carrier on every device and a function reads the decoded
+        // twin's view (`FormatEmulation::Decoded`) alone.
+        P::ASTC4x2LDR | P::ASTC8x4LDR => {
+            color(vec![combined(F::R8G8B8A8_UNORM, FormatEmulation::Decoded)])
+        }
+        P::ASTC4x2SRGB | P::ASTC8x4SRGB => {
+            color(vec![combined(F::R8G8B8A8_SRGB, FormatEmulation::Decoded)])
+        }
+        P::ASTC4x2HDR | P::ASTC8x4HDR => color(vec![combined(
+            F::R16G16B16A16_SFLOAT,
+            FormatEmulation::Decoded,
+        )]),
         formats_named_not_held!() => Repr::NotImplemented,
         P::Depth16Unorm => Repr::Candidates(depth, vec![direct(F::D16_UNORM)]),
         P::Depth32Float => Repr::Candidates(
@@ -2426,7 +2422,6 @@ pub(crate) fn out_of_bounds_alpha_one(pf: PixelFormat) -> Option<bool> {
         P::Invalid | P::Unspecialized => return None,
         // Formats of which this crate holds no texture (`repr`'s `NotImplemented`).
         P::RGBA16FloatXR | P::AnyDepth | P::AnyStencil => return None,
-        astc_without_a_vulkan_block!() => return None,
         formats_named_not_held!() => return None,
         // No alpha: a missing alpha reads 1.
         P::R10UnormX6 | P::RG10UnormX12 | P::R10UnormX6SRGB | P::RG10UnormX12SRGB => true,
@@ -2551,6 +2546,12 @@ pub(crate) fn out_of_bounds_alpha_one(pf: PixelFormat) -> Option<bool> {
         | P::EACRGBA8SRGB
         | P::ETC2RGB8A1
         | P::ETC2RGB8A1SRGB
+        | P::ASTC4x2SRGB
+        | P::ASTC8x4SRGB
+        | P::ASTC4x2LDR
+        | P::ASTC8x4LDR
+        | P::ASTC4x2HDR
+        | P::ASTC8x4HDR
         | P::ASTC4x4SRGB
         | P::ASTC5x4SRGB
         | P::ASTC5x5SRGB

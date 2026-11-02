@@ -530,20 +530,20 @@ driver's. Each is open work.
   that does not render the format** (the RTX 5080). Its word view takes a `float` output's writes,
   clears and resolves; a `half` output and a color input are `NotImplemented(Format)`, and a blend
   or a mask of some of its channels is refused as the device lacking the format.
-- **ASTC textures on a device without ASTC.** Making a heap's or a sparse heap's such texture
-  (`RuntimeGap::DecodedHeapTexture`) and a view of another decode (an LDR or sRGB texture's HDR
-  form, an HDR texture's LDR or sRGB form) are refused. The heap size query answers one: its
-  footprint is Metal's blocks, which no image of the device decides. A pass rendering into one,
-  and a kernel's write of one, are refused where Metal's validation stops them (plain Metal's pass
-  stores nothing, and its write leaves bytes no format defines).
-- **The 32 formats this crate holds no image of** (`metal::format::footprint`: ASTC's 4x2 and 8x4
-  footprints, `ARGB8Unorm_sRGB`, Apple's nine one-plane `YCBCR*` formats, the ten
+- **ASTC textures on a device without ASTC** (and Apple's 4x2 and 8x4 footprints on every
+  device). Making a heap's or a sparse heap's such texture (`RuntimeGap::DecodedHeapTexture`) and
+  a view of another decode (an LDR or sRGB texture's HDR form, an HDR texture's LDR or sRGB form)
+  are refused. The heap size query answers one: its footprint is Metal's blocks, which no image of
+  the device decides. A pass rendering into one, and a kernel's write of one, are refused where
+  Metal's validation stops them (plain Metal's pass stores nothing, and its write leaves bytes no
+  format defines).
+- **The 26 formats this crate holds no image of** (`metal::format::footprint`:
+  `ARGB8Unorm_sRGB`, Apple's nine one-plane `YCBCR*` formats, the ten
   padded 10- and 12-bit display formats, the four `RGB10A8_2P` ones and the two packed 10-bit
   ones). `heapTextureSizeAndAlignWithDescriptor:` answers Metal's exact size and alignment for
   every one, because the footprint is arithmetic over the descriptor and no image decides it. A
-  texture, a view, a copy, a read and a write of one stay refused `NotImplemented(Format)`: no
-  Vulkan format holds the bytes (an ASTC 4x2 or 8x4 block) or their reads and writes are not
-  measured yet. Plain Metal lays out no image storage for the two packed 10-bit
+  texture, a view, a copy, a read and a write of one stay refused `NotImplemented(Format)`: their
+  reads and writes are not measured yet. Plain Metal lays out no image storage for the two packed 10-bit
   ones and makes a texture from every creator that needs none -- a placement heap's offset, the
   shared creator in `Private`, a buffer's and an IOSurface plane's own bytes, and `Memoryless` --
   so the refusal from each of those is this crate's own and not Metal's nil; the device's own

@@ -2367,7 +2367,7 @@ bound.
   level by a rule that differs by family and by release, measured at the release every device
   answers as (`MACOS_RELEASE`) for the BC, ETC2, EAC, ASTC and PVRTC families (an Apple M3 Max, and
   an Apple M4 alike but PVRTC), whose textures lie as Metal lays them out; a format of none of them
-  (ASTC's 4x2 and 8x4 footprints) lies in the runtime's layout. Cost: the texture's
+  lies in the runtime's layout. Cost: the texture's
   reads, writes and copies are Metal's, but its blocks lie in the heap's bytes in the runtime's
   layout, where Metal tiles them: a buffer or texture over them meets the blocks at other bytes than
   on Metal.

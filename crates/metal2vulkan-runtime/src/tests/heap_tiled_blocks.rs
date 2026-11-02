@@ -11,6 +11,7 @@ use crate::copy_plan::{block_bytes, block_extent};
 use crate::metal_release::heap_blocks;
 use crate::pvrtc::is_pvrtc;
 use crate::texture::heap_tiled::{BlockFamily, BlockPlacement, Elements, TiledLayout};
+use metal2vulkan::bind::AstcDecode;
 use metal2vulkan::metal::format::direct_format;
 use metal2vulkan::metal::{PixelFormat as P, TextureType as T};
 
@@ -935,15 +936,20 @@ fn the_rows_tell_the_placements_apart() {
 }
 
 /// Every block-compressed format the crate holds a texture of has a family, and every format of a
-/// family but PVRTC's (`pvrtc_blocks_lie_where_the_release_places_them`) is among the rows.
+/// family but PVRTC's (`pvrtc_blocks_lie_where_the_release_places_them`) and ASTC's 4x2 and 8x4
+/// (`heap_footprint_formats`) is among the rows.
 #[test]
 fn every_block_compressed_format_has_a_measured_family() {
     let measured: std::collections::BTreeSet<P> = rows(M4_ROWS).iter().map(|row| row.pf).collect();
     for &pf in P::ALL {
-        let held = block_extent(pf).is_some() && (direct_format(pf).is_some() || is_pvrtc(pf));
+        let carried = AstcDecode::of(pf).is_some();
+        let held =
+            block_extent(pf).is_some() && (direct_format(pf).is_some() || is_pvrtc(pf) || carried);
         let family = BlockFamily::of(pf);
         assert_eq!(family.is_some(), held, "{pf:?}");
-        if family.is_some() && !is_pvrtc(pf) {
+        // ASTC's 4x2 and 8x4 footprints, which no Vulkan block has, are measured by the footprint
+        // rows of `heap_footprint_formats`.
+        if family.is_some() && !is_pvrtc(pf) && direct_format(pf).is_some() {
             assert!(measured.contains(&pf), "{pf:?} not measured");
         }
     }

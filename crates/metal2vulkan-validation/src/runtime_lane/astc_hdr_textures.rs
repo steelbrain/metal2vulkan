@@ -16,7 +16,8 @@
 //! a new texture's zero blocks NaN, then blocks a CPU copy wrote, a blit from a buffer, a fill of
 //! an HDR void-extent block and a copy from another texture, each decoded into a twin (a blit's by
 //! a GPU decode pass; a CPU copy's by a pass or on the CPU, counted in `WorkCounts`). The blocks
-//! each wrote come back unchanged from `get_bytes` and a blit into a buffer. A pass rendering into
+//! each wrote come back unchanged from `get_bytes` and a blit into a buffer. Apple's 4x2 and 8x4
+//! footprints, which no Vulkan format holds, lie in a carrier on every device. A pass rendering into
 //! one and a kernel's write of one, which Metal's validation stops (plain Metal's pass stores
 //! nothing, its write leaves bytes no format defines), are refused, typed
 //! ([`astc_hdr_textures_of_every_usage_are_made`]).
@@ -39,13 +40,15 @@ use metal2vulkan_runtime::{
     Texture,
 };
 
-/// Every ASTC HDR format of a Vulkan footprint.
-const FORMATS: [PixelFormat; 14] = [
+/// Every ASTC HDR format.
+const FORMATS: [PixelFormat; 16] = [
     PixelFormat::ASTC4x4HDR,
+    PixelFormat::ASTC4x2HDR,
     PixelFormat::ASTC5x4HDR,
     PixelFormat::ASTC5x5HDR,
     PixelFormat::ASTC6x5HDR,
     PixelFormat::ASTC6x6HDR,
+    PixelFormat::ASTC8x4HDR,
     PixelFormat::ASTC8x5HDR,
     PixelFormat::ASTC8x6HDR,
     PixelFormat::ASTC8x8HDR,
