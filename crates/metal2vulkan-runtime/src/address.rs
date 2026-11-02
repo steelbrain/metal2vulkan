@@ -42,9 +42,11 @@
 //!   buffer in its slots is gone. Which slot a buffer takes, and when a pool is needed or goes, is
 //!   the caller's to model, as are Metal's own allocations in its pools.
 //! - **Outside the space**: the runtime's own buffers (the index buffers it generates, staging for
-//!   fills, uploads and copies, scratch, tile memory, shadows) take ranges of a second space above
-//!   it, `[2^47, 2^48)`, so a program's buffer addresses never depend on when the runtime's own
-//!   work completes, as Metal's own allocations never move a program's.
+//!   fills, uploads and copies, scratch, tile memory, shadows, and the buffers of the device's
+//!   in-place check, `in_place_check.rs`, which runs on a thread of its own while the program makes
+//!   its resources) take ranges of a second space above it, `[2^47, 2^48)`, so a program's buffer
+//!   addresses never depend on whether or when the runtime's own work runs or completes, as
+//!   Metal's own allocations never move a program's, and no pin of the program's meets them.
 //!   [`AddressPlacement::Outside`], a runtime extension, puts a caller's helper buffer there too. A
 //!   pin never reaches it.
 //! - **Indirect command buffers' records**: an indirect command buffer's ID is the one Metal's pool

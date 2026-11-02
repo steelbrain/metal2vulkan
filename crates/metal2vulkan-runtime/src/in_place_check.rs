@@ -15,6 +15,11 @@
 //!   must then read the CPU's write where the CPU wrote it, and the pattern elsewhere. Each class
 //!   runs every shape of [`SHAPES`] (texels of 1, 2, 4, 8 and 16 bytes, rows apart or one after
 //!   another, and 3840x2160 at 4 bytes) [`ROUNDS`] times.
+//! - **Its buffers' addresses** lie outside the Metal address space (`AddressPlacement::Outside`,
+//!   `address.rs`), each made as the product makes its class's otherwise: the check runs while
+//!   the program makes its resources, so a range of the space it took would refuse a pin of the
+//!   program's there, or move a range the runtime picks for it. Its pages, their import, the
+//!   image and the move do not depend on the address, so neither does a verdict.
 //! - **Its cost** is the pattern's fill and compare of each window, at the speed of a copy and a
 //!   comparison of memory (a 3840x2160 surface's 33 MB among them), and each image's making and
 //!   first move: the writes themselves run only while the move does.
@@ -42,7 +47,9 @@ use crate::exit_guard;
 use crate::host_memory::HostMemory;
 use crate::in_place::{encode, mark_checking, record_name, PagesClass, Verdict};
 use crate::values::ResourceOptions;
-use crate::{Buffer, BufferContents, BufferDescriptor, Device, TextureDescriptor};
+use crate::{
+    AddressPlacement, Buffer, BufferContents, BufferDescriptor, Device, TextureDescriptor,
+};
 use metal2vulkan::device::HostPageTexturePolicy;
 use metal2vulkan::metal::{PixelFormat, TextureUsage};
 use std::ptr::NonNull;
@@ -285,7 +292,9 @@ impl ClassPages {
         match class {
             PagesClass::Pointer => pointer_pages(device, length),
             PagesClass::Fresh => {
-                let buffer = device.new_buffer(length, ResourceOptions::shared()).ok()?;
+                let buffer = device
+                    .new_buffer_placed(length, ResourceOptions::shared(), AddressPlacement::Outside)
+                    .ok()?;
                 if !buffer.in_fresh_pages() {
                     return None;
                 }
@@ -330,7 +339,8 @@ fn no_copy_kept(
         deallocator: None,
         keep_alive: Some(pages),
     };
-    let descriptor = BufferDescriptor::new(length, ResourceOptions::shared(), contents);
+    let descriptor = BufferDescriptor::new(length, ResourceOptions::shared(), contents)
+        .with_placement(AddressPlacement::Outside);
     device.new_buffer_with_descriptor(descriptor).ok()
 }
 

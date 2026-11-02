@@ -1913,10 +1913,22 @@ impl Device {
     /// answers nil, its validation stopping it), `Memoryless` storage
     /// (`Invalid`).
     pub fn new_buffer(&self, length: u64, options: ResourceOptions) -> Result<Buffer, Error> {
+        self.new_buffer_placed(length, options, AddressPlacement::Any)
+    }
+
+    /// [`Device::new_buffer`] at `placement` in the address space: made, refused, announced and
+    /// kept among the program's resources as that is, at `AddressPlacement::Outside` for a buffer
+    /// whose address Metal shows no program, so that no program buffer's address depends on it
+    /// (`address.rs`).
+    pub(super) fn new_buffer_placed(
+        &self,
+        length: u64,
+        options: ResourceOptions,
+        placement: AddressPlacement,
+    ) -> Result<Buffer, Error> {
         self.keep_room();
         let options = self.own_memory_options("new_buffer", options)?;
-        let (buffer, class) =
-            self.buffer_of_length("new_buffer", length, options, AddressPlacement::Any)?;
+        let (buffer, class) = self.buffer_of_length("new_buffer", length, options, placement)?;
         self.degrade_system_memory(&buffer, class, || {
             format!("a `Shared` buffer of {length} bytes")
         });
