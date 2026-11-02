@@ -311,26 +311,9 @@ pub(super) fn plan<'a>(
     area: Option<&DrawnArea>,
 ) -> Result<Vec<Vec<ShadowCopy>>, Error> {
     let attached = render_target::attachment_uses(layout)?;
-    // The colors whose writes an instance bounds, and the uses of the other attachments.
-    let bounded: Vec<usize> = (layout.colors.iter().enumerate())
-        .filter(|&(index, color)| {
-            let loaded = drawn.is_some_and(|(_, loaded)| loaded.get(index) == Some(&true));
-            color
-                .as_ref()
-                .is_some_and(|color| loaded && bounded_color(color, layout))
-        })
-        .map(|(index, _)| index)
-        .collect();
-    let others = render_target::attachment_uses_but(layout, |index| bounded.contains(&index))?;
-    let mut writes = Vec::with_capacity(bounded.len());
-    for color in bounded
-        .iter()
-        .filter_map(|&index| layout.colors[index].as_ref())
-    {
-        let texture = &color.target.texture;
-        let uses = render_target::target_uses(&color.target, false)?;
-        writes.push((uses, texture.usage_shadow_copies()));
-    }
+    // The writes an instance bounds, made at the first that bounds its own: none in a pass of one
+    // instance, which no step before the pass's instances leaves alone.
+    let mut bounded: Option<BoundedWrites> = None;
     let mut copies = Vec::new();
     for (index, (instance, bound)) in instances.enumerate() {
         let bound = bound.filter(|_| drawn.is_some());
@@ -347,11 +330,19 @@ pub(super) fn plan<'a>(
         }
         let uses: Vec<Use<ResourceKey>> = instance.uses().chain(attached.iter().cloned()).collect();
         copies.push(core.plan_shadows(&shadows, &uses)?);
-        match bound.filter(|_| !writes.is_empty()) {
-            Some(area) => {
-                let uses: Vec<Use<ResourceKey>> =
-                    instance.uses().chain(others.iter().cloned()).collect();
-                let within: Vec<Within> = (writes.iter())
+        if bound.is_some() && bounded.is_none() {
+            bounded = Some(BoundedWrites::of(layout, drawn)?);
+        }
+        let writes = bounded
+            .as_ref()
+            .filter(|bounded| !bounded.writes.is_empty());
+        match bound.zip(writes) {
+            Some((area, bounded)) => {
+                let uses: Vec<Use<ResourceKey>> = instance
+                    .uses()
+                    .chain(bounded.others.iter().cloned())
+                    .collect();
+                let within: Vec<Within> = (bounded.writes.iter())
                     .map(|(uses, texels)| Within {
                         uses: uses.clone(),
                         texels: texels.clone(),
@@ -364,6 +355,42 @@ pub(super) fn plan<'a>(
         }
     }
     Ok(copies)
+}
+
+/// The writes of the colors whose writes an instance of a pass bounds by its draws' scissors
+/// ([`plan`]), and the uses of the pass's other attachments.
+struct BoundedWrites {
+    /// The uses of the attachments but those colors (their resolves' kept).
+    others: Vec<Use<ResourceKey>>,
+    /// Each such color's attachment uses and its texture's usage shadow, where it has one.
+    writes: Vec<(Vec<Use<ResourceKey>>, Option<Arc<ShadowCopies>>)>,
+}
+
+impl BoundedWrites {
+    /// Those of a pass of `layout` that loads the colors `drawn` names by index, inside its
+    /// rectangle: each loaded color whose writes the pass bounds ([`bounded_color`]).
+    fn of(layout: &PassLayout, drawn: Option<([u32; 4], &[bool])>) -> Result<Self, Error> {
+        let bounded: Vec<usize> = (layout.colors.iter().enumerate())
+            .filter(|&(index, color)| {
+                let loaded = drawn.is_some_and(|(_, loaded)| loaded.get(index) == Some(&true));
+                color
+                    .as_ref()
+                    .is_some_and(|color| loaded && bounded_color(color, layout))
+            })
+            .map(|(index, _)| index)
+            .collect();
+        let others = render_target::attachment_uses_but(layout, |index| bounded.contains(&index))?;
+        let mut writes = Vec::with_capacity(bounded.len());
+        for color in bounded
+            .iter()
+            .filter_map(|&index| layout.colors[index].as_ref())
+        {
+            let texture = &color.target.texture;
+            let uses = render_target::target_uses(&color.target, false)?;
+            writes.push((uses, texture.usage_shadow_copies()));
+        }
+        Ok(BoundedWrites { others, writes })
+    }
 }
 
 /// Whether a pass of `layout` has a shadowed attachment or resolve target.

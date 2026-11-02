@@ -1893,3 +1893,34 @@ fn a_resource_used_at_moving_ranges_allocates_its_list_once() {
     assert!(!kept.is_empty() && kept.len() <= ENTRIES_PER_KEY);
     assert!(kept.iter().all(|used| used.key == 1));
 }
+
+/// An encoder's summary lists its tracked uses by resource, in key order, and each resource's
+/// ranges in the order its commands first used them, however the resources were first used: a
+/// render encoder's draws over a buffer at offsets that move back and forth, over several
+/// buffers named in no order.
+#[test]
+fn a_summary_lists_its_uses_by_resource_each_in_recorded_order() {
+    let mut uses = EncoderUses::new(false);
+    let keys: [Key; 6] = [41, 7, 19, 3, 88, 23];
+    // Each resource's ranges, 100 bytes apart so none meets another, used in this order.
+    let starts: [u64; 4] = [300, 100, 500, 200];
+    for &start in &starts {
+        for &key in &keys {
+            let used = reads(key, bytes(start..start + 10), shader_read());
+            uses.record(FRAGMENT, &[used], None);
+        }
+    }
+    let summary = uses.finish();
+    let mut sorted = keys;
+    sorted.sort_unstable();
+    let expected: Vec<(Key, Range<u64>)> = (sorted.iter())
+        .flat_map(|&key| starts.iter().map(move |&start| (key, start..start + 10)))
+        .collect();
+    let got: Vec<(Key, Range<u64>)> = (summary.uses().iter())
+        .map(|used| match &used.range {
+            UseRange::Bytes(range) => (used.key, range.clone()),
+            other => panic!("a use of bytes, not {other:?}"),
+        })
+        .collect();
+    assert_eq!(got, expected);
+}

@@ -4883,8 +4883,10 @@ impl RenderLowering {
                 .iter()
                 .any(|dispatch| !dispatch.shadows.is_empty());
         // Their truths, which an execution's commands may reach past what its call gathered
-        // (`render/executions.rs`).
-        let pass_shadows = match texels_shadowed {
+        // (`render/executions.rs`), held by a pass that records later (below): one of no
+        // execution, pending draw or tile dispatch records now, and needs none.
+        let records_later = !executions.is_empty() || !pending.is_empty() || !dispatches.is_empty();
+        let pass_shadows = match texels_shadowed && records_later {
             true => shadows::pass_shadows(
                 &layout,
                 (instances.iter().map(|instance| &instance.shadows))
