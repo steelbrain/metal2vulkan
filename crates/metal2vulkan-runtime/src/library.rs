@@ -524,7 +524,7 @@ impl Function {
     /// (`FunctionDescriptor::specialized`) where the function was made with constant values or by
     /// [`Library::new_function_with_descriptor`]; a pipeline state of one made by
     /// [`Library::new_function_with_name`] whose function declares function constants is refused
-    /// (`Invalid` with [`Problem::UnspecializedFunction`](crate::Problem::UnspecializedFunction)),
+    /// (`Invalid` with [`Problem::UnspecializedFunction`]),
     /// as plain Metal ends its process at the creation.
     ///
     /// [`RenderPipelineDescriptor`]: metal2vulkan::pipeline::RenderPipelineDescriptor

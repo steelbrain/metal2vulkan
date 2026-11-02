@@ -271,7 +271,7 @@ fn is_defined_arg(
 
 /// The unsupplied function constant a constant with `value` depends on: its global's own when it
 /// is a global's address, otherwise the lowest among its operands' (`operand` gives an
-/// operand's). The one rule for [`Solver`] and [`entry_block_refusal`].
+/// operand's). [`Solver`]'s rule.
 fn const_taint(
     value: &Const,
     fcs: &HashMap<GlobalId, FcState>,
