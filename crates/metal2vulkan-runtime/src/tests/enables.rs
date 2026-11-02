@@ -566,3 +566,103 @@ fn an_optional_extension_is_enabled_only_with_its_features() {
         [c"VK_KHR_swapchain", c"VK_EXT_swapchain_maintenance1"]
     );
 }
+
+/// The video extensions whose feature structures the runtime knows (`VK_KHR_video_maintenance1`,
+/// `VK_KHR_video_maintenance2`, `VK_KHR_unified_image_layouts`) take their structures with every
+/// feature the device has set; `unifiedImageLayoutsVideo`, which Vulkan requires of no device
+/// listing the extension, stays disabled where the device lacks it, without a refusal, and a
+/// device without `unifiedImageLayouts` is refused (listed) or leaves the extension out
+/// (optional).
+#[test]
+fn video_extensions_take_their_features_the_optional_one_where_the_device_has_it() {
+    use crate::enables::listed_structures;
+    use crate::error::ExtensionFeature;
+    let names =
+        |names: &[&CStr]| -> Vec<CString> { names.iter().map(|&name| name.to_owned()).collect() };
+    let (maintenance1, maintenance2, unified) = (1_000_515_000, 1_000_586_000, 1_000_527_000);
+    // The `VkBool32` members after `sType` and `pNext` of each chained video structure.
+    let members = |enables: &mut Enables| {
+        enables.with_create_info(&[], |info| {
+            let mut set = Vec::new();
+            let mut next = info.p_next.cast::<vk::BaseInStructure>();
+            while !next.is_null() {
+                // SAFETY: every structure of the chain lives for the call, and each begins with
+                // `sType` and `pNext`.
+                let base = unsafe { &*next };
+                let raw = base.s_type.as_raw();
+                let count = match raw {
+                    _ if raw == unified => 2,
+                    _ if raw == maintenance1 || raw == maintenance2 => 1,
+                    _ => 0,
+                };
+                // SAFETY: each such structure holds `count` `VkBool32` members after `pNext`.
+                let bools: Vec<vk::Bool32> = (0..count)
+                    .map(|at| unsafe { *next.cast::<u8>().add(16 + 4 * at).cast::<vk::Bool32>() })
+                    .collect();
+                if count > 0 {
+                    set.push((raw, bools));
+                }
+                next = base.p_next;
+            }
+            set.sort();
+            set
+        })
+    };
+    let listed = listed_structures(&names(&[
+        c"VK_KHR_video_queue",
+        c"VK_KHR_video_maintenance1",
+        c"VK_KHR_video_maintenance2",
+        c"VK_KHR_unified_image_layouts",
+    ]));
+    assert_eq!(listed.len(), 3, "the video queue takes no structure");
+    let mut enables =
+        Enables::of(&EnableSet::new(), ApiVersion::V1_3, &BTreeSet::new(), &[]).unwrap();
+    enables.enable_listed(&listed, |_| true).unwrap();
+    assert_eq!(
+        members(&mut enables),
+        [
+            (maintenance1, vec![vk::TRUE]),
+            (unified, vec![vk::TRUE, vk::TRUE]),
+            (maintenance2, vec![vk::TRUE]),
+        ]
+    );
+    // Without `unifiedImageLayoutsVideo`: the extension stays, its video member disabled.
+    let mut enables =
+        Enables::of(&EnableSet::new(), ApiVersion::V1_3, &BTreeSet::new(), &[]).unwrap();
+    enables
+        .enable_listed(&listed, |feature| feature != "unifiedImageLayoutsVideo")
+        .unwrap();
+    assert!(members(&mut enables).contains(&(unified, vec![vk::TRUE, vk::FALSE])));
+    // Without `unifiedImageLayouts`: refused when listed, left out when optional.
+    let mut enables =
+        Enables::of(&EnableSet::new(), ApiVersion::V1_3, &BTreeSet::new(), &[]).unwrap();
+    assert_eq!(
+        enables.enable_listed(&listed, |feature| feature != "unifiedImageLayouts"),
+        Err(Error::ExtensionFeature(ExtensionFeature {
+            extension: "VK_KHR_unified_image_layouts",
+            feature: "unifiedImageLayouts",
+        }))
+    );
+    let mut enables =
+        Enables::of(&EnableSet::new(), ApiVersion::V1_3, &BTreeSet::new(), &[]).unwrap();
+    enables.enable_where_featured(
+        &names(&[
+            c"VK_KHR_video_maintenance1",
+            c"VK_KHR_unified_image_layouts",
+        ]),
+        |feature| !feature.starts_with("unifiedImageLayouts"),
+    );
+    assert_eq!(members(&mut enables), [(maintenance1, vec![vk::TRUE])]);
+    let enabled: Vec<&CStr> = enables.names().collect();
+    assert_eq!(enabled, [c"VK_KHR_video_maintenance1"]);
+    // An optional one whose video member alone is missing is enabled.
+    let mut enables =
+        Enables::of(&EnableSet::new(), ApiVersion::V1_3, &BTreeSet::new(), &[]).unwrap();
+    enables.enable_where_featured(&names(&[c"VK_KHR_unified_image_layouts"]), |feature| {
+        feature != "unifiedImageLayoutsVideo"
+    });
+    assert_eq!(
+        members(&mut enables),
+        [(unified, vec![vk::TRUE, vk::FALSE])]
+    );
+}

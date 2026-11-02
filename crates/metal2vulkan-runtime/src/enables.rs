@@ -172,6 +172,68 @@ unsafe impl vk::ExtendsDeviceCreateInfo for FifoLatestReadyFeatures {}
 // SAFETY: the registry lists `VkPhysicalDeviceFeatures2` in the structure's `structextends`.
 unsafe impl vk::ExtendsPhysicalDeviceFeatures2 for FifoLatestReadyFeatures {}
 
+/// `VkPhysicalDeviceVideoMaintenance2FeaturesKHR`, which `ash 0.38` predates, laid out as the
+/// registry defines it (extension number 587).
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct VideoMaintenance2Features {
+    s_type: vk::StructureType,
+    p_next: *mut std::ffi::c_void,
+    video_maintenance2: vk::Bool32,
+}
+
+impl Default for VideoMaintenance2Features {
+    fn default() -> Self {
+        VideoMaintenance2Features {
+            s_type: <Self as vk::TaggedStructure>::STRUCTURE_TYPE,
+            p_next: std::ptr::null_mut(),
+            video_maintenance2: vk::FALSE,
+        }
+    }
+}
+
+// SAFETY: the layout is the registry's `VkPhysicalDeviceVideoMaintenance2FeaturesKHR`, which
+// begins with `sType` and `pNext` as every chained structure must, and this is its structure type.
+unsafe impl vk::TaggedStructure for VideoMaintenance2Features {
+    const STRUCTURE_TYPE: vk::StructureType = vk::StructureType::from_raw(1_000_586_000);
+}
+// SAFETY: the registry lists `VkDeviceCreateInfo` in the structure's `structextends`.
+unsafe impl vk::ExtendsDeviceCreateInfo for VideoMaintenance2Features {}
+// SAFETY: the registry lists `VkPhysicalDeviceFeatures2` in the structure's `structextends`.
+unsafe impl vk::ExtendsPhysicalDeviceFeatures2 for VideoMaintenance2Features {}
+
+/// `VkPhysicalDeviceUnifiedImageLayoutsFeaturesKHR`, which `ash 0.38` predates, laid out as the
+/// registry defines it (extension number 528).
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct UnifiedImageLayoutsFeatures {
+    s_type: vk::StructureType,
+    p_next: *mut std::ffi::c_void,
+    unified_image_layouts: vk::Bool32,
+    unified_image_layouts_video: vk::Bool32,
+}
+
+impl Default for UnifiedImageLayoutsFeatures {
+    fn default() -> Self {
+        UnifiedImageLayoutsFeatures {
+            s_type: <Self as vk::TaggedStructure>::STRUCTURE_TYPE,
+            p_next: std::ptr::null_mut(),
+            unified_image_layouts: vk::FALSE,
+            unified_image_layouts_video: vk::FALSE,
+        }
+    }
+}
+
+// SAFETY: the layout is the registry's `VkPhysicalDeviceUnifiedImageLayoutsFeaturesKHR`, which
+// begins with `sType` and `pNext` as every chained structure must, and this is its structure type.
+unsafe impl vk::TaggedStructure for UnifiedImageLayoutsFeatures {
+    const STRUCTURE_TYPE: vk::StructureType = vk::StructureType::from_raw(1_000_527_000);
+}
+// SAFETY: the registry lists `VkDeviceCreateInfo` in the structure's `structextends`.
+unsafe impl vk::ExtendsDeviceCreateInfo for UnifiedImageLayoutsFeatures {}
+// SAFETY: the registry lists `VkPhysicalDeviceFeatures2` in the structure's `structextends`.
+unsafe impl vk::ExtendsPhysicalDeviceFeatures2 for UnifiedImageLayoutsFeatures {}
+
 /// The name of `VK_KHR_pipeline_binary` (extension number 484), which `ash 0.38` predates and the
 /// vocabulary does not hold.
 pub(super) const PIPELINE_BINARY: &CStr = c"VK_KHR_pipeline_binary";
@@ -396,6 +458,15 @@ pub(super) enum Structure {
     /// `VkPhysicalDevicePresentModeFifoLatestReadyFeaturesKHR`, outside the vocabulary: linked
     /// only by [`Enables::enable_listed`], where the caller lists its extension.
     FifoLatestReady,
+    /// `VkPhysicalDeviceVideoMaintenance1FeaturesKHR`, outside the vocabulary: linked only by
+    /// [`Enables::enable_listed`], where the caller lists its extension.
+    VideoMaintenance1,
+    /// `VkPhysicalDeviceVideoMaintenance2FeaturesKHR`, outside the vocabulary: linked only by
+    /// [`Enables::enable_listed`], where the caller lists its extension.
+    VideoMaintenance2,
+    /// `VkPhysicalDeviceUnifiedImageLayoutsFeaturesKHR`, outside the vocabulary: linked only by
+    /// [`Enables::enable_listed`], where the caller lists its extension.
+    UnifiedImageLayouts,
     /// `VkPhysicalDeviceLinearColorAttachmentFeaturesNV`, outside the vocabulary: linked only by
     /// [`Enables::enable_linear_color_attachment`].
     LinearColorAttachment,
@@ -483,6 +554,9 @@ impl Structure {
             | Structure::GeneratedCommands
             | Structure::SwapchainMaintenance1
             | Structure::FifoLatestReady
+            | Structure::VideoMaintenance1
+            | Structure::VideoMaintenance2
+            | Structure::UnifiedImageLayouts
             | Structure::LinearColorAttachment
             | Structure::PipelineBinary
             | Structure::InternalCacheControl
@@ -541,6 +615,9 @@ impl Structure {
             Structure::GeneratedCommands
             | Structure::SwapchainMaintenance1
             | Structure::FifoLatestReady
+            | Structure::VideoMaintenance1
+            | Structure::VideoMaintenance2
+            | Structure::UnifiedImageLayouts
             | Structure::LinearColorAttachment
             | Structure::PipelineBinary
             | Structure::InternalCacheControl
@@ -604,6 +681,9 @@ struct FeatureChain {
     generated_commands: GeneratedCommandsFeatures,
     swapchain_maintenance1: vk::PhysicalDeviceSwapchainMaintenance1FeaturesEXT<'static>,
     fifo_latest_ready: FifoLatestReadyFeatures,
+    video_maintenance1: vk::PhysicalDeviceVideoMaintenance1FeaturesKHR<'static>,
+    video_maintenance2: VideoMaintenance2Features,
+    unified_image_layouts: UnifiedImageLayoutsFeatures,
     linear_color_attachment: vk::PhysicalDeviceLinearColorAttachmentFeaturesNV<'static>,
     pipeline_binary: PipelineBinaryFeatures,
     internal_cache_control: InternalCacheControl,
@@ -982,17 +1062,21 @@ const EXTENSIONS: &[(VkExtension, &CStr)] = {
 };
 
 /// One feature of an extension outside the vocabulary that a caller may list
-/// (`DeviceOptions::device_extensions`): its structure, its name, and its member.
+/// (`DeviceOptions::device_extensions`): its structure, its name, its member, and whether Vulkan
+/// requires it of every device that lists the extension (the specification's feature
+/// requirements): a required one the device lacks refuses the extension, an optional one is
+/// enabled where the device has it.
 struct ListedFeature {
     structure: Structure,
     name: &'static str,
     member: fn(&mut FeatureChain) -> &mut vk::Bool32,
+    required: bool,
 }
 
 /// Each name of an extension outside the vocabulary whose features the runtime enables where
 /// the caller lists it, with its feature structure (the `KHR` and `EXT` names of one extension
 /// share one).
-const LISTED: [(&CStr, Structure); 4] = [
+const LISTED: [(&CStr, Structure); 7] = [
     (
         c"VK_KHR_swapchain_maintenance1",
         Structure::SwapchainMaintenance1,
@@ -1009,19 +1093,52 @@ const LISTED: [(&CStr, Structure); 4] = [
         c"VK_EXT_present_mode_fifo_latest_ready",
         Structure::FifoLatestReady,
     ),
+    (c"VK_KHR_video_maintenance1", Structure::VideoMaintenance1),
+    (c"VK_KHR_video_maintenance2", Structure::VideoMaintenance2),
+    (
+        c"VK_KHR_unified_image_layouts",
+        Structure::UnifiedImageLayouts,
+    ),
 ];
 
 /// Every feature of [`LISTED`]'s structures.
-const LISTED_FEATURES: [ListedFeature; 2] = [
+const LISTED_FEATURES: [ListedFeature; 6] = [
     ListedFeature {
         structure: Structure::SwapchainMaintenance1,
         name: "swapchainMaintenance1",
         member: |chain| &mut chain.swapchain_maintenance1.swapchain_maintenance1,
+        required: true,
     },
     ListedFeature {
         structure: Structure::FifoLatestReady,
         name: "presentModeFifoLatestReady",
         member: |chain| &mut chain.fifo_latest_ready.present_mode_fifo_latest_ready,
+        required: true,
+    },
+    ListedFeature {
+        structure: Structure::VideoMaintenance1,
+        name: "videoMaintenance1",
+        member: |chain| &mut chain.video_maintenance1.video_maintenance1,
+        required: true,
+    },
+    ListedFeature {
+        structure: Structure::VideoMaintenance2,
+        name: "videoMaintenance2",
+        member: |chain| &mut chain.video_maintenance2.video_maintenance2,
+        required: true,
+    },
+    ListedFeature {
+        structure: Structure::UnifiedImageLayouts,
+        name: "unifiedImageLayouts",
+        member: |chain| &mut chain.unified_image_layouts.unified_image_layouts,
+        required: true,
+    },
+    // Vulkan requires it only of a device whose video layouts `GENERAL` serves.
+    ListedFeature {
+        structure: Structure::UnifiedImageLayouts,
+        name: "unifiedImageLayoutsVideo",
+        member: |chain| &mut chain.unified_image_layouts.unified_image_layouts_video,
+        required: false,
     },
 ];
 
@@ -1062,6 +1179,15 @@ pub(super) unsafe fn listed_reported(
         }
         if has(Structure::FifoLatestReady) {
             features = features.push_next(&mut c.fifo_latest_ready);
+        }
+        if has(Structure::VideoMaintenance1) {
+            features = features.push_next(&mut c.video_maintenance1);
+        }
+        if has(Structure::VideoMaintenance2) {
+            features = features.push_next(&mut c.video_maintenance2);
+        }
+        if has(Structure::UnifiedImageLayouts) {
+            features = features.push_next(&mut c.unified_image_layouts);
         }
         // SAFETY: the caller's contract; the chain lives for the call, of structures the listed
         // extensions define.
@@ -1125,6 +1251,9 @@ macro_rules! link_extensions {
             GeneratedCommands => generated_commands,
             SwapchainMaintenance1 => swapchain_maintenance1,
             FifoLatestReady => fifo_latest_ready,
+            VideoMaintenance1 => video_maintenance1,
+            VideoMaintenance2 => video_maintenance2,
+            UnifiedImageLayouts => unified_image_layouts,
             LinearColorAttachment => linear_color_attachment,
             PipelineBinary => pipeline_binary,
             InternalCacheControl => internal_cache_control,
@@ -1328,9 +1457,10 @@ impl Enables {
 
     /// Enables every feature of `listed`'s structures ([`listed_structures`] of the caller's
     /// extensions) that `reported` ([`listed_reported`]) says the device has, chaining each
-    /// structure. A feature the device lacks refuses the device, naming the extension the caller
-    /// listed and the feature ([`Error::ExtensionFeature`]): the extension is never enabled
-    /// without its features.
+    /// structure. A required feature the device lacks ([`ListedFeature::required`]) refuses the
+    /// device, naming the extension the caller listed and the feature
+    /// ([`Error::ExtensionFeature`]): the extension is never enabled without its required
+    /// features. An optional one the device lacks stays disabled.
     pub(super) fn enable_listed(
         &mut self,
         listed: &[(&'static CStr, Structure)],
@@ -1342,6 +1472,9 @@ impl Enables {
                 .filter(|feature| feature.structure == structure)
             {
                 if !reported(feature.name) {
+                    if !feature.required {
+                        continue;
+                    }
                     return Err(Error::ExtensionFeature(ExtensionFeature {
                         extension: extension.to_str().unwrap_or_default(),
                         feature: feature.name,
@@ -1356,10 +1489,10 @@ impl Enables {
 
     /// Enables each of the caller's optional extensions `names` (`DeviceOptions::
     /// optional_device_extensions`, each listed by the device), where `reported`
-    /// ([`listed_reported`] of their [`listed_structures`]) says the device has every feature of
-    /// its structure that the runtime knows ([`LISTED`]), chaining the structure with those
-    /// features set; an extension of no known structure is enabled as it is. One the device lacks
-    /// a feature of is left out.
+    /// ([`listed_reported`] of their [`listed_structures`]) says the device has every required
+    /// feature of its structure that the runtime knows ([`LISTED`]), chaining the structure with
+    /// those features set, and each optional one the device has; an extension of no known
+    /// structure is enabled as it is. One the device lacks a required feature of is left out.
     pub(super) fn enable_where_featured(
         &mut self,
         names: &[CString],
@@ -1376,10 +1509,10 @@ impl Enables {
                         .iter()
                         .filter(move |feature| feature.structure == structure)
                 };
-                if !features().all(|feature| reported(feature.name)) {
+                if !features().all(|feature| !feature.required || reported(feature.name)) {
                     continue;
                 }
-                for feature in features() {
+                for feature in features().filter(|feature| reported(feature.name)) {
                     *(feature.member)(&mut self.chain) = vk::TRUE;
                 }
                 self.linked.insert(structure);

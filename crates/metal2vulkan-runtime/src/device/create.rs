@@ -74,10 +74,16 @@ pub struct DeviceOptions {
     /// Device extensions beyond the recommended enables (a swapchain, for example). Where one
     /// is an extension whose feature structure the runtime knows (`VK_KHR_` or
     /// `VK_EXT_swapchain_maintenance1`: `swapchainMaintenance1`; `VK_KHR_` or
-    /// `VK_EXT_present_mode_fifo_latest_ready`: `presentModeFifoLatestReady`) and the device
-    /// lists it, the device enables the structure's features too; a device that lacks one is
-    /// refused ([`Error::ExtensionFeature`](crate::Error::ExtensionFeature)) rather than enable
-    /// the extension without it. One whose registry dependency names an instance extension the
+    /// `VK_EXT_present_mode_fifo_latest_ready`: `presentModeFifoLatestReady`;
+    /// `VK_KHR_video_maintenance1`: `videoMaintenance1`; `VK_KHR_video_maintenance2`:
+    /// `videoMaintenance2`; `VK_KHR_unified_image_layouts`: `unifiedImageLayouts` and
+    /// `unifiedImageLayoutsVideo`) and the device lists it, the device enables the structure's
+    /// features too; a device that lacks one Vulkan requires of every device listing the
+    /// extension (all of them but `unifiedImageLayoutsVideo`) is refused
+    /// ([`Error::ExtensionFeature`](crate::Error::ExtensionFeature)) rather than enable the
+    /// extension without it. `unifiedImageLayoutsVideo` is enabled where the device has it
+    /// (`vkGetPhysicalDeviceFeatures2` on [`DeviceHandles`](crate::DeviceHandles) answers
+    /// whether it does). One whose registry dependency names an instance extension the
     /// instance would not enable (`VK_KHR_swapchain` without `VK_KHR_surface` in
     /// `instance_extensions`, for example) refuses the options before the instance is made
     /// ([`Error::InstanceExtensionRequired`](crate::Error::InstanceExtensionRequired)).
@@ -85,8 +91,9 @@ pub struct DeviceOptions {
     /// Device extensions each device enables only where it can, never refused for one: where the
     /// device lists it, the instance enables every instance extension its registry dependency
     /// names (as for `device_extensions`), and, for an extension whose feature structure the
-    /// runtime knows (as for `device_extensions`), the device has every feature of it, which it
-    /// then enables too. Elsewhere the device leaves it out, and is made all the same. Which a
+    /// runtime knows (as for `device_extensions`), the device has every required feature of it,
+    /// which it then enables too, with each optional one it has (`unifiedImageLayoutsVideo`).
+    /// Elsewhere the device leaves it out, and is made all the same. Which a
     /// device enabled, [`Device::enables_extension`](crate::Device::enables_extension) answers
     /// (window-system extensions, for a consumer whose windows present where the device can).
     /// One also in `device_extensions` is that list's. Metal has no such setting.
