@@ -2132,6 +2132,141 @@ mod tests {
         assert_eq!(of(&|d| d.lod_average = true), 0);
     }
 
+    /// The word's linear predicate (`SamplerWord::LINEAR_FILTER` masked to `SamplerWord::LINEAR`)
+    /// holds for linear minification and magnification filters of one isotropic level, whatever
+    /// the coordinates, addressing, border, comparison and reduction; the state an emulated
+    /// sample reads (`SamplerWord::LINEAR_STATE`) is every field but the comparison, the
+    /// reduction, the level clamps and the cubic filter.
+    #[test]
+    fn a_sampler_word_answers_the_linear_predicate() {
+        use SamplerMinMagFilter as F;
+        let linear = |d: &SamplerDescriptor| {
+            (SamplerWord::of(d).0 & SamplerWord::LINEAR_FILTER) == SamplerWord::LINEAR
+        };
+        let mut d = metal_default();
+        assert!(!linear(&d));
+        d.min_filter = F::Linear;
+        assert!(!linear(&d));
+        d.mag_filter = F::Linear;
+        assert!(linear(&d));
+        // Neither the coordinates, the addressing, the border, nor the comparison decide it.
+        let mut e = d;
+        e.normalized_coordinates = false;
+        e.s_address_mode = SamplerAddressMode::MirrorRepeat;
+        e.border_color = SamplerBorderColor::OpaqueWhite;
+        e.compare_function = CompareFunction::Less;
+        assert!(linear(&e));
+        for mip in [SamplerMipFilter::Nearest, SamplerMipFilter::Linear] {
+            let mut e = d;
+            e.mip_filter = mip;
+            assert!(!linear(&e), "{mip:?}");
+        }
+        // A minimum or maximum reduction reads the weighted average.
+        for reduction in [SamplerReductionMode::Minimum, SamplerReductionMode::Maximum] {
+            let mut e = d;
+            e.reduction_mode = reduction;
+            assert!(linear(&e), "{reduction:?}");
+        }
+        let mut e = d;
+        e.max_anisotropy = 2;
+        assert!(!linear(&e));
+        // The state an emulated sample reads is every field but the comparison and the
+        // reduction.
+        assert_eq!(
+            SamplerWord::LINEAR_STATE,
+            SamplerWord::FIELDS
+                & !SamplerWord::COMPARE
+                & !SamplerWord::REDUCTION
+                & !SamplerWord::LEVEL_MIN
+                & !SamplerWord::LEVEL_MAX
+                & !SamplerWord::CUBIC
+        );
+    }
+
+    /// A sampler's word holds the levels a nearest mip filter reads at its clamp on Metal's grid
+    /// (the default clamp's are the word 0's).
+    #[test]
+    fn a_samplers_word_holds_metals_levels_on_its_grid() {
+        let levels = SamplerWord::LEVEL_MIN | SamplerWord::LEVEL_MAX;
+        assert_eq!(SamplerWord::of(&metal_default()).0 & levels, 0);
+        let below_33 = (33.0f32 / 64.0).next_down();
+        for (c, level) in [
+            (-1.0, 0),
+            (0.0, 0),
+            (0.5, 0),
+            (below_33, 0),
+            (33.0 / 64.0, 1),
+            (1.5, 1),
+            (1.515_625, 2),
+            (2.5, 2),
+            (2.7, 3),
+            (14.6, 15),
+            (100.0, LAST_WORD_LEVEL),
+            (f32::MAX, LAST_WORD_LEVEL),
+        ] {
+            assert_eq!(nearest_level(c), level, "{c:e}");
+        }
+        assert_eq!(level_on_grid(0.3), 19.0 / 64.0);
+        assert_eq!(level_on_grid(below_33), 0.5);
+        assert_eq!(level_on_grid(f32::MAX), f32::MAX);
+
+        let mut d = metal_default();
+        d.mip_filter = SamplerMipFilter::Nearest;
+        d.lod_min_clamp = 0.6;
+        d.lod_max_clamp = 2.7;
+        let w = SamplerWord::of(&d).0;
+        assert_eq!((w >> SamplerWord::LEVEL_MIN_SHIFT) & 0xf, 1);
+        assert_eq!(
+            LAST_WORD_LEVEL - ((w >> SamplerWord::LEVEL_MAX_SHIFT) & 0xf),
+            3
+        );
+    }
+
+    /// The device is handed the descriptor's level clamp, its lower bound at least 0, whatever the
+    /// mip filter, the filters, the anisotropy and the use: it clamps and selects its own level.
+    #[test]
+    fn a_samplers_clamp_is_the_descriptors() {
+        let dev = device(&[VkFeature::SamplerAnisotropy], &[]);
+        let lods = |d: &SamplerDescriptor, use_| {
+            let s = vk_sampler(d, use_, dev.profile()).unwrap();
+            (s.min_lod, s.max_lod)
+        };
+        for mip in [SamplerMipFilter::Nearest, SamplerMipFilter::Linear] {
+            for (minf, magf, aniso) in [
+                (
+                    SamplerMinMagFilter::Nearest,
+                    SamplerMinMagFilter::Nearest,
+                    1,
+                ),
+                (SamplerMinMagFilter::Linear, SamplerMinMagFilter::Linear, 1),
+                (SamplerMinMagFilter::Linear, SamplerMinMagFilter::Nearest, 1),
+                (
+                    SamplerMinMagFilter::Nearest,
+                    SamplerMinMagFilter::Nearest,
+                    4,
+                ),
+            ] {
+                for (lo, hi) in [(0.6, 2.7), (0.01, 0.012), (2.505, f32::MAX), (0.0, 0.3)] {
+                    let mut d = metal_default();
+                    (d.min_filter, d.mag_filter, d.max_anisotropy) = (minf, magf, aniso);
+                    (d.mip_filter, d.lod_min_clamp, d.lod_max_clamp) = (mip, lo, hi);
+                    let what = format!("{minf:?}/{magf:?} x{aniso} {mip:?} [{lo}, {hi}]");
+                    for use_ in [
+                        SamplerUse::default(),
+                        SamplerUse::new(true, false),
+                        SamplerUse::new(false, true),
+                    ] {
+                        assert_eq!(lods(&d, use_), (lo, hi), "{what} {use_:?}");
+                    }
+                }
+            }
+        }
+        let mut d = metal_default();
+        d.mip_filter = SamplerMipFilter::Linear;
+        d.lod_min_clamp = -1.0;
+        assert_eq!(lods(&d, SamplerUse::default()).0, 0.0);
+    }
+
     /// The word answers the pixel samplers' predicates. A sampler with normalized coordinates
     /// answers neither. A pixel sampler's sample at its texel's centre
     /// ([`SamplerWord::nearest_pixel`]) needs one isotropic level (no mip filter, not
