@@ -63,7 +63,7 @@ use crate::degradation::Degradation;
 use crate::error::{Error, RuntimeGap};
 use crate::pipeline::{FixedState, GraphicsState as DrawingState};
 use metal2vulkan::bind::RewriteProgram;
-use metal2vulkan::device::{VkFeature, WideLinePolicy};
+use metal2vulkan::device::{DeviceProfile, VkFeature, WideLinePolicy};
 use metal2vulkan::error::{Capability, Feature, Unsupported};
 use metal2vulkan::metal::{PrimitiveType, TriangleFillMode};
 use metal2vulkan::pipeline::LineBandState;
@@ -129,7 +129,7 @@ impl LineRoute {
 }
 
 /// What of a draw the width changes.
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Drawn {
     /// Nothing: points, filled triangles, a draw that rasterizes nothing.
     Nothing,
@@ -140,10 +140,16 @@ enum Drawn {
     Other,
 }
 
-/// What `assembly`, drawn by `pipeline` in fill mode `fill`, draws that the width changes.
-fn drawn(pipeline: &DrawingState, assembly: Assembly, fill: TriangleFillMode) -> Drawn {
-    let graphics = &pipeline.base().graphics;
-    if graphics.rasterizer_discard {
+/// What `assembly` draws that the width changes, in fill mode `fill`, under a pipeline that
+/// rasterizes nothing where `discards`, whose emulated meshes' primitives have `mesh_corners`
+/// corners (`None` for a mesh draw the device draws).
+fn drawn(
+    assembly: Assembly,
+    fill: TriangleFillMode,
+    discards: bool,
+    mesh_corners: Option<u32>,
+) -> Drawn {
+    if discards {
         return Drawn::Nothing;
     }
     let edges = match fill {
@@ -157,12 +163,69 @@ fn drawn(pipeline: &DrawingState, assembly: Assembly, fill: TriangleFillMode) ->
         Assembly::Primitives(PrimitiveType::Triangle | PrimitiveType::TriangleStrip)
         | Assembly::Private(_)
         | Assembly::Patches => edges,
-        Assembly::Meshes => match graphics.mesh_records.as_ref().map(|r| r.corners) {
+        Assembly::Meshes => match mesh_corners {
             Some(1) => Drawn::Nothing,
             Some(2) | None => Drawn::Other,
             Some(_) => edges,
         },
     }
+}
+
+/// The route a draw of `drawn` at Metal's width `width` takes on a device of `profile` under
+/// `policy` (the module docs), drawn with vertex amplification above 1 where `amplifies` and in a
+/// rasterization-rate-mapped pass where `rate_mapped`; with whether the device's lines it draws
+/// differ from Metal's parallelogram, which the draw announces. Refused as the module docs say.
+fn route(
+    profile: &DeviceProfile,
+    policy: WideLinePolicy,
+    width: LineWidth,
+    drawn: Drawn,
+    (amplifies, rate_mapped): (bool, bool),
+) -> Result<(LineRoute, bool), Error> {
+    if width == LineWidth::ONE || drawn == Drawn::Nothing {
+        return Ok((LineRoute::Plain, false));
+    }
+    if rate_mapped {
+        return Err(Error::NotImplemented(RuntimeGap::WideLines));
+    }
+    let enabled = profile.enabled();
+    let limits = profile.limits();
+    let w = width.pixels();
+    let [low, high] = limits.line_width_range_bits.map(f32::from_bits);
+    let granularity = f32::from_bits(limits.line_width_granularity_bits);
+    let drawable =
+        enabled.features.contains(&VkFeature::WideLines) && w > 0.0 && (low..=high).contains(&w);
+    // On the granularity's grid from the range's bottom: the widths the device draws without
+    // rounding.
+    let on_grid = granularity > 0.0 && {
+        let steps = (w - low) / granularity;
+        steps == steps.round()
+    };
+    let exact = drawable
+        && !limits.strict_lines
+        && limits.non_strict_wide_lines_use_parallelogram
+        && w > 1.0
+        && on_grid;
+    let tessellates = enabled.features.contains(&VkFeature::TessellationShader);
+    // Where the band can draw the draw's lines.
+    let band = drawn == Drawn::Lines && tessellates && !amplifies;
+    if exact || (drawable && (policy == WideLinePolicy::Device || !band)) {
+        return Ok((LineRoute::Device { width: w }, !exact));
+    }
+    if !band {
+        return Err(match drawn == Drawn::Lines && !tessellates {
+            true => Error::Unsupported(Unsupported::needs(
+                Feature::WideLines,
+                Capability::Feature(VkFeature::TessellationShader),
+            )),
+            false => Error::NotImplemented(RuntimeGap::WideLines),
+        });
+    }
+    let half = match width.0 {
+        0 => (-(limits.sub_pixel_precision_bits as f32)).exp2(),
+        _ => w / 2.0,
+    };
+    Ok((LineRoute::Band { half }, false))
 }
 
 impl ShapeInputs<'_> {
@@ -175,59 +238,26 @@ impl ShapeInputs<'_> {
         (pipeline, assembly): (&DrawingState, Assembly),
         announce: bool,
     ) -> Result<LineRoute, Error> {
+        let graphics = &pipeline.base().graphics;
+        let drawn = drawn(
+            assembly,
+            self.state.fill_mode(),
+            graphics.rasterizer_discard,
+            graphics.mesh_records.as_ref().map(|r| r.corners),
+        );
+        let compile = self.device.compile_device();
         let width = self.state.line_width();
-        let drawn = drawn(pipeline, assembly, self.state.fill_mode());
-        if width == LineWidth::ONE || drawn == Drawn::Nothing {
-            return Ok(LineRoute::Plain);
+        let (route, differs) = route(
+            compile.profile(),
+            compile.policy().wide_lines,
+            width,
+            drawn,
+            (self.amplification.amplifies(), self.rate_map.is_some()),
+        )?;
+        if differs && announce {
+            announce_device_lines(self.device, call, width.pixels());
         }
-        if self.rate_map.is_some() {
-            return Err(Error::NotImplemented(RuntimeGap::WideLines));
-        }
-        let device = self.device;
-        let profile = device.compile_device().profile();
-        let enabled = profile.enabled();
-        let limits = profile.limits();
-        let w = width.pixels();
-        let [low, high] = limits.line_width_range_bits.map(f32::from_bits);
-        let granularity = f32::from_bits(limits.line_width_granularity_bits);
-        let drawable = enabled.features.contains(&VkFeature::WideLines)
-            && w > 0.0
-            && (low..=high).contains(&w);
-        // On the granularity's grid from the range's bottom: the widths the device draws
-        // without rounding.
-        let on_grid = granularity > 0.0 && {
-            let steps = (w - low) / granularity;
-            steps == steps.round()
-        };
-        let exact = drawable
-            && !limits.strict_lines
-            && limits.non_strict_wide_lines_use_parallelogram
-            && w > 1.0
-            && on_grid;
-        let tessellates = enabled.features.contains(&VkFeature::TessellationShader);
-        // Where the band can draw the draw's lines.
-        let band = drawn == Drawn::Lines && tessellates && !self.amplification.amplifies();
-        let policy = device.compile_device().policy().wide_lines;
-        if exact || (drawable && (policy == WideLinePolicy::Device || !band)) {
-            if !exact && announce {
-                announce_device_lines(device, call, w);
-            }
-            return Ok(LineRoute::Device { width: w });
-        }
-        if !band {
-            return Err(match drawn == Drawn::Lines && !tessellates {
-                true => Error::Unsupported(Unsupported::needs(
-                    Feature::WideLines,
-                    Capability::Feature(VkFeature::TessellationShader),
-                )),
-                false => Error::NotImplemented(RuntimeGap::WideLines),
-            });
-        }
-        let half = match width.0 {
-            0 => (-(limits.sub_pixel_precision_bits as f32)).exp2(),
-            _ => w / 2.0,
-        };
-        Ok(LineRoute::Band { half })
+        Ok(route)
     }
 }
 
@@ -270,40 +300,4 @@ impl RenderLowering {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::LineWidth;
-
-    /// The widths Metal draws for the widths measured (the module docs): floored to sixteenths,
-    /// clamped to `[0, 16]`, NaN and every width not above 0 as 0.
-    #[test]
-    fn the_widths_are_metal_s_measured_ones() {
-        let cases: [(f32, f32); 22] = [
-            (1.0, 1.0),
-            (1.0625, 1.0625),
-            (1.03125, 1.0),
-            (1.000_061, 1.0),
-            (0.999_939, 0.9375),
-            (0.9375, 0.9375),
-            (3.0, 3.0),
-            (3.03125, 3.0),
-            (3.0625, 3.0625),
-            (2.96875, 2.9375),
-            (15.9375, 15.9375),
-            (15.96875, 15.9375),
-            (16.0, 16.0),
-            (17.0, 16.0),
-            (1e30, 16.0),
-            (f32::INFINITY, 16.0),
-            (-0.0, 0.0),
-            (-1.0, 0.0),
-            (f32::NEG_INFINITY, 0.0),
-            (f32::NAN, 0.0),
-            (0.0625, 0.0625),
-            (0.03125, 0.0),
-        ];
-        for (given, drawn) in cases {
-            assert_eq!(LineWidth::of(given).pixels(), drawn, "{given}");
-        }
-        assert_eq!(LineWidth::of(1.0), LineWidth::ONE);
-    }
-}
+mod tests;
