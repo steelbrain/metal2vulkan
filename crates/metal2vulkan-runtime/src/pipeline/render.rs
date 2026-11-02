@@ -2309,8 +2309,8 @@ impl GraphicsState {
     }
 
     /// The translator refused a draw's band variant of `primitive`, past the one
-    /// [`band_refused`](Self::band_refused) compiled: the state's later draws of it take the
-    /// nearest width.
+    /// [`band_refused`](Self::band_refused) compiled: that draw, routed again, and the state's
+    /// later draws of it take the nearest width (`render/line_width.rs`).
     pub(crate) fn refuse_band(&self, primitive: BandPrimitive) {
         lock(&self.0.band_refusals)[band_index(primitive)] = Some(true);
     }

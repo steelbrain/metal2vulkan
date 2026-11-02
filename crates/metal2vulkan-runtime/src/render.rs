@@ -899,6 +899,28 @@ struct DrawSettings {
     line_band: Option<(metal2vulkan::pipeline::BandPrimitive, [f32; 4])>,
 }
 
+/// How a draw is drawn from the encoder's call (`RenderCommandEncoder::routed_draw`): what its
+/// lines' route (`DrawSettings::line`) decides beside its settings.
+struct RoutedDraw {
+    /// Its last provoking vertex (`render/provoking.rs`), and the variant's forms of it.
+    provoking: provoking::Provoking,
+    provoking_forms: ProvokingForms,
+    /// Its strip or private type drawn as its list (`render/restart.rs`), and its private type's
+    /// form (`PrivateForm`).
+    restarted: Option<restart::Restarted>,
+    private: PrivateForm,
+    /// The assembly it draws: its list's where it is listed.
+    assembly: Assembly,
+    settings: DrawSettings,
+    /// The pass's hidden depth and stencil it gives (`RenderCommandEncoder::needed_hidden`).
+    hidden: Option<Target>,
+    /// Its settings' entry in the encoder's memo (`render/draw_shape.rs`), `None` where they are
+    /// not kept.
+    shape_token: Option<ShapeToken>,
+    /// The index type its de-indexed variant reads ([`primitive_id_indices`]).
+    primitive_id_indices: Option<IndexType>,
+}
+
 /// The render encoder state one draw takes, statically or as dynamic state, in Vulkan's terms
 /// (`render_state.rs`).
 #[derive(Clone)]
@@ -7251,30 +7273,7 @@ impl RenderLowering {
         // the device's lines at the nearest width they draw (`render/line_width.rs`); a draw of no
         // complete primitive as every line.
         let primitives = line_width::draws_primitives(assembly, &draw);
-        let line = (self.shape_inputs()).line_route(call, (&pipeline, assembly, primitives), false);
-        let provoking = self.provoking(call, &pipeline, (assembly, line.band()), &draw);
-        let provoking_forms = provoking.forms(assembly, &pipeline);
-        let restarted = self.restarted(assembly, &draw, (provoking, line));
-        let private = match (assembly, restarted) {
-            (Assembly::Private(program), _) => PrivateForm::of(&pipeline, program, &draw),
-            (_, Some(_)) => PrivateForm::listed(&draw),
-            (_, None) => PrivateForm::default(),
-        };
-        let assembly = restarted.map_or(assembly, |r| r.assembly());
-        // Its settings, and the memo entry its draw state and pipeline are found and kept in
-        // (`render/draw_shape.rs`).
-        let (settings, hidden, shape_token) =
-            self.shaped_settings(call, &pipeline, (assembly, primitives))?;
-        // A direct indexed draw of a pipeline that writes the primitive ID runs its de-indexed
-        // variant; a restarted strip's list keeps the strip's indices, which it does not run.
-        let primitive_id_indices = match restarted {
-            None => primitive_id_indices(&pipeline, &draw),
-            Some(_) => None,
-        };
-        let (topology, primitive_restart) = (settings.topology, settings.primitive_restart);
-        let unsized_points = settings.unsized_points;
-        let (native, compensation) = (settings.native, settings.compensation);
-        let hidden_depth = settings.hidden;
+        let mut routed = self.routed_draw(call, &pipeline, (assembly, primitives), &draw)?;
         let (_, stencil) = self.layout.aspects();
         let max = pipeline.base().graphics.max_vertex_amplification_count;
         let function_tables = pipeline.function_tables();
@@ -7293,11 +7292,12 @@ impl RenderLowering {
             [&self.vertex, &self.object, &self.mesh],
             &pipeline.base().interface,
         )?;
-        self.degrade_kept_colors(&pipeline, &settings.routing);
+        // Its routing is the same whatever its lines' route (`ShapeInputs::routing`).
+        self.degrade_kept_colors(&pipeline, &routed.settings.routing);
         // The pass colors the draw renders through views of other formats, in an instance of
         // its own (`next_instance`). Refused (`NotImplemented(IndirectRenderCommands)`) for an
         // execution's command, whose runs' framebuffers are the pass's.
-        let reformats = self.reformats(&pipeline, &settings.routing)?;
+        let reformats = self.reformats(&pipeline, &routed.settings.routing)?;
         if self.replaying && !reformats.is_empty() {
             return Err(Error::NotImplemented(RuntimeGap::IndirectRenderCommands));
         }
@@ -7313,23 +7313,53 @@ impl RenderLowering {
         // Its runtime samplers' address modes as the textures they sample map them: what it
         // settles under, and binds with.
         let sampler_maps = self.sampler_maps(&pipeline, &pass_start)?;
+        let settled = loop {
+            let settled = self.settle_draw(
+                live,
+                (
+                    &pipeline,
+                    &routed.settings,
+                    routed.primitive_id_indices,
+                    routed.private,
+                    routed.provoking_forms,
+                ),
+                (&pass_start, &sampler_maps),
+                (&mut argument_samplers, &mut unlisted),
+                (&function_tables, &mut snapshot),
+            );
+            // A band variant the translator refuses for the draw's own shape, past the one the
+            // state compiled for its first band: the draw takes the nearest width, routed again,
+            // as the state's later draws of the primitive do (`render/line_width.rs`). Routed
+            // again, it draws no band of the primitive, so it settles once more at most.
+            let refused = settled
+                .as_ref()
+                .err()
+                .and_then(|e| routed.settings.line.refused(e));
+            let Some(primitive) = refused else {
+                break settled?;
+            };
+            pipeline.refuse_band(primitive);
+            routed = self.routed_draw(call, &pipeline, (assembly, primitives), &draw)?;
+        };
         let Settled {
             shape,
             variant,
             plan,
-        } = self.settle_draw(
-            live,
-            (
-                &pipeline,
-                &settings,
-                primitive_id_indices,
-                private,
-                provoking_forms,
-            ),
-            (&pass_start, &sampler_maps),
-            (&mut argument_samplers, &mut unlisted),
-            (&function_tables, &mut snapshot),
-        )?;
+        } = settled;
+        let RoutedDraw {
+            provoking,
+            restarted,
+            private,
+            assembly,
+            settings,
+            hidden,
+            shape_token,
+            ..
+        } = routed;
+        let (topology, primitive_restart) = (settings.topology, settings.primitive_restart);
+        let unsized_points = settings.unsized_points;
+        let (native, compensation) = (settings.native, settings.compensation);
+        let hidden_depth = settings.hidden;
         let planes = |form: &ExtendedRange| matches!(form, ExtendedRange::Planes { .. });
         if plan.variant.extended_range.values().any(planes) {
             self.core.device().shared().counts.two_plane_draw();
@@ -9698,6 +9728,51 @@ impl RenderLowering {
             .settings(call, (pipeline, assembly, true), hidden, announce)
     }
 
+    /// How the encoder's `call` of `assembly` (which may draw a primitive where `primitives`)
+    /// draws `draw` of `pipeline` ([`RoutedDraw`]): its lines' route at the encoder's width
+    /// (`render/line_width.rs`), its last provoking vertex (`render/provoking.rs`), a strip or
+    /// private type as its list (`render/restart.rs`), and its settings
+    /// ([`shaped_settings`](Self::shaped_settings)).
+    fn routed_draw(
+        &mut self,
+        call: &'static str,
+        pipeline: &DrawingState,
+        (assembly, primitives): (Assembly, bool),
+        draw: &DrawCall,
+    ) -> Result<RoutedDraw, Error> {
+        let line = (self.shape_inputs()).line_route(call, (pipeline, assembly, primitives), false);
+        let provoking = self.provoking(call, pipeline, (assembly, line.band()), draw);
+        let provoking_forms = provoking.forms(assembly, pipeline);
+        let restarted = self.restarted(assembly, draw, (provoking, line));
+        let private = match (assembly, restarted) {
+            (Assembly::Private(program), _) => PrivateForm::of(pipeline, program, draw),
+            (_, Some(_)) => PrivateForm::listed(draw),
+            (_, None) => PrivateForm::default(),
+        };
+        let assembly = restarted.map_or(assembly, |r| r.assembly());
+        // Its settings, and the memo entry its draw state and pipeline are found and kept in
+        // (`render/draw_shape.rs`).
+        let (settings, hidden, shape_token) =
+            self.shaped_settings(call, pipeline, (assembly, primitives))?;
+        // A direct indexed draw of a pipeline that writes the primitive ID runs its de-indexed
+        // variant; a restarted strip's list keeps the strip's indices, which it does not run.
+        let primitive_id_indices = match restarted {
+            None => primitive_id_indices(pipeline, draw),
+            Some(_) => None,
+        };
+        Ok(RoutedDraw {
+            provoking,
+            provoking_forms,
+            restarted,
+            private,
+            assembly,
+            settings,
+            hidden,
+            shape_token,
+            primitive_id_indices,
+        })
+    }
+
     /// A draw's settings ([`draw_settings`](Self::draw_settings), of a draw of `assembly` that may
     /// draw a primitive where `primitives`), with the hidden depth and
     /// stencil it gives the pass: those an earlier draw of the encoder derived from the same
@@ -9850,17 +9925,9 @@ impl RenderLowering {
             let shape = live.shape(counts, |state| pipeline.kept_shape(state));
             // Through what the pipeline state settled lately (`GraphicsState::settle_shape`).
             let settled = match pipeline.settle_shape(&shape, self.forms) {
-                // A band variant the translator refuses for the draw's shape, past the one the
-                // state compiled for its first band: refused, and the state's later draws take
-                // the nearest width (`render/line_width.rs`).
-                Err(Error::Unsupported(refused))
-                    if refused.feature == metal2vulkan::error::Feature::WideLines =>
-                {
-                    if let Some((primitive, _)) = settings.line_band {
-                        pipeline.refuse_band(primitive);
-                    }
-                    return Err(Error::Unsupported(refused));
-                }
+                // A band variant the translator refuses for the draw's shape: the caller routes
+                // the draw again (`LineRoute::refused`).
+                Err(refused) if settings.line.refused(&refused).is_some() => return Err(refused),
                 // A variant that reads through snapshots the compile or bind layer refuses: the
                 // draw takes the split (`render/snapshot.rs`).
                 Err(Error::Unsupported(_) | Error::Bind(BindError::Unsupported(_)))

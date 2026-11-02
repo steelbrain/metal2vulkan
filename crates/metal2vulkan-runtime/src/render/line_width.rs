@@ -68,10 +68,11 @@
 //!   clamped into `lineWidthRange` where it enables `wideLines`, else 1), where neither route above
 //!   draws `w'`, announced (`Degradation::LinesAtNearestWidth`, with why): a mesh draw's lines and
 //!   edges, and a tessellated patch draw's edges, which the band does not draw; lines and edges
-//!   without `tessellationShader`, or of a pipeline state whose band variant the translator
-//!   refuses (`pipeline::link::band`: a vertex function that selects a slice or viewport, a
-//!   fragment function that reads barycentric weights, synthesized geometry, multiview, stages
-//!   past `maxTessellationEvaluationOutputComponents`); a band under vertex amplification above 1
+//!   without `tessellationShader`, or of a pipeline state or a draw whose band variant the
+//!   translator refuses (`pipeline::link::band`: a vertex function that selects a slice or
+//!   viewport, a fragment function that reads barycentric weights, synthesized geometry,
+//!   multiview, stages past `maxTessellationEvaluationOutputComponents` or push data past
+//!   `maxPushConstantsSize`); a band under vertex amplification above 1
 //!   (its viewports); and every line drawn in a rasterization-rate-mapped pass or as an
 //!   execution's command, whose width Metal's answer is not measured for. Without `wideLines` they
 //!   are 1 pixel wide whatever `w'`.
@@ -79,9 +80,13 @@
 //! A pipeline state's band variant of each primitive is compiled when a draw first takes it, under
 //! the state's base key; where the translator refuses it, the state's draws of that primitive take
 //! the nearest width from then on (`GraphicsState::band_refused`). A draw whose own variant the
-//! translator refuses past that (a varying the draw's variant adds that takes the band's stages
-//! past `maxTessellationEvaluationOutputComponents`) is refused with the translator's
-//! `Unsupported(WideLines)`, and the state's later draws take the nearest width.
+//! translator refuses past that (a varying or push data the draw's variant adds, such as a
+//! shader-side depth test's window depth and depth range, that takes the band's stages past
+//! `maxTessellationEvaluationOutputComponents` or `maxPushConstantsSize`) takes the nearest width
+//! too, routed again ([`LineRoute::refused`]), and so do the state's later draws of the primitive
+//! (`GraphicsState::refuse_band`): the refusal is kept per state and primitive, as the state's own
+//! is, since a draw's variant key follows from its bind shape, which its route sets. Both are
+//! announced alike (`Degradation::LinesAtNearestWidth`, the translator's refusal as the reason).
 //!
 //! Refused (`NotImplemented(RuntimeGap::WideLines)`): a strip's band whose list of primitives the
 //! runtime cannot draw (`render/restart.rs`, as for a list of the last provoking vertex).
@@ -94,9 +99,11 @@
 use super::draw_shape::ShapeInputs;
 use super::{Assembly, RenderLowering};
 use crate::degradation::Degradation;
+use crate::error::Error;
 use crate::pipeline::{FixedState, GraphicsState as DrawingState};
 use metal2vulkan::bind::{DrawCall, RewriteProgram};
 use metal2vulkan::device::{DeviceProfile, VkFeature, WideLinePolicy};
+use metal2vulkan::error::Feature;
 use metal2vulkan::metal::state::DepthBias;
 use metal2vulkan::metal::{PixelFormat, PrimitiveType, TriangleFillMode};
 use metal2vulkan::pipeline::{BandPrimitive, LineBandState};
@@ -152,7 +159,8 @@ pub(super) enum Unrouted {
     Unbanded,
     /// No `tessellationShader`, which the band needs.
     Untessellated,
-    /// The pipeline state's band variant, which the translator refuses.
+    /// The pipeline state's band variant, or a draw's of it, which the translator refuses
+    /// (the module docs).
     Refused,
     /// Vertex amplification above 1, whose views the band does not draw.
     Amplified,
@@ -191,6 +199,22 @@ impl LineRoute {
     /// own band variant, past the one the state compiled first (`GraphicsState::refuse_band`).
     pub(super) fn band_refused_by(self, pipeline: &DrawingState) -> bool {
         matches!(self, LineRoute::Band { primitive, .. } if pipeline.refused_band(primitive))
+    }
+
+    /// The primitive of the band the route draws where `error`, the answer for the draw's
+    /// variant, is the translator's refusal of it (`Unsupported(WideLines)`,
+    /// `pipeline::link::band`): the draw takes the nearest width instead, as the state's later
+    /// draws of the primitive do (the module docs). `None` for every other route and answer, which
+    /// stands.
+    pub(super) fn refused(self, error: &Error) -> Option<BandPrimitive> {
+        match (self, error) {
+            (LineRoute::Band { primitive, .. }, Error::Unsupported(refused))
+                if refused.feature == Feature::WideLines =>
+            {
+                Some(primitive)
+            }
+            _ => None,
+        }
     }
 
     /// The band's push (`BindState::line_band`) through a Vulkan viewport 0 of half extent
@@ -461,9 +485,9 @@ fn announce_nearest_lines(
         Unrouted::Untessellated => ("lines or edges", "the band needs tessellationShader"),
         Unrouted::Refused => (
             "lines or edges",
-            "the translator refuses the pipeline state's band (a vertex function that selects \
-             a slice or viewport, a fragment function that reads barycentric weights, or stages \
-             past the device's limits)",
+            "the translator refuses the pipeline state's band, or a draw's of it (a vertex \
+             function that selects a slice or viewport, a fragment function that reads \
+             barycentric weights, or stages past the device's limits)",
         ),
         Unrouted::Amplified => (
             "lines or edges",

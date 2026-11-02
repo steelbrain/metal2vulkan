@@ -470,21 +470,21 @@ draw whose vertices or indices complete no primitive of its type draws nothing, 
 
 The band is the pipeline's band variant, through a tessellation control and evaluation stage the
 translator adds (docs/API.md section 4): two triangles over each line's parallelogram, and for a
-triangle in fill mode `Lines` its three edges' parallelograms, which face as the triangle does
-under the draw's cull mode, front face and depth bias. A strip, loop or fan is drawn as the list of
-its primitives. The band's depth bias is the device's, of each band triangle's own slope and
-depths, where Metal biases the edges by the triangle's: announced `wide-edge-depth-bias` under a
-slope factor, or a constant factor over a float depth. Neither route draws, so the nearest width
-takes: a mesh draw's lines and edges and a tessellated patch draw's edges the device's lines do not
-draw (1 pixel wide on MoltenVK), lines and edges on a device without `tessellationShader` whose
-lines do not draw them or of a pipeline state whose band variant the translator refuses (a vertex
-function that selects a slice or viewport, barycentric weights, synthesized geometry, multiview;
-the state's first band asks), an amplified band, and every wide line in an execution or a
-rasterization-rate-mapped pass, whose width Metal's answer is not measured for. Refused
-`NotImplemented(RuntimeGap::WideLines)`: a strip's band whose list of primitives the runtime cannot
-draw; and `Unsupported` (`Feature::WideLines`) for a draw whose own band variant the translator
-refuses where the state's first band compiled (a varying the draw's variant adds past the
-evaluation stage's outputs), after which the state's draws take the nearest width.
+triangle in fill mode `Lines` its three edges' parallelograms, which face as the triangle does under
+the draw's cull mode, front face and depth bias. A strip, loop or fan is drawn as the list of its
+primitives. The band's depth bias is the device's, of each band triangle's own slope and depths,
+where Metal biases the edges by the triangle's: announced `wide-edge-depth-bias` under a slope
+factor, or a constant factor over a float depth. Neither route draws, so the nearest width takes: a
+mesh draw's lines and edges and a tessellated patch draw's edges the device's lines do not draw (1
+pixel wide on MoltenVK), lines and edges on a device without `tessellationShader` whose lines do not
+draw them or of a pipeline state whose band variant the translator refuses (a vertex function that
+selects a slice or viewport, barycentric weights, synthesized geometry, multiview; the state's first
+band asks), a draw whose own band variant the translator refuses where the state's first band
+compiled (a varying or push data the draw's variant adds past the evaluation stage's outputs or
+`maxPushConstantsSize`; the state's later draws of the primitive take the nearest width too), an
+amplified band, and every wide line in an execution or a rasterization-rate-mapped pass, whose width
+Metal's answer is not measured for. Refused `NotImplemented(RuntimeGap::WideLines)`: a strip's band
+whose list of primitives the runtime cannot draw.
 docs/FAST-PATHS.md records the choice and the known gaps.
 
 ## GPU families

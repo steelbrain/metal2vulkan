@@ -2063,7 +2063,8 @@ degradations! {
         /// tessellated patch draw's edges, which the band does not draw, where the device's lines
         /// do not draw the width (every such draw on a device without `wideLines`, MoltenVK among
         /// them); lines and edges on a device without `tessellationShader` whose lines do not draw
-        /// them, or of a pipeline state whose band variant the translator refuses; a band under
+        /// them, or of a pipeline state or a draw whose band variant the translator refuses (and
+        /// the state's later draws of a draw so refused); a band under
         /// vertex amplification above 1; and every line in a rasterization-rate-mapped pass or of
         /// an execution's command, whose width Metal's answer is not measured for. The reason
         /// names which, and both widths.

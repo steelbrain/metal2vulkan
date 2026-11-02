@@ -2,9 +2,11 @@
 //! primitive (`render/line_width.rs`).
 
 use super::{drawn, draws_primitives, route, Assembly, Drawn, LineRoute, LineWidth, Unrouted};
+use crate::error::{Error, RuntimeGap};
 use metal2vulkan::bind::{DrawCall, IndexBufferRef, IndirectRef, RewriteProgram};
-use metal2vulkan::device::WideLinePolicy;
 use metal2vulkan::device::{Device, DeviceDescription, DevicePolicy, DeviceProfile, VkFeature};
+use metal2vulkan::device::{VkLimit, WideLinePolicy};
+use metal2vulkan::error::{Capability, Feature, Unsupported};
 use metal2vulkan::metal::{PrimitiveType, TriangleFillMode};
 use metal2vulkan::pipeline::BandPrimitive;
 use metal2vulkan::vk;
@@ -351,6 +353,102 @@ fn each_device_routes_each_width_as_its_lines_allow() {
             }
         }
     }
+}
+
+/// A draw whose own band variant the translator refuses (`Unsupported(WideLines)`: not
+/// implemented, or a limit such as `maxTessellationEvaluationOutputComponents` a varying of the
+/// draw's variant passes) takes the nearest width, routed again as a draw of a state whose band is
+/// refused (`LineRoute::refused`), never failing: on every committed device profile, under both
+/// `WideLinePolicy` values, for lines and a triangle's edges at each width the band draws. Routed
+/// again it draws no band, so the draw settles again once at most. Any other answer stands, and a
+/// route other than the band takes no refusal.
+#[test]
+fn a_draw_whose_band_the_translator_refuses_takes_the_nearest_width() {
+    let refusals = [
+        Error::Unsupported(Unsupported::not_implemented(Feature::WideLines)),
+        Error::Unsupported(Unsupported::needs(
+            Feature::WideLines,
+            Capability::Limit {
+                limit: VkLimit::MaxTessellationEvaluationOutputComponents,
+                required: 128,
+                available: 124,
+            },
+        )),
+    ];
+    let others = [
+        Error::Unsupported(Unsupported::not_implemented(Feature::Tessellation)),
+        Error::NotImplemented(RuntimeGap::WideLines),
+    ];
+    let edges = drawn(
+        Assembly::Primitives(PrimitiveType::Triangle),
+        TriangleFillMode::Lines,
+        false,
+        None,
+        true,
+    );
+    let lines = drawn(
+        Assembly::Primitives(PrimitiveType::Line),
+        TriangleFillMode::Fill,
+        false,
+        None,
+        true,
+    );
+    let mut bands = 0;
+    for stem in [
+        "amd-780m-radv",
+        "amd-rdna3-radv",
+        "intel-arl-anv",
+        "lavapipe",
+        "nvidia-rtx5080-laptop",
+        "moltenvk-m3",
+        "swiftshader",
+        "vk12-floor",
+        "roadmap-2022",
+        "lunarg-desktop-baseline-2023",
+        "amd-780m-hawkpoint-radv",
+    ] {
+        let device = device(stem);
+        let profile = device.profile();
+        for policy in [WideLinePolicy::Device, WideLinePolicy::Exact] {
+            for drawn in [lines, edges] {
+                for w in [0.0, 0.5, 1.0, 1.5, 2.5, 8.0625, 16.0] {
+                    let width = LineWidth::of(w);
+                    let at =
+                        |refused| route(profile, policy, width, drawn, Default::default(), refused);
+                    let what = format!("{stem}, {policy:?}, {drawn:?} at {w}");
+                    let first = at(false);
+                    for other in &others {
+                        assert_eq!(first.refused(other), None, "{what}: {other:?}");
+                    }
+                    let LineRoute::Band { primitive, .. } = first else {
+                        for refusal in &refusals {
+                            assert_eq!(first.refused(refusal), None, "{what}: {first:?}");
+                        }
+                        continue;
+                    };
+                    bands += 1;
+                    for refusal in &refusals {
+                        assert_eq!(first.refused(refusal), Some(primitive), "{what}");
+                    }
+                    // Routed again: the device's lines where they draw the width, else the
+                    // nearest width, the translator's refusal the reason; no band.
+                    let again = at(true);
+                    let nearest = LineRoute::Nearest {
+                        width: nearest(profile, width.pixels()),
+                        why: Unrouted::Refused,
+                    };
+                    assert!(
+                        again == nearest || matches!(again, LineRoute::Device { .. }),
+                        "{what}: routed again {again:?}"
+                    );
+                    for refusal in &refusals {
+                        assert_eq!(again.refused(refusal), None, "{what}: {again:?}");
+                    }
+                }
+            }
+        }
+    }
+    assert!(bands > 0, "no profile drew a band");
 }
 
 /// A direct draw whose vertices or indices complete no primitive of its type draws nothing at
