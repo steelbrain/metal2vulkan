@@ -8535,6 +8535,7 @@ impl RenderLowering {
             });
         }
         device.degrade_cross_class(&plan.diagnostics, &formats);
+        device.degrade_astc_storage(&plan.diagnostics, &formats);
         // Those its notices name, where the device announces any of its variant's kinds at every
         // occurrence (announced as the draw records, below), taken while its tables live.
         let bound_each = device

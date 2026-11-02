@@ -1667,6 +1667,20 @@ degradations! {
             "the function reads the slot's neutral texture (zero texels; zero size), where plain \
              Metal reads the texture in its format's own class and hands back its words as the \
              declared type";
+        /// A draw or dispatch that binds an ASTC texture (LDR, sRGB or HDR, of any footprint, in
+        /// its own block or in a carrier) at a storage slot its function writes, or reads and
+        /// writes (`PlanDiagnostic::AstcStorageNeutral`): no Vulkan format of a block is a
+        /// storage image's, so the slot binds the declared type's neutral, and the writes leave
+        /// the texture's blocks as they were. Plain Metal completes the writes and stores bytes
+        /// no format defines into the blocks, the same for the same written value, and reads
+        /// the blocks' decode through a `read_write` slot (an Apple M3 Max under macOS 27.0.1,
+        /// our probe `astc_passes_writes_footprints`). A pass rendering into such a texture
+        /// announces nothing: Metal's leaves its blocks as they were too.
+        AstcStorageNeutral = "astc-storage-neutral", Precision,
+            "the function's writes to the texture are dropped, leaving its blocks as they were, \
+             and its reads and size queries through the slot answer the neutral texture's (zero \
+             texels), where plain Metal stores bytes no format defines into the blocks and reads \
+             their decode";
         /// An execution of an indirect command buffer replayed on the host ran a command that
         /// holds a nil buffer set at an offset whose low 32 bits are not 0. Metal's function sees
         /// those bits as the buffer's address (a pointer into no buffer); the host replay binds
@@ -3748,6 +3762,33 @@ impl Device {
                 )
             }
             _ => (String::new(), String::new()),
+        });
+    }
+
+    /// Announce `astc-storage-neutral` at a draw or dispatch whose plan binds a storage slot's
+    /// neutral where an ASTC texture is bound (`PlanDiagnostic::AstcStorageNeutral` among
+    /// `diagnostics`), naming the first such slot and the format `formats` binds there. A kind
+    /// already announced costs one atomic load.
+    pub(crate) fn degrade_astc_storage(
+        &self,
+        diagnostics: &[PlanDiagnostic],
+        formats: BoundFormats<'_>,
+    ) {
+        let Some(slot) = diagnostics.iter().find_map(|d| match d {
+            PlanDiagnostic::AstcStorageNeutral { slot, .. } => Some(*slot),
+            _ => None,
+        }) else {
+            return;
+        };
+        self.degrade(Degradation::AstcStorageNeutral, || {
+            let bound = match formats(slot) {
+                Some(format) => format!("{format:?}"),
+                None => "an ASTC format".to_owned(),
+            };
+            (
+                format!("the {:?} function's texture {}", slot.stage, slot.index),
+                format!("a storage slot bound to a texture of {bound}, whose blocks it cannot store into"),
+            )
         });
     }
 

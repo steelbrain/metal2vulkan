@@ -41,8 +41,14 @@
 //!   texture's HDR form, an HDR texture's LDR or sRGB form, or another footprint;
 //!   `Feature::TextureView`).
 //! - **Passes and shader writes.** No Vulkan format of a block is an attachment's or a storage
-//!   image's, the device's own ASTC block's included: a pass rendering into such a texture and a
-//!   kernel's binding of one for writes are refused, typed.
+//!   image's, the device's own ASTC block's included. A pass drops an ASTC color attachment that
+//!   resolves nothing (`render_pass::layout`): it loads, clears and stores nothing into it, which
+//!   is Metal's answer, so nothing is announced; a resolve of one is not measured and keeps the
+//!   format's refusal. A draw or dispatch that binds such a texture at a storage slot binds the
+//!   slot's neutral instead (`bind::PlanDiagnostic::AstcStorageNeutral`): its writes leave the
+//!   blocks as they were and its reads answer zero, announced `astc-storage-neutral`, where Metal
+//!   stores undefined bytes and reads the blocks' decode. A render pipeline of an ASTC color
+//!   attachment is refused, where Metal ends the process.
 
 use super::copy_plan::ImageRegion;
 use super::image_plan::{sample_count, ImageFacts, ImagePlan};

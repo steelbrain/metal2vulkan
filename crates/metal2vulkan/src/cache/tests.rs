@@ -1842,9 +1842,9 @@ fn a_content_digest_is_the_content_not_the_key() {
 /// and loads them under) and byte-identical artifacts, so the compile carries nothing of the
 /// stand-in beyond its key. Every bind of another format at any of the slots plans another key,
 /// except where the plan does not bind that texture at all: a texture the slot cannot take is
-/// replaced by the slot's neutral (`IncompatibleBinding`, or `CrossClassNeutral` for a storage read
-/// of another numeric class), an `R32` texture of the slot's texel type, whose compile is the
-/// stand-in's.
+/// replaced by the slot's neutral (`IncompatibleBinding`, `CrossClassNeutral` for a storage read
+/// of another numeric class, or `AstcStorageNeutral` for an ASTC texture), an `R32` texture of the
+/// slot's texel type, whose compile is the stand-in's.
 #[test]
 fn a_stand_in_compile_is_the_compile_of_its_formats_bind_and_no_other() {
     use crate::bind::{BindState, BoundTexture, PlanDiagnostic, StageTable, TextureFacts};
@@ -1938,7 +1938,8 @@ fn a_stand_in_compile_is_the_compile_of_its_formats_bind_and_no_other() {
             };
             let neutral = plan.diagnostics.iter().any(|d| match d {
                 PlanDiagnostic::IncompatibleBinding { slot: s, .. }
-                | PlanDiagnostic::CrossClassNeutral { slot: s, .. } => *s == slot(bound[at].0),
+                | PlanDiagnostic::CrossClassNeutral { slot: s, .. }
+                | PlanDiagnostic::AstcStorageNeutral { slot: s, .. } => *s == slot(bound[at].0),
                 _ => false,
             });
             if neutral {
@@ -1954,6 +1955,20 @@ fn a_stand_in_compile_is_the_compile_of_its_formats_bind_and_no_other() {
         same.is_empty(),
         "binds that plan the stand-ins' key: {same:?}"
     );
+    // An ASTC texture, of every profile and footprint, at a storage slot: the slot's neutral, and
+    // the plan says why (`PlanDiagnostic::AstcStorageNeutral`), which the runtime announces.
+    let astc = metal::PixelFormat::ALL
+        .iter()
+        .filter(|&&pf| crate::bind::AstcDecode::of(pf).is_some());
+    for &pf in astc {
+        let mut bound = formats;
+        bound[0].1 = pf;
+        let plan = planned(&bound).unwrap_or_else(|e| panic!("{pf:?}: {e}"));
+        let said = plan.diagnostics.iter().any(
+            |d| matches!(d, PlanDiagnostic::AstcStorageNeutral { slot: s, .. } if *s == slot(0)),
+        );
+        assert!(said, "{pf:?}: {:?}", plan.diagnostics);
+    }
     assert!(other_keys > 0, "no other format plans");
     eprintln!(
         "{other_keys} binds of other formats plan other keys; {replaced} are replaced by the \

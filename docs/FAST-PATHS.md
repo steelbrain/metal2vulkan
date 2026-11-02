@@ -534,9 +534,10 @@ driver's. Each is open work.
   device). Making a heap's or a sparse heap's such texture (`RuntimeGap::DecodedHeapTexture`) and
   a view of another decode (an LDR or sRGB texture's HDR form, an HDR texture's LDR or sRGB form)
   are refused. The heap size query answers one: its footprint is Metal's blocks, which no image of
-  the device decides. A pass rendering into one, and a kernel's write of one, are refused where
-  Metal's validation stops them (plain Metal's pass stores nothing, and its write leaves bytes no
-  format defines).
+  the device decides. On every device, a kernel's or a fragment function's storage slot over an
+  ASTC texture binds the slot's neutral (`astc-storage-neutral`): its writes leave the blocks as
+  they were, where Metal stores undefined bytes into them, and its reads answer zero, where Metal
+  reads the blocks' decode. A resolve of an ASTC attachment is refused, unmeasured.
 - **The 26 formats this crate holds no image of** (`metal::format::footprint`:
   `ARGB8Unorm_sRGB`, Apple's nine one-plane `YCBCR*` formats, the ten
   padded 10- and 12-bit display formats, the four `RGB10A8_2P` ones and the two packed 10-bit

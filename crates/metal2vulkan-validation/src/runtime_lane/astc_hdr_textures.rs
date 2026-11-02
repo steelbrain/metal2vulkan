@@ -17,10 +17,9 @@
 //! an HDR void-extent block and a copy from another texture, each decoded into a twin (a blit's by
 //! a GPU decode pass; a CPU copy's by a pass or on the CPU, counted in `WorkCounts`). The blocks
 //! each wrote come back unchanged from `get_bytes` and a blit into a buffer. Apple's 4x2 and 8x4
-//! footprints, which no Vulkan format holds, lie in a carrier on every device. A pass rendering into
-//! one and a kernel's write of one, which Metal's validation stops (plain Metal's pass stores
-//! nothing, its write leaves bytes no format defines), are refused, typed
-//! ([`astc_hdr_textures_of_every_usage_are_made`]).
+//! footprints, which no Vulkan format holds, lie in a carrier on every device. A texture of
+//! `ShaderWrite` and `RenderTarget` usage is made ([`astc_hdr_textures_of_every_usage_are_made`]);
+//! passes rendering into one and kernels writing one are `astc_passes_and_writes`'.
 
 use super::astc_textures::{
     blit, block_count, blocks_of, decodes_astc, download, metal_texels, read_whole, reader,
@@ -35,9 +34,8 @@ use metal2vulkan::metal::{PixelFormat, TextureUsage};
 use metal2vulkan::pipeline::{ComputePipelineDescriptor, StageSource};
 use metal2vulkan_devtools::{engine_dir, llvm_assemble};
 use metal2vulkan_runtime::{
-    ClearColor, CommandBufferStatus, ComputePipelineState, Degradation, Device, Error, LoadAction,
-    Origin, PipelineOptions, Region, RenderPassDescriptor, SamplerState, Size, StoreAction,
-    Texture,
+    CommandBufferStatus, ComputePipelineState, Degradation, Device, Error, Origin, PipelineOptions,
+    Region, SamplerState, Size, Texture,
 };
 
 /// Every ASTC HDR format.
@@ -272,10 +270,9 @@ fn astc_hdr_texels_read_as_metal_s() {
     });
 }
 
-/// A texture of `ShaderWrite` and `RenderTarget` usage too is made, as Metal makes it; a pass
-/// rendering into it and a kernel writing it are refused, typed, where Metal's validation stops
-/// each. A view in its LDR form reads the LDR decode of its blocks where the device holds
-/// both blocks, and is refused where its blocks lie in a carrier (another decode).
+/// A texture of `ShaderWrite` and `RenderTarget` usage too is made, as Metal makes it. A view in
+/// its LDR form reads the LDR decode of its blocks where the device holds both blocks, and is
+/// refused where its blocks lie in a carrier (another decode).
 #[test]
 fn astc_hdr_textures_of_every_usage_are_made() {
     on_device(|device, messages| {
@@ -286,44 +283,6 @@ fn astc_hdr_textures_of_every_usage_are_made() {
             | TextureUsage::RENDER_TARGET
             | TextureUsage::PIXEL_FORMAT_VIEW;
         let target = texture(device, pf, usage);
-        let mut pass = RenderPassDescriptor::new();
-        let color = &mut pass.color_attachments[0];
-        color.texture = Some(target.clone());
-        color.load_action = LoadAction::Clear;
-        color.store_action = StoreAction::Store;
-        color.clear_color = ClearColor::new(0.5, 4.0, 8.0, 1.0);
-        let queue = device.new_command_queue().unwrap();
-        let command_buffer = queue.command_buffer().unwrap();
-        let encoder = command_buffer.render_command_encoder(&pass).map(drop);
-        assert!(
-            matches!(encoder, Err(Error::Unsupported(_))),
-            "on {name}: {encoder:?}"
-        );
-        // A kernel's write of it, which Metal's validation stops too (plain Metal leaves bytes
-        // no format defines).
-        let bitcode = llvm_assemble(&engine_dir().join("format_scout.ll")).unwrap();
-        let library = device.new_library_with_air(&bitcode).unwrap();
-        let function = library.new_function_with_name("scout_write_f").unwrap();
-        let writer = device
-            .new_compute_pipeline_state(
-                &ComputePipelineDescriptor::new(StageSource::Function(
-                    function.function_descriptor(),
-                )),
-                &PipelineOptions::default(),
-            )
-            .unwrap();
-        let command_buffer = queue.command_buffer().unwrap();
-        let mut encoder = command_buffer.compute_command_encoder().unwrap();
-        encoder.set_compute_pipeline_state(&writer).unwrap();
-        let side = u64::from(SIDE);
-        let written = encoder.set_texture(Some(&target), 0).and_then(|()| {
-            encoder.dispatch_threads(Size::new(side, side, 1), Size::new(side, side, 1))
-        });
-        // The device lacks the format as a storage image: its binding is refused.
-        assert!(
-            matches!(written, Err(Error::Bind(_) | Error::Unsupported(_))),
-            "on {name}: {written:?}"
-        );
         let decode = AstcDecode::of(pf).unwrap();
         let blocks = seeded_blocks(0x4d72_ffff, block_count(decode));
         let whole = Region::new_2d(0, 0, SIDE.into(), SIDE.into());

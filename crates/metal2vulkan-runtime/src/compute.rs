@@ -2567,6 +2567,7 @@ fn record(
         }
     }
     device.degrade_cross_class(&plan.diagnostics, formats);
+    device.degrade_astc_storage(&plan.diagnostics, formats);
     objects.announce_bound(
         (
             std::slice::from_ref(&variant.pipeline().stage),

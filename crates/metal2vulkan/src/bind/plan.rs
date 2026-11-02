@@ -1006,6 +1006,16 @@ pub enum PlanDiagnostic {
         element: u32,
         source: HeapSource,
     },
+    /// The texture bound at storage slot `slot` (a function's write, or read and write) is an
+    /// ASTC texture, whose blocks no storage view stores into: plain Metal completes the
+    /// function's writes, storing bytes no format defines into the blocks, and reads the blocks'
+    /// decode through a slot that also reads them. A neutral of the declared type is written
+    /// instead (its writes dropped, its reads zero, its size queries the neutral's), which leaves
+    /// the texture's blocks as they were; the runtime announces it (`astc-storage-neutral`).
+    AstcStorageNeutral {
+        slot: SlotRef,
+        substituted: NeutralResource,
+    },
 }
 
 /// How a draw or dispatch uses one resource: staging, writeback, and hazard facts. A plan's `uses`

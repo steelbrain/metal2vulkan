@@ -2448,6 +2448,18 @@ bound.
   texture, or an integer write to an `RGB9E5Float` texture. Cost: the function reads the slot's
   neutral texture (zero texels; zero size), where plain Metal reads the texture in its format's own
   class and hands back its words as the declared type.
+- `metal2vulkan-degrade-astc-storage-neutral` (precision). `AstcStorageNeutral`: A draw or dispatch
+  that binds an ASTC texture (LDR, sRGB or HDR, of any footprint, in its own block or in a carrier)
+  at a storage slot its function writes, or reads and writes (`PlanDiagnostic::AstcStorageNeutral`):
+  no Vulkan format of a block is a storage image's, so the slot binds the declared type's neutral,
+  and the writes leave the texture's blocks as they were. Plain Metal completes the writes and
+  stores bytes no format defines into the blocks, the same for the same written value, and reads
+  the blocks' decode through a `read_write` slot (an Apple M3 Max under macOS 27.0.1, our probe
+  `astc_passes_writes_footprints`). A pass rendering into such a texture announces nothing:
+  Metal's leaves its blocks as they were too. Cost: the function's writes to the texture are
+  dropped, leaving its blocks as they were, and its reads and size queries through the slot answer
+  the neutral texture's (zero texels), where plain Metal stores bytes no format defines into the
+  blocks and reads their decode.
 - `metal2vulkan-degrade-indirect-nil-buffer-offset` (precision). `IndirectNilBufferOffset`: An
   execution of an indirect command buffer replayed on the host ran a command that holds a nil buffer
   set at an offset whose low 32 bits are not 0. Cost: the function sees no buffer, a null address,

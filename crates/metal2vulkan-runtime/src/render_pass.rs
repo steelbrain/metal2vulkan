@@ -119,6 +119,7 @@ use super::tile_pass::{self, TilePass, TileRefusal};
 use super::view_plan::ViewRecord;
 use super::Device;
 use ash::vk;
+use metal2vulkan::bind::AstcDecode;
 use metal2vulkan::device::{DriverFact, VkLimit};
 use metal2vulkan::error::{Capability, Feature, Unsupported};
 use metal2vulkan::metal::format::{
@@ -1526,6 +1527,32 @@ pub(super) fn layout(
             colors.push(None);
             continue;
         };
+        // An ASTC attachment, of any form and on any device: plain Metal completes the pass and
+        // leaves the texture's blocks as they were, whatever its load and store actions, and
+        // renders the pass's other attachments as it would (an Apple M3 Max under macOS 27.0.1,
+        // our probe `astc_passes_writes_footprints`: every load and store action, with a draw and
+        // without, LDR, sRGB and HDR, Apple's 4x2 and 8x4 footprints among them). No Vulkan
+        // format of a block is an attachment's, so the pass drops it: it loads, clears and
+        // stores nothing, as Metal's does, and its level's extent still bounds the pass. A resolve
+        // of one is not measured: it keeps the format's refusal (`target`).
+        let unresolved = color.resolve_texture.is_none() && !color.store_action.resolves();
+        if unresolved && AstcDecode::of(texture.pixel_format()).is_some() {
+            if !texture.device().same(device) {
+                return Err(foreign());
+            }
+            let facts = Facts::of(texture.record());
+            let sub = check_target(
+                call,
+                which,
+                &facts,
+                (color.level, color.slice, color.depth_plane),
+                descriptor.render_target_array_length,
+            )?;
+            extents[attached] = (sub.extent, facts.samples);
+            attached += 1;
+            colors.push(None);
+            continue;
+        }
         // A two-plane YCbCr attachment loads, stores and blends as Metal's tile of halves
         // (`texture/ycbcr_image.rs`); a resolve into or out of one is not measured, nor a load
         // of one over a surface of a P3 matrix.

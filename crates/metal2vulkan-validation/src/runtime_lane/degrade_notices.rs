@@ -105,7 +105,8 @@
 //! ([`PAST_METAL_SIZES`]), BC1 to BC5 textures on a driver not measured to decode them as Metal
 //! does in `compressed_decode` ([`BLOCK_DECODES`]), ASTC textures on a device without their format
 //! in `astc_textures` ([`ASTC_TWINS`]; PVRTC ones take the first in `pvrtc_textures`) and CPU
-//! writes into their decoded twins there ([`CPU_DECODES`]), passes rendering a linear image apart in
+//! writes into their decoded twins there ([`CPU_DECODES`]), kernel writes into ASTC textures in
+//! `astc_passes_and_writes` ([`ASTC_STORAGE`]), passes rendering a linear image apart in
 //! `linear_attachments` ([`LINEAR_COPIES`]) and those rendering one through copies as they clear
 //! it and no command of them may read it, there too ([`CHOSEN_COPIES`]), passes rendering a texture
 //! over a buffer they do not store through the image its texture keeps in `kept_buffer_bytes`
@@ -147,6 +148,7 @@
 
 use super::absent_reads::ABSENT_READS;
 use super::amplified_draws::AMPLIFICATION;
+use super::astc_passes_and_writes::ASTC_STORAGE;
 use super::astc_textures::{decodes_astc, ASTC_TWINS, CPU_DECODES};
 use super::attachment_reads::IN_PLACE;
 use super::barycentric_weights::SYNTHESIZED_GEOMETRY;
@@ -558,6 +560,7 @@ fn every_kind_has_a_site_a_lane_test_takes() {
         &BLOCK_DECODES,
         &ASTC_TWINS,
         &CPU_DECODES,
+        &ASTC_STORAGE,
         &SHARED_PRESENT_QUEUES,
         &PAST_METAL_SIZES,
         &LINEAR_COPIES,

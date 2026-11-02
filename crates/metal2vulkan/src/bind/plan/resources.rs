@@ -19,6 +19,10 @@
 //!   count, or numeric type, a texture buffer for an image, a color texture under a depth
 //!   comparison): the neutral of exactly the declared type; an incompatible binding is also a
 //!   `PlanDiagnostic::IncompatibleBinding` (guest undefined behavior).
+//! - **Bound, its storage not held:** a storage slot a function only writes over a texture whose
+//!   writes Metal drops (`metal::format::writes_dropped`), and any storage slot over an ASTC
+//!   texture, whose blocks no storage view stores into (`PlanDiagnostic::AstcStorageNeutral`):
+//!   the neutral of the declared type, which the writes leave as Metal leaves the texture.
 //! - **Variant**: a read or written storage slot's choice joins the plan's `VariantKey` unless the
 //!   declaration a pipeline compiled without one has serves it (an `Identity` choice without an
 //!   alias, where the profile accesses the slot's uses without a format), so the common path stays
@@ -52,6 +56,7 @@ use super::{
 };
 use crate::bind::neutral::NeutralResource;
 use crate::bind::state::{SamplerShape, StageShape, TextureShape};
+use crate::bind::AstcDecode;
 use crate::cache::VariantKey;
 use crate::device::requirements::{FormatUsage, VkLimit};
 use crate::device::DeviceProfile;
@@ -924,10 +929,20 @@ impl ResourcePlanner<'_> {
         // stops the binding), so the slot takes its neutral, which the writes leave as Metal leaves
         // the texture. A slot that reads it keeps the format's refusal (`metal::format`).
         let only_written = storage && t.access.write && !t.access.read && !t.access.sample;
+        // An ASTC texture at a storage slot: no storage view stores into its blocks (no Vulkan
+        // format of a block is a storage image's). Plain Metal completes a function's writes,
+        // storing bytes no format defines into the blocks, and reads the blocks' decode through
+        // a slot that also reads them (our probe `astc_passes_writes_footprints`): the slot takes
+        // its neutral, so the writes leave the texture's blocks as they were, and the plan says
+        // so (`PlanDiagnostic::AstcStorageNeutral`), which the runtime announces.
+        let astc_storage = storage
+            && matches!(compat, Some(TextureShape::Texture { pixel_format, .. })
+                if AstcDecode::of(pixel_format).is_some());
         let compat = compat.filter(|s| {
-            !(only_written
-                && matches!(s, TextureShape::Texture { .. })
-                && writes_dropped(s.pixel_format()))
+            !astc_storage
+                && !(only_written
+                    && matches!(s, TextureShape::Texture { .. })
+                    && writes_dropped(s.pixel_format()))
         });
         // A 4:4:4 two-plane YCbCr texture whose writes Metal stores into its planes
         // (`metal::format::ycbcr_writes_stored`) at a storage slot its function only writes: the
@@ -1052,8 +1067,18 @@ impl ResourcePlanner<'_> {
             self.variant.extended_range.insert(slot, form);
         }
         let Some(shape) = compat else {
-            let write = WriteSource::Neutral(self.substitute(slot, n, shape.as_ref(), (&t, &base)));
-            return Ok((write, n));
+            let n = match astc_storage {
+                true => {
+                    let d = PlanDiagnostic::AstcStorageNeutral {
+                        slot,
+                        substituted: n,
+                    };
+                    self.diagnostics.push(d);
+                    n
+                }
+                false => self.substitute(slot, n, shape.as_ref(), (&t, &base)),
+            };
+            return Ok((WriteSource::Neutral(n), n));
         };
         self.texture_use(slot, &t, storage);
         match shape {
