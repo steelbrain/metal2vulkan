@@ -9952,6 +9952,16 @@ impl RenderLowering {
                 }
                 settled => settled?,
             };
+            // Vulkan takes no `InterpolateAtSample` in a pipeline made with custom sample
+            // locations (`VUID-VkGraphicsPipelineCreateInfo-sampleLocationsEnable-01524`), where
+            // Metal's answer is not measured.
+            if settled.variant.pipeline().graphics.interpolates_at_sample
+                && !self.layout.sample_positions.is_empty()
+            {
+                return Err(Error::NotImplemented(
+                    RuntimeGap::InterpolateAtSampleWithPositions,
+                ));
+            }
             // A plan that does not read through every snapshot the draw asked for: the draw
             // takes the split, settled again without them.
             if let Some(wanted) = snapshot.as_ref() {

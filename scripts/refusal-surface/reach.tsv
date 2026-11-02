@@ -151,6 +151,7 @@ gap	ExecutionRangePastBuffer	rare	an execution range whose 8 bytes run past its 
 gap	ExecutionRangeOffFour	rare	an execution range at an offset off 4 bytes
 gap	IndirectCommandUnstridedBuffer	rare	an executed indirect command's buffer bound without the attribute stride the dynamic layout of its pipeline reads, where the pipeline's descriptor turned `support_dynamic_attribute_stride` on (with it off there is no stride word, and the runtime answers the bind at stride 0 as Metal does)
 gap	SamplePositionsAtBegin	rare	custom sample positions Vulkan takes only at begin
+gap	InterpolateAtSampleWithPositions	rare	interpolate_at_sample in a pass at custom sample positions
 gap	SharedEventAcrossDevices	rare	a shared event opened on another device
 gap	ViewportDepthRange	rare	viewport depth outside [0, 1] without the device features
 gap	NonFiniteDepthBias	rare	NaN or infinite depth bias

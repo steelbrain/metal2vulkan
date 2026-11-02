@@ -155,6 +155,9 @@ pub struct DeviceProperties {
     /// Custom sample positions are taken at every texture sample count above 1
     /// (`sample_positions.rs`).
     programmable_sample_positions: bool,
+    /// The compile layer lowers an `interpolant` read at its centroid, a sample or an offset
+    /// ([`DeviceProperties::supports_pull_model_interpolation`]).
+    pull_model_interpolation: bool,
 }
 
 /// What [`DeviceProperties::new`] reads of the physical device itself, beside the description
@@ -227,6 +230,7 @@ impl DeviceProperties {
                 texture_sample_counts,
             ),
             max_vertex_amplification_count,
+            pull_model_interpolation: compile.profile().interpolation_function_needs().is_empty(),
             driver_defects: driver_defects::of(&description),
             driver_facts: description.driver_facts(),
             description,
@@ -289,6 +293,23 @@ impl DeviceProperties {
         TextureRules {
             sample_counts: self.texture_sample_counts,
         }
+    }
+
+    /// `supportsPullModelInterpolation`: a fragment function may read an `interpolant` through
+    /// every interpolation function, `interpolate_at_center`, `_centroid`, `_sample` and
+    /// `_offset`, which the compile layer lowers to `GLSL.std.450`'s interpolation functions: the
+    /// device has `sampleRateShading`, and on a portability-subset device (MoltenVK)
+    /// `shaderSampleRateInterpolationFunctions`
+    /// ([`DeviceProfile::interpolation_function_needs`](metal2vulkan::device::DeviceProfile::interpolation_function_needs)
+    /// is empty). Without them only `interpolate_at_center` compiles, and a function that reads
+    /// otherwise is refused, `Unsupported(PullModelInterpolation)`. What differs from Metal: an
+    /// offset is read on the device's grid and within its range
+    /// (`PrecisionNote::DeviceInterpolationOffset`), a centroid where Vulkan puts it
+    /// (`PrecisionNote::MultisamplePosition`), and a draw at custom sample positions through a
+    /// function that reads at a sample is refused
+    /// ([`RuntimeGap::InterpolateAtSampleWithPositions`]).
+    pub fn supports_pull_model_interpolation(&self) -> Result<bool, RuntimeGap> {
+        Query::PullModelInterpolation.answer(self.pull_model_interpolation)
     }
 
     /// `supportsSamplerReductionMode`: no, on every device, as Metal answers on an Apple M4
@@ -406,11 +427,13 @@ pub enum Query {
     MinimumLinearTextureAlignment,
     /// `supportsSamplerReductionMode`.
     SamplerReductionMode,
+    /// `supportsPullModelInterpolation`.
+    PullModelInterpolation,
 }
 
 impl Query {
     /// Every query, in declaration order.
-    pub const ALL: [Query; 8] = [
+    pub const ALL: [Query; 9] = [
         Query::RasterOrderGroups,
         Query::Depth24Stencil8,
         Query::ProgrammableSamplePositions,
@@ -419,6 +442,7 @@ impl Query {
         Query::RasterizationRateMapLayerCount,
         Query::MinimumLinearTextureAlignment,
         Query::SamplerReductionMode,
+        Query::PullModelInterpolation,
     ];
 
     /// Metal's selector.
@@ -432,6 +456,7 @@ impl Query {
             Query::RasterizationRateMapLayerCount => "supportsRasterizationRateMapWithLayerCount:",
             Query::MinimumLinearTextureAlignment => "minimumLinearTextureAlignmentForPixelFormat:",
             Query::SamplerReductionMode => "supportsSamplerReductionMode",
+            Query::PullModelInterpolation => "supportsPullModelInterpolation",
         }
     }
 
@@ -446,7 +471,8 @@ impl Query {
             | Query::Depth24Stencil8
             | Query::TextureSampleCount
             | Query::MinimumLinearTextureAlignment
-            | Query::SamplerReductionMode => None,
+            | Query::SamplerReductionMode
+            | Query::PullModelInterpolation => None,
         }
     }
 
@@ -467,6 +493,7 @@ impl DeviceProperties {
             raster_order_groups: self.raster_order_groups,
             texture_sample_counts: self.texture_sample_counts,
             max_vertex_amplification_count: self.max_vertex_amplification_count,
+            pull_model_interpolation: self.pull_model_interpolation,
         }
     }
 }
@@ -478,4 +505,5 @@ pub(super) struct DeviceAnswers {
     pub raster_order_groups: bool,
     pub texture_sample_counts: SampleCountFlags,
     pub max_vertex_amplification_count: u64,
+    pub pull_model_interpolation: bool,
 }

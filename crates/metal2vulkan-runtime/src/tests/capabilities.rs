@@ -203,6 +203,19 @@ fn every_committed_profile_answers_from_its_sources() {
             Ok(programmable),
             "{stem}"
         );
+        // The interpolation functions: `sampleRateShading`, and on a portability-subset device
+        // its member for them.
+        let portability = enabled
+            .extensions
+            .contains(&VkExtension::KhrPortabilitySubset);
+        let functions = has(VkFeature::SampleRateShading)
+            && (!portability || has(VkFeature::ShaderSampleRateInterpolationFunctions));
+        assert_eq!(
+            p.supports_pull_model_interpolation(),
+            Ok(functions),
+            "{stem}"
+        );
+        assert_eq!(answers.pull_model_interpolation, functions, "{stem}");
         assert_eq!(p.description, enabled, "{stem}");
         assert_eq!(p.max_viewports, 16, "{stem}");
         assert_eq!(p.name, "test device", "{stem}");
@@ -313,12 +326,14 @@ fn the_venue_devices_answer_as_pinned() {
             answers.max_vertex_amplification_count, amplification,
             "{stem}"
         );
-        // Every venue takes custom sample positions at every count it renders.
+        // Every venue takes custom sample positions at every count it renders, and reads an
+        // interpolant every way (as the M3 Max, a Radeon Pro 5300M and a UHD 630 answer).
         assert_eq!(
             p.are_programmable_sample_positions_supported(),
             Ok(true),
             "{stem}"
         );
+        assert_eq!(p.supports_pull_model_interpolation(), Ok(true), "{stem}");
     }
 }
 
@@ -419,6 +434,9 @@ fn every_query_answers_the_device() {
         Query::SamplerReductionMode => {
             assert_eq!(p.supports_sampler_reduction_mode(), Ok(false));
         }
+        Query::PullModelInterpolation => {
+            assert_eq!(p.supports_pull_model_interpolation(), Ok(true));
+        }
     };
     for q in Query::ALL {
         assert_eq!(q.gap(), None, "{q:?}");
@@ -453,4 +471,26 @@ fn the_linear_alignment_of_a_compressed_or_depth_format_is_refused() {
             "{pf:?}"
         );
     }
+}
+
+/// `supportsPullModelInterpolation` answers no on a device without `sampleRateShading`, the Vulkan
+/// 1.2 floor's, where the compile layer refuses every interpolation function but
+/// `interpolate_at_center`; and on MoltenVK only with its portability member for them.
+#[test]
+fn pull_model_interpolation_needs_the_interpolation_functions() {
+    let profiles = committed_descriptions();
+    let (_, floor) = profiles.iter().find(|(s, _)| s == "vk12-floor").unwrap();
+    let (enabled, p) = created("vk12-floor", floor);
+    assert!(!enabled.has(VkFeature::SampleRateShading));
+    assert_eq!(p.supports_pull_model_interpolation(), Ok(false));
+    let (_, moltenvk) = profiles.iter().find(|(s, _)| s == "moltenvk-m3").unwrap();
+    let member = VkFeature::ShaderSampleRateInterpolationFunctions;
+    let (enabled, p) = created("moltenvk-m3", moltenvk);
+    assert!(enabled.has(member));
+    assert_eq!(p.supports_pull_model_interpolation(), Ok(true));
+    let mut withheld = moltenvk.clone();
+    withheld.features.remove(&member);
+    let (enabled, p) = created("moltenvk-m3", &withheld);
+    assert!(!enabled.has(member));
+    assert_eq!(p.supports_pull_model_interpolation(), Ok(false));
 }

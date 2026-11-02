@@ -1510,6 +1510,14 @@ pub enum RuntimeGap {
     /// takes them only at the pass's begin (`VkRenderPassSampleLocationsBeginInfoEXT`)
     /// (`sample_positions.rs`).
     SamplePositionsAtBegin,
+    /// A draw at custom sample positions (`setSamplePositions:count:`) through a pipeline whose
+    /// fragment function reads an `interpolant` at a sample it names (`interpolate_at_sample`,
+    /// [`GraphicsState::interpolates_at_sample`](metal2vulkan::pipeline::GraphicsState::interpolates_at_sample)):
+    /// Vulkan takes no `InterpolateAtSample` in a pipeline made with custom sample locations
+    /// (`VUID-VkGraphicsPipelineCreateInfo-sampleLocationsEnable-01524`), and where Metal reads
+    /// such a sample at custom positions is not measured. The same draw at the device's own
+    /// positions runs.
+    InterpolateAtSampleWithPositions,
     /// A shared event handle opened on a device other than its event's: another physical
     /// device's, or one made with other options or adopted (equal options make one device, as
     /// Metal's calls do). Vulkan semaphores do not cross devices unless exported, which the runtime
