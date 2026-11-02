@@ -307,8 +307,8 @@ pub struct GraphicsState {
     #[cfg_attr(feature = "serde", serde(default))]
     pub logic_op: Option<vk::LogicOp>,
     /// The fragment function reads an `interpolant` at a sample it names (`interpolate_at_sample`,
-    /// an input of [`Sampling::Interpolant`](crate::pipeline::Sampling::Interpolant) with
-    /// `sample`): its module uses `GLSL.std.450 InterpolateAtSample`, which Vulkan takes in no
+    /// an input its stage interface samples `Sampling::Interpolant` with `sample`): its module
+    /// uses `GLSL.std.450 InterpolateAtSample`, which Vulkan takes in no
     /// pipeline made with custom sample locations
     /// (`VUID-VkGraphicsPipelineCreateInfo-sampleLocationsEnable-01524`), so the consumer draws it
     /// only at the device's own sample positions.
