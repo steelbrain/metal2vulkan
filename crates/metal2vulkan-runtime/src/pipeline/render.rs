@@ -1320,7 +1320,6 @@ impl GraphicsState {
                 Problem::IndirectScaledTessellation,
             ));
         }
-        super::additions::check_render(descriptor, "new_render_pipeline_state")?;
         // Metal answers nil with an `NSError` for a state with rasterization disabled whose vertex
         // function returns a value (`unrasterized.rs`), before it compiles anything.
         // Each answer below is the one a creation of a descriptor of the same key worked out, where
@@ -1494,6 +1493,9 @@ impl GraphicsState {
             RenderVariant::compiled(&sources, descriptor, key, entries, descriptor_key)
         })
         .map_err(|error| compile_error(device, error))?;
+        // Metal fails the creation over a binary function not compiled to a binary once the
+        // stages link, after a reference they leave unresolved (`additions.rs`).
+        super::additions::check_render("new_render_pipeline_state", descriptor)?;
         let sized_class = matches!(
             descriptor.input_primitive_topology,
             PrimitiveTopologyClass::Line | PrimitiveTopologyClass::Triangle
@@ -1649,6 +1651,8 @@ impl GraphicsState {
         if let Some(fragment) = &descriptor.fragment {
             super::unspecialized::check(device, CALL, Stage::Fragment, fragment, &budget)?;
         }
+        // And for binary functions an object or mesh stage links (`additions.rs`).
+        super::additions::check_mesh(CALL, descriptor)?;
         // A state an indirect command buffer's commands may set takes its ID where the options
         // place it, as a render state's does.
         let placement = if descriptor.support_indirect_command_buffers {
@@ -1703,6 +1707,13 @@ impl GraphicsState {
             compile.compile_mesh_variant(descriptor, key, &budget)
         })
         .map_err(|error| compile_error(device, error))?;
+        // A fragment stage's binary function not compiled to a binary, as a render state's
+        // (`additions.rs`).
+        super::additions::check_precompiled(
+            CALL,
+            super::additions::Made::Render,
+            &descriptor.fragment,
+        )?;
         let stand_in = !key.storage_images.is_empty();
         let base = RenderVariant::of(
             device,

@@ -11,24 +11,61 @@
 //!   dispatch, whose threadgroup differs on any axis; without it Metal runs the size given, and
 //!   so does the runtime. An indirect command buffer's dispatch is not checked, and runs the size
 //!   it was encoded with.
-//! - **Binary functions.** A function in a stage's `binaryFunctions`, or among the functions added
-//!   to a made state, must be compiled to a binary (`MTLFunctionOptionCompileToBinary`): API
-//!   validation stops another, and creation fails without validation. Adding to a stage of a
-//!   state made without its support flag (`supportAddingBinaryFunctions`, or the vertex and
-//!   fragment forms) is an API validation stop; without validation Metal adds them. The added
-//!   state has the base state's handles and one for each added function; an addition the stage
-//!   already links keeps its handle, and adding nothing makes a state alike.
+//! - **Binary functions, added.** Adding to a stage of a state made without its support flag
+//!   (`supportAddingBinaryFunctions`, or the vertex and fragment forms) is an API validation stop;
+//!   without validation Metal adds them. The added state has the base state's handles and one for
+//!   each added function; an addition the stage already links keeps its handle, and adding
+//!   nothing makes a state alike.
+//!
+//! Measured on an M3 Max under macOS 27.0.1 (`binary_function_linking.m`, of libraries compiled
+//! from source and of metallibs alike, plain and with `MTL_DEBUG_LAYER=1`):
+//! - **A binary function is a table's function alone.** No visible-function reference resolves to
+//!   a function only `binaryFunctions` lists: a direct call to it from a compute, vertex, fragment
+//!   or tile function, or from a function `functions` links, fails the creation, plain and under
+//!   validation (code 3, "error: unresolved visible function reference: add_one", then "Reason:
+//!   visible function not loaded"), which the runtime answers as any reference no linked function
+//!   resolves (`Compile`, `NeedsInput(LinkedFunction)`); through a visible-function table, or
+//!   with no call, the pipeline is made and its table calls it.
+//! - **One name in two lists.** `functions` and `binaryFunctions` holding a function of one name
+//!   (one function in both, or two functions of two libraries) is made, plain; API validation
+//!   stops it ("All linked functions must have unique names. Function 'add_one' is a duplicate
+//!   symbol in binaryFunctions, symbol first found in functions."). A reference calls the one of
+//!   `functions`, and a table holds each, each handle calling its own function. Two functions of
+//!   one name in `binaryFunctions` are made alike (a table holds both), and a function added to a
+//!   made state beside a function of its name the stage links is added, with a handle of its own,
+//!   validation or not. `functions` holding one name twice fails the creation (code 3, "error:
+//!   duplicated symbol: add_one"), the runtime's `Invalid(DuplicateLinkedFunction)`.
+//! - **Not compiled to a binary.** A function made without `MTLFunctionOptionCompileToBinary` in a
+//!   stage's `binaryFunctions` fails a plain creation once its stage links, whether a table or
+//!   nothing calls it, and when `functions` lists it too: code 2, "Internal error during compute
+//!   pipeline creation" (a tile pipeline's "tile pipeline", and an empty description for a render
+//!   pipeline's vertex or fragment stage and a mesh pipeline's fragment stage), after a reference
+//!   the stage leaves unresolved (code 3 first). Among the functions added to a made state, of its
+//!   kernel, vertex, fragment or tile stage, with or without its support flag: code 1, "Failed to
+//!   allocate a new pipeline". Added to a stage the state lacks (a drawing state's tile stage, or
+//!   the fragment stage it has no function of; a tile state's vertex stage), it is added, as such
+//!   functions are, with no handle. API validation stops each ("Function 'add_one' was found in
+//!   binaryFunctions array but is not precompiled.", "... in Vertex functions array ..."), and
+//!   the runtime answers plain Metal's error ([`Error::MetalError`]), after the compile (a
+//!   fragment stage a render pipeline without rasterization drops is not asked: Metal's answer
+//!   there was not measured). While a
+//!   function `newFunctionWithDescriptor:` made compiled to a binary lives, Metal's
+//!   `newFunctionWithName:` of the same library function answers that one object, compiled to a
+//!   binary (and the other way about), where the runtime's two functions stay two.
+//! - **Mesh pipelines.** A binary function in a mesh pipeline's object or mesh stage ends plain
+//!   Metal's process at the creation ("Binary linked functions are not supported for object and
+//!   mesh shaders"); its fragment stage takes them as a render pipeline's does.
 
+use super::indirect_arguments::DOMAIN;
 use super::render::{GraphicsState, Kind, RenderPipelineState, StateDescriptor};
 use super::tile::TileState;
 use super::{ComputePipelineState, Kernel, PipelineOptions};
-use crate::error::{invalid, Error, Problem};
+use crate::error::{invalid, Error, MetalError, Problem};
 use crate::library::Function;
 use crate::values::Size;
 use crate::Device;
 use metal2vulkan::pipeline::{
-    FunctionDescriptor, LinkedFunction, LinkedFunctions, MeshPipelineDescriptor,
-    RenderPipelineDescriptor, Stage, StageSource,
+    LinkedFunction, MeshPipelineDescriptor, RenderPipelineDescriptor, Stage, StageSource,
 };
 
 /// A `requiredThreadsPerThreadgroup` Metal stops at a pipeline's creation.
@@ -117,16 +154,33 @@ pub enum BinaryFunctionProblem {
         /// The stage.
         stage: BinaryFunctionStage,
     },
-    /// A function not compiled to a binary in a stage's `binary_functions` ("Function 'f' was
-    /// found in binaryFunctions array but is not precompiled.") or among the functions added
-    /// ("Function 'f' was found in Fragment functions array but is not precompiled."): Metal's
-    /// API validation stops it, and its creation fails without validation.
+    /// A function not compiled to a binary in a stage's `binary_functions` or among the functions
+    /// added to a stage of a made state, which plain Metal's creation fails over: the runtime
+    /// answers it as [`Error::MetalError`], code 2 for a stage's ("Internal error during compute
+    /// pipeline creation", "Internal error during tile pipeline creation", or an empty
+    /// description for a render or mesh pipeline's stage) once its stage compiled, and code 1
+    /// ("Failed to allocate a new pipeline") for one added. Metal's API validation stops both
+    /// ("Function 'f' was found in binaryFunctions array but is not precompiled.", "Function 'f'
+    /// was found in Fragment functions array but is not precompiled."); a function added to a
+    /// stage the state lacks is taken, as plain Metal takes it (the module docs).
     ///
-    /// Basis: metal-documented (Metal's validation says "Function 'f' was found in binaryFunctions
-    /// array but is not precompiled.", and its creation fails without validation).
+    /// Basis: metal-measured (an M3 Max, macOS 27.0.1: plain Metal's creation fails with code 2,
+    /// an addition's with code 1, `binary_function_linking.m`).
     NotPrecompiled {
         /// The function's name.
         name: String,
+    },
+    /// Binary functions in a mesh render pipeline's object or mesh stage (the `binary_functions`
+    /// of its function's linked functions, Metal's `objectLinkedFunctions` and
+    /// `meshLinkedFunctions`): plain Metal's process ends at the creation, at its descriptor
+    /// validation ("Binary linked functions are not supported for object and mesh shaders"). Its
+    /// fragment stage takes them.
+    ///
+    /// Basis: metal-measured (an M3 Max, macOS 27.0.1: plain Metal's process ends at the creation,
+    /// `binary_function_linking.m`).
+    ObjectOrMeshStage {
+        /// The stage: `Object` or `Mesh`.
+        stage: Stage,
     },
     /// Functions added to a stage the compile layer already compiled (`StageSource::Compiled`),
     /// whose linked functions are fixed: Metal's stages are functions, so it has no such call.
@@ -181,13 +235,12 @@ impl Kernel {
     }
 }
 
-/// Check, before compiling, a compute or tile creation of `kernel` (whose function is `function`)
-/// in `call` on `device`: its required threads per threadgroup against the device's limit and its
-/// own maximum, and that its `binary_functions` are precompiled, as Metal does (the module docs).
+/// Check, before compiling, a compute or tile creation of `kernel` in `call` on `device`: its
+/// required threads per threadgroup against the device's limit and its own maximum, as Metal does
+/// (the module docs).
 pub(super) fn check_kernel(
     device: &Device,
     kernel: &Kernel,
-    function: &FunctionDescriptor,
     call: &'static str,
 ) -> Result<(), Error> {
     let (required, max) = kernel.threadgroup_fields();
@@ -223,44 +276,124 @@ pub(super) fn check_kernel(
             _ => {}
         }
     }
-    check_precompiled(call, &function.linked)
+    Ok(())
 }
 
-/// Check, before compiling, that a render creation's stages link only precompiled
-/// `binary_functions`, as a compute creation's must.
-pub(super) fn check_render(
-    descriptor: &RenderPipelineDescriptor,
+/// The kind of pipeline a creation makes, whose name Metal's error for a binary function not
+/// compiled to a binary says.
+#[derive(Clone, Copy, Debug)]
+pub(super) enum Made {
+    Compute,
+    Tile,
+    /// A render pipeline's vertex or fragment stage, or a mesh pipeline's fragment stage.
+    Render,
+}
+
+impl Made {
+    /// Metal's `localizedDescription` for such a function of a stage of the pipeline.
+    fn description(self) -> &'static str {
+        match self {
+            Made::Compute => "Internal error during compute pipeline creation",
+            Made::Tile => "Internal error during tile pipeline creation",
+            Made::Render => "",
+        }
+    }
+}
+
+/// The code of Metal's error for a stage's binary function not compiled to a binary.
+const NOT_PRECOMPILED: i64 = 2;
+
+/// The code and the `localizedDescription` of Metal's error for a function added to a made state
+/// that is not compiled to a binary.
+const ADDED_NOT_PRECOMPILED: (i64, &str) = (1, "Failed to allocate a new pipeline");
+
+/// Metal's error in `call` for `f`, not compiled to a binary, of `code` and `description`.
+fn not_precompiled(
     call: &'static str,
+    f: &LinkedFunction,
+    (code, description): (i64, &'static str),
+) -> Error {
+    Error::MetalError(MetalError::new(
+        call,
+        Problem::BinaryFunctions(BinaryFunctionProblem::NotPrecompiled {
+            name: f.name().to_owned(),
+        }),
+        DOMAIN,
+        code,
+        description,
+    ))
+}
+
+/// Refused in `call` once the stages compiled, as plain Metal fails a creation of kind `made`
+/// whose stage links a binary function not compiled to a binary (the module docs): the first such
+/// function of `stages`, in order. A compiled stage links none Metal names.
+pub(super) fn check_precompiled<'a>(
+    call: &'static str,
+    made: Made,
+    stages: impl IntoIterator<Item = &'a StageSource>,
 ) -> Result<(), Error> {
-    for stage in std::iter::once(&descriptor.vertex).chain(&descriptor.fragment) {
-        if let StageSource::Function(function) = stage {
-            check_precompiled(call, &function.linked)?;
+    for stage in stages {
+        let StageSource::Function(function) = stage else {
+            continue;
+        };
+        if let Some(f) = function
+            .linked
+            .binary_functions
+            .iter()
+            .find(|f| !f.precompiled)
+        {
+            return Err(not_precompiled(
+                call,
+                f,
+                (NOT_PRECOMPILED, made.description()),
+            ));
         }
     }
     Ok(())
 }
 
-/// The first of `linked`'s `binary_functions` that is not precompiled refuses `call`.
-fn check_precompiled(call: &'static str, linked: &LinkedFunctions) -> Result<(), Error> {
-    match linked.binary_functions.iter().find(|f| !f.precompiled) {
-        Some(f) => Err(not_precompiled(call, f)),
-        None => Ok(()),
+/// Refused in `call` before anything, as plain Metal's descriptor validation ends its process
+/// there: a mesh pipeline's object or mesh stage that links binary functions (the module docs).
+pub(super) fn check_mesh(
+    call: &'static str,
+    descriptor: &MeshPipelineDescriptor,
+) -> Result<(), Error> {
+    let stages = descriptor
+        .object
+        .iter()
+        .map(|object| (Stage::Object, object))
+        .chain([(Stage::Mesh, &descriptor.mesh)]);
+    for (stage, source) in stages {
+        if let StageSource::Function(function) = source {
+            if !function.linked.binary_functions.is_empty() {
+                return Err(invalid(
+                    call,
+                    Problem::BinaryFunctions(BinaryFunctionProblem::ObjectOrMeshStage { stage }),
+                ));
+            }
+        }
     }
+    Ok(())
 }
 
-fn not_precompiled(call: &'static str, f: &LinkedFunction) -> Error {
-    invalid(
+/// [`check_precompiled`] of a render creation's vertex and fragment stages.
+pub(super) fn check_render(
+    call: &'static str,
+    descriptor: &RenderPipelineDescriptor,
+) -> Result<(), Error> {
+    check_precompiled(
         call,
-        Problem::BinaryFunctions(BinaryFunctionProblem::NotPrecompiled {
-            name: f.name().to_owned(),
-        }),
+        Made::Render,
+        std::iter::once(&descriptor.vertex).chain(&descriptor.fragment),
     )
 }
 
 /// `stage` of a state, with `functions` added to its `binary_functions`, in `call` on `device`;
-/// `supported` is the stage's support flag. Each function must be of `device` and precompiled;
-/// one the stage's `functions` or `binary_functions` already link (the same name it links under,
-/// library function, AIR, constant values and specialization) keeps its entry and handle.
+/// `supported` is the stage's support flag. Each function must be of `device` and precompiled
+/// (Metal's error otherwise, the module docs); one the stage's `functions` or `binary_functions`
+/// already link (the same name it links under, library function, AIR, constant values and
+/// specialization) keeps its entry and handle, and another of a name the stage links is added
+/// beside it.
 fn added(
     device: &Device,
     call: &'static str,
@@ -291,7 +424,7 @@ fn added(
         }
         let linked = function.linked_function();
         if !linked.precompiled {
-            return Err(not_precompiled(call, &linked));
+            return Err(not_precompiled(call, &linked, ADDED_NOT_PRECOMPILED));
         }
         let same = |f: &LinkedFunction| {
             f.name() == linked.name()
@@ -342,17 +475,13 @@ fn added_counting(
 }
 
 /// `functions` added in `call` to a stage a drawing or tile state lacks, which plain Metal makes
-/// the state without, giving no handle of them, where its API validation stops them: refused
-/// (`Invalid`) only as a stage's are, for a function of another device or one not compiled to a
-/// binary.
+/// the state without, giving no handle of them, where its API validation stops them, a function
+/// not compiled to a binary among them (the module docs): refused (`Invalid`) only for a function
+/// of another device.
 fn ignored(device: &Device, call: &'static str, functions: &[Function]) -> Result<(), Error> {
     for function in functions {
         if !function.device().same(device) {
             return Err(invalid(call, Problem::ForeignObject));
-        }
-        let linked = function.linked_function();
-        if !linked.precompiled {
-            return Err(not_precompiled(call, &linked));
         }
     }
     Ok(())
@@ -366,9 +495,10 @@ impl ComputePipelineState {
     /// makes a state alike. On a state made without `support_adding_binary_functions`, which
     /// Metal's API validation stops, an added function's handle calls the kernel's last other
     /// callable function, and none where it has none (an entry that reads null), as plain Metal's
-    /// does. Refused (`Invalid`), as Metal's API validation refuses it: a function not made
-    /// compiled to a binary (`FunctionOptions::COMPILE_TO_BINARY`), which Metal's creation also
-    /// fails on without validation (`BinaryFunctions`); and a function of another device
+    /// does. A function not made compiled to a binary (`FunctionOptions::COMPILE_TO_BINARY`) fails
+    /// it as plain Metal's call fails, with or without the support flag: [`Error::MetalError`]
+    /// with `BinaryFunctions(NotPrecompiled)`, code 1 ("Failed to allocate a new pipeline"), where
+    /// Metal's API validation stops it. Refused (`Invalid`): a function of another device
     /// (`ForeignObject`). Otherwise refused as the creation is.
     pub fn new_compute_pipeline_state_with_additional_binary_functions(
         &self,
@@ -467,16 +597,18 @@ impl RenderPipelineState {
     /// one with the default options and this state's label. It has this state's function handles
     /// and one for each added function. Functions added to a stage the state lacks (a drawing
     /// state's tile stage or missing fragment stage, a tile state's vertex and fragment stages) are
-    /// left out, with no handle, as plain Metal leaves them where its API validation stops them; on
+    /// left out, with no handle, compiled to a binary or not, as plain Metal leaves them where its
+    /// API validation stops them; on
     /// a stage made without its support flag (`support_adding_vertex_binary_functions`,
     /// `support_adding_fragment_binary_functions`, a tile descriptor's
     /// `support_adding_binary_functions`), which its API validation also stops, an added function's
     /// handle calls the stage's last other callable function, and none where it has none (an entry
-    /// that reads null), as plain Metal's does. Refused (`Invalid`), as Metal's API validation
-    /// refuses it: functions added to a mesh state (`BinaryFunctions(NotSupported)`; plain Metal's
-    /// process ends there), and a function not made compiled to a binary
-    /// (`BinaryFunctions(NotPrecompiled)`); a function of another device (`ForeignObject`); and
-    /// functions added to a stage the compile layer already compiled
+    /// that reads null), as plain Metal's does. A function not made compiled to a binary added to
+    /// a stage the state has fails it as plain Metal's call fails: [`Error::MetalError`] with
+    /// `BinaryFunctions(NotPrecompiled)`, code 1 ("Failed to allocate a new pipeline"), where
+    /// Metal's API validation stops it. Refused (`Invalid`): functions added to a mesh state
+    /// (`BinaryFunctions(NotSupported)`; plain Metal's process ends there); a function of another
+    /// device (`ForeignObject`); and functions added to a stage the compile layer already compiled
     /// (`BinaryFunctions(CompiledStage)`). Otherwise refused as the creation is.
     pub fn new_render_pipeline_state_with_additional_binary_functions(
         &self,

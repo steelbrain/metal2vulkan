@@ -11051,6 +11051,7 @@ variant	metal2vulkan-runtime::BinaryArchiveError::Write	Write { path: PathBuf, k
 variant	metal2vulkan-runtime::BinaryFunctionProblem::CompiledStage	CompiledStage { stage: BinaryFunctionStage }
 variant	metal2vulkan-runtime::BinaryFunctionProblem::NotPrecompiled	NotPrecompiled { name: String }
 variant	metal2vulkan-runtime::BinaryFunctionProblem::NotSupported	NotSupported { stage: BinaryFunctionStage }
+variant	metal2vulkan-runtime::BinaryFunctionProblem::ObjectOrMeshStage	ObjectOrMeshStage { stage: Stage }
 variant	metal2vulkan-runtime::BinaryFunctionStage::Fragment	Fragment
 variant	metal2vulkan-runtime::BinaryFunctionStage::Kernel	Kernel
 variant	metal2vulkan-runtime::BinaryFunctionStage::Tile	Tile

@@ -1,5 +1,6 @@
 //! The checks a compute pipeline state's descriptor passes before its compile
-//! (`pipeline::duplicate_linked_name`, by the name each linked function links under), the imageblock length it answers
+//! (`pipeline::duplicate_linked_name`, by the name each linked function links under), the
+//! imageblock length it answers
 //! (`pipeline::imageblock_memory_length`), the specialization values a failed draw's
 //! pipeline names (`pipeline::specialization_values`), and which form of a key a driver's facts
 //! choose (`pipeline::views_read_at_bind`).
@@ -32,10 +33,11 @@ fn linked(stem: &str) -> LinkedFunction {
     LinkedFunction::new(library.function(stem).expect("function"))
 }
 
-/// A name `functions` lists twice, or `binary_functions` twice, or both lists hold for two
-/// different functions, is a descriptor Metal's creation fails on or whose answer was not measured,
-/// named as its first repeat; one function both lists hold is taken, as plain Metal takes it; a
-/// name only `private_functions` or a group repeats is left to the compile, as is one listed once.
+/// A name `functions` lists twice is a descriptor plain Metal's creation fails on ("duplicated
+/// symbol"), named as its first repeat; a name `binary_functions` lists twice, or both lists hold,
+/// one function or two different ones, is taken, as plain Metal makes it (an M3 Max under macOS
+/// 27.0.1, `binary_function_linking.m`); a name only `private_functions` or a group repeats is left
+/// to the compile, as is one listed once.
 #[test]
 fn a_name_the_numbered_lists_repeat_is_found() {
     let (first, second, third) = (
@@ -63,7 +65,7 @@ fn a_name_the_numbered_lists_repeat_is_found() {
         duplicate_linked_name(&twice),
         Some("ob3_index_buffer".to_owned())
     );
-    // One function in both lists: plain Metal takes it, with one handle.
+    // One function in both lists, and twice in `binary_functions`: plain Metal makes both.
     let mut both = once.clone();
     both.binary_functions
         .push(first.clone().with_precompiled(true));
@@ -73,20 +75,20 @@ fn a_name_the_numbered_lists_repeat_is_found() {
         third.clone().with_precompiled(true),
         third.clone().with_precompiled(true),
     ]);
-    assert_eq!(
-        duplicate_linked_name(&binary_twice),
-        Some("ob3_texture_array".to_owned())
-    );
-    // Another function of the same name (its constant values differ) in the other list.
+    assert_eq!(duplicate_linked_name(&binary_twice), None);
+    // Another function of the same name (its constant values differ) in the other list, and in
+    // `binary_functions` beside the first: plain Metal makes both too.
     let mut other = first.clone().with_precompiled(true);
     other.constants = FunctionConstantValues::defaults()
         .with_index(0, FunctionConstantValue::new(DataType::Bool, [1u8]));
-    let mut different = once;
-    different.binary_functions.push(other);
-    assert_eq!(
-        duplicate_linked_name(&different),
-        Some("ob3_stage_input".to_owned())
-    );
+    let mut different = once.clone();
+    different.binary_functions.push(other.clone());
+    assert_eq!(duplicate_linked_name(&different), None);
+    let mut binary_different = once;
+    binary_different
+        .binary_functions
+        .extend([first.with_precompiled(true), other]);
+    assert_eq!(duplicate_linked_name(&binary_different), None);
 }
 
 /// The name a list repeats is the one each function links under, its specialized name where it

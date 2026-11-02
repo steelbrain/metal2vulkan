@@ -436,7 +436,8 @@ impl Unproven {
 /// `NSLocalizedDescription` = `localized_description`, its only key where Metal's holds no
 /// other (every refusal the runtime answers so: [`Problem::IndirectCommandsDirectArgument`],
 /// [`Problem::UnrasterizedVertexReturn`], [`Problem::DepthWrittenWithoutAttachment`],
-/// [`Problem::UnwrittenFragmentInputs`], [`Problem::RasterSampleCount`]).
+/// [`Problem::UnwrittenFragmentInputs`], [`Problem::RasterSampleCount`], and
+/// [`Problem::BinaryFunctions`] with [`BinaryFunctionProblem::NotPrecompiled`]).
 #[non_exhaustive]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct MetalError {
@@ -781,14 +782,15 @@ pub enum Problem {
         /// The function's name.
         name: String,
     },
-    /// `new_compute_pipeline_state`: the kernel's linked `functions`, or its `binary_functions`,
-    /// list this name twice, or both lists hold it for two different functions. Metal's API
-    /// validation stops every repeat ("All linked functions must have unique names"); plain
-    /// Metal's creation fails on a name `functions` repeats and takes one function listed in both
-    /// lists, as the runtime takes it (measured on an M3 Max and an M4).
+    /// `new_compute_pipeline_state`: the kernel's linked `functions` list this name twice, one
+    /// function twice or two functions of the name: plain Metal's creation fails ("error:
+    /// duplicated symbol: add_one", code 3), and its API validation stops it ("All linked
+    /// functions must have unique names"). A name `binary_functions` lists twice, or both
+    /// `functions` and `binary_functions` hold, is made, as plain Metal makes it where its API
+    /// validation stops it (`pipeline/additions.rs`).
     ///
-    /// Basis: metal-measured (an M3 Max and an M4: plain Metal's creation fails on a name the
-    /// linked functions repeat).
+    /// Basis: metal-measured (an M3 Max, macOS 27.0.1: plain Metal's creation fails with code 3,
+    /// `binary_function_linking.m`).
     DuplicateLinkedFunction {
         /// The function's name.
         name: String,
@@ -904,8 +906,9 @@ pub enum Problem {
     ///
     /// Basis: delegated(RequiredThreadsProblem).
     RequiredThreads(RequiredThreadsProblem),
-    /// A pipeline's binary functions that Metal refuses: not precompiled, of another stage, or
-    /// added to a pipeline created without support for adding them.
+    /// A pipeline's binary functions that Metal refuses: not precompiled (plain Metal's error,
+    /// [`Error::MetalError`]), in a mesh pipeline's object or mesh stage, or added to a stage of a
+    /// state that cannot take them.
     ///
     /// Basis: delegated(BinaryFunctionProblem).
     BinaryFunctions(BinaryFunctionProblem),

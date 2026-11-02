@@ -102,7 +102,13 @@ the linked function of its name, `Function::name`: the specialized name
 Metal's `specializedName`), else its own. A linked function computes with the constant values it
 was made with, and a constant it was given no value for reads as undefined, as Metal's does; one
 made by `new_function_with_name` that reaches a constant of its module refuses the pipeline state
-(`Compile`, `LinkProblem::UnresolvedConstant`), as Metal fails its creation. A function Metal's
+(`Compile`, `LinkProblem::UnresolvedConstant`), as Metal fails its creation. A function in the
+stage's `binary_functions` is one a visible-function table calls: no call by name resolves to it
+(`Compile`, `NeedsInput(LinkedFunction)`, as Metal's creation fails), and beside a function of its
+name in `functions` the call calls that one while a table holds both, each with its handle. A
+function there that was not made with `FunctionOptions::COMPILE_TO_BINARY` fails the creation as
+plain Metal's does (`MetalError`, code 2), and one added to a made state
+(`*_with_additional_binary_functions`) fails that call (`MetalError`, code 1). A function Metal's
 stitcher made links the same way, privately or not, from the stitched library's bytes
 (`Device::new_library_with_data`); the runtime makes no stitched library itself
 (`newLibraryWithStitchedDescriptor:` is not built).

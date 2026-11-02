@@ -543,10 +543,17 @@ impl Device {
     /// `MTLComputePipelineDescriptor.linkedFunctions`); every variant compiles under the
     /// descriptor's other fields. A kernel the compile layer already compiled
     /// (`StageSource::Compiled`) is refused (`Invalid(CompiledKernel)`): the state compiles its
-    /// kernel again for each variant a dispatch needs. So is a name `functions` or
-    /// `binary_functions` lists twice, or both lists hold for two different functions
-    /// (`Invalid(DuplicateLinkedFunction)`); one function listed in both is linked once, with one
-    /// handle, as plain Metal takes it where its API validation stops it. So is an archive of
+    /// kernel again for each variant a dispatch needs. So is a name `functions` lists twice
+    /// (`Invalid(DuplicateLinkedFunction)`), as plain Metal's creation fails. A name both
+    /// `functions` and `binary_functions` hold, or `binary_functions` holds twice, is made, as
+    /// plain Metal makes it where its API validation stops it: one function listed twice is linked
+    /// once, with one handle; two different functions are two, each with its handle, and a call
+    /// to the name calls the one of `functions`. No call to a visible function resolves to a
+    /// function `binary_functions` alone holds, which only a visible-function table calls
+    /// (`Compile`, `NeedsInput(LinkedFunction)`, as Metal's creation fails). A function in
+    /// `binary_functions` not made compiled to a binary fails the creation once the kernel
+    /// compiled, [`Error::MetalError`] with `BinaryFunctions(NotPrecompiled)` (code 2), as plain
+    /// Metal's does. So is an archive of
     /// another device (`Invalid(ForeignObject)`). Under `FAIL_ON_BINARY_ARCHIVE_MISS`, a pipeline
     /// no listed archive holds is `BinaryArchiveMiss`. What the compile refuses is `Compile` or
     /// `Unsupported`: constant values that do not fit the function's constants, and a call to a
@@ -702,7 +709,7 @@ impl ComputePipelineState {
             kernel.stage(),
             &options.budget(),
         )?;
-        additions::check_kernel(device, &kernel, function, call)?;
+        additions::check_kernel(device, &kernel, call)?;
         // A tile pipeline's descriptor has no `supportIndirectCommandBuffers`, and no
         // `resourceIndex`.
         let indirect = match &kernel {
@@ -736,6 +743,13 @@ impl ComputePipelineState {
             Variant::compiled(&sources, function, &kernel, key)
         })
         .map_err(|error| compile_error(device, error))?;
+        // Metal fails the creation over a binary function not compiled to a binary once the
+        // stage links, after a reference it leaves unresolved (`additions.rs`).
+        let made = match &kernel {
+            Kernel::Compute(_) => additions::Made::Compute,
+            Kernel::Tile(_) => additions::Made::Tile,
+        };
+        additions::check_precompiled(call, made, [kernel.stage()])?;
         // Metal answers nil with an `NSError` for a compute state that supports indirect command
         // buffers whose kernel uses a direct texture or sampler (`indirect_arguments.rs`).
         // Asked of the kernel the compile above produced, which answers from what that compile
@@ -874,47 +888,26 @@ pub(crate) fn warm(device: &Device, pipeline: &crate::warm::Pipeline) -> Result<
     Ok(true)
 }
 
-/// The first name `linked` repeats where Metal's pipeline creation fails or was not measured: a
-/// name `functions` lists twice ("error: duplicated symbol", without validation too), or
-/// `binary_functions` twice, and a name both lists hold for two different functions (another
-/// AIR, library function or constant values), in that order. A function's name is the one it links
-/// under ([`LinkedFunction::name`]): its specialized name where it has one, so one library
-/// function linked under its own name and under a specialized one is no repeat, as Metal links
-/// both (`linked_function_specialized_name.m`, an M3 Max under macOS 27.0.1). Metal's API validation stops every repeat ("All
-/// linked functions must have unique names. Function 'add_one' is a duplicate symbol in
-/// binaryFunctions, symbol first found in functions"), but plain Metal takes one function listed
-/// in both lists, with one handle (a probe, an M3 and an M4), as the compile layer links it once.
-/// Whether validation also counts `private_functions` and `groups` was not measured, so they are
-/// left to it.
+/// The first name `functions` repeats, where plain Metal's pipeline creation fails ("error:
+/// duplicated symbol: add_one", code 3, one function listed twice or two of one name, an M3 Max
+/// under macOS 27.0.1, `binary_function_linking.m`). A function's name is the one it links under
+/// ([`LinkedFunction::name`]): its specialized name where it has one, so one library function
+/// linked under its own name and under a specialized one is no repeat, as Metal links both
+/// (`linked_function_specialized_name.m`, an M3 Max under macOS 27.0.1). Metal's API validation
+/// stops every repeat across the lists too ("All linked functions must have unique names.
+/// Function 'add_one' is a duplicate symbol in binaryFunctions, symbol first found in
+/// functions"), but plain Metal makes a name both `functions` and `binary_functions` hold, or
+/// `binary_functions` holds twice, whether one function or two, and so does the runtime (the
+/// compile layer resolves a reference against `functions` alone of the two, and a table holds
+/// each). Whether a repeat `private_functions` or `groups` holds fails was not measured, so they
+/// are left to the compile layer.
 pub(super) fn duplicate_linked_name(linked: &LinkedFunctions) -> Option<String> {
-    fn name(f: &LinkedFunction) -> &str {
-        f.name()
-    }
-    fn repeated(list: &[LinkedFunction]) -> Option<&str> {
-        let mut seen = HashSet::new();
-        list.iter().map(name).find(|n| !seen.insert(*n))
-    }
-    let same = |a: &LinkedFunction, b: &LinkedFunction| {
-        name(a) == name(b)
-            && a.function.info().name == b.function.info().name
-            && a.function.info().air_hash == b.function.info().air_hash
-            && a.constants == b.constants
-            && a.specialized == b.specialized
-    };
-    repeated(&linked.functions)
-        .or_else(|| repeated(&linked.binary_functions))
-        .or_else(|| {
-            linked
-                .binary_functions
-                .iter()
-                .find(|b| {
-                    linked
-                        .functions
-                        .iter()
-                        .any(|f| name(f) == name(b) && !same(f, b))
-                })
-                .map(name)
-        })
+    let mut seen = HashSet::new();
+    linked
+        .functions
+        .iter()
+        .map(LinkedFunction::name)
+        .find(|n| !seen.insert(*n))
         .map(str::to_owned)
 }
 
