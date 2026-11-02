@@ -1616,7 +1616,8 @@ fn mesh_fields(d: &MeshPipelineDescriptor) -> String {
 /// Vulkan evaluates at an implementation-defined position within the fragment, or at the
 /// invocation's sample under sample shading, and Metal at the pixel center, notes
 /// `PrecisionNote::MultisamplePosition`: `[[position]]`'s z or w, a center varying not read at the
-/// pixel (`StageIo::varyings_at_pixel`), a centroid varying, `[[point_coord]]`, or
+/// pixel (`StageIo::varyings_at_pixel`), a centroid varying, an interpolant read at the center or
+/// the centroid as those are (`Sampling::Interpolant`), `[[point_coord]]`, or
 /// `[[barycentric_coord]]`, at pixel rate or per sample. Link refused a per-sample function's
 /// center varying where the device has no pixel form, so a center varying reaches here without it
 /// only at pixel rate.
@@ -1634,20 +1635,20 @@ fn note_sample_position(
             continue;
         }
         let io = &a.interface.io;
-        let interpolated = |at: Sampling| {
+        let interpolated = |reads: fn(Sampling) -> bool| {
             io.inputs.iter().any(|v| {
                 matches!(
                     v.role,
                     IoRole::Varying {
                         interpolation: Some(Interpolation::Smooth { sampling, .. }),
                         ..
-                    } if sampling == at
+                    } if reads(sampling)
                 )
             })
         };
         let reads = (io.builtins.contains(&StageBuiltin::FragCoord) && io.position_depth)
-            || (interpolated(Sampling::Center) && !io.varyings_at_pixel)
-            || interpolated(Sampling::Centroid)
+            || (interpolated(Sampling::reads_center) && !io.varyings_at_pixel)
+            || interpolated(Sampling::reads_centroid)
             || io
                 .builtins
                 .iter()

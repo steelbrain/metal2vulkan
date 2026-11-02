@@ -529,6 +529,7 @@ pub enum AccelerationStructureKind {
 }
 
 /// Interpolation of a fragment input (`air.center|centroid|sample` with
+/// `air.perspective|no_perspective`, `air.interpolation_function` with
 /// `air.perspective|no_perspective`, or `air.flat`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Interpolation {
@@ -552,6 +553,23 @@ pub enum Sampling {
     Centroid,
     /// `air.sample`: at each sample's location (per-sample shading).
     Sample,
+    /// `air.interpolation_function`: an `interpolant` (Metal's pull-model interpolation), a
+    /// handle (`ptr addrspace(1)`) read only through the `air.interpolate_*` calls, each at the
+    /// location it names.
+    Interpolant,
+}
+
+impl Interpolation {
+    /// Whether the input is an `interpolant` ([`Sampling::Interpolant`]).
+    pub fn is_interpolant(self) -> bool {
+        matches!(
+            self,
+            Interpolation::Smooth {
+                sampling: Sampling::Interpolant,
+                ..
+            }
+        )
+    }
 }
 
 /// A varying's AIR user key (`generated(..)` / `user(..)`): the Metal interface-matching ABI,
@@ -825,6 +843,8 @@ pub enum AbiHandle {
     MeshGridProperties,
     /// A mesh function's output (`air.mesh`).
     Mesh,
+    /// A fragment input that is an `interpolant` (`air.interpolation_function`).
+    Interpolant,
 }
 
 impl ParamRole {
@@ -844,6 +864,9 @@ impl ParamRole {
             ParamRole::DepthStencilState(_) => Some(AbiHandle::DepthStencilState),
             ParamRole::MeshGridProperties => Some(AbiHandle::MeshGridProperties),
             ParamRole::Mesh(_) => Some(AbiHandle::Mesh),
+            ParamRole::FragmentInput(v) if v.interpolation.is_interpolant() => {
+                Some(AbiHandle::Interpolant)
+            }
             ParamRole::Payload { .. }
             | ParamRole::Buffer(_)
             | ParamRole::ArgumentBuffer(_)

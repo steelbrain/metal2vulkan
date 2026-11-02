@@ -817,6 +817,24 @@ const OBSERVED: &[(&str, &str)] = &[
     ("air.get_num_samples.i32", "i32 (i32)"),
     ("air.quad_is_helper_thread", "i1 ()"),
     ("air.simd_is_helper_thread", "i1 ()"),
+    // Pull-model interpolation (`pull_model_interpolants`).
+    ("air.interpolate_center_perspective.v4f32", "v4f32 (p1)"),
+    ("air.interpolate_center_no_perspective.f32", "f32 (p1)"),
+    ("air.interpolate_centroid_perspective.v2f32", "v2f32 (p1)"),
+    ("air.interpolate_centroid_no_perspective.f16", "f16 (p1)"),
+    (
+        "air.interpolate_sample_perspective.v4f16",
+        "v4f16 (p1, i32)",
+    ),
+    (
+        "air.interpolate_sample_no_perspective.v4f32",
+        "v4f32 (p1, i32)",
+    ),
+    ("air.interpolate_offset_perspective.f32", "f32 (p1, v2f32)"),
+    (
+        "air.interpolate_offset_no_perspective.v2f32",
+        "v2f32 (p1, v2f32)",
+    ),
     ("air.imageblock_data", "p4 (v2i16, i32, i16)"),
     ("air.get_imageblock_width", "i16 ()"),
     (
@@ -3624,5 +3642,55 @@ fn legacy_block_forms_are_chosen_by_the_declaration() {
             DeclClass::Mismatch,
             "{decl}"
         );
+    }
+}
+
+#[test]
+fn interpolation_functions_read_their_location_and_interpolant() {
+    let i = |name: &str, decl: &str| match declared_air(name, decl) {
+        AirIntrinsic::Interpolate(i) => i,
+        other => panic!("{name}: {other:?}"),
+    };
+    let f32x = |lanes| NumTy {
+        elem: Elem::F32,
+        lanes,
+    };
+    let offset = i(
+        "air.interpolate_offset_no_perspective.v2f32",
+        "v2f32 (p1, v2f32)",
+    );
+    assert_eq!(
+        offset,
+        Interpolate {
+            at: InterpolateAt::Offset,
+            perspective: false,
+            ty: f32x(2),
+        }
+    );
+    let sample = i(
+        "air.interpolate_sample_perspective.v4f16",
+        "v4f16 (p1, i32)",
+    );
+    assert_eq!(
+        (sample.at, sample.perspective),
+        (InterpolateAt::Sample, true)
+    );
+    let center = i("air.interpolate_center_perspective.f32", "f32 (p1)");
+    assert_eq!(center.ty, f32x(1));
+    // The interpolant is the one handle, a device-space pointer.
+    for x in [offset, sample, center] {
+        let handles: Vec<_> = x.signature().handles().collect();
+        assert_eq!(handles, [(0, HandleKind::Interpolant)]);
+        assert_eq!(HandleKind::Interpolant.space(), AddrSpace::Device);
+    }
+    // No other location, qualifier or value type is an interpolation function.
+    for name in [
+        "air.interpolate_center_flat.f32",
+        "air.interpolate_pixel_perspective.f32",
+        "air.interpolate_center_perspective.i32",
+        "air.interpolate_center_perspective.v8f32",
+        "air.interpolate_centerperspective.f32",
+    ] {
+        assert_eq!(AirIntrinsic::parse(name), None, "{name}");
     }
 }

@@ -646,6 +646,7 @@ impl TypedModule {
             entry: &self.entry,
             enabling: &self.enabling,
             per_primitive: &self.per_primitive,
+            offsets_from_seven_sixteenths: self.offsets_from_seven_sixteenths,
         };
         let (iface, reqs) = (interface(&view)?, recorded(&view, &self.subgroup)?);
         self.interface = iface;

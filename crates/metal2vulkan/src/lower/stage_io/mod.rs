@@ -140,8 +140,19 @@
 //! A color output in a raster order group is stored like any other: the fragment family runs the
 //! whole body inside the interlock.
 //!
-//! Refused as `NotImplemented`: array varyings, Metal's interpolation functions (`interpolant`),
-//! and a fragment position or barycentric input sampled other than at the pixel center.
+//! An `interpolant` fragment input (Metal's pull-model interpolation) is a float varying of its
+//! form and perspective, which only its interpolation functions read ([`Source::Interpolant`],
+//! [`interpolate`]): `interpolate_at_center` as a center varying is read (through its pixel-center
+//! form where one is), `interpolate_at_centroid`, `_sample` and `_offset` through `GLSL.std.450`'s
+//! `InterpolateAtCentroid`, `InterpolateAtSample` (the index masked to the pipeline's sample count,
+//! as Metal reads sample `i mod n`) and `InterpolateAtOffset` (the offset, which Metal measures
+//! from the pixel's corner at any distance, moved to the device's origin and clamped to its range:
+//! `PrecisionNote::DeviceInterpolationOffset`). `lower::fragment`'s `interpolate` states Metal's
+//! measured answers.
+//!
+//! Refused as `NotImplemented`: array varyings, an `interpolant` used other than as the operand of
+//! its interpolation functions (one chosen at run time), and a fragment position or barycentric
+//! input sampled other than at the pixel center.
 //! A 64-bit interface value is invalid input. A post-tessellation vertex function's inputs are
 //! `lower::tessellation`'s; its outputs are planned here.
 //!
@@ -279,6 +290,11 @@ pub enum Source {
     /// Vulkan's `PrimitiveId` (the variable) shifted right by one, the quad of the list's
     /// triangle, as Metal counts one primitive a quad of its private quads and quad strip.
     QuadPrimitive(Link),
+    /// An `interpolant` (Metal's pull-model interpolation): the variable, which has no value of
+    /// its own and which only the interpolation functions read ([`interpolate`]);
+    /// `interpolate_at_center` through its pixel-center form where `at_pixel`
+    /// ([`Source::PixelCenter`]'s), else as it is.
+    Interpolant { link: Link, at_pixel: bool },
 }
 
 /// One used stage-IO parameter.
@@ -446,6 +462,12 @@ pub struct StageIoPlan {
     /// center as Metal does (`VkProperty::MetalCenterVaryings`): the module requires that
     /// property.
     pub center_varyings_by_device: bool,
+    /// A fragment function reads an interpolant at an offset moved by 7/16, because its device's
+    /// `InterpolateAtOffset` reads Metal's offset plus 7/16
+    /// (`VkProperty::InterpolateAtOffsetFromSevenSixteenths`): the module is marked so
+    /// (`ModuleBuilder::offsets_from_seven_sixteenths`) and requires that property in place of
+    /// `VkProperty::InterpolateAtOffsetCentered`.
+    pub offsets_from_seven_sixteenths: bool,
     /// A fragment function reads a varying the device interpolates and records no
     /// `PrecisionNote::DeviceInterpolation`, because its device interpolates as Metal does
     /// (`VkProperty::MetalInterpolation`): the module requires that property.
@@ -1160,7 +1182,8 @@ pub fn emit_entry(cx: &mut EmitCx<'_>, fb: &mut FunctionBuilder<'_>) -> BResult<
             | Source::CapturedBaseVertex(_)
             | Source::Merged { .. }
             | Source::Uniform(_)
-            | Source::QuadPrimitive(_) => None,
+            | Source::QuadPrimitive(_)
+            | Source::Interpolant { .. } => None,
         })
         .collect();
     for (param, read) in pulled {
@@ -1260,6 +1283,12 @@ pub fn param_value(
             let x = fb.binary(BinOp::ShiftRightLogical, x, one)?;
             return to_lowered(cx, fb, &link, x);
         }
+        Some(Source::Interpolant { .. }) => {
+            return Err(cx.fail(format!(
+                "interpolant {} read other than by an interpolation function",
+                b.param
+            )))
+        }
         None => return Err(cx.fail(format!("parameter {} has no stage-IO value", b.param))),
     };
     let x = match link.place {
@@ -1341,6 +1370,121 @@ fn pixel_center(cx: &mut EmitCx<'_>, fb: &mut FunctionBuilder<'_>, link: &Link) 
         }
     };
     to_lowered(cx, fb, link, x)
+}
+
+/// Where an interpolation function reads its interpolant (`lower::fragment`'s `Interpolate`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum InterpolantAt {
+    /// `interpolate_at_center()`: as a center-sampled varying is read.
+    Center,
+    /// `interpolate_at_centroid()`: `InterpolateAtCentroid`.
+    Centroid,
+    /// `interpolate_at_sample(index)`: `InterpolateAtSample` at `index & (n - 1)`, `n` the
+    /// pipeline's sample count (`SpecKey::SampleCount`, a power of two), the sample Metal reads
+    /// for any index (Metal probes on the Apple M3 Max, macOS 27.0.1: at 1, 2 and 4 samples every
+    /// index to 16, 100, `2^31 - 1` and `2^32 - 1` read sample `index mod n`), where Vulkan leaves
+    /// the position of a sample the pipeline lacks undefined.
+    Sample(ValueId),
+    /// `interpolate_at_offset(offset)`: `InterpolateAtOffset` at `offset - origin`, Metal's offset
+    /// from the pixel's upper-left corner moved to the device's origin, clamped to `[min, max]`,
+    /// the device's `[minInterpolationOffset, maxInterpolationOffset]` (each the `f32`'s bits; a
+    /// NaN to `min`), as Vulkan requires (`PrecisionNote::DeviceInterpolationOffset`).
+    Offset {
+        offset: ValueId,
+        origin: u32,
+        min: u32,
+        max: u32,
+    },
+}
+
+/// One interpolation function's read of the interpolant parameter `param`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct InterpolantRead {
+    pub param: u32,
+    pub at: InterpolantAt,
+}
+
+/// The value interpolation function `read` returns, in its lowered representation (the
+/// interpolant's form): its variable read where the function says, or zero for an interpolant
+/// no vertex output writes ([`Source::Absent`]).
+pub fn interpolate(
+    cx: &mut EmitCx<'_>,
+    fb: &mut FunctionBuilder<'_>,
+    read: &InterpolantRead,
+) -> BResult<SValue> {
+    use crate::lower::arith::FloatFmt;
+    use crate::spirv::ir::GlslOp;
+    let planned = cx
+        .plan
+        .families
+        .stage_io
+        .params
+        .iter()
+        .find(|p| p.param == read.param)
+        .map(|p| p.source);
+    let (link, at_pixel) = match planned {
+        Some(Source::Interpolant { link, at_pixel }) => (link, at_pixel),
+        Some(Source::Absent(form)) => {
+            return match crate::lower::arith::legal::zero(&form.demote()) {
+                Some(k) => match crate::lower::arith::legal::materialize(fb, &k)? {
+                    Some(x) => Ok(x),
+                    None => Err(cx.fail("an absent interpolant's zero does not materialize")),
+                },
+                None => Err(cx.fail("an absent interpolant of a type without a zero")),
+            };
+        }
+        _ => {
+            return Err(cx.fail(format!(
+                "parameter {} is interpolated but no interpolant",
+                read.param
+            )))
+        }
+    };
+    let f32x2 = Form {
+        held: Held::Float(FloatFmt::F32),
+        lanes: 2,
+    };
+    let x = match read.at {
+        InterpolantAt::Center if at_pixel => return pixel_center(cx, fb, &link),
+        InterpolantAt::Center => {
+            let p = pointer(cx, fb, &link)?;
+            fb.load(p, MemAccess::default())?
+        }
+        InterpolantAt::Centroid => {
+            let p = pointer(cx, fb, &link)?;
+            fb.glsl(GlslOp::InterpolateAtCentroid, &[p])?
+        }
+        InterpolantAt::Sample(index) => {
+            let i = cx.operand(fb, index)?;
+            let u32_ = fb.module().ty(SType::Int {
+                width: 32,
+                signed: false,
+            })?;
+            let count = fb.module().spec(SpecKey::SampleCount, u32_, ConstBits(1))?;
+            let count = fb.module().const_value(count)?;
+            let one = crate::memory::leaf::k32(fb, 1)?;
+            let mask = fb.binary(BinOp::ISub, count, one)?;
+            let s = fb.binary(BinOp::BitwiseAnd, i, mask)?;
+            let p = pointer(cx, fb, &link)?;
+            fb.glsl(GlslOp::InterpolateAtSample, &[p, s])?
+        }
+        InterpolantAt::Offset {
+            offset,
+            origin,
+            min,
+            max,
+        } => {
+            let o = cx.operand(fb, offset)?;
+            let origin = ops::splat(fb, f32x2, u64::from(origin))?;
+            let moved = fb.binary(BinOp::FSub, o, origin)?;
+            let min = ops::splat(fb, f32x2, u64::from(min))?;
+            let max = ops::splat(fb, f32x2, u64::from(max))?;
+            let v = fb.glsl(GlslOp::NClamp, &[moved, min, max])?;
+            let p = pointer(cx, fb, &link)?;
+            fb.glsl(GlslOp::InterpolateAtOffset, &[p, v])?
+        }
+    };
+    to_lowered(cx, fb, &link, x)
 }
 
 /// The sample of the pass of the loop over the covered samples: the fragment family's
@@ -2570,6 +2714,9 @@ pub fn declare(
 ) -> BResult<Declared> {
     let sp = &plan.families.stage_io;
     let mut d = Declared::default();
+    if sp.offsets_from_seven_sixteenths {
+        mb.offsets_from_seven_sixteenths();
+    }
     // The sample-qualified varyings a looping entry reads at every sample before the loop, and
     // how many samples.
     let before_loop = plan

@@ -82,6 +82,9 @@ pub struct ModuleBuilder {
     invariant: BTreeSet<GlobalId>,
     /// User varyings decorated `PerPrimitiveEXT` (`ModuleBuilder::per_primitive`).
     per_primitive: BTreeSet<GlobalId>,
+    /// The module's `InterpolateAtOffset` offsets are Metal's moved by 7/16
+    /// (`ModuleBuilder::offsets_from_seven_sixteenths`).
+    offsets_from_seven_sixteenths: bool,
     /// Every storage buffer and storage image resource is decorated `Coherent`
     /// (`ModuleBuilder::coherent_resources`).
     coherent: bool,
@@ -820,6 +823,15 @@ impl ModuleBuilder {
         }
     }
 
+    /// Mark the module's `GLSL.std.450 InterpolateAtOffset` offsets as Metal's offsets moved by
+    /// 7/16, for a device whose instruction reads Metal's `interpolate_at_offset` at its offset
+    /// plus 7/16: the module then requires
+    /// `VkProperty::InterpolateAtOffsetFromSevenSixteenths`, where every other use of the
+    /// instruction requires `VkProperty::InterpolateAtOffsetCentered`.
+    pub fn offsets_from_seven_sixteenths(&mut self) {
+        self.offsets_from_seven_sixteenths = true;
+    }
+
     /// Decorate user varying `g` `PerPrimitiveEXT`: a mesh entry's primitive output, or a fragment
     /// input that reads one. A mesh entry's primitive builtins need no call: the serializer
     /// decorates them.
@@ -1290,6 +1302,7 @@ impl ModuleBuilder {
             entry: &entry,
             enabling: &self.enabling,
             per_primitive: &self.per_primitive,
+            offsets_from_seven_sixteenths: self.offsets_from_seven_sixteenths,
         };
         let interface = requirements::interface(&view)?;
         let subgroup = self.subgroup.unwrap_or(SubgroupRequirement::NONE);
@@ -1328,6 +1341,7 @@ impl ModuleBuilder {
             subgroup,
             invariant: self.invariant,
             per_primitive: self.per_primitive,
+            offsets_from_seven_sixteenths: self.offsets_from_seven_sixteenths,
             coherent,
             volatile: self.volatile,
             enabling: self.enabling,

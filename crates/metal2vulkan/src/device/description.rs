@@ -214,8 +214,9 @@ impl DeviceDescription {
     /// `interpolate_at_offset(offset + 0.4375)`, which Metal measures from the pixel's upper-left
     /// corner, so offset 0 reads a sixteenth of a pixel from the center. That conversion is read in
     /// SPIRV-Cross's source and Metal's reading measured on the Apple M3 Max; no release of
-    /// MoltenVK is measured to read at the center, so none takes it, and translation refuses what
-    /// needs it there.
+    /// MoltenVK is measured to read at the center, so none takes it: a device without it has
+    /// `VkProperty::InterpolateAtOffsetFromSevenSixteenths`, where translation moves a Metal
+    /// offset by 7/16 and reads nothing else through the instruction.
     pub(crate) fn interpolates_at_offset_centered(&self) -> bool {
         self.driver_id != Some(vk::DriverId::MOLTENVK)
     }

@@ -722,6 +722,8 @@ fn enabled_caps(desc: &DeviceDescription, deviations: &BTreeSet<DriverDeviation>
     // Where `InterpolateAtOffset` reads, and the measured deviations.
     if desc.interpolates_at_offset_centered() {
         properties.insert(VkProperty::InterpolateAtOffsetCentered);
+    } else {
+        properties.insert(VkProperty::InterpolateAtOffsetFromSevenSixteenths);
     }
     if deviations.contains(&DriverDeviation::SimdgroupLockstep) {
         properties.insert(VkProperty::SimdgroupLockstep);

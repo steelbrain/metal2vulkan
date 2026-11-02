@@ -1031,7 +1031,7 @@ codec_enum! {
         MetalHalfTexelWrites, MetalNormStorageWrites, DeviceSampling,
         MetalDepth16Stores, MetalDepth16BiasedStores, MetalInterpolation, MetalFirstVertexIndices,
         MetalFullQuads, ProvokingVertexModePerPipeline, DepthImageKeepsValuesOutsideUnitRange,
-        MetalNormalizedVertexFetch, MetalAlphaCoverage,
+        MetalNormalizedVertexFetch, MetalAlphaCoverage, InterpolateAtOffsetFromSevenSixteenths,
     }
     VkLimit {
         MaxComputeWorkGroupSize(f0), MaxComputeWorkGroupCount(f0), MaxComputeWorkGroupInvocations,
@@ -1166,7 +1166,7 @@ codec_enum! {
         Barycentric { perspective }, SelectedLayer, SelectedViewport, PrimitiveId,
     }
     IoInterpolation { Flat, Smooth { sampling, perspective } }
-    IoSampling { Center, Centroid, Sample }
+    IoSampling { Center, Centroid, Sample, Interpolant { center, centroid, sample } }
     CoverageLoop { NotNeeded, Looped, Unlooped, Refused(f0), DriverRunsPerSample }
     ChannelWrite {
         Unorm { bits }, Snorm { bits, blended }, Srgb, FloatTowardZero { mantissa, signed }, Device,
@@ -1358,7 +1358,7 @@ codec_struct! {
         clip_distances, writes_depth, reads_barycentric_coord, reads_primitive_id,
         reads_position_depth,
         fragment_writes_memory, color_outputs, sample_mask, shader_tests, snapshot_reads,
-        color_group, logic_op, line_band,
+        color_group, logic_op, line_band, interpolates_at_sample,
     }
     TessellationState {
         patch_control_points, domain, control_points, factor_step_function, push_offset,
@@ -1449,6 +1449,7 @@ codec_enum! {
         UnmeasuredFetchBlend,
         DeviceVertexConversion,
         DeviceAlphaCoverage,
+        DeviceInterpolationOffset,
     }
     BindingSource {
         Buffer(f0), Texture(f0), Sampler(f0), CombinedTextureSampler { texture, sampler },

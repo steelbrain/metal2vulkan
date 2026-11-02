@@ -1,11 +1,14 @@
 //! Selection of the stage interface: which Vulkan object each vertex or fragment input and output
 //! becomes, checked against the profile.
 
+use std::collections::BTreeSet;
+
 use crate::air::abi::{
     AbiInt, Builtin, DepthQualifier, Interpolation as AirInterp, OutputBinding, OutputRole,
-    ParamBinding, ParamRole, PatchInput, Sampling as AirSampling, Stage as AirStage,
+    ParamBinding, ParamRole, PatchInput, Sampling as AirSampling, Stage as AirStage, Varying,
 };
-use crate::air::ir::{ArgIdx, Type, TypeId as AirTypeId, Value};
+use crate::air::intrinsics::{AirIntrinsic, Fragment as AirFragment, InterpolateAt};
+use crate::air::ir::{ArgIdx, Callee, InstKind, Type, TypeId as AirTypeId, Value};
 use crate::device::profile::DriverWorkaround;
 use crate::device::requirements::{VkExtension, VkFeature, VkLimit, VkProperty};
 use crate::error::{Attachment, Capability, DriverDeviation, Error, Feature, Unsupported};
@@ -353,6 +356,10 @@ fn fragment_input_deco(
                     deco.sampling = SSampling::Sample;
                     Sampling::Sample
                 }
+                // Planned by `interpolant`, never as a varying read by value.
+                AirSampling::Interpolant => {
+                    return Err(cx.invariant("an interpolant planned as a varying"))
+                }
             };
             Interpolation::Smooth {
                 sampling: s,
@@ -370,14 +377,180 @@ fn fragment_input_deco(
 /// read the offset from the center as GLSL.std.450 states
 /// (`VkProperty::InterpolateAtOffsetCentered`; MoltenVK does not).
 fn interpolation_functions(cx: &SelectCx<'_>) -> bool {
-    let p = cx.profile.fields();
-    p.fragment.sample_rate_shading
-        && !p
+    cx.profile.interpolation_function_needs().is_empty()
+        && cx
+            .profile
+            .fields()
             .enabled
-            .portability_withholds(VkFeature::ShaderSampleRateInterpolationFunctions)
-        && p.enabled
             .properties
             .contains(&VkProperty::InterpolateAtOffsetCentered)
+}
+
+/// Plan interpolant parameter `b` (Metal's pull-model interpolation): a float varying of the
+/// interpolant's form and perspective, declared without `Centroid` or `Sample`, which only its
+/// interpolation functions read (`lower::fragment`'s `Interpolate`), each where it says.
+/// `interpolate_at_center` reads it as a center-sampled varying is read: under
+/// `LoweringInputs::multisampled` through its pixel-center form where the device has one
+/// (`InterpolateAtOffset` at offset 0, [`Source::PixelCenter`]'s, or the read as it is on a device
+/// that reads such a varying at the pixel center itself), else as it is. The other functions are
+/// `GLSL.std.450`'s `InterpolateAtCentroid`, `InterpolateAtSample` and `InterpolateAtOffset`,
+/// which the `InterpolationFunction` capability declares, enabled by `sampleRateShading` (and on
+/// a portability-subset device `shaderSampleRateInterpolationFunctions`): without them the
+/// function needs them. An interpolant no vertex output writes is zero at every read
+/// ([`Source::Absent`]). One used any other way ([`interpolant_reads`]), or one its mesh function
+/// writes per primitive, is not lowered (`Feature::PullModelInterpolation`).
+fn interpolant(cx: &mut SelectCx<'_>, b: &ParamBinding, v: &Varying) -> Result<(), Error> {
+    let AirInterp::Smooth { perspective, .. } = v.interpolation else {
+        return Err(cx.invariant("an interpolant without its perspective"));
+    };
+    let (reads, ty) = interpolant_reads(cx, b.param)?;
+    let key = VaryingKey::user(&v.key.0);
+    if cx.inputs.absent_varyings.contains(&key) {
+        let f = form_on(cx.entry, cx.profile, ty)?;
+        cx.families.stage_io.params.push(PlannedParam {
+            param: b.param,
+            source: Source::Absent(f),
+        });
+        return Ok(());
+    }
+    if read_per_primitive(cx, &key) {
+        return Err(Unsupported::not_implemented(Feature::PullModelInterpolation).into());
+    }
+    if reads.iter().any(|at| *at != InterpolateAt::Center) {
+        let lacks = cx.profile.interpolation_function_needs();
+        if !lacks.is_empty() {
+            return Err(
+                Unsupported::needs_any_of(Feature::PullModelInterpolation, vec![lacks]).into(),
+            );
+        }
+    }
+    let f = varying_form(cx, ty)?;
+    if !f.is_float() {
+        return Err(cx.invariant("an interpolant of no float type"));
+    }
+    let mut deco = IoDecor {
+        packed: true,
+        ..IoDecor::default()
+    };
+    if !perspective {
+        deco.interpolation = SInterp::NoPerspective;
+    }
+    let center = reads.contains(&InterpolateAt::Center);
+    let interp = Interpolation::Smooth {
+        sampling: Sampling::Interpolant {
+            center,
+            centroid: reads.contains(&InterpolateAt::Centroid),
+            sample: reads.contains(&InterpolateAt::Sample),
+        },
+        perspective,
+    };
+    note_device_interpolation(cx, interp);
+    // The center read's pixel form, as a center varying's.
+    let at_center = center && cx.inputs.multisampled;
+    let by_device = at_center && device_reads_center_varyings_at_pixel(cx);
+    let at_pixel = at_center && !by_device && interpolation_functions(cx);
+    let sp = &mut cx.families.stage_io;
+    sp.interface.varyings_at_pixel |= at_pixel || by_device;
+    sp.center_varyings_by_device |= by_device;
+    let object = user(sp, key.clone(), IoDir::Input, io_type(f), deco)?;
+    push_var(
+        &mut sp.interface.inputs,
+        IoVariable {
+            key,
+            role: IoRole::Varying {
+                user: AirUserKey(v.key.0.clone()),
+                interpolation: Some(interp),
+            },
+            ty: io_type(f),
+        },
+    );
+    sp.params.push(PlannedParam {
+        param: b.param,
+        source: Source::Interpolant {
+            link: Link {
+                object,
+                place: Place::Whole,
+                form: f,
+            },
+            at_pixel,
+        },
+    });
+    Ok(())
+}
+
+/// Where the interpolation functions read interpolant parameter `param`, and the type they
+/// return, the interpolant's: every use of the parameter must be the interpolant operand of an
+/// `air.interpolate_*` call, all of one result type. Any other use (a `select` or `phi` choosing
+/// the interpolant at run time, a store, a call, another operand) is not lowered
+/// (`Feature::PullModelInterpolation`), and neither is a sample or offset read on a driver whose
+/// interpolation reads garbage where some of the quad's invocations have left the control flow
+/// (`DriverWorkaround::InterpolationNeedsTheWholeQuad`) outside the function's first block or
+/// after a discard there, where some may have.
+pub(super) fn interpolant_reads(
+    cx: &SelectCx<'_>,
+    param: u32,
+) -> Result<(BTreeSet<InterpolateAt>, AirTypeId), Error> {
+    let arg = Value::Arg(ArgIdx::new(param));
+    let refused =
+        || -> Error { Unsupported::not_implemented(Feature::PullModelInterpolation).into() };
+    let whole_quad = cx
+        .profile
+        .fields()
+        .workarounds
+        .contains(&DriverWorkaround::InterpolationNeedsTheWholeQuad);
+    let first_block_end = cx.body.blocks.values().next().map(|b| b.end);
+    let mut discarded = false;
+    let mut reads = BTreeSet::new();
+    let mut ty = None;
+    for (id, inst) in cx.body.insts.iter() {
+        let read = match &inst.kind {
+            InstKind::Call(call) => match &call.callee {
+                Callee::Air {
+                    op: AirIntrinsic::Interpolate(i),
+                    ..
+                } => Some((i, call.args.first() == Some(&arg))),
+                Callee::Air {
+                    op: AirIntrinsic::Fragment(AirFragment::Discard),
+                    ..
+                } => {
+                    discarded |= first_block_end.is_some_and(|end| id < end);
+                    None
+                }
+                _ => None,
+            },
+            _ => None,
+        };
+        let mut uses = 0usize;
+        inst.kind.for_each_value(|v| uses += usize::from(v == arg));
+        if uses == 0 {
+            continue;
+        }
+        let Some((i, true)) = read else {
+            return Err(refused());
+        };
+        if uses != 1 {
+            return Err(refused());
+        }
+        if whole_quad
+            && matches!(i.at, InterpolateAt::Sample | InterpolateAt::Offset)
+            && (discarded || first_block_end.is_none_or(|end| id >= end))
+        {
+            return Err(Unsupported::driver_defect(
+                Feature::PullModelInterpolation,
+                DriverWorkaround::InterpolationNeedsTheWholeQuad,
+            )
+            .into());
+        }
+        if ty.is_some_and(|t| t != inst.ty) {
+            return Err(refused());
+        }
+        ty = Some(inst.ty);
+        reads.insert(i.at);
+    }
+    match ty {
+        Some(ty) => Ok((reads, ty)),
+        None => Err(cx.invariant("an interpolant planned without a read")),
+    }
 }
 
 /// Whether the device reads a center-sampled varying of a multisampled pipeline at the pixel
@@ -520,6 +693,9 @@ pub fn param(cx: &mut SelectCx<'_>, b: &ParamBinding) -> Result<(), Error> {
                 place: Place::Whole,
                 form: f,
             }
+        }
+        (ParamRole::FragmentInput(v), Stage::Fragment) if v.interpolation.is_interpolant() => {
+            return interpolant(cx, b, v);
         }
         (ParamRole::FragmentInput(v), Stage::Fragment) => {
             let key = VaryingKey::user(&v.key.0);
@@ -3369,6 +3545,9 @@ fn param_words(cx: &SelectCx<'_>) -> u64 {
                 loaded.push((p.param, USE_WORDS + PIXEL_WORDS))
             }
             Source::Uniform(_) => loaded.push((p.param, USE_WORDS + UNIFORM_WORDS)),
+            // A read through an interpolation function (the call's own arithmetic is its
+            // strategy's).
+            Source::Interpolant { .. } => loaded.push((p.param, USE_WORDS + PIXEL_WORDS)),
             Source::Pulled(r) => fetch_words = fetch_words.saturating_add(u64::from(r.words())),
         }
     }

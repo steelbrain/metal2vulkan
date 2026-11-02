@@ -2965,15 +2965,17 @@ bound.
   position within the fragment: `[[position]]`'s z or w (the interpolated depth and `1/w`, whose
   position Vulkan does not state), a center-sampled varying on a device without its pixel form
   (interpolation functions whose `InterpolateAtOffset` reads from the pixel center: "an
-  implementation-defined position within the fragment area being shaded"), a centroid varying
-  (anywhere in the fragment's covered area, where Metal, measured on Apple M3 Max, moves it to a
-  covered sample's location only under partial coverage), `[[point_coord]]` ("the fragment center,
-  or the location of a sample"), or `[[barycentric_coord]]` (its builtin). A function that runs per
-  sample under sample shading reads all but the center varying where Vulkan evaluates them for its
-  sample, where Metal reads every one as the pixel's in each sample's run (Apple M3 Max at 4x,
-  measured). Each is evaluated at a point of the pixel, so it differs from Metal's by at most its
-  change over half the pixel's diagonal, and a centroid varying by at most its change across the
-  pixel's covered area; exact where the device evaluates a read where Metal does.
+  implementation-defined position within the fragment area being shaded"), a centroid varying or an
+  `interpolant` read through `interpolate_at_centroid` (anywhere in the fragment's covered area,
+  where Metal, measured on Apple M3 Max, moves it to the lowest covered sample's location only under
+  partial coverage), an `interpolant` read through `interpolate_at_center` as a center varying,
+  `[[point_coord]]` ("the fragment center, or the location of a sample"), or `[[barycentric_coord]]`
+  (its builtin). A function that runs per sample under sample shading reads all but the center
+  varying where Vulkan evaluates them for its sample, where Metal reads every one as the pixel's in
+  each sample's run (Apple M3 Max at 4x, measured). Each is evaluated at a point of the pixel, so it
+  differs from Metal's by at most its change over half the pixel's diagonal, and a centroid varying
+  by at most its change across the pixel's covered area; exact where the device evaluates a read
+  where Metal does.
 - `metal2vulkan-degrade-rasterization-rate-map` (precision). `PrecisionNote::RasterizationRateMap`:
   A render pass drawn by regions over a rasterization-rate map that is not the identity: its
   regions' lines are this crate's tiles' exact lines, where Apple's are its fixed-point ones, so a
@@ -3110,6 +3112,16 @@ bound.
   (`DriverDeviation::MetalInterpolation`, which MoltenVK takes: Metal interpolates there). Vulkan
   states no precision for interpolation, and RADV, ANV, lavapipe and NVIDIA's driver each round
   most interpolated lanes otherwise than Metal, up to about `1.5e-4` apart (`3e-4` on lavapipe).
+- `metal2vulkan-degrade-device-interpolation-offset` (precision).
+  `PrecisionNote::DeviceInterpolationOffset`: A fragment function reads an `interpolant` through
+  `interpolate_at_offset`, which Metal evaluates at the offset as given from the pixel's upper-left
+  corner, at any distance and on no grid (an Apple M3 Max, macOS 27.0.1: 0.999 read at 0.999, `1e9`
+  extrapolated, a NaN or infinite offset NaN). The device reads at the offset moved to its origin
+  (the pixel center; 7/16 on MoltenVK) and clamped to its `[minInterpolationOffset,
+  maxInterpolationOffset]`, which Vulkan requires, a NaN to the minimum, and rounds it to its
+  `subPixelInterpolationOffsetBits` (at least sixteenths): within the range the read lies within
+  half a step of Metal's, past it at the range's nearer end. On MoltenVK Metal reads the offset
+  itself, so within the range (`[-1/16, 15/16]` from the corner on the M3 Max) the read is Metal's.
 - `metal2vulkan-degrade-quads-split-by-clipping` (precision). `PrecisionNote::QuadsSplitByClipping`:
   A fragment function runs a quad or simdgroup operation on a device that shades a triangle it clips
   as several triangles (`DriverWorkaround::ClippedTrianglesSplitPixelFragments`): a quad a seam

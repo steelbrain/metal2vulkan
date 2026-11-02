@@ -100,6 +100,9 @@ pub(super) enum Key {
     Perspective,
     NoPerspective,
     Flat,
+    /// `air.interpolation_function`: a fragment input that is an `interpolant`, read only through
+    /// Metal's interpolation functions.
+    InterpolationFunction,
     ImageblockDataSize,
     ImageblockMaster,
     AliasImplicitImageblock,
@@ -280,6 +283,7 @@ const KEYS: &[(&str, Key)] = &[
     ("air.perspective", Key::Perspective),
     ("air.no_perspective", Key::NoPerspective),
     ("air.flat", Key::Flat),
+    ("air.interpolation_function", Key::InterpolationFunction),
     ("air.imageblock_data_size", Key::ImageblockDataSize),
     ("air.imageblock_master", Key::ImageblockMaster),
     (
@@ -413,6 +417,7 @@ impl Key {
             b"air.perspective" => Key::Perspective,
             b"air.no_perspective" => Key::NoPerspective,
             b"air.flat" => Key::Flat,
+            b"air.interpolation_function" => Key::InterpolationFunction,
             b"air.imageblock_data_size" => Key::ImageblockDataSize,
             b"air.imageblock_master" => Key::ImageblockMaster,
             b"air.alias_implicit_imageblock" => Key::AliasImplicitImageblock,
@@ -535,6 +540,7 @@ impl Key {
             Key::Perspective => "air.perspective",
             Key::NoPerspective => "air.no_perspective",
             Key::Flat => "air.flat",
+            Key::InterpolationFunction => "air.interpolation_function",
             Key::ImageblockDataSize => "air.imageblock_data_size",
             Key::ImageblockMaster => "air.imageblock_master",
             Key::AliasImplicitImageblock => "air.alias_implicit_imageblock",

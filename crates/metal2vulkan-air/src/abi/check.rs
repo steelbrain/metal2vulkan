@@ -413,6 +413,10 @@ fn role_type(m: &Module, p: &ParamBinding, ty: TypeId, site: &Site) -> Result<()
         ParamRole::Payload { .. } => space == Some(AddrSpace::ObjectData),
         ParamRole::MeshGridProperties => space == Some(AddrSpace::Threadgroup),
         ParamRole::Mesh(_) => space == Some(AddrSpace::MeshOutput),
+        // An `interpolant` is an opaque device-space handle.
+        ParamRole::FragmentInput(v) if v.interpolation.is_interpolant() => {
+            space == Some(AddrSpace::Device)
+        }
         ParamRole::Builtin(_)
         | ParamRole::StageIn { .. }
         | ParamRole::VertexInput { .. }

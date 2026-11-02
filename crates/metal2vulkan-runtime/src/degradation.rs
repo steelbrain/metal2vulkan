@@ -2189,6 +2189,7 @@ degradations! {
         /// 8-bit sRGB attachment within 4 codes. Another device is not bounded past one code.
         DeviceColorConversion = "device-color-conversion";
         DeviceInterpolation = "device-interpolation";
+        DeviceInterpolationOffset = "device-interpolation-offset";
         QuadsSplitByClipping = "quads-split-by-clipping";
         VertexSimdgroupGrouping = "vertex-simdgroup-grouping";
         FragmentSimdgroupGrouping = "fragment-simdgroup-grouping";

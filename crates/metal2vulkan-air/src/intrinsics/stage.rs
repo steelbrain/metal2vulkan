@@ -211,6 +211,72 @@ impl Fragment {
     }
 }
 
+/// Where an interpolation function reads its `interpolant`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum InterpolateAt {
+    /// `interpolate_at_center()`: at the pixel's center.
+    Center,
+    /// `interpolate_at_centroid()`: at the centroid of the pixel's covered area.
+    Centroid,
+    /// `interpolate_at_sample(uint)`: at a sample's location, an `i32` operand.
+    Sample,
+    /// `interpolate_at_offset(float2)`: at an offset from the pixel's upper-left corner, a
+    /// `<2 x float>` operand.
+    Offset,
+}
+
+/// `air.interpolate_{center,centroid,sample,offset}_{perspective,no_perspective}.<T>`: Metal's
+/// pull-model interpolation of an `interpolant` fragment input, a handle (`ptr addrspace(1)`).
+/// `T` is a `half` or `float` scalar or vector: `T (ptr)` at the center or the centroid,
+/// `T (ptr, i32)` at a sample, `T (ptr, <2 x float>)` at an offset.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct Interpolate {
+    /// Where it reads.
+    pub at: InterpolateAt,
+    /// `_perspective` (`true`) or `_no_perspective` (`false`): the interpolant's own qualifier.
+    pub perspective: bool,
+    /// The value type.
+    pub ty: NumTy,
+}
+
+impl Interpolate {
+    pub(super) fn parse(rest: &str) -> Option<Interpolate> {
+        let (stem, ty) = rest.strip_prefix("interpolate_")?.split_once('.')?;
+        let (at, qualifier) = stem.split_once('_')?;
+        let at = match at {
+            "center" => InterpolateAt::Center,
+            "centroid" => InterpolateAt::Centroid,
+            "sample" => InterpolateAt::Sample,
+            "offset" => InterpolateAt::Offset,
+            _ => return None,
+        };
+        let perspective = match qualifier {
+            "perspective" => true,
+            "no_perspective" => false,
+            _ => return None,
+        };
+        let ty = NumTy::parse(ty)?;
+        (matches!(ty.elem, Elem::F16 | Elem::F32) && matches!(ty.lanes, 1..=4)).then_some(
+            Interpolate {
+                at,
+                perspective,
+                ty,
+            },
+        )
+    }
+
+    /// The typed signature.
+    pub fn signature(&self) -> Signature {
+        let handle = Operand::Handle(super::sig::HandleKind::Interpolant);
+        let ret = Operand::Num(self.ty);
+        match self.at {
+            InterpolateAt::Center | InterpolateAt::Centroid => Signature::new(ret, &[handle]),
+            InterpolateAt::Sample => Signature::new(ret, &[handle, num(Elem::I32, 1)]),
+            InterpolateAt::Offset => Signature::new(ret, &[handle, num(Elem::F32, 2)]),
+        }
+    }
+}
+
 /// Imageblock operations. The `(i32, <2 x i16>, i32, i16)` tail of the implicit accesses and the
 /// `(<2 x i16>, i32, i16)` operands of `imageblock_data` are typed operands lowering interprets.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]

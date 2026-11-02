@@ -1462,6 +1462,75 @@ fn interpolation_must_be_complete() {
     }
 }
 
+/// An `interpolant` fragment input (`air.interpolation_function` with its perspective key) is an
+/// opaque device-space handle, sampled where each interpolation function says: no sampling key
+/// and no `air.flat` beside it, and a pointer parameter, as no other fragment input is.
+#[test]
+fn an_interpolant_is_a_device_handle_with_its_perspective() {
+    let fragment_input = |pointer: bool, keys: &[&'static str]| {
+        let mut b = ModuleBuilder::new();
+        let ty = if pointer {
+            b.ptr(AddrSpace::Device)
+        } else {
+            let f32t = b.float();
+            b.vector(f32t, 4)
+        };
+        let void = b.void();
+        let fs = entry_fn(&mut b, "fs", void, &[ty]);
+        let mut ops = vec![I(0), S("air.fragment_input"), S("generated(1pDv4_f)")];
+        ops.extend(keys.iter().map(|&k| S(k)));
+        let arg = node(&mut b, &ops);
+        let ins = node(&mut b, &[N(arg)]);
+        let outs = node(&mut b, &[]);
+        let e = node(&mut b, &[F(fs), N(outs), N(ins)]);
+        b.named_md("air.fragment", &[e]);
+        let m = b.finish().unwrap();
+        decode(&m, &PointeeTable::default(), &mut meter())
+    };
+    for (keys, perspective) in [
+        (&["air.interpolation_function", "air.perspective"][..], true),
+        (&["air.interpolation_function", "air.no_perspective"], false),
+    ] {
+        let abi = fragment_input(true, keys).unwrap_or_else(|e| panic!("{keys:?}: {e:?}"));
+        let role = &abi.entries[0].params[0].role;
+        let ParamRole::FragmentInput(v) = role else {
+            panic!("{keys:?}: a fragment input")
+        };
+        let want = Interpolation::Smooth {
+            sampling: Sampling::Interpolant,
+            perspective,
+        };
+        assert_eq!(v.interpolation, want, "{keys:?}");
+        assert!(v.interpolation.is_interpolant());
+        assert_eq!(role.handle(), Some(AbiHandle::Interpolant), "{keys:?}");
+    }
+    for keys in [
+        &["air.interpolation_function"][..],
+        &[
+            "air.interpolation_function",
+            "air.center",
+            "air.perspective",
+        ],
+        &[
+            "air.interpolation_function",
+            "air.sample",
+            "air.perspective",
+        ],
+        &["air.interpolation_function", "air.flat"],
+    ] {
+        expect_abi(fragment_input(true, keys), AbiError::BadValue);
+    }
+    // A value parameter is no interpolant, and a pointer is no plain varying.
+    expect_abi(
+        fragment_input(false, &["air.interpolation_function", "air.perspective"]),
+        AbiError::RoleTypeMismatch,
+    );
+    expect_abi(
+        fragment_input(true, &["air.center", "air.perspective"]),
+        AbiError::RoleTypeMismatch,
+    );
+}
+
 // ---- Struct layouts ----
 
 #[test]

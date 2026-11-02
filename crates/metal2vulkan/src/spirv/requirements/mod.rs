@@ -118,6 +118,9 @@ pub struct ModuleView<'a> {
     pub(crate) enabling: &'a std::collections::BTreeMap<GlobalId, Cap>,
     /// The user varyings decorated `PerPrimitiveEXT`.
     pub(crate) per_primitive: &'a BTreeSet<GlobalId>,
+    /// The `InterpolateAtOffset` offsets are Metal's moved by 7/16
+    /// (`ModuleBuilder::offsets_from_seven_sixteenths`).
+    pub(crate) offsets_from_seven_sixteenths: bool,
 }
 
 /// The enabling capabilities of builtin `b` in direction `dir` that lowering chooses among by
@@ -1166,9 +1169,14 @@ impl Deriver<'_> {
                 self.cap(Cap::InterpolationFunction);
                 self.feat(VkFeature::SampleRateShading);
                 // An offset is read from the pixel center only where the device does as
-                // GLSL.std.450 states.
+                // GLSL.std.450 states; a module whose offsets are Metal's moved by 7/16 needs the
+                // device that reads them so.
                 if *op == GlslOp::InterpolateAtOffset {
-                    self.prop(VkProperty::InterpolateAtOffsetCentered);
+                    self.prop(if self.m.offsets_from_seven_sixteenths {
+                        VkProperty::InterpolateAtOffsetFromSevenSixteenths
+                    } else {
+                        VkProperty::InterpolateAtOffsetCentered
+                    });
                 }
             }
             Inst::RayQuery(RayQueryInst::Initialize { flags, .. }) => {

@@ -75,6 +75,8 @@ pub enum HandleKind {
     MeshGrid,
     /// A mesh function's output (`metal::mesh<..>`): a pointer in its own address space.
     Mesh,
+    /// A fragment function's `interpolant` input: `ptr addrspace(1)`.
+    Interpolant,
 }
 
 impl HandleKind {
@@ -88,7 +90,8 @@ impl HandleKind {
             | HandleKind::Command
             | HandleKind::ComputePipelineState
             | HandleKind::RenderPipelineState
-            | HandleKind::DepthStencilState => AddrSpace::Device,
+            | HandleKind::DepthStencilState
+            | HandleKind::Interpolant => AddrSpace::Device,
             HandleKind::Sampler => AddrSpace::Constant,
             HandleKind::Event => AddrSpace::Thread,
             HandleKind::MeshGrid => AddrSpace::Threadgroup,

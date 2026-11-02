@@ -423,6 +423,7 @@ pub(super) fn check_derived(m: &TypedModule) -> Result<(), VerifyError> {
         entry: &m.entry,
         enabling: &m.enabling,
         per_primitive: &m.per_primitive,
+        offsets_from_seven_sixteenths: m.offsets_from_seven_sixteenths,
     };
     if interface(&view)? != m.interface {
         return Err(Violation::InterfaceStale.into());

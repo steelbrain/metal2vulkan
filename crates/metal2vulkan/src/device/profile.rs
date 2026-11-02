@@ -339,6 +339,25 @@ impl DeviceProfile {
         }
     }
 
+    /// What this profile lacks of `GLSL.std.450`'s interpolation functions (the
+    /// `InterpolationFunction` capability: `InterpolateAtCentroid`, `InterpolateAtSample`,
+    /// `InterpolateAtOffset`): `sampleRateShading`, and on a portability-subset device
+    /// `shaderSampleRateInterpolationFunctions`, whichever are missing, in that order. Empty
+    /// exactly when a fragment function may read an `interpolant` at its centroid, a sample or an
+    /// offset (Metal's pull-model interpolation, `supportsPullModelInterpolation`).
+    pub fn interpolation_function_needs(&self) -> Vec<Capability> {
+        let f = &self.fields;
+        let mut needs = Vec::new();
+        if !f.fragment.sample_rate_shading {
+            needs.push(Capability::Feature(VkFeature::SampleRateShading));
+        }
+        let member = VkFeature::ShaderSampleRateInterpolationFunctions;
+        if f.enabled.portability_withholds(member) {
+            needs.push(Capability::Feature(member));
+        }
+        needs
+    }
+
     /// What this profile lacks of Profile A's device-address requirements: `bufferDeviceAddress`
     /// and `shaderInt64`, whichever are missing, in that order. Empty exactly when the profile
     /// reaches buffers by device address (Profile A). A Profile F refusal that device addresses

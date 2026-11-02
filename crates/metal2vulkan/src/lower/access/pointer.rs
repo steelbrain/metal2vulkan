@@ -229,6 +229,8 @@ fn unlowered(class: HandleClass) -> Option<Feature> {
     match class {
         HandleClass::Texture | HandleClass::Sampler | HandleClass::Event => None,
         HandleClass::MeshGrid | HandleClass::Mesh => Some(Feature::MeshShading),
+        // Read only as the interpolant of an interpolation function (`lower::stage_io`).
+        HandleClass::Interpolant => Some(Feature::PullModelInterpolation),
         HandleClass::AccelerationStructure => Some(Feature::RayTracing),
         HandleClass::FunctionTable => Some(Feature::DynamicCall),
         HandleClass::IntersectionTable => Some(Feature::IntersectionFunctionTable),

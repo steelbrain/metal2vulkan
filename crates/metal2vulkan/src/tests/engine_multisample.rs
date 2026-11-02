@@ -72,7 +72,7 @@ fn fixture() -> Option<Library> {
     library("multisample")
 }
 
-fn library(name: &str) -> Option<Library> {
+pub(super) fn library(name: &str) -> Option<Library> {
     match llvm_assemble(&engine_dir().join(format!("{name}.ll"))) {
         Ok(b) => Some(Library::from_air(&b).expect("library")),
         Err(AssembleError::Missing(why)) => {
@@ -83,7 +83,7 @@ fn library(name: &str) -> Option<Library> {
     }
 }
 
-fn description(stem: &str) -> DeviceDescription {
+pub(super) fn description(stem: &str) -> DeviceDescription {
     let path = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../metal2vulkan-validation/profiles")
         .join(format!("{stem}.json"));
@@ -92,7 +92,7 @@ fn description(stem: &str) -> DeviceDescription {
 }
 
 /// Every committed profile's stem, sorted.
-fn stems() -> Vec<String> {
+pub(super) fn stems() -> Vec<String> {
     let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../metal2vulkan-validation/profiles");
     let mut out: Vec<String> = std::fs::read_dir(&dir)
         .unwrap_or_else(|e| panic!("{}: {e}", dir.display()))
@@ -165,7 +165,7 @@ fn stage_io_render(lib: &Library, samples: u32) -> RenderPipelineDescriptor {
 }
 
 /// The `GLSL.std.450` instruction numbers of every `OpExtInst` in `words`.
-fn ext_insts(words: &[u32]) -> Vec<u32> {
+pub(super) fn ext_insts(words: &[u32]) -> Vec<u32> {
     let mut out = Vec::new();
     let mut i = 5;
     while let Some(&w) = words.get(i) {
@@ -182,7 +182,7 @@ fn ext_insts(words: &[u32]) -> Vec<u32> {
 }
 
 /// The fragment module of `p`.
-fn fragment_words(p: &RenderPipeline) -> &[u32] {
+pub(super) fn fragment_words(p: &RenderPipeline) -> &[u32] {
     &p.stages
         .iter()
         .find(|m| m.stage == crate::vk::ShaderStage::FRAGMENT)
@@ -191,7 +191,7 @@ fn fragment_words(p: &RenderPipeline) -> &[u32] {
 }
 
 /// L3 for every stage of `p` on `dev`.
-fn validate(p: &RenderPipeline, dev: &Device, what: &str) {
+pub(super) fn validate(p: &RenderPipeline, dev: &Device, what: &str) {
     for m in &p.stages {
         check_words_valid(&m.spirv, &p.requirements, dev.profile())
             .unwrap_or_else(|e| panic!("{what} {:?}: L3: {e}", m.stage));
@@ -217,7 +217,7 @@ const CENTERED: Capability = Capability::Property(VkProperty::InterpolateAtOffse
 
 /// Whether `dev` has the pixel form of a center varying: interpolation functions whose
 /// `InterpolateAtOffset` reads from the center.
-fn pixel_form(dev: &Device) -> bool {
+pub(super) fn pixel_form(dev: &Device) -> bool {
     let fields = dev.profile().fields();
     let withheld = fields
         .enabled
@@ -253,7 +253,7 @@ fn unmeasured_moltenvk() -> DeviceDescription {
 }
 
 /// Whether `dev` reads center varyings at the pixel center itself, as Metal does.
-fn reads_center_at_pixel(dev: &Device) -> bool {
+pub(super) fn reads_center_at_pixel(dev: &Device) -> bool {
     dev.profile()
         .fields()
         .enabled
@@ -819,7 +819,7 @@ fn a_center_varying_at_sample_rate_reads_as_it_is_where_the_driver_reads_it_at_t
 }
 
 /// The value of the planned specialization constant `key` of `p`.
-fn planned(p: &RenderPipeline, plan: &crate::bind::BindingPlan, key: SpecKey) -> u32 {
+pub(super) fn planned(p: &RenderPipeline, plan: &crate::bind::BindingPlan, key: SpecKey) -> u32 {
     let id = p
         .stages
         .iter()

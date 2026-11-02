@@ -629,6 +629,7 @@ impl<'a> Engine<'a> {
                 | AirIntrinsic::SimdgroupSize(_)
                 | AirIntrinsic::GlobalBuiltin(_)
                 | AirIntrinsic::FunctionConstant(_)
+                | AirIntrinsic::Interpolate(_)
                 | AirIntrinsic::AccelerationStructure(_) => false,
                 AirIntrinsic::Texture(t) => matches!(
                     t.op,

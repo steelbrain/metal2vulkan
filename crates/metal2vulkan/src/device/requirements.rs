@@ -562,7 +562,8 @@ pub enum VkProperty {
     /// `GLSL.std.450 InterpolateAtOffset` reads at the pixel center plus its offset, as
     /// GLSL.std.450 states. Every device has it but one whose description reports a MoltenVK
     /// driver, which reads 1/16 pixel off the center at any release. A module that uses the
-    /// instruction requires it.
+    /// instruction requires it, but one that requires
+    /// [`VkProperty::InterpolateAtOffsetFromSevenSixteenths`] instead.
     InterpolateAtOffsetCentered,
     /// The device runs each 32 consecutive invocations of a compute workgroup in lockstep, as an
     /// Apple GPU runs a Metal simdgroup (the driver's measured deviation
@@ -831,6 +832,14 @@ pub enum VkProperty {
     /// requires it, where no module does (the coverage is the pipeline's multisample state);
     /// without it, the pipeline's fragment stage records that note.
     MetalAlphaCoverage,
+    /// `GLSL.std.450 InterpolateAtOffset` at offset `v` reads Metal's `interpolate_at_offset` at
+    /// `v + 7/16`, measured from the pixel's upper-left corner: a device whose description reports
+    /// a MoltenVK driver, whose SPIRV-Cross hands the instruction to Metal so at any release
+    /// (`CompilerMSL`'s `GLSLstd450InterpolateAtOffset`, read in its source), where Metal reads at
+    /// the offset as given (the Apple M3 Max, macOS 27.0.1). No Vulkan query reports it. A module
+    /// that hands Metal's `interpolate_at_offset` to the instruction moved by 7/16 requires it in
+    /// place of [`VkProperty::InterpolateAtOffsetCentered`].
+    InterpolateAtOffsetFromSevenSixteenths,
 }
 
 /// One depth or stencil resolve mode (`VkResolveModeFlagBits`), named by

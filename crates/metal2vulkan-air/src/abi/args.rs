@@ -160,6 +160,8 @@ struct Attrs {
     sampling: Option<Sampling>,
     perspective: Option<bool>,
     flat: bool,
+    /// `air.interpolation_function`: an `interpolant`.
+    interpolant: bool,
     data_size: Option<u32>,
     /// The `air.imageblock_master` layout node, resolved by [`Node::layouts`].
     master: Option<MdId>,
@@ -212,10 +214,14 @@ impl Attrs {
 
     /// The interpolation keys, if any were given.
     fn interpolation(&self, site: &Site) -> Result<Option<Interpolation>, Error> {
-        let sampling = match (self.sampling, self.access) {
-            (Some(s), None) => Some(s),
-            (None, Some(Access::Sample)) => Some(Sampling::Sample),
-            (None, None) => None,
+        let sampling = match (self.sampling, self.access, self.interpolant) {
+            (Some(s), None, false) => Some(s),
+            (None, Some(Access::Sample), false) => Some(Sampling::Sample),
+            (None, None, true) => Some(Sampling::Interpolant),
+            (None, None, false) => None,
+            (_, _, true) => {
+                return Err(site.err(AbiError::BadValue, Some(Key::InterpolationFunction.name())))
+            }
             _ => return Err(site.err(AbiError::BadValue, Some(Key::Sample.name()))),
         };
         match (self.flat, sampling, self.perspective) {
@@ -526,6 +532,7 @@ impl<'m> Cx<'m, '_> {
                 Key::Perspective => set(&mut a.perspective, true, ops, k)?,
                 Key::NoPerspective => set(&mut a.perspective, false, ops, k)?,
                 Key::Flat => a.flat = true,
+                Key::InterpolationFunction => a.interpolant = true,
                 Key::ImageblockDataSize => a.data_size = Some(ops.u32(name)?),
                 Key::ImageblockMaster => {
                     a.master = Some(ops.child(name)?);
@@ -738,7 +745,11 @@ impl<'m> Cx<'m, '_> {
                 }
             }
             Key::FragmentInput if !indirect => {
-                a.allow(self.meter, site, &[INTERPOLATION])?;
+                a.allow(
+                    self.meter,
+                    site,
+                    &[INTERPOLATION, &[Key::InterpolationFunction]],
+                )?;
                 let key = kept_bytes(n.word.as_deref().unwrap_or_default(), self.meter)?;
                 ParamRole::FragmentInput(Varying {
                     key: UserKey(key),

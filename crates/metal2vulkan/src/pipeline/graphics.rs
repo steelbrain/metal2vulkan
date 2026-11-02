@@ -306,6 +306,14 @@ pub struct GraphicsState {
     /// attachments' states already draw them. `None` with the logic operation off, and for those.
     #[cfg_attr(feature = "serde", serde(default))]
     pub logic_op: Option<vk::LogicOp>,
+    /// The fragment function reads an `interpolant` at a sample it names (`interpolate_at_sample`,
+    /// an input of [`Sampling::Interpolant`](crate::pipeline::Sampling::Interpolant) with
+    /// `sample`): its module uses `GLSL.std.450 InterpolateAtSample`, which Vulkan takes in no
+    /// pipeline made with custom sample locations
+    /// (`VUID-VkGraphicsPipelineCreateInfo-sampleLocationsEnable-01524`), so the consumer draws it
+    /// only at the device's own sample positions.
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub interpolates_at_sample: bool,
 }
 
 /// What a consumer and the binder need of a tessellation pipeline.
@@ -500,6 +508,7 @@ impl GraphicsState {
             snapshot_reads: false,
             color_group: None,
             logic_op: None,
+            interpolates_at_sample: false,
         }
     }
 

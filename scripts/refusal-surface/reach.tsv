@@ -64,6 +64,7 @@ feature	DualSourceBlending	rare	dual-source blending on a device without it
 feature	Barycentrics	rare	barycentric coordinates
 feature	StencilExport	rare	stencil from the shader
 feature	SampleRateShading	rare	per-sample shading
+feature	PullModelInterpolation	rare	interpolant inputs read at the centroid, a sample or an offset
 feature	SamplePositions	rare	custom sample positions on a device that takes none at the pass's sample count
 feature	PixelCoverageAtSampleRate	rare	coverage read at sample rate
 feature	InterfaceComponents	rare	too many varyings or attachments for a device

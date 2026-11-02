@@ -840,7 +840,7 @@ fn route_air(cx: &SelectCx<'_>, op: &AirIntrinsic, decl: FuncId) -> Route {
         | A::SimdgroupSize(_)
         | A::SimdMatrix(_) => Route::Family(LowerFamily::Simd),
         A::Sync(_) | A::Derivative(_) => Route::Family(LowerFamily::Barrier),
-        A::Fragment(_) => Route::Family(LowerFamily::Fragment),
+        A::Fragment(_) | A::Interpolate(_) => Route::Family(LowerFamily::Fragment),
         // A read of an argument the function constants removed, which specialization made.
         A::FunctionConstant(
             FunctionConstant::AbsentRead(_) | FunctionConstant::AbsentMemory(_),

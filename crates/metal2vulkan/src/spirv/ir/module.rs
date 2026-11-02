@@ -1420,6 +1420,9 @@ pub struct TypedModule {
     /// User varyings decorated `PerPrimitiveEXT` (`ModuleBuilder::per_primitive`): a mesh entry's
     /// primitive outputs, and the fragment inputs that read them.
     pub(in crate::spirv) per_primitive: std::collections::BTreeSet<GlobalId>,
+    /// The `InterpolateAtOffset` offsets are Metal's moved by 7/16
+    /// (`ModuleBuilder::offsets_from_seven_sixteenths`).
+    pub(in crate::spirv) offsets_from_seven_sixteenths: bool,
     /// Resources decorated `Coherent`: every storage buffer and storage image resource of a
     /// module built with `ModuleBuilder::coherent_resources`.
     pub(in crate::spirv) coherent: std::collections::BTreeSet<GlobalId>,

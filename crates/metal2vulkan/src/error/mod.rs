@@ -1192,6 +1192,15 @@ pub enum Feature {
     StencilExport,
     /// Per-sample shading.
     SampleRateShading,
+    /// Metal's pull-model interpolation (`interpolant` fragment inputs and their
+    /// `interpolate_at_center`, `_centroid`, `_sample` and `_offset` functions) in a form not
+    /// lowered: an interpolant read other than as the interpolant of one of its functions (chosen
+    /// at run time, stored or passed on), or one a mesh function writes per primitive. On a device
+    /// without `sampleRateShading` (which the `InterpolationFunction` capability needs), refused as
+    /// needing it; on a driver whose interpolation needs the whole quad
+    /// (`DriverWorkaround::InterpolationNeedsTheWholeQuad`), a sample or offset read in control flow
+    /// some of the quad may have left is the driver's defect.
+    PullModelInterpolation,
     /// A render pass's custom sample positions (`setSamplePositions:count:`) on a device that
     /// takes no custom sample locations at the pass's sample count, which is the count the grid
     /// is programmed at (`VkProperty::SampleLocationSampleCount`, named by the refusal). Only the

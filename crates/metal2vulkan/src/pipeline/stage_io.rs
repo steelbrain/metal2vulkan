@@ -821,6 +821,37 @@ pub enum Sampling {
     Center,
     Centroid,
     Sample,
+    /// An `interpolant` (Metal's pull-model interpolation): declared without `Centroid` or
+    /// `Sample`, and read only through its interpolation functions, each where it says. `center`
+    /// and `centroid` say whether the function reads it at the pixel center
+    /// (`interpolate_at_center`), as a center-sampled input is read, and at the centroid
+    /// (`interpolate_at_centroid`), as a centroid-sampled one is; `sample`, whether it reads it at
+    /// a sample it names (`interpolate_at_sample`, `GLSL.std.450 InterpolateAtSample`).
+    Interpolant {
+        center: bool,
+        centroid: bool,
+        sample: bool,
+    },
+}
+
+impl Sampling {
+    /// Whether an input sampled so is read at the pixel center: a center-sampled input, or an
+    /// interpolant read there.
+    pub fn reads_center(self) -> bool {
+        matches!(
+            self,
+            Sampling::Center | Sampling::Interpolant { center: true, .. }
+        )
+    }
+
+    /// Whether an input sampled so is read at the centroid: a centroid-sampled input, or an
+    /// interpolant read there.
+    pub fn reads_centroid(self) -> bool {
+        matches!(
+            self,
+            Sampling::Centroid | Sampling::Interpolant { centroid: true, .. }
+        )
+    }
 }
 
 /// The declared type of an interface variable: `components` lanes (1–4) of `numeric`, each of

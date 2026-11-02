@@ -308,6 +308,8 @@ pub enum HandleClass {
     MeshGrid,
     /// A mesh function's output.
     Mesh,
+    /// A fragment function's `interpolant` input.
+    Interpolant,
 }
 
 impl HandleClass {
@@ -325,6 +327,7 @@ impl HandleClass {
             AbiHandle::DepthStencilState => HandleClass::DepthStencilState,
             AbiHandle::MeshGridProperties => HandleClass::MeshGrid,
             AbiHandle::Mesh => HandleClass::Mesh,
+            AbiHandle::Interpolant => HandleClass::Interpolant,
         }
     }
 
@@ -343,6 +346,7 @@ impl HandleClass {
             HandleKind::Event => HandleClass::Event,
             HandleKind::MeshGrid => HandleClass::MeshGrid,
             HandleKind::Mesh => HandleClass::Mesh,
+            HandleKind::Interpolant => HandleClass::Interpolant,
         }
     }
 }

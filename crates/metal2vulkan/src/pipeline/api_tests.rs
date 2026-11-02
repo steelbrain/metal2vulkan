@@ -686,6 +686,7 @@ mod serde_round_trips {
                 push_offset: 112,
                 primitive: crate::pipeline::BandPrimitive::Triangles,
             }),
+            interpolates_at_sample: true,
         });
         let mut slots = BTreeMap::new();
         slots.insert(

@@ -161,6 +161,7 @@ fn observes(callee: &Callee) -> bool {
         | AirIntrinsic::Intersect(_)
         | AirIntrinsic::Mesh(_) => true,
         AirIntrinsic::Fragment(Fragment::IsHelperThread)
+        | AirIntrinsic::Interpolate(_)
         | AirIntrinsic::Math(_)
         | AirIntrinsic::Convert(_)
         | AirIntrinsic::Pack(_)

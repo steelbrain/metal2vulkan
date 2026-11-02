@@ -714,6 +714,7 @@ pub fn graphics_state(
         // The pipeline's private logic operation, once compile decided it
         // (`private_state::logic_operation`).
         logic_op: None,
+        interpolates_at_sample: fs.is_some_and(|fs| interpolates_at_sample(&fs.io)),
     };
     // The sample count against the attachments' sample counts.
     state.sample_count_properties(&p.fields().enabled.properties)?;
@@ -764,6 +765,23 @@ fn reads_flat_inputs(io: &StageIo) -> bool {
         .any(|b| matches!(b, StageBuiltin::Layer | StageBuiltin::ViewportIndex))
 }
 
+/// Whether a fragment stage of interface `io` reads an interpolant at a sample it names
+/// (`GraphicsState::interpolates_at_sample`).
+fn interpolates_at_sample(io: &StageIo) -> bool {
+    io.inputs.iter().any(|v| {
+        matches!(
+            v.role,
+            IoRole::Varying {
+                interpolation: Some(Interpolation::Smooth {
+                    sampling: Sampling::Interpolant { sample: true, .. },
+                    ..
+                }),
+                ..
+            }
+        )
+    })
+}
+
 /// Refuse what a fragment stage `fs` of a multisampled pipeline reads of its coverage on a
 /// driver that rasterizes a clipped triangle as several
 /// ([`DriverWorkaround::ClippedTrianglesSplitPixelFragments`]): `[[sample_mask]]` and a centroid
@@ -797,12 +815,9 @@ fn split_pixel_fragments(
         matches!(
             v.role,
             IoRole::Varying {
-                interpolation: Some(Interpolation::Smooth {
-                    sampling: Sampling::Centroid,
-                    ..
-                }),
+                interpolation: Some(Interpolation::Smooth { sampling, .. }),
                 ..
-            }
+            } if sampling.reads_centroid()
         )
     });
     if centroid {
@@ -835,14 +850,15 @@ fn sample_invocations(
         return Ok(false);
     }
     let io = &fs.io;
-    // The barycentric weights' varyings are center varyings.
-    let interpolated = |at: Sampling| {
+    // The barycentric weights' varyings are center varyings, and an interpolant read at the
+    // center is read as one.
+    let interpolated = |reads: fn(Sampling) -> bool| {
         io.inputs.iter().any(|v| match v.role {
             IoRole::Varying {
                 interpolation: Some(Interpolation::Smooth { sampling, .. }),
                 ..
-            } => sampling == at,
-            IoRole::Barycentric { .. } => at == Sampling::Center,
+            } => reads(sampling),
+            IoRole::Barycentric { .. } => reads(Sampling::Center),
             _ => false,
         })
     };
@@ -863,7 +879,7 @@ fn sample_invocations(
     let sample_shading = fs.writes_memory;
     let per_sample = sample_shading
         || io.builtins.contains(&StageBuiltin::SampleId)
-        || interpolated(Sampling::Sample);
+        || interpolated(|s| s == Sampling::Sample);
     if !per_sample {
         return Ok(false);
     }
@@ -900,7 +916,7 @@ fn sample_invocations(
     // sample shading: they read where Vulkan evaluates them, within the pixel, as a pixel-rate
     // function's do, and the compile layer notes `PrecisionNote::MultisamplePosition` for them.
     let position = io.builtins.contains(&StageBuiltin::FragCoord);
-    let center = interpolated(Sampling::Center);
+    let center = interpolated(Sampling::reads_center);
     if !position && !center {
         return Ok(sample_shading);
     }

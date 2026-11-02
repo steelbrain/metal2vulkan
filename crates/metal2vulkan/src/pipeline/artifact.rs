@@ -731,9 +731,11 @@ pub enum PrecisionNote {
     /// interpolated depth and `1/w`, whose position Vulkan does not state), a center-sampled
     /// varying on a device without its pixel form (interpolation functions whose
     /// `InterpolateAtOffset` reads from the pixel center: "an implementation-defined position
-    /// within the fragment area being shaded"), a centroid varying (anywhere in the fragment's
-    /// covered area, where Metal, measured on Apple M3 Max, moves it to a covered sample's location
-    /// only under partial coverage), `[[point_coord]]` ("the fragment center, or the location of a
+    /// within the fragment area being shaded"), a centroid varying or an `interpolant` read through
+    /// `interpolate_at_centroid` (anywhere in the fragment's covered area, where Metal, measured on
+    /// Apple M3 Max, moves it to the location of the lowest covered sample only under partial
+    /// coverage), an `interpolant` read through `interpolate_at_center` as a center varying,
+    /// `[[point_coord]]` ("the fragment center, or the location of a
     /// sample"), or `[[barycentric_coord]]` (its builtin; the varying form without
     /// `fragmentShaderBarycentric` is read at the pixel center, as a center varying). A function
     /// that runs per sample under sample shading reads all but the center varying (which link
@@ -1984,6 +1986,24 @@ pub enum PrecisionNote {
     /// fast math at four lanes; under fast math Metal regroups the blend, unmeasured.
     /// Validation derives no tolerance from it.
     UnmeasuredFetchBlend,
+    /// A fragment function reads an `interpolant` through `interpolate_at_offset(offset)`, which
+    /// Metal evaluates at the offset as given from the pixel's upper-left corner, at any distance
+    /// and on no grid (the Apple M3 Max, macOS 27.0.1: an offset of 0.999 read at 0.999, one of
+    /// `1e9` extrapolated to `1e9`, every step of a 1/512-pixel sweep a step of its own, a NaN or
+    /// infinite offset NaN). The module reads `GLSL.std.450 InterpolateAtOffset` at the offset
+    /// moved to the device's origin (the pixel center, less a half; on MoltenVK, whose
+    /// SPIRV-Cross hands the offset to Metal plus 7/16, less 7/16), clamped to the device's
+    /// `[minInterpolationOffset, maxInterpolationOffset]`, which Vulkan requires
+    /// (`VUID-RuntimeSpirv-Offset-06344` to `-06347`), a NaN to the minimum. The device then
+    /// rounds the offset to its `subPixelInterpolationOffsetBits` (at least 4: sixteenths), so the
+    /// read lies within half a step of Metal's where the offset is in range, and at the range's
+    /// nearer end where it is not (Metal: past the pixel, or NaN). On MoltenVK, where Metal reads
+    /// the offset itself, the read is Metal's within the range (`[-1/16, 15/16]` from the corner
+    /// on the M3 Max, whose limits are `[-0.5, 0.5]`).
+    ///
+    /// Validation derives no tolerance and no explanation from it: a difference stays a
+    /// mismatch for review.
+    DeviceInterpolationOffset,
 }
 
 /// The math mode of an entry's module, which decides, on a device whose `float` functions are

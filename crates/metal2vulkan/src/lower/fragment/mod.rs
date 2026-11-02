@@ -49,6 +49,9 @@
 //!   in which, in the draw that takes the snapshot, each non-helper fragment copies its pixel's
 //!   texel, and that draw returns after it; in the draw that reads it, each read of the slot reads
 //!   the snapshot, and a helper reads 0. The body runs outside the critical section.
+//! - **Pull-model interpolation** (`interpolate`): each `interpolate_at_*` call of an
+//!   `interpolant` reads the interpolant's variable where it says (`stage_io::interpolate`); the
+//!   interpolant itself is planned by `lower::stage_io`.
 //! - Refused: the `uint2` overloads of `map_screen_to_physical_coordinates` and its inverse
 //!   (canon compiles the `float2` ones to the rate map's decoder; no reading of the
 //!   physical-to-screen `uint2` one is established).
@@ -60,6 +63,7 @@ mod discard;
 pub(crate) mod fetch;
 mod imageblock;
 mod input_blend;
+mod interpolate;
 mod rog;
 mod snapshot;
 mod stencil;
@@ -134,6 +138,8 @@ pub enum FragmentStrategy {
     /// `OpIsHelperInvocationEXT` where a discard demotes, else the `HelperInvocation` input, or a
     /// predicated discard's `discarded`; `false` in every other stage, as Metal answers there.
     IsHelperThread,
+    /// An interpolation function of an `interpolant` (`stage_io::interpolate`).
+    Interpolate(crate::lower::stage_io::InterpolantRead),
 }
 
 impl FamilyStrategy for FragmentStrategy {
@@ -145,6 +151,7 @@ impl FamilyStrategy for FragmentStrategy {
             FragmentStrategy::Discard => "fragment.discard",
             FragmentStrategy::NumSamples(_) => "fragment.num_samples",
             FragmentStrategy::IsHelperThread => "fragment.is_helper_thread",
+            FragmentStrategy::Interpolate(_) => "fragment.interpolate",
         })
     }
 
@@ -157,6 +164,9 @@ impl FamilyStrategy for FragmentStrategy {
             FragmentStrategy::Discard => 24,
             FragmentStrategy::NumSamples(_) => 16,
             FragmentStrategy::IsHelperThread => 32,
+            // An offset's move and clamp, and their constants, or a sample's mask; the read is
+            // the parameter's use (`stage_io`).
+            FragmentStrategy::Interpolate(_) => 32,
         }
     }
 }
@@ -929,12 +939,16 @@ pub fn select(cx: &mut SelectCx<'_>, at: InstId, inst: &Inst) -> Result<Fragment
     let InstKind::Call(call) = &inst.kind else {
         return Err(cx.invariant("a non-call routed to the fragment family"));
     };
-    let Callee::Air {
-        op: AirIntrinsic::Fragment(op),
-        ..
-    } = &call.callee
-    else {
-        return Err(cx.invariant("a call routed to the fragment family is no fragment op"));
+    let op = match &call.callee {
+        Callee::Air {
+            op: AirIntrinsic::Fragment(op),
+            ..
+        } => op,
+        Callee::Air {
+            op: AirIntrinsic::Interpolate(i),
+            ..
+        } => return interpolate::select(cx, i, &call.args),
+        _ => return Err(cx.invariant("a call routed to the fragment family is no fragment op")),
     };
     match op {
         Fragment::Discard if cx.stage == Stage::Fragment => {
@@ -995,6 +1009,14 @@ pub fn emit(
     s: &FragmentStrategy,
 ) -> BResult<()> {
     match s {
+        FragmentStrategy::Interpolate(read) => {
+            let Some(result) = cx.plan.values.inst(at) else {
+                return Err(cx.fail(format!("{at:?} is out of range")));
+            };
+            let x = crate::lower::stage_io::interpolate(cx, fb, read)?;
+            cx.define(result, x);
+            Ok(())
+        }
         FragmentStrategy::IsHelperThread => {
             let Some(result) = cx.plan.values.inst(at) else {
                 return Err(cx.fail(format!("{at:?} is out of range")));

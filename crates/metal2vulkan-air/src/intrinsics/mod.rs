@@ -22,9 +22,9 @@
 //! seed memory's provenance lattice. Families decoded here: math, conversions and packing, memory
 //! atomics and coherent accesses, derivatives, textures and samplers, barriers and fences,
 //! simdgroup and quad operations, simdgroup matrices, function constants, fragment operations,
-//! imageblocks, async copies, function tables, acceleration-structure queries, ray intersection
-//! (`air.intersect`), tensor descriptors, indirect commands, and the closed `llvm.*` set with the
-//! AGX family. Every other `air.*` name (names whose declarations have not been observed) stays
+//! pull-model interpolation, imageblocks, async copies, function tables, acceleration-structure
+//! queries, ray intersection (`air.intersect`), tensor descriptors, indirect commands, and the
+//! closed `llvm.*` set with the AGX family. Every other `air.*` name (names whose declarations have not been observed) stays
 //! unknown. [`UNDECODED`] lists the known families among them, and the intrinsic census of the
 //! `bitcode-reader` audit reports every unknown name with row counts. [`UNDECODED_FEATURES`] names
 //! the undecoded families that belong to a typed feature not implemented yet (intersection function
@@ -73,6 +73,7 @@ pub use simd::{Group, GroupOp, GroupScope, IsUniform, SimdgroupSize};
 pub use stage::Imageblock;
 pub use stage::{AbsentAccess, BoolReduce, Derivative, DerivativeOp, Fragment, FunctionConstant};
 pub use stage::{GlobalBuiltin, GlobalVar};
+pub use stage::{Interpolate, InterpolateAt};
 pub use sync::{BarrierName, MemFlags, Sync};
 #[cfg(test)]
 pub use texture::{Access, Form};
@@ -122,6 +123,9 @@ pub enum AirIntrinsic {
     FunctionConstant(FunctionConstant),
     /// A fragment operation: a discard, a rate-map coordinate mapping, or the sample count.
     Fragment(Fragment),
+    /// `air.interpolate_<at>_<perspective>.<type>`: an interpolation function of an
+    /// `interpolant` fragment input (Metal's pull-model interpolation).
+    Interpolate(Interpolate),
     /// An imageblock operation: its data pointer, its size, or an implicit-imageblock load or
     /// store.
     Imageblock(Imageblock),
@@ -187,6 +191,7 @@ impl AirIntrinsic {
             .or_else(|| SimdMatrix::parse(rest).map(A::SimdMatrix))
             .or_else(|| FunctionConstant::parse(rest).map(A::FunctionConstant))
             .or_else(|| Fragment::parse(rest).map(A::Fragment))
+            .or_else(|| Interpolate::parse(rest).map(A::Interpolate))
             .or_else(|| AsyncCopy::parse(rest).map(A::AsyncCopy))
             .or_else(|| FunctionTable::parse(rest).map(A::FunctionTable))
             .or_else(|| AccelerationStructure::parse(rest).map(A::AccelerationStructure))
@@ -232,6 +237,7 @@ impl AirIntrinsic {
             AirIntrinsic::SimdMatrix(m) => m.signature(),
             AirIntrinsic::FunctionConstant(f) => f.signature(),
             AirIntrinsic::Fragment(f) => f.signature(),
+            AirIntrinsic::Interpolate(i) => i.signature(),
             AirIntrinsic::Imageblock(i) => i.signature(),
             AirIntrinsic::AsyncCopy(a) => a.signature(),
             AirIntrinsic::FunctionTable(f) => f.signature(),
