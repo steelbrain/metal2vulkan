@@ -847,6 +847,20 @@ pub enum DriverDeviation {
     /// the module requires the property. The sRGB format, `unorm10a2` in `float`, `snorm10a2`, and
     /// the `half` unpacks of `unorm2x16` and `snorm2x16` stay noted. Unmeasured, each records it.
     MetalPackConversions,
+    /// The device's conversion of a 32-bit float to 16 bits, `OpFConvert` (MSL's `half(x)`
+    /// through MoltenVK), answers Metal's (`VkProperty::MetalHalfConversion`): Metal's
+    /// `half(float)` (to nearest even on the `half` grid, `half` denormals kept, infinity from
+    /// 65520 up) of every `float` a function converts, whatever instruction computed it, and,
+    /// where the `float` is an image instruction's texel, Metal's own `half` result of that access,
+    /// into which Metal's compiler folds the conversion. Where the profile takes it, a module whose
+    /// every `half` rounding through that conversion (`QuantizeForm::Converted`) is a conversion of
+    /// a `float` the function holds (an AIR `fptrunc` or `air.convert` from `float`) or of a texel
+    /// an image instruction hands back records no `PrecisionNote::NativeHalfConversion` and
+    /// requires the property. A `half` a function or an operation computes in `float` and rounds
+    /// keeps the note on every profile: Metal computes it otherwise (its `half` `tanh` answers 7
+    /// of the 65,536 `half`s otherwise than the nearest even `half` of its `float` `tanh`, which the
+    /// device's conversion answers). Unmeasured, each records it.
+    MetalHalfConversion,
 }
 
 /// A defect of a device's driver in a command the runtime records for itself, never in a

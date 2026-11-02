@@ -431,6 +431,24 @@ pub(crate) fn among<F: Copy + Ord>(
 /// unpacks of `unorm2x16` and `snorm2x16` (8 lanes, a `float` quotient rounded twice);
 /// `snorm10a2` is unmeasured. One row per GPU, as measured.
 ///
+/// `MetalHalfConversion`: MoltenVK 1.4.2 writes `OpFConvert` from 32 to 16 bits as Metal's
+/// `half(x)`, and Metal's compiler folds the conversion of an image instruction's `float` texel
+/// into the access. On the M3 Max under macOS 27.0.1 (2026-11-03), word for word against plain
+/// Metal, with and without fast math: the conversion of a `float` loaded (425,216 words: every
+/// `half`'s value, each midpoint between two `half`s and the `float`s either side of it, values
+/// inside each interval, the overflow edge, the `half` denormals' range and below it, NaNs and
+/// random words, both signs), of a sum, a product and a quotient of two (144,896 pairs each, built
+/// to land on and beside the `half` ties), of a fused multiply-add (123,648) and of an integer's
+/// quotient (190,208): none differs. Nor does the `half` result of a `read()`, a nearest sample at
+/// the texel's centre, a linear sample a quarter texel off it and a gather of every texel of
+/// `RGBA32Float` (every `float` word above), `RGBA16Float` (every `half`), `RGBA8Unorm`, its sRGB
+/// twin, `RGBA8Snorm`, `RGBA16Unorm` and `RGBA16Snorm` (every code), `RGB10A2Unorm` (every code)
+/// and `RG11B10Float` and `RGB9E5Float` (16,384 random words each). Measured to differ, so outside
+/// it: Metal's `half` `tanh`, which answers 7 of the 65,536 `half`s otherwise than the nearest
+/// even `half` of its `float` `tanh`; `exp`, `sqrt` and a reciprocal on `half` matched, but each is
+/// a function or an operation computed otherwise than by the conversion, so it stays noted
+/// (`narrow::rounds_unmeasured`). One row per GPU, as measured.
+///
 /// Another driver has none of them, as Vulkan states, and a listed driver on another vendor's GPU
 /// (or another GPU than a row's) is unmeasured: the profile then takes each one's route without
 /// it, which the deviation's docs name (`derive.rs`).
@@ -624,6 +642,10 @@ pub(crate) const DEVIATIONS: &[Measured<DriverDeviation>] = &[
     Measured {
         device: Some(APPLE9),
         ..moltenvk_on_apple(DriverDeviation::MetalPackConversions)
+    },
+    Measured {
+        device: Some(APPLE9),
+        ..moltenvk_on_apple(DriverDeviation::MetalHalfConversion)
     },
 ];
 

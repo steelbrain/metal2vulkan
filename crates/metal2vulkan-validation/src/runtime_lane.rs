@@ -473,6 +473,8 @@ mod guarded_effects;
 #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd), target_os = "linux"))]
 mod guest_frame_costs;
 #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+mod half_conversions;
+#[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
 mod half_output_blends;
 #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
 mod half_read_nans;

@@ -1742,6 +1742,17 @@ pub enum PrecisionNote {
     ///   computed `half` NaN is `0x7FFF` (where 18 C3 cases differed in NaNs, signs of zero,
     ///   `atan2` and `pow` at special operands, and `half` texel and pack conversions).
     ///
+    /// Not recorded for that rounding on a profile that takes
+    /// [`DriverDeviation::MetalHalfConversion`](crate::error::DriverDeviation::MetalHalfConversion)
+    /// (MoltenVK on the Apple M3 Max's macOS 27 identity) where every `half` the module rounds
+    /// through the conversion is a conversion of a `float` the function holds (an AIR `fptrunc` or
+    /// `air.convert` from `float`, whatever computed the `float`) or of a texel an image instruction
+    /// hands back, measured to answer Metal's there; the module then requires
+    /// `VkProperty::MetalHalfConversion`. A `half` operation or function the module computes in
+    /// `float` and rounds keeps it there too (Metal's `half` `tanh` answers 7 of the 65,536
+    /// `half`s otherwise than the conversion of its `float` `tanh`), as do a texel the module
+    /// decodes itself and every other rounding (`lower::arith::narrow::rounds_unmeasured`).
+    ///
     /// Every `half` a module reads from its bits (a load, a reinterpretation, a texel's bits) is
     /// the device's widening of them, on every device: an `OpFConvert` to 32 bits of the bits read
     /// as a 16-bit float with `shaderFloat16`, `GLSL.std.450 UnpackHalf2x16` of them without it.

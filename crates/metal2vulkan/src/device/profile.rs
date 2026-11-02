@@ -343,6 +343,10 @@ impl DeviceProfile {
                 .enabled
                 .properties
                 .contains(&VkProperty::MetalPackConversions),
+            DriverDeviation::MetalHalfConversion => f
+                .enabled
+                .properties
+                .contains(&VkProperty::MetalHalfConversion),
         }
     }
 

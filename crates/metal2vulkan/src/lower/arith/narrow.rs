@@ -166,6 +166,11 @@ pub fn native_rounding(form: QuantizeForm) -> Option<PrecisionNote> {
 /// rounded at all (the note's stated bound), and the store's conversion to bits rounds it
 /// ([`converted_bits`]).
 fn converted(fb: &mut FunctionBuilder<'_>, wide: Form, x: Value) -> BResult<Value> {
+    converted_pair(fb, wide, x).map(|(_, w)| w)
+}
+
+/// [`converted`]'s pair: the narrowing to 16 bits and its widening back.
+fn converted_pair(fb: &mut FunctionBuilder<'_>, wide: Form, x: Value) -> BResult<(Value, Value)> {
     let e = fb.module().ty(Type::Float { width: 16 })?;
     let h = match wide.lanes {
         1 => e,
@@ -173,7 +178,25 @@ fn converted(fb: &mut FunctionBuilder<'_>, wide: Form, x: Value) -> BResult<Valu
     };
     let w = ty(fb, wide)?;
     let n = fb.convert(ConvOp::FConvert, x, h)?;
-    fb.convert(ConvOp::FConvert, n, w)
+    Ok((n, fb.convert(ConvOp::FConvert, n, w)?))
+}
+
+/// [`round`] of a `float` the function holds to `half` (an AIR `fptrunc` or `air.convert` of a
+/// `float`, [`resize`]): the conversion Metal's compiler compiles from the AIR's own, which
+/// `DriverDeviation::MetalHalfConversion` measures to be Metal's `half(float)` whatever computed
+/// the `float` ([`rounds_unmeasured`]). In [`QuantizeForm::Converted`] the pair's narrowing is
+/// recorded as measured (`ModuleBuilder::note_measured_rounding`); every other form rounds as
+/// [`round`] does. A `half` an operation or a function computes in `float` is not this form:
+/// Metal computes it otherwise (its `half` `tanh`), and it takes [`round`].
+pub fn round_measured(fb: &mut FunctionBuilder<'_>, f: Form, x: Value) -> BResult<Value> {
+    match (f.held, fb.module().quantize_form()) {
+        (Held::Float(FloatFmt::Half), QuantizeForm::Converted) => {
+            let (n, w) = converted_pair(fb, f.with(Held::Float(FloatFmt::F32)), x)?;
+            fb.module().note_measured_rounding(n);
+            Ok(w)
+        }
+        _ => round(fb, f, x),
+    }
 }
 
 /// `x` (`f32` lanes of form `wide`) rounded to `half` by the device's conversion to 16 bits and
@@ -303,6 +326,112 @@ pub fn rounds_by_conversion(m: &TypedModule, meter: &mut Meter) -> Result<bool, 
     let found = any && fconverts().any(|(a, r)| is_narrowed(a) && width(r) == Some(32));
     drop(narrowed);
     meter.release(8 * words);
+    Ok(found)
+}
+
+/// Whether module `m` rounds a `half` through [`converted`] in a form
+/// `DriverDeviation::MetalHalfConversion` does not measure: a conversion pair (an `OpFConvert` of
+/// an `f32` to 16 bits whose result another widens back, as [`rounds_by_conversion`] finds them)
+/// whose narrowing is neither recorded as measured ([`round_measured`]) nor of a texel an image
+/// instruction hands back. A texel's pair is one whose `f32` is an image read, fetch, sample or
+/// gather's result (or a member of a sparse one's), or a parameter of a function every call of
+/// which passes such a texel there (the `half` texel routine, `texture::half`): Metal's compiler
+/// folds such a conversion into the image instruction, whose `half` is Metal's own. One pass over
+/// the instructions to find each value's definition, two over the conversions, and one over the
+/// calls of each routine a pair narrows a parameter of, with a word and a bit per value of the
+/// module charged to `meter` while they run.
+pub fn rounds_unmeasured(m: &TypedModule, meter: &mut Meter) -> Result<bool, Error> {
+    let width = |v: Value| -> Option<u8> {
+        let ty = m.value(v).ok()?.ty;
+        let ty = match m.types().get(ty).ok()? {
+            Type::Vector { elem, .. } => *elem,
+            _ => ty,
+        };
+        match m.types().get(ty).ok()? {
+            Type::Float { width } => Some(*width),
+            _ => None,
+        }
+    };
+    let words = m.values().len().div_ceil(64);
+    let bytes = 8 * m.values().len() + 8 * words;
+    meter.charge(bytes)?;
+    // Each instruction result's definition.
+    let mut def: Vec<Option<&Inst>> = vec![None; m.values().len()];
+    for n in m.blocks().iter().flat_map(|b| &b.insts) {
+        if let Some(slot) = n.result.and_then(|r| def.get_mut(r.index())) {
+            *slot = Some(&n.inst);
+        }
+    }
+    let image = |v: Value| -> bool {
+        let at = |v: Value| def.get(v.index()).copied().flatten();
+        let direct = |i: Option<&Inst>| {
+            matches!(
+                i,
+                Some(
+                    Inst::ImageFetch { .. }
+                        | Inst::ImageRead { .. }
+                        | Inst::ImageSample { .. }
+                        | Inst::ImageGather { .. }
+                        | Inst::ImageDrefGather { .. }
+                )
+            )
+        };
+        match at(v) {
+            Some(Inst::CompositeExtract { composite, .. }) => direct(at(*composite)),
+            i => direct(i),
+        }
+    };
+    let texel = |v: Value| -> bool {
+        if image(v) {
+            return true;
+        }
+        let Ok(ValueOrigin::Param { func, index }) = m.value(v).map(|d| d.origin) else {
+            return false;
+        };
+        let mut calls = m
+            .blocks()
+            .iter()
+            .flat_map(|b| &b.insts)
+            .filter_map(|n| match &n.inst {
+                Inst::Call { func: f, args } if *f == func => Some(args),
+                _ => None,
+            })
+            .peekable();
+        calls.peek().is_some()
+            && calls.all(|args| args.get(index as usize).is_some_and(|&a| image(a)))
+    };
+    let fconverts = || {
+        m.blocks()
+            .iter()
+            .flat_map(|b| &b.insts)
+            .filter_map(|n| match (&n.inst, n.result) {
+                (
+                    Inst::Convert {
+                        op: ConvOp::FConvert,
+                        a,
+                        ..
+                    },
+                    Some(r),
+                ) => Some((*a, r)),
+                _ => None,
+            })
+    };
+    // The narrowings some conversion widens back.
+    let mut widened = vec![0u64; words];
+    for (a, r) in fconverts() {
+        if width(a) == Some(16) && width(r) == Some(32) {
+            set_bit(&mut widened, a);
+        }
+    }
+    let found = fconverts().any(|(a, r)| {
+        width(a) == Some(32)
+            && width(r) == Some(16)
+            && has_bit(&widened, r)
+            && !m.measured_roundings().contains(&r)
+            && !texel(a)
+    });
+    drop((def, widened));
+    meter.release(bytes);
     Ok(found)
 }
 
@@ -1802,6 +1931,8 @@ pub fn resize(fb: &mut FunctionBuilder<'_>, from: Form, to: Form, x: Value) -> B
     );
     if widening {
         Ok(x)
+    } else if (src, dst) == (FloatFmt::F32, FloatFmt::Half) {
+        round_measured(fb, to, x)
     } else {
         round(fb, to, x)
     }

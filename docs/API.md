@@ -3456,7 +3456,15 @@ bound.
   is the device's narrowing, and that conversion is neither under those controls nor measured to be
   Metal's: the conversion on NVIDIA and lavapipe, and `GLSL.std.450 UnpackHalf2x16` and
   `PackHalf2x16` on every device without `shaderFloat16`. A half denormal may read or encode as the
-  zero of its sign.
+  zero of its sign. **Exempt:** on a profile that takes `DriverDeviation::MetalHalfConversion`,
+  MoltenVK on Apple's GPUs of the Apple M3 Max's macOS 27 identity, a module whose every `half`
+  rounded through the conversion converts a `float` the function holds (an AIR `fptrunc` or
+  `air.convert` from `float`) or an image instruction's texel records no note for that rounding and
+  requires `VkProperty::MetalHalfConversion`: measured word for word against plain Metal, with and
+  without fast math, over 1,173,760 `float`s loaded, summed, multiplied, divided and fused, an
+  integer's quotient, and every texel of ten formats read, sampled and gathered as `half`. A `half`
+  operation or function computed in `float` and rounded keeps the note (Metal's `half` `tanh`
+  answers 7 of the 65,536 `half`s otherwise).
 - `metal2vulkan-degrade-native-half-quantize` (precision). `PrecisionNote::NativeHalfQuantize`:
   Native half rounding (a quantize): the module rounds a `half` result it computes in `float` (a
   `half` operation's, a function's, a conversion from `float`'s, a texel's) by the device's

@@ -12988,6 +12988,7 @@ variant	metal2vulkan::device::VkProperty::MetalFragmentSimdgroups	MetalFragmentS
 variant	metal2vulkan::device::VkProperty::MetalFullQuads	MetalFullQuads
 variant	metal2vulkan::device::VkProperty::MetalHalfArithmetic	MetalHalfArithmetic
 variant	metal2vulkan::device::VkProperty::MetalHalfColorNans	MetalHalfColorNans
+variant	metal2vulkan::device::VkProperty::MetalHalfConversion	MetalHalfConversion
 variant	metal2vulkan::device::VkProperty::MetalHalfFma	MetalHalfFma
 variant	metal2vulkan::device::VkProperty::MetalHalfStorageNans	MetalHalfStorageNans
 variant	metal2vulkan::device::VkProperty::MetalHalfStorageWrites	MetalHalfStorageWrites
@@ -13147,6 +13148,7 @@ variant	metal2vulkan::error::DriverDeviation::MetalFragmentSimdgroups	MetalFragm
 variant	metal2vulkan::error::DriverDeviation::MetalFullQuads	MetalFullQuads
 variant	metal2vulkan::error::DriverDeviation::MetalHalfArithmetic	MetalHalfArithmetic
 variant	metal2vulkan::error::DriverDeviation::MetalHalfColorNans	MetalHalfColorNans
+variant	metal2vulkan::error::DriverDeviation::MetalHalfConversion	MetalHalfConversion
 variant	metal2vulkan::error::DriverDeviation::MetalHalfFma	MetalHalfFma
 variant	metal2vulkan::error::DriverDeviation::MetalHalfStorageNans	MetalHalfStorageNans
 variant	metal2vulkan::error::DriverDeviation::MetalHalfStorageWrites	MetalHalfStorageWrites

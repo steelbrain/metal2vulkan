@@ -1434,6 +1434,10 @@ pub struct TypedModule {
     /// The values decorated `NonUniform`: every result that carries a non-uniform descriptor
     /// element ([`Inst::carries_non_uniform`]), recorded as the builder appends it.
     pub(in crate::spirv) non_uniform: std::collections::BTreeSet<Value>,
+    /// The narrowings to 16 bits of the conversion pairs that round a `half` in a form measured
+    /// to answer Metal's where the driver takes `DriverDeviation::MetalHalfConversion`
+    /// (`ModuleBuilder::measured_roundings`), recorded as the builder emits them.
+    pub(in crate::spirv) measured_roundings: std::collections::BTreeSet<Value>,
     /// The `Function` variables the emitter holds workgroup uniform by construction: the `cont`
     /// flag of a predicated loop that iterates together, which the lowering's uniformity analysis
     /// proved. An in-memory record for checks (`spirv::testing::barriers`), kept only where they
@@ -1457,6 +1461,12 @@ impl TypedModule {
     /// The constant table.
     pub fn consts(&self) -> &Consts {
         &self.consts
+    }
+
+    /// The narrowings to 16 bits of the conversion pairs that round a `half` in a form measured to
+    /// answer Metal's (`ModuleBuilder::note_measured_rounding`).
+    pub fn measured_roundings(&self) -> &std::collections::BTreeSet<Value> {
+        &self.measured_roundings
     }
 
     /// The SSA value of a constant.

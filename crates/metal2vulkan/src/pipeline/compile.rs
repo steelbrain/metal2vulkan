@@ -2667,9 +2667,15 @@ fn compile_kept<K>(
     let device_quantize = quantize == crate::spirv::builder::QuantizeForm::Device
         && crate::lower::arith::narrow::quantizes(&module);
     // A `half` rounded through the device's conversion to 16 bits and back, with no quantize: the
-    // module records the native note.
+    // module records the native note, but where the device's conversion is measured to answer
+    // Metal's (`DriverDeviation::MetalHalfConversion`) and every such rounding is of a form the
+    // measurement covers (a `float` the function converts, or an image instruction's texel),
+    // which the module then requires.
     let converts = quantize == crate::spirv::builder::QuantizeForm::Converted
         && crate::lower::arith::narrow::rounds_by_conversion(&module, m)?;
+    let measured_conversion = converts
+        && p.takes_driver_deviation(crate::error::DriverDeviation::MetalHalfConversion)
+        && !crate::lower::arith::narrow::rounds_unmeasured(&module, m)?;
     // A `half` read from its bits by the device's widening, or encoded to them by its narrowing
     // (every profile: `OpFConvert` with `shaderFloat16`, `UnpackHalf2x16` and `PackHalf2x16`
     // without): a NaN's bits are the device's, recorded. Under the float controls its denormals
@@ -2717,7 +2723,7 @@ fn compile_kept<K>(
         ),
         (device_quantize, PrecisionNote::NativeHalfQuantize),
         (
-            converts || native_widening,
+            (converts && !measured_conversion) || native_widening,
             PrecisionNote::NativeHalfConversion,
         ),
     ];
@@ -2807,6 +2813,12 @@ fn compile_kept<K>(
         requirements
             .properties
             .insert(crate::device::requirements::VkProperty::MetalNanMoves);
+    }
+    // A `half` rounded by the device's conversion with no note because it is Metal's.
+    if measured_conversion {
+        requirements
+            .properties
+            .insert(crate::device::requirements::VkProperty::MetalHalfConversion);
     }
     // A packed format's conversion left to the device with no note because it is Metal's.
     if plan.families.arith.metal_packs {

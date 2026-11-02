@@ -849,6 +849,16 @@ pub enum VkProperty {
     /// [`PrecisionNote::DevicePackConversion`](crate::pipeline::PrecisionNote::DevicePackConversion)
     /// for it requires it.
     MetalPackConversions,
+    /// The device's conversion of a 32-bit float to 16 bits answers Metal's `half(float)` where
+    /// the module converts a `float` it holds, and Metal's own `half` texel where the `float` is
+    /// an image instruction's texel (the driver's measured deviation
+    /// [`DriverDeviation::MetalHalfConversion`](crate::error::DriverDeviation::MetalHalfConversion)).
+    /// No Vulkan query reports it: without the float controls Vulkan leaves the conversion's
+    /// rounding to the device. A module that rounds a `half` through that conversion in those
+    /// forms alone records no
+    /// [`PrecisionNote::NativeHalfConversion`](crate::pipeline::PrecisionNote::NativeHalfConversion)
+    /// and requires it.
+    MetalHalfConversion,
     /// `GLSL.std.450 InterpolateAtOffset` at offset `v` reads Metal's `interpolate_at_offset` at
     /// `v + 7/16`, measured from the pixel's upper-left corner: a device whose description reports
     /// a MoltenVK driver, whose SPIRV-Cross hands the instruction to Metal so at any release

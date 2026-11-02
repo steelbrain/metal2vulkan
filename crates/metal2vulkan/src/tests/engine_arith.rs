@@ -3966,6 +3966,101 @@ fn pack_conversions_are_metals_where_measured() {
     }
 }
 
+/// A `half` rounded from a `float` the function holds, by an AIR `fptrunc` of a sum, a product, a
+/// quotient or a fused multiply-add, records no `NativeHalfConversion` on a profile that takes
+/// `DriverDeviation::MetalHalfConversion` (`moltenvk-m3`), and the module requires
+/// `VkProperty::MetalHalfConversion`; without the deviation (the same profile with it dropped) each
+/// records the note and requires nothing. A `half` function the lowering computes in `float` and
+/// rounds through the conversion keeps the note there, as on every profile: Metal computes it
+/// otherwise.
+#[test]
+fn half_conversions_are_metals_where_measured() {
+    use crate::device::requirements::VkProperty;
+    use crate::error::DriverDeviation;
+    let halves = |x: &str| {
+        format!(
+            "  %h = fptrunc float {x} to half\n  %hb = bitcast half %h to i16\n  %r = zext i16 %hb to i32\n"
+        )
+    };
+    let two = format!("{}{}", of("a", 0.3), of("b", 1.7));
+    // (name, body, whether the rounding converts a `float` the function holds alone).
+    let cases = [
+        ("conv_sum", format!("{two}  %s = fadd float %a, %b\n{}", halves("%s")), true),
+        ("conv_product", format!("{two}  %s = fmul float %a, %b\n{}", halves("%s")), true),
+        ("conv_quotient", format!("{two}  %s = fdiv float %a, %b\n{}", halves("%s")), true),
+        (
+            "conv_fma",
+            format!(
+                "{two}  %s = call float @air.fma.f32(float %a, float %b, float %a)\n{}",
+                halves("%s")
+            ),
+            true,
+        ),
+        (
+            "half_tanh",
+            format!(
+                "{}  %g = fptrunc float %a to half\n  %t = call half @air.tanh.f16(half %g)\n  %tb = bitcast half %t to i16\n  %r = zext i16 %tb to i32\n",
+                of("a", 0.3)
+            ),
+            false,
+        ),
+    ];
+    let ks: Vec<Kernel> = cases
+        .iter()
+        .map(|(name, body, _)| Kernel {
+            want: None,
+            ..k(name, body.clone(), 0)
+        })
+        .collect();
+    let text = module(&ks).replace(
+        DECLS,
+        &format!(
+            "{DECLS}declare float @air.fma.f32(float, float, float)\ndeclare half @air.tanh.f16(half)\n"
+        ),
+    );
+    let Some(bitcode) = assemble("half-conversions", &text) else {
+        return;
+    };
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../metal2vulkan-validation/profiles/moltenvk-m3.json");
+    let text = std::fs::read_to_string(&path).expect("profile");
+    for taken in [true, false] {
+        let desc = DeviceDescription::from_khronos_json(&text, None).expect("description");
+        let p = Device::with_deviation(
+            desc,
+            DevicePolicy::default(),
+            DriverDeviation::MetalHalfConversion,
+            taken,
+        )
+        .expect("device")
+        .profile()
+        .clone();
+        assert_eq!(
+            p.takes_driver_deviation(DriverDeviation::MetalHalfConversion),
+            taken
+        );
+        for ((name, _, measured), kk) in cases.iter().zip(&ks) {
+            let what = format!("{name}, the deviation taken: {taken}");
+            let a = compile(&bitcode, kk.name, &p).unwrap_or_else(|e| panic!("{what}: {e:?}"));
+            link_and_validate(&a, &p).unwrap_or_else(|e| panic!("{what}: L3: {e}"));
+            let exempt = taken && *measured;
+            assert_eq!(
+                a.precision.contains(&PrecisionNote::NativeHalfConversion),
+                !exempt,
+                "{what}: {:?}",
+                a.precision
+            );
+            assert_eq!(
+                a.requirements
+                    .properties
+                    .contains(&VkProperty::MetalHalfConversion),
+                exempt,
+                "{what}"
+            );
+        }
+    }
+}
+
 /// Class E: Metal's `float` `fneg` and `fabs` (`air.fabs`, `air.fast_fabs`, and `llvm.fabs`, which
 /// takes `air.fabs`'s answer) flip or clear the sign bit alone, with and without fast-math flags: a
 /// NaN keeps its payload, signaling or not, and a denormal stays. The lowering is the device's

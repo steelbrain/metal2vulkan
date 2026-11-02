@@ -101,6 +101,11 @@ pub struct ModuleBuilder {
     /// Every result that carries a non-uniform descriptor element (`Inst::carries_non_uniform`):
     /// decorated `NonUniform`, and refused where it would reach an undecorated operand.
     pub(super) non_uniform: BTreeSet<Value>,
+    /// The narrowings to 16 bits of the conversion pairs that round a `half` in a form measured
+    /// to answer Metal's on the devices whose driver takes `DriverDeviation::MetalHalfConversion`
+    /// (`ModuleBuilder::note_measured_rounding`). Nothing emitted depends on it: the compile
+    /// reads it to decide `PrecisionNote::NativeHalfConversion`.
+    pub(super) measured_roundings: BTreeSet<Value>,
     /// The `Function` variables the emitter holds workgroup uniform by construction
     /// (`FunctionBuilder::note_uniform_var`). Nothing emitted depends on it: a record for the
     /// checks of `spirv::testing::barriers`, kept only where they build.
@@ -281,6 +286,13 @@ impl ModuleBuilder {
         self.native_half = native;
     }
 
+    /// Record `narrowed`, the narrowing to 16 bits of a conversion pair that rounds a `half` in a
+    /// form measured to answer Metal's where the driver takes
+    /// `DriverDeviation::MetalHalfConversion` (`narrow::round_measured`).
+    pub fn note_measured_rounding(&mut self, narrowed: Value) {
+        self.measured_roundings.insert(narrowed);
+    }
+
     /// Whether the module's `half` rounding is the device's own
     /// ([`ModuleBuilder::set_native_half`]).
     pub fn native_half(&self) -> bool {
@@ -342,6 +354,7 @@ impl ModuleBuilder {
                 std::mem::size_of::<(GlobalId, crate::spv::Capability)>(),
             )
             + tree_bytes(self.non_uniform.len(), std::mem::size_of::<Value>())
+            + tree_bytes(self.measured_roundings.len(), std::mem::size_of::<Value>())
             + map_bytes(&self.bits)
             + map_bytes(&self.lanes)
             + map_bytes(&self.inserts)
@@ -1346,6 +1359,7 @@ impl ModuleBuilder {
             volatile: self.volatile,
             enabling: self.enabling,
             non_uniform: self.non_uniform,
+            measured_roundings: self.measured_roundings,
             #[cfg(test)]
             uniform_vars: self.uniform_vars,
         })
