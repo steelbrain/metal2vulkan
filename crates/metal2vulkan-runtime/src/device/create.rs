@@ -929,7 +929,7 @@ fn identified(
 
 /// The fewest `VkQueue`s a created device takes for the round robin logical queues share, where
 /// the families taken have that many.
-const LEAST_QUEUES: u32 = 4;
+pub(crate) const LEAST_QUEUES: u32 = 4;
 
 /// The most it takes for that round robin, where the families taken have queues to spare past
 /// [`PRESENT_QUEUES`].
@@ -948,7 +948,7 @@ const LEAST_QUEUES: u32 = 4;
 /// submissions on semaphore operations (`DriverFact::SemaphoreOperationsStallSubmits`) and so
 /// takes no such wait at all: its batches begin with a barrier instead, whose cost does not grow
 /// with the queues.
-const ROUND_ROBIN_CEILING: u32 = 16;
+pub(crate) const ROUND_ROBIN_CEILING: u32 = 16;
 
 /// The most `VkQueue`s a created device reserves for presenting queues
 /// (`Device::new_command_queue_for_presenting`), outside the round robin: the taken families'

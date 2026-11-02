@@ -15,7 +15,7 @@
 //! of device the cfg selects.
 
 use super::blit_holds::{Scratch, WAIT};
-use crate::device::create::queue_plan;
+use crate::device::create::{queue_plan, LEAST_QUEUES, ROUND_ROBIN_CEILING};
 use crate::{
     CommandBufferStatus, CommandQueue, Device, DeviceKind, DeviceOptions, MessageSink,
     ReservedQueue, ResourceOptions, ShaderCacheOptions, VkEventSignal, VkEventWait,
@@ -93,8 +93,11 @@ fn round_robin(device: &Device) -> (Vec<CommandQueue>, Vec<vk::Queue>) {
 
 /// One reserved queue: of a family of the device's own, given up by the round robin, which takes
 /// one `VkQueue` fewer than the same device's without the reservation, and taken by no command
-/// queue (more of them than the round robin has, and presenting ones). Where the device has none
-/// to spare, it reserves none, reports that, and its round robin is the one it has without.
+/// queue (more of them than the round robin has, and presenting ones). Whether the device has one
+/// to spare is read from what the same device without the reservation does, not from the plan:
+/// it spares one exactly where that round robin has more than its floor of four `VkQueue`s (the
+/// presenting reservation keeps its own). Where it has none to spare, it reserves none, reports
+/// that, and its round robin is the one it has without.
 #[test]
 fn a_reserved_queue_is_a_runtime_family_s_and_no_command_queue_takes_it() {
     let scratch = Scratch::new("reserved-queue");
@@ -102,13 +105,9 @@ fn a_reserved_queue_is_a_runtime_family_s_and_no_command_queue_takes_it() {
     let unreserved = device(&scratch.0, 0, &unreserved_messages);
     let (_queues, unreserved_round_robin) = round_robin(&unreserved);
     let families = families(&unreserved);
-    let plan = queue_plan(&families, 1).unwrap();
-    let plan_without = queue_plan(&families, 0).unwrap();
-    assert_eq!(
-        unreserved_round_robin.len(),
-        plan_without.queues.len(),
-        "the device without a reservation lends its plan's round robin"
-    );
+    let unreserved_count = unreserved_round_robin.len();
+    // The device spares a queue exactly where its round robin without one is past its floor.
+    let spares = unreserved_count > LEAST_QUEUES as usize;
 
     let messages = Arc::new(Mutex::new(Vec::new()));
     let device = device(&scratch.0, 1, &messages);
@@ -134,17 +133,27 @@ fn a_reserved_queue_is_a_runtime_family_s_and_no_command_queue_takes_it() {
             .collect::<Vec<_>>(),
         raw.queue_families,
         taken.len(),
-        unreserved_round_robin.len(),
+        unreserved_count,
         presenting_taken.len(),
     );
-    assert_eq!(reserved.len(), plan.reserved.len(), "{plan:?}");
-    assert_eq!(taken.len(), plan.queues.len(), "{plan:?}");
+    let plan = queue_plan(&families, 1).unwrap();
+    assert_eq!(
+        (reserved.len(), taken.len()),
+        (plan.reserved.len(), plan.queues.len()),
+        "the device's queues are its plan's: {plan:?}"
+    );
+    assert_eq!(
+        reserved.len(),
+        usize::from(spares),
+        "a round robin of {unreserved_count} without the reservation spares one exactly past \
+         its floor of {LEAST_QUEUES}"
+    );
     let Some(queue) = reserved.first() else {
         let text = messages.lock().unwrap().join("\n");
         assert!(text.contains(ABSENT), "no {ABSENT} message: {text}");
         assert_eq!(
             taken.len(),
-            unreserved_round_robin.len(),
+            unreserved_count,
             "a device that reserved nothing lends the round robin what it lends without"
         );
         eprintln!(
@@ -169,11 +178,12 @@ fn a_reserved_queue_is_a_runtime_family_s_and_no_command_queue_takes_it() {
     );
     // The round robin gives the reserved queue up, unless the families have a queue past its
     // ceiling and presenting's two (a family of more than 18), which the reservation takes first.
-    let past_the_plan = plan.queues.len() == plan_without.queues.len();
-    assert_eq!(
-        taken.len() + usize::from(!past_the_plan),
-        unreserved_round_robin.len(),
-        "the round robin gives up the reserved queue"
+    let at_ceiling = unreserved_count == ROUND_ROBIN_CEILING as usize;
+    assert!(
+        taken.len() + 1 == unreserved_count || (at_ceiling && taken.len() == unreserved_count),
+        "the round robin gives up the reserved queue: {} VkQueues with it, {unreserved_count} \
+         without",
+        taken.len()
     );
     assert!(
         !messages.lock().unwrap().join("\n").contains(ABSENT),
