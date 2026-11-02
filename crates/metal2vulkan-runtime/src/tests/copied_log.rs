@@ -479,6 +479,9 @@ fn a_cpu_write_the_gpu_did_not_make_survives_both_ways_logged_or_not() {
                     // below); the runtime's reads of it race as the CPU's and the GPU's do.
                     unsafe { std::ptr::write_volatile((pages as *mut u8).add(cpu_byte), value) };
                     own.told(BLOCK..2 * BLOCK, 0);
+                    // Each write told is kept, and every copy in reads them all: unpaced, the
+                    // log grew as fast as this thread ran and the rounds slowed with it.
+                    std::thread::sleep(std::time::Duration::from_micros(20));
                 }
                 value
             })
