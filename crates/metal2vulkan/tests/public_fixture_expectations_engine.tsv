@@ -2647,6 +2647,14 @@ engine/wrg_gather_depth_positions.air.ll	wrg_gather_depth_positions	ok	ok	ok	ok	
 engine/wrg_gather_depth_positions.ll	wrg_gather_depth_positions	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
 engine/wrg_sampler_positions.air.ll	wrg_sampler_positions	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
 engine/wrg_sampler_positions.ll	wrg_sampler_positions	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
+engine/wsm_samples.air.ll	wsm_read_f	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
+engine/wsm_samples.air.ll	wsm_read_u	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
+engine/wsm_samples.air.ll	wsm_vertex	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
+engine/wsm_samples.air.ll	wsm_fill	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	Unsupported{SampleRateShading; AnyOf[[Feature(SampleRateShading)]]}
+engine/wsm_samples.ll	wsm_read_f	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
+engine/wsm_samples.ll	wsm_read_u	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
+engine/wsm_samples.ll	wsm_vertex	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
+engine/wsm_samples.ll	wsm_fill	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	Unsupported{SampleRateShading; AnyOf[[Feature(SampleRateShading)]]}
 engine/xr_bicubic.air.ll	xrb_runtime	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
 engine/xr_bicubic.air.ll	xrb_runtime_half	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
 engine/xr_bicubic.air.ll	xrb_edge	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
