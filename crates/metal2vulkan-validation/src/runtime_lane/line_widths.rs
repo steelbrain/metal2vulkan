@@ -12,8 +12,9 @@
 //! as the probe prints it and compared with its map, and every fragment must be front-facing, as
 //! a line's is. The cases: the lane's 16x16 list of two lines and three-vertex strip at widths 0,
 //! 0.5, 1, 2, 3.5 and 8; the widths Metal quantizes; the width's encoder state; the band's edges
-//! and ends; width 0; strips' overlaps counted; filled triangles; and 4 samples at widths 0.5
-//! and 2.
+//! and ends; width 0, on the centres and off them (lines offset by steps of 1/512 pixel, scattered
+//! endpoints as lists, reversed, instanced and a strip, clip-space positions), which Metal draws
+//! as 1/16; strips' overlaps counted; filled triangles; and 4 samples at widths 0.5 and 2.
 //!
 //! The work counts show which route each draw took (`WorkCounts::line_band_draws`,
 //! `device_wide_line_draws`): every draw at a width other than 1 takes one of the two, and on a
@@ -60,16 +61,19 @@ enum Shade {
     Count,
 }
 
-/// One draw of an encoder: its primitive type, its points in pixel coordinates (y down), the
-/// width set before it (`None`: none), its triangle fill mode, and whether it sets the other of
-/// the probe's two pipeline states first.
+/// One draw of an encoder: its primitive type, its points in pixel coordinates (y down), or
+/// clip-space `x` and `y` (`z` 0, `w` 1) where `clip`, the width set before it (`None`: none), its
+/// triangle fill mode, whether it sets the other of the probe's two pipeline states first, and its
+/// instances.
 #[derive(Clone, Debug)]
 struct Draw {
     primitive: PrimitiveType,
     points: Vec<[f32; 2]>,
+    clip: bool,
     width: Option<f32>,
     fill: TriangleFillMode,
     other_pipeline: bool,
+    instances: u32,
 }
 
 impl Draw {
@@ -77,9 +81,11 @@ impl Draw {
         Draw {
             primitive,
             points: points.chunks(2).map(|p| [p[0], p[1]]).collect(),
+            clip: false,
             width: Some(width),
             fill: TriangleFillMode::Fill,
             other_pipeline: false,
+            instances: 1,
         }
     }
 
@@ -220,6 +226,42 @@ fn measured() -> (BTreeMap<String, String>, BTreeMap<u32, String>) {
     }
     (blocks, quantized)
 }
+
+/// The probe's `scatter`: `count` points of a `side x side` target, each coordinate in
+/// `[1, side - 1)` on a grid of 1/4096 pixel, `x` then `y`, from its 64-bit linear congruential
+/// generator seeded with `seed`.
+fn scatter(count: usize, side: u32, seed: u64) -> Vec<f32> {
+    let mut state = seed;
+    (0..2 * count)
+        .map(|_| {
+            state = state
+                .wrapping_mul(6_364_136_223_846_793_005)
+                .wrapping_add(1_442_695_040_888_963_407);
+            let r = (state >> 33) as u32;
+            1.0 + (r % ((side - 2) * 4096)) as f32 / 4096.0
+        })
+        .collect()
+}
+
+/// The probe's eight clip-space positions (`x`, `y`) of its `zero` case.
+const CLIP_POSITIONS: [f32; 16] = [
+    -0.32525787,
+    0.4939026,
+    0.38724214,
+    -0.6796814,
+    0.13544922,
+    -0.1575119,
+    0.21390076,
+    0.4868866,
+    0.9281403,
+    -0.76723635,
+    -0.45363313,
+    0.2326004,
+    -0.824118,
+    -0.9427811,
+    0.06479645,
+    -0.2337021,
+];
 
 /// The probe's `MAP` cases, each by its title: `ties`, `zero`, `strips`, `fill`, `msaa` and
 /// `state`, geometry for geometry.
@@ -368,6 +410,57 @@ fn map_cases() -> Vec<(String, Shot)> {
     ];
     for (title, points, width) in zero {
         one(title, 32, 1, Shade::White, Draw::line(Line, &points, width));
+    }
+    // Lines offset from rows and columns of centres by `(r - 32) / 512` pixel.
+    let (mut rows, mut columns) = (Vec::new(), Vec::new());
+    for r in 4..60 {
+        let at = r as f32 + 0.5 + (r - 32) as f32 / 512.0;
+        rows.extend([2.25, at, 9.75, at]);
+        columns.extend([at, 2.25, at, 9.75]);
+    }
+    for width in [0.0f32, 0.0625] {
+        for (title, points) in [
+            ("rows offset by (r - 32) / 512", &rows),
+            ("columns offset by (c - 32) / 512", &columns),
+        ] {
+            let title = format!("{title} width {width}");
+            one(&title, 64, 1, Shade::White, Draw::line(Line, points, width));
+        }
+    }
+    // Scattered endpoints: 48 lines, the same reversed and as two instances, and a strip.
+    let list = scatter(96, 32, 1);
+    let reversed: Vec<f32> = list
+        .chunks(4)
+        .flat_map(|l| [l[2], l[3], l[0], l[1]])
+        .collect();
+    let strip = scatter(49, 32, 2);
+    let scattered: [(&str, PrimitiveType, &[f32], f32, u32); 9] = [
+        ("scattered lines width 0", Line, &list, 0.0, 1),
+        ("scattered lines width 0.03125", Line, &list, 0.03125, 1),
+        ("scattered lines width 0.0625", Line, &list, 0.0625, 1),
+        ("scattered lines width -1", Line, &list, -1.0, 1),
+        ("scattered lines width NaN", Line, &list, f32::NAN, 1),
+        ("scattered lines width 2.5", Line, &list, 2.5, 1),
+        ("scattered lines reversed width 0", Line, &reversed, 0.0, 1),
+        ("scattered lines 2 instances width 0", Line, &list, 0.0, 2),
+        ("scattered strip width 0", LineStrip, &strip, 0.0, 1),
+    ];
+    for (title, primitive, points, width, instances) in scattered {
+        let draw = Draw {
+            instances,
+            ..Draw::line(primitive, points, width)
+        };
+        one(&format!("{title}, fragments"), 32, 1, Shade::Count, draw);
+    }
+    for (title, primitive) in [
+        ("clip-space lines width 0, fragments", Line),
+        ("clip-space strip width 0, fragments", LineStrip),
+    ] {
+        let draw = Draw {
+            clip: true,
+            ..Draw::line(primitive, &CLIP_POSITIONS, 0.0)
+        };
+        one(title, 16, 1, Shade::Count, draw);
     }
     let corner = [4.0, 8.5, 24.5, 8.5, 24.5, 28.0];
     let peak = [4.0, 28.0, 16.0, 4.0, 28.0, 28.0];
@@ -575,15 +668,20 @@ impl Lane {
                         encoder.set_render_pipeline_state(if index & 1 == 1 { &b } else { &a })?;
                     }
                     encoder.set_triangle_fill_mode(draw.fill)?;
-                    // The probe's vertex function's arithmetic, in the same `f32` operations.
+                    // The probe's vertex function's arithmetic, in the same `f32` operations;
+                    // clip-space positions as they are.
                     let positions: Vec<u8> = draw
                         .points
                         .iter()
-                        .flat_map(|&[x, y]| [x / half_side - 1.0, 1.0 - y / half_side, 0.0, 1.0])
+                        .flat_map(|&[x, y]| match draw.clip {
+                            true => [x, y, 0.0, 1.0],
+                            false => [x / half_side - 1.0, 1.0 - y / half_side, 0.0, 1.0],
+                        })
                         .flat_map(f32::to_le_bytes)
                         .collect();
                     encoder.set_vertex_bytes(&positions, 0)?;
-                    encoder.draw_primitives(draw.primitive, 0, draw.points.len() as u32, 1, 0)?;
+                    let count = draw.points.len() as u32;
+                    encoder.draw_primitives(draw.primitive, 0, count, draw.instances, 0)?;
                     index += 1;
                 }
                 Ok(())

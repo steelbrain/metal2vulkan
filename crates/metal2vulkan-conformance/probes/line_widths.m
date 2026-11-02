@@ -18,6 +18,10 @@
 //   ties       a band's edges: rows of a horizontal line on a pixel edge and through centres, ends
 //              on pixel centres in both directions, 45 degrees both ways, a y-major line;
 //   zero       width 0 and below 1/16: centres on the segment, its ends, a segment through none;
+//              rows and columns of lines offset from the centres in steps of 1/512 pixel, at 0 and
+//              1/16; 48 lines of scattered endpoints (a 1/4096 grid) at 0, 1/32, 1/16, -1, NaN and
+//              2.5, reversed, as two instances, and a strip of 49; eight clip-space positions as a
+//              list and a strip;
 //   strips     fragments counted where a strip's segments overlap, at widths 1, 3.5 and 8;
 //   fill       triangles under the fill mode Lines at widths 1 and 4, and Fill at 4, counted;
 //   msaa       4 samples, resolved: a horizontal line at y = 16 at widths 0.5, 1 and 2.
@@ -26,12 +30,17 @@
 // `metal2vulkan-validation`'s `runtime_lane/line_widths_m3_max.txt`):
 //
 //   - Each encoder starts at width 1; a width holds across draws and pipeline states.
-//   - Metal draws w' = floor(16 w) / 16 clamped to [0, 16]: negative widths and NaN as 0, 16 and
-//     above, infinity among them, as 16.
+//   - Metal draws w' = floor(16 w) / 16 clamped to [1/16, 16]: every width below 1/16 (0, negative
+//     widths and NaN among them) as 1/16, 16 and above, infinity among them, as 16.
 //   - At w' = 1 the diamond-exit lines; at every other w', below 1 too, the parallelogram whose
 //     minor-axis edges pass through the endpoints, w' long and centred, its other edges parallel
 //     to the segment, the ends not extended, a pixel drawn where its centre is inside (top-left
-//     ties), the width not rounded; at w' = 0 exactly the pixel centres on the segment.
+//     ties), the width not rounded; the endpoints first snapped to 1/256 pixel, a half rounded up.
+//   - A width below 1/16 draws exactly as 1/16 (every scattered map alike): the parallelogram
+//     reaches 1/32 pixel to each side of the segment along its minor axis, so it draws a centre
+//     off the segment by less, and a line offset from a row of centres by -15/512 to 16/512 pixel
+//     draws them, by the snapping and the ties above. A centre-aligned segment cannot tell it from
+//     drawing only the centres on the segment.
 //   - A strip draws one parallelogram per segment, no joins: an overlap takes two fragments (at 1 a
 //     shared vertex is drawn once).
 //   - Triangles in fill mode Lines draw their edges so; fill mode Fill ignores the width.
@@ -60,6 +69,10 @@ static NSString *kSource =
    "  o.position = float4(p.x / half_side - 1.0, 1.0 - p.y / half_side, 0.0, 1.0);\n"
    "  return o;\n"
    "}\n"
+   "vertex Out pass(uint v [[vertex_id]], const device float4 *at [[buffer(0)]]) {\n"
+   "  Out o; o.position = at[v];\n"
+   "  return o;\n"
+   "}\n"
    "fragment float4 white() { return float4(1.0); }\n"
    "fragment float4 one_count() { return float4(1.0 / 255.0); }\n";
 
@@ -69,9 +82,11 @@ static id<MTLLibrary> gLibrary;
 
 typedef enum { kWhite, kCount } Shade;
 
-static id<MTLRenderPipelineState> pipeline(Shade shade, NSUInteger samples) {
+// The pipeline state of `shade` and `samples` whose vertex function places pixel coordinates, or
+// passes clip-space positions through where `clip`.
+static id<MTLRenderPipelineState> pipeline(Shade shade, NSUInteger samples, int clip) {
   MTLRenderPipelineDescriptor *d = [MTLRenderPipelineDescriptor new];
-  d.vertexFunction = [gLibrary newFunctionWithName:@"place"];
+  d.vertexFunction = [gLibrary newFunctionWithName:clip ? @"pass" : @"place"];
   d.fragmentFunction = [gLibrary newFunctionWithName:shade == kCount ? @"one_count" : @"white"];
   d.colorAttachments[0].pixelFormat = MTLPixelFormatRGBA8Unorm;
   d.rasterSampleCount = samples;
@@ -95,7 +110,8 @@ static void set_width(id<MTLRenderCommandEncoder> e, float width) {
 }
 
 // One draw of an encoder: its primitive type, its points, and the width set before it (`set` 0
-// sets none).
+// sets none); its instances (0 for 1), and whether its points are clip-space `float4`s (`clip`)
+// rather than pixel coordinates.
 typedef struct {
   MTLPrimitiveType type;
   const float *points;
@@ -104,6 +120,8 @@ typedef struct {
   float width;
   MTLTriangleFillMode fill;
   int new_pipeline;
+  int instances;
+  int clip;
 } Draw;
 
 // Draws each encoder's draws on an S x S target of `samples` samples; `encoders[i]` draws are
@@ -125,8 +143,9 @@ static uint8_t *render(int side, NSUInteger samples, Shade shade, const Draw *dr
     td.storageMode = MTLStorageModePrivate;
     target = [gDevice newTextureWithDescriptor:td];
   }
-  id<MTLRenderPipelineState> a = pipeline(shade, samples);
-  id<MTLRenderPipelineState> b = pipeline(shade, samples);
+  int clip = draws[0].clip;
+  id<MTLRenderPipelineState> a = pipeline(shade, samples, clip);
+  id<MTLRenderPipelineState> b = pipeline(shade, samples, clip);
   float half_side = side / 2.0f;
   id<MTLCommandBuffer> cb = [gQueue commandBuffer];
   for (int e = 0; e < encoders; e++) {
@@ -149,10 +168,13 @@ static uint8_t *render(int side, NSUInteger samples, Shade shade, const Draw *dr
       if (d->new_pipeline) [enc setRenderPipelineState:(i & 1) ? b : a];
       [enc setTriangleFillMode:d->fill];
       id<MTLBuffer> points = [gDevice newBufferWithBytes:d->points
-                                                  length:sizeof(float) * 2 * d->count
+                                                  length:sizeof(float) * (clip ? 4 : 2) * d->count
                                                  options:MTLResourceStorageModeShared];
       [enc setVertexBuffer:points offset:0 atIndex:0];
-      [enc drawPrimitives:d->type vertexStart:0 vertexCount:d->count];
+      [enc drawPrimitives:d->type
+              vertexStart:0
+              vertexCount:d->count
+            instanceCount:d->instances ? d->instances : 1];
     }
     [enc endEncoding];
   }
@@ -176,9 +198,20 @@ static uint8_t *render(int side, NSUInteger samples, Shade shade, const Draw *dr
 // One draw alone in one encoder.
 static uint8_t *one(int side, NSUInteger samples, Shade shade, MTLPrimitiveType type,
                     const float *points, int count, float width) {
-  Draw d = {type, points, count, 1, width, MTLTriangleFillModeFill, 0};
+  Draw d = {type, points, count, 1, width, MTLTriangleFillModeFill, 0, 0, 0};
   int starts[2] = {0, 1};
   return render(side, samples, shade, &d, starts, 1);
+}
+
+// The scatter: `count` points of an S x S target, each coordinate in [1, S - 1) on a grid of 1/4096
+// pixel, drawn in order (x, then y) from a 64-bit linear congruential generator seeded with `seed`
+// (the lane test draws the same).
+static void scatter(float *points, int count, int side, uint64_t seed) {
+  for (int i = 0; i < 2 * count; i++) {
+    seed = seed * 6364136223846793005ULL + 1442695040888963407ULL;
+    uint32_t r = (uint32_t)(seed >> 33);
+    points[i] = 1.0f + (float)(r % (uint32_t)((side - 2) * 4096)) / 4096.0f;
+  }
 }
 
 static char cell(uint8_t v, Shade shade, NSUInteger samples) {
@@ -352,6 +385,85 @@ static void zero(void) {
   for (size_t i = 0; i < sizeof cases / sizeof cases[0]; i++) {
     uint8_t *r = one(32, 1, kWhite, MTLPrimitiveTypeLine, cases[i].points, 2, cases[i].width);
     print_map(cases[i].name, 32, r, kWhite, 1);
+    free(r);
+  }
+  // Offsets from the centres, 64 x 64: row r's horizontal line at y = r + 0.5 + (r - 32) / 512,
+  // x 2.25 to 9.75, for r 4 to 59 (column c's vertical one alike), at width 0 and 1/16.
+  static float rows_at[56 * 4], columns_at[56 * 4];
+  for (int r = 4; r < 60; r++) {
+    float at = r + 0.5f + (r - 32) / 512.0f;
+    float *h = &rows_at[(r - 4) * 4], *v = &columns_at[(r - 4) * 4];
+    h[0] = 2.25f, h[1] = at, h[2] = 9.75f, h[3] = at;
+    v[0] = at, v[1] = 2.25f, v[2] = at, v[3] = 9.75f;
+  }
+  float offset_widths[] = {0, 0.0625f};
+  for (size_t w = 0; w < sizeof offset_widths / sizeof offset_widths[0]; w++) {
+    char title[96];
+    uint8_t *r = one(64, 1, kWhite, MTLPrimitiveTypeLine, rows_at, 112, offset_widths[w]);
+    snprintf(title, sizeof title, "rows offset by (r - 32) / 512 width %g", offset_widths[w]);
+    print_map(title, 64, r, kWhite, 1);
+    free(r);
+    r = one(64, 1, kWhite, MTLPrimitiveTypeLine, columns_at, 112, offset_widths[w]);
+    snprintf(title, sizeof title, "columns offset by (c - 32) / 512 width %g", offset_widths[w]);
+    print_map(title, 64, r, kWhite, 1);
+    free(r);
+  }
+  // Scattered endpoints, 32 x 32 (`scatter`, seed 1): a list of 48 lines at widths 0, below 1/16,
+  // 1/16, negative, NaN and 2.5; the same lines each reversed; the list drawn as two instances; and
+  // a strip of 49 points (seed 2); fragments counted.
+  static float list[96 * 2], reversed[96 * 2], strip[49 * 2];
+  scatter(list, 96, 32, 1);
+  for (int i = 0; i < 96; i += 2) {
+    memcpy(&reversed[2 * i], &list[2 * (i + 1)], 2 * sizeof(float));
+    memcpy(&reversed[2 * (i + 1)], &list[2 * i], 2 * sizeof(float));
+  }
+  scatter(strip, 49, 32, 2);
+  struct {
+    const char *name;
+    MTLPrimitiveType type;
+    const float *points;
+    int count;
+    float width;
+    int instances;
+  } scattered[] = {
+      {"scattered lines width 0", MTLPrimitiveTypeLine, list, 96, 0, 1},
+      {"scattered lines width 0.03125", MTLPrimitiveTypeLine, list, 96, 0.03125f, 1},
+      {"scattered lines width 0.0625", MTLPrimitiveTypeLine, list, 96, 0.0625f, 1},
+      {"scattered lines width -1", MTLPrimitiveTypeLine, list, 96, -1, 1},
+      {"scattered lines width NaN", MTLPrimitiveTypeLine, list, 96, NAN, 1},
+      {"scattered lines width 2.5", MTLPrimitiveTypeLine, list, 96, 2.5f, 1},
+      {"scattered lines reversed width 0", MTLPrimitiveTypeLine, reversed, 96, 0, 1},
+      {"scattered lines 2 instances width 0", MTLPrimitiveTypeLine, list, 96, 0, 2},
+      {"scattered strip width 0", MTLPrimitiveTypeLineStrip, strip, 49, 0, 1},
+  };
+  for (size_t i = 0; i < sizeof scattered / sizeof scattered[0]; i++) {
+    Draw d = {scattered[i].type, scattered[i].points, scattered[i].count, 1, scattered[i].width,
+              MTLTriangleFillModeFill, 0, scattered[i].instances, 0};
+    int starts[2] = {0, 1};
+    uint8_t *r = render(32, 1, kCount, &d, starts, 1);
+    char title[96];
+    snprintf(title, sizeof title, "%s, fragments", scattered[i].name);
+    print_map(title, 32, r, kCount, 1);
+    free(r);
+  }
+  // Eight clip-space positions, 16 x 16, as a list of 4 lines and a strip of 7, at width 0.
+  static const float clip[8 * 4] = {
+      -0.3252578675746918f, 0.4939025938510895f,   0, 1,
+      0.3872421383857727f,  -0.6796814203262329f,  0, 1,
+      0.13544921576976776f, -0.157511904835701f,   0, 1,
+      0.21390075981616974f, 0.486886590719223f,    0, 1,
+      0.9281402826309204f,  -0.7672363519668579f,  0, 1,
+      -0.4536331295967102f, 0.2326004058122635f,   0, 1,
+      -0.8241180181503296f, -0.9427810907363892f,  0, 1,
+      0.06479644775390625f, -0.23370209336280823f, 0, 1,
+  };
+  for (int t = 0; t < 2; t++) {
+    Draw d = {t ? MTLPrimitiveTypeLineStrip : MTLPrimitiveTypeLine, clip, 8, 1, 0,
+              MTLTriangleFillModeFill, 0, 1, 1};
+    int starts[2] = {0, 1};
+    uint8_t *r = render(16, 1, kCount, &d, starts, 1);
+    print_map(t ? "clip-space strip width 0, fragments" : "clip-space lines width 0, fragments", 16,
+              r, kCount, 1);
     free(r);
   }
 }
