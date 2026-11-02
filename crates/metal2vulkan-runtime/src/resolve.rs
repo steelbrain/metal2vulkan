@@ -73,10 +73,15 @@
 //!   colors average values finer than the codes. The runtime holds the codes and resolves by the
 //!   crate-owned resolve at every count (`color_resolve.rs`), Metal's rule where the codes give
 //!   it and a near-equivalent elsewhere, announced as `extended-range-resolve`.
-//! - A packed 16-bit attachment the device renders through the view of its word
-//!   (`metal::format::WordAttachment`) holds each sample's stored codes, while Metal's resolve
-//!   averages its tile's values, finer than the codes: not modelled, refused
-//!   `NotImplemented(Format)`.
+//! - An attachment the device renders through the view of its word
+//!   (`metal::format::WordAttachment`: a multisampled texture held in its word's format,
+//!   `image_plan.rs`) holds each sample's stored word, which no device's average reads: it
+//!   resolves by the crate-owned resolve at every count (`color_resolve.rs`). Metal resolves
+//!   `RGB9E5Float` and an 8-bit sRGB format from the stored codes (our probe `msaa_word_formats.m`
+//!   on the M3 Max under macOS 27.0.1: the pass that drew the samples and one that loaded them
+//!   resolve alike), by rules the crate-owned resolve applies; a packed 16-bit format from its
+//!   tile's values, finer than the codes, where the resolve averages the codes, a near-equivalent
+//!   within one code, announced as `word-resolve`.
 //! - The depth filters `Sample0`, `Min` and `Max` take sample 0's depth, the smallest and the
 //!   largest. The stencil filter `Sample0` takes sample 0's stencil, and `DepthResolvedSample`
 //!   the stencil of the sample whose depth the depth filter took: of equal depths, the last
@@ -635,17 +640,6 @@ pub(super) fn color(
     // A private form's codes no resolve reads (Metal makes no multisampled texture of it).
     if let Some(unsupported) = unmodelled_resolve(source.texture.pixel_format()) {
         return Err(Error::Unsupported(unsupported));
-    }
-    // An attachment rendered through the view of its word (`metal::format::WordAttachment`) holds
-    // each sample's stored codes, while Metal resolves its tile's values: not modelled.
-    let word = metal2vulkan::metal::format::WordAttachment::of(
-        source.texture.pixel_format(),
-        device.compile_device().profile(),
-    );
-    if word.is_some_and(|w| w.word_format() == source.format) {
-        return Err(Error::Unsupported(
-            metal2vulkan::error::Unsupported::not_implemented(metal2vulkan::error::Feature::Format),
-        ));
     }
     single_sampled(call, which, source)?;
     let Some(destination) = destination(call, device, which, source, texture, wanted)? else {

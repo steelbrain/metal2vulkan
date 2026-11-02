@@ -215,6 +215,7 @@ use super::view_reinterpretation::VIEW_SHADOWS;
 use super::viewport_ranges::{NAN_DEPTH, UNCLAMPED_BIAS, VERTEX_CLAMPS};
 use super::visibility::REPEATED_STARTS;
 use super::wide_points::POINT_GUARD_BAND;
+use super::word_samples_msaa::WORD_RESOLVE;
 use super::ycbcr_passes::YCBCR_PASSES;
 use super::ycbcr_textures::YCBCR_FILTERS;
 use super::{
@@ -577,6 +578,7 @@ fn every_kind_has_a_site_a_lane_test_takes() {
         &EMULATED_TESSELLATION,
         &GROUPED,
         &WORD_PAST_BUFFER,
+        &WORD_RESOLVE,
         &XR_RESOLVE,
         &YCBCR_PASSES,
         &MEMORYLESS_TEXEL_BUFFERS,

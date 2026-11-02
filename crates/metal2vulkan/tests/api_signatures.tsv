@@ -2017,6 +2017,7 @@ field	metal2vulkan-runtime::DeviceOptions.pipeline_records	pub pipeline_records:
 field	metal2vulkan-runtime::DeviceOptions.policy	pub policy: DevicePolicy
 field	metal2vulkan-runtime::DeviceOptions.record_executions	pub record_executions: bool
 field	metal2vulkan-runtime::DeviceOptions.shader_cache	pub shader_cache: ShaderCacheOptions
+field	metal2vulkan-runtime::DeviceOptions.withheld_attachment_formats	pub withheld_attachment_formats: BTreeSet<metal2vulkan::vk::Format>
 field	metal2vulkan-runtime::DeviceOptions.withheld_extensions	pub withheld_extensions: BTreeSet<VkExtension>
 field	metal2vulkan-runtime::DeviceOptions.withheld_features	pub withheld_features: BTreeSet<VkFeature>
 field	metal2vulkan-runtime::DeviceOptions.withhold_generated_commands	pub withhold_generated_commands: bool
@@ -5150,6 +5151,7 @@ macro-member	metal2vulkan-runtime::Degradation::VertexSimdgroupGrouping	VertexSi
 macro-member	metal2vulkan-runtime::Degradation::ViewBaseTexelOffset	ViewBaseTexelOffset = "view-base-texel-offset";
 macro-member	metal2vulkan-runtime::Degradation::VisibilityCountPerColor	VisibilityCountPerColor = "visibility-count-per-color", Precision,
 macro-member	metal2vulkan-runtime::Degradation::WideEdgeDepthBias	WideEdgeDepthBias = "wide-edge-depth-bias", Precision,
+macro-member	metal2vulkan-runtime::Degradation::WordResolve	WordResolve = "word-resolve", Precision,
 macro-member	metal2vulkan-runtime::Degradation::WrappedImageLayoutTransitions	WrappedImageLayoutTransitions = "wrapped-image-layout-transitions", Performance,
 macro-member	metal2vulkan-runtime::Degradation::YCbCrBlendRounding	YCbCrBlendRounding = "ycbcr-blend-rounding", Precision,
 macro-member	metal2vulkan-runtime::Degradation::YCbCrFilterNotExact	YCbCrFilterNotExact = "ycbcr-filter-not-exact", Precision,

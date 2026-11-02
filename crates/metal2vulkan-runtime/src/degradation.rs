@@ -760,6 +760,21 @@ degradations! {
             "where a pixel's samples differ, a resolved alpha, or an sRGB color, can differ from \
              Metal's by a code (an sRGB color by a few where the samples' values nearly cancel): \
              Metal averages values finer than the codes the attachment holds";
+        /// A multisample resolve of a packed 16-bit color attachment (`A1BGR5Unorm`,
+        /// `ABGR4Unorm`, the other packed 16-bit formats) the device renders only through the view
+        /// of its word, held in the word's format (`image_plan.rs`,
+        /// `bind::ColorResolveFormat::word`): the crate-owned resolve (`color_resolve.rs`) averages
+        /// each field's codes, a tie rounded down (a one-bit field's up), where Metal averages its
+        /// tile's values, the outputs as `half`s, finer than the codes, from the pass that drew
+        /// them. A pixel whose samples hold one word resolves to it. Measured against Metal's
+        /// resolve on the M3 Max under macOS 27.0.1 (our probe `msaa_word_formats.m`, 256 pixels
+        /// at 2 and 4 samples per format): Metal's code in 74% to 88% of the channels resolved in
+        /// the pass that drew them, 90% to 99% (every one-bit alpha) of those a pass only loaded,
+        /// and within one code in every channel (`runtime_lane::word_samples_msaa`).
+        /// `RGB9E5Float`'s and an 8-bit sRGB format's word resolve is Metal's, every pixel.
+        WordResolve = "word-resolve", Precision,
+            "where a pixel's samples differ, a resolved channel can differ from Metal's by a code: \
+             Metal averages its tile's values, finer than the codes the attachment's words hold";
         /// An attachment stored with `DontCare` (or the multisampled attachment of
         /// `MultisampleResolve`) is Vulkan's `DONT_CARE`, where Apple's GPU keeps the earlier
         /// texels unless its tiler overflows. Only on a driver measured to keep the earlier texel
@@ -3940,7 +3955,11 @@ impl Device {
                     ),
                     format!(
                         "{}{}",
-                        match color_resolve::extended(color.target.texture.pixel_format()) {
+                        match color_resolve::shader_rules(
+                            color.target.texture.pixel_format(),
+                            color.target.format,
+                            color.target.samples,
+                        ) {
                             Some(_) => format!(
                                 "no device's resolve averages the codes {:?} holds",
                                 color.target.format
@@ -3961,15 +3980,32 @@ impl Device {
                 )
             });
         }
-        // An extended-range resolve whose rule the codes cannot give (`color_resolve.rs`).
-        let near = colors.clone().find(|color| {
-            color
-                .resolve
-                .as_ref()
-                .and_then(|r| r.shader)
-                .is_some_and(|rules| !rules.exact())
-        });
-        if let Some(color) = near {
+        // An extended-range or a word resolve whose rule the codes cannot give
+        // (`color_resolve.rs`).
+        let near = |word: bool| {
+            colors.clone().find(move |color| {
+                color
+                    .resolve
+                    .as_ref()
+                    .and_then(|r| r.shader)
+                    .is_some_and(|rules| !rules.exact() && rules.held_word().is_some() == word)
+            })
+        };
+        if let Some(color) = near(true) {
+            self.degrade(Degradation::WordResolve, || {
+                (
+                    format!(
+                        "a resolve of a {:?} color attachment of {} samples",
+                        color.target.texture.pixel_format(),
+                        color.target.samples
+                    ),
+                    "Metal averages its tile's values, finer than the words the attachment \
+                     holds, from a pass that drew them; the resolve averages the words' codes"
+                        .to_owned(),
+                )
+            });
+        }
+        if let Some(color) = near(false) {
             self.degrade(Degradation::ExtendedRangeResolve, || {
                 (
                     format!(

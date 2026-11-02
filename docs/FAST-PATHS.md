@@ -512,25 +512,24 @@ driver's. Each is open work.
   compute encoder its unit of command predication reaches past, which is one whose unit laid a
   step before it opened or one of its own that the unit's later encoders read, and one whose unit
   laid a loop or left work out; work on the GPU alone) fail `EncodedUseRebound` (announced).
-- **A fetched or resolved packed 16-bit attachment on a device that does not render the format**
+- **A packed 16-bit attachment's blend on a device that does not render the format**
   (`A1BGR5Unorm`, `ABGR4Unorm` on the RTX 5080). Its word view (`WordAttachment`) takes writes
-  (blended and partly masked ones through the pixel interlock, the row above); a color input or
-  resolve is `NotImplemented(Format)`, a blend of an output of fewer than four lanes
-  `NotImplemented`, and a blend of the second source, or a blend or partial mask on a device
-  without the interlock, is refused as the device lacking the format.
-- **A blended, fetched or resolved one- or two-channel 8-bit sRGB attachment on a device that
-  does not render the format** (`R8Unorm_sRGB`, `RG8Unorm_sRGB` on the RTX 5080 and ANV). Its
-  word view takes writes (partly masked ones through the pixel interlock, or over the attachment's
-  input attachment on a device that orders fetch through them, lavapipe); a blend other than one
-  and zero is refused as the device lacking the format, and a color input or resolve is
+  (blended and partly masked ones through the pixel interlock, the row above), color inputs and
+  resolves; a blend of an output of fewer than four lanes is `NotImplemented`, and a blend of the
+  second source, or a blend or partial mask on a device without the interlock, is refused as the
+  device lacking the format.
+- **A blended or fetched one- or two-channel 8-bit sRGB attachment on a device that does not
+  render the format** (`R8Unorm_sRGB`, `RG8Unorm_sRGB` on the RTX 5080 and ANV). Its word view
+  takes writes (partly masked ones through the pixel interlock, or over the attachment's input
+  attachment on a device that orders fetch through them, lavapipe) and resolves; a blend other
+  than one and zero is refused as the device lacking the format, and a color input is
   `NotImplemented(Format)`. A device that orders fetch only through the pixel interlock and renders
   any color format through its word view (these, the packed 16-bit ones, `RGB9E5Float`) answers
   the `ProgrammableBlending` family row `NotImplemented` and `isFramebufferReadSupported` no.
-- **A half output, blend, partial mask, color input or resolve of an `RGB9E5Float` attachment on
-  a device that does not render the format** (the RTX 5080). Its word view takes a `float`
-  output's writes and clears; a `half` output, a color input and a resolve are
-  `NotImplemented(Format)`, and a blend or a mask of some of its channels is refused as the
-  device lacking the format.
+- **A half output, blend, partial mask or color input of an `RGB9E5Float` attachment on a device
+  that does not render the format** (the RTX 5080). Its word view takes a `float` output's writes,
+  clears and resolves; a `half` output and a color input are `NotImplemented(Format)`, and a blend
+  or a mask of some of its channels is refused as the device lacking the format.
 - **ASTC textures on a device without ASTC.** Making a heap's or a sparse heap's such texture
   (`RuntimeGap::DecodedHeapTexture`) and a view of another decode (an LDR or sRGB texture's HDR
   form, an HDR texture's LDR or sRGB form) are refused. The heap size query answers one: its

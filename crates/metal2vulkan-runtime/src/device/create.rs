@@ -184,6 +184,15 @@ pub struct DeviceOptions {
     /// lanes that hold the shadow to a failed check. No Metal counterpart.
     #[doc(hidden)]
     pub fail_in_place_check: bool,
+    /// Color formats each device takes as no color attachment, as a device without the
+    /// attachment feature of them does: their tilings' `COLOR_ATTACHMENT` and blend features and
+    /// their attachment sample counts are left out of the description the device plans and
+    /// compiles by (`withhold_attachments`). Empty by default. A test hook, for the lanes that run
+    /// the path a device that renders a format only through the view of its word takes
+    /// (`metal::format::WordAttachment`, its multisampled textures held in the word's format) on a
+    /// device that renders the format. No Metal counterpart.
+    #[doc(hidden)]
+    pub withheld_attachment_formats: BTreeSet<metal2vulkan::vk::Format>,
     /// Where each device hands its pipeline records: one [`PipelineRecord`](crate::PipelineRecord)
     /// per pipeline state creation that made its state (compute, render, mesh render and tile
     /// render, and the additional-binary-functions forms; and the one-sample or factor-scaling
@@ -222,6 +231,7 @@ impl std::fmt::Debug for DeviceOptions {
             lowering_refuses,
             record_executions,
             fail_in_place_check,
+            withheld_attachment_formats,
             pipeline_records,
         } = self;
         f.debug_struct("DeviceOptions")
@@ -248,6 +258,7 @@ impl std::fmt::Debug for DeviceOptions {
             .field("lowering_refuses", lowering_refuses)
             .field("record_executions", record_executions)
             .field("fail_in_place_check", fail_in_place_check)
+            .field("withheld_attachment_formats", withheld_attachment_formats)
             .field(
                 "pipeline_records",
                 &pipeline_records.as_ref().map(|_| "hook"),
@@ -957,6 +968,25 @@ pub(crate) fn queue_plan(families: &[vk::QueueFamilyProperties]) -> Option<Queue
     })
 }
 
+/// `description` with each of `withheld` no color attachment
+/// (`DeviceOptions::withheld_attachment_formats`): its tilings' `COLOR_ATTACHMENT` and blend
+/// features and its attachment sample counts left out.
+pub(crate) fn withhold_attachments(
+    description: &mut DeviceDescription,
+    withheld: &BTreeSet<metal2vulkan::vk::Format>,
+) {
+    use metal2vulkan::vk::{FormatFeatureFlags2, SampleCountFlags};
+    let attachment =
+        FormatFeatureFlags2::COLOR_ATTACHMENT | FormatFeatureFlags2::COLOR_ATTACHMENT_BLEND;
+    for format in withheld {
+        if let Some(properties) = description.formats.formats.get_mut(format) {
+            properties.optimal_tiling = properties.optimal_tiling.difference(attachment);
+            properties.linear_tiling = properties.linear_tiling.difference(attachment);
+            properties.color_attachment_sample_counts = SampleCountFlags::empty();
+        }
+    }
+}
+
 /// What a device of `description` the runtime creates under `options` enables: the
 /// description's recommended enables for the options' policy and `VK_EXT_external_memory_host`
 /// where listed (the runtime's own need: buffers over host memory without a copy), less
@@ -1311,9 +1341,10 @@ fn create_on(
     cache: &CacheSetup,
 ) -> Result<Device, Error> {
     // SAFETY: `physical` was enumerated from the instance, created at `api_version`.
-    let description =
+    let mut description =
         unsafe { DeviceDescription::query(&instance.raw, physical, instance.api_version) }
             .map_err(device_error)?;
+    withhold_attachments(&mut description, &options.withheld_attachment_formats);
     // SAFETY: as above.
     unsafe { timeline_conformant(&instance.raw, physical) }?;
     argument_buffers_kept(&description)?;
@@ -1684,6 +1715,7 @@ fn same_options(a: &DeviceOptions, b: &DeviceOptions) -> bool {
         lowering_refuses,
         record_executions,
         fail_in_place_check,
+        withheld_attachment_formats,
         pipeline_records: _,
     } = a;
     *policy == b.policy
@@ -1705,6 +1737,7 @@ fn same_options(a: &DeviceOptions, b: &DeviceOptions) -> bool {
         && *lowering_refuses == b.lowering_refuses
         && *record_executions == b.record_executions
         && *fail_in_place_check == b.fail_in_place_check
+        && *withheld_attachment_formats == b.withheld_attachment_formats
 }
 
 /// The group of `made` for `options`: the live one, or a new one on a new instance. Its index.

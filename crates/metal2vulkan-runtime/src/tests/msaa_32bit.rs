@@ -26,7 +26,7 @@ use metal2vulkan::vk::{
 
 /// The sample counts a profile states for each kind of sampled image (`sampledImage*SampleCounts`,
 /// which a description does not hold).
-struct Sampled {
+pub(super) struct Sampled {
     color: SampleCountFlags,
     integer: SampleCountFlags,
     depth: SampleCountFlags,
@@ -34,7 +34,7 @@ struct Sampled {
 }
 
 impl Sampled {
-    fn of(stem: &str) -> Sampled {
+    pub(super) fn of(stem: &str) -> Sampled {
         Sampled {
             color: profile_counts(stem, "sampledImageColorSampleCounts"),
             integer: profile_counts(stem, "sampledImageIntegerSampleCounts"),
@@ -51,7 +51,7 @@ impl Sampled {
 /// for the kind of format (an integer color format's `framebufferIntegerColorSampleCounts` and
 /// `sampledImageIntegerSampleCounts`, another color format's `framebufferColorSampleCounts` and
 /// `sampledImageColorSampleCounts`, depth's and stencil's, and `storageImageSampleCounts`).
-fn stated_limits(
+pub(super) fn stated_limits(
     enabled: &DeviceDescription,
     sampled: &Sampled,
     plan: &ImagePlan,

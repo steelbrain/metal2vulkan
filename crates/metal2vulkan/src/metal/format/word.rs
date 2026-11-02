@@ -56,8 +56,13 @@
 //! told apart). Metal's tile holds a pass's clear and an earlier draw's write finer than the
 //! codes, as it holds them for a blend (`PrecisionNote::DeviceColorConversion`), so a read after
 //! one in the same pass reads the code the attachment holds. A color input of an 8-bit sRGB word
-//! and of an `RGB9E5Float` one, and a pass's resolve of any word attachment, are
-//! `NotImplemented(Format)`.
+//! and of an `RGB9E5Float` one is `NotImplemented(Format)`.
+//!
+//! A multisampled texture of such a format is held in the word's format where the device renders
+//! that at the texture's count (the runtime's image plan), so every sample holds Metal's word. A
+//! pass's resolve of it reads the stored words (`bind::ColorResolveFormat::word`): Metal's rule
+//! for `RGB9E5Float` and an 8-bit sRGB word, a near-equivalent from the codes for a packed 16-bit
+//! one.
 
 use crate::device::requirements::FormatUsage;
 use crate::device::DeviceProfile;

@@ -109,7 +109,7 @@ use ash::vk;
 use metal2vulkan::bind::{color_resolve_modules, ColorResolveFormat, PlanesCopy, ResolveSource};
 use metal2vulkan::device::{DeviceProfile, DriverFact, FormatUsage};
 use metal2vulkan::error::{Feature, Unsupported};
-use metal2vulkan::metal::format::ExtendedRange;
+use metal2vulkan::metal::format::{direct_format, ExtendedRange, WordAttachment};
 use metal2vulkan::metal::PixelFormat;
 use metal2vulkan::vk::{
     ComponentMapping, Format, FormatFeatureFlags2, ImageAspectFlags, ImageUsageFlags, ImageViewType,
@@ -138,29 +138,51 @@ pub(super) fn extended(pf: PixelFormat) -> Option<ColorResolveFormat> {
     ExtendedRange::of(pf).and_then(ColorResolveFormat::extended_range)
 }
 
-/// The crate-owned resolve of a color attachment of pixel format `pf` at `samples`, where it
-/// resolves the attachment's own samples into its own format: an extended-range format's
-/// ([`extended`]) at every count past one. `None` where the device resolves it in the pass.
-pub(super) fn shader_rules(pf: PixelFormat, samples: u32) -> Option<ColorResolveFormat> {
-    extended(pf).filter(|_| samples > 1)
+/// The crate-owned resolve of a color attachment of pixel format `pf` held in `format` at
+/// `samples`, where it resolves the attachment's own samples into its own format, at every count
+/// past one: an extended-range format's ([`extended`]), and a word's ([`word`]). `None` where the
+/// device resolves it in the pass.
+pub(super) fn shader_rules(
+    pf: PixelFormat,
+    format: Format,
+    samples: u32,
+) -> Option<ColorResolveFormat> {
+    (samples > 1).then(|| extended(pf).or_else(|| word(pf, format)))?
+}
+
+/// The resolve of a multisampled color attachment of `pf` held in `format`, its word's format
+/// (`metal::format::WordAttachment`, `image_plan::word_samples`), which no device's average reads:
+/// a packed 16-bit or `RGB9E5Float` word's own ([`ColorResolveFormat::word`]), and an 8-bit sRGB
+/// word's format's sRGB rules ([`ColorResolveFormat::of`]), whose codes it reads and writes
+/// through the views of its UNORM twin ([`raw_view`]). `None` for another format.
+fn word(pf: PixelFormat, format: Format) -> Option<ColorResolveFormat> {
+    let word = WordAttachment::layout(pf).filter(|w| w.word_format() == format)?;
+    ColorResolveFormat::word(word).or_else(|| direct_format(pf).and_then(ColorResolveFormat::of))
+}
+
+/// Whether `target` is an attachment rendered through the view of its word
+/// (`metal::format::WordAttachment`): its view is in the word's format.
+fn word_view(target: &Target) -> bool {
+    WordAttachment::layout(target.texture.pixel_format())
+        .is_some_and(|w| w.word_format() == target.format)
 }
 
 /// The crate-owned resolve of the color attachment `source`, where the runtime resolves it so:
-/// [`shader_rules`] of its format and samples, where the resolve may read its samples: through its
-/// image's input attachment usage, or from a copy of them into a scratch image that has it
-/// ([`copied`]), unless its sample planes hold them (the module docs). An extended-range
-/// attachment's image that takes neither is refused: no other resolve reads its codes.
+/// [`shader_rules`] of its format, view and samples, where the resolve may read its samples:
+/// through its image's input attachment usage, or from a copy of them into a scratch image that
+/// has it ([`copied`]), unless its sample planes hold them (the module docs). An extended-range or
+/// word attachment's image that takes neither is refused: no other resolve reads its codes.
 pub(super) fn of_attachment(
     device: &Device,
     source: &Target,
 ) -> Result<Option<ColorResolveFormat>, Error> {
     let pf = source.texture.pixel_format();
-    match shader_rules(pf, source.samples) {
+    match shader_rules(pf, source.format, source.samples) {
         Some(rules) if takes_input(source)? || copied(device, source)? => Ok(Some(rules)),
-        Some(_) if extended(pf).is_some() => Err(Error::Unsupported(Unsupported::not_implemented(
+        Some(_) => Err(Error::Unsupported(Unsupported::not_implemented(
             Feature::Format,
         ))),
-        _ => Ok(None),
+        None => Ok(None),
     }
 }
 
@@ -236,7 +258,7 @@ fn copied(device: &Device, source: &Target) -> Result<bool, Error> {
 pub(super) fn twin_resolved(pf: PixelFormat, samples: u32) -> bool {
     samples > 1
         && srgb_twin(pf)
-            .and_then(metal2vulkan::metal::format::direct_format)
+            .and_then(direct_format)
             .and_then(ColorResolveFormat::of)
             .is_some()
 }
@@ -252,7 +274,7 @@ pub(super) fn twin_read_view(
     format: Format,
     samples: u32,
 ) -> Option<Format> {
-    use metal2vulkan::metal::format::{direct_format, srgb_raw_twin};
+    use metal2vulkan::metal::format::srgb_raw_twin;
     if !twin_resolved(pf, samples) {
         return None;
     }
@@ -271,7 +293,7 @@ pub(super) fn twin_read_view(
 pub(super) fn input_candidate(plan: &ImagePlan) -> Option<ImagePlan> {
     let usage = plan.usage;
     let samples = plan.samples.as_raw();
-    let resolved = shader_rules(plan.pixel_format, samples).is_some()
+    let resolved = shader_rules(plan.pixel_format, plan.format, samples).is_some()
         || twin_resolved(plan.pixel_format, samples);
     let candidate = usage.contains(ImageUsageFlags::COLOR_ATTACHMENT)
         && !usage.contains(ImageUsageFlags::INPUT_ATTACHMENT)
@@ -288,10 +310,13 @@ pub(super) fn input_candidate(plan: &ImagePlan) -> Option<ImagePlan> {
 /// the image takes a view of it (an sRGB texture's image lists its twin's formats,
 /// `image_plan.rs`) and `device` renders it. A target already in the raw twin, which a twin
 /// resolve's attachment is (`resolve::Resolve::twin`: the UNORM attachment of sRGB rules holds
-/// their codes itself), is reached through a view in its own format.
+/// their codes itself), is reached through a view in its own format. So is a target an 8-bit
+/// sRGB texture renders through the view of its word ([`word_view`]), whose image lists its
+/// UNORM twin's view (`image_plan.rs`): the word's codes are the twin's.
 fn raw_view(device: &Device, target: &Target, rules: ColorResolveFormat) -> Result<bool, Error> {
     let raw = rules.raw_format();
-    if raw == rules.format() || (target.format != rules.format() && target.format != raw) {
+    let reached = target.format == rules.format() || target.format == raw || word_view(target);
+    if raw == rules.format() || !reached {
         return Ok(false);
     }
     let profile = device.compile_device().profile();

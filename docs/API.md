@@ -594,7 +594,7 @@ Where Metal's rules differ from Vulkan's, the pipeline gives Metal's answer:
   clear's or an earlier blend's result in the pass as a `half`, and under fast math Metal sums a
   few states otherwise; `docs/FAST-PATHS.md`). A blend of the second source, and a blend or
   partial mask on a device without the interlock, is refused as the device lacking the format; a
-  resolve of one, and a blend of an output of fewer lanes, is `NotImplemented`; a color input of
+  blend of an output of fewer lanes is `NotImplemented`; a color input of
   one is read in the interlocked storage form, the word decoded to each channel's code over its
   maximum code rounded to `half`, nearest even, which is Metal's value (measured on an Apple M3
   Max under macOS 27.0.1 for a `float4` and a `half4` input, every code of each 4-bit channel).
@@ -606,15 +606,26 @@ Where Metal's rules differ from Vulkan's, the pipeline gives Metal's answer:
   merges the word in the interlock, or over the attachment's input attachment on a device that
   orders fetch through rasterization-order input attachments (lavapipe;
   `RuntimeFact::WordInputMerge`). A blend of one
-  other than one and zero is refused as the device lacking the format; a color input or resolve
-  of one is `NotImplemented(Format)`.
+  other than one and zero is refused as the device lacking the format; a color input of one is
+  `NotImplemented(Format)`.
 - An `RGB9E5Float` attachment the device does not render (the RTX 5080) renders through an
   `R32_UINT` view of its texture: the fragment function writes Metal's word of a `float` output
   (each channel clamped to `[0, 65408]`, a NaN 0, the exponent of the largest, every mantissa
   truncated), and a pass clears it to the word of Metal's clear. Exact. A `half` output to one
   is `NotImplemented(Format)` (Metal rounds the `float` the `half` was converted from, half up);
   a blend, or a mask of some of its channels, is refused as the device lacking the format; a
-  color input or resolve of one is `NotImplemented(Format)`.
+  color input of one is `NotImplemented(Format)`.
+- A multisampled texture of one of these formats, on a device that samples the format but
+  renders it at no count (the RTX 5080), is held in its word's format (`R8_UINT`, `R16_UINT` or
+  `R32_UINT`) wherever the device renders that format at the texture's count:
+  its samples are the words Metal stores, read through the format's own view as Metal reads them,
+  and copied bitwise. Its resolve is the crate-owned one, a pass after the pass that reads the
+  stored words (`shader-resolve`): Metal's for `RGB9E5Float` (each channel's mean of the samples'
+  values, rounded to the nearest `half`, then encoded with its mantissas rounded half up) and an
+  8-bit sRGB format, every pixel; for a packed 16-bit format each field's mean of the samples'
+  codes, a tie rounded down (a one-bit field's up), within one code of Metal's, which averages its
+  tile's finer values (`word-resolve`). A device whose word's format renders one sample at that
+  count refuses the texture (`TextureSampleCount`).
 - A fragment function that reads a color attachment (framebuffer fetch) reads it in an ordered
   form wherever the device has one, and is refused (`Unsupported{FramebufferFetch}`) where it has
   none: an unordered read could see a pixel before an earlier fragment's write, which Metal never
@@ -1795,6 +1806,18 @@ bound.
   texel. Cost: where a pixel's samples differ, a resolved alpha, or an sRGB color, can differ from
   Metal's by a code (an sRGB color by a few where the samples' values nearly cancel): Metal averages
   values finer than the codes the attachment holds.
+- `metal2vulkan-degrade-word-resolve` (precision). `WordResolve`: A multisample resolve of a
+  packed 16-bit color attachment (`A1BGR5Unorm`, `ABGR4Unorm`, the other packed 16-bit formats) the
+  device renders only through the view of its word, held in the word's format: the crate-owned
+  resolve averages each field's codes, a tie rounded down (a one-bit field's up), where Metal
+  averages its tile's values, the outputs as `half`s, finer than the codes, from the pass that drew
+  them. A pixel whose samples hold one word resolves to it. Measured against Metal's resolve on the
+  M3 Max under macOS 27.0.1 (256 pixels at 2 and 4 samples per format): Metal's code in 74% to 88%
+  of the channels resolved in the pass that drew them, 90% to 99% (every one-bit alpha) of those a
+  pass only loaded, and within one code in every channel. `RGB9E5Float`'s and an 8-bit sRGB
+  format's word resolve is Metal's, every pixel. Cost: where a pixel's samples differ, a resolved
+  channel can differ from Metal's by a code: Metal averages its tile's values, finer than the codes
+  the attachment's words hold.
 - `metal2vulkan-degrade-dont-care-store` (precision). `DontCareStore`: An attachment stored with
   `DontCare` (or the multisampled attachment of `MultisampleResolve`) is Vulkan's `DONT_CARE`, where
   Apple's GPU keeps the earlier texels unless its tiler overflows. Only on a driver measured to keep

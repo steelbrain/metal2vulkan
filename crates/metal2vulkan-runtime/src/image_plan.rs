@@ -42,6 +42,11 @@
 //!   (lavapipe's `R8_SRGB`, ANV's and NVIDIA's `R8G8_SRGB`) samples its texture through the twin's
 //!   view: the image holds the twin's format, the same bytes, and the shader reads the raw codes
 //!   and decodes them as Metal does (the variant; [`holds_srgb_twin`]).
+//! - **Multisampled words.** A multisampled texture of a format the device samples but renders
+//!   only through the view of its word (`metal::format::WordAttachment`), whose own image takes
+//!   one sample (no attachment feature), is held in the word's unsigned format, which renders at
+//!   the count, mutable to the format's sampled view ([`word_samples`]): every sample holds the
+//!   word Metal stores.
 //! - **Exactness.** A texture is held only in an exact representation: 24-bit depth held as
 //!   32-bit float depth (`FormatEmulation::DepthWidened`) is refused, naming the format it needs.
 //!
@@ -527,6 +532,17 @@ fn plan_held(
             Capability::Feature(VkFeature::MultisampleArrayImage),
         )));
     }
+    // A multisampled texture of a format the device samples but renders only through its word's
+    // view, whose own image takes one sample, is held in the word's format ([`word_samples`]).
+    if let Some(plan) = word_samples(
+        layout,
+        usage,
+        memoryless,
+        facts,
+        (image_type, flags, samples),
+    ) {
+        return Ok(plan);
+    }
     // A PVRTC texture the device has no format for holds its blocks in a carrier (`pvrtc.rs`).
     if !memoryless {
         if let Some(plan) = plan_blocks(layout, usage, facts) {
@@ -872,6 +888,135 @@ fn plan_held(
         flags |= render_3d_flags(profile);
     }
     Ok(ImagePlan {
+        pixel_format: pf,
+        flags,
+        image_type,
+        format,
+        extent: layout.extent,
+        levels: layout.levels,
+        layers: layout.layers,
+        samples,
+        usage: usage_flags,
+        view_formats,
+        mapping,
+        unavailable,
+    })
+}
+
+/// The image of a multisampled color texture of `layout` with Metal `usage` (`memoryless` for
+/// `MTLStorageModeMemoryless`) whose format the device samples and renders only through the view
+/// of its word (`WordAttachment::of`: `R8Unorm_sRGB`, the packed 16-bit formats and `RGB9E5Float`
+/// on the RTX 5080), where the format's own image takes one sample: a format without an attachment
+/// feature has no multisampled image (`VkImageFormatProperties::sampleCounts`). Such a texture is
+/// held in the word's unsigned format, which the device renders at the texture's count, so every
+/// sample holds exactly the word Metal stores (its draws' and clears' words, which the fragment
+/// function and the runtime's clear values write, as at one sample). Its image is mutable to the
+/// format's own sampled view, through which a `texture2d_ms` read decodes each sample's word as
+/// the format's (Metal's `float` read of these formats is each code's value, measured by our probe
+/// `msaa_word_formats.m` on an M3 Max); to an 8-bit sRGB format's UNORM twin, through which the
+/// resolve reads its codes (`color_resolve.rs`), and to its sRGB twin's views, as any texture of
+/// the format. Its resolve is the crate-owned one (`color_resolve.rs`): no device's average reads
+/// a word. Shader writes are unavailable: Metal writes no multisampled texture from a function.
+/// `None` for a single-sampled texture, a format with no word on the device, or one whose image
+/// the device multisamples (an 8-bit sRGB format held in its UNORM twin, which renders).
+fn word_samples(
+    layout: &TextureLayout,
+    usage: TextureUsage,
+    memoryless: bool,
+    facts: &ImageFacts<'_>,
+    (image_type, flags, samples): (ImageType, ImageCreateFlags, SampleCountFlags),
+) -> Option<ImagePlan> {
+    let pf = layout.pixel_format;
+    let profile = facts.profile;
+    if samples.as_raw() == 1 {
+        return None;
+    }
+    let word = WordAttachment::of(pf, profile)?;
+    let format = word.word_format();
+    let mapping = vk_format(pf, &[FormatUsage::SampledImage].into(), profile).ok()?;
+    let attachments =
+        FormatFeatureFlags2::COLOR_ATTACHMENT | FormatFeatureFlags2::DEPTH_STENCIL_ATTACHMENT;
+    if facts.optimal(mapping.format).intersects(attachments)
+        || !compatible(format, mapping.format, false)
+    {
+        return None;
+    }
+    let usage = effective_usage(usage);
+    let wants = |bit: TextureUsage| usage.contains(bit);
+    let mut usage_flags = ImageUsageFlags::empty();
+    let mut views = BTreeSet::from([format]);
+    if wants(TextureUsage::RENDER_TARGET) {
+        usage_flags |= attachment_flag(false, profile);
+    }
+    let unavailable = if memoryless {
+        // A memoryless texture is a render target only.
+        usage_flags |= ImageUsageFlags::TRANSIENT_ATTACHMENT;
+        usage.difference(TextureUsage::RENDER_TARGET)
+    } else {
+        let optimal = facts.optimal(format);
+        for (feature, bit) in [
+            (
+                FormatFeatureFlags2::TRANSFER_SRC,
+                ImageUsageFlags::TRANSFER_SRC,
+            ),
+            (
+                FormatFeatureFlags2::TRANSFER_DST,
+                ImageUsageFlags::TRANSFER_DST,
+            ),
+        ] {
+            if optimal.contains(feature) {
+                usage_flags |= bit;
+            }
+        }
+        if wants(TextureUsage::SHADER_READ) {
+            usage_flags |= ImageUsageFlags::SAMPLED;
+            views.insert(mapping.format);
+        }
+        usage.intersection(
+            TextureUsage::SHADER_WRITE
+                | TextureUsage::SHADER_ATOMIC
+                | TextureUsage::BLOCK_WRITES_ONLY,
+        )
+    };
+    // An 8-bit sRGB word's resolve reads and writes its codes through the UNORM twin's view.
+    if let WordAttachment::Srgb8 { .. } = word {
+        views.extend(
+            srgb_raw_twin(pf)
+                .and_then(direct_format)
+                .filter(|&raw| profile.supports_format(raw, FormatUsage::ColorAttachment)),
+        );
+    }
+    if let Some(twin) = srgb_twin(pf) {
+        let twin_word = WordAttachment::of(twin, profile).map(|w| w.word_format());
+        views.extend(
+            view_formats(twin, usage_flags, profile)
+                .into_iter()
+                .filter(|&f| compatible(format, f, true) && Some(f) != twin_word),
+        );
+    }
+    let extended = [
+        (ImageUsageFlags::SAMPLED, FormatUsage::SampledImage),
+        (
+            ImageUsageFlags::COLOR_ATTACHMENT,
+            FormatUsage::ColorAttachment,
+        ),
+    ]
+    .iter()
+    .any(|&(bit, need)| usage_flags.contains(bit) && !profile.supports_format(format, need));
+    let any_format = !memoryless && usage.contains(TextureUsage::PIXEL_FORMAT_VIEW);
+    let mut flags = flags;
+    let mut view_formats = Vec::new();
+    if any_format || views.len() > 1 || extended {
+        flags |= ImageCreateFlags::MUTABLE_FORMAT;
+        if extended {
+            flags |= ImageCreateFlags::EXTENDED_USAGE;
+        }
+        if !any_format {
+            view_formats.push(format);
+            view_formats.extend(views.iter().copied().filter(|&f| f != format));
+        }
+    }
+    Some(ImagePlan {
         pixel_format: pf,
         flags,
         image_type,

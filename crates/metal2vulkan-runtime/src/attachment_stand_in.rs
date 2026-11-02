@@ -429,7 +429,7 @@ pub(super) fn stand_in_as(
     // input attachment (`color_resolve.rs`), as does the resolve into the attachment's format's
     // sRGB twin, whose encoding no device's average writes (`color_resolve::twin_resolved`).
     let resolved = multisampled
-        && (color_resolve::shader_rules(pixel_format, target.samples).is_some()
+        && (color_resolve::shader_rules(pixel_format, target.format, target.samples).is_some()
             || color_resolve::twin_resolved(pixel_format, target.samples));
     if color && (framebuffer_fetch::through_inputs(profile) || resolved) {
         usage |= ImageUsageFlags::INPUT_ATTACHMENT;
