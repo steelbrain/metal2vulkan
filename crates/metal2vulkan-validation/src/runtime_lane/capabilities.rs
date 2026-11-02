@@ -91,6 +91,7 @@ fn query_answers(p: &DeviceProperties) -> Vec<(Query, Vec<Answer>)> {
                         .minimum_linear_texture_alignment_for_pixel_format(PixelFormat::RGBA8Unorm))
                 }
                 Query::SamplerReductionMode => gapped(p.supports_sampler_reduction_mode()),
+                Query::PullModelInterpolation => gapped(p.supports_pull_model_interpolation()),
                 other => panic!("{other:?}: a query this test does not ask"),
             };
             (query, answers)
