@@ -278,6 +278,12 @@ pub(super) struct DontCareLoads {
 }
 
 impl DontCareLoads {
+    /// Whether [`dont_care_loads`] gave any attachment's `DontCare` load an answer: the only
+    /// loads the tiles a pass's draws reach bound ([`ReachClears::plan`]).
+    pub(super) fn any(&self) -> bool {
+        !self.colors.is_empty() || self.depth || self.stencil
+    }
+
     /// Whether [`dont_care_loads`] gave color attachment `index`'s `DontCare` load an answer.
     pub(super) fn color(&self, index: usize) -> bool {
         self.colors.contains(&index)
@@ -292,9 +298,46 @@ impl DontCareLoads {
 /// The most distinct pixel rectangles [`DrawnArea`] keeps; past them it is the whole render area.
 const MOST_RECTS: usize = 1024;
 
+/// What [`DrawnArea`] worked out on this thread: its tile counts ([`DrawnArea::covered_tiles`]) and
+/// its grids of the tiles a pass's draws reach ([`DrawnArea::tiles`]), which a pass end works out
+/// only where a count or a clear reads them (`tests/pass_end_tiles.rs`).
+#[cfg(test)]
+pub(super) mod made {
+    use std::cell::Cell;
+    use std::thread::LocalKey;
+
+    thread_local! {
+        pub(super) static COVERED: Cell<u64> = const { Cell::new(0) };
+        pub(super) static GRIDS: Cell<u64> = const { Cell::new(0) };
+    }
+
+    /// One more of `what` on this thread.
+    pub(super) fn note(what: &'static LocalKey<Cell<u64>>) {
+        what.with(|made| made.set(made.get() + 1));
+    }
+
+    /// The tile counts and the grids worked out on this thread so far.
+    pub(crate) fn so_far() -> [u64; 2] {
+        [COVERED.with(Cell::get), GRIDS.with(Cell::get)]
+    }
+}
+
 /// The words of a row of tiles in [`DrawnArea::covered_tiles`]: 512 tiles, the 16384 pixels of
 /// the widest render area.
 const ROW_WORDS: usize = 8;
+
+/// Set the bits `bits` of `row`, a row of tiles in [`DrawnArea::covered_tiles`], a word at a time.
+fn set_bits(row: &mut [u64; ROW_WORDS], bits: std::ops::Range<u32>) {
+    if bits.is_empty() {
+        return;
+    }
+    for word in bits.start / 64..bits.end.div_ceil(64) {
+        let first = bits.start.max(word * 64) - word * 64;
+        let past = bits.end.min(word * 64 + 64) - word * 64;
+        let ones = u64::MAX >> (64 - (past - first));
+        row[word as usize] |= ones << first;
+    }
+}
 
 /// The pixels a pass's draws may write, as far as the host bounds them: each draw that draws
 /// writes only inside its viewports' pixels within their scissor rectangles
@@ -393,6 +436,8 @@ impl DrawnArea {
     /// `None` where it bounds nothing. A count (`WorkCounts::shadow_attachment_tiles_covered`):
     /// what a copy cut to the rectangles' tiles would leave out of one cut to their bounds.
     pub(super) fn covered_tiles(&self) -> Option<(u64, u64)> {
+        #[cfg(test)]
+        made::note(&made::COVERED);
         let [x0, y0, x1, y1] = self.bounds()?;
         let (tx0, ty0) = (x0 / TILE, y0 / TILE);
         let (tx1, ty1) = (x1.div_ceil(TILE), y1.div_ceil(TILE));
@@ -402,22 +447,31 @@ impl DrawnArea {
         if (tx1 - tx0) as usize > ROW_WORDS * 64 {
             return Some((bounded, bounded));
         }
+        // Each rectangle's tiles: its columns from the bounds' first, and its rows.
+        let tiled = |&[rx0, ry0, rx1, ry1]: &[u32; 4]| {
+            (rx0 < rx1 && ry0 < ry1).then(|| {
+                let columns = rx0 / TILE - tx0..rx1.div_ceil(TILE) - tx0;
+                (columns, ry0 / TILE..ry1.div_ceil(TILE))
+            })
+        };
+        // The rows where a rectangle's tiles start or end: every row from one such edge to the
+        // next is reached by the same rectangles, so one row of tiles counts for them all.
+        let mut edges: Vec<u32> = (self.rects.iter().filter_map(tiled))
+            .flat_map(|(_, rows)| [rows.start, rows.end])
+            .collect();
+        edges.sort_unstable();
+        edges.dedup();
         let mut covered = 0;
-        for ty in ty0..ty1 {
-            let (top, bottom) = (ty * TILE, (ty + 1) * TILE);
+        for band in edges.windows(2) {
+            let (top, bottom) = (band[0], band[1]);
             let mut row = [0u64; ROW_WORDS];
-            for &[rx0, ry0, rx1, ry1] in self.rects.iter() {
-                if rx0 >= rx1 || ry0 >= ry1 || ry0 >= bottom || ry1 <= top {
-                    continue;
-                }
-                for tile in rx0 / TILE - tx0..rx1.div_ceil(TILE) - tx0 {
-                    row[(tile / 64) as usize] |= 1 << (tile % 64);
+            for (columns, rows) in self.rects.iter().filter_map(tiled) {
+                if rows.contains(&top) {
+                    set_bits(&mut row, columns);
                 }
             }
-            covered += row
-                .iter()
-                .map(|word| u64::from(word.count_ones()))
-                .sum::<u64>();
+            let tiles: u64 = row.iter().map(|word| u64::from(word.count_ones())).sum();
+            covered += u64::from(bottom - top) * tiles;
         }
         Some((covered, bounded))
     }
@@ -450,8 +504,32 @@ impl DrawnArea {
     /// `None` where that is every tile of the render area rounded up to whole tiles, the area is
     /// not bounded, or the pass's sample count has no measured tile size.
     pub(super) fn tiles(&self, layout: &PassLayout) -> Option<DrawnTiles> {
+        #[cfg(test)]
+        made::note(&made::GRIDS);
         let tile = layout.tile.tile.filter(|_| !self.whole)?;
         self.tiles_of(tile, layout.extent)
+    }
+
+    /// Whether [`tiles`](Self::tiles) holds tiles and none is reached: the rectangles reach no
+    /// tile of `layout`'s pass, which a scan of them answers with no grid made.
+    pub(super) fn reaches_no_tile(&self, layout: &PassLayout) -> bool {
+        layout
+            .tile
+            .tile
+            .filter(|_| !self.whole)
+            .is_some_and(|tile| self.reaches_no_tile_of(tile, layout.extent))
+    }
+
+    /// [`reaches_no_tile`](Self::reaches_no_tile) at `tile` pixels a side of a render area of
+    /// `extent`: a grid of tiles, none of which a rectangle overlaps, as
+    /// [`tiles_of`](Self::tiles_of) sets them.
+    fn reaches_no_tile_of(&self, tile: [u32; 2], extent: [u32; 2]) -> bool {
+        let [per_row, rows] = [0, 1].map(|axis| extent[axis].div_ceil(tile[axis]));
+        let overlaps = |&[x0, y0, x1, y1]: &[u32; 4]| {
+            x0 / tile[0] < x1.div_ceil(tile[0]).min(per_row)
+                && y0 / tile[1] < y1.div_ceil(tile[1]).min(rows)
+        };
+        per_row != 0 && rows != 0 && !self.rects.iter().any(overlaps)
     }
 
     /// The tiles of `tile` pixels a side of a render area of `extent` the rectangles reach:
@@ -501,11 +579,6 @@ pub(super) struct DrawnTiles {
 }
 
 impl DrawnTiles {
-    /// Whether no tile is reached.
-    pub(super) fn is_empty(&self) -> bool {
-        self.words.iter().all(|&w| w == 0)
-    }
-
     /// Whether tile `(tx, ty)` is reached: none past the grid.
     pub(super) fn contains(&self, tx: u32, ty: u32) -> bool {
         let t = (ty as usize) * (self.per_row as usize) + tx as usize;
@@ -879,6 +952,43 @@ mod tests {
             assert_eq!(area.covered_tiles(), *expected, "case {case}");
         }
         assert_eq!(DrawnArea::unbounded().covered_tiles(), None);
+        // Against the tiles counted one at a time, for rectangles spread over a large area.
+        let mut seed = 0x2545_f491_u64;
+        let mut next = |below: u32| {
+            seed = seed.wrapping_mul(6_364_136_223_846_793_005).wrapping_add(1);
+            ((seed >> 33) % u64::from(below)) as u32
+        };
+        for case in 0..200 {
+            let rects: Vec<vk::Rect2D> = (0..1 + next(24))
+                .map(|_| {
+                    rect(
+                        next(3000) as i32,
+                        next(2000) as i32,
+                        1 + next(900),
+                        1 + next(700),
+                    )
+                })
+                .collect();
+            let mut area = DrawnArea::default();
+            area.add(&rects);
+            let [x0, y0, x1, y1] = area.bounds().expect("a rectangle");
+            let (tx0, ty0, tx1, ty1) = (x0 / 32, y0 / 32, x1.div_ceil(32), y1.div_ceil(32));
+            let mut covered = 0;
+            for ty in ty0..ty1 {
+                for tx in tx0..tx1 {
+                    let reached = area.rects.iter().any(|&[rx0, ry0, rx1, ry1]| {
+                        rx0 < (tx + 1) * 32 && tx * 32 < rx1 && ry0 < (ty + 1) * 32 && ty * 32 < ry1
+                    });
+                    covered += u64::from(reached);
+                }
+            }
+            let bounded = u64::from(tx1 - tx0) * u64::from(ty1 - ty0);
+            assert_eq!(
+                area.covered_tiles(),
+                Some((covered, bounded)),
+                "case {case}"
+            );
+        }
     }
 
     /// The tiles a pass's rectangles reach are the tiles each overlaps, whether one of them
@@ -905,6 +1015,10 @@ mod tests {
             vec![rect(0, 0, 50, 70), rect(50, 0, 50, 70)],
             vec![rect(40, 20, 10, 10)],
             vec![],
+            // Past the grid, across and down: no tile.
+            vec![rect(128, 0, 10, 10)],
+            vec![rect(0, 80, 10, 10), rect(130, 90, 5, 5)],
+            vec![rect(96, 64, 4, 6)],
         ];
         for (case, rects) in cases.iter().enumerate() {
             let mut area = DrawnArea::default();
@@ -919,6 +1033,9 @@ mod tests {
                 })
             };
             let every = (0..rows).all(|ty| (0..per_row).all(|tx| reached(tx, ty)));
+            // The scan with no grid made answers whether the grid holds none.
+            let none = (0..rows).all(|ty| (0..per_row).all(|tx| !reached(tx, ty)));
+            assert_eq!(area.reaches_no_tile_of(tile, extent), none, "case {case}");
             match area.tiles_of(tile, extent) {
                 None => assert!(every, "case {case}"),
                 Some(tiles) => {

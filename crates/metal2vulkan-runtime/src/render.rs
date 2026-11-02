@@ -4332,19 +4332,23 @@ impl RenderLowering {
             });
         }
         let loaded_colors = &loaded[..layout.colors.len()];
-        let tiles = match reach {
-            clear_reach::PassReach::Draws => drawn.tiles(&layout),
-            _ => None,
+        // A pass whose draws' rectangles reach no tile reaches none.
+        let reach = match reach {
+            clear_reach::PassReach::Draws if drawn.reaches_no_tile(&layout) => {
+                clear_reach::PassReach::Nothing
+            }
+            reach => reach,
         };
-        let reach = match &tiles {
-            Some(tiles) if tiles.is_empty() => clear_reach::PassReach::Nothing,
-            _ => reach,
-        };
-        let tiles = tiles.filter(|tiles| !tiles.is_empty());
         // A `DontCare` load of an attachment the pass stores: loaded in a pass whose draws reach
         // no tile, else cleared to zero or its clear value, Metal's answer in each tile a draw
         // reaches (`clear_reach.rs`), and only in those `tiles` bounds.
         let dont_care = clear_reach::dont_care_loads(&mut layout, reach);
+        // The tiles the draws reach, which only those loads' clears read: none made for a pass
+        // without one.
+        let tiles = match reach {
+            clear_reach::PassReach::Draws if dont_care.any() => drawn.tiles(&layout),
+            _ => None,
+        };
         if let Some(named) = dont_care.named.clone() {
             device.degrade(Degradation::DontCareLoadTiles, || {
                 (

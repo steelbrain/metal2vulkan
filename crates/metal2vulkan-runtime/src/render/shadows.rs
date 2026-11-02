@@ -638,6 +638,8 @@ fn color_take(
 
 /// Count how a pass of `layout` takes each of its color attachments whose texture is shadowed
 /// (`WorkCounts::shadow_attachment_loads_within` and kin), as [`attachment_shadows`] plans them.
+/// The tiles `area` covers are counted only for a shadowed color loaded within its draws'
+/// scissors, the one count that reads them: a pass with none counts no tile.
 fn count_colors(
     counts: &Counters,
     layout: &PassLayout,
@@ -645,7 +647,7 @@ fn count_colors(
     drawn: Option<([u32; 4], &[bool])>,
     area: Option<&DrawnArea>,
 ) {
-    let tiles = area.and_then(DrawnArea::covered_tiles);
+    let mut tiles = None;
     let colors = layout.colors.iter().enumerate();
     for (index, color) in colors.filter_map(|(index, color)| Some((index, color.as_ref()?))) {
         let Some(copies) = color.target.texture.shadow() else {
@@ -660,7 +662,11 @@ fn count_colors(
             _ => ColorTaken::Loaded,
         };
         counts.shadow_color_taken(taken);
-        if let (ColorTaken::LoadedWithin, Some((covered, bounded))) = (taken, tiles) {
+        if taken != ColorTaken::LoadedWithin {
+            continue;
+        }
+        let tiles = *tiles.get_or_insert_with(|| area.and_then(DrawnArea::covered_tiles));
+        if let Some((covered, bounded)) = tiles {
             counts.shadow_attachment_tiles(covered, bounded);
         }
     }
