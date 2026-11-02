@@ -194,8 +194,8 @@ pub enum FormatEmulation {
     /// reads the nearest texel) and blends none (its validation asserts), so a filter and a blend
     /// are not admitted.
     Bfloat,
-    /// A compressed format the device has no format for, today an ASTC LDR, a PVRTC, an ETC2 or
-    /// an EAC one (or its `_sRGB` form), or a 4:2:2 one (`GBGR422`, `BGRG422`, whose Vulkan
+    /// A compressed format the device has no format for, today an ASTC (LDR, `_sRGB` or `_HDR`),
+    /// a PVRTC, an ETC2 or an EAC one (or its `_sRGB` form), or a 4:2:2 one (`GBGR422`, `BGRG422`, whose Vulkan
     /// formats reconstruct chroma by the implementation's rules): the texture's blocks are held
     /// for copies alone, and its sampled views present a decoded twin, an image of Metal's decode
     /// of them ([`AstcDecode`](crate::bind::AstcDecode), [`PvrtcDecode`](crate::bind::PvrtcDecode),
@@ -203,7 +203,8 @@ pub enum FormatEmulation {
     /// the consumer decodes after each write. The candidate's format is the twin's view of compact
     /// texels, `R8G8B8A8_UNORM` (an `_sRGB` form's `R8G8B8A8_SRGB`), whose texels are 8-bit codes
     /// of Metal's values (a PVRTC, ETC2, EAC or 4:2:2 format's own codes, an sRGB one's decoded by
-    /// the device through that view, `texel_format::srgb_coded`), or an EAC 11-bit
+    /// the device through that view, `texel_format::srgb_coded`), an ASTC HDR format's
+    /// half-precision values, Metal's exactly (`R16G16B16A16_SFLOAT`), or an EAC 11-bit
     /// format's 16-bit normalized codes nearest Metal's values (`R16_UNORM`, `R16_SNORM` and their
     /// two-channel forms); for an ASTC or an EAC 11-bit format the consumer may hold Metal's values
     /// exactly as `float`s instead ([`AstcTexels`](crate::bind::AstcTexels),
@@ -1649,22 +1650,24 @@ fn make_repr(pf: PixelFormat) -> Repr {
         P::ASTC12x10LDR => decoded(F::ASTC_12X10_UNORM_BLOCK, F::R8G8B8A8_UNORM),
         P::ASTC12x12LDR => decoded(F::ASTC_12X12_UNORM_BLOCK, F::R8G8B8A8_UNORM),
         // The ASTC HDR profile: the `SFLOAT` blocks (core 1.3 or
-        // `VK_EXT_texture_compression_astc_hdr`). Like every compressed format they are usable
-        // where the format properties say so; `textureCompressionASTC_HDR` only guarantees that.
-        P::ASTC4x4HDR => one(F::ASTC_4X4_SFLOAT_BLOCK),
-        P::ASTC5x4HDR => one(F::ASTC_5X4_SFLOAT_BLOCK),
-        P::ASTC5x5HDR => one(F::ASTC_5X5_SFLOAT_BLOCK),
-        P::ASTC6x5HDR => one(F::ASTC_6X5_SFLOAT_BLOCK),
-        P::ASTC6x6HDR => one(F::ASTC_6X6_SFLOAT_BLOCK),
-        P::ASTC8x5HDR => one(F::ASTC_8X5_SFLOAT_BLOCK),
-        P::ASTC8x6HDR => one(F::ASTC_8X6_SFLOAT_BLOCK),
-        P::ASTC8x8HDR => one(F::ASTC_8X8_SFLOAT_BLOCK),
-        P::ASTC10x5HDR => one(F::ASTC_10X5_SFLOAT_BLOCK),
-        P::ASTC10x6HDR => one(F::ASTC_10X6_SFLOAT_BLOCK),
-        P::ASTC10x8HDR => one(F::ASTC_10X8_SFLOAT_BLOCK),
-        P::ASTC10x10HDR => one(F::ASTC_10X10_SFLOAT_BLOCK),
-        P::ASTC12x10HDR => one(F::ASTC_12X10_SFLOAT_BLOCK),
-        P::ASTC12x12HDR => one(F::ASTC_12X12_SFLOAT_BLOCK),
+        // `VK_EXT_texture_compression_astc_hdr`), else the decoded twin's view
+        // (`FormatEmulation::Decoded`) of Metal's half-precision values. Like every compressed
+        // format the blocks are usable where the format properties say so;
+        // `textureCompressionASTC_HDR` only guarantees that.
+        P::ASTC4x4HDR => decoded(F::ASTC_4X4_SFLOAT_BLOCK, F::R16G16B16A16_SFLOAT),
+        P::ASTC5x4HDR => decoded(F::ASTC_5X4_SFLOAT_BLOCK, F::R16G16B16A16_SFLOAT),
+        P::ASTC5x5HDR => decoded(F::ASTC_5X5_SFLOAT_BLOCK, F::R16G16B16A16_SFLOAT),
+        P::ASTC6x5HDR => decoded(F::ASTC_6X5_SFLOAT_BLOCK, F::R16G16B16A16_SFLOAT),
+        P::ASTC6x6HDR => decoded(F::ASTC_6X6_SFLOAT_BLOCK, F::R16G16B16A16_SFLOAT),
+        P::ASTC8x5HDR => decoded(F::ASTC_8X5_SFLOAT_BLOCK, F::R16G16B16A16_SFLOAT),
+        P::ASTC8x6HDR => decoded(F::ASTC_8X6_SFLOAT_BLOCK, F::R16G16B16A16_SFLOAT),
+        P::ASTC8x8HDR => decoded(F::ASTC_8X8_SFLOAT_BLOCK, F::R16G16B16A16_SFLOAT),
+        P::ASTC10x5HDR => decoded(F::ASTC_10X5_SFLOAT_BLOCK, F::R16G16B16A16_SFLOAT),
+        P::ASTC10x6HDR => decoded(F::ASTC_10X6_SFLOAT_BLOCK, F::R16G16B16A16_SFLOAT),
+        P::ASTC10x8HDR => decoded(F::ASTC_10X8_SFLOAT_BLOCK, F::R16G16B16A16_SFLOAT),
+        P::ASTC10x10HDR => decoded(F::ASTC_10X10_SFLOAT_BLOCK, F::R16G16B16A16_SFLOAT),
+        P::ASTC12x10HDR => decoded(F::ASTC_12X10_SFLOAT_BLOCK, F::R16G16B16A16_SFLOAT),
+        P::ASTC12x12HDR => decoded(F::ASTC_12X12_SFLOAT_BLOCK, F::R16G16B16A16_SFLOAT),
         // 4:2:2: `G8B8G8R8_422_UNORM`/`B8G8R8G8_422_UNORM` exist (core 1.1), but a view of them
         // needs a sampler Y′CbCr conversion (VUID-VkImageViewCreateInfo-format-06415), whose
         // chroma reconstruction is the implementation's. The decoded twin's view

@@ -1,6 +1,8 @@
 //! The ASTC decode against blocks the specification's rules decide outright, and against Metal's
 //! reads of seeded random blocks on an Apple M3 Max (macOS 27.0.1).
 
+mod hdr;
+
 use super::kernel::typed_module;
 use super::{AstcDecode, AstcTexels, Illegal};
 use crate::bind::block_decode::{BlockDecodeModule, BLOCKS, SHAPE, TEXELS};
@@ -8,24 +10,25 @@ use crate::metal::PixelFormat;
 use crate::spirv::interp::{run, Buffer, Config, Order, Resources};
 use crate::spirv::testing::{assert_valid, committed_profiles};
 
-/// The fourteen 2D footprints, linear and sRGB, decode, and no other format does (the HDR forms
-/// and Apple's 4x2 and 8x4 footprints among them).
+/// The fourteen 2D footprints, linear, sRGB and HDR, decode, and no other format does (Apple's
+/// 4x2 and 8x4 footprints among them).
 #[test]
-fn the_ldr_and_srgb_formats_alone_decode() {
+fn the_fourteen_footprints_of_every_profile_alone_decode() {
     let decoded: Vec<(PixelFormat, AstcDecode)> = PixelFormat::ALL
         .iter()
         .filter_map(|&pf| AstcDecode::of(pf).map(|d| (pf, d)))
         .collect();
-    assert_eq!(decoded.len(), 28);
+    assert_eq!(decoded.len(), 42);
     for (pf, d) in decoded {
         let name = pf.name();
         let footprint = format!("_{}x{}_", d.width, d.height);
         assert!(name.contains(&footprint), "{name}: {d:?}");
         assert_eq!(name.ends_with("_sRGB"), d.srgb, "{name}");
-        assert!(name.ends_with("_LDR") || d.srgb, "{name}");
+        assert_eq!(name.ends_with("_HDR"), d.hdr, "{name}");
+        assert!(name.ends_with("_LDR") || d.srgb || d.hdr, "{name}");
     }
     for pf in [
-        PixelFormat::ASTC8x8HDR,
+        PixelFormat::ASTC4x2HDR,
         PixelFormat::ASTC4x2LDR,
         PixelFormat::ASTC8x4SRGB,
         PixelFormat::BC7RGBAUnorm,
@@ -234,7 +237,7 @@ fn kernel_texels(
 ) -> Vec<u8> {
     let m = typed_module(decode, texels).expect("module");
     let [w, h, d] = size;
-    let length = (w * h * d * AstcDecode::texel_bytes(texels)) as usize;
+    let length = (w * h * d * decode.texel_bytes(texels)) as usize;
     let res = Resources {
         buffers: vec![
             Buffer {
@@ -345,7 +348,7 @@ fn assert_kernel_decodes(
     let want = decode.decode(texels, blocks, size);
     for &order in orders {
         let got = kernel_texels(decode, texels, blocks, size, order);
-        let bytes = AstcDecode::texel_bytes(texels) as usize;
+        let bytes = decode.texel_bytes(texels) as usize;
         let differs = (got.chunks(bytes).zip(want.chunks(bytes))).position(|(g, w)| g != w);
         if let Some(t) = differs {
             let [w, h, _] = size.map(|axis| axis as usize);

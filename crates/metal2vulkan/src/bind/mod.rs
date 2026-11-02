@@ -95,7 +95,7 @@
 //! [`two_plane_texels_module`]; a blit into such a texture of a heap writes the heap's bytes at
 //! Metal's rows through [`plane_bytes_copy_module`]. A heap texture over host pages keeps its
 //! elements in the heap's bytes in Metal's tiled layout, moved between its image and those bytes
-//! through [`tiled_texels_module`]. An ASTC LDR texture
+//! through [`tiled_texels_module`]. An ASTC texture
 //! on a device without its block is read through a twin of Metal's decode of its blocks
 //! ([`AstcDecode`], in the texels [`AstcTexels`] names), which [`astc_decode_module`] writes from
 //! the blocks each write left, each decode module of [`BlockDecodeModule`]'s shape; a

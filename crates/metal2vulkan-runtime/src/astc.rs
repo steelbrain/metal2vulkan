@@ -1,12 +1,16 @@
-//! ASTC LDR textures on a device without their ASTC block: their blocks held as raw bytes in a
-//! carrier, which copies move, and their samples read a decoded twin.
+//! ASTC textures (LDR, sRGB and HDR) on a device without their ASTC block: their blocks held as
+//! raw bytes in a carrier, which copies move, and their samples read a decoded twin.
 //!
-//! - **Metal's answers** (an Apple M3 Max under macOS 27.0.1, our own probe): every ASTC LDR
-//!   format makes a texture, `Shared`, `Private` and memoryless, of every type but 1D and
-//!   multisampled, of `ShaderWrite` and `RenderTarget` usage too, and views as its sRGB or HDR
-//!   form. `getBytes` and a blit out of the texture hand back the blocks a write put there; a new
-//!   texture's blocks are zeros, which read magenta (an error block). Its reads and samples are
-//!   `bind::AstcDecode`'s.
+//! - **Metal's answers** (an Apple M3 Max under macOS 27.0.1, our own probes; the HDR formats'
+//!   `conformance/probes/astc_hdr_textures.m`): every ASTC format, LDR, sRGB and HDR, makes a
+//!   texture, `Shared`, `Private` and memoryless, of every type but 1D and multisampled (which
+//!   end the process), of `ShaderWrite` and `RenderTarget` usage too, and views as its other
+//!   forms of the footprint (another footprint's view ends the process). `getBytes` and a blit out
+//!   of the texture hand back the blocks a write put there; a new texture's blocks are zeros,
+//!   which read magenta (an error block; an HDR texture's NaN). Its reads and samples are
+//!   `bind::AstcDecode`'s. An HDR format's render pipeline ends the process; a pass storing into
+//!   such a texture completes and leaves its blocks as they were, and a kernel's write completes
+//!   and leaves bytes no format defines: Metal's validation stops both.
 //! - **The store.** Vulkan copies a compressed image's blocks as bytes. Such a texture holds its
 //!   blocks in an image of a *carrier*: a compressed format whose blocks are also 16 bytes, over
 //!   4 x 4 texels, the first of [`CARRIERS`] the device copies (every Vulkan device has BC or ETC2,
@@ -21,14 +25,17 @@
 //!   (`texture/decoded_twin.rs`), Metal's decode of the blocks as 8-bit codes (an LDR form's the
 //!   code nearest Metal's 12-bit value, announced `decoded-texel-precision`; an sRGB form's its own
 //!   codes, which its slots read through the twin's `R8G8B8A8_SRGB` view, the device's decode,
-//!   announced `srgb-texel-decode`), decoded after each write as a BC
+//!   announced `srgb-texel-decode`) or an HDR form's halves, Metal's exactly
+//!   (`R16G16B16A16_SFLOAT`), decoded after each write as a BC
 //!   texture's twin is: on the GPU (`bind::astc_decode_module`), or a host write's on the CPU.
 //!   A view in the texture's other colour space (its `_sRGB` or LDR form) presents a second twin
 //!   of that form's decode, made at the first such view. Refused: a heap's or a sparse heap's
-//!   texture (`RuntimeGap::DecodedHeapTexture`) and a view of another decode (the texture's HDR
-//!   form, or another footprint; `Feature::TextureView`). A shader write and
-//!   an attachment take no such image: Metal's functions write no compressed texture, and no pass
-//!   renders into one.
+//!   texture (`RuntimeGap::DecodedHeapTexture`) and a view of another decode (an LDR or sRGB
+//!   texture's HDR form, an HDR texture's LDR or sRGB form, or another footprint;
+//!   `Feature::TextureView`). A shader write and an attachment take no such image (no more than
+//!   the device's own ASTC block, which Vulkan neither stores into nor renders into): a pass
+//!   rendering into one and a kernel's binding for writes are refused, typed, where Metal's
+//!   validation stops each.
 
 use super::copy_plan::ImageRegion;
 use super::image_plan::{sample_count, ImageFacts, ImagePlan};

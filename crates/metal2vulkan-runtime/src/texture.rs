@@ -5212,7 +5212,8 @@ impl Texture {
             ));
         }
         // A carrier's decoded twin holds its own blocks' decode alone: a view of another decode
-        // (an ASTC format's HDR form or another footprint, another PVRTC block, an EAC 11-bit
+        // (an ASTC format's HDR form, an HDR format's LDR or sRGB one, or another footprint,
+        // another PVRTC block, an EAC 11-bit
         // format's other signedness) reads no twin (`astc.rs`, `pvrtc.rs`, `etc.rs`; a PVRTC,
         // ETC2 or EAC format's sRGB form's codes are its linear form's). A view of an ASTC
         // texture in its other colour space reads the carrier's second twin, made now where it
@@ -5222,7 +5223,8 @@ impl Texture {
             let pf = record.pixel_format;
             let astc = super::astc::decode_of(truth.plan()).map(|held| (held, AstcDecode::of(pf)));
             let other_space = matches!(astc, Some((held, Some(view)))
-                if view.srgb != held.srgb && [view.width, view.height] == [held.width, held.height]);
+                if view.srgb != held.srgb && view.hdr == held.hdr
+                    && [view.width, view.height] == [held.width, held.height]);
             let astc = astc.is_some_and(|(held, view)| view != Some(held)) && !other_space;
             let pvrtc = super::pvrtc::decode_of(truth.plan())
                 .is_some_and(|held| PvrtcDecode::of(pf).map(PvrtcDecode::linear) != Some(held));

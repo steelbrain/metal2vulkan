@@ -2074,3 +2074,88 @@ fn astc_carriers_hold_each_level_s_blocks() {
     }
     assert!(carried > 0, "no committed device holds ASTC in a carrier");
 }
+
+/// Every ASTC HDR format's texture, of every type Metal makes of one (2D, 2D array, cube, cube
+/// array, 3D) and every usage (`ShaderWrite` and `RenderTarget` too, unavailable), plans on every
+/// committed device that holds ASTC LDR in a carrier: in its own `SFLOAT` block where the device
+/// samples it (MoltenVK on the M3 Max, its `textureCompressionASTC_HDR`), else its blocks in a
+/// carrier whose decoded twin holds Metal's halves (`R16G16B16A16_SFLOAT`) — the RTX 5080's among
+/// them, which refused it before the decode.
+#[test]
+fn astc_hdr_textures_plan_natively_or_in_a_carrier() {
+    use super::super::astc::{decode_of, CARRIERS as ASTC_CARRIERS};
+    use super::super::texture::decoded_twin::{twin_plan, TwinDecode};
+    use metal2vulkan::bind::{AstcDecode, AstcTexels};
+    let hdr: Vec<PixelFormat> = (PixelFormat::ALL.iter().copied())
+        .filter(|&pf| AstcDecode::of(pf).is_some_and(|d| d.hdr))
+        .collect();
+    assert_eq!(hdr.len(), 14);
+    let (mut native, mut carried) = (Vec::new(), Vec::new());
+    for (name, desc, device) in committed() {
+        let facts = facts(&desc, &device);
+        let copies = FormatFeatureFlags2::TRANSFER_SRC | FormatFeatureFlags2::TRANSFER_DST;
+        if !(ASTC_CARRIERS.iter()).any(|&f| facts.optimal(f).contains(copies)) {
+            continue;
+        }
+        for &pf in &hdr {
+            let decode = AstcDecode::of(pf).expect("a decode");
+            let block = direct_format(pf).expect("an SFLOAT block");
+            let own = facts
+                .optimal(block)
+                .contains(FormatFeatureFlags2::SAMPLED_IMAGE);
+            for ty in [
+                TextureType::Type2D,
+                TextureType::Type2DArray,
+                TextureType::Cube,
+                TextureType::CubeArray,
+                TextureType::Type3D,
+            ] {
+                let what = format!("{name} {pf:?} {ty:?}");
+                let l = layout(ty, pf, 1, if ty == TextureType::CubeArray { 6 } else { 1 });
+                let usage = TextureUsage::SHADER_READ
+                    | TextureUsage::SHADER_WRITE
+                    | TextureUsage::RENDER_TARGET;
+                let plan = plan_image(&l, usage, false, &facts).expect(&what);
+                assert!(
+                    plan.unavailable
+                        .contains(TextureUsage::SHADER_WRITE | TextureUsage::RENDER_TARGET),
+                    "{what}: {:?}",
+                    plan.unavailable
+                );
+                if own {
+                    assert_eq!(plan.format, block, "{what}");
+                    assert_eq!(decode_of(&plan), None, "{what}");
+                    continue;
+                }
+                assert!(
+                    ASTC_CARRIERS.contains(&plan.format),
+                    "{what}: {:?}",
+                    plan.format
+                );
+                assert_eq!(decode_of(&plan), Some(decode), "{what}");
+                let twin = TwinDecode::Astc(decode, decode.form(AstcTexels::Unorm8));
+                let twin = twin_plan(&plan, &l, twin, false);
+                assert_eq!(twin.format, Format::R16G16B16A16_SFLOAT, "{what}");
+                assert_eq!(twin.pixel_format, PixelFormat::RGBA16Float, "{what}");
+            }
+            match own {
+                true => native.push(name.clone()),
+                false => carried.push(name.clone()),
+            }
+        }
+    }
+    assert!(native.contains(&"moltenvk-m3".to_owned()), "{native:?}");
+    assert!(!carried.contains(&"moltenvk-m3".to_owned()), "{carried:?}");
+    for profile in [
+        "nvidia-rtx5080-laptop",
+        "lavapipe",
+        "amd-780m-radv",
+        "intel-arl-anv",
+    ] {
+        assert_eq!(
+            carried.iter().filter(|name| *name == profile).count(),
+            14,
+            "{profile}: {carried:?}"
+        );
+    }
+}

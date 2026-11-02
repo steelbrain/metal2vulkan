@@ -532,9 +532,11 @@ driver's. Each is open work.
   `NotImplemented(Format)`, and a blend or a mask of some of its channels is refused as the
   device lacking the format.
 - **ASTC textures on a device without ASTC.** Making a heap's or a sparse heap's such texture
-  (`RuntimeGap::DecodedHeapTexture`) and a view of another decode (its HDR form) are refused. The
-  heap size query answers one: its footprint is Metal's blocks, which no image of the device
-  decides.
+  (`RuntimeGap::DecodedHeapTexture`) and a view of another decode (an LDR or sRGB texture's HDR
+  form, an HDR texture's LDR or sRGB form) are refused. The heap size query answers one: its
+  footprint is Metal's blocks, which no image of the device decides. A pass rendering into one,
+  and a kernel's write of one, are refused where Metal's validation stops them (plain Metal's pass
+  stores nothing, and its write leaves bytes no format defines).
 - **The 32 formats this crate holds no image of** (`metal::format::footprint`: ASTC's 4x2 and 8x4
   footprints, `ARGB8Unorm_sRGB`, Apple's nine one-plane `YCBCR*` formats, the ten
   padded 10- and 12-bit display formats, the four `RGB10A8_2P` ones and the two packed 10-bit

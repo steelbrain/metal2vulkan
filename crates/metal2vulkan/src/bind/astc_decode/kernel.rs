@@ -27,6 +27,8 @@ use crate::spirv::ir::{
     UnOp,
 };
 
+mod hdr;
+
 /// The module's tables (the module docs), as `Private` arrays.
 #[derive(Clone, Copy)]
 struct Tables {
@@ -674,9 +676,9 @@ impl K<'_, '_> {
     }
 }
 
-/// The texel's channels, each its 16-bit interpolation result `C`, and whether the texel is an
-/// error one: the decode of the block `words` at texel `(s, t)` of a block of `decode`'s
-/// footprint (`super::decode_block` and `super::void_extent`).
+/// The texel's channels, each its 16-bit interpolation result `C` (an HDR format's half-precision
+/// bits), and whether the texel is an error one: the decode of the block `words` at texel
+/// `(s, t)` of a block of `decode`'s footprint (`super::decode_block` and `super::void_extent`).
 fn texel(
     k: &mut K<'_, '_>,
     decode: AstcDecode,
@@ -893,8 +895,43 @@ fn texel(
         let tables = (k.tables.color_at, k.tables.colors);
         *slot = k.unquantize(tables, color_range, raw)?;
     }
-    let ([e0, e1], hdr) = k.endpoints(cem, v)?;
-    let partition_bad = k.lor(bad, hdr)?;
+    let ([l0, l1], hdr_cem) = k.endpoints(cem, v)?;
+    // The endpoints widened to 16 bits (`super::endpoints`): an LDR mode's 8-bit ones, and an HDR
+    // format's HDR mode's 12-bit ones, logarithmic but for mode 14's alpha.
+    let widen = |k: &mut K<'_, '_>, e: Value| match decode.srgb {
+        true => {
+            let up = k.shlk(e, 8)?;
+            k.opk(BinOp::BitwiseOr, up, 0x80)
+        }
+        false => k.mulk(e, 257),
+    };
+    let mut e0 = [zero; 4];
+    let mut e1 = [zero; 4];
+    for ch in 0..4 {
+        e0[ch] = widen(k, l0[ch])?;
+        e1[ch] = widen(k, l1[ch])?;
+    }
+    let (partition_bad, lns) = match decode.hdr {
+        true => {
+            let ([h0, h1], alpha_lns) = k.hdr_endpoints(cem, v)?;
+            for ch in 0..4 {
+                for (end, hdr_end) in [(&mut e0[ch], h0[ch]), (&mut e1[ch], h1[ch])] {
+                    let log = k.shlk(hdr_end, 4)?;
+                    let wide = match ch {
+                        3 => {
+                            let linear = k.mulk(hdr_end, 257)?;
+                            k.sel(alpha_lns, log, linear)?
+                        }
+                        _ => log,
+                    };
+                    *end = k.sel(hdr_cem, wide, *end)?;
+                }
+            }
+            let alpha = k.land(hdr_cem, alpha_lns)?;
+            (bad, Some([hdr_cem, hdr_cem, hdr_cem, alpha]))
+        }
+        false => (k.lor(bad, hdr_cem)?, None),
+    };
     // The weights, from bit 127 down: the stream of the block's bits reversed.
     let mut reversed = words;
     for (slot, &w) in reversed.iter_mut().zip(words.iter().rev()) {
@@ -952,22 +989,21 @@ fn texel(
         let is_ccs = k.eqk(ccs, ch)?;
         let use_second = k.land(dual, is_ccs)?;
         let w = k.sel(use_second, second, plane_weights[0])?;
-        let widen = |k: &mut K<'_, '_>, e: Value| match decode.srgb {
-            true => {
-                let up = k.shlk(e, 8)?;
-                k.opk(BinOp::BitwiseOr, up, 0x80)
-            }
-            false => k.mulk(e, 257),
-        };
-        let c0 = widen(k, e0[ch as usize])?;
-        let c1 = widen(k, e1[ch as usize])?;
         let sixty_four = k.k(64)?;
         let rest = k.sub(sixty_four, w)?;
-        let a = k.mul(c0, rest)?;
-        let b = k.mul(c1, w)?;
+        let a = k.mul(e0[ch as usize], rest)?;
+        let b = k.mul(e1[ch as usize], w)?;
         let sum = k.add(a, b)?;
         let sum = k.addk(sum, 32)?;
-        *slot = k.shrk(sum, 6)?;
+        let c = k.shrk(sum, 6)?;
+        *slot = match lns {
+            Some(lns) => {
+                let log = k.lns_to_half(c)?;
+                let linear = k.unorm16_to_half(c)?;
+                k.sel(lns[ch as usize], log, linear)?
+            }
+            None => c,
+        };
     }
     // A void-extent block (`super::void_extent`).
     let void_mode = k.andk(mode, 0x1ff)?;
@@ -990,12 +1026,21 @@ fn texel(
     let empty = k.lor(empty_s, empty_t)?;
     let some = k.not(all_ones)?;
     let empty = k.land(some, empty)?;
-    let void_bad = k.lor(hdr_void, reserved_void)?;
+    // An HDR format's HDR block holds halves, its LDR one 16-bit values read as an LDR channel.
+    let void_bad = match decode.hdr {
+        true => reserved_void,
+        false => k.lor(hdr_void, reserved_void)?,
+    };
     let void_bad = k.lor(void_bad, empty)?;
     let mut color = [zero; 4];
     for (i, slot) in color.iter_mut().enumerate() {
         let word = words[2 + i / 2];
         *slot = k.field(word, 16 * (i as u32 % 2), 16)?;
+        if decode.hdr {
+            let half = k.quiet_nan(*slot)?;
+            let linear = k.unorm16_to_half(*slot)?;
+            *slot = k.sel(hdr_void, half, linear)?;
+        }
     }
     let channels = k.sel4(void, color, channels)?;
     let bad = k.sel(void, void_bad, partition_bad)?;
@@ -1068,10 +1113,31 @@ pub(super) fn typed_module(decode: AstcDecode, texels: AstcTexels) -> BResult<Ty
         let y0 = k.mulk(by, bh)?;
         let t = k.sub(y, y0)?;
         let (channels, bad) = texel(&mut k, decode, words, [s, t])?;
-        // An error texel is magenta: each channel's `C` all ones, green 0.
-        let all = k.k(0xffff)?;
-        let channels = k.sel4(bad, [all, zero, all, all], channels)?;
-        let out: Vec<Value> = match texels {
+        // An error texel is magenta (each channel's `C` all ones, green 0), an HDR format's NaN.
+        let error = match decode.hdr {
+            true => [k.k(super::HDR_ERROR.into())?; 4],
+            false => {
+                let all = k.k(0xffff)?;
+                [all, zero, all, all]
+            }
+        };
+        let channels = k.sel4(bad, error, channels)?;
+        let out: Vec<Value> = match decode.form(texels) {
+            AstcTexels::Half => {
+                let mut words = Vec::with_capacity(2);
+                for pair in channels.as_chunks::<2>().0 {
+                    let high = k.shlk(pair[1], 16)?;
+                    words.push(k.or(pair[0], high)?);
+                }
+                words
+            }
+            AstcTexels::Float if decode.hdr => {
+                let mut words = Vec::with_capacity(4);
+                for c in channels {
+                    words.push(k.half_bits_to_f32(c)?);
+                }
+                words
+            }
             AstcTexels::Unorm8 => {
                 let mut packed = zero;
                 for (ch, c) in (0u32..).zip(channels) {

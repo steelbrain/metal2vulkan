@@ -243,8 +243,9 @@ fn extents_near_two_to_the_64_wrap_the_block_count() {
     }
 }
 
-/// Every ASTC LDR format, and its sRGB form, is described as Metal describes it whatever the
-/// device holds its blocks in (its ASTC format, or a carrier, `astc.rs`): a format of blocks (flags
+/// Every ASTC format of the fourteen 2D footprints, LDR, sRGB and HDR, is described as Metal
+/// describes it whatever the device holds its blocks in (its ASTC format, or a carrier,
+/// `astc.rs`): a format of blocks (flags
 /// bit 0x400) of 16 bytes, its footprint, depth 1; and a level's layout counts its blocks, a side
 /// no multiple of the block rounded up, rows of 16-byte blocks, an image of those rows.
 #[test]
@@ -280,5 +281,5 @@ fn astc_formats_answer_metal_s_blocks_and_levels() {
             assert_eq!(answer.bytes_per_image, 16 * across * down, "{what}");
         }
     }
-    assert_eq!(seen, 28);
+    assert_eq!(seen, 42);
 }

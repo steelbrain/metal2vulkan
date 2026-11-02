@@ -959,7 +959,8 @@ fn compressed_extension_formats_follow_exposure() {
                 usage: U::SampledImage,
             },
         ]];
-        // A PVRTC format's decoded twin, whose codes' format this floor does not list.
+        // A PVRTC format's decoded twin, whose codes' format this floor does not list; an ASTC
+        // HDR format's, whose halves' format it does not list.
         if crate::bind::PvrtcDecode::of(pf).is_some() {
             let codes = match crate::metal::texel_format::srgb_coded(pf) {
                 true => vk::Format::R8G8B8A8_SRGB,
@@ -967,6 +968,12 @@ fn compressed_extension_formats_follow_exposure() {
             };
             needs.push(vec![Capability::Format {
                 format: codes,
+                usage: U::SampledImage,
+            }]);
+        }
+        if crate::bind::AstcDecode::of(pf).is_some_and(|d| d.hdr) {
+            needs.push(vec![Capability::Format {
+                format: vk::Format::R16G16B16A16_SFLOAT,
                 usage: U::SampledImage,
             }]);
         }

@@ -17,23 +17,18 @@
 //!
 //! # The three profiles, and what each one compares
 //!
-//! Forty-two cases: the fourteen 2D footprints in each of ASTC's three profiles. The `_LDR` and
-//! `_sRGB` ones are the port described above, where the subject is **our** decoder, because no
-//! desktop GPU and no lavapipe holds an ASTC block and the texels a guest reads are ours.
+//! Forty-two cases: the fourteen 2D footprints in each of ASTC's three profiles. On a device
+//! without a format's ASTC block (no desktop GPU and no lavapipe holds an LDR one; only MoltenVK
+//! among the committed devices holds the HDR `SFLOAT` ones) the texels a guest reads are **our**
+//! decoder's, through the texture's decoded twin.
 //!
-//! The fourteen `_HDR` ones are a different comparison, and a stronger one where the venue has the
-//! block. This crate has **no** ASTC HDR decode (`AstcDecode::of` holds the LDR and sRGB profiles
-//! alone), so there is no decoded twin: a device either holds `ASTC_*_SFLOAT_BLOCK` natively —
-//! which needs `textureCompressionASTC_HDR`, Vulkan 1.3 core or
-//! `VK_EXT_texture_compression_astc_hdr` — or refuses the texture, and the site is then the
-//! venue's own gap rather than a refusal of ours. Where it does hold it, the case compares
-//! **Apple's ASTC HDR decode against the driver's**, with nothing of ours in between, which is a
-//! thing no other case in this suite does. On MoltenVK over this M3 Max (the extension and the
-//! feature both present) all fourteen are exact over both rounds, every texel and every channel.
-//!
-//! That is also why an HDR case names **no allowance at all**: the twin notices
-//! (`carried-decoded-twin`, `cpu-block-decode`) and the compact tolerance
-//! (`decoded-texel-precision`) are all facts about a twin, and an HDR texture has none.
+//! The fourteen `_HDR` ones compare two things, by venue. Where the device holds
+//! `ASTC_*_SFLOAT_BLOCK` (`textureCompressionASTC_HDR`, Vulkan 1.3 core or
+//! `VK_EXT_texture_compression_astc_hdr`), the case compares **Apple's ASTC HDR decode against the
+//! driver's**, with nothing of ours in between: on MoltenVK over this M3 Max all fourteen are
+//! exact over both rounds, every texel and every channel. Elsewhere it compares Apple's against
+//! our decoder's halves, which the twin holds exactly, so an HDR case names the twin notices as
+//! the LDR and sRGB ones do and no tolerance.
 //!
 //! ## Which footprints the sweep can tell apart, measured
 //!
@@ -51,14 +46,11 @@
 //!
 //! **One case per format**, so a venue that holds no texture of one answers its typed refusal there
 //! and the suite counts that format as [`LacksFeature`](crate::verdict::Verdict::LacksFeature). The
-//! lane walks all twenty-eight formats in one test, where a device missing one would take the whole
-//! lane down.
+//! lanes walk their formats in one test each (the twenty-eight LDR and sRGB ones, the fourteen HDR
+//! ones), where a device missing one would take the whole lane down.
 //!
 //! The footprint itself comes from [`metal2vulkan::metal::format::block_extent`], the translator's
-//! public query, and not from the decoder: the decoder holds two of the three profiles, while the
-//! footprint is a fact about the `MTLPixelFormat` that every profile shares. Until that query
-//! existed this family could state only the formats `AstcDecode::of` answered for, which is what
-//! kept the fourteen HDR formats out of it.
+//! public query: the footprint is a fact about the `MTLPixelFormat` that every profile shares.
 //!
 //! Each case is two 16 x 16 textures, read whole by the owned fixture `format_scout`'s
 //! `scout_read_f`, one thread a texel: one of **zero blocks**, which are error blocks and read
@@ -88,7 +80,8 @@
 //! codes, which their slots read through the twin's sRGB view, the device's own decode
 //! (`srgb-texel-decode`, a native note that loosens no value), so they name **no tolerance at
 //! all**: through Metal's own texture unit they are exact, and a value another device's decode
-//! moves is a `known-gaps.tsv` row of its venue. An `_HDR` format names none, having no twin.
+//! moves is a `known-gaps.tsv` row of its venue. An `_HDR` format names none: its twin holds
+//! Metal's halves exactly.
 //!
 //! Nothing here can fault a GPU: one compute pass a read, one read-only texture, one buffer, one
 //! thread a texel inside the texture, no loop and no sampling.
@@ -406,13 +399,10 @@ impl AstcTextures {
         block_extent(self.format().format).expect("an ASTC format")
     }
 
-    /// How the format's blocks decode on a device with no ASTC block, where this crate has an
-    /// answer: `None` for the HDR profile, whose textures have no decoded twin at all
-    /// (`AstcDecode::of` holds the LDR and sRGB profiles alone). That `None` is the structural
-    /// reason an HDR case names no tolerance and no twin notice: there is nothing of ours between
-    /// the blocks and the texels, so a device either holds the format natively or refuses it.
-    fn decode(&self) -> Option<AstcDecode> {
-        AstcDecode::of(self.format().format)
+    /// How the format's blocks decode on a device with no ASTC block: every case's format has an
+    /// answer, LDR, sRGB or HDR.
+    fn decode(&self) -> AstcDecode {
+        AstcDecode::of(self.format().format).expect("an ASTC format of a Vulkan footprint")
     }
 
     /// The fixture the case runs.
@@ -443,11 +433,10 @@ impl AstcTextures {
     /// How far a compact texel of this format may be off Metal's value, where that is not zero:
     /// a linear format's half 8-bit step. `None` for an sRGB form, whose twin holds Metal's own
     /// codes and whose slots read the device's decode of them, which loosens no value, and
-    /// `None` for an HDR form, which has no twin to be compact about.
+    /// `None` for an HDR form, whose twin holds Metal's halves exactly.
     fn compact_bound(&self) -> Option<f64> {
-        self.decode()
-            .filter(|decode| !decode.srgb)
-            .map(|_| LEDGERS_COMPACT_BOUND)
+        let decode = self.decode();
+        (!decode.srgb && !decode.hdr).then_some(LEDGERS_COMPACT_BOUND)
     }
 
     /// The layout a round's texels read back under: one row of the layout per row of texels, four
@@ -495,29 +484,24 @@ impl Case for AstcTextures {
         // mechanism the line above names, measured on lavapipe for every format of this family. It
         // is a declaration and not a tolerance -- every texel the case reads still compares
         // exactly with Metal.
-        // Named only where this crate has a decode for the format, which is the LDR and sRGB
-        // profiles. An HDR texture has no decoded twin: a device either holds the ASTC HDR block
-        // natively, in which case nothing of ours sits between the blocks and the texels and no
-        // notice fires, or it refuses the texture and the site is the venue's own gap.
+        // Measured on lavapipe for every format of this family, the HDR ones among them. A device
+        // that holds a format's ASTC block natively announces neither: nothing of ours sits between
+        // the blocks and the texels there.
         // Every row that runs reads its texels back through a `Shared` buffer, so on a device
         // without unified memory the runtime announces `shared-in-system-memory`
         // (`crate::replay::shared_memory_notice` holds the whole reason). It declares the notices
         // site alone, so every texel still compares against Metal's exactly.
         //
-        // Named on the LDR and sRGB rows, which is where it was **measured**: on the RTX 5080
-        // Laptop (615.71.09) all 28 of them announced it and were divergent on that field and
-        // nothing else (replay-nvidia.log). The 14 HDR rows read `lacks the device feature` on
-        // that card -- the venue holds no ASTC HDR block -- so no run has announced anything for
-        // them and they declare nothing: a declaration on a row no venue has run is a claim
-        // nobody has checked.
-        let mut all = match self.decode().is_some() {
-            true => vec![
-                crate::replay::shared_memory_notice(),
-                crate::replay::notice_allowance(Degradation::CarriedDecodedTwin.code()),
-                crate::replay::notice_allowance(Degradation::CpuBlockDecode.code()),
-            ],
-            false => Vec::new(),
-        };
+        // Measured on the LDR and sRGB rows: on the RTX 5080 Laptop (615.71.09) all 28 of them
+        // announced it and were divergent on that field and nothing else (replay-nvidia.log). The
+        // 14 HDR rows, which that card makes through the same carrier and twin since the HDR
+        // decode, have not run there since: their declaration counts as unchecked until a run on
+        // a device without unified memory announces it.
+        let mut all = vec![
+            crate::replay::shared_memory_notice(),
+            crate::replay::notice_allowance(Degradation::CarriedDecodedTwin.code()),
+            crate::replay::notice_allowance(Degradation::CpuBlockDecode.code()),
+        ];
         // An sRGB form's twin holds Metal's own 8-bit codes, which its slots decode through Metal's
         // table, so its texels compare exactly and it names nothing further. A linear format's
         // compact twin holds the 8-bit code nearest Metal's 12-bit value, which the runtime
@@ -650,13 +634,12 @@ mod tests {
     use super::*;
     use std::collections::BTreeSet;
 
-    /// The profile a case's format decodes with, from the decoder's own answer: the LDR and sRGB
-    /// profiles are the two this crate decodes, and a format it has no decode for is HDR.
-    fn profile(decode: Option<AstcDecode>) -> &'static str {
-        match decode {
-            Some(decode) if decode.srgb => "srgb",
-            Some(_) => "ldr",
-            None => "hdr",
+    /// The profile a case's format decodes with, from the decoder's own answer.
+    fn profile(decode: AstcDecode) -> &'static str {
+        match (decode.srgb, decode.hdr) {
+            (true, _) => "srgb",
+            (_, true) => "hdr",
+            _ => "ldr",
         }
     }
 
@@ -670,10 +653,9 @@ mod tests {
     /// Every case names a format with a footprint, and the forty-two cases cover every one of the
     /// fourteen footprints in all three profiles exactly once.
     ///
-    /// The profile comes from the decoder's presence and its `srgb` flag, which within this list
-    /// is exact: ASTC's other two footprints (4x2 and 8x4) also have no decoder, and they are not
-    /// here — [`every_cases_name_states_its_own_footprint`] is what holds that, since a 4x2 case
-    /// would have to be named `astc-4x2-hdr` to pass it and no such case exists.
+    /// The profile comes from the decoder's `srgb` and `hdr` flags. ASTC's other two footprints
+    /// (4x2 and 8x4) have no decoder, and they are not here — [`AstcTextures::decode`] expects
+    /// one of every case.
     #[test]
     fn the_cases_are_every_footprint_in_all_three_profiles() {
         let mut seen = BTreeSet::new();
@@ -784,7 +766,7 @@ mod tests {
                 .filter(|allowance| allowance.path.ends_with("/texels"))
                 .map(|allowance| allowance.loosening)
                 .collect();
-            // An sRGB form's twin holds Metal's own codes and an HDR format has no twin, so
+            // An sRGB form's twin holds Metal's own codes and an HDR format's Metal's halves, so
             // neither loosens a texel; only the fourteen linear ones do.
             if case.compact_bound().is_none() {
                 assert!(bounds.is_empty(), "{}: {bounds:?}", format.name);
@@ -830,12 +812,7 @@ mod tests {
                     continue;
                 }
             };
-            // The HDR profile has no decode of ours to cross-check against: a device either
-            // holds the ASTC HDR block natively or refuses the texture, so the recording is
-            // Metal's answer and there is no second derivation to hold it to.
-            let Some(decode) = (AstcTextures { at }).decode() else {
-                continue;
-            };
+            let decode = (AstcTextures { at }).decode();
             for answer in &recording.answers {
                 for outcome in &answer.outcomes {
                     for (round, name) in ROUNDS.iter().enumerate() {

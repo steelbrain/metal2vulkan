@@ -2984,6 +2984,7 @@ field	metal2vulkan::bind::ArgumentSampler.element	pub element: Option<u32>
 field	metal2vulkan::bind::ArgumentSampler.resource_id	pub resource_id: u64
 field	metal2vulkan::bind::ArgumentSamplersShape.class	pub class: u8
 field	metal2vulkan::bind::ArgumentSamplersShape.shapes	pub shapes: std::collections::BTreeSet<SamplerShape>
+field	metal2vulkan::bind::AstcDecode.hdr	pub hdr: bool
 field	metal2vulkan::bind::AstcDecode.height	pub height: u32
 field	metal2vulkan::bind::AstcDecode.srgb	pub srgb: bool
 field	metal2vulkan::bind::AstcDecode.width	pub width: u32
@@ -8322,9 +8323,10 @@ method	metal2vulkan::bind::AstcDecode::block_extent	pub fn block_extent(self) ->
 method	metal2vulkan::bind::AstcDecode::block_values	pub fn block_values(self, block: &[u8; 16]) -> Option<Vec<[u16; 4]>>
 method	metal2vulkan::bind::AstcDecode::decode	pub fn decode(self, texels: AstcTexels, blocks: &[u8], size: [u32; 3]) -> Vec<u8>
 method	metal2vulkan::bind::AstcDecode::decode_into	pub fn decode_into(self, texels: AstcTexels, blocks: &[u8], [width, height, depth]: [u32; 3], out: &mut [u8])
+method	metal2vulkan::bind::AstcDecode::form	pub fn form(self, texels: AstcTexels) -> AstcTexels
 method	metal2vulkan::bind::AstcDecode::metal_value	pub fn metal_value(self, c: [u16; 4]) -> [f32; 4]
 method	metal2vulkan::bind::AstcDecode::of	pub fn of(pf: PixelFormat) -> Option<AstcDecode>
-method	metal2vulkan::bind::AstcDecode::texel_bytes	pub fn texel_bytes(texels: AstcTexels) -> u32
+method	metal2vulkan::bind::AstcDecode::texel_bytes	pub fn texel_bytes(self, texels: AstcTexels) -> u32
 method	metal2vulkan::bind::AstcDecode::texel_format	pub fn texel_format(self, texels: AstcTexels) -> Format
 method	metal2vulkan::bind::AstcDecode::texel_pixel_format	pub fn texel_pixel_format(self, texels: AstcTexels) -> PixelFormat
 method	metal2vulkan::bind::BindShape::for_plan	pub fn for_plan(&self, dependencies: &[RuntimeDependency]) -> Cow<'_, BindShape>
@@ -12040,6 +12042,7 @@ variant	metal2vulkan::bind::ArgumentType::Struct	Struct
 variant	metal2vulkan::bind::ArgumentType::Texture	Texture
 variant	metal2vulkan::bind::ArgumentType::VisibleFunctionTable	VisibleFunctionTable
 variant	metal2vulkan::bind::AstcTexels::Float	Float
+variant	metal2vulkan::bind::AstcTexels::Half	Half
 variant	metal2vulkan::bind::AstcTexels::Unorm8	Unorm8
 variant	metal2vulkan::bind::BoundBuffer::Buffer	Buffer { length: u64, offset: u64, gpu_address: u64, device_address: Option<u64>, attribute_stride: Option<u32> }
 variant	metal2vulkan::bind::BoundBuffer::Bytes	Bytes { len: u32,  attribute_stride: Option<u32> }

@@ -2460,7 +2460,10 @@ bound.
   may read the texture is submitted and not yet complete, or the texture is untracked.
 - `metal2vulkan-degrade-carried-decoded-twin` (performance). `CarriedDecodedTwin`: A texture of an ASTC
   LDR format (`ASTC_4x4_LDR` to `ASTC_12x12_LDR`, the sRGB forms too) made on a device without that
-  ASTC format, of a PVRTC format on a device without it (every device but MoltenVK's, and there
+  ASTC format, of an ASTC HDR format (`ASTC_4x4_HDR` to `ASTC_12x12_HDR`) on a device without its
+  `SFLOAT` block (`textureCompressionASTC_HDR`; of the committed device profiles, every one but
+  MoltenVK's), of a PVRTC format on a device without it (every
+  device but MoltenVK's, and there
   the four RGB formats), or of an ETC2 or EAC format on a device without them (desktop GPUs and
   lavapipe): its blocks lie in an image of a carrier format whose blocks are also 16 (ASTC,
   `EAC_RGBA8`, `RG11`) or 8 (PVRTC, the other ETC2 and EAC formats) bytes, which copies and
@@ -2468,7 +2471,8 @@ bound.
   codes: an ASTC LDR texture's and an EAC 11-bit texture's each nearest Metal's value
   (`decoded-texel-precision`); a PVRTC texture's, and an 8-bit ETC2 or EAC texture's, 8-bit codes,
   exact (its sRGB form's slots decode them through Metal's table, and one twin serves the views of
-  the linear and sRGB forms); an ASTC sRGB texture's, its own 8-bit codes, read the same way.
+  the linear and sRGB forms); an ASTC sRGB texture's, its own 8-bit codes, read the same way; an
+  ASTC HDR texture's, Metal's halves, exact (its error blocks' NaN included).
   It is decoded after each write into it (a PVRTC texture's whole levels, since each texel's
   colors come from the blocks around it). An ASTC texture's first view in its other colour
   space (its sRGB form as LDR, or the other way) gives it a second twin of that form's decode, kept
@@ -2480,8 +2484,9 @@ bound.
   with Metal's reconstruction (`decoded-texel-precision`; every decode then a GPU pass, its CPU
   copies through submissions), else Metal's texels, exact. Cost: a carrier image of its
   blocks, at most about 1 byte a texel (a 4:2:2 texture's 2), and a decoded twin of 4 bytes a texel
-  (R8G8B8A8; an EAC 11-bit texture's 16-bit codes, 2 bytes a channel, or its floats, 4 bytes a
-  channel, where the device does not take those codes), two for an ASTC texture viewed in both
+  (R8G8B8A8; an ASTC HDR texture's halves, 8 bytes a texel; an EAC 11-bit texture's 16-bit codes, 2
+  bytes a channel, or its floats, 4 bytes a channel, where the device does not take those codes),
+  two for an ASTC texture viewed in both
   colour spaces, and a decode after each write into it: a pass on
   the GPU for a blit, a copy from a texture or a CPU copy through a submission; on the CPU, on the
   device's decode thread, where its CPU copies go on the host or the staging queue.

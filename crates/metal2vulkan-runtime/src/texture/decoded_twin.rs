@@ -1,5 +1,5 @@
-//! Decoded twins of carried textures: an ASTC LDR, PVRTC, ETC2 or EAC texture on a device without
-//! its format, and a 4:2:2 texture on every device.
+//! Decoded twins of carried textures: an ASTC (LDR, sRGB or HDR), PVRTC, ETC2 or EAC texture on a
+//! device without its format, and a 4:2:2 texture on every device.
 //!
 //! **Why.** The device holds no image of such a texture's format that samples as Metal's does, so
 //! its blocks lie in a carrier image of a format whose blocks are as many bytes, which every copy,
@@ -40,16 +40,19 @@
 //!
 //! **ASTC** (`astc.rs`): its twin holds Metal's decode as 8-bit codes (`TwinDecode::Astc`; an LDR
 //! form's the code nearest Metal's 12-bit value, an sRGB form's its own codes, which its slots read
-//! through the twin's sRGB view, the device's decode), kept in step as above (`bind::astc_decode_module` on the
+//! through the twin's sRGB view, the device's decode), or an HDR form's halves, Metal's exactly
+//! (`R16G16B16A16_SFLOAT`), kept in step as above (`bind::astc_decode_module` on the
 //! GPU, `AstcDecode::decode_into` on the CPU): a pass's bands are of the texture's texels, each
 //! band's blocks copied out of the carrier's texels over them. A new one's zero blocks read
-//! magenta (an error block).
+//! magenta (an error block; an HDR one's NaN, the twin started cleared to it).
 //!
 //! **An ASTC texture's other colour space.** Metal views an ASTC texture as its `_sRGB` or LDR
 //! form over the same blocks, whatever its usage, and the view reads what a texture of its own
 //! format over those blocks reads (our probe on an M3 Max, macOS 27.0.1: reads and linear samples
 //! bit for bit, footprints 4x4, 6x5 and 12x12). The two forms widen the endpoints apart
-//! (`bind::AstcDecode`), so neither's texels follow from the other's: the first view of the
+//! (`bind::AstcDecode`), so neither's texels follow from the other's. An HDR texture's LDR or sRGB
+//! view, and an LDR or sRGB texture's HDR view, decode in another profile: a carrier refuses them
+//! (`Feature::TextureView`). Within the LDR profile the first view of the
 //! texture in its other colour space makes the carrier a second twin ([`Image::make_second_twin`]),
 //! of that form's decode in 8-bit codes, in memory of its own, which the CPU
 //! never writes. Its decodes are the GPU's, each recorded by a batch's submission
@@ -159,8 +162,8 @@ const TWIN_FEATURES: FormatFeatureFlags2 = FormatFeatureFlags2::SAMPLED_IMAGE
 /// blocks), within `maxStorageBufferRange`.
 pub(crate) const BAND_BYTES: u64 = 32 << 20;
 
-/// How a decoded twin's blocks, held in a carrier, decode: an ASTC LDR format's (`astc.rs`) into
-/// 8-bit codes, a PVRTC format's (`pvrtc.rs`) into its codes (its linear form's decode, which its
+/// How a decoded twin's blocks, held in a carrier, decode: an ASTC format's (`astc.rs`) into 8-bit
+/// codes or an HDR form's halves, a PVRTC format's (`pvrtc.rs`) into its codes (its linear form's decode, which its
 /// sRGB form's is too), an ETC2 or EAC format's (`etc.rs`) into its codes or an 11-bit format's
 /// texels (`Device::etc_texels`; its unorm form's decode, which its sRGB form's is too), or a
 /// 4:2:2 format's pairs (`chroma_pairs.rs`) into its codes.
@@ -208,7 +211,7 @@ impl TwinDecode {
     /// The bytes of a decoded texel.
     pub(crate) fn texel_bytes(self) -> u32 {
         match self {
-            TwinDecode::Astc(_, texels) => AstcDecode::texel_bytes(texels),
+            TwinDecode::Astc(decode, texels) => decode.texel_bytes(texels),
             TwinDecode::Pvrtc(_) => PvrtcDecode::TEXEL_BYTES,
             TwinDecode::Etc(decode, texels) => decode.texel_bytes(texels),
             TwinDecode::Chroma(_) => ChromaDecode::TEXEL_BYTES,
@@ -334,18 +337,24 @@ impl Decoded {
     /// 8-bit form's view of its codes; `None` for a format whose view reads the carrier.
     fn view_format(&self, format: Format) -> Option<Format> {
         use Format as F;
-        // An ASTC texture's binding views name its candidate's 8-bit format (its `_sRGB` form's
-        // `R8G8B8A8_SRGB`, whose codes its twin holds, or `R8G8B8A8_UNORM`): the twin's own view
-        // of it, or an LDR twin's exact values.
+        // An ASTC texture's binding views name its candidate's format (its `_sRGB` form's
+        // `R8G8B8A8_SRGB`, whose codes its twin holds, `R8G8B8A8_UNORM`, or its `_HDR` form's
+        // `R16G16B16A16_SFLOAT`): the twin's own view of it, or a twin's exact values.
         // A PVRTC texture's name the same formats, and the twin holds their codes; so does an
         // ETC2 or EAC 8-bit format's, and an 11-bit one's name its compact texels' format. A
         // 4:2:2 texture's name the codes' `R8G8B8A8_UNORM` alone (it has no sRGB form).
         let named = matches!(format, F::R8G8B8A8_UNORM | F::R8G8B8A8_SRGB);
         match self.decode {
-            TwinDecode::Astc(_, texels) => named.then_some(match texels {
-                AstcTexels::Unorm8 => format,
-                _ => self.decode.texel_format(),
-            }),
+            TwinDecode::Astc(astc, texels) => {
+                let named = match astc.hdr {
+                    true => format == F::R16G16B16A16_SFLOAT,
+                    false => named,
+                };
+                named.then_some(match astc.form(texels) {
+                    AstcTexels::Unorm8 => format,
+                    _ => self.decode.texel_format(),
+                })
+            }
             TwinDecode::Pvrtc(_) => named.then_some(format),
             TwinDecode::Etc(etc, texels) if etc.eleven_bit() => {
                 let compact = etc.texel_format(EtcTexels::Compact);
@@ -431,17 +440,18 @@ pub(crate) fn twin_plan(
 }
 
 impl Device {
-    /// The texels of the decoded twin of an ASTC texture of `decode` on this device: 8-bit codes,
-    /// an LDR form's each the code nearest Metal's 12-bit value (`decoded-texel-precision`), an
-    /// sRGB form's its own, which its `R8G8B8A8_SRGB` view decodes, the device's sRGB decode
-    /// (`metal::texel_format::srgb_coded`). Refused where the device does not take the codes'
-    /// format so (no conformant device).
+    /// The texels of the decoded twin of an ASTC texture of `decode` on this device: an LDR or
+    /// sRGB form's 8-bit codes, an LDR form's each the code nearest Metal's 12-bit value
+    /// (`decoded-texel-precision`), an sRGB form's its own, which its `R8G8B8A8_SRGB` view
+    /// decodes, the device's sRGB decode (`metal::texel_format::srgb_coded`); an HDR form's
+    /// halves, Metal's values exactly. Refused where the device does not take their format so (no
+    /// conformant device).
     fn astc_texels(&self, decode: AstcDecode) -> Result<AstcTexels, Error> {
         let facts = self
             .shared()
             .textures
             .facts(self.compile_device().profile());
-        let texels = AstcTexels::Unorm8;
+        let texels = decode.form(AstcTexels::Unorm8);
         if facts
             .optimal(decode.texel_format(texels))
             .contains(TWIN_FEATURES)
@@ -756,7 +766,7 @@ fn zero_texel(decode: TwinDecode) -> Option<Vec<u8>> {
 }
 
 /// The clear color of a twin whose zero blocks decode to texels other than zeros: an ASTC
-/// texture's magenta (an error block), an ETC2 texture's grey of codes 2, an EAC
+/// texture's magenta (an error block; an HDR one's NaN), an ETC2 texture's grey of codes 2, an EAC
 /// 11-bit texture's value of 1 (signed -3) or its compact code; `None` where they decode to
 /// zeros, which a new image's first move writes. The clear converts each value back to the code
 /// it came from: a normalized code over its largest is within half a step of it.
@@ -776,6 +786,19 @@ fn zero_clear(decode: TwinDecode) -> Option<vk::ClearColorValue> {
             for (value, bytes) in float32.iter_mut().zip(texel.as_chunks::<4>().0) {
                 *value = f32::from_le_bytes(*bytes);
             }
+        }
+        // An ASTC HDR texture's halves: its zero blocks' NaN.
+        Format::R16G16B16A16_SFLOAT => {
+            let TwinDecode::Astc(astc, _) = decode else {
+                return None;
+            };
+            let halves = texel
+                .as_chunks::<2>()
+                .0
+                .iter()
+                .map(|h| u16::from_le_bytes(*h));
+            let halves: Vec<u16> = halves.collect();
+            float32 = astc.metal_value(halves.try_into().ok()?);
         }
         Format::R16_UNORM | Format::R16G16_UNORM => {
             for (value, bytes) in float32.iter_mut().zip(texel.as_chunks::<2>().0) {
