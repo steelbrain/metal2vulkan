@@ -160,6 +160,7 @@ Vulkan-side choices Metal has no counterpart for:
 | `instance_extensions`, `device_extensions` | Extensions beyond those the runtime enables (a swapchain, for example). |
 | `optional_device_extensions` | Device extensions each device enables only where it can (it lists one, the instance has what it requires, and the device has its features), never refused for one; `Device::enables_extension` says which. A listed extension's feature structure is enabled with it where the runtime knows one (`VK_KHR_video_maintenance1` and `2`'s, `VK_KHR_unified_image_layouts`' with `unifiedImageLayoutsVideo` where the device has it), here and for `device_extensions`. |
 | `extra_queues` | Queues each device makes for the consumer beside its own, one per `VkQueueFlags` entry (a video decode queue, for example), of the first family whose flags contain the entry's; `DeviceHandles::extra_queues` returns them. A device with no queue for an entry is made all the same, says so (`metal2vulkan-extra-queues-absent`), and leaves it out. The runtime never submits to them. Empty by default. |
+| `reserved_queues` | How many queues of its own queue families each device reserves for the consumer out of the round robin its command queues share, which shrinks by each (on an RTX 5080, 13 `VkQueue`s rather than 14); `DeviceHandles::reserved_queues` returns them. The round robin keeps its first four and presenting its two, so a device with none to spare past those (MoltenVK's four families of one queue, lavapipe's one queue) reserves fewer, is made all the same, and says so (`metal2vulkan-reserved-queues-absent`). No command queue, presenting or not, and no internal copy ever submits to them. 0 by default. |
 | `instance_api_version` | The instance's `apiVersion` (1.2 when unset); a version outside 1.2 to the loader's is refused, never clamped. |
 | `withheld_features`, `withheld_extensions`, `withhold_generated_commands`, `withhold_view_reinterpretation` | Parts of the recommended enables to leave off; the device then compiles for what is enabled. |
 | `messages` | A `MessageSink` for the validation layer's messages and the runtime's notices; without one, notices go to stderr. `MessageSink::with_least_severity` skips messages below a severity (never a degrade notice), and the runtime then formats none of its own lines it would skip. |
@@ -195,7 +196,13 @@ the runtime made.
   the extra queues the options asked for (`ExtraQueue`: flags, family, `VkQueue`), which the
   consumer alone submits to. The runtime's own buffers and images are shared among its own queue
   families only, so work on an extra queue of another family uses the consumer's own objects.
-  `CommandQueue::with_vk_queue` lends a queue's `VkQueue` under the runtime's lock.
+  The reserved queues (`ReservedQueue`: family, `VkQueue`) are of the runtime's own families, so
+  the consumer's work there uses the runtime's buffers and images with no ownership transfer
+  (while they live, ordered against the runtime's work through semaphores, a runtime image left
+  in `GENERAL`), and waits behind no command queue's command buffers.
+  `CommandQueue::with_vk_queue` lends a queue's `VkQueue` under the runtime's lock: the consumer's
+  submissions there sit in that command queue's order, and in that of any other command queue
+  sharing the `VkQueue`.
 - `Texture::vk_image`, `Buffer::vk_buffer` and `SharedEvent::vk_semaphore` give an object's handle.
   A texture over a buffer's bytes that aliases them gives a linear image (the same one for textures
   of one image over the same bytes of one import of host pages, which share it), which over a

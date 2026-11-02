@@ -140,7 +140,7 @@ use crate::device::create::{
     instance_version, layer_settings, layers_dropped, linear_color_attachment, open_loader,
     queue_plan, setting_values, timeline_difference, QueuePlan, LAYERS_DROPPED,
 };
-use crate::device::create::{extra_queue_places, extra_queues_absent};
+use crate::device::create::{extra_queue_places, extra_queues_absent, reserved_queues_absent};
 use crate::enables::host_image_copy_names;
 use crate::{DeviceOptions, Error, InstanceApiVersion, LayerSetting, LayerSettingValue};
 use ash::vk;
@@ -514,6 +514,7 @@ fn equivalent_queue_families_are_all_taken_in_turn() {
             primary,
             queues: queues.to_vec(),
             present: present.to_vec(),
+            reserved: Vec::new(),
             staging,
         })
     };
@@ -521,25 +522,25 @@ fn equivalent_queue_families_are_all_taken_in_turn() {
         staged(primary, queues, present, None)
     };
     assert_eq!(
-        queue_plan(&[family(all, 1); 4]),
+        queue_plan(&[family(all, 1); 4], 0),
         plan(0, &[(0, 0), (1, 0), (2, 0), (3, 0)], &[])
     );
     assert_eq!(
-        queue_plan(&[family(all, 3); 2]),
+        queue_plan(&[family(all, 3); 2], 0),
         plan(0, &[(0, 0), (1, 0), (0, 1), (1, 1)], &[(0, 2), (1, 2)])
     );
     assert_eq!(
-        queue_plan(&[family(all, 6)]),
+        queue_plan(&[family(all, 6)], 0),
         plan(0, &[(0, 0), (0, 1), (0, 2), (0, 3)], &[(0, 4), (0, 5)])
     );
     assert_eq!(
-        queue_plan(&[family(all, 5)]),
+        queue_plan(&[family(all, 5)], 0),
         plan(0, &[(0, 0), (0, 1), (0, 2), (0, 3)], &[(0, 4)])
     );
-    assert_eq!(queue_plan(&[family(all, 1)]), plan(0, &[(0, 0)], &[]));
+    assert_eq!(queue_plan(&[family(all, 1)], 0), plan(0, &[(0, 0)], &[]));
     let transfer = family(vk::QueueFlags::TRANSFER | vk::QueueFlags::SPARSE_BINDING, 2);
     assert_eq!(
-        queue_plan(&[family(all, 2), transfer]),
+        queue_plan(&[family(all, 2), transfer], 0),
         staged(0, &[(0, 0), (0, 1)], &[], Some((1, 0)))
     );
     // NVIDIA's shape (an RTX 3090 with 615.71.09): a graphics family of 16, a
@@ -553,25 +554,28 @@ fn equivalent_queue_families_are_all_taken_in_turn() {
     // reserved would otherwise sit idle while logical queues shared four.
     let fourteen: Vec<(u32, u32)> = (0..14).map(|index| (0, index)).collect();
     assert_eq!(
-        queue_plan(&[family(all, 16), transfer, compute, decode, encode, flow]),
+        queue_plan(
+            &[family(all, 16), transfer, compute, decode, encode, flow],
+            0
+        ),
         staged(0, &fourteen, &[(0, 14), (0, 15)], Some((1, 0)))
     );
     assert_eq!(
-        queue_plan(&[family(all, 16), compute, decode, encode, flow]),
+        queue_plan(&[family(all, 16), compute, decode, encode, flow], 0),
         plan(0, &fourteen, &[(0, 14), (0, 15)]),
         "no family of transfers alone: no staging queue"
     );
     // The round robin's ceiling: a family of more than eighteen leaves the rest untaken.
     let sixteen: Vec<(u32, u32)> = (0..16).map(|index| (0, index)).collect();
     assert_eq!(
-        queue_plan(&[family(all, 24)]),
+        queue_plan(&[family(all, 24)], 0),
         plan(0, &sixteen, &[(0, 16), (0, 17)]),
         "the round robin takes at most sixteen, and presenting the next two"
     );
     // Its floor: a family of seven lends five, and one of six still lends four, so no device
     // takes fewer round-robin queues than it took before.
     assert_eq!(
-        queue_plan(&[family(all, 7)]),
+        queue_plan(&[family(all, 7)], 0),
         plan(
             0,
             &[(0, 0), (0, 1), (0, 2), (0, 3), (0, 4)],
@@ -584,35 +588,38 @@ fn equivalent_queue_families_are_all_taken_in_turn() {
     // none stages: its textures copy on the host from its host-cached memory.
     let video = |flags| family(flags, 1);
     assert_eq!(
-        queue_plan(&[
-            family(all, 1),
-            family(all & !vk::QueueFlags::GRAPHICS, 4),
-            video(vk::QueueFlags::VIDEO_DECODE_KHR),
-            video(vk::QueueFlags::VIDEO_ENCODE_KHR),
-            family(vk::QueueFlags::SPARSE_BINDING, 1),
-        ]),
+        queue_plan(
+            &[
+                family(all, 1),
+                family(all & !vk::QueueFlags::GRAPHICS, 4),
+                video(vk::QueueFlags::VIDEO_DECODE_KHR),
+                video(vk::QueueFlags::VIDEO_ENCODE_KHR),
+                family(vk::QueueFlags::SPARSE_BINDING, 1),
+            ],
+            0
+        ),
         plan(0, &[(0, 0)], &[])
     );
     let mut blocks = transfer;
     blocks.min_image_transfer_granularity.width = 8;
     assert_eq!(
-        queue_plan(&[family(all, 1), blocks]),
+        queue_plan(&[family(all, 1), blocks], 0),
         plan(0, &[(0, 0)], &[]),
         "a copy engine whose copies take whole blocks of texels stages nothing"
     );
     assert_eq!(
-        queue_plan(&[transfer, family(all, 1), family(all, 1)]),
+        queue_plan(&[transfer, family(all, 1), family(all, 1)], 0),
         staged(1, &[(1, 0)], &[], Some((0, 0)))
     );
     let mut coarse = family(all, 1);
     coarse.timestamp_valid_bits = 36;
     assert_eq!(
-        queue_plan(&[family(all, 1), coarse]),
+        queue_plan(&[family(all, 1), coarse], 0),
         plan(0, &[(0, 0)], &[]),
         "families whose timestamps differ are not equivalent"
     );
-    assert_eq!(queue_plan(&[transfer]), None);
-    assert_eq!(queue_plan(&[family(all, 0)]), None);
+    assert_eq!(queue_plan(&[transfer], 0), None);
+    assert_eq!(queue_plan(&[family(all, 0)], 0), None);
 }
 
 /// The caller's extra queues (`DeviceOptions::extra_queues`): each a queue the device's own plan
@@ -651,7 +658,7 @@ fn extra_queues_take_a_free_queue_else_one_the_device_gives_up() {
         family(copy.queue_flags | decode, 1),
         family(copy.queue_flags | encode, 1),
     ];
-    let mut plan = queue_plan(&nvidia).unwrap();
+    let mut plan = queue_plan(&nvidia, 0).unwrap();
     let before = plan.clone();
     assert_eq!(
         extra_queue_places(
@@ -669,13 +676,13 @@ fn extra_queues_take_a_free_queue_else_one_the_device_gives_up() {
     // MoltenVK's shape: four families of one queue each, every one the device's own. The round
     // robin gives up its last queues, never its first.
     let moltenvk = [family(all, 1); 4];
-    let mut plan = queue_plan(&moltenvk).unwrap();
+    let mut plan = queue_plan(&moltenvk, 0).unwrap();
     assert_eq!(
         extra_queue_places(&moltenvk, &mut plan, &[compute, decode, transfer]),
         [Some((3, 0)), None, Some((2, 0))]
     );
     assert_eq!(plan.queues, [(0, 0), (1, 0)]);
-    let mut plan = queue_plan(&moltenvk).unwrap();
+    let mut plan = queue_plan(&moltenvk, 0).unwrap();
     let four = [compute; 4];
     assert_eq!(
         extra_queue_places(&moltenvk, &mut plan, &four),
@@ -683,14 +690,14 @@ fn extra_queues_take_a_free_queue_else_one_the_device_gives_up() {
     );
     assert_eq!(plan.queues, [(0, 0)]);
     // A family of six: the presenting reserve goes first, from its last.
-    let mut plan = queue_plan(&[family(all, 6)]).unwrap();
+    let mut plan = queue_plan(&[family(all, 6)], 0).unwrap();
     assert_eq!(
         extra_queue_places(&[family(all, 6)], &mut plan, &[compute, compute, compute]),
         [Some((0, 5)), Some((0, 4)), Some((0, 3))]
     );
     assert_eq!((plan.queues.len(), plan.present.len()), (3, 0));
     // One queue (lavapipe's), empty flags, flags no family has: none.
-    let mut plan = queue_plan(&[family(all, 1)]).unwrap();
+    let mut plan = queue_plan(&[family(all, 1)], 0).unwrap();
     assert_eq!(
         extra_queue_places(
             &[family(all, 1)],
@@ -702,7 +709,7 @@ fn extra_queues_take_a_free_queue_else_one_the_device_gives_up() {
     assert_eq!(plan.queues, [(0, 0)]);
     // Staging's queue last of all.
     let shape = [family(all, 1), family(copy.queue_flags, 1)];
-    let mut plan = queue_plan(&shape).unwrap();
+    let mut plan = queue_plan(&shape, 0).unwrap();
     assert_eq!(plan.staging, Some((1, 0)));
     assert_eq!(
         extra_queue_places(&shape, &mut plan, &[transfer]),
@@ -719,6 +726,123 @@ fn extra_queues_take_a_free_queue_else_one_the_device_gives_up() {
         "{text}"
     );
     assert_eq!(extra_queues_absent(&[], "a GPU"), None);
+}
+
+/// The caller's reserved queues (`DeviceOptions::reserved_queues`): queues of the families the
+/// round robin takes, which it gives up for them, so it shrinks by each one; the round robin keeps
+/// its first four and presenting its two before the caller has any, and a family with queues past
+/// the round robin's ceiling and presenting's two gives those first. A device with none to spare
+/// (MoltenVK's four families of one queue, lavapipe's one queue, a family of six) reserves none,
+/// and says so; no extra queue takes a reserved one.
+#[test]
+fn reserved_queues_leave_the_round_robin_after_presenting() {
+    let all = vk::QueueFlags::GRAPHICS
+        | vk::QueueFlags::COMPUTE
+        | vk::QueueFlags::TRANSFER
+        | vk::QueueFlags::SPARSE_BINDING;
+    let family = |flags: vk::QueueFlags, count: u32| vk::QueueFamilyProperties {
+        queue_flags: flags,
+        queue_count: count,
+        timestamp_valid_bits: 64,
+        min_image_transfer_granularity: vk::Extent3D {
+            width: 1,
+            height: 1,
+            depth: 1,
+        },
+    };
+    let of = |family: u32, indices: std::ops::Range<u32>| -> Vec<(u32, u32)> {
+        indices.map(|index| (family, index)).collect()
+    };
+    let shape = |plan: &QueuePlan| {
+        (
+            plan.queues.len(),
+            plan.present.clone(),
+            plan.reserved.clone(),
+        )
+    };
+    // NVIDIA's shape (an RTX 5080): a graphics family of 16, a copy engine of 2, a compute family
+    // of 8, video families. One reserved queue: the round robin 13, presenting 2, the caller the
+    // family's last; staging and every other family as before.
+    let copy = family(vk::QueueFlags::TRANSFER | vk::QueueFlags::SPARSE_BINDING, 2);
+    let nvidia = [
+        family(all, 16),
+        copy,
+        family(all & !vk::QueueFlags::GRAPHICS, 8),
+        family(copy.queue_flags | vk::QueueFlags::VIDEO_DECODE_KHR, 1),
+    ];
+    let unreserved = queue_plan(&nvidia, 0).unwrap();
+    assert_eq!(unreserved.queues.len(), 14);
+    assert!(unreserved.reserved.is_empty());
+    let one = queue_plan(&nvidia, 1).unwrap();
+    assert_eq!(
+        one,
+        QueuePlan {
+            primary: 0,
+            queues: of(0, 0..13),
+            present: of(0, 13..15),
+            reserved: of(0, 15..16),
+            staging: Some((1, 0)),
+        }
+    );
+    // As many as the family spares: the round robin keeps four, presenting two, so ten.
+    for asked in [10, 11, 64, u32::MAX] {
+        assert_eq!(
+            shape(&queue_plan(&nvidia, asked).unwrap()),
+            (4, of(0, 4..6), of(0, 6..16)),
+            "{asked} asked"
+        );
+    }
+    // No extra queue takes a reserved one: graphics extra queues take presenting's, then the
+    // round robin's last, as without a reservation.
+    let mut plan = queue_plan(&nvidia, 1).unwrap();
+    let graphics = vk::QueueFlags::GRAPHICS;
+    assert_eq!(
+        extra_queue_places(&nvidia, &mut plan, &[graphics; 3]),
+        [Some((0, 14)), Some((0, 13)), Some((0, 12))]
+    );
+    assert_eq!(shape(&plan), (12, Vec::new(), of(0, 15..16)));
+    // A family of seven spares one; of six, none (the round robin's four and presenting's two).
+    assert_eq!(
+        shape(&queue_plan(&[family(all, 7)], 1).unwrap()),
+        (4, of(0, 4..6), of(0, 6..7))
+    );
+    assert_eq!(
+        shape(&queue_plan(&[family(all, 6)], 1).unwrap()),
+        (4, of(0, 4..6), Vec::new())
+    );
+    // A family of five: presenting keeps its one, the caller has none.
+    assert_eq!(
+        shape(&queue_plan(&[family(all, 5)], 1).unwrap()),
+        (4, of(0, 4..5), Vec::new())
+    );
+    // Past the round robin's ceiling and presenting's two, the caller's come first: the round
+    // robin of a family of 24 stays 16.
+    assert_eq!(
+        shape(&queue_plan(&[family(all, 24)], 2).unwrap()),
+        (16, of(0, 16..18), of(0, 18..20))
+    );
+    // MoltenVK's shape and lavapipe's: none to spare, the round robin as without.
+    let moltenvk = [family(all, 1); 4];
+    assert_eq!(queue_plan(&moltenvk, 1), queue_plan(&moltenvk, 0));
+    assert_eq!(
+        queue_plan(&[family(all, 1)], 1),
+        queue_plan(&[family(all, 1)], 0)
+    );
+    // Equivalent families take their reserved queues in the round robin's order, of families it
+    // takes.
+    assert_eq!(
+        shape(&queue_plan(&[family(all, 4); 2], 1).unwrap()),
+        (5, vec![(1, 2), (0, 3)], vec![(1, 3)])
+    );
+    let text = reserved_queues_absent(1, 0, "a GPU").unwrap();
+    assert!(
+        text.contains("reserved 0 of the 1 queue(s)")
+            && text.ends_with("[metal2vulkan-reserved-queues-absent]"),
+        "{text}"
+    );
+    assert!(reserved_queues_absent(11, 10, "a GPU").is_some());
+    assert_eq!(reserved_queues_absent(1, 1, "a GPU"), None);
+    assert_eq!(reserved_queues_absent(0, 0, "a GPU"), None);
 }
 
 /// The runtime enables `hostImageCopy` itself wherever the device lists the extensions its

@@ -2012,6 +2012,7 @@ field	metal2vulkan-runtime::DeviceHandles.instance_api_version	pub instance_api_
 field	metal2vulkan-runtime::DeviceHandles.physical_device	pub physical_device: vk::PhysicalDevice
 field	metal2vulkan-runtime::DeviceHandles.queue_families	pub queue_families: &'a [u32]
 field	metal2vulkan-runtime::DeviceHandles.queue_family	pub queue_family: u32
+field	metal2vulkan-runtime::DeviceHandles.reserved_queues	pub reserved_queues: &'a [ReservedQueue]
 field	metal2vulkan-runtime::DeviceOptions.announce_each	pub announce_each: BTreeSet<crate::Degradation>
 field	metal2vulkan-runtime::DeviceOptions.device_extensions	pub device_extensions: Vec<CString>
 field	metal2vulkan-runtime::DeviceOptions.extra_queues	pub extra_queues: Vec<vk::QueueFlags>
@@ -2029,6 +2030,7 @@ field	metal2vulkan-runtime::DeviceOptions.optional_device_extensions	pub optiona
 field	metal2vulkan-runtime::DeviceOptions.pipeline_records	pub pipeline_records: Option<Arc<dyn Fn(crate::PipelineRecord) + Send + Sync>>
 field	metal2vulkan-runtime::DeviceOptions.policy	pub policy: DevicePolicy
 field	metal2vulkan-runtime::DeviceOptions.record_executions	pub record_executions: bool
+field	metal2vulkan-runtime::DeviceOptions.reserved_queues	pub reserved_queues: u32
 field	metal2vulkan-runtime::DeviceOptions.shader_cache	pub shader_cache: ShaderCacheOptions
 field	metal2vulkan-runtime::DeviceOptions.withheld_attachment_formats	pub withheld_attachment_formats: BTreeSet<metal2vulkan::vk::Format>
 field	metal2vulkan-runtime::DeviceOptions.withheld_extensions	pub withheld_extensions: BTreeSet<VkExtension>
@@ -2316,6 +2318,8 @@ field	metal2vulkan-runtime::RenderPassStencilAttachmentDescriptor.texture	pub te
 field	metal2vulkan-runtime::RenderPipelineFunctionsDescriptor.fragment_additional_binary_functions	pub fragment_additional_binary_functions: Vec<Function>
 field	metal2vulkan-runtime::RenderPipelineFunctionsDescriptor.tile_additional_binary_functions	pub tile_additional_binary_functions: Vec<Function>
 field	metal2vulkan-runtime::RenderPipelineFunctionsDescriptor.vertex_additional_binary_functions	pub vertex_additional_binary_functions: Vec<Function>
+field	metal2vulkan-runtime::ReservedQueue.family	pub family: u32
+field	metal2vulkan-runtime::ReservedQueue.queue	pub queue: vk::Queue
 field	metal2vulkan-runtime::ResolveTarget.depth_plane	pub depth_plane: u64
 field	metal2vulkan-runtime::ResolveTarget.level	pub level: u64
 field	metal2vulkan-runtime::ResolveTarget.slice	pub slice: u64
@@ -9434,6 +9438,7 @@ struct	metal2vulkan-runtime::RenderPassDescriptor	#[derive(Clone, Debug, Default
 struct	metal2vulkan-runtime::RenderPassStencilAttachmentDescriptor	#[derive(Clone, Debug)] #[non_exhaustive] pub struct RenderPassStencilAttachmentDescriptor
 struct	metal2vulkan-runtime::RenderPipelineFunctionsDescriptor	#[derive(Clone, Debug, Default)] #[non_exhaustive] pub struct RenderPipelineFunctionsDescriptor
 struct	metal2vulkan-runtime::RenderPipelineState	#[derive(Clone)] pub struct RenderPipelineState(Kind)
+struct	metal2vulkan-runtime::ReservedQueue	#[derive(Clone, Copy, Debug, PartialEq, Eq)] #[non_exhaustive] pub struct ReservedQueue
 struct	metal2vulkan-runtime::ResolveTarget	#[derive(Clone, Debug)] #[non_exhaustive] pub struct ResolveTarget
 struct	metal2vulkan-runtime::ResourceId	#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] pub struct ResourceId(pub u64)
 struct	metal2vulkan-runtime::ResourceOptions	#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)] pub struct ResourceOptions(u64)

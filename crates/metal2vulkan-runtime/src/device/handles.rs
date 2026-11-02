@@ -24,7 +24,8 @@ pub struct DeviceHandles<'a> {
     /// The device's primary queue family: the first of [`DeviceHandles::queue_families`], and,
     /// on a device of one family, the family every `VkQueue` of the device's queues belongs to.
     pub queue_family: u32,
-    /// Every queue family the device's queues belong to, the primary first, each once. A device
+    /// Every queue family the device's queues belong to, the primary first, each once, the
+    /// families of its [`reserved_queues`](Self::reserved_queues) among them. A device
     /// the runtime creates where every queue family is equivalent (the same flags, queue count,
     /// timestamp bits and transfer granularity, as MoltenVK's) takes queues of all of them, so
     /// its queues run side by side; its buffers and images are then concurrent among all these
@@ -37,6 +38,35 @@ pub struct DeviceHandles<'a> {
     /// order, leaving out each the device had no queue for: none for an adopted device. The
     /// runtime never submits to them.
     pub extra_queues: &'a [ExtraQueue],
+    /// The queues of its own families the device reserved for the caller
+    /// ([`DeviceOptions::reserved_queues`](super::DeviceOptions::reserved_queues)), as many as
+    /// it had to spare, at most as many as asked: none for an adopted device. The runtime never
+    /// submits to them.
+    pub reserved_queues: &'a [ReservedQueue],
+}
+
+/// No Metal counterpart: one of the queues of its own queue families a created device reserved
+/// for the caller out of the round robin its command queues share
+/// ([`DeviceOptions::reserved_queues`](super::DeviceOptions::reserved_queues)), which
+/// [`DeviceHandles::reserved_queues`] returns. Metal has no queue a program owns apart from its
+/// command queues: a `CommandQueue` here may share its `VkQueue` with another command queue
+/// (`WorkCounts::queues_sharing_a_vk_queue`), and the runtime submits to that `VkQueue` itself,
+/// while no runtime work ever goes to this one. No command queue takes it, presenting or not,
+/// and no internal or staging copy goes there: the caller is its only submitter, and
+/// synchronizes its submissions to it externally, as Vulkan requires. Its family is one of
+/// [`DeviceHandles::queue_families`], which the device's buffers and images are shared among, so
+/// a submission to it may use them with no ownership transfer, under their handles' contracts
+/// ([`Buffer::vk_buffer`](crate::Buffer::vk_buffer),
+/// [`Texture::vk_image`](crate::Texture::vk_image)): while the object lives, ordered against the
+/// runtime's work on it through semaphores or completion, and an image the runtime made left in
+/// `VK_IMAGE_LAYOUT_GENERAL`. It lives as long as the device.
+#[non_exhaustive]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ReservedQueue {
+    /// The queue's family, one of [`DeviceHandles::queue_families`].
+    pub family: u32,
+    /// The queue.
+    pub queue: vk::Queue,
 }
 
 /// No Metal counterpart: one of the queues a created device made for the caller beside its own
@@ -108,6 +138,7 @@ impl std::fmt::Debug for DeviceHandles<'_> {
             .field("queue_family", &self.queue_family)
             .field("queue_families", &self.queue_families)
             .field("extra_queues", &self.extra_queues)
+            .field("reserved_queues", &self.reserved_queues)
             .finish_non_exhaustive()
     }
 }
@@ -119,8 +150,9 @@ impl Device {
     /// # Safety
     ///
     /// The objects stay their owner's: the caller destroys none of them, uses them only while
-    /// the device lives, and submits to the device's queues only through
-    /// [`CommandQueue::with_vk_queue`](super::super::CommandQueue::with_vk_queue). On MoltenVK, a
+    /// the device lives, and submits to the queues the runtime submits to only through
+    /// [`CommandQueue::with_vk_queue`](super::super::CommandQueue::with_vk_queue) (the extra and
+    /// reserved queues are the caller's alone). On MoltenVK, a
     /// device with a debug-utils messenger may find its first word overwritten: the calls the
     /// Vulkan loader serves for the device itself (`vkAllocateCommandBuffers`, `vkGetDeviceQueue`,
     /// `vkGetDeviceProcAddr`, `vkDestroyDevice`, `vkCreateSwapchainKHR`:
@@ -139,6 +171,7 @@ impl Device {
             queue_family: shared.queue_family,
             queue_families: &shared.queue_families,
             extra_queues: &shared.extra_queues,
+            reserved_queues: &shared.reserved_queues,
         }
     }
 }

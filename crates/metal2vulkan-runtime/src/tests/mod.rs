@@ -250,6 +250,8 @@ mod render_sibling_work;
 mod render_stage_digests;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod rerun_arenas;
+#[cfg(any(m2v_gpu, m2v_cpu_icd))]
+mod reserved_queues;
 mod resource;
 mod resource_ids;
 mod rotated;

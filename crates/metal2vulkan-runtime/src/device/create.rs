@@ -236,6 +236,39 @@ pub struct DeviceOptions {
     /// or [`Device::new_texture_with_vk_image_plane`](crate::Device::new_texture_with_vk_image_plane)).
     /// Empty by default. No Metal counterpart: a Vulkan-side option.
     pub extra_queues: Vec<vk::QueueFlags>,
+    /// How many queues of its own queue families each device reserves for the caller, which
+    /// [`DeviceHandles::reserved_queues`](crate::DeviceHandles::reserved_queues) returns: queues
+    /// it would otherwise lend the round robin its command queues share
+    /// ([`CommandQueue`](crate::CommandQueue)), so that round robin shrinks by each one reserved,
+    /// and the runtime never submits to one (no command queue, presenting or not, takes one; no
+    /// internal or staging copy goes there). They are the round robin's last queues: it keeps its
+    /// first four, and the two queues reserved for presenting queues keep theirs, so a device
+    /// reserves only queues past those six (on an RTX 5080, whose graphics family has 16, one
+    /// reserved queue leaves the round robin 13 and presenting 2). A family with queues past the
+    /// round robin's ceiling of 16 and presenting's two gives those first, and its round robin
+    /// does not shrink. A device with fewer to spare reserves those it has (none on MoltenVK's
+    /// four families of one queue each, which its round robin takes, or lavapipe's one queue), is
+    /// made all the same, and says so once in an informational message
+    /// (`metal2vulkan-reserved-queues-absent`, through [`messages`](Self::messages) or on
+    /// stderr). They are reserved before the [`extra_queues`](Self::extra_queues) are placed, so
+    /// no extra queue takes one.
+    ///
+    /// A reserved queue's family is one of the device's own
+    /// ([`DeviceHandles::queue_families`](crate::DeviceHandles::queue_families)), which its
+    /// buffers and images are shared among (`EXCLUSIVE` on a device of one family, `CONCURRENT`
+    /// among them otherwise): a submission there may use the runtime's buffers and images
+    /// ([`Buffer::vk_buffer`](crate::Buffer::vk_buffer),
+    /// [`Texture::vk_image`](crate::Texture::vk_image)) as well as the caller's, with no
+    /// ownership transfer, under those handles' contracts: while the object lives, ordered
+    /// against the runtime's work on it through semaphores
+    /// ([`SharedEvent::vk_wait`](crate::SharedEvent::vk_wait),
+    /// [`SharedEvent::reserve_vk_signal`](crate::SharedEvent::reserve_vk_signal),
+    /// [`CommandBuffer::encode_wait_for_vk_semaphore`](crate::CommandBuffer::encode_wait_for_vk_semaphore),
+    /// [`CommandBuffer::encode_signal_vk_semaphore`](crate::CommandBuffer::encode_signal_vk_semaphore))
+    /// or completion, and an image the runtime made left in `VK_IMAGE_LAYOUT_GENERAL`. The caller
+    /// is the queue's only submitter: its submissions there sit in no command queue's order, and
+    /// hold none back. 0 by default. No Metal counterpart: a Vulkan-side option.
+    pub reserved_queues: u32,
 }
 
 impl std::fmt::Debug for DeviceOptions {
@@ -265,6 +298,7 @@ impl std::fmt::Debug for DeviceOptions {
             withheld_attachment_formats,
             pipeline_records,
             extra_queues,
+            reserved_queues,
         } = self;
         f.debug_struct("DeviceOptions")
             .field("policy", policy)
@@ -301,6 +335,7 @@ impl std::fmt::Debug for DeviceOptions {
                     .map(|&flags| super::handles::QueueFlagsText(flags))
                     .collect::<Vec<_>>(),
             )
+            .field("reserved_queues", reserved_queues)
             .finish()
     }
 }
@@ -917,7 +952,7 @@ const ROUND_ROBIN_CEILING: u32 = 16;
 
 /// The most `VkQueue`s a created device reserves for presenting queues
 /// (`Device::new_command_queue_for_presenting`), outside the round robin: the taken families'
-/// queues past the round robin's, where they have them.
+/// queues past the round robin's, where they have them, before any reserved for the caller.
 const PRESENT_QUEUES: u32 = 2;
 
 /// The queues a created device takes ([`queue_plan`]).
@@ -931,6 +966,9 @@ pub(crate) struct QueuePlan {
     /// The queues reserved for presenting queues, after `queues` in the same order: at most
     /// [`PRESENT_QUEUES`], none where the families taken have no more.
     pub(crate) present: Vec<(u32, u32)>,
+    /// The queues reserved for the caller (`DeviceOptions::reserved_queues`), after `present` in
+    /// the same order: at most as many as asked, none where the families taken have no more.
+    pub(crate) reserved: Vec<(u32, u32)>,
     /// The queue reserved for staging copies (`device/staging.rs`): the first queue of the first
     /// family of transfers alone whose copies take any texel (a granularity of one texel), which
     /// is none of the families above; `None` where there is none.
@@ -945,16 +983,22 @@ pub(crate) struct QueuePlan {
 /// another Metal command queue on MoltenVK, whose command buffers the GPU runs beside the
 /// first's; queues of one family there share one.
 ///
-/// The round robin logical queues share takes those queues less [`PRESENT_QUEUES`], at least
-/// [`LEAST_QUEUES`] and at most [`ROUND_ROBIN_CEILING`], so a family with queues to spare lends
-/// them to the round robin rather than leaving them idle (NVIDIA's 16 give 14) and no device
-/// takes fewer than it took before. The next queues in that order, at most
-/// [`PRESENT_QUEUES`], are reserved for presenting queues. A queue of a family of transfers alone
+/// The round robin logical queues share takes those queues less [`PRESENT_QUEUES`] and less the
+/// `reserved` the caller asks for (`DeviceOptions::reserved_queues`), at least [`LEAST_QUEUES`]
+/// and at most [`ROUND_ROBIN_CEILING`], so a family with queues to spare lends them to the round
+/// robin rather than leaving them idle (NVIDIA's 16 give 14) and no device takes fewer than it
+/// took before. The next queues in that order, at most [`PRESENT_QUEUES`], are reserved for
+/// presenting queues, and the next, at most `reserved`, for the caller: the round robin keeps its
+/// first [`LEAST_QUEUES`] and presenting its queues before the caller has any (NVIDIA's 16 with
+/// one reserved give the round robin 13). A queue of a family of transfers alone
 /// is reserved for staging copies: a copy engine, which runs beside the graphics family's work
 /// where another of its queues waits behind it; an asynchronous compute queue is none (its work
 /// waited up to 1.05 s on a Radeon 780M and 1.19 s on an RTX 3090 behind a kernel that filled the
 /// GPU). `None` where no family does graphics and compute work.
-pub(crate) fn queue_plan(families: &[vk::QueueFamilyProperties]) -> Option<QueuePlan> {
+pub(crate) fn queue_plan(
+    families: &[vk::QueueFamilyProperties],
+    reserved: u32,
+) -> Option<QueuePlan> {
     let wanted = vk::QueueFlags::GRAPHICS | vk::QueueFlags::COMPUTE;
     let (primary, first) = families
         .iter()
@@ -974,10 +1018,13 @@ pub(crate) fn queue_plan(families: &[vk::QueueFamilyProperties]) -> Option<Queue
     let mut order = (0..first.queue_count)
         .flat_map(|index| taken.iter().map(move |&family| (family, index)))
         .collect::<Vec<_>>();
-    let round_robin = (order.len().saturating_sub(PRESENT_QUEUES as usize))
+    let past = (PRESENT_QUEUES as usize).saturating_add(reserved as usize);
+    let round_robin = (order.len().saturating_sub(past))
         .clamp(LEAST_QUEUES as usize, ROUND_ROBIN_CEILING as usize)
         .min(order.len());
-    let present = order.split_off(round_robin);
+    let mut rest = order.split_off(round_robin).into_iter();
+    let present = rest.by_ref().take(PRESENT_QUEUES as usize).collect();
+    let reserved = rest.take(reserved as usize).collect();
     // Transfers alone (sparse binding and protected memory aside: no graphics, compute, video or
     // optical flow work), and copies of any texel.
     let unit = vk::Extent3D {
@@ -1001,7 +1048,8 @@ pub(crate) fn queue_plan(families: &[vk::QueueFamilyProperties]) -> Option<Queue
     Some(QueuePlan {
         primary: primary as u32,
         queues: order,
-        present: present.into_iter().take(PRESENT_QUEUES as usize).collect(),
+        present,
+        reserved,
         staging,
     })
 }
@@ -1011,8 +1059,8 @@ pub(crate) fn queue_plan(families: &[vk::QueueFamilyProperties]) -> Option<Queue
 /// plan leaves free, of the first family whose flags contain the asked flags and that has one,
 /// at its lowest free index; else the last queue the plan reserved for presenting, then the last
 /// of the round robin's but its first (internal submissions go there), then the staging queue, of
-/// such a family, which `plan` then gives up. Flags that are empty, or that no family's contain,
-/// take none.
+/// such a family, which `plan` then gives up; never a queue reserved for the caller. Flags that
+/// are empty, or that no family's contain, take none.
 pub(crate) fn extra_queue_places(
     families: &[vk::QueueFamilyProperties],
     plan: &mut QueuePlan,
@@ -1028,6 +1076,7 @@ pub(crate) fn extra_queue_places(
         let taken = |place: (u32, u32)| {
             plan.queues.contains(&place)
                 || plan.present.contains(&place)
+                || plan.reserved.contains(&place)
                 || plan.staging == Some(place)
                 || extra.contains(&place)
         };
@@ -1079,6 +1128,25 @@ pub(crate) fn extra_queues_absent(absent: &[vk::QueueFlags], device: &str) -> Op
 /// The id name of the informational message a device made without some of the extra queues its
 /// options asked for sends as it is made ([`extra_queues_absent`]).
 pub(crate) const EXTRA_QUEUES_ABSENT: &str = "metal2vulkan-extra-queues-absent";
+
+/// The informational message a device that reserved only `reserved` of the `asked` queues
+/// (`DeviceOptions::reserved_queues`) sends as it is made; `None` where it reserved every one.
+pub(crate) fn reserved_queues_absent(asked: u32, reserved: usize, device: &str) -> Option<String> {
+    if reserved >= asked as usize {
+        return None;
+    }
+    Some(format!(
+        "metal2vulkan: the device on {device} reserved {reserved} of the {asked} queue(s) of its \
+         own queue families the options asked for: its round robin keeps its first \
+         {LEAST_QUEUES} queues and presenting its {PRESENT_QUEUES} before the caller has any, \
+         and its families have no more; the device was made with those it reserved, which \
+         DeviceHandles::reserved_queues holds [{RESERVED_QUEUES_ABSENT}]"
+    ))
+}
+
+/// The id name of the informational message a device made with fewer reserved queues than its
+/// options asked for sends as it is made ([`reserved_queues_absent`]).
+pub(crate) const RESERVED_QUEUES_ABSENT: &str = "metal2vulkan-reserved-queues-absent";
 
 /// `description` with each of `withheld` no color attachment
 /// (`DeviceOptions::withheld_attachment_formats`): its tilings' `COLOR_ATTACHMENT` and blend
@@ -1466,7 +1534,7 @@ fn create_on(
             .raw
             .get_physical_device_queue_family_properties(physical)
     };
-    let mut plan = queue_plan(&families).ok_or(Error::NoDevice)?;
+    let mut plan = queue_plan(&families, options.reserved_queues).ok_or(Error::NoDevice)?;
     let extra_places = extra_queue_places(&families, &mut plan, &options.extra_queues);
     let queue_family = plan.primary;
     let api = description.api_version;
@@ -1633,7 +1701,9 @@ fn create_on(
     // One create info per family taken, of as many queues as the plan takes of it.
     let mut taken: Vec<(u32, usize)> = Vec::new();
     let extra: Vec<(u32, u32)> = extra_places.iter().flatten().copied().collect();
-    let all = plan.queues.iter().chain(&plan.present).chain(&plan.staging);
+    let all = (plan.queues.iter().chain(&plan.present))
+        .chain(&plan.reserved)
+        .chain(&plan.staging);
     for &(family, _) in all.chain(&extra) {
         match taken.iter_mut().find(|(at, _)| *at == family) {
             Some((_, count)) => *count += 1,
@@ -1642,8 +1712,8 @@ fn create_on(
     }
     // One priority per queue of the family the plan and the extra queues take most of, so the
     // slice each create info names is always within it: the round robin alone takes up to
-    // `ROUND_ROBIN_CEILING` of one family, presenting `PRESENT_QUEUES` more, and the extra queues
-    // at most the family's own count.
+    // `ROUND_ROBIN_CEILING` of one family, presenting `PRESENT_QUEUES` more, and the reserved and
+    // extra queues at most the family's own count.
     let priorities = vec![1.0f32; taken.iter().map(|&(_, count)| count).max().unwrap_or(0)];
     let queues: Vec<vk::DeviceQueueCreateInfo<'_>> = taken
         .iter()
@@ -1672,6 +1742,7 @@ fn create_on(
         primary.map_or(vk::QueueFlags::empty(), |family| family.queue_flags),
         enables.names(),
     );
+    let reserved = plan.reserved.len();
     let parts = Parts {
         instance: Arc::clone(instance),
         physical,
@@ -1681,6 +1752,7 @@ fn create_on(
         present_queues: plan.present.len(),
         queues: plan.queues.into_iter().chain(plan.present).collect(),
         staging: plan.staging,
+        reserved_queues: plan.reserved,
         extra_queues: (options.extra_queues.iter().zip(&extra_places))
             .filter_map(|(&flags, place)| place.map(|(family, index)| (flags, family, index)))
             .collect(),
@@ -1721,6 +1793,9 @@ fn create_on(
         .collect();
     if let Some(text) = extra_queues_absent(&absent, device.name()) {
         device.inform(EXTRA_QUEUES_ABSENT, text);
+    }
+    if let Some(text) = reserved_queues_absent(options.reserved_queues, reserved, device.name()) {
+        device.inform(RESERVED_QUEUES_ABSENT, text);
     }
     if let Some(why) = cache_kept {
         let object = format!("the device, on {}", device.name());
@@ -1844,6 +1919,7 @@ fn same_options(a: &DeviceOptions, b: &DeviceOptions) -> bool {
         withheld_attachment_formats,
         pipeline_records: _,
         extra_queues,
+        reserved_queues,
     } = a;
     *policy == b.policy
         && *layers == b.layers
@@ -1866,6 +1942,7 @@ fn same_options(a: &DeviceOptions, b: &DeviceOptions) -> bool {
         && *fail_in_place_check == b.fail_in_place_check
         && *withheld_attachment_formats == b.withheld_attachment_formats
         && *extra_queues == b.extra_queues
+        && *reserved_queues == b.reserved_queues
 }
 
 /// The group of `made` for `options`: the live one, or a new one on a new instance. Its index.

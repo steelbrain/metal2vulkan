@@ -37,7 +37,7 @@ pub use create::{
     DebugMessage, DeviceOptions, LayerSetting, LayerSettingValue, MessageKind, MessageSeverity,
     MessageSink,
 };
-pub use handles::{DeviceHandles, ExtraQueue};
+pub use handles::{DeviceHandles, ExtraQueue, ReservedQueue};
 pub use properties::{DeviceKind, PhysicalDeviceIdentity};
 
 use super::address::AddressSpace;
@@ -195,8 +195,8 @@ pub(super) struct DeviceShared {
     /// one. Shared with the scheduler's thread where it takes the driver's stalls idle
     /// (`submit_stalls.rs`).
     pub(super) queues: Arc<[QueueSlot]>,
-    /// The families of those queues, the primary first, each once: what the device's buffers and
-    /// images are shared among (`sharing.rs`).
+    /// The families of those queues and of the caller's reserved queues, the primary first, each
+    /// once: what the device's buffers and images are shared among (`sharing.rs`).
     pub(super) queue_families: Vec<u32>,
     /// How many of `queues`, the first, logical queues share round robin; the rest are reserved
     /// for presenting queues.
@@ -290,6 +290,9 @@ pub(super) struct DeviceShared {
     /// The caller's extra queues (`DeviceOptions::extra_queues`), to which the runtime never
     /// submits (`handles.rs`).
     pub(super) extra_queues: Vec<handles::ExtraQueue>,
+    /// The queues of its own families reserved for the caller (`DeviceOptions::reserved_queues`),
+    /// outside `queues`: the runtime never submits to them (`handles.rs`).
+    pub(super) reserved_queues: Vec<handles::ReservedQueue>,
     pub(super) scheduler: Scheduler,
     /// The scheduler's nudge, a timeline semaphore its wakers signal where its thread waits for
     /// the GPU (`scheduler/mod.rs`): made on every device, used where the driver's wait for any
@@ -1152,6 +1155,10 @@ pub(super) struct Parts {
     /// The queue reserved for staging copies, its family and index there, outside `queues`
     /// (`staging.rs`): `None` for an adopted device, or where the families have no more.
     pub(super) staging: Option<(u32, u32)>,
+    /// The queues reserved for the caller (`DeviceOptions::reserved_queues`), each its family and
+    /// index there, of `queues`' families, outside `queues` and `staging`: none for an adopted
+    /// device.
+    pub(super) reserved_queues: Vec<(u32, u32)>,
     /// The caller's extra queues (`DeviceOptions::extra_queues`), each the flags asked for, its
     /// family and its index there, outside `queues` and `staging`: none for an adopted device.
     pub(super) extra_queues: Vec<(vk::QueueFlags, u32, u32)>,
@@ -1242,6 +1249,7 @@ impl Device {
             queues: queue_places,
             present_queues,
             staging: staging_place,
+            reserved_queues: reserved_places,
             extra_queues: extra_places,
             compile,
             description,
@@ -1371,9 +1379,14 @@ impl Device {
             })
             .collect();
         let mut queue_families: Vec<u32> = Vec::with_capacity(queues.len());
-        for slot in &queues {
-            if !queue_families.contains(&slot.family) {
-                queue_families.push(slot.family);
+        let reserved_families = reserved_places.iter().map(|&(family, _)| family);
+        for family in queues
+            .iter()
+            .map(|slot| slot.family)
+            .chain(reserved_families)
+        {
+            if !queue_families.contains(&family) {
+                queue_families.push(family);
             }
         }
         let staging = staging_place.map(|(family, index)| {
@@ -1385,6 +1398,17 @@ impl Device {
                 staging::StagingQueue::new(family, flags_of(family), queue, &queue_families)
             }
         });
+        let reserved_queues = (reserved_places.iter())
+            .map(|&(family, index)| handles::ReservedQueue {
+                family,
+                // SAFETY: the queue exists (the caller's contract), and the loader serves the
+                // call after the word is put back.
+                queue: unsafe {
+                    loader_word.restore();
+                    raw.get_device_queue(family, index)
+                },
+            })
+            .collect();
         let extra_queues = (extra_places.iter())
             .map(|&(flags, family, index)| handles::ExtraQueue {
                 flags,
@@ -1840,6 +1864,7 @@ impl Device {
             bound_at: Mutex::new(None),
             staging,
             extra_queues,
+            reserved_queues,
             scheduler,
             nudge,
             completion,

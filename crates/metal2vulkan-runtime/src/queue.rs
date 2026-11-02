@@ -26,6 +26,20 @@
 //! waiting stands; each queue that takes a `VkQueue` another took is counted
 //! (`WorkCounts::queues_sharing_a_vk_queue`).
 //!
+//! **The caller's own queues.** A caller that submits Vulkan work of its own beside Metal's, and
+//! must not wait behind a command queue's command buffers nor hold one back, asks the device for
+//! queues of its own families (`DeviceOptions::reserved_queues`, `DeviceHandles::reserved_queues`):
+//! the round robin gives them up, one fewer `VkQueue` for each (on an RTX 5080, 13 rather than
+//! 14), keeping its first four and presenting's two, and no command queue, presenting or not, and
+//! no internal or staging copy ever submits to them. Their families are the device's, which its
+//! buffers and images are shared among, so the caller's submissions there use the runtime's own
+//! objects with no ownership transfer, ordered against its command buffers through semaphores
+//! (a shared event's, or the caller's own). A queue a command queue lends
+//! (`CommandQueue::with_vk_queue`) is no such queue: the caller's submissions there sit in that
+//! command queue's order, and in every other command queue's that shares its `VkQueue`. A device
+//! with no queue to spare (MoltenVK's, lavapipe's, a family of six) reserves none and says so
+//! (`metal2vulkan-reserved-queues-absent`).
+//!
 //! A queue holds at most its `maxCommandBufferCount` uncompleted command buffers, as Metal's does
 //! (measured on an M3 Max with macOS 26.7 and an M4 with macOS 27.0.1, with and without API
 //! validation):
@@ -238,7 +252,9 @@ impl Device {
     /// then holds no other queue's submissions, as Metal's present holds no other queue.
     ///
     /// A device the runtime creates reserves up to two such `VkQueue`s, of its queue families'
-    /// queues past the four the round robin takes (NVIDIA's graphics family has 16), and
+    /// queues past the four the round robin takes (NVIDIA's graphics family has 16), before any
+    /// it reserves for the caller
+    /// ([`DeviceOptions::reserved_queues`](crate::DeviceOptions::reserved_queues)), and
     /// presenting queues take them in turn; one made past their number shares one with an
     /// earlier presenting queue. A device with no such queue (MoltenVK's four families of one
     /// queue, RADV's and lavapipe's single graphics queue, or a device the caller made,
