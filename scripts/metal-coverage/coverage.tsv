@@ -1067,7 +1067,7 @@ MTLDevice.h	MTLDevice	property	supports32BitFloatFiltering		I	runtime	DeviceProp
 MTLDevice.h	MTLDevice	property	supports32BitMSAA		I	runtime	Device::supports_32bit_msaa			
 MTLDevice.h	MTLDevice	property	supportsQueryTextureLOD		M			capability query; the family rows hold the answer (`FeatureRow::QueryTextureLod`)	S	queries
 MTLDevice.h	MTLDevice	property	supportsBCTextureCompression		M			capability query; the family rows hold the answer (`FeatureRow::BcPixelFormats`)	S	queries
-MTLDevice.h	MTLDevice	property	supportsPullModelInterpolation		M			capability query	S	queries
+MTLDevice.h	MTLDevice	property	supportsPullModelInterpolation		I	runtime	DeviceProperties::supports_pull_model_interpolation			
 MTLDevice.h	MTLDevice	property	barycentricCoordsSupported	yes	M			capability query (deprecated name of the next)	S	queries
 MTLDevice.h	MTLDevice	property	supportsShaderBarycentricCoordinates		M			capability query; the family rows hold the answer (`FeatureRow::BarycentricCoordinates`)	S	queries
 MTLDevice.h	MTLDevice	property	currentAllocatedSize		M			the runtime's sub-allocator knows the total	S	queries

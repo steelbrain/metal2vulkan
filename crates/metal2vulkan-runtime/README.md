@@ -504,6 +504,14 @@ plans it within the device's own limits for the format. Vulkan guarantees an int
 one format (RADV does), so the answer follows the device's per-format limits. A float resolve is
 the device's own average, announced as `device-rounded-resolve` where it is not Metal's.
 
+`DeviceProperties::supports_pull_model_interpolation` (`supportsPullModelInterpolation`) answers
+yes where the device has `sampleRateShading` (and, on MoltenVK, the portability subset's
+`shaderSampleRateInterpolationFunctions`): an `interpolant` input is then read at its centroid, a
+sample and an offset through Vulkan's interpolation functions; without them only
+`interpolate_at_center` compiles. An offset is read within the device's range and on its grid
+(`device-interpolation-offset`), and a draw at custom sample positions through a function that
+reads at a sample is refused (`RuntimeGap::InterpolateAtSampleWithPositions`).
+
 Where Metal's answers differ by macOS release (which pixel formats it describes, how a heap
 texture's blocks lie, its private device properties),
 every device answers as one release, `MACOS_RELEASE` (macOS 27.0.1, measured on an Apple M3 Max),

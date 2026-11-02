@@ -32,11 +32,11 @@ Its limits, measured rather than asserted:
 
 | | |
 |---|---|
-| implemented Metal items | 958 |
+| implemented Metal items | 959 |
 | of those, unreachable: `objc2-metal` binds no name for them | 3 |
-| so reachable by some case | 955 |
+| so reachable by some case | 956 |
 | of the reachable, exercised by the suite's Metal leg | 793 |
-| of the reachable, not exercised | 162 |
+| of the reachable, not exercised | 163 |
 | share of the reachable exercised | 83% |
 | of those exercised, no case reaching it loosens anything | 594 |
 | of those exercised, a case reaching it loosens some site | 199 |
@@ -362,7 +362,7 @@ Every container with an implemented item, by how much of it the suite reaches. *
 | `MTLRenderCommandEncoder` | 119 | 0 | 69 | 50 | `alpha_coverage_pairs`, `blend_interactions`, `blend_sweeps`, `blit_indirect_commands`… |
 | `MTLArgument` | 17 | 0 | 0 | 17 |  |
 | the header's free functions | 12 | 0 | 0 | 12 |  |
-| `MTLDevice` | 64 | 2 | 51 | 11 | `alpha_coverage_pairs`, `argument_encoder_crossings`, `argument_encoders`, `astc_textures`… |
+| `MTLDevice` | 65 | 2 | 51 | 12 | `alpha_coverage_pairs`, `argument_encoder_crossings`, `argument_encoders`, `astc_textures`… |
 | `MTLRasterizationRateLayerDescriptor` | 9 | 0 | 2 | 7 | `rate_map_degenerate_forms`, `rate_map_sweeps`, `rate_maps` |
 | `MTLComputePipelineState` | 15 | 0 | 9 | 6 | `compute_threadgroups`, `pipeline_facts`, `pipeline_handlers`, `visible_tables` |
 | `MTLIndirectRenderCommand` | 23 | 0 | 17 | 6 | `indirect_command_depth`, `indirect_commands`, `mesh_commands` |
@@ -465,7 +465,7 @@ A container is one Objective-C type; the SDK header it sits in is the family of 
 |---|---|---|---|
 | `MTLRenderCommandEncoder.h` | 119 | 69 | 50 |
 | `MTLArgument.h` | 77 | 59 | 18 |
-| `MTLDevice.h` | 74 | 61 | 13 |
+| `MTLDevice.h` | 75 | 61 | 14 |
 | `MTLRasterizationRate.h` | 36 | 23 | 13 |
 | `MTLRenderPipeline.h` | 114 | 105 | 9 |
 | `MTLComputePipeline.h` | 34 | 27 | 7 |
@@ -1100,6 +1100,7 @@ One row per implemented item of the SDK, in the coverage map's order. *exercised
 | `rasterOrderGroupsSupported` | no | — | — |
 | `supports32BitFloatFiltering` | no | — | — |
 | `supports32BitMSAA` | no | — | — |
+| `supportsPullModelInterpolation` | no | — | — |
 | `newCommandQueue` | yes | `command_buffer_facts`, `command_queues`, `event_orders`, `host_detach`, `scheduled_handlers` | 8 |
 | `newCommandQueueWithMaxCommandBufferCount:` | yes | `command_queues` | 1 |
 | `heapTextureSizeAndAlignWithDescriptor:` | yes | `compressed_moves`, `format_footprints`, `heap_metal_sizes`, `texture_descriptor_pairs`, `two_plane_copies`, `ycbcr_textures` | 35 |

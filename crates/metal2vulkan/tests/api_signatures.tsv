@@ -54,7 +54,7 @@ assoc-const	metal2vulkan-runtime::PipelineOption::NONE	pub const NONE: PipelineO
 assoc-const	metal2vulkan-runtime::PixelFormatInfo::INVALID	pub const INVALID: PixelFormatInfo
 assoc-const	metal2vulkan-runtime::PrivateCount::ALL	pub const ALL: [PrivateCount; 28]
 assoc-const	metal2vulkan-runtime::PrivateFlag::ALL	pub const ALL: [PrivateFlag; 23]
-assoc-const	metal2vulkan-runtime::Query::ALL	pub const ALL: [Query; 8]
+assoc-const	metal2vulkan-runtime::Query::ALL	pub const ALL: [Query; 9]
 assoc-const	metal2vulkan-runtime::ResourceOptions::PRIVATE_BIT	pub const PRIVATE_BIT: u64
 assoc-const	metal2vulkan-runtime::StoreActionOptions::CUSTOM_SAMPLE_POSITIONS	pub const CUSTOM_SAMPLE_POSITIONS: StoreActionOptions
 assoc-const	metal2vulkan-runtime::StoreActionOptions::NONE	pub const NONE: StoreActionOptions
@@ -522,7 +522,7 @@ assoc-const-value	metal2vulkan-runtime::PipelineOption::NONE	PipelineOption(0)
 assoc-const-value	metal2vulkan-runtime::PixelFormatInfo::INVALID	PixelFormatInfo
 assoc-const-value	metal2vulkan-runtime::PrivateCount::ALL	
 assoc-const-value	metal2vulkan-runtime::PrivateFlag::ALL	
-assoc-const-value	metal2vulkan-runtime::Query::ALL	[Query::RasterOrderGroups, Query::Depth24Stencil8, Query::ProgrammableSamplePositions, Query::TextureSampleCount, Query::VertexAmplificationCount, Query::RasterizationRateMapLayerCount, Query::MinimumLinearTextureAlignment, Query::SamplerReductionMode]
+assoc-const-value	metal2vulkan-runtime::Query::ALL	[Query::RasterOrderGroups, Query::Depth24Stencil8, Query::ProgrammableSamplePositions, Query::TextureSampleCount, Query::VertexAmplificationCount, Query::RasterizationRateMapLayerCount, Query::MinimumLinearTextureAlignment, Query::SamplerReductionMode, Query::PullModelInterpolation]
 assoc-const-value	metal2vulkan-runtime::ResourceOptions::PRIVATE_BIT	1 <<24
 assoc-const-value	metal2vulkan-runtime::StoreActionOptions::CUSTOM_SAMPLE_POSITIONS	StoreActionOptions(1)
 assoc-const-value	metal2vulkan-runtime::StoreActionOptions::NONE	StoreActionOptions(0)
@@ -1154,6 +1154,7 @@ enum	metal2vulkan-air::intrinsics::ImageDim	#[derive(Clone, Copy, Debug, Partial
 enum	metal2vulkan-air::intrinsics::Imageblock	#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] pub enum Imageblock
 enum	metal2vulkan-air::intrinsics::IndirectCommand	#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] pub enum IndirectCommand
 enum	metal2vulkan-air::intrinsics::Instancing	#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] pub enum Instancing
+enum	metal2vulkan-air::intrinsics::InterpolateAt	#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] pub enum InterpolateAt
 enum	metal2vulkan-air::intrinsics::IntersectRole	#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] pub enum Role
 enum	metal2vulkan-air::intrinsics::LlvmFloatOp	#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] pub enum LlvmFloatOp
 enum	metal2vulkan-air::intrinsics::LlvmIntOp	#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] pub enum LlvmIntOp
@@ -1816,6 +1817,9 @@ field	metal2vulkan-air::intrinsics::ImageShape.array	pub array: bool
 field	metal2vulkan-air::intrinsics::ImageShape.depth	pub depth: bool
 field	metal2vulkan-air::intrinsics::ImageShape.dim	pub dim: ImageDim
 field	metal2vulkan-air::intrinsics::ImageShape.ms	pub ms: bool
+field	metal2vulkan-air::intrinsics::Interpolate.at	pub at: InterpolateAt
+field	metal2vulkan-air::intrinsics::Interpolate.perspective	pub perspective: bool
+field	metal2vulkan-air::intrinsics::Interpolate.ty	pub ty: NumTy
 field	metal2vulkan-air::intrinsics::Intersect.tags	pub tags: IntersectTags
 field	metal2vulkan-air::intrinsics::IntersectTags.curve_data	pub curve_data: bool
 field	metal2vulkan-air::intrinsics::IntersectTags.extended_limits	pub extended_limits: bool
@@ -4124,6 +4128,7 @@ field	metal2vulkan::pipeline::GraphicsState.flat_fragment_inputs	pub flat_fragme
 field	metal2vulkan::pipeline::GraphicsState.fragment_imageblock	pub fragment_imageblock: Option<FragmentImageblock>
 field	metal2vulkan::pipeline::GraphicsState.fragment_writes_memory	pub fragment_writes_memory: bool
 field	metal2vulkan::pipeline::GraphicsState.input_attachments	pub input_attachments: Vec<InputAttachmentUse>
+field	metal2vulkan::pipeline::GraphicsState.interpolates_at_sample	pub interpolates_at_sample: bool
 field	metal2vulkan::pipeline::GraphicsState.line_band	pub line_band: Option<LineBandState>
 field	metal2vulkan::pipeline::GraphicsState.logic_op	pub logic_op: Option<vk::LogicOp>
 field	metal2vulkan::pipeline::GraphicsState.max_vertex_amplification_count	pub max_vertex_amplification_count: u32
@@ -4956,6 +4961,7 @@ macro-member	metal2vulkan-runtime::Degradation::DeviceColorConversion	DeviceColo
 macro-member	metal2vulkan-runtime::Degradation::DeviceDenormals	DeviceDenormals = "device-denormals";
 macro-member	metal2vulkan-runtime::Degradation::DeviceFilteredMipmaps	DeviceFilteredMipmaps = "device-filtered-mipmaps", Precision,
 macro-member	metal2vulkan-runtime::Degradation::DeviceInterpolation	DeviceInterpolation = "device-interpolation";
+macro-member	metal2vulkan-runtime::Degradation::DeviceInterpolationOffset	DeviceInterpolationOffset = "device-interpolation-offset";
 macro-member	metal2vulkan-runtime::Degradation::DeviceNanEncoding	DeviceNanEncoding = "device-nan-encoding";
 macro-member	metal2vulkan-runtime::Degradation::DevicePackConversion	DevicePackConversion = "device-pack-conversion";
 macro-member	metal2vulkan-runtime::Degradation::DevicePointSize	DevicePointSize = "device-point-size";
@@ -7105,6 +7111,7 @@ method	metal2vulkan-air::abi::EntryPoint::is_control_point_function	pub fn is_co
 method	metal2vulkan-air::abi::EntryPoint::reaches_command_buffers	pub fn reaches_command_buffers(&self, structs: &[StructInfo]) -> bool
 method	metal2vulkan-air::abi::EntryPoint::takes_writable_textures	pub fn takes_writable_textures(&self, structs: &[StructInfo]) -> bool
 method	metal2vulkan-air::abi::Half::to_f32	pub fn to_f32(self) -> f32
+method	metal2vulkan-air::abi::Interpolation::is_interpolant	pub fn is_interpolant(self) -> bool
 method	metal2vulkan-air::abi::Member::handle	pub fn handle(&self) -> Option<AbiHandle>
 method	metal2vulkan-air::abi::ParamRole::handle	pub fn handle(&self) -> Option<AbiHandle>
 method	metal2vulkan-air::abi::SamplerState::from_words	pub fn from_words(words: [u64; 2]) -> Option<SamplerState>
@@ -7266,6 +7273,7 @@ method	metal2vulkan-air::intrinsics::Immediates::get	pub fn get(&self, i: usize)
 method	metal2vulkan-air::intrinsics::Immediates::new	pub fn new(sig: Signature, args: &'a [Value], consts: &'a ConstTable) -> Immediates<'a>
 method	metal2vulkan-air::intrinsics::IndirectCommand::records_address	pub fn records_address(self) -> bool
 method	metal2vulkan-air::intrinsics::IndirectCommand::signature	pub fn signature(&self) -> Signature
+method	metal2vulkan-air::intrinsics::Interpolate::signature	pub fn signature(&self) -> Signature
 method	metal2vulkan-air::intrinsics::Intersect::index	pub fn index(&self, role: Role) -> Option<usize>
 method	metal2vulkan-air::intrinsics::Intersect::layout	pub fn layout(&self) -> Layout<Role>
 method	metal2vulkan-air::intrinsics::Intersect::signature	pub fn signature(&self) -> Signature
@@ -7763,6 +7771,7 @@ method	metal2vulkan-runtime::DeviceProperties::drops_gpu_writes_to_read_only_mem
 method	metal2vulkan-runtime::DeviceProperties::is_depth24_stencil8_pixel_format_supported	pub fn is_depth24_stencil8_pixel_format_supported(&self) -> Result<bool, RuntimeGap>
 method	metal2vulkan-runtime::DeviceProperties::minimum_linear_texture_alignment_for_pixel_format	pub fn minimum_linear_texture_alignment_for_pixel_format(&self, format: PixelFormat) -> Result<u64, Error>
 method	metal2vulkan-runtime::DeviceProperties::supports_primitive_type	pub fn supports_primitive_type(&self, raw: u64) -> bool
+method	metal2vulkan-runtime::DeviceProperties::supports_pull_model_interpolation	pub fn supports_pull_model_interpolation(&self) -> Result<bool, RuntimeGap>
 method	metal2vulkan-runtime::DeviceProperties::supports_rasterization_rate_map_with_layer_count	pub fn supports_rasterization_rate_map_with_layer_count(&self, count: u64) -> Result<bool, RuntimeGap>
 method	metal2vulkan-runtime::DeviceProperties::supports_sampler_reduction_mode	pub fn supports_sampler_reduction_mode(&self) -> Result<bool, RuntimeGap>
 method	metal2vulkan-runtime::DeviceProperties::supports_texture_sample_count	pub fn supports_texture_sample_count(&self, count: u64) -> Result<bool, RuntimeGap>
@@ -8760,6 +8769,7 @@ method	metal2vulkan::device::DeviceProfile::fingerprint	pub fn fingerprint(&self
 method	metal2vulkan::device::DeviceProfile::fragment	pub fn fragment(&self) -> &FragmentCaps
 method	metal2vulkan::device::DeviceProfile::function_storage	pub fn function_storage(&self) -> FunctionStorage
 method	metal2vulkan::device::DeviceProfile::images	pub fn images(&self) -> &ImageCaps
+method	metal2vulkan::device::DeviceProfile::interpolation_function_needs	pub fn interpolation_function_needs(&self) -> Vec<Capability>
 method	metal2vulkan::device::DeviceProfile::limits	pub fn limits(&self) -> &Limits
 method	metal2vulkan::device::DeviceProfile::link_standalone	pub fn link_standalone(&self, f: &CompiledFunction) -> Result<StandaloneModule, Error>
 method	metal2vulkan::device::DeviceProfile::plan_entry	pub fn plan_entry(&self, d: &EntryDescriptor<'_>, inputs: &LoweringInputs, budget: &Budget) -> (Result<EntryPlan, Error>, CompileReport)
@@ -9248,6 +9258,7 @@ struct	metal2vulkan-air::intrinsics::GlobalBuiltin	#[derive(Clone, Copy, Debug, 
 struct	metal2vulkan-air::intrinsics::Group	#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] pub struct Group
 struct	metal2vulkan-air::intrinsics::ImageShape	#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] pub struct ImageShape
 struct	metal2vulkan-air::intrinsics::Immediates	pub struct Immediates<'a>
+struct	metal2vulkan-air::intrinsics::Interpolate	#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] pub struct Interpolate
 struct	metal2vulkan-air::intrinsics::Intersect	#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] pub struct Intersect
 struct	metal2vulkan-air::intrinsics::IntersectTags	#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] pub struct IntersectTags
 struct	metal2vulkan-air::intrinsics::IsUniform	#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] pub struct IsUniform
@@ -10021,6 +10032,7 @@ variant	metal2vulkan-air::abi::AbiHandle::CommandBuffer	CommandBuffer
 variant	metal2vulkan-air::abi::AbiHandle::ComputePipelineState	ComputePipelineState
 variant	metal2vulkan-air::abi::AbiHandle::DepthStencilState	DepthStencilState
 variant	metal2vulkan-air::abi::AbiHandle::FunctionTable	FunctionTable
+variant	metal2vulkan-air::abi::AbiHandle::Interpolant	Interpolant
 variant	metal2vulkan-air::abi::AbiHandle::IntersectionTable	IntersectionTable
 variant	metal2vulkan-air::abi::AbiHandle::Mesh	Mesh
 variant	metal2vulkan-air::abi::AbiHandle::MeshGridProperties	MeshGridProperties
@@ -10169,6 +10181,7 @@ variant	metal2vulkan-air::abi::Reduction::Minimum	Minimum
 variant	metal2vulkan-air::abi::Reduction::WeightedAverage	WeightedAverage
 variant	metal2vulkan-air::abi::Sampling::Center	Center
 variant	metal2vulkan-air::abi::Sampling::Centroid	Centroid
+variant	metal2vulkan-air::abi::Sampling::Interpolant	Interpolant
 variant	metal2vulkan-air::abi::Sampling::Sample	Sample
 variant	metal2vulkan-air::abi::Stage::Fragment	Fragment { early_fragment_tests: bool }
 variant	metal2vulkan-air::abi::Stage::Kernel	Kernel { max_total_threads: Option<u32> }
@@ -10371,6 +10384,7 @@ variant	metal2vulkan-air::intrinsics::AirIntrinsic::GlobalBuiltin	GlobalBuiltin(
 variant	metal2vulkan-air::intrinsics::AirIntrinsic::Group	Group(Group)
 variant	metal2vulkan-air::intrinsics::AirIntrinsic::Imageblock	Imageblock(Imageblock)
 variant	metal2vulkan-air::intrinsics::AirIntrinsic::IndirectCommand	IndirectCommand(IndirectCommand)
+variant	metal2vulkan-air::intrinsics::AirIntrinsic::Interpolate	Interpolate(Interpolate)
 variant	metal2vulkan-air::intrinsics::AirIntrinsic::Intersect	Intersect(Intersect)
 variant	metal2vulkan-air::intrinsics::AirIntrinsic::IsUniform	IsUniform(IsUniform)
 variant	metal2vulkan-air::intrinsics::AirIntrinsic::Math	Math(Math)
@@ -10500,6 +10514,7 @@ variant	metal2vulkan-air::intrinsics::HandleKind::Command	Command
 variant	metal2vulkan-air::intrinsics::HandleKind::ComputePipelineState	ComputePipelineState
 variant	metal2vulkan-air::intrinsics::HandleKind::DepthStencilState	DepthStencilState
 variant	metal2vulkan-air::intrinsics::HandleKind::Event	Event
+variant	metal2vulkan-air::intrinsics::HandleKind::Interpolant	Interpolant
 variant	metal2vulkan-air::intrinsics::HandleKind::IntersectionFunctionTable	IntersectionFunctionTable
 variant	metal2vulkan-air::intrinsics::HandleKind::Mesh	Mesh
 variant	metal2vulkan-air::intrinsics::HandleKind::MeshGrid	MeshGrid
@@ -10539,6 +10554,10 @@ variant	metal2vulkan-air::intrinsics::IndirectCommand::SetThreadgroupMemoryLengt
 variant	metal2vulkan-air::intrinsics::Instancing::Multi	Multi
 variant	metal2vulkan-air::intrinsics::Instancing::None	None
 variant	metal2vulkan-air::intrinsics::Instancing::Single	Single
+variant	metal2vulkan-air::intrinsics::InterpolateAt::Center	Center
+variant	metal2vulkan-air::intrinsics::InterpolateAt::Centroid	Centroid
+variant	metal2vulkan-air::intrinsics::InterpolateAt::Offset	Offset
+variant	metal2vulkan-air::intrinsics::InterpolateAt::Sample	Sample
 variant	metal2vulkan-air::intrinsics::IntersectRole::AcceptAny	AcceptAny
 variant	metal2vulkan-air::intrinsics::IntersectRole::BaseId	BaseId
 variant	metal2vulkan-air::intrinsics::IntersectRole::CurveBasis	CurveBasis
@@ -11757,6 +11776,7 @@ variant	metal2vulkan-runtime::PurgeableState::Volatile	Volatile
 variant	metal2vulkan-runtime::Query::Depth24Stencil8	Depth24Stencil8
 variant	metal2vulkan-runtime::Query::MinimumLinearTextureAlignment	MinimumLinearTextureAlignment
 variant	metal2vulkan-runtime::Query::ProgrammableSamplePositions	ProgrammableSamplePositions
+variant	metal2vulkan-runtime::Query::PullModelInterpolation	PullModelInterpolation
 variant	metal2vulkan-runtime::Query::RasterOrderGroups	RasterOrderGroups
 variant	metal2vulkan-runtime::Query::RasterizationRateMapLayerCount	RasterizationRateMapLayerCount
 variant	metal2vulkan-runtime::Query::SamplerReductionMode	SamplerReductionMode
@@ -11862,6 +11882,7 @@ variant	metal2vulkan-runtime::RuntimeGap::IndirectCommandUnstridedBuffer	Indirec
 variant	metal2vulkan-runtime::RuntimeGap::IndirectDrawArguments	IndirectDrawArguments
 variant	metal2vulkan-runtime::RuntimeGap::IndirectImageblockSize	IndirectImageblockSize { width: u64, height: u64 }
 variant	metal2vulkan-runtime::RuntimeGap::IndirectRenderCommands	IndirectRenderCommands
+variant	metal2vulkan-runtime::RuntimeGap::InterpolateAtSampleWithPositions	InterpolateAtSampleWithPositions
 variant	metal2vulkan-runtime::RuntimeGap::IoCommandQueues	IoCommandQueues
 variant	metal2vulkan-runtime::RuntimeGap::LayeredPass	LayeredPass
 variant	metal2vulkan-runtime::RuntimeGap::LibrarySource	LibrarySource
@@ -12886,6 +12907,7 @@ variant	metal2vulkan::device::VkProperty::FramebufferStencilSampleCount	Framebuf
 variant	metal2vulkan::device::VkProperty::IndependentResolve	IndependentResolve
 variant	metal2vulkan::device::VkProperty::IndependentResolveNone	IndependentResolveNone
 variant	metal2vulkan::device::VkProperty::InterpolateAtOffsetCentered	InterpolateAtOffsetCentered
+variant	metal2vulkan::device::VkProperty::InterpolateAtOffsetFromSevenSixteenths	InterpolateAtOffsetFromSevenSixteenths
 variant	metal2vulkan::device::VkProperty::MetalAlphaCoverage	MetalAlphaCoverage
 variant	metal2vulkan::device::VkProperty::MetalCenterVaryings	MetalCenterVaryings
 variant	metal2vulkan::device::VkProperty::MetalColorWrites	MetalColorWrites
@@ -13161,6 +13183,7 @@ variant	metal2vulkan::error::Feature::PrivateMemory	PrivateMemory
 variant	metal2vulkan::error::Feature::PrivatePrimitives	PrivatePrimitives
 variant	metal2vulkan::error::Feature::PrivateRenderState	PrivateRenderState(PrivateRenderField)
 variant	metal2vulkan::error::Feature::ProgramScopeBinding	ProgramScopeBinding
+variant	metal2vulkan::error::Feature::PullModelInterpolation	PullModelInterpolation
 variant	metal2vulkan::error::Feature::QuadOperations	QuadOperations
 variant	metal2vulkan::error::Feature::RasterOrderGroups	RasterOrderGroups
 variant	metal2vulkan::error::Feature::RasterSampleCount	RasterSampleCount
@@ -13523,6 +13546,7 @@ variant	metal2vulkan::pipeline::PrecisionNote::DeviceArithmetic	DeviceArithmetic
 variant	metal2vulkan::pipeline::PrecisionNote::DeviceColorConversion	DeviceColorConversion
 variant	metal2vulkan::pipeline::PrecisionNote::DeviceDenormals	DeviceDenormals
 variant	metal2vulkan::pipeline::PrecisionNote::DeviceInterpolation	DeviceInterpolation
+variant	metal2vulkan::pipeline::PrecisionNote::DeviceInterpolationOffset	DeviceInterpolationOffset
 variant	metal2vulkan::pipeline::PrecisionNote::DeviceNanEncoding	DeviceNanEncoding
 variant	metal2vulkan::pipeline::PrecisionNote::DevicePackConversion	DevicePackConversion
 variant	metal2vulkan::pipeline::PrecisionNote::DevicePointSize	DevicePointSize
