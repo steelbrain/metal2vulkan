@@ -1033,6 +1033,7 @@ codec_enum! {
         MetalDepth16Stores, MetalDepth16BiasedStores, MetalInterpolation, MetalFirstVertexIndices,
         MetalFullQuads, ProvokingVertexModePerPipeline, DepthImageKeepsValuesOutsideUnitRange,
         MetalNormalizedVertexFetch, MetalAlphaCoverage, InterpolateAtOffsetFromSevenSixteenths,
+        MetalNanMoves,
     }
     VkLimit {
         MaxComputeWorkGroupSize(f0), MaxComputeWorkGroupCount(f0), MaxComputeWorkGroupInvocations,

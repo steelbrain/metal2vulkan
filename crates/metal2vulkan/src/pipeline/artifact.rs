@@ -1800,8 +1800,12 @@ pub enum PrecisionNote {
     /// (an `OpFConvert` to 16 bits with `shaderFloat16`, `PackHalf2x16` without it), and a NaN
     /// narrows to a NaN whose bits are the device's, where Metal keeps a `half` NaN's sign and
     /// payload. Every other `half` widens to its value and narrows to its bits, but a denormal on a
-    /// device that may flush 16-bit ones ([`PrecisionNote::NativeHalfConversion`]). Validation
-    /// derives no tolerance from it.
+    /// device that may flush 16-bit ones ([`PrecisionNote::NativeHalfConversion`]). Not recorded,
+    /// on a device whose moves of a NaN are measured to be Metal's (MoltenVK on the Apple M3 Max's
+    /// macOS 27 identity, `DriverDeviation::MetalNanMoves`), for a `float` `fneg` or `fabs`, a
+    /// `half`'s widening to `float` or `fabs`, or a module's reads and encodes of a `half`'s bits
+    /// where it moves its `half` values through the registers alone. Validation derives no
+    /// tolerance from it.
     NativeNanEncoding,
     /// Native device maths: Metal's `fmin`, `fmax`, `min3`, `max3`, `clamp` or `saturate` (its
     /// `clamp(x, +0, 1)`) on `float` or `half` is the device's `GLSL.std.450` `NMin`, `NMax` or

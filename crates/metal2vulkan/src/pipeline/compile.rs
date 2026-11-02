@@ -2683,6 +2683,17 @@ fn compile_kept<K>(
         && p.takes_driver_deviation(crate::error::DriverDeviation::MetalHalfArithmetic);
     let native_widening =
         widens && quantize != crate::spirv::builder::QuantizeForm::Controlled && !measured_widening;
+    // Its NaN's bits, and those of a `half` held widened that a widening to `float` or a `half`
+    // `fabs` moves: Metal's where the device's widening and narrowing are measured to answer
+    // them (`DriverDeviation::MetalNanMoves`) and the module moves its `half` values only as
+    // measured, which it then requires; the device's, recorded, elsewhere.
+    let held_moves = plan.families.arith.held_nan_moves;
+    let unfolded = (widens || held_moves)
+        && p.takes_driver_deviation(crate::error::DriverDeviation::MetalNanMoves)
+        && crate::lower::arith::narrow::moves_unfolded(&module, m)?;
+    let moved_nans = widens
+        && p.takes_driver_deviation(crate::error::DriverDeviation::MetalNanMoves)
+        && !unfolded;
     // A `half` rounded through the device's conversion and its widening, each decorated
     // `NoContraction`, under the float controls that make it Metal's, computed by the device's
     // 16-bit arithmetic, which they make Metal's too, or read from its bits by the device's
@@ -2700,7 +2711,10 @@ fn compile_kept<K>(
     // conversion, or widens a `half` by the device where that is not measured or controlled to be
     // Metal's, records each kind, and requires no fact.
     let native_half = [
-        (widens, PrecisionNote::NativeNanEncoding),
+        (
+            (widens && !moved_nans) || (held_moves && unfolded),
+            PrecisionNote::NativeNanEncoding,
+        ),
         (device_quantize, PrecisionNote::NativeHalfQuantize),
         (
             converts || native_widening,
@@ -2786,6 +2800,13 @@ fn compile_kept<K>(
         requirements
             .properties
             .insert(crate::device::requirements::VkProperty::MetalHalfFma);
+    }
+    // A NaN's bits left to the device's widening, narrowing, negation or magnitude because they
+    // are Metal's.
+    if plan.families.arith.nan_moves || moved_nans || (held_moves && !unfolded) {
+        requirements
+            .properties
+            .insert(crate::device::requirements::VkProperty::MetalNanMoves);
     }
     // Metal's `float` and `half` minimum and maximum family left to the device's `NMin`, `NMax`
     // and `NClamp` because they are Metal's.

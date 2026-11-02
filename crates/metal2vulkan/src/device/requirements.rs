@@ -832,6 +832,15 @@ pub enum VkProperty {
     /// requires it, where no module does (the coverage is the pipeline's multisample state);
     /// without it, the pipeline's fragment stage records that note.
     MetalAlphaCoverage,
+    /// The device's widening and narrowing between 16- and 32-bit floats, and its `OpFNegate`
+    /// and `FAbs`, answer Metal's NaN bits (the driver's measured deviation
+    /// [`DriverDeviation::MetalNanMoves`](crate::error::DriverDeviation::MetalNanMoves)). No Vulkan
+    /// query reports it: Vulkan states no NaN's bits. A module that reads a `half` from its bits or
+    /// encodes one to them, widens a `half` to `float`, negates a `float` or takes the magnitude
+    /// of a `float` or `half`, and records no
+    /// [`PrecisionNote::NativeNanEncoding`](crate::pipeline::PrecisionNote::NativeNanEncoding)
+    /// for it requires it.
+    MetalNanMoves,
     /// `GLSL.std.450 InterpolateAtOffset` at offset `v` reads Metal's `interpolate_at_offset` at
     /// `v + 7/16`, measured from the pixel's upper-left corner: a device whose description reports
     /// a MoltenVK driver, whose SPIRV-Cross hands the instruction to Metal so at any release

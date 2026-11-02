@@ -396,6 +396,24 @@ pub(crate) fn among<F: Copy + Ord>(
 /// RTX 5080 Laptop GPU, which stores a fragment of alpha 1/2 at one sample (the conformance case
 /// `a2c-on-1-alpha-50`).
 ///
+/// `MetalNanMoves`: MoltenVK 1.4.2 (its SPIRV-Cross `6c09849f`) writes a 16-bit float's widening
+/// as Metal's `float(half)`, the narrowing as `half(float)`, `OpFNegate` as `-x` and `FAbs` as
+/// `abs(x)`, Metal's own conversions and operators, and the driver's compiler folds a narrowing of
+/// a widening moved through the registers (a select, a branch's merge, a function's `float`
+/// variable) into the `half` itself, as Metal moves a `half` unwidened. Measured on the M3 Max
+/// under macOS 27.0.1 (2026-11-02), word for word against plain Metal: every one of the 65,536
+/// `half` bit patterns widened (every NaN `0x7FC00000`), moved through a `select`, a branch's
+/// merge (a `half` and a `half2`) and to a later block and stored (each its own bits), and its
+/// `half` `fabs` (every NaN `0x7E00`); and 262,144 `float` words (every `half` value widened,
+/// 65,536 NaNs of both signs over every top-12 payload bits and four low patterns, 32,768 random
+/// NaNs, 131,072 random words) narrowed to `half`, negated and their magnitude taken: none
+/// differs, with and without fast math (the AIR of `runtime_lane::nan_moves`, which checks the
+/// runtime against Metal's answers, run on Metal too). The `half` `fneg` matched too, but by the
+/// driver's compiler moving the
+/// negation onto the `half`, which nothing states, so it stays noted; and a module that carries a
+/// widened `half` elsewhere or reads its bits is outside the measurement
+/// (`narrow::moves_unfolded`). One row per GPU, as measured.
+///
 /// Another driver has none of them, as Vulkan states, and a listed driver on another vendor's GPU
 /// (or another GPU than a row's) is unmeasured: the profile then takes each one's route without
 /// it, which the deviation's docs name (`derive.rs`).
@@ -581,6 +599,10 @@ pub(crate) const DEVIATIONS: &[Measured<DriverDeviation>] = &[
     Measured {
         device: Some(APPLE9),
         ..moltenvk_on_apple(DriverDeviation::MetalAlphaCoverage)
+    },
+    Measured {
+        device: Some(APPLE9),
+        ..moltenvk_on_apple(DriverDeviation::MetalNanMoves)
     },
 ];
 

@@ -713,6 +713,16 @@ pub struct ArithPlan {
     /// ([`ArithStrategy::F16`]), measured to be Metal's (`DriverDeviation::MetalHalfArithmetic`),
     /// recorded at selection: the module then requires `VkProperty::MetalHalfArithmetic`.
     pub f16_arith: bool,
+    /// Whether the NaN a `float` `fneg` or `fabs` moves is left to the device because it is
+    /// measured to answer Metal's (`DriverDeviation::MetalNanMoves`, [`nan::moves_answered`]),
+    /// recorded at selection: the module then requires `VkProperty::MetalNanMoves`.
+    pub nan_moves: bool,
+    /// Whether the NaN of a `half` held widened that a widening to `float` or a `half` `fabs`
+    /// moves is left to the device because it is measured to answer Metal's
+    /// ([`nan::moves_answered`]), recorded at selection: the module then requires
+    /// `VkProperty::MetalNanMoves`, but where it holds a `half` the device's conversions did not
+    /// make ([`narrow::moves_unfolded`]), where it records `PrecisionNote::NativeNanEncoding`.
+    pub held_nan_moves: bool,
     /// The precision notes the plan's operations record unless their entry's quotient and
     /// functions are Metal's own (the profile's `float` functions are Metal's and Metal compiles
     /// the entry with fast math), recorded at selection ([`OpNotes::unless_metal_fast`]);
@@ -1226,6 +1236,26 @@ fn with_nan(
     s
 }
 
+/// `answer`, the NaN Metal answers for an operation that moves a NaN (a `half`'s widening to
+/// `float`, a `float` `fneg`), where the device is not measured to answer it: `None` on a profile
+/// whose device's moves are measured to be Metal's ([`nan::moves_answered`]), which the plan
+/// records ([`ArithPlan::held_nan_moves`] for a `half` held widened, else
+/// [`ArithPlan::nan_moves`]).
+fn moved_nan(
+    cx: &mut SelectCx<'_>,
+    answer: Option<nan::NanAnswer>,
+    held: bool,
+) -> Option<nan::NanAnswer> {
+    if answer.is_some() && nan::moves_answered(cx.profile) {
+        match held {
+            true => cx.families.arith.held_nan_moves = true,
+            false => cx.families.arith.nan_moves = true,
+        }
+        return None;
+    }
+    answer
+}
+
 /// Record `NativeNanEncoding` where Metal answers a NaN (`answer`) the device is not measured to
 /// answer ([`nan::NanAnswer::device_answers`]).
 fn note_native_nan(cx: &mut SelectCx<'_>, answer: Option<nan::NanAnswer>) {
@@ -1430,6 +1460,12 @@ fn select_in(
             device_float(cx, f, true, false);
             fp_env(cx, *fmf, f);
             let nan = f.float_fmt().and_then(nan::fneg_answer);
+            // A `float` one's NaN is Metal's where the device's negation is measured to be
+            // ([`moved_nan`]); a `half` one's held result keeps the flipped sign, noted.
+            let nan = match f.float_fmt() {
+                Some(FloatFmt::F32) => moved_nan(cx, nan, false),
+                _ => nan,
+            };
             with_nan(cx, S::FNeg { form: f }, nan)
         }
         InstKind::ICmp { pred, a, .. } => {
@@ -1540,8 +1576,13 @@ fn select_cast(
                 from,
                 to,
             };
-            // A `float` narrowed to `half` answers Metal's canonical `half` NaN.
+            // A `float` narrowed to `half` answers Metal's canonical `half` NaN; a `half` widened
+            // to `float` is the widening it was read with ([`moved_nan`]).
             let answer = match (from.float_fmt(), to.float_fmt()) {
+                (Some(FloatFmt::Half), Some(FloatFmt::F32)) => {
+                    let answer = nan::cast_answer(op, FloatFmt::Half, FloatFmt::F32);
+                    moved_nan(cx, answer, true)
+                }
                 (Some(a), Some(b)) => nan::cast_answer(op, a, b),
                 _ => None,
             };
@@ -1906,6 +1947,12 @@ fn select_float_fn(
         arith.fmod_uses |= fmod;
         arith.device_min_max |= device_min_max(cx.profile, op, f);
     }
+    if facts.nan_moves && moves_nan(lowered.how, f) {
+        match f.float_fmt() {
+            Some(FloatFmt::Half) => cx.families.arith.held_nan_moves = true,
+            _ => cx.families.arith.nan_moves = true,
+        }
+    }
     if let FloatLowering::Fma(fma) | FloatLowering::FastFmod(fma) = lowered.how {
         cx.families.arith.take_fma(fma);
     }
@@ -2071,6 +2118,9 @@ struct FloatFacts {
     /// Whether Metal's minimum and maximum functions are the device's not measured to be Metal's:
     /// the profile does not take `DriverDeviation::MetalMinMax` ([`native_min_max`]).
     native_min_max: bool,
+    /// Whether the device's `fabs` answers Metal's NaN, `float` and `half`
+    /// ([`nan::moves_answered`]).
+    nan_moves: bool,
 }
 
 impl FloatFacts {
@@ -2082,6 +2132,7 @@ impl FloatFacts {
             device_denormals: denormal::device_flushes(p),
             nans: nan::encoding(p),
             native_min_max: !p.takes_driver_deviation(crate::error::DriverDeviation::MetalMinMax),
+            nan_moves: nan::moves_answered(p),
         }
     }
 }
@@ -2223,6 +2274,10 @@ fn float_call(
     facts: FloatFacts,
 ) -> Option<FloatCall> {
     let mut call = float_call_of(op, fast, fmf, f, facts)?;
+    // The device's `fabs` moves the NaN Metal's does where that is measured ([`moves_nan`]).
+    if facts.nan_moves && moves_nan(call.how, f) {
+        call.nan = None;
+    }
     let mut native = BTreeSet::new();
     if call.nan.is_some_and(|a| !a.device_answers(facts.nans)) {
         native.insert(PrecisionNote::NativeNanEncoding);
@@ -2239,6 +2294,14 @@ fn float_call(
     }
     call.notes = call.notes.with(OpNotes::everywhere(native));
     Some(call)
+}
+
+/// Whether a float call lowered as `how` on form `f` moves its operand's NaN rather than computes
+/// one, so that a device measured to move it as Metal does answers Metal's NaN
+/// ([`nan::moves_answered`]): `fabs` on `float` and `half`.
+fn moves_nan(how: FloatLowering, f: Form) -> bool {
+    matches!(how, FloatLowering::Fn(FloatFn::Abs))
+        && matches!(f.float_fmt(), Some(FloatFmt::F32 | FloatFmt::Half))
 }
 
 /// [`float_call`] before the device's NaN and minimum and maximum notes.
@@ -2652,8 +2715,12 @@ fn select_convert(
         return Err(cx.invariant("an air.convert whose kinds disagree with its types"));
     }
     let s = ArithStrategy::Convert { kind, from, to };
-    // Metal's widening of a `half` NaN, as `fpext`'s.
+    // Metal's widening of a `half` NaN, as `fpext`'s ([`moved_nan`]).
     let nan = match (kind, from.float_fmt(), to.float_fmt()) {
+        (ConvertKind::Float, Some(FloatFmt::Half), Some(FloatFmt::F32)) => {
+            let answer = nan::convert_answer(FloatFmt::Half, FloatFmt::F32);
+            moved_nan(cx, answer, true)
+        }
         (ConvertKind::Float, Some(a), Some(b)) => nan::convert_answer(a, b),
         _ => None,
     };

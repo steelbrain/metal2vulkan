@@ -336,6 +336,9 @@ impl DeviceProfile {
                 .enabled
                 .properties
                 .contains(&VkProperty::MetalAlphaCoverage),
+            DriverDeviation::MetalNanMoves => {
+                f.enabled.properties.contains(&VkProperty::MetalNanMoves)
+            }
         }
     }
 

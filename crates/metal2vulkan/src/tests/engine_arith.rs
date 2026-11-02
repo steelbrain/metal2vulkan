@@ -1721,7 +1721,7 @@ fn a_fast_division_leaves_its_nans_to_the_device() {
     let Some(bitcode) = assemble("fast-divide-specials", &module(&ks)) else {
         return;
     };
-    nans_are_the_device_s(&bitcode, &ks, false, &[], &|_, fact| !fact);
+    nans_are_the_device_s(&bitcode, &ks, false, &[], &|_, fact, _| !fact);
     for stem in every_profile() {
         let p = profile(&stem, exact_maths()).expect("profile");
         let device_nans =
@@ -3124,18 +3124,21 @@ fn stores_nan(bits: u32, half: bool) -> bool {
 /// Kernels `ks` of `bitcode` (each storing a NaN's bits, `half` ones zero-extended where `half`)
 /// on `lavapipe` and `moltenvk-m3`, each with its driver's deviation `MetalCanonicalNans` taken
 /// and not: the module selects no NaN, so it is the same word for word on both sides of the fact;
-/// it records `PrecisionNote::NativeNanEncoding` exactly where `noted(kernel, fact)` or it reads a
-/// `half` from its bits by the device's widening or encodes one by its narrowing
-/// (`narrow::widens_bits`, `narrow::encodes_bits`: both profiles have `shaderFloat16`), and never
-/// `DeviceNanEncoding`; and the interpreter's answer is the kernel's
-/// `want`, or a NaN, its bits the device's, where it has none, but for the kernels `unread` names,
-/// whose device instruction the interpreter does not evaluate.
+/// it records `PrecisionNote::NativeNanEncoding` exactly where `noted(kernel, fact, moves)` or it
+/// reads a `half` from its bits by the device's widening or encodes one by its narrowing
+/// (`narrow::widens_bits`, `narrow::encodes_bits`: both profiles have `shaderFloat16`) on a profile
+/// whose moves of a NaN are not measured (`moves`, `DriverDeviation::MetalNanMoves`: the M3 Max's
+/// identity on MoltenVK), and never `DeviceNanEncoding`; it requires `VkProperty::MetalNanMoves`
+/// exactly where `moves` and it reads or encodes a `half` so, or `noted` drops the note for the
+/// moves; and the interpreter's answer is the kernel's `want`, or a NaN, its bits the device's,
+/// where it has none, but for the kernels `unread` names, whose device instruction the interpreter
+/// does not evaluate.
 fn nans_are_the_device_s(
     bitcode: &[u8],
     ks: &[Kernel],
     half: bool,
     unread: &[&str],
-    noted: &dyn Fn(&str, bool) -> bool,
+    noted: &dyn Fn(&str, bool, bool) -> bool,
 ) {
     for stem in ["lavapipe", "moltenvk-m3"] {
         for kk in ks {
@@ -3153,11 +3156,20 @@ fn nans_are_the_device_s(
                         Ok(w || crate::lower::arith::narrow::encodes_bits(&m, &mut meter())?)
                     })
                     .unwrap_or_else(|e| panic!("{what}: {e:?}"));
+                let moves = p.takes_driver_deviation(crate::error::DriverDeviation::MetalNanMoves);
                 assert_eq!(
                     a.precision.contains(&PrecisionNote::NativeNanEncoding),
-                    noted(kk.name, fact) || widens,
+                    noted(kk.name, fact, moves) || (widens && !moves),
                     "{what}: {:?}",
                     a.precision
+                );
+                let moved = noted(kk.name, fact, false) && !noted(kk.name, fact, true);
+                assert_eq!(
+                    a.requirements
+                        .properties
+                        .contains(&crate::device::requirements::VkProperty::MetalNanMoves),
+                    moves && (widens || moved),
+                    "{what}"
                 );
                 assert!(
                     !a.precision.contains(&PrecisionNote::DeviceNanEncoding),
@@ -3207,7 +3219,7 @@ fn a_float_nan_is_the_device_s_on_every_profile() {
     let Some(bitcode) = assemble("nan-fact", &module(&ks)) else {
         return;
     };
-    nans_are_the_device_s(&bitcode, &ks, false, &[], &|name, fact| {
+    nans_are_the_device_s(&bitcode, &ks, false, &[], &|name, fact, _| {
         name == "nan_round" || !fact
     });
     // The committed profiles state the fact for the measured device only.
@@ -3441,7 +3453,7 @@ fn sincos_answers_the_device_s_nan() {
         return;
     };
     let unread = ["sincos_nan_sine", "sincos_nan_cosine"];
-    nans_are_the_device_s(&bitcode, &ks, false, &unread, &|_, fact| !fact);
+    nans_are_the_device_s(&bitcode, &ks, false, &unread, &|_, fact, _| !fact);
 }
 
 /// A NaN test (Metal's saturating conversion's) is `OpIsNan` only in an entry that declares
@@ -3648,15 +3660,16 @@ fn half_nans_answer_the_device_s_nan() {
     let Some(bitcode) = assemble("nan-half", &text) else {
         return;
     };
-    nans_are_the_device_s(&bitcode, &ks, true, &[], &|_, fact| !fact);
+    nans_are_the_device_s(&bitcode, &ks, true, &[], &|_, fact, _| !fact);
 }
 
 /// Class C: Metal widens a `half` NaN to the canonical `float` NaN `0x7FC00000`, sign and payload
 /// dropped, by `fpext` and by its intrinsic form `air.convert`. A `half` is held widened, so
 /// `fpext` emits no device operation: the NaN is the device's widening of the `half`'s bits where
 /// the profile has `shaderFloat16` (both profiles here), and the module selects nothing and notes
-/// `PrecisionNote::NativeNanEncoding` whatever the device fact states. The interpreter's widening
-/// keeps the payload, as a device may.
+/// `PrecisionNote::NativeNanEncoding` whatever the device fact states, but where the device's
+/// widening is measured to answer Metal's (`DriverDeviation::MetalNanMoves`, on `moltenvk-m3`),
+/// where it requires that. The interpreter's widening keeps the payload, as a device may.
 #[test]
 fn a_widened_half_nan_keeps_its_payload_on_every_profile() {
     let hx = oh("hx", 0xFE01);
@@ -3688,15 +3701,17 @@ fn a_widened_half_nan_keeps_its_payload_on_every_profile() {
     let Some(bitcode) = assemble("nan-widen", &text) else {
         return;
     };
-    nans_are_the_device_s(&bitcode, &ks, false, &[], &|_, _| true);
+    nans_are_the_device_s(&bitcode, &ks, false, &[], &|_, _, moves| !moves);
 }
 
 /// Class D: Metal's `half` `fneg` and `fabs` answer the canonical `half` NaN `0x7E00`, with or
 /// without fast-math flags. A device computes both exactly on the held value's sign, so a NaN's
 /// payload is kept on every profile: the module selects nothing and notes
 /// `PrecisionNote::NativeNanEncoding` whatever the device fact states, as for an `fadd` whose only
-/// use is the `fneg`. The interpreter keeps a `half` NaN's payload through the held value, as a
-/// device does (the value stored unchanged is `0xFE01`, and notes nothing).
+/// use is the `fneg`; but `fabs` where the device's is measured to answer Metal's
+/// (`DriverDeviation::MetalNanMoves`, on `moltenvk-m3`: the held value is its widening's canonical
+/// NaN there), where it requires that. The interpreter keeps a `half` NaN's payload through the
+/// held value, as a device may (the value stored unchanged is `0xFE01`, and notes nothing).
 #[test]
 fn half_sign_operations_keep_a_nan_s_payload_on_every_profile() {
     let hx = oh("hx", 0xFE01);
@@ -3732,7 +3747,83 @@ fn half_sign_operations_keep_a_nan_s_payload_on_every_profile() {
     let Some(bitcode) = assemble("nan-half-sign", &text) else {
         return;
     };
-    nans_are_the_device_s(&bitcode, &ks, true, &[], &|name, _| name != "half_kept");
+    nans_are_the_device_s(&bitcode, &ks, true, &[], &|name, _, moves| {
+        name != "half_kept" && !(moves && name.starts_with("half_fabs"))
+    });
+}
+
+/// A `half` read from its bits by the device's widening and moved through the registers to a
+/// narrowing (a select of it, a phi of it, which the module holds in a function's `float`
+/// variable, a select with Metal's canonical `half` NaN constant; a `half` stored as itself is not
+/// widened at all) is Metal's bits where the
+/// device's compiler is measured to fold that widening and narrowing
+/// (`DriverDeviation::MetalNanMoves`, `moltenvk-m3`): the module records no
+/// `PrecisionNote::NativeNanEncoding` there and requires `VkProperty::MetalNanMoves`, and records
+/// the note on `lavapipe`, which is not measured. A select with a `half` NaN constant of another
+/// payload (held widened as a `float` NaN that no conversion of the device made) is not in the
+/// measurement, and records the note on both, requiring nothing (`narrow::moves_unfolded`).
+#[test]
+fn half_moves_are_metals_only_where_the_device_folds_them() {
+    let hx = oh("hx", 0xFE01);
+    let nan = "  %c = fcmp uno half %hx, 0xH0000\n";
+    let ks = [
+        half_nan_kernel("kept", format!("{hx}  %s = freeze half %hx\n"), Some(0xFE01)),
+        half_nan_kernel(
+            "selected",
+            format!("{hx}{nan}  %s = select i1 %c, half %hx, half 0xH3C00\n"),
+            None,
+        ),
+        half_nan_kernel(
+            "joined",
+            format!(
+                "{hx}{nan}  br i1 %c, label %l, label %u\nl:\n  br label %j\nu:\n  br label %j\nj:\n  %s = phi half [ %hx, %l ], [ 0xH3C00, %u ]\n"
+            ),
+            None,
+        ),
+        half_nan_kernel(
+            "canonical_constant",
+            format!("{hx}{nan}  %s = select i1 %c, half 0xH7E00, half %hx\n"),
+            Some(0x7E00),
+        ),
+        half_nan_kernel(
+            "payload_constant",
+            format!("{hx}{nan}  %s = select i1 %c, half 0xH7E01, half %hx\n"),
+            None,
+        ),
+    ];
+    let Some(bitcode) = assemble("nan-half-moves", &module(&ks)) else {
+        return;
+    };
+    for stem in ["lavapipe", "moltenvk-m3"] {
+        let p = profile(stem, DevicePolicy::default()).expect("profile");
+        let moves = p.takes_driver_deviation(crate::error::DriverDeviation::MetalNanMoves);
+        assert_eq!(moves, stem == "moltenvk-m3", "{stem}");
+        for kk in &ks {
+            let what = format!("{} on {stem}", kk.name);
+            let a = compile(&bitcode, kk.name, &p).unwrap_or_else(|e| panic!("{what}: {e:?}"));
+            link_and_validate(&a, &p).unwrap_or_else(|e| panic!("{what}: L3: {e}"));
+            let (_, m) = crate::pipeline::testing::typed_module(&bitcode, kk.name, &p)
+                .unwrap_or_else(|e| panic!("{what}: {e:?}"));
+            let widens = crate::lower::arith::narrow::widens_bits(&m, &mut meter())
+                .unwrap_or_else(|e| panic!("{what}: {e:?}"));
+            // A `half` stored as itself is never widened; each select reads it by the widening.
+            assert_eq!(widens, kk.name != "kept", "{what}");
+            let folded = moves && kk.name != "payload_constant";
+            assert_eq!(
+                a.precision.contains(&PrecisionNote::NativeNanEncoding),
+                widens && !folded,
+                "{what}: {:?}",
+                a.precision
+            );
+            assert_eq!(
+                a.requirements
+                    .properties
+                    .contains(&crate::device::requirements::VkProperty::MetalNanMoves),
+                widens && folded,
+                "{what}"
+            );
+        }
+    }
 }
 
 /// Class E: Metal's `float` `fneg` and `fabs` (`air.fabs`, `air.fast_fabs`, and `llvm.fabs`, which
@@ -3740,8 +3831,10 @@ fn half_sign_operations_keep_a_nan_s_payload_on_every_profile() {
 /// NaN keeps its payload, signaling or not, and a denormal stays. The lowering is the device's
 /// `OpFNegate` and `FAbs` on every profile (RADV's `fneg` keeps a NaN's sign, NVIDIA's `fabs`
 /// answers `0x7FFFFFFF`, RADV and ANV flush a denormal): no NaN is selected and nothing moves on
-/// the bits, the NaN noted `NativeNanEncoding` and `fneg`'s denormal `DeviceDenormals`. The
-/// interpreter keeps the payload and the denormal, as a device may.
+/// the bits, the NaN noted `NativeNanEncoding` but where the device's are measured to be Metal's
+/// (`DriverDeviation::MetalNanMoves`, on `moltenvk-m3`), where the module requires that, and
+/// `fneg`'s denormal `DeviceDenormals`. The interpreter keeps the payload and the denormal, as a
+/// device may.
 #[test]
 fn float_sign_operations_are_the_devices_on_every_profile() {
     let snan = ob("x", 0x7F80_0001);
@@ -3825,10 +3918,19 @@ fn float_sign_operations_are_the_devices_on_every_profile() {
             assert_eq!(fabs(&words) > 0, abs, "{what}");
             assert_eq!(nan_tests(&words), (0, 0), "{what}");
             if neg || abs {
-                assert!(
+                let moves = p.takes_driver_deviation(crate::error::DriverDeviation::MetalNanMoves);
+                assert_eq!(
                     a.precision.contains(&PrecisionNote::NativeNanEncoding),
+                    !moves,
                     "{what}: {:?}",
                     a.precision
+                );
+                assert_eq!(
+                    a.requirements
+                        .properties
+                        .contains(&crate::device::requirements::VkProperty::MetalNanMoves),
+                    moves,
+                    "{what}"
                 );
             }
             if neg {
@@ -4278,7 +4380,7 @@ fn half_functions_answer_the_device_s_nan() {
     let Some(bitcode) = assemble("nan-half-functions", &text) else {
         return;
     };
-    nans_are_the_device_s(&bitcode, &ks, true, &["half_asin"], &|name, fact| {
+    nans_are_the_device_s(&bitcode, &ks, true, &["half_asin"], &|name, fact, _| {
         name.starts_with("half_round")
             || name.starts_with("half_fract")
             || name == "half_asin"

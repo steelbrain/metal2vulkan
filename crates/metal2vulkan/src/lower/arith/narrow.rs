@@ -57,8 +57,8 @@ use crate::spirv::builder::{FunctionBuilder, NarrowFmt, QuantizeForm};
 use crate::spirv::error::{BResult, BuildError, TypeRule};
 use crate::spirv::ids::Value;
 use crate::spirv::ir::{
-    BinOp, ConstBits, ConstKind, Constant, ConvOp, ExecMode, GlslOp, Inst, Type, TypedModule, UnOp,
-    ValueOrigin,
+    BinOp, ConstBits, ConstKind, Constant, ConvOp, ExecMode, GlslOp, Inst, StorageClass,
+    Terminator, Type, TypedModule, UnOp, ValueOrigin,
 };
 
 /// The unsigned 32-bit integer form with `f`'s lanes.
@@ -1301,25 +1301,27 @@ fn device_from_bits(fb: &mut FunctionBuilder<'_>, f: Form, h: Value) -> BResult<
 /// [`QuantizeForm::Device`]), or an `OpFConvert` to 32 bits of an `OpBitcast` to a 16-bit float or
 /// a vector of them, or of 16-bit floats taken from one by a component extract or a shuffle
 /// ([`device_from_bits`]). The module then records `PrecisionNote::NativeNanEncoding` (a NaN's
-/// bits the device's); under the float controls ([`QuantizeForm::Controlled`]) its entry declares
-/// [`controlled_modes`], and elsewhere its denormals are the measured fact's
+/// bits the device's) unless the device's moves of a NaN are measured to be Metal's
+/// ([`moves_unfolded`]); under the float controls ([`QuantizeForm::Controlled`]) its entry
+/// declares [`controlled_modes`], and elsewhere its denormals are the measured fact's
 /// (`DriverDeviation::MetalHalfArithmetic`, which measures the conversion, not the unpack) or the
 /// device's (`PrecisionNote::NativeHalfConversion`). The device's 16-bit arithmetic and
 /// conversions widen what they compute, which no bitcast gives. At most four passes over the
-/// instructions, with two bits per value of the module charged to `meter` while they run.
+/// instructions, with three bits per value of the module charged to `meter` while they run.
 pub fn widens_bits(m: &TypedModule, meter: &mut Meter) -> Result<bool, Error> {
-    let unpacks = m.blocks().iter().flat_map(|b| &b.insts).any(|n| {
-        matches!(
-            n.inst,
-            Inst::Glsl {
-                op: GlslOp::UnpackHalf2x16,
-                ..
-            }
-        )
-    });
-    if unpacks {
-        return Ok(true);
-    }
+    let words = m.values().len().div_ceil(64);
+    meter.charge(8 * words)?;
+    let found = widenings(m, meter).map(|w| w.iter().any(|&w| w != 0));
+    meter.release(8 * words);
+    found
+}
+
+/// The values of module `m` that widen a `half` from its bits by the device ([`widens_bits`]),
+/// one bit per value: each `UnpackHalf2x16` and each such `OpFConvert`. Two more bits per value
+/// charged to `meter` while it runs.
+fn widenings(m: &TypedModule, meter: &mut Meter) -> Result<Vec<u64>, Error> {
+    let words = m.values().len().div_ceil(64);
+    let mut found = vec![0u64; words];
     // Whether `ty` is a 16-bit float or a vector of them (`halves`), or a 32-bit one.
     let is = |ty, halves: bool| -> bool {
         let lane = match m.types().get(ty) {
@@ -1330,57 +1332,267 @@ pub fn widens_bits(m: &TypedModule, meter: &mut Meter) -> Result<bool, Error> {
         matches!(m.types().get(lane), Ok(Type::Float { width: w }) if *w == width)
     };
     let insts = || m.blocks().iter().flat_map(|b| &b.insts);
-    let words = m.values().len().div_ceil(64);
     meter.charge(16 * words)?;
     let mut halves = vec![0u64; words];
     let mut lanes = vec![0u64; words];
-    let set = |bits: &mut [u64], v: Value| {
-        if let Some(w) = bits.get_mut(v.index() / 64) {
-            *w |= 1 << (v.index() % 64);
-        }
-    };
-    let has = |bits: &[u64], v: Value| {
-        bits.get(v.index() / 64)
-            .is_some_and(|w| w & (1 << (v.index() % 64)) != 0)
-    };
     for n in insts() {
-        if let (
-            Inst::Convert {
-                op: ConvOp::Bitcast,
-                ..
-            },
-            Some(r),
-        ) = (&n.inst, n.result)
-        {
-            if m.value(r).is_ok_and(|v| is(v.ty, true)) {
-                set(&mut halves, r);
-            }
+        match (&n.inst, n.result) {
+            (
+                Inst::Glsl {
+                    op: GlslOp::UnpackHalf2x16,
+                    ..
+                },
+                Some(r),
+            ) => set_bit(&mut found, r),
+            (
+                Inst::Convert {
+                    op: ConvOp::Bitcast,
+                    ..
+                },
+                Some(r),
+            ) if m.value(r).is_ok_and(|v| is(v.ty, true)) => set_bit(&mut halves, r),
+            _ => {}
         }
     }
     for n in insts() {
         let taken = match &n.inst {
-            Inst::CompositeExtract { composite, .. } => has(&halves, *composite),
-            Inst::VectorShuffle { a, b, .. } => has(&halves, *a) || has(&halves, *b),
+            Inst::CompositeExtract { composite, .. } => has_bit(&halves, *composite),
+            Inst::VectorShuffle { a, b, .. } => has_bit(&halves, *a) || has_bit(&halves, *b),
             _ => false,
         };
         if let (true, Some(r)) = (taken, n.result) {
-            set(&mut lanes, r);
+            set_bit(&mut lanes, r);
         }
     }
-    let found = insts().any(|n| match (&n.inst, n.result) {
-        (
+    for n in insts() {
+        if let (
             Inst::Convert {
                 op: ConvOp::FConvert,
                 a,
                 ..
             },
             Some(r),
-        ) => (has(&lanes, *a) || has(&halves, *a)) && m.value(r).is_ok_and(|v| is(v.ty, false)),
-        _ => false,
-    });
+        ) = (&n.inst, n.result)
+        {
+            let from = has_bit(&lanes, *a) || has_bit(&halves, *a);
+            if from && m.value(r).is_ok_and(|v| is(v.ty, false)) {
+                set_bit(&mut found, r);
+            }
+        }
+    }
     drop((halves, lanes));
     meter.release(16 * words);
     Ok(found)
+}
+
+/// Set value `v`'s bit in `bits`.
+fn set_bit(bits: &mut [u64], v: Value) {
+    if let Some(w) = bits.get_mut(v.index() / 64) {
+        *w |= 1 << (v.index() % 64);
+    }
+}
+
+/// Whether value `v`'s bit is set in `bits`.
+fn has_bit(bits: &[u64], v: Value) -> bool {
+    bits.get(v.index() / 64)
+        .is_some_and(|w| w & (1 << (v.index() % 64)) != 0)
+}
+
+/// Whether module `m` moves a `half` NaN where the device's compiler is not measured to fold the
+/// widening and the narrowing that hold it (`DriverDeviation::MetalNanMoves`), so that its bits
+/// stay the device's. A value a `half` read from its bits widens to ([`widens_bits`]), moved
+/// through phis, selects, copies, composites and a function's scalar or vector `float` variable
+/// (stored and loaded, which the driver's compiler keeps in the registers), may reach a
+/// conversion (its bits, by a bitcast, only as stored to a buffer or to workgroup memory), an
+/// arithmetic or comparison instruction, a fused multiply-add, a derivative, a `GLSL.std.450`
+/// function other than `FrexpStruct`, `ModfStruct` and `Ldexp`, each of which computes a value
+/// whose NaN Metal answers from the widened value's or its own note records, and a store to a
+/// buffer or to workgroup memory, which holds a `float` there; anything else (a store to another
+/// class, a call, a return, an atomic, a group or image operation, or its bits read) carries the
+/// widened `float` out of the registers or reads its bits before any narrowing. The
+/// module holding a 32-bit float constant that is a NaN other than `0x7FC00000`, such as a `half`
+/// NaN constant held widened with its payload, which no conversion of the device made, is unfolded
+/// too. The measurement covers moves through the registers, and `half` values held as the device's
+/// conversions made them. One pass over the constants, then a pass over the instructions per round
+/// of the moves' closure and one more, with four bits per value of the module charged to `meter`
+/// while it runs.
+pub fn moves_unfolded(m: &TypedModule, meter: &mut Meter) -> Result<bool, Error> {
+    let float32 = |ty| matches!(m.types().get(ty), Ok(Type::Float { width: 32 }));
+    let payload = m.consts().iter().any(|(_, c)| match &c.kind {
+        ConstKind::Plain(Constant::Scalar { ty, bits }) if float32(*ty) => {
+            let b = bits.0 as u32;
+            b & 0x7F80_0000 == 0x7F80_0000 && b & 0x007F_FFFF != 0 && b != 0x7FC0_0000
+        }
+        _ => false,
+    });
+    if payload {
+        return Ok(true);
+    }
+    let words = m.values().len().div_ceil(64);
+    // The class of pointer `ptr`, and the type it points to.
+    let pointer = |ptr| {
+        m.value(ptr).ok().and_then(|v| match m.types().get(v.ty) {
+            Ok(Type::Pointer { class, pointee }) => Some((*class, *pointee)),
+            _ => None,
+        })
+    };
+    // Whether pointer `ptr` is to a function's scalar or vector `float` variable.
+    let local_float = |ptr| match pointer(ptr) {
+        Some((StorageClass::Function, pointee)) => {
+            let lane = match m.types().get(pointee) {
+                Ok(Type::Vector { elem, .. }) => *elem,
+                _ => pointee,
+            };
+            float32(lane)
+        }
+        _ => false,
+    };
+    meter.charge(16 * words)?;
+    let carried = widenings(m, meter).map(|mut widened| {
+        // The widened values' bits, by a bitcast and the moves.
+        let mut bits = vec![0u64; words];
+        // The moves' closure: a phi, a select, a copy or a composite of a widened value is one,
+        // and of its bits.
+        let mut grew = true;
+        while grew {
+            grew = false;
+            for b in m.blocks() {
+                for phi in &b.phis {
+                    for set in [&mut widened, &mut bits] {
+                        if !has_bit(set, phi.result)
+                            && phi.incoming.iter().any(|(v, _)| has_bit(set, *v))
+                        {
+                            set_bit(set, phi.result);
+                            grew = true;
+                        }
+                    }
+                }
+                for n in &b.insts {
+                    // A function's `float` variable a widened value is stored to holds one.
+                    if let Inst::Store { ptr, value, .. } = &n.inst {
+                        if has_bit(&widened, *value)
+                            && local_float(*ptr)
+                            && !has_bit(&widened, *ptr)
+                        {
+                            set_bit(&mut widened, *ptr);
+                            grew = true;
+                        }
+                        continue;
+                    }
+                    let Some(r) = n.result else { continue };
+                    if let Inst::Load { ptr, .. } = &n.inst {
+                        if has_bit(&widened, *ptr) && !has_bit(&widened, r) {
+                            set_bit(&mut widened, r);
+                            grew = true;
+                        }
+                        continue;
+                    }
+                    if let Inst::Convert {
+                        op: ConvOp::Bitcast,
+                        a,
+                        ..
+                    } = &n.inst
+                    {
+                        if has_bit(&widened, *a) && !has_bit(&bits, r) {
+                            set_bit(&mut bits, r);
+                            grew = true;
+                        }
+                        continue;
+                    }
+                    if !moves(&n.inst) {
+                        continue;
+                    }
+                    for set in [&mut widened, &mut bits] {
+                        let mut from = false;
+                        n.inst.for_each_value(|v| from |= has_bit(set, v));
+                        if from && !has_bit(set, r) {
+                            set_bit(set, r);
+                            grew = true;
+                        }
+                    }
+                }
+            }
+        }
+        // Whether pointer `ptr` is to a buffer or to workgroup memory.
+        let held_as_float = |ptr| {
+            matches!(
+                pointer(ptr),
+                Some((
+                    StorageClass::StorageBuffer
+                        | StorageClass::PhysicalStorageBuffer
+                        | StorageClass::Workgroup,
+                    _
+                ))
+            )
+        };
+        m.blocks().iter().any(|b| {
+            let returned = matches!(
+                b.term,
+                Terminator::ReturnValue(v) if has_bit(&widened, v) || has_bit(&bits, v)
+            );
+            returned
+                || b.insts.iter().filter(|n| !moves(&n.inst)).any(|n| {
+                    let (mut from, mut read) = (false, false);
+                    n.inst.for_each_value(|v| {
+                        from |= has_bit(&widened, v);
+                        read |= has_bit(&bits, v);
+                    });
+                    match &n.inst {
+                        Inst::Store { ptr, value, .. } => {
+                            has_bit(&bits, *ptr)
+                                || (has_bit(&widened, *value)
+                                    && !held_as_float(*ptr)
+                                    && !local_float(*ptr))
+                                || (has_bit(&bits, *value) && !held_as_float(*ptr))
+                        }
+                        Inst::Load { .. } => false,
+                        Inst::AtomicStore { ptr, .. } => {
+                            from || has_bit(&widened, *ptr) || has_bit(&bits, *ptr)
+                        }
+                        Inst::Convert {
+                            op: ConvOp::Bitcast,
+                            ..
+                        } => read,
+                        inst => read || (from && !computes(inst)),
+                    }
+                })
+        })
+    });
+    meter.release(16 * words);
+    carried
+}
+
+/// Whether `inst` moves its operands' values into its result unchanged ([`moves_unfolded`]).
+fn moves(inst: &Inst) -> bool {
+    matches!(
+        inst,
+        Inst::Select { .. }
+            | Inst::Unary {
+                op: UnOp::CopyObject,
+                ..
+            }
+            | Inst::CompositeConstruct { .. }
+            | Inst::CompositeExtract { .. }
+            | Inst::CompositeInsert { .. }
+            | Inst::VectorExtractDynamic { .. }
+            | Inst::VectorInsertDynamic { .. }
+            | Inst::VectorShuffle { .. }
+    )
+}
+
+/// Whether `inst` computes a value from its operands' in the registers, whose NaN Metal answers
+/// from the widened value's or its own note records ([`moves_unfolded`]).
+fn computes(inst: &Inst) -> bool {
+    match inst {
+        Inst::Convert { op, .. } => *op != ConvOp::Bitcast,
+        Inst::Glsl { op, .. } => {
+            !matches!(op, GlslOp::FrexpStruct | GlslOp::ModfStruct | GlslOp::Ldexp)
+        }
+        Inst::Unary { .. } | Inst::Binary { .. } | Inst::Fma { .. } | Inst::Derivative { .. } => {
+            true
+        }
+        _ => false,
+    }
 }
 
 /// Whether module `m` computes in 16-bit floats: an `OpFAdd`, `OpFSub` or `OpFMul`, an `OpFmaKHR`

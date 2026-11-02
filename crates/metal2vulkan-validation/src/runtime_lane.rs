@@ -605,6 +605,8 @@ mod msaa_32bit;
 #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
 mod msaa_depth_moves;
 #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+mod nan_moves;
+#[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
 mod nan_resolves;
 #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
 mod narrow_clamps;

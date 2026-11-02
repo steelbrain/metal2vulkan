@@ -149,6 +149,17 @@ pub fn storage_buffers(a: &FunctionArtifact) -> u32 {
         .sum()
 }
 
+/// Whether artifact `a` leaves a NaN's bits to the device, which the interpreter does not model:
+/// it records `PrecisionNote::NativeNanEncoding`, or it requires `VkProperty::MetalNanMoves`, whose
+/// measured device answers Metal's bits where the interpreter's conversions answer their own.
+pub fn device_nan_bits(a: &FunctionArtifact) -> bool {
+    a.precision
+        .contains(&crate::pipeline::artifact::PrecisionNote::NativeNanEncoding)
+        || a.requirements
+            .properties
+            .contains(&crate::device::requirements::VkProperty::MetalNanMoves)
+}
+
 /// The default policy with Metal's answers wherever a choice still offers them
 /// ([`DevicePolicy::exact_answers`]).
 pub fn exact_maths() -> DevicePolicy {

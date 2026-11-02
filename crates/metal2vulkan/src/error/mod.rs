@@ -670,7 +670,9 @@ pub enum DriverDeviation {
     /// widening (`x + -0` of every `x`), exact but for a NaN, denormals included: a module that
     /// reads a `half` from its bits by that widening (every profile with `shaderFloat16` does)
     /// requires the property for its denormals, and records `PrecisionNote::NativeNanEncoding`
-    /// for its NaNs' bits.
+    /// for its NaNs' bits but where the profile takes [`MetalNanMoves`].
+    ///
+    /// [`MetalNanMoves`]: DriverDeviation::MetalNanMoves
     MetalHalfArithmetic,
     /// The device stores every `float` but a NaN that a shader writes to a half-float storage
     /// image (`R16Float`, `RG16Float`, `RGBA16Float`; a storage texel buffer of one too) as Metal
@@ -814,6 +816,26 @@ pub enum DriverDeviation {
     /// alpha records no `PrecisionNote::DeviceAlphaCoverage` and requires the property.
     /// Unmeasured, such a pipeline's fragment stage records the note.
     MetalAlphaCoverage,
+    /// The device's operations that move a `float` or `half` NaN, rather than compute one, answer
+    /// Metal's bits (`VkProperty::MetalNanMoves`): its widening of a 16-bit float to 32 bits
+    /// (`OpFConvert`) answers `0x7FC00000` for every `half` NaN, as Metal's `float(half)` does;
+    /// its narrowing of a 32-bit float to 16 bits answers Metal's `half` NaN, and its narrowing of
+    /// such a widening, moved through the registers (selects, phis, a function's `float`
+    /// variable), which the driver's compiler folds, the `half`'s own bits, as Metal's moves of a
+    /// `half` keep them; its `OpFNegate` and `FAbs` of a `float` keep a NaN's payload with the sign
+    /// flipped or cleared, as Metal's `fneg` and `fabs` do; and its `FAbs` of a `half` held
+    /// widened answers the canonical NaN, as Metal's `half` `fabs` does. Where the profile takes
+    /// it, a module that reads a `half` from its bits or encodes one to them, a `half`'s widening
+    /// to `float` and a `half` `fabs` record no `PrecisionNote::NativeNanEncoding` and the module
+    /// requires the property, but where the module carries a widened `half` out of the registers
+    /// (a store to a stage output or another variable, a call, a group, atomic or image operation)
+    /// or reads its bits before narrowing it, or holds a `float` NaN constant other than
+    /// `0x7FC00000`, which the measurement does not cover (`narrow::moves_unfolded`): there each
+    /// records the note. A `float` `fneg` and `fabs` record none and require the property. A `half`
+    /// `fneg` records the note on every profile: the device negates the held `float`, whose NaN
+    /// keeps its flipped sign unless the driver's compiler moves the negation onto the `half`.
+    /// Unmeasured, each records it.
+    MetalNanMoves,
 }
 
 /// A defect of a device's driver in a command the runtime records for itself, never in a

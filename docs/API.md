@@ -3458,7 +3458,19 @@ bound.
   widen with its bits. And wherever a `half` is encoded to its bits (a store, a reinterpretation, a
   texel's bits) where they are not the bits it was read from, on every device, since the encode is
   the device's narrowing (its conversion with `shaderFloat16`, `PackHalf2x16` without): a NaN's
-  bits the device's, where Metal keeps a `half` NaN's sign and payload.
+  bits the device's, where Metal keeps a `half` NaN's sign and payload. **Exempt:** on a profile
+  that takes `DriverDeviation::MetalNanMoves`, MoltenVK on Apple's GPUs of the Apple M3 Max's
+  macOS 27 identity, whose widening, narrowing, `float` `fneg` and `fabs` and `half` `fabs` were
+  measured to answer Metal's bits (every `half` widened, moved through a select, a phi of a
+  `half` and of a `half2`, a later block and `fabs`, and 98,368 `float` words negated and taken
+  the magnitude of, on Metal and on the runtime, `runtime_lane::nan_moves`), a `float` `fneg` or
+  `fabs`, a `half`'s widening to `float`, a `half` `fabs`, and a module's reads and encodes of a
+  `half`'s bits record no note and require `VkProperty::MetalNanMoves`. The exemption stops where
+  the module carries a widened `half` out of the registers before narrowing it (a store to a stage
+  output or a variable other than a function's `float` one, a call, a return, a group, atomic or
+  image operation), reads its widened bits (a bitcast but to store them to memory, `frexp`,
+  `modf`, `ldexp`), or holds a `float` NaN constant other than `0x7fc00000`: such a module
+  records the note there too. A `half` `fneg` records it on every device.
 - `metal2vulkan-degrade-native-min-max` (precision). `PrecisionNote::NativeMinMax`: Native device
   maths: Metal's `fmin`, `fmax`, `min3`, `max3`, `clamp` or `saturate` (its `clamp(x, +0, 1)`) on
   `float` or `half` is the device's `GLSL.std.450` `NMin`, `NMax` or `NClamp`, on a device not

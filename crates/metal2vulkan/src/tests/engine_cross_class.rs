@@ -37,7 +37,8 @@ use crate::pipeline::sym::{
     Axis, ResourceKind, ResourceSlot, SampledType, SlotClass, SlotRef, SpecKey, Stage,
 };
 use crate::pipeline::testing::{
-    link_and_validate, llvm_assemble, meter, profile, typed_module_with, AssembleError,
+    device_nan_bits, link_and_validate, llvm_assemble, meter, profile, typed_module_with,
+    AssembleError,
 };
 use crate::pipeline::StageSource;
 use crate::pipeline::{ComputePipeline, ComputePipelineDescriptor, FunctionDescriptor};
@@ -342,9 +343,10 @@ fn run(
 /// Every read through a slot of another class gives the words the slot of the texture's own
 /// class gives, a `half` result their low 16 bits: Metal's rule. A `ushort` result of an integer
 /// texture is the low 16 bits too, of a float texture the `half` read's bits. Where the module
-/// widens a `half` from its bits by the device and records `PrecisionNote::NativeNanEncoding` (both
-/// profiles here, which have `shaderFloat16`), a `half` result's NaN is the device's widening's,
-/// so a NaN pattern need only come back a NaN.
+/// widens a `half` from its bits by the device and records `PrecisionNote::NativeNanEncoding` or
+/// requires `VkProperty::MetalNanMoves` (both profiles here, which have `shaderFloat16`;
+/// `device_nan_bits`), a `half` result's NaN is the device's widening's, which the interpreter is
+/// not, so a NaN pattern need only come back a NaN.
 #[test]
 fn accesses_through_another_class_are_the_native_words() {
     use SampledType as S;
@@ -392,18 +394,18 @@ fn accesses_through_another_class_are_the_native_words() {
             let want = run(&own, native, &inputs(None), p, class, &what);
             let consts = FunctionConstantValues::defaults();
             let device_nans = ty == Ty::Half
-                && compile_bitcode(
-                    &cross,
-                    EntryRef::Name("k"),
-                    &consts,
-                    p,
-                    &inputs(Some(class)),
-                    &mut meter(),
-                    SPIRV_WORDS,
-                )
-                .unwrap_or_else(|e| panic!("{what}: {e}"))
-                .precision
-                .contains(&PrecisionNote::NativeNanEncoding);
+                && device_nan_bits(
+                    &compile_bitcode(
+                        &cross,
+                        EntryRef::Name("k"),
+                        &consts,
+                        p,
+                        &inputs(Some(class)),
+                        &mut meter(),
+                        SPIRV_WORDS,
+                    )
+                    .unwrap_or_else(|e| panic!("{what}: {e}")),
+                );
             let nan = |h: u32| h & 0x7C00 == 0x7C00 && h & 0x3FF != 0;
             let lanes = (SIDE * SIDE * 4) as usize;
             let lane_of = |b: &[u8], t: Ty, lane: usize| match t {

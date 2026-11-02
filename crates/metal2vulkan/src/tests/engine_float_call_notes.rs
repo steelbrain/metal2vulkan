@@ -7,13 +7,14 @@
 //! and without the `fast_` prefix and with and without fast-math flags, and every float binary
 //! operator, is compiled alone (its operands loaded from a buffer and its result stored) on one
 //! committed profile per class of the facts the notes read: the `float` fused multiply-add route,
-//! whether the `float` functions are Metal's, and whether the device reads `f32` denormals as
-//! Metal does. Each artifact's notes are exactly what the exported function answers for that call
+//! whether the `float` functions are Metal's, whether the device reads `f32` denormals as Metal
+//! does, and whether its moves of a NaN are Metal's (`nan::moves_answered`). Each artifact's notes are exactly what the exported function answers for that call
 //! in that entry's math mode. The loads and stores around it record none, but a `half` kernel's
 //! widening and rounding, which the module records once by the profile's own form: its rounding's
 //! note (`narrow::native_rounding`), which the test sets aside, and a module's widening of a
 //! `half` from its bits or narrowing of one to them by the device (every profile), whose NaN's
-//! bits are the device's (`narrow::widens_bits`, `narrow::encodes_bits`, `NativeNanEncoding`), and
+//! bits are the device's (`narrow::widens_bits`, `narrow::encodes_bits`, `NativeNanEncoding`) but
+//! where the device's moves of a NaN are measured to be Metal's (`narrow::moves_unfolded`), and
 //! without `shaderFloat16` its denormals too (`UnpackHalf2x16`, `PackHalf2x16`,
 //! `NativeHalfConversion`), which the test adds to the operation's notes.
 //!
@@ -287,9 +288,9 @@ fn assemble(token: &str, chunk: usize, text: &str) -> Option<Vec<u8>> {
 }
 
 /// What the notes of a float operation read of a profile: its `float` fused multiply-add route,
-/// whether its `float` functions are Metal's, and whether the device reads `f32` denormals as Metal
-/// does.
-type NoteClass = (Route, bool, bool);
+/// whether its `float` functions are Metal's, whether the device reads `f32` denormals as Metal
+/// does, and whether its moves of a NaN are Metal's.
+type NoteClass = (Route, bool, bool, bool);
 
 /// The note class of profile `p`.
 fn note_class(p: &DeviceProfile) -> NoteClass {
@@ -297,6 +298,7 @@ fn note_class(p: &DeviceProfile) -> NoteClass {
         fma::float_route(p),
         p.fields().float_functions == FloatFunctions::Metal,
         denormal::device_flushes(p),
+        nan::moves_answered(p),
     )
 }
 
@@ -306,14 +308,14 @@ fn one_profile_per_class() -> BTreeMap<NoteClass, (String, DeviceProfile)> {
     for (stem, p) in committed_profiles_with(exact_maths()).expect("profiles") {
         out.entry(note_class(&p)).or_insert((stem, p));
     }
-    let routes: BTreeSet<Route> = out.keys().map(|(route, _, _)| *route).collect();
+    let routes: BTreeSet<Route> = out.keys().map(|(route, _, _, _)| *route).collect();
     assert_eq!(
         routes,
         BTreeSet::from([Route::Khr, Route::Native]),
         "every float route is some committed profile's"
     );
     assert!(
-        out.keys().any(|(_, metal, _)| *metal),
+        out.keys().any(|(_, metal, _, _)| *metal),
         "a committed profile's float functions are Metal's"
     );
     out
@@ -372,11 +374,16 @@ fn exported_float_notes_are_the_ones_a_compile_records() {
                         let crosses = narrow::widens_bits(&m, &mut meter())
                             .and_then(|w| Ok(w || narrow::encodes_bits(&m, &mut meter())?))
                             .unwrap_or_else(|e| panic!("{what}: {e:?}"));
-                        if crosses {
+                        // Its NaN's bits Metal's where the device's moves are measured to be and
+                        // the module moves its `half` values only so.
+                        let moved = nan::moves_answered(p)
+                            && !narrow::moves_unfolded(&m, &mut meter())
+                                .unwrap_or_else(|e| panic!("{what}: {e:?}"));
+                        if crosses && !moved {
                             want.insert(PrecisionNote::NativeNanEncoding);
-                            if form == crate::spirv::builder::QuantizeForm::Device {
-                                want.insert(PrecisionNote::NativeHalfConversion);
-                            }
+                        }
+                        if crosses && form == crate::spirv::builder::QuantizeForm::Device {
+                            want.insert(PrecisionNote::NativeHalfConversion);
                         }
                     }
                     assert_eq!(got, want, "{what}");
@@ -405,7 +412,7 @@ fn exported_float_notes_are_the_ones_a_compile_records() {
 #[test]
 fn a_float_division_is_the_devices_arithmetic_unless_it_is_metals_precise_one() {
     for (class, (stem, p)) in one_profile_per_class() {
-        let (_, metal_functions, _) = class;
+        let (_, metal_functions, _, _) = class;
         let flushes = p.takes_driver_deviation(DriverDeviation::MetalFloatDenormals);
         let native_nans = nan::encoding(&p) == NanEncoding::Native;
         for (_, _, _, fmt) in ELEMS {
@@ -505,7 +512,7 @@ fn precise_fmod_records_no_precision_note_and_the_roots_the_devices() {
         Some(AirIntrinsic::Math(call)) => call,
         _ => panic!("{name} is a math call"),
     };
-    for ((_, metal_functions, _), (stem, p)) in one_profile_per_class() {
+    for ((_, metal_functions, _, _), (stem, p)) in one_profile_per_class() {
         for name in ["air.fmod.f32", "air.fmod.f16"] {
             for fmf in [FastMath::NONE, every_flag()] {
                 for math in [EntryMath::Fast, EntryMath::Precise] {
@@ -678,7 +685,7 @@ fn a_fast_math_entry_on_moltenvk_records_no_note_for_metals_own_operations() {
     {
         let stem = "moltenvk-m3";
         let p = by_stem(stem);
-        assert_eq!(note_class(p), (Route::Khr, true, true), "{stem}");
+        assert_eq!(note_class(p), (Route::Khr, true, true, true), "{stem}");
         let (fast, _) = notes_of(p, "fdiv_fast");
         assert!(fast.is_empty(), "fdiv_fast on {stem}: {fast:?}");
         let (preserving, _) = notes_of(p, "fdiv_preserving");
@@ -719,7 +726,7 @@ fn a_fast_math_entry_on_moltenvk_records_no_note_for_metals_own_operations() {
     // and the fast division keeps its note.
     for denormals in [true, false] {
         let Some((stem, p)) = profiles.iter().find(|(_, p)| {
-            let (_, metal, flushes) = note_class(p);
+            let (_, metal, flushes, _) = note_class(p);
             !metal && flushes == denormals
         }) else {
             panic!("no committed profile of the device's functions, Metal's denormals {denormals}");

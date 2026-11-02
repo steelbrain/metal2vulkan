@@ -36,7 +36,6 @@ use crate::library::FunctionConstantValues;
 use crate::lower::emit::emit_module;
 use crate::lower::select::{select, LowerInputs, Plan};
 use crate::memory::static_root::analyze_memory;
-use crate::pipeline::artifact::PrecisionNote;
 use crate::pipeline::compile::{compile_bitcode, plan_bitcode, EntryRef};
 use crate::pipeline::facts::{RuntimeFact, UniformViewChoice};
 use crate::pipeline::interface::{BufferForm, DescriptorView, PushLoc, SlotInterface, Window};
@@ -44,7 +43,8 @@ use crate::pipeline::sym::{
     PushField, ResourceKind, ResourceSlot, SlotClass, SlotRef, SpecKey, Stage, Symbol,
 };
 use crate::pipeline::testing::{
-    compile, engine_dir, link_and_validate, llvm_assemble, meter, typed_module, AssembleError,
+    compile, device_nan_bits, engine_dir, link_and_validate, llvm_assemble, meter, typed_module,
+    AssembleError,
 };
 use crate::spirv::interp::{run, Buffer, Config, InterpError, Resources};
 use crate::spirv::ir::{GlobalKind, TypedModule};
@@ -749,7 +749,8 @@ fn offsets(size: u64) -> Vec<u64> {
 /// bounds. Probes are skipped where the offset breaks the access's stated alignment (undefined in
 /// Metal). A `half` NaN loaded, or stored from a constant, need only come back a NaN where the
 /// module reads a `half` from its bits by the device's widening or encodes one by its narrowing
-/// (`PrecisionNote::NativeNanEncoding`), whose NaN encoding is the device's.
+/// (`PrecisionNote::NativeNanEncoding`, or `VkProperty::MetalNanMoves`, measured on a device the
+/// interpreter is not: `device_nan_bits`), whose NaN encoding is the device's.
 #[test]
 fn every_leaf_path_is_exact_in_bounds_and_contained_out_of_bounds() {
     let size = 32u64;
@@ -762,10 +763,9 @@ fn every_leaf_path_is_exact_in_bounds_and_contained_out_of_bounds() {
             };
             check_l3(&bc, k.name, &p, &what);
             let native_halves = k.ty.contains("half")
-                && compile(&bc, k.name, &p)
-                    .unwrap_or_else(|e| panic!("{what}: {e}"))
-                    .precision
-                    .contains(&PrecisionNote::NativeNanEncoding);
+                && device_nan_bits(
+                    &compile(&bc, k.name, &p).unwrap_or_else(|e| panic!("{what}: {e}")),
+                );
             let (plan, m) = typed_module(&bc, k.name, &p).unwrap_or_else(|e| panic!("{what}: {e}"));
             for r in [0u32, 4] {
                 for off in offsets(size) {
@@ -1058,8 +1058,8 @@ fn push_with_table(plan: &Plan) -> Vec<u8> {
 /// and leaves the allocation unchanged. Robust buffer access does not cover device addresses, so
 /// the check is emitted on a robust profile too. A `half` NaN loaded, or stored from a constant,
 /// need only come back a NaN where the module reads a `half` from its bits by the device's
-/// widening or encodes one by its narrowing (`PrecisionNote::NativeNanEncoding`), whose NaN
-/// encoding is the device's.
+/// widening or encodes one by its narrowing (`PrecisionNote::NativeNanEncoding`, or
+/// `VkProperty::MetalNanMoves`: `device_nan_bits`), whose NaN encoding is the device's.
 #[test]
 fn a_device_address_slot_is_exact_and_contained() {
     let size = 32u64;
@@ -1083,8 +1083,7 @@ fn a_device_address_slot_is_exact_and_contained() {
         )
         .unwrap_or_else(|e| panic!("{what}: {e}"));
         link_and_validate(&a, &p).unwrap_or_else(|e| panic!("{what}: L3: {e}"));
-        let native_halves =
-            k.ty.contains("half") && a.precision.contains(&PrecisionNote::NativeNanEncoding);
+        let native_halves = k.ty.contains("half") && device_nan_bits(&a);
         let (plan, m) = typed_module_with(&bc, k.name, &p, &inputs);
         for bind in [0u64, 8] {
             for off in offsets(size) {
@@ -1769,8 +1768,8 @@ fn profile_without(stem: &str, features: &[VkFeature]) -> DeviceProfile {
 /// follows the binder contract (descriptor base congruent to the Metal address modulo 4), and a
 /// sub-word store through a unit leaves its neighbours unchanged. A `half` NaN loaded, or stored
 /// from a constant, need only come back a NaN where the module reads a `half` from its bits by the
-/// device's widening or encodes one by its narrowing (`PrecisionNote::NativeNanEncoding`), whose
-/// NaN encoding is the device's.
+/// device's widening or encodes one by its narrowing (`PrecisionNote::NativeNanEncoding`, or
+/// `VkProperty::MetalNanMoves`: `device_nan_bits`), whose NaN encoding is the device's.
 #[test]
 fn narrow_units_are_exact_at_every_bind_residual() {
     let size = 32u64;
@@ -1789,10 +1788,9 @@ fn narrow_units_are_exact_at_every_bind_residual() {
             };
             check_l3(&bc, k.name, &p, &what);
             let native_halves = k.ty.contains("half")
-                && compile(&bc, k.name, &p)
-                    .unwrap_or_else(|e| panic!("{what}: {e}"))
-                    .precision
-                    .contains(&PrecisionNote::NativeNanEncoding);
+                && device_nan_bits(
+                    &compile(&bc, k.name, &p).unwrap_or_else(|e| panic!("{what}: {e}")),
+                );
             let (plan, m) = typed_module(&bc, k.name, &p).unwrap_or_else(|e| panic!("{what}: {e}"));
             let mut probes: Vec<u32> = (0..=9).collect();
             probes.extend(size as u32 - 9..=size as u32 + 1);
@@ -2114,7 +2112,7 @@ const VEC4_RESIDUALS: [u32; 6] = [0, 4, 12, 16, 36, 0xFFFF_FFF0];
 /// tested profile; aligned to 4 it moves word by word (four stores, no `uvec4` view of the slot it
 /// stores to). At every residual a descriptor offset that is a multiple of 16 reads and writes
 /// exactly the leaf's 16 bytes of a 48-byte range (a `half` NaN stored from a constant a NaN where
-/// the module encodes it by the device's narrowing, `PrecisionNote::NativeNanEncoding`), and with
+/// the module encodes it by the device's narrowing, `device_nan_bits`), and with
 /// the in-shader check the offset past the range reads 0 and writes nothing.
 #[test]
 fn sixteen_byte_leaves_move_as_one_uvec4() {
@@ -2147,8 +2145,7 @@ fn sixteen_byte_leaves_move_as_one_uvec4() {
                 "{what}: views of out"
             );
             let a = compile(&bc, k.name, &p).unwrap_or_else(|e| panic!("{what}: {e}"));
-            let native_halves =
-                k.ty.contains("half") && a.precision.contains(&PrecisionNote::NativeNanEncoding);
+            let native_halves = k.ty.contains("half") && device_nan_bits(&a);
             let stores = opcodes(&a.module.words)
                 .iter()
                 .filter(|o| **o == OP_STORE)

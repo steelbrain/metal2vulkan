@@ -2462,6 +2462,7 @@ const KHR_FACTS: super::FloatFacts = super::FloatFacts {
     device_denormals: false,
     nans: crate::device::profile::NanEncoding::Native,
     native_min_max: false,
+    nan_moves: false,
 };
 
 /// Precise `pow` on `float` leaves its NaNs to the device (the device's `Pow`, and the device's sum

@@ -12970,6 +12970,7 @@ variant	metal2vulkan::device::VkProperty::MetalHalfStorageWrites	MetalHalfStorag
 variant	metal2vulkan::device::VkProperty::MetalHalfTexelWrites	MetalHalfTexelWrites
 variant	metal2vulkan::device::VkProperty::MetalInterpolation	MetalInterpolation
 variant	metal2vulkan::device::VkProperty::MetalMinMax	MetalMinMax
+variant	metal2vulkan::device::VkProperty::MetalNanMoves	MetalNanMoves
 variant	metal2vulkan::device::VkProperty::MetalNorm16ColorWrites	MetalNorm16ColorWrites
 variant	metal2vulkan::device::VkProperty::MetalNormStorageWrites	MetalNormStorageWrites
 variant	metal2vulkan::device::VkProperty::MetalNormalizedVertexFetch	MetalNormalizedVertexFetch
@@ -13127,6 +13128,7 @@ variant	metal2vulkan::error::DriverDeviation::MetalHalfStorageWrites	MetalHalfSt
 variant	metal2vulkan::error::DriverDeviation::MetalHalfTexelWrites	MetalHalfTexelWrites
 variant	metal2vulkan::error::DriverDeviation::MetalInterpolation	MetalInterpolation
 variant	metal2vulkan::error::DriverDeviation::MetalMinMax	MetalMinMax
+variant	metal2vulkan::error::DriverDeviation::MetalNanMoves	MetalNanMoves
 variant	metal2vulkan::error::DriverDeviation::MetalNorm16ColorWrites	MetalNorm16ColorWrites
 variant	metal2vulkan::error::DriverDeviation::MetalNormStorageWrites	MetalNormStorageWrites
 variant	metal2vulkan::error::DriverDeviation::MetalNormalizedVertexFetch	MetalNormalizedVertexFetch

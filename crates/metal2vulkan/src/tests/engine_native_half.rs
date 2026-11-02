@@ -22,7 +22,8 @@ use crate::lower::select::{select, LowerInputs};
 use crate::memory::static_root::analyze_memory;
 use crate::pipeline::sym::{ResourceKind, ResourceSlot, Stage};
 use crate::pipeline::testing::{
-    compile, compile_kept, link_and_validate, llvm_assemble, meter, profile, AssembleError, Scratch,
+    compile, compile_kept, device_nan_bits, link_and_validate, llvm_assemble, meter, profile,
+    AssembleError, Scratch,
 };
 use crate::pipeline::PrecisionNote;
 use crate::spirv::builder::QuantizeForm;
@@ -368,7 +369,9 @@ fn decodes(m: &TypedModule) -> (usize, usize) {
 /// fact; on the floor (no `shaderFloat16`) it is `UnpackHalf2x16` of each word, recording both
 /// notes and requiring no fact. A `half4` widens as one vector (two words unpacked and shuffled
 /// where the device unpacks). Each module passes L3 and answers the `half`s' values on the
-/// interpreter (whose widening is exact).
+/// interpreter (whose widening is exact). Where the device's moves of a NaN are measured to be
+/// Metal's (`DriverDeviation::MetalNanMoves`, MoltenVK on the M3 Max's identity), a module that
+/// moves its `half`s only so requires that in place of the NaN's note (`device_nan_bits`).
 #[test]
 fn a_half_decode_is_the_devices_widening_inside_loops_and_out() {
     let Some(bc) = assemble("native-half-decode", &decode_module()) else {
@@ -413,7 +416,7 @@ fn a_half_decode_is_the_devices_widening_inside_loops_and_out() {
             };
             let (device, integer) = decodes(&kept);
             assert_eq!((device, integer), (reads, 0), "{what}: the decodes");
-            assert!(a.precision.contains(&nan), "{what}: {:?}", a.precision);
+            assert!(device_nan_bits(&a), "{what}: {:?}", a.precision);
             assert_eq!(
                 a.precision.contains(&conversion),
                 native,
@@ -830,7 +833,9 @@ fn half_load_module() -> String {
 /// widens exactly) and it records no other note; where the measured `MetalHalfArithmetic` reads
 /// every `half` through that widening as Metal's (MoltenVK) it requires the fact; elsewhere
 /// (NVIDIA, lavapipe: the device's conversion, no float controls) it records
-/// `NativeHalfConversion`, whose bound holds a denormal the device flushes. Without it (Pascal,
+/// `NativeHalfConversion`, whose bound holds a denormal the device flushes; where the device's
+/// moves of a NaN are measured to be Metal's (`DriverDeviation::MetalNanMoves`, MoltenVK on the
+/// M3 Max's identity) it requires that in place of `NativeNanEncoding`. Without it (Pascal,
 /// the LunarG baseline, SwiftShader, the floor) the widening is one `UnpackHalf2x16` of the word,
 /// a 16-bit unit's zero extension where the profile has 16-bit storage, with no 16-bit float type,
 /// recording `NativeHalfConversion` too and requiring no fact. Each passes L3; on the interpreter
@@ -858,6 +863,11 @@ fn a_half_read_from_memory_is_the_devices_widening_on_every_profile() {
             .properties
             .contains(&VkProperty::MetalHalfArithmetic);
         let nan = a.precision.contains(&PrecisionNote::NativeNanEncoding);
+        let moves = p.takes_driver_deviation(DriverDeviation::MetalNanMoves);
+        let moved = a
+            .requirements
+            .properties
+            .contains(&VkProperty::MetalNanMoves);
         let conversion = a.precision.contains(&PrecisionNote::NativeHalfConversion);
         match form {
             QuantizeForm::Device => {
@@ -876,7 +886,7 @@ fn a_half_read_from_memory_is_the_devices_widening_on_every_profile() {
             }
             QuantizeForm::Converted => {
                 assert_eq!((r.widenings, r.unpacks), (1, 0), "{what}: {r:?}");
-                assert!(nan, "{what}: {:?}", a.precision);
+                assert_eq!((nan, moved), (!moves, moves), "{what}: {:?}", a.precision);
                 assert_eq!(conversion, !measured, "{what}: {:?}", a.precision);
                 assert_eq!(fact, measured, "{what}: {:?}", a.requirements.properties);
             }

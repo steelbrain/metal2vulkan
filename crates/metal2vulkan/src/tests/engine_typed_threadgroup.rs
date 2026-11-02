@@ -21,11 +21,11 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use crate::device::profile::DeviceProfile;
 use crate::device::DevicePolicy;
 use crate::lower::select::Plan;
-use crate::pipeline::artifact::PrecisionNote;
 use crate::pipeline::interface::PushLoc;
 use crate::pipeline::sym::{Axis, PushField, ResourceKind, ResourceSlot, SpecKey, Stage};
 use crate::pipeline::testing::{
-    compile, link_and_validate, llvm_assemble, profile, typed_module, AssembleError,
+    compile, device_nan_bits, link_and_validate, llvm_assemble, profile, typed_module,
+    AssembleError,
 };
 use crate::spirv::interp::{run, Buffer, Config, Order, Resources, SubgroupSize};
 use crate::spirv::ir::{StorageClass, TypedModule};
@@ -179,12 +179,10 @@ fn run_both(m: &TypedModule, res: &Resources) -> Vec<u32> {
 }
 
 /// Whether entry `entry` of `bc` on `prof` reads a `half` from its bits by the device's widening
-/// (`PrecisionNote::NativeNanEncoding`), whose reinterpretation of a NaN's bits is the device's.
+/// (`PrecisionNote::NativeNanEncoding`, or `VkProperty::MetalNanMoves` on a device the interpreter
+/// is not: `device_nan_bits`), whose reinterpretation of a NaN's bits is the device's.
 fn native_halves(bc: &[u8], entry: &str, prof: &DeviceProfile) -> bool {
-    compile(bc, entry, prof)
-        .expect("compile")
-        .precision
-        .contains(&PrecisionNote::NativeNanEncoding)
+    device_nan_bits(&compile(bc, entry, prof).expect("compile"))
 }
 
 /// `got` against the bit patterns `want`. Where the module reads a `half` from its bits by the
