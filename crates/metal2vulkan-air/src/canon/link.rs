@@ -3,7 +3,10 @@
 //! A module calls a `[[visible]]` function it does not define through a stub declaration, which
 //! `!air.visible_function_references` maps to the function's name, the Metal linker's symbol. A
 //! pipeline supplies the functions it links (`MTLLinkedFunctions`) as [`LinkedModule`]s. This step,
-//! run right after entry selection, resolves every stub whose name one linked function has: that
+//! run right after entry selection, resolves every stub whose name one linked function a reference
+//! resolves to has ([`LinkedName::resolves_references`]: a function of `functions` or
+//! `privateFunctions`, never one only `binaryFunctions` lists, which only a table reaches, as Metal
+//! resolves no reference against it): that
 //! function is imported into the module with everything it reaches (its helpers, globals,
 //! constants, types, and declarations; its own stubs are resolved in turn, against the same linked
 //! functions), and every direct call to the stub is redirected to the imported definition, which
@@ -104,6 +107,12 @@ pub struct LinkedName {
     /// (the translator's `FunctionHandle`), when the pipeline can place it in
     /// a visible-function table (it is in `functions` or `binary_functions`).
     pub handle: Option<u32>,
+    /// A visible-function reference to `name` resolves to this function: the pipeline lists it in
+    /// `functions` or `private_functions`. A function only `binary_functions` lists resolves none
+    /// (only a table reaches it), as Metal's creation fails over a reference only such a function
+    /// names ("unresolved visible function reference"), so it is never ambiguous beside a function
+    /// of its name that does.
+    pub resolves_references: bool,
 }
 
 /// A function a call through a visible-function table may call: its table word, its name
@@ -559,7 +568,7 @@ fn link_in(
             l.functions
                 .iter()
                 .enumerate()
-                .filter(|(_, f)| *f.name == *symbol.0)
+                .filter(|(_, f)| f.resolves_references && *f.name == *symbol.0)
                 .map(move |(j, f)| ((i, j), l, f))
         });
         let state = match (named.next(), named.next()) {

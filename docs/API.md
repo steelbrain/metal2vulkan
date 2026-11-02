@@ -518,7 +518,13 @@ layout stride of `None` is `MTLBufferLayoutStrideDynamic`: the stride comes from
   `DescriptorError::LinkedFunction` with `LinkProblem::UnresolvedConstant { index }`, guarded by
   `is_function_constant_defined` or not, as Metal fails the creation ("cannot lower module with
   unresolved function constants"); one that reaches none links. The specialized name and the
-  specialization are part of the compile key.
+  specialization are part of the compile key. A reference resolves against `functions` and
+  `private_functions` (`LinkedList::resolves_references`), never against `binary_functions`,
+  whose functions only a visible-function table calls: a reference only a binary function names
+  is `NeedsInput(LinkedFunction)`, as Metal fails the creation ("unresolved visible function
+  reference"). Two different functions of one name, one in `functions` and one in
+  `binary_functions`, are two functions a table holds, each with its handle, and the reference
+  calls the one of `functions`, as Metal links them.
 - **Stitched functions.** A function Metal's stitcher made (`newLibraryWithStitchedDescriptor:`)
   links like any other visible function, in `functions` or in `privateFunctions`: hand the
   stitched library's bytes to `Library::from_metallib`, and link its function. Each stitched
@@ -527,8 +533,10 @@ layout stride of `None` is `MTLBufferLayoutStrideDynamic`: the stride comes from
   stitched library itself. A module whose linkage signature has no reading (a linked-constants
   signature on a module that still declares function constants) refuses the pipeline at a call
   that survives specialization, `Unsupported` with `Feature::Linking`.
-- **Binary functions, required threadgroup sizes, buffer mutability.** These descriptor fields
-  change no translation and are in no compile key; the runtime checks them as Metal does.
+- **Binary functions, required threadgroup sizes, buffer mutability.** Whether a binary function
+  was compiled to a binary (`LinkedFunction::precompiled`), required threadgroup sizes and buffer
+  mutability change no translation and are in no compile key; the runtime checks them as Metal
+  does.
 - **Dynamic libraries.** `DynamicLibrary::new(library, &budget)` checks a dynamic metallib as
   Metal's `newDynamicLibrary:` does; pipelines link its exported functions.
 

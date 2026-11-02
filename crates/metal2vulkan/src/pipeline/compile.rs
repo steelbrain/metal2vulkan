@@ -1686,16 +1686,21 @@ fn constant_values(
 
 /// The linked functions the references of the module with ABI `abi` reach, by module: the function
 /// of each referenced name, then the functions their own references name, in breadth-first order.
-/// When an entry of the module takes a visible-function table or an intersection function table, or
-/// a buffer it takes holds a visible-function table, every function a table can hold (`functions`
-/// and `binary_functions`) is reached too, before the references, and each listed function carries
-/// its table word. A name that no function of `linked` has is left to canonicalization (a call to
-/// it may be dead); a function nothing references (or, without tables, nothing but a table could
-/// call) is listed only where it is one a table can hold and its module decodes and has constexpr
-/// samplers, which Metal numbers, and is otherwise never decoded. Each distinct module (bitcode
-/// hash) is decoded once for all its functions. Every function of a referenced name is listed (the
-/// same function listed twice, with the same constants, is one), so canonicalization sees two
-/// different ones as ambiguous. Each function takes the values of the constants its module
+/// A reference reaches the functions of its name that `functions` and `private_functions` list,
+/// never one only `binary_functions` lists, as Metal resolves no reference against
+/// `binaryFunctions` ([`LinkedList::resolves_references`]). When an entry of the module takes a
+/// visible-function table or an intersection function table, or a buffer it takes holds a
+/// visible-function table, every function a table can hold (`functions` and `binary_functions`) is
+/// reached too, itself rather than by its name, before the references, and each listed function
+/// carries its table word. A name that no function of `linked` has is left to canonicalization (a
+/// call to it may be dead); a function nothing references (or, without tables, nothing but a table
+/// could call) is listed only where it is one a table can hold and its module decodes and has
+/// constexpr samplers, which Metal numbers, and is otherwise never decoded. Each distinct module
+/// (bitcode hash) is decoded once for all its functions. Every function a referenced name reaches
+/// is listed (the same function listed twice, with the same constants, is one), so
+/// canonicalization sees two different ones as ambiguous; each listed function says whether a
+/// reference resolves to it (`LinkedName::resolves_references`). Each function takes the values of
+/// the constants its module
 /// declares, the others ignored (`constant_values`). A module that does not decode, or values it
 /// refuses (two for one constant), are recorded rather than returned: canonicalization refuses them
 /// only at a surviving call. Budget stops, cancellation, and internal errors return at once.
@@ -1712,7 +1717,7 @@ pub(crate) fn linked_modules(
     let mut out: Vec<(Hash256, LinkedModule)> = Vec::new();
     let mut listed: Vec<LinkedKey<'_>> = Vec::new();
     let mut seen: BTreeSet<Box<[u8]>> = BTreeSet::new();
-    let mut queue: VecDeque<Box<[u8]>> = VecDeque::new();
+    let mut queue: VecDeque<Reach> = VecDeque::new();
     let tables = abi.entries.iter().any(|e| {
         abi.reaches_function_tables(e)
             || e.params
@@ -1720,33 +1725,40 @@ pub(crate) fn linked_modules(
                 .any(|p| matches!(p.role, ParamRole::IntersectionTable(_)))
     });
     if tables {
-        for (s, h) in linked.iter().zip(&handles) {
+        for (at, h) in handles.iter().enumerate() {
             if h.is_some() {
-                let name = s.key.link_name();
-                m.charge(name.len())?;
-                queue.push_back(name.as_bytes().into());
+                m.charge(std::mem::size_of::<Reach>())?;
+                queue.push_back(Reach::Table(at));
             }
         }
     }
-    let refs = |abi: &AirAbi, queue: &mut VecDeque<Box<[u8]>>, m: &mut Meter| {
+    let refs = |abi: &AirAbi, queue: &mut VecDeque<Reach>, m: &mut Meter| {
         for (_, symbol) in abi.visible_function_stubs() {
-            m.charge(symbol.0.len())?;
-            queue.push_back(symbol.0.clone());
+            m.charge(std::mem::size_of::<Reach>() + symbol.0.len())?;
+            queue.push_back(Reach::Name(symbol.0.clone()));
         }
         Ok::<(), Error>(())
     };
     refs(abi, &mut queue, m)?;
-    while let Some(name) = queue.pop_front() {
+    while let Some(reach) = queue.pop_front() {
         m.tick(1)?;
-        if seen.contains(&name) {
-            continue;
+        if let Reach::Name(name) = &reach {
+            if seen.contains(name) {
+                continue;
+            }
+            m.charge(name.len())?;
+            seen.insert(name.clone());
         }
-        m.charge(name.len())?;
-        seen.insert(name.clone());
-        for (s, handle) in linked.iter().zip(&handles) {
+        for (at, (s, handle)) in linked.iter().zip(&handles).enumerate() {
             m.tick(1)?;
             let key = &s.key;
-            if !key.list.resolves_references() || key.link_name().as_bytes() != &*name {
+            let reached = match &reach {
+                Reach::Table(table) => at == *table,
+                Reach::Name(name) => {
+                    key.list.resolves_references() && key.link_name().as_bytes() == &**name
+                }
+            };
+            if !reached {
                 continue;
             }
             // The same function listed twice (in two lists, or twice in one) is one function.
@@ -1786,13 +1798,15 @@ pub(crate) fn linked_modules(
                 // Refused for the module's code first.
                 Err(_) => Ok(BTreeMap::new()),
             };
-            m.charge(std::mem::size_of::<LinkedName>() + key.name.len())?;
+            let link_name = key.link_name();
+            m.charge(std::mem::size_of::<LinkedName>() + link_name.len() + key.name.len())?;
             l.functions.push(LinkedName {
-                name: name.clone(),
+                name: link_name.as_bytes().into(),
                 function: key.name.as_bytes().into(),
                 specialized: key.specialized,
                 constants,
                 handle: handle.map(|h| h.word()),
+                resolves_references: resolves_references(linked, key, m)?,
             });
         }
     }
@@ -1846,9 +1860,33 @@ pub(crate) fn linked_modules(
             specialized: key.specialized,
             constants,
             handle: handle.map(|h| h.word()),
+            resolves_references: resolves_references(linked, key, m)?,
         });
     }
     Ok(out.into_iter().map(|(_, l)| l).collect())
+}
+
+/// What reaches a linked function in [`linked_modules`]: a visible-function reference to a name,
+/// or a table that can hold the linked function at this index.
+enum Reach {
+    Name(Box<[u8]>),
+    Table(usize),
+}
+
+/// Whether a visible-function reference to `key`'s name resolves to it: `linked` lists the same
+/// function in a list a reference resolves against (`functions`, `private_functions`).
+fn resolves_references(
+    linked: &[LinkedSource<'_>],
+    key: &LinkedKey<'_>,
+    m: &mut Meter,
+) -> Result<bool, Error> {
+    for s in linked {
+        m.tick(1)?;
+        if s.key.list.resolves_references() && s.key.same_function(key) {
+            return Ok(true);
+        }
+    }
+    Ok(false)
 }
 
 /// The `SpecRequest` of `consts` against the decoded ABI's declared constants.

@@ -184,9 +184,11 @@ impl DynamicLibraries {
 ///
 /// A function calls a `[[visible]]` function it does not define through a visible-function
 /// reference (`!air.visible_function_references`), which names it. Compile resolves each
-/// reference against the functions of `functions`, `private_functions`, and `binary_functions`
-/// by [`LinkedFunction::name`]: its specialized name where it has one, else its library function's
-/// [`FunctionInfo::name`](crate::library::FunctionInfo). The named function (a visible
+/// reference against the functions of `functions` and `private_functions`
+/// ([`LinkedList::resolves_references`]) by [`LinkedFunction::name`]: its specialized name where it
+/// has one, else its library function's [`FunctionInfo::name`](crate::library::FunctionInfo). A
+/// function only `binary_functions` lists resolves none, as Metal's creation fails over a
+/// reference only such a function names. The named function (a visible
 /// function of its module, [`FunctionStage::Visible`](crate::library::FunctionStage) in a
 /// bitcode library) is linked statically and inlined, as are the functions it references in
 /// turn. A reference nothing names is `Error::NeedsInput(LinkedFunction)` if a call to it
@@ -206,7 +208,10 @@ impl DynamicLibraries {
 /// The functions of `functions` and `binary_functions` are also what a
 /// visible-function table can hold: each has a [`FunctionHandle`](crate::pipeline::FunctionHandle)
 /// ([`LinkedFunctions::function_handle`]), and a call through a table compiles to a switch over
-/// those of the call's type. `groups` names the functions a call site through a function pointer
+/// those of the call's type. Two different functions of one name, one in each list, are two
+/// functions with two handles, each calling its own definition, and a reference to the name
+/// resolves to the one of `functions`, as Metal makes such a pipeline (an M3 Max under macOS
+/// 27.0.1, where its API validation layer stops it). `groups` names the functions a call site through a function pointer
 /// may call; the decoder drops the call site's `!air.function_groups`, so no output depends on it.
 /// Every field is part of the compile key.
 #[non_exhaustive]
@@ -217,8 +222,9 @@ pub struct LinkedFunctions {
     pub functions: Vec<LinkedFunction>,
     /// `privateFunctions`: visible functions the pipeline calls only by reference.
     pub private_functions: Vec<LinkedFunction>,
-    /// `binaryFunctions`: visible functions compiled to a binary. The translator links their AIR
-    /// as it links `functions`, and a table can hold them too.
+    /// `binaryFunctions`: visible functions compiled to a binary, which a visible-function table
+    /// can hold (each has a table handle) and no visible-function reference resolves to. The
+    /// translator links their AIR as it links a table's other functions.
     pub binary_functions: Vec<LinkedFunction>,
     /// `groups`: by call-site group name, the functions a call through a function pointer in
     /// that group may call.
@@ -285,10 +291,14 @@ pub enum LinkedList<'a> {
 }
 
 impl LinkedList<'_> {
-    /// Whether a visible-function reference resolves against this list: every list but a group,
-    /// whose functions only a function-pointer call reaches.
+    /// Whether a visible-function reference resolves against this list: `functions` and
+    /// `private_functions`. Not `binary_functions`, whose functions only a table reaches (Metal's
+    /// creation fails over a reference only such a function names, "unresolved visible function
+    /// reference", directly from the stage's function or from a linked function, on an M3 Max
+    /// under macOS 27.0.1, `binary_function_linking.m`), and not a group, whose functions only a
+    /// function-pointer call reaches.
     pub fn resolves_references(self) -> bool {
-        !matches!(self, LinkedList::Group(_))
+        matches!(self, LinkedList::Functions | LinkedList::PrivateFunctions)
     }
 }
 

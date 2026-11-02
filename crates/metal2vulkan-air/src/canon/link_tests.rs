@@ -237,6 +237,7 @@ fn linked(name: &str, module: Module, abi: AirAbi) -> LinkedModule {
             specialized: false,
             constants: Ok(BTreeMap::new()),
             handle: None,
+            resolves_references: true,
         }],
         code: Ok(LinkedCode { module, abi }),
     }
@@ -316,6 +317,53 @@ fn an_unresolved_reference_needs_the_linked_function() {
         symbol: DiagName::new("g"),
     });
     assert_eq!(link(&[callee("f", &["g"])]).unwrap_err(), nested);
+}
+
+/// A function only `binaryFunctions` lists resolves no reference, the entry's or a linked
+/// function's, as Metal's creation fails over a reference only such a function names
+/// ("unresolved visible function reference", a probe on an M3 Max under macOS 27.0.1,
+/// `binary_function_linking.m`); beside a function of its name that resolves references, the
+/// reference resolves to that one, with no ambiguity.
+#[test]
+fn a_function_only_binary_functions_lists_resolves_no_reference() {
+    let binary = |mut l: LinkedModule| {
+        for f in &mut l.functions {
+            f.resolves_references = false;
+            f.handle = Some(2);
+        }
+        l
+    };
+    let missing = |symbol: &str| {
+        Error::NeedsInput(MissingInput::LinkedFunction {
+            symbol: DiagName::new(symbol),
+        })
+    };
+    assert_eq!(link(&[binary(callee("f", &[]))]).unwrap_err(), missing("f"));
+    assert_eq!(
+        link(&[callee("f", &["g"]), binary(callee("g", &[]))]).unwrap_err(),
+        missing("g")
+    );
+    // Another `f`, `x ^ 7`, beside the one that resolves references (`x * 3 + table[x & 3]`).
+    let mut m = ModuleBuilder::new();
+    let i32t = m.int(32);
+    let fty = m.fn_ty(i32t, &[i32t]);
+    let seven = m.const_int(i32t, 7);
+    let mut f = m.define("f", fty);
+    let v = f.bin(BinOp::Xor, arg(0), seven);
+    f.ret(Some(v));
+    let func = f.finish();
+    let mut other_abi = abi();
+    other_abi.visible_functions = vec![visible(func, "f")];
+    let other = linked("f", m.finish().unwrap(), other_abi);
+    for listed in [
+        [binary(other.clone()), callee("f", &[])],
+        [callee("f", &[]), binary(other)],
+    ] {
+        let t = text(&link(&listed).unwrap_or_else(|e| panic!("{e}")));
+        assert!(!t.contains("call "), "{t}");
+        assert!(t.contains("mul i32"), "{t}");
+        assert!(!t.contains("xor i32"), "{t}");
+    }
 }
 
 /// A call that SCCP deletes needs nothing linked, and supplying functions nothing references
@@ -424,6 +472,7 @@ fn a_linked_module_s_signature_is_read_as_the_entry_s() {
                 specialized: true,
                 constants: Ok(BTreeMap::new()),
                 handle: None,
+                resolves_references: true,
             }],
             code: Ok(code),
         }])
@@ -568,6 +617,7 @@ fn constant_link(function: &str, specialized: bool, c: Option<u32>) -> Result<En
             specialized,
             constants: Ok(constants),
             handle: None,
+            resolves_references: true,
         }],
         code: Ok(constant_callee()),
     }])
@@ -631,6 +681,7 @@ fn an_unspecialized_linked_function_that_reaches_a_constant_is_refused() {
             specialized: false,
             constants: Ok(BTreeMap::new()),
             handle: None,
+            resolves_references: true,
         }],
         code: Ok(constant_callee()),
     };
@@ -650,6 +701,7 @@ fn a_linked_function_links_under_its_name_not_its_function_s() {
             specialized: true,
             constants: Ok(BTreeMap::new()),
             handle: None,
+            resolves_references: true,
         }],
         ..callee("f", &[])
     };
@@ -691,6 +743,7 @@ fn a_linked_module_s_static_initializer_runs_before_the_import() {
             specialized: false,
             constants: Ok(BTreeMap::new()),
             handle: None,
+            resolves_references: true,
         }],
         code: Ok(code),
     }])

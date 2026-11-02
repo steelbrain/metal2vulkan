@@ -234,6 +234,7 @@ fn candidates() -> LinkedModule {
                 specialized: false,
                 constants: Ok(BTreeMap::new()),
                 handle: Some(word),
+                resolves_references: true,
             })
             .collect(),
         code: Ok(LinkedCode { module, abi }),
@@ -395,6 +396,7 @@ fn an_unimportable_candidate_is_refused_at_a_surviving_call() {
             specialized: false,
             constants: Ok(BTreeMap::new()),
             handle: Some(2),
+            resolves_references: true,
         }],
         code: Err(Unsupported::not_implemented(Feature::Linking).into()),
     };
@@ -478,6 +480,7 @@ fn a_candidate_calling_through_its_table_recurses_on_a_call_stack() {
             specialized: false,
             constants: Ok(BTreeMap::new()),
             handle: Some(2),
+            resolves_references: true,
         }],
         code: Ok(LinkedCode {
             module: lmodule,
@@ -751,6 +754,7 @@ fn pointer_candidates() -> LinkedModule {
                 specialized: false,
                 constants: Ok(BTreeMap::new()),
                 handle: Some(word),
+                resolves_references: true,
             })
             .collect(),
         code: Ok(LinkedCode { module, abi }),
@@ -1406,6 +1410,7 @@ fn inlining_candidates_at_every_table_call_is_capped() {
             specialized: false,
             constants: Ok(BTreeMap::new()),
             handle: Some(2),
+            resolves_references: true,
         }],
         code: Ok(LinkedCode {
             module: lmodule,

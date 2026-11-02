@@ -264,6 +264,65 @@ fn a_table_call_calls_the_entry_the_table_holds() {
     assert_eq!(out, expect);
 }
 
+/// Two different functions of one name, one in `functions` and one in `binary_functions`, are two
+/// functions a table holds, two handles each calling its own definition, as Metal makes such a
+/// pipeline (a probe on an M3 Max under macOS 27.0.1, `binary_function_linking.m`, where Metal's
+/// API validation layer stops it): `engine/linked_other_functions`' `table_add` is `a + b + 100`.
+/// A function only `binary_functions` lists is called through a table too.
+#[test]
+fn a_table_holds_a_binary_function_of_another_s_name() {
+    let Some((caller, functions)) = fixtures() else {
+        return;
+    };
+    let Some(other) = fixture("linked_other_functions") else {
+        return;
+    };
+    let lib = Library::from_air(&functions).expect("library");
+    let other_lib = Library::from_air(&other).expect("library");
+    let none = FunctionConstantValues::defaults();
+    let p = profile("moltenvk-m3", DevicePolicy::default()).expect("profile");
+    let own = LinkedFunction::new(lib.function("table_add").expect("function"));
+    let others = LinkedFunction::new(other_lib.function("table_add").expect("function"));
+    const N: u32 = 8;
+    for swapped in [false, true] {
+        let (listed, binary) = match swapped {
+            false => ((&own, &functions), (&others, &other)),
+            true => ((&others, &other), (&own, &functions)),
+        };
+        let mut api = LinkedFunctions::new().with_function(listed.0.clone());
+        api.binary_functions
+            .push(binary.0.clone().with_precompiled(true));
+        let handles = [listed.0, binary.0].map(|f| api.function_handle(f).expect("a handle"));
+        assert_eq!(handles.map(FunctionHandle::word), [word(0), word(1)]);
+        let mut sources = [
+            LinkedSource::new("table_add", listed.1, &none),
+            LinkedSource::new("table_add", binary.1, &none),
+        ];
+        sources[1].key.list = crate::pipeline::LinkedList::BinaryFunctions;
+        let (_, m) = typed_module_linked(&caller, TABLE, &p, &sources).expect("module");
+        let mut table = FunctionTableWords::new(2);
+        for (i, handle) in handles.into_iter().enumerate() {
+            assert!(table.set(i as u32, Some(handle)));
+        }
+        let add = |tid: u32, other: bool| tid + 3 + if other { 100 } else { 0 };
+        let expect: Vec<u32> = (0..N)
+            .map(|tid| add(tid, (tid % 2 == 0) == swapped))
+            .collect();
+        assert_eq!(dispatch(&m, N, Some(&table.to_bytes())), expect);
+        // The binary function alone, the stage's only callable function.
+        let mut alone_api = LinkedFunctions::new();
+        alone_api.binary_functions.push(binary.0.clone());
+        let handle = alone_api.function_handle(binary.0).expect("a handle");
+        assert_eq!(handle.word(), word(0));
+        let alone = [sources[1]];
+        let (_, m) = typed_module_linked(&caller, TABLE, &p, &alone).expect("module");
+        let mut table = FunctionTableWords::new(1);
+        assert!(table.set(0, Some(handle)));
+        let expect: Vec<u32> = (0..N).map(|tid| add(tid, !swapped)).collect();
+        assert_eq!(dispatch(&m, N, Some(&table.to_bytes())), expect);
+    }
+}
+
 /// A null table (nothing bound: the zero-filled neutral) and an empty table are observed as
 /// Metal observes them.
 #[test]

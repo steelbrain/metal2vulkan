@@ -1545,6 +1545,7 @@ field	metal2vulkan-air::LinkedName.constants	pub constants: Result<BTreeMap<u32,
 field	metal2vulkan-air::LinkedName.function	pub function: Box<[u8]>
 field	metal2vulkan-air::LinkedName.handle	pub handle: Option<u32>
 field	metal2vulkan-air::LinkedName.name	pub name: Box<[u8]>
+field	metal2vulkan-air::LinkedName.resolves_references	pub resolves_references: bool
 field	metal2vulkan-air::LinkedName.specialized	pub specialized: bool
 field	metal2vulkan-air::LinkedSamplerGroup.kept	pub kept: usize
 field	metal2vulkan-air::LinkedSamplerGroup.library	pub library: bool
