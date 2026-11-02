@@ -2836,6 +2836,8 @@ fn write(cx: &mut EmitCx<'_>, fb: &mut FunctionBuilder<'_>, w: &Write) -> BResul
         (true, ImageRef::Heap { handle, .. }) => heap_alpha_in_red(cx, fb, handle, texel, false)?,
         _ => texel,
     };
+    // The write's notes account for the texel's stored NaN (`moves_unfolded`).
+    fb.module().note_stored_texel(texel);
     let mem = texel_memory(cx, fb, &w.image)?;
     // A write to a sparse texture is dropped.
     let kept = sparse_writes_kept(cx, fb, &w.image)?;
@@ -3021,6 +3023,7 @@ fn slice<'c>(cx: &mut EmitCx<'c>, fb: &mut FunctionBuilder<'_>, s: &Slice) -> BR
             lanes: 4,
         };
         let texel = to_image(fb, &decl, form, held)?;
+        fb.module().note_stored_texel(texel);
         let ty = vec(fb, u, dims)?;
         let delta = if dims == 2 {
             fb.composite_construct(ty, &[x, y])?

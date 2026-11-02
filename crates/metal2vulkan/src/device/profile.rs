@@ -347,6 +347,10 @@ impl DeviceProfile {
                 .enabled
                 .properties
                 .contains(&VkProperty::MetalHalfConversion),
+            DriverDeviation::MetalSmallFloatNans => f
+                .enabled
+                .properties
+                .contains(&VkProperty::MetalSmallFloatNans),
         }
     }
 

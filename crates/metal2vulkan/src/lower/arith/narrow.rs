@@ -1536,15 +1536,17 @@ fn has_bit(bits: &[u64], v: Value) -> bool {
 /// arithmetic or comparison instruction, a fused multiply-add, a derivative, a `GLSL.std.450`
 /// function other than `FrexpStruct`, `ModfStruct` and `Ldexp`, each of which computes a value
 /// whose NaN Metal answers from the widened value's or its own note records, and a store to a
-/// buffer or to workgroup memory, which holds a `float` there; anything else (a store to another
-/// class, a call, a return, an atomic, a group or image operation, or its bits read) carries the
-/// widened `float` out of the registers or reads its bits before any narrowing. The
-/// module holding a 32-bit float constant that is a NaN other than `0x7FC00000`, such as a `half`
-/// NaN constant held widened with its payload, which no conversion of the device made, is unfolded
-/// too. The measurement covers moves through the registers, and `half` values held as the device's
-/// conversions made them. One pass over the constants, then a pass over the instructions per round
-/// of the moves' closure and one more, with four bits per value of the module charged to `meter`
-/// while it runs.
+/// buffer or to workgroup memory, which holds a `float` there, and a texture write's store of it
+/// as its texel (`TypedModule::stored_texels`), whose stored NaN the write's own notes account for
+/// under the format it stores (`lower::texture::half_write_nans` and `half_storage_facts`);
+/// anything else (a store to another class, a call, a return, an atomic, a group or another image
+/// operation, or its bits read) carries the widened `float` out of the registers or reads its bits
+/// before any narrowing. The module holding a 32-bit float constant that is a NaN other than
+/// `0x7FC00000`, such as a `half` NaN constant held widened with its payload, which no conversion
+/// of the device made, is unfolded too. The measurement covers moves through the registers, and
+/// `half` values held as the device's conversions made them. One pass over the constants, then a
+/// pass over the instructions per round of the moves' closure and one more, with four bits per
+/// value of the module charged to `meter` while it runs.
 pub fn moves_unfolded(m: &TypedModule, meter: &mut Meter) -> Result<bool, Error> {
     let float32 = |ty| matches!(m.types().get(ty), Ok(Type::Float { width: 32 }));
     let payload = m.consts().iter().any(|(_, c)| match &c.kind {
@@ -1675,6 +1677,11 @@ pub fn moves_unfolded(m: &TypedModule, meter: &mut Meter) -> Result<bool, Error>
                                 || (has_bit(&bits, *value) && !held_as_float(*ptr))
                         }
                         Inst::Load { .. } => false,
+                        Inst::ImageWrite { texel, .. } => {
+                            read || (from
+                                && !(has_bit(&widened, *texel)
+                                    && m.stored_texels().contains(texel)))
+                        }
                         Inst::AtomicStore { ptr, .. } => {
                             from || has_bit(&widened, *ptr) || has_bit(&bits, *ptr)
                         }

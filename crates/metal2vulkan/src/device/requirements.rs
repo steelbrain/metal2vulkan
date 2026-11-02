@@ -859,6 +859,14 @@ pub enum VkProperty {
     /// [`PrecisionNote::NativeHalfConversion`](crate::pipeline::PrecisionNote::NativeHalfConversion)
     /// and requires it.
     MetalHalfConversion,
+    /// The device stores a NaN a shader writes to a packed small float storage image
+    /// (`B10G11R11_UFLOAT_PACK32`) as Metal stores it, a `float`'s or a `half`'s widened (the
+    /// driver's measured deviation
+    /// [`DriverDeviation::MetalSmallFloatNans`](crate::error::DriverDeviation::MetalSmallFloatNans)).
+    /// Vulkan states no encoding for it. A module whose write may reach such an image records no
+    /// [`PrecisionNote::DeviceNanEncoding`](crate::pipeline::PrecisionNote::DeviceNanEncoding)
+    /// for it and requires it.
+    MetalSmallFloatNans,
     /// `GLSL.std.450 InterpolateAtOffset` at offset `v` reads Metal's `interpolate_at_offset` at
     /// `v + 7/16`, measured from the pixel's upper-left corner: a device whose description reports
     /// a MoltenVK driver, whose SPIRV-Cross hands the instruction to Metal so at any release

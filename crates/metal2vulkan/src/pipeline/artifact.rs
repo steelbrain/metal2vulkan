@@ -869,7 +869,12 @@ pub enum PrecisionNote {
     /// field the quiet NaN (`0x7e0`, `0x3f0`), and the device's copy keeps its bits. And for a
     /// plain color fill to a NaN of a half or small-float texture the device's clear writes: the
     /// device converts the NaN as it likes, where Metal's fill keeps a half NaN's sign and payload
-    /// and makes a small float's all ones. Validation derives no tolerance and no explanation from
+    /// and makes a small float's all ones. Not recorded by a texture write of a constant texel none
+    /// of whose lanes is a NaN, nor where the write's stored NaN is measured to be Metal's (MoltenVK
+    /// on the Apple M3 Max's macOS 27 identity): a `half` texel's write to a 32-bit float format on
+    /// a profile that takes `DriverDeviation::MetalNanMoves`, and a `float` or `half` texel's write
+    /// to `RG11B10Float` on one that takes `DriverDeviation::MetalSmallFloatNans` (the module then
+    /// requires the matching `VkProperty`). Validation derives no tolerance and no explanation from
     /// it, as for `DeviceDenormals`.
     DeviceNanEncoding,
     /// The device compares a depth texture's texels (a sample or a gather with comparison) on a
@@ -1815,8 +1820,9 @@ pub enum PrecisionNote {
     /// on a device whose moves of a NaN are measured to be Metal's (MoltenVK on the Apple M3 Max's
     /// macOS 27 identity, `DriverDeviation::MetalNanMoves`), for a `float` `fneg` or `fabs`, a
     /// `half`'s widening to `float` or `fabs`, or a module's reads and encodes of a `half`'s bits
-    /// where it moves its `half` values through the registers alone. Validation derives no
-    /// tolerance from it.
+    /// where it moves its `half` values through the registers alone, or into a texture write's
+    /// texel, whose store the write's [`PrecisionNote::DeviceNanEncoding`] accounts for.
+    /// Validation derives no tolerance from it.
     NativeNanEncoding,
     /// Native device maths: Metal's `fmin`, `fmax`, `min3`, `max3`, `clamp` or `saturate` (its
     /// `clamp(x, +0, 1)`) on `float` or `half` is the device's `GLSL.std.450` `NMin`, `NMax` or

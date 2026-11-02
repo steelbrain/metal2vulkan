@@ -428,9 +428,12 @@ const OP_IS_NAN: u16 = 156;
 /// `DriverDeviation::MetalHalfTexelWrites`, and requires `VkProperty::MetalHalfTexelWrites` on one
 /// with it (a choice of a class rounding to `half` is a 16-bit float format's, declared or not;
 /// such a device's own choice declares no format, so the test declares one there too);
-/// bound in `RGBA8Unorm` it records none. Where the choice declares no format and no class, the
-/// write records the note. A choice declaring `RGBA16Float` on every profile records the note or
-/// requires the property as the profile's deviation says.
+/// bound in `RGBA8Unorm` it records none; bound in `RGBA32Float` it records none on a profile
+/// whose widening of a `half` is Metal's (`DriverDeviation::MetalNanMoves`), which it then
+/// requires. Where the choice declares no format and no class, the write records the note under
+/// the format bound there. A
+/// choice declaring `RGBA16Float` on every profile records the note or requires the property as
+/// the profile's deviation says.
 #[test]
 fn a_half_texel_write_records_the_device_nan_encoding_where_it_may_not_be_metal_s() {
     use crate::device::requirements::VkProperty;
@@ -470,7 +473,12 @@ fn a_half_texel_write_records_the_device_nan_encoding_where_it_may_not_be_metal_
             };
             let what = format!("{stem}: {pf:?}: tests {}, noted {}", tests(&a), noted(&a));
             if undeclared {
-                assert!(noted(&a), "{what}");
+                // Noted under the bound format: a class of no family always may hold a NaN.
+                let specialized = a
+                    .specialized
+                    .iter()
+                    .any(|n| n.note == PrecisionNote::DeviceNanEncoding);
+                assert!(noted(&a) && specialized, "{what}");
                 formatless += 1;
                 continue;
             }
@@ -487,7 +495,16 @@ fn a_half_texel_write_records_the_device_nan_encoding_where_it_may_not_be_metal_
                     measured += usize::from(keeps);
                 }
                 PixelFormat::RGBA32Float => {
-                    assert!(!tests(&a) && noted(&a), "{what}");
+                    // The widened `half`'s bits as written: Metal's where the widening is.
+                    let moves = p.takes_driver_deviation(DriverDeviation::MetalNanMoves);
+                    assert!(!tests(&a) && noted(&a) == !moves, "{what}");
+                    assert_eq!(
+                        a.requirements
+                            .properties
+                            .contains(&VkProperty::MetalNanMoves),
+                        moves,
+                        "{what}"
+                    );
                     float += 1;
                 }
                 _ => assert!(!noted(&a), "{what}"),
@@ -527,6 +544,215 @@ fn a_half_texel_write_records_the_device_nan_encoding_where_it_may_not_be_metal_
         "the committed profiles cover a declared float format ({float}), a formatless choice \
          ({formatless}), the measured deviation ({measured}) and the device's NaN ({device})"
     );
+}
+
+/// The NaN of a `half` texel a kernel loads from a buffer and writes (`fpv_srgb_write_half`): the
+/// write's own `DeviceNanEncoding` accounts for it, so on a profile whose widening of a `half` is
+/// Metal's (`DriverDeviation::MetalNanMoves`, `moltenvk-m3`) the module records no
+/// `NativeNanEncoding` for the texel it stores, and records it with that deviation dropped and on
+/// `lavapipe`. The write records `DeviceNanEncoding` where the store's NaN is the device's: under a
+/// choice declaring a 32-bit float format but where the profile takes `MetalNanMoves` (the image
+/// stores the widened `float`'s bits, Metal's `0x7fc00000`), declaring the packed small float one
+/// but where it takes `DriverDeviation::MetalSmallFloatNans`, and declaring a 16-bit float one but
+/// where it takes `DriverDeviation::MetalHalfTexelWrites`, each requiring its property; under a
+/// formatless choice it records the note under the bound format's class for each of those
+/// families whose deviation the profile lacks and for a class of no family.
+#[test]
+fn a_half_texel_write_s_nan_into_wide_and_small_float_images_is_metal_s_where_measured() {
+    use crate::device::requirements::VkProperty;
+    use crate::error::DriverDeviation;
+    use crate::metal::texel_format::texel_format;
+    use crate::pipeline::lower_inputs::StorageImageChoice;
+    use crate::vk::Format as F;
+    let Some(bc) = fixture("fpv_srgb_storage") else {
+        return;
+    };
+    let slot = texture_slot(0);
+    let committed = |stem: &str, dropped: Option<DriverDeviation>| {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../metal2vulkan-validation/profiles")
+            .join(format!("{stem}.json"));
+        let text = std::fs::read_to_string(&path).expect("profile");
+        let desc = DeviceDescription::from_khronos_json(&text, None).expect("description");
+        match dropped {
+            Some(d) => Device::with_deviation(desc, DevicePolicy::default(), d, false),
+            None => Device::new(desc, DevicePolicy::default()),
+        }
+        .expect("device")
+        .profile()
+        .clone()
+    };
+    // Whether the specialized note of `a` holds of a texture of `pf` bound at the slot.
+    let holds = |a: &FunctionArtifact, pf: PixelFormat| {
+        a.specialized
+            .iter()
+            .filter(|n| n.note == PrecisionNote::DeviceNanEncoding)
+            .flat_map(|n| &n.when)
+            .any(|c| {
+                c.all
+                    .iter()
+                    .all(|t| (texel_format(pf).0 & t.mask == t.bits) == t.equal)
+            })
+    };
+    let mut exempt = 0;
+    for (stem, dropped) in [
+        ("moltenvk-m3", None),
+        ("moltenvk-m3", Some(DriverDeviation::MetalSmallFloatNans)),
+        ("moltenvk-m3", Some(DriverDeviation::MetalNanMoves)),
+        ("lavapipe", None),
+    ] {
+        let p = committed(stem, dropped);
+        let takes = |d| p.takes_driver_deviation(d);
+        let moves = takes(DriverDeviation::MetalNanMoves);
+        // Each format's family: its declared choice, its deviation and property.
+        let families = [
+            (
+                PixelFormat::RGBA32Float,
+                F::R32G32B32A32_SFLOAT,
+                DriverDeviation::MetalNanMoves,
+                VkProperty::MetalNanMoves,
+            ),
+            (
+                PixelFormat::RG11B10Float,
+                F::B10G11R11_UFLOAT_PACK32,
+                DriverDeviation::MetalSmallFloatNans,
+                VkProperty::MetalSmallFloatNans,
+            ),
+            (
+                PixelFormat::RGBA16Float,
+                F::R16G16B16A16_SFLOAT,
+                DriverDeviation::MetalHalfTexelWrites,
+                VkProperty::MetalHalfTexelWrites,
+            ),
+        ];
+        let compiled = |format: F| {
+            let mut inputs = LowerInputs::new();
+            inputs.storage_images.insert(
+                slot,
+                StorageImageChoice::new(format, StorageImageClass::Identity),
+            );
+            let what = format!("{stem} without {dropped:?}: {format:?}");
+            let a = ok(
+                with_inputs(&bc, "fpv_srgb_write_half", &p, &inputs),
+                &p,
+                &what,
+            );
+            // The stored texel's moves are the write's to account for.
+            assert_eq!(
+                a.precision.contains(&PrecisionNote::NativeNanEncoding),
+                !moves,
+                "{what}: {:?}",
+                a.precision
+            );
+            (a, what)
+        };
+        for (_, format, deviation, property) in families {
+            let (a, what) = compiled(format);
+            let measured = takes(deviation);
+            assert_eq!(
+                a.precision.contains(&PrecisionNote::DeviceNanEncoding),
+                !measured,
+                "{what}: {:?}",
+                a.precision
+            );
+            assert!(a.specialized.is_empty(), "{what}: {:?}", a.specialized);
+            assert!(
+                !measured || a.requirements.properties.contains(&property),
+                "{what}"
+            );
+            exempt += usize::from(measured && moves);
+        }
+        let (a, what) = compiled(F::UNDEFINED);
+        for (pf, _, deviation, property) in families {
+            let measured = takes(deviation);
+            assert_eq!(holds(&a, pf), !measured, "{what}: bound as {pf:?}");
+            assert!(
+                !measured || a.requirements.properties.contains(&property),
+                "{what}: bound as {pf:?}"
+            );
+        }
+        assert!(!holds(&a, PixelFormat::RGBA8Unorm), "{what}: RGBA8Unorm");
+    }
+    assert_eq!(
+        exempt, 3,
+        "the measured stores: two on moltenvk-m3, one without its small floats"
+    );
+}
+
+/// A constant texel none of whose lanes is a NaN stores no NaN, so its write records no
+/// `DeviceNanEncoding` whatever the device's encoding: `storage_texture_write`'s `float4` constant
+/// and `txt_level_write` with its texel made a `half4` constant, under a choice of each float
+/// format and a formatless one, on every committed profile. The same writes of a computed or NaN
+/// texel record it under the formatless choice.
+#[test]
+fn a_constant_texel_without_a_nan_records_no_nan_encoding() {
+    use crate::pipeline::lower_inputs::StorageImageChoice;
+    use crate::vk::Format as F;
+    let Some(computed) = fixture("txt_level_write") else {
+        return;
+    };
+    let text = std::fs::read_to_string(engine_dir().join("txt_level_write.ll")).expect("fixture");
+    let body: String = text
+        .lines()
+        .filter(|l| !l.starts_with("target "))
+        .map(|l| format!("{l}\n"))
+        .collect();
+    let texel = "<4 x half> %9, i16 %10";
+    assert_eq!(body.matches(texel).count(), 1, "txt_level_write's write");
+    let constant = |lanes: &str| body.replace(texel, &format!("<4 x half> <{lanes}>, i16 %10"));
+    let Some(zero) = assemble(
+        "half-constant",
+        &constant("half 0xH0000, half 0xH3C00, half 0xH8000, half 0xH7BFF"),
+    ) else {
+        return;
+    };
+    let nan = assemble(
+        "half-nan",
+        &constant("half 0xH0000, half 0xH7E00, half 0xH0000, half 0xH3C00"),
+    )
+    .expect("assembled");
+    let Some(float) = fixture("storage_texture_write") else {
+        return;
+    };
+    let slot = texture_slot(0);
+    let mut formatless = 0;
+    for (stem, p) in committed_profiles().expect("profiles") {
+        for format in [
+            F::R16G16B16A16_SFLOAT,
+            F::R32G32B32A32_SFLOAT,
+            F::B10G11R11_UFLOAT_PACK32,
+            F::UNDEFINED,
+        ] {
+            let mut inputs = LowerInputs::new();
+            inputs.storage_images.insert(
+                slot,
+                StorageImageChoice::new(format, StorageImageClass::Identity),
+            );
+            for (bc, entry, constant) in [
+                (&zero, "txt_level_write", true),
+                (&nan, "txt_level_write", false),
+                (&computed, "txt_level_write", false),
+                (&float, "storage_texture_write", true),
+            ] {
+                let what = format!("{stem}: {entry} under {format:?}, constant {constant}");
+                let a = match with_inputs(bc, entry, &p, &inputs) {
+                    Err(Error::NeedsInput(_) | Error::Unsupported(_)) => continue,
+                    a => ok(a, &p, &what),
+                };
+                let noted = a.precision.contains(&PrecisionNote::DeviceNanEncoding)
+                    || a.specialized
+                        .iter()
+                        .any(|n| n.note == PrecisionNote::DeviceNanEncoding);
+                if constant {
+                    assert!(!noted, "{what}: {:?}", a.precision);
+                } else if format == F::UNDEFINED && entry == "txt_level_write" {
+                    assert!(noted, "{what}");
+                    formatless += 1;
+                }
+            }
+        }
+    }
+    assert!(formatless > 0, "no profile compiled the formatless writes");
 }
 
 /// Cube reads by face use the binder's 2D-array view (`ImageViewShape`), and a cube array's

@@ -56,7 +56,7 @@ UnpackHalf2x16` without it), and a `half` stored or reinterpreted as bits, unles
 bits it was loaded from, the device's narrowing (an `OpFConvert` to 16 bits, `GLSL.std.450
 PackHalf2x16` without `shaderFloat16`); the pipeline records `NativeNanEncoding` (a NaN's bits;
 not on MoltenVK on the Apple M3 Max's macOS 27 identity, `DriverDeviation::MetalNanMoves`, where
-the `half` moves through the registers alone) and, where that conversion is neither under the
+the `half` moves through the registers alone or into a texture write's texel) and, where that conversion is neither under the
 float controls nor measured to be Metal's, `NativeHalfConversion` (a denormal the device may
 flush).
 

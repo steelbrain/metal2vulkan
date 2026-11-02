@@ -1855,6 +1855,7 @@ fn verify(
                 if m.value(x)?.ty != m.value(y)?.ty
                     || m.non_uniform.contains(&x) != m.non_uniform.contains(&y)
                     || m.measured_roundings.contains(&x) != m.measured_roundings.contains(&y)
+                    || m.stored_texels.contains(&x) != m.stored_texels.contains(&y)
                 {
                     return Ok(None);
                 }

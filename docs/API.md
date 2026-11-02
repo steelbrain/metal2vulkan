@@ -3079,7 +3079,15 @@ bound.
   Metal's fill keeps a half NaN's sign and payload and makes a small float's all ones. Also a blend
   a fragment function computes into a 16-bit float attachment through the pixel interlock: a NaN
   of the blend is the device's arithmetic's, which the storage image's store converts, where Metal
-  stores every NaN of the blend as `0x7e00`.
+  stores every NaN of the blend as `0x7e00`. A texture write records it where the stored NaN is the
+  device's: a constant texel none of whose lanes is a NaN records nothing. **Exempt:** a `half`
+  texel's write to a 32-bit float storage image on a profile that takes
+  `DriverDeviation::MetalNanMoves` (the image stores the widened `float`'s bits, Metal's
+  `0x7fc00000`; the module requires `VkProperty::MetalNanMoves`), and a `float` or `half` texel's
+  write to a packed small float one (`RG11B10Float`) on a profile that takes
+  `DriverDeviation::MetalSmallFloatNans`, MoltenVK on Apple's GPUs of the Apple M3 Max's macOS 27
+  identity, measured byte for byte against plain Metal over every `half` and 33,792 `float` words,
+  16,446 NaNs among them (the module requires `VkProperty::MetalSmallFloatNans`).
 - `metal2vulkan-degrade-restricted-depth-range` (precision). `PrecisionNote::RestrictedDepthRange`:
   The device compares a depth texture's texels on a device without `VK_EXT_depth_range_unrestricted`
   enabled whose driver is not measured to keep depth values outside `[0, 1]` without it.
@@ -3493,10 +3501,12 @@ bound.
   `fabs`, a `half`'s widening to `float`, a `half` `fabs`, and a module's reads and encodes of a
   `half`'s bits record no note and require `VkProperty::MetalNanMoves`. The exemption stops where
   the module carries a widened `half` out of the registers before narrowing it (a store to a stage
-  output or a variable other than a function's `float` one, a call, a return, a group, atomic or
-  image operation), reads its widened bits (a bitcast but to store them to memory, `frexp`,
-  `modf`, `ldexp`), or holds a `float` NaN constant other than `0x7fc00000`: such a module
-  records the note there too. A `half` `fneg` records it on every device.
+  output or a variable other than a function's `float` one, a call, a return, a group or atomic
+  operation, an image operation but a texture write of it, whose store the write's own
+  `PrecisionNote::DeviceNanEncoding` accounts for), reads its widened bits (a bitcast but to store
+  them to memory, `frexp`, `modf`, `ldexp`), or holds a `float` NaN constant other than
+  `0x7fc00000`: such a module records the note there too. A `half` `fneg` records it on every
+  device.
 - `metal2vulkan-degrade-native-min-max` (precision). `PrecisionNote::NativeMinMax`: Native device
   maths: Metal's `fmin`, `fmax`, `min3`, `max3`, `clamp` or `saturate` (its `clamp(x, +0, 1)`) on
   `float` or `half` is the device's `GLSL.std.450` `NMin`, `NMax` or `NClamp`, on a device not

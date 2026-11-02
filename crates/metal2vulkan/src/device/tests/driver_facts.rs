@@ -164,6 +164,10 @@ fn taken(p: &crate::device::DeviceProfile) -> Vec<crate::error::DriverDeviation>
             D::MetalHalfConversion,
             property(VkProperty::MetalHalfConversion),
         ),
+        (
+            D::MetalSmallFloatNans,
+            property(VkProperty::MetalSmallFloatNans),
+        ),
     ]
     .into_iter()
     .inspect(|&(d, taken)| {
@@ -178,7 +182,7 @@ fn taken(p: &crate::device::DeviceProfile) -> Vec<crate::error::DriverDeviation>
 /// at every release: every Apple GPU's (MoltenVK's lockstep, `float` functions, canonical NaNs,
 /// sampler, compute cube route and the rest of the seventeen), with the graphics cube route and the
 /// per-sample depth of macOS 27's Apple9 identity, that identity's normalized
-/// storage writes, full quads, normalized vertex fetch, alpha to coverage, moved NaNs, pack conversions and half conversions, and every Apple GPU's 16-bit unorm depth stores, interpolation
+/// storage writes, full quads, normalized vertex fetch, alpha to coverage, moved NaNs, pack conversions, half conversions and small-float NaN stores, and every Apple GPU's 16-bit unorm depth stores, interpolation
 /// and first-vertex indices; lavapipe's `float` color NaNs and half-float storage writes; RADV's on
 /// the Radeon 780M, ANV's on the Iris Xe of RPL-P and the UHD 770 of RPL-S, and NVIDIA's on the
 /// RTX 3090 and the RTX 5080 Laptop GPU, as measured there; the 8-bit linear filter's bound where
@@ -236,14 +240,15 @@ fn the_profile_takes_the_deviations_its_driver_is_measured_with() {
         list.push(D::MetalFirstVertexIndices);
     }
     // macOS 27's full quads, measured on the M4's identity alone, and its normalized vertex
-    // fetch, alpha to coverage, moved NaNs, pack conversions and half conversions, measured on the
-    // M3 Max under it.
+    // fetch, alpha to coverage, moved NaNs, pack conversions, half conversions and small-float NaN
+    // stores, measured on the M3 Max under it.
     m4_measured.push(D::MetalFullQuads);
     m4_measured.push(D::MetalNormalizedVertexFetch);
     m4_measured.push(D::MetalAlphaCoverage);
     m4_measured.push(D::MetalNanMoves);
     m4_measured.push(D::MetalPackConversions);
     m4_measured.push(D::MetalHalfConversion);
+    m4_measured.push(D::MetalSmallFloatNans);
     let all_of = |d: &DeviceDescription| match d.device_id {
         crate::device::driver_facts::APPLE9 => m4_measured.clone(),
         _ => apple_all.clone(),

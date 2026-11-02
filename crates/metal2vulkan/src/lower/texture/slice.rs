@@ -299,13 +299,13 @@ pub(super) fn select(
     let guard = slot::write_guard(cx, false);
     let class = super::storage_class(cx, image)?;
     if conv == TexelConv::F32 {
-        super::half_storage_facts(cx, image, (class, false), m)?;
+        super::half_storage_facts(cx, image, (class, false, true), m)?;
     }
     if matches!(conv, TexelConv::F32 | TexelConv::F16) {
         super::norm_storage_facts(cx, image, t.image, TexelForm { conv, lanes })?;
     }
     if conv == TexelConv::F16 {
-        super::half_write_nans(cx, image)?;
+        super::half_write_nans(cx, image, m)?;
     }
     mark(cx, image, |u| u.write = true);
     // Every invocation shares the write where its guard selects local id 0 at a uniform point.

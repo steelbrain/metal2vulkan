@@ -156,6 +156,7 @@ fn a_float_write_notes_the_device_s_half_conversion_under_the_bound_format() {
         let p = dev.profile();
         let rounds = p.takes_driver_deviation(DriverDeviation::MetalHalfStorageWrites);
         let nans = p.takes_driver_deviation(DriverDeviation::MetalHalfStorageNans);
+        let small_nans = p.takes_driver_deviation(DriverDeviation::MetalSmallFloatNans);
         for (entry, buffer) in [
             ("hsw_write", false),
             ("hsw_read_write", false),
@@ -202,10 +203,20 @@ fn a_float_write_notes_the_device_s_half_conversion_under_the_bound_format() {
                     continue;
                 }
                 // Metal stores a small float's every NaN as its canonical one, and RADV and
-                // NVIDIA keep another's payload bits; a 32-bit float or normalized channel takes
-                // no half's NaN.
+                // NVIDIA keep another's payload bits, where a device of `MetalSmallFloatNans`
+                // stores Metal's; a 32-bit float or normalized channel takes no half's NaN.
                 let small = pf == PixelFormat::RG11B10Float;
-                assert_eq!(nan, small, "{what}: {:?}", stage.specialized_notes);
+                assert_eq!(
+                    nan,
+                    small && !small_nans,
+                    "{what}: {:?}",
+                    stage.specialized_notes
+                );
+                // Required wherever the module may store into a small float, on the deviation.
+                let relies = relied.contains(&VkProperty::MetalSmallFloatNans);
+                assert!(small_nans || !relies, "{what}");
+                assert!(!small || relies == small_nans, "{what}");
+                measured += usize::from(small && small_nans);
             }
             // The module of no storage choice serves every format the device writes without one:
             // its NaN note holds of the half-float classes (where the device's NaN is not Metal's)
@@ -219,7 +230,7 @@ fn a_float_write_notes_the_device_s_half_conversion_under_the_bound_format() {
                 let small = matches!(pf, P::RG11B10Float | P::RGB9E5Float);
                 assert_eq!(
                     announced(&plain.stage, PrecisionNote::DeviceNanEncoding, pf),
-                    (half && !nans) || small,
+                    (half && !nans) || (small && !small_nans),
                     "{entry} without a storage choice, bound as {pf:?}, on {stem}"
                 );
             }

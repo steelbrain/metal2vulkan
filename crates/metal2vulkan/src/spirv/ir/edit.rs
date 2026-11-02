@@ -406,6 +406,7 @@ impl TypedModule {
         let values = &self.values;
         self.non_uniform.retain(|v| !removed(v, values));
         self.measured_roundings.retain(|v| !removed(v, values));
+        self.stored_texels.retain(|v| !removed(v, values));
         self.loops.retain(|l| at(&bmap, l.header.index()).is_some());
         for l in &mut self.loops {
             l.header = block(l.header);

@@ -15,8 +15,12 @@
 //! format's stored words are printed with every lane that differs from Metal's (`in -> stored,
 //! Metal's`). The write stores the half widened, a NaN's payload in the significand's top bits:
 //! a 16-bit float channel stores Metal's on a device with `VkProperty::MetalHalfTexelWrites`, a
-//! 32-bit or packed float channel's NaN is the device's, and a pipeline whose stores differ
-//! announces `device-nan-encoding`.
+//! 32-bit one the widened `float`'s bits, Metal's `0x7fc00000` on a device with
+//! `VkProperty::MetalNanMoves`, and a packed small float one Metal's on a device with
+//! `VkProperty::MetalSmallFloatNans`; elsewhere the NaN is the device's, and a pipeline whose
+//! stores differ announces `device-nan-encoding`. On a device with those properties a texture
+//! slot's write into such a texture announces neither `device-nan-encoding` nor
+//! `native-nan-encoding` (a heap element's, which may be any format, announces the first).
 
 use super::degrade_notices::{counts, on_device_with};
 use super::{buffer_with, layer_reported_nothing, read_buffer, WAIT};
@@ -318,7 +322,9 @@ fn stored(
 
 /// Each format's stored words through `write`, `read_write` and `held`, printed with the lanes
 /// that differ from Metal's (the module docs): none in a 16-bit float channel on a device with
-/// `VkProperty::MetalHalfTexelWrites`; a pipeline whose stores differ announces
+/// `VkProperty::MetalHalfTexelWrites`, nor, through a texture slot, announced or differing in a
+/// 32-bit float channel on a device with `VkProperty::MetalNanMoves` or a packed small float one
+/// on a device with `VkProperty::MetalSmallFloatNans`; a pipeline whose stores differ announces
 /// `device-nan-encoding` (at its making, or at the dispatch that binds such a texture to a slot of
 /// no declared format).
 #[test]
@@ -331,6 +337,7 @@ fn half_writes_store_their_nans_as_metal_or_announce() {
     on_device_with(
         |options| {
             options.announce_each.insert(Degradation::DeviceNanEncoding);
+            options.announce_each.insert(Degradation::NativeNanEncoding);
         },
         |device, messages| {
             for access in ["write", "read_write", "held"] {
@@ -339,12 +346,21 @@ fn half_writes_store_their_nans_as_metal_or_announce() {
                         let state = kernel(device, access);
                         let texels = stored(device, (&state, access), f);
                         let announced = counts(&messages.take_notices());
-                        let keeps = device
-                            .compile_device()
-                            .profile()
-                            .enabled()
-                            .properties
-                            .contains(&VkProperty::MetalHalfTexelWrites);
+                        let properties = &device.compile_device().profile().enabled().properties;
+                        let keeps = properties.contains(&VkProperty::MetalHalfTexelWrites);
+                        // The NaN a texture slot's write stores, Metal's on the device's measured
+                        // deviation: a 32-bit float channel's where the widening is Metal's, a
+                        // packed small float one's where its store is.
+                        let measured = access != "held"
+                            && match f.format {
+                                PixelFormat::RG11B10Float => {
+                                    properties.contains(&VkProperty::MetalSmallFloatNans)
+                                }
+                                _ => {
+                                    f.word_bytes == 4
+                                        && properties.contains(&VkProperty::MetalNanMoves)
+                                }
+                            };
                         let mut differ = Vec::new();
                         for (x, words) in texels.iter().enumerate() {
                             for (c, &got) in words.iter().enumerate() {
@@ -380,6 +396,16 @@ fn half_writes_store_their_nans_as_metal_or_announce() {
                             f.name,
                             differ.len()
                         );
+                        if measured {
+                            let moved = announced.contains_key(&Degradation::NativeNanEncoding);
+                            assert!(
+                                differ.is_empty() && !noted && !moved,
+                                "{access} {}: {} lanes differ from Metal's, device-nan-encoding \
+                                 {noted}, native-nan-encoding {moved}",
+                                f.name,
+                                differ.len()
+                            );
+                        }
                         // A 16-bit float channel stores the half's bits where the device keeps
                         // them.
                         if keeps && f.word_bytes == 2 {

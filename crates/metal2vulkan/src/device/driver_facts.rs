@@ -449,6 +449,16 @@ pub(crate) fn among<F: Copy + Ord>(
 /// a function or an operation computed otherwise than by the conversion, so it stays noted
 /// (`narrow::rounds_unmeasured`). One row per GPU, as measured.
 ///
+/// `MetalSmallFloatNans`: MoltenVK 1.4.2 hands a storage image write to Metal's own texture
+/// write. On the M3 Max under macOS 27.0.1 (2026-11-03), byte for byte against plain Metal, a
+/// kernel's `float4` write of 33,792 words (every top-13 payload pattern of a NaN of both signs,
+/// 16,384 random words, the quiet and signalling edges and the infinities) and its `half4` write
+/// of every one of the 65,536 `half`s (its 2,046 NaNs among them) into `RG11B10Float` store
+/// Metal's bytes in every texel, as the same writes do into `RGBA32Float`, `RG32Float` and
+/// `R32Float` (a `half` widened by Metal's own `float(half)`, `MetalNanMoves`). Into `R16Float`
+/// and `RGBA16Float` a `half` NaN's payload differs (the device stores `0x7e00`), which
+/// `MetalHalfTexelWrites` would state, so outside it. One row per GPU, as measured.
+///
 /// Another driver has none of them, as Vulkan states, and a listed driver on another vendor's GPU
 /// (or another GPU than a row's) is unmeasured: the profile then takes each one's route without
 /// it, which the deviation's docs name (`derive.rs`).
@@ -646,6 +656,10 @@ pub(crate) const DEVIATIONS: &[Measured<DriverDeviation>] = &[
     Measured {
         device: Some(APPLE9),
         ..moltenvk_on_apple(DriverDeviation::MetalHalfConversion)
+    },
+    Measured {
+        device: Some(APPLE9),
+        ..moltenvk_on_apple(DriverDeviation::MetalSmallFloatNans)
     },
 ];
 

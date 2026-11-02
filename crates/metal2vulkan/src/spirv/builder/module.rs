@@ -106,6 +106,11 @@ pub struct ModuleBuilder {
     /// (`ModuleBuilder::note_measured_rounding`). Nothing emitted depends on it: the compile
     /// reads it to decide `PrecisionNote::NativeHalfConversion`.
     pub(super) measured_roundings: BTreeSet<Value>,
+    /// The texels the texture family's writes store (`ModuleBuilder::note_stored_texel`), whose
+    /// stored NaN the write's own notes account for (`lower::texture::half_write_nans` and
+    /// `half_storage_facts`). Nothing emitted depends on it: the compile reads it to decide
+    /// `PrecisionNote::NativeNanEncoding` (`lower::arith::narrow::moves_unfolded`).
+    pub(super) stored_texels: BTreeSet<Value>,
     /// The `Function` variables the emitter holds workgroup uniform by construction
     /// (`FunctionBuilder::note_uniform_var`). Nothing emitted depends on it: a record for the
     /// checks of `spirv::testing::barriers`, kept only where they build.
@@ -293,6 +298,12 @@ impl ModuleBuilder {
         self.measured_roundings.insert(narrowed);
     }
 
+    /// Record `texel`, a texel a texture write stores, whose stored NaN the write's own notes
+    /// account for (`lower::texture::emit`).
+    pub fn note_stored_texel(&mut self, texel: Value) {
+        self.stored_texels.insert(texel);
+    }
+
     /// Whether the module's `half` rounding is the device's own
     /// ([`ModuleBuilder::set_native_half`]).
     pub fn native_half(&self) -> bool {
@@ -355,6 +366,7 @@ impl ModuleBuilder {
             )
             + tree_bytes(self.non_uniform.len(), std::mem::size_of::<Value>())
             + tree_bytes(self.measured_roundings.len(), std::mem::size_of::<Value>())
+            + tree_bytes(self.stored_texels.len(), std::mem::size_of::<Value>())
             + map_bytes(&self.bits)
             + map_bytes(&self.lanes)
             + map_bytes(&self.inserts)
@@ -1360,6 +1372,7 @@ impl ModuleBuilder {
             enabling: self.enabling,
             non_uniform: self.non_uniform,
             measured_roundings: self.measured_roundings,
+            stored_texels: self.stored_texels,
             #[cfg(test)]
             uniform_vars: self.uniform_vars,
         })

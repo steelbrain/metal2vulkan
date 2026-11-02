@@ -2024,13 +2024,15 @@ pub const HEAP_CLASS_CENSUS: &str = "sampler.heap.texel_class";
 /// property), else the device's encoding of it (`PrecisionNote::DeviceNanEncoding`). A write that
 /// may reach a packed small float image ([`small_float_storage`]) stores its NaN as the device
 /// converts it too: Metal stores every NaN there as its canonical one, and RADV and NVIDIA keep
-/// another NaN's payload bits. A slot declared without a format records each note under the format
-/// bound there (`m` charged for the clauses), which the runtime announces at a draw or dispatch
-/// that binds such a texture.
+/// another NaN's payload bits; a device of `DriverDeviation::MetalSmallFloatNans` stores Metal's
+/// (the module requires its property). A texel that holds no NaN (`nans` false: a constant none
+/// of whose lanes is one) records neither NaN's note. A slot declared without a format records each
+/// note under the format bound there (`m` charged for the clauses), which the runtime announces at
+/// a draw or dispatch that binds such a texture.
 pub(super) fn half_storage_facts(
     cx: &mut SelectCx<'_>,
     image: ImageRef,
-    (class, cross): (StorageImageClass, bool),
+    (class, cross, nans): (StorageImageClass, bool, bool),
     m: &mut Meter,
 ) -> Result<(), Error> {
     use crate::device::requirements::VkProperty;
@@ -2051,7 +2053,8 @@ pub(super) fn half_storage_facts(
         } else {
             cx.note_when(PrecisionNote::DeviceColorConversion, half.clone(), m)?;
         }
-        if cx
+        if !nans {
+        } else if cx
             .profile
             .takes_driver_deviation(DriverDeviation::MetalHalfStorageNans)
         {
@@ -2066,6 +2069,19 @@ pub(super) fn half_storage_facts(
     let small = small_float_storage(cx, image)?;
     if cross {
         cx.note_when(PrecisionNote::DeviceColorConversion, small.clone(), m)?;
+    }
+    if small.is_empty() || !nans {
+        return Ok(());
+    }
+    if cx
+        .profile
+        .takes_driver_deviation(DriverDeviation::MetalSmallFloatNans)
+    {
+        cx.families
+            .texture
+            .storage_properties
+            .insert(VkProperty::MetalSmallFloatNans);
+        return Ok(());
     }
     cx.note_when(PrecisionNote::DeviceNanEncoding, small, m)
 }
@@ -2118,31 +2134,51 @@ fn stored_where(
 /// M4 under macOS 27.0.1: every NaN class, both signs, `write` and `read_write`, `Shared` and
 /// `Private`). The write stores the half widened, its NaN's payload in the significand's top bits,
 /// which the device converts: a 16-bit float channel's NaN is Metal's on a device of
-/// `DriverDeviation::MetalHalfTexelWrites` (the module requires its property), and every other
-/// float channel's, a 32-bit one's among them, is the device's.
+/// `DriverDeviation::MetalHalfTexelWrites` (the module requires its property); a 32-bit one's is
+/// the widened `float`'s bits as written, Metal's `0x7fc00000` where the device's widening is
+/// Metal's (`DriverDeviation::MetalNanMoves`, whose property the module then requires); a packed
+/// small float one's is Metal's on a device of `DriverDeviation::MetalSmallFloatNans`, which
+/// stores every `float` NaN there as Metal does (the module requires its property); and every
+/// other float channel's is the device's.
 ///
 /// The write records `PrecisionNote::DeviceNanEncoding` where the stored NaN stays the device's:
 /// a 16-bit float channel's on a profile without `DriverDeviation::MetalHalfTexelWrites`, a 32-bit
-/// or packed small float channel's, a slot's whose choice declares no format, a texel buffer's
-/// declaring none, and a heap element's, which may be any of them. A normalized or integer channel
-/// stores no NaN.
-pub(super) fn half_write_nans(cx: &mut SelectCx<'_>, image: ImageRef) -> Result<(), Error> {
+/// one's without `DriverDeviation::MetalNanMoves`, a packed small float one's without
+/// `DriverDeviation::MetalSmallFloatNans`, and a heap element's, which may be any of them. A slot
+/// whose choice declares no format (or a variant that states none) records it under the format
+/// bound there (`m` charged for the clauses), which the runtime announces at a draw or dispatch
+/// that binds such a texture: where the bound class is one of those three families on a profile
+/// without its deviation, or of no family the classes name (a format that may hold a NaN). A
+/// normalized or integer channel stores no NaN.
+pub(super) fn half_write_nans(
+    cx: &mut SelectCx<'_>,
+    image: ImageRef,
+    m: &mut Meter,
+) -> Result<(), Error> {
     use crate::device::requirements::VkProperty;
     use crate::vk::NumericFormat as N;
-    // Whether the stored NaN is exact (`Exact`), a 16-bit float channel's (`Sixteen`, Metal's on
-    // the measured deviation), or the device's (`Device`).
+    // Whether the stored NaN is exact (`Exact`), a 16-bit float channel's (`Sixteen`), a 32-bit
+    // one's (`Wide`) or a packed small float one's (`Small`), each Metal's on its measured
+    // deviation, or the device's (`Device`).
     #[derive(PartialEq)]
     enum Stored {
         Exact,
         Sixteen,
+        Wide,
+        Small,
         Device,
+        Bound(u32),
     }
     let declared = |f: crate::vk::Format| -> Stored {
+        if f == crate::vk::Format::B10G11R11_UFLOAT_PACK32 {
+            return Stored::Small;
+        }
         let Some(b) = f.block() else {
             return Stored::Device;
         };
         match (b.color, b.component_bits, b.packed_bits) {
             (Some(N::Sfloat), Some(16), None) => Stored::Sixteen,
+            (Some(N::Sfloat), Some(32), None) => Stored::Wide,
             (Some(N::Sfloat | N::Ufloat), _, _) => Stored::Device,
             _ => Stored::Exact,
         }
@@ -2153,29 +2189,97 @@ pub(super) fn half_write_nans(cx: &mut SelectCx<'_>, image: ImageRef) -> Result<
             let slot = slot_of(cx, index)?.slot;
             match cx.inputs.storage_images.get(&slot) {
                 Some(c) => match c.class {
+                    StorageImageClass::Identity if c.vk_format == crate::vk::Format::UNDEFINED => {
+                        Stored::Bound(index)
+                    }
                     StorageImageClass::Identity => declared(c.vk_format),
                     _ => Stored::Exact,
                 },
-                None => Stored::Device,
+                None => Stored::Bound(index),
             }
         }
     };
-    let measured = cx
-        .profile
-        .takes_driver_deviation(DriverDeviation::MetalHalfTexelWrites);
-    match stored {
-        Stored::Sixteen if measured => {
-            cx.families
-                .texture
-                .storage_properties
-                .insert(VkProperty::MetalHalfTexelWrites);
+    let takes = |d| cx.profile.takes_driver_deviation(d);
+    if let Stored::Bound(index) = stored {
+        use crate::metal::bicubic::BicubicTexels as B;
+        use crate::metal::texel_format::{PackedTexels, TexelFormat};
+        let family = B::LINEAR | B::HALF | TexelFormat::NAN_FREE;
+        let packed = TexelFormat::PACKED_MASK;
+        let bound = |mask, bits| NoteTest::equal(NoteOn::Bound(index), mask, bits);
+        // Each family the bound class may name, its deviation and its property; and a class of no
+        // family, which may hold a NaN the device stores as it likes.
+        let families = [
+            (
+                [bound(family, B::HALF), bound(packed, 0)].into(),
+                Some((
+                    DriverDeviation::MetalHalfTexelWrites,
+                    VkProperty::MetalHalfTexelWrites,
+                )),
+            ),
+            (
+                [bound(family, B::LINEAR), bound(packed, 0)].into(),
+                Some((DriverDeviation::MetalNanMoves, VkProperty::MetalNanMoves)),
+            ),
+            (
+                [bound(packed, PackedTexels::SmallFloat.class().0)].into(),
+                Some((
+                    DriverDeviation::MetalSmallFloatNans,
+                    VkProperty::MetalSmallFloatNans,
+                )),
+            ),
+            ([bound(family, 0), bound(packed, 0)].into(), None),
+        ];
+        let mut when = Vec::new();
+        for (clause, measured) in families {
+            match measured {
+                Some((deviation, property)) if takes(deviation) => {
+                    cx.families.texture.storage_properties.insert(property);
+                }
+                _ => when.push(clause),
+            }
         }
-        Stored::Sixteen | Stored::Device => {
+        return cx.note_when(PrecisionNote::DeviceNanEncoding, when, m);
+    }
+    let measured = match stored {
+        Stored::Sixteen => Some((
+            DriverDeviation::MetalHalfTexelWrites,
+            VkProperty::MetalHalfTexelWrites,
+        )),
+        Stored::Wide => Some((DriverDeviation::MetalNanMoves, VkProperty::MetalNanMoves)),
+        Stored::Small => Some((
+            DriverDeviation::MetalSmallFloatNans,
+            VkProperty::MetalSmallFloatNans,
+        )),
+        Stored::Exact | Stored::Device | Stored::Bound(_) => None,
+    };
+    match measured {
+        Some((deviation, property)) if takes(deviation) => {
+            cx.families.texture.storage_properties.insert(property);
+        }
+        _ if stored == Stored::Exact => {}
+        _ => {
             cx.precision.insert(PrecisionNote::DeviceNanEncoding);
         }
-        Stored::Exact => {}
     }
     Ok(())
+}
+
+/// Whether texel `value` is a constant none of whose lanes is a NaN: a `half` or `float` scalar or
+/// vector constant whose every lane's bits are not a NaN's. Its write stores no NaN, so no device's
+/// encoding of one can show. An `undef` texel, a composite, and any computed value may hold one.
+fn holds_no_nan(cx: &SelectCx<'_>, value: Value) -> bool {
+    use crate::lower::arith::legal::LoweredConst as C;
+    use crate::spirv::ids::ScalarTy;
+    let nan = |ty: ScalarTy, bits: u64| match ty {
+        ScalarTy::Float { bits: 16 } => bits & 0x7c00 == 0x7c00 && bits & 0x3ff != 0,
+        ScalarTy::Float { bits: 32 } => bits & 0x7f80_0000 == 0x7f80_0000 && bits & 0x7f_ffff != 0,
+        _ => true,
+    };
+    match cx.constant(value) {
+        Some(C::Scalar { ty, bits }) => !nan(ty, bits),
+        Some(C::Vector { elem, lanes }) => lanes.iter().all(|&bits| !nan(elem, bits)),
+        _ => false,
+    }
 }
 
 /// Whether a storage read or write of a `float` or `half` texel (`texel`) through heap handle
@@ -3169,11 +3273,13 @@ fn select_write(
     mode_rounded_write(cx, image, texel, extended.is_some())?;
     // Its alpha in red where the class is `A8Unorm`'s and the device holds such a texture so.
     let heap_alpha_red = heap_alpha_in_red(cx, image, shape, texel.conv);
+    // A constant texel none of whose lanes is a NaN stores none, whatever the device's encoding.
+    let nans = !holds_no_nan(cx, value);
     if texel.conv == TexelConv::F32 {
-        half_storage_facts(cx, image, (class, cross.is_some()), m)?;
+        half_storage_facts(cx, image, (class, cross.is_some(), nans), m)?;
     }
-    if texel.conv == TexelConv::F16 && extended.is_none() {
-        half_write_nans(cx, image)?;
+    if texel.conv == TexelConv::F16 && extended.is_none() && nans {
+        half_write_nans(cx, image, m)?;
     }
     // A `half` texel's too, held widened: Metal stores its value by the same rule.
     if matches!(texel.conv, TexelConv::F32 | TexelConv::F16) && extended.is_none() {

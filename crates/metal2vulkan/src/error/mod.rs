@@ -861,6 +861,15 @@ pub enum DriverDeviation {
     /// of the 65,536 `half`s otherwise than the nearest even `half` of its `float` `tanh`, which the
     /// device's conversion answers). Unmeasured, each records it.
     MetalHalfConversion,
+    /// The device stores the NaN a shader writes to a packed small float storage image
+    /// (`B10G11R11_UFLOAT_PACK32`, Metal's `RG11B10Float`) as Metal stores the same write: a
+    /// `float` texel's NaN, whatever its sign and payload, and a `half` texel's, handed to the
+    /// device widened (`VkProperty::MetalSmallFloatNans`). Where the profile takes it, a write that
+    /// may reach such an image records no `PrecisionNote::DeviceNanEncoding` for it and the module
+    /// requires the property; with [`DriverDeviation::MetalNanMoves`], whose widening of a `half`
+    /// answers Metal's, a widened `half` written there moves its NaN as measured
+    /// (`lower::arith::narrow::moves_unfolded`). Unmeasured, the write records the note.
+    MetalSmallFloatNans,
 }
 
 /// A defect of a device's driver in a command the runtime records for itself, never in a
