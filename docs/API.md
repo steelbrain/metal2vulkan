@@ -2887,7 +2887,13 @@ bound.
   functions and `saturate` are the device's `NMin`, `NMax` and `NClamp`, their pick of a denormal
   is `NativeMinMax`'s. Off MoltenVK the device's multiply and fused multiply-add, and `ldexp` on
   `float` by that multiply, round a result whose exact value is below `2^-126` up to `2^-126`, which
-  Metal flushes (`float-tininess-after-rounding`).
+  Metal flushes (`float-tininess-after-rounding`). A nearest pixel-coordinate sample at its texel's
+  centre `floor(x) + 0.5`, and a pixel fetch at `floor(x) + k` under an offset, records it for that
+  `floor`: Metal's sampler reads a negative subnormal `x` as texel -1, where MoltenVK's `floor`
+  reads it as the zero of its sign, texel 0 (an Apple M3 Max). Through a constexpr sampler always;
+  through a runtime sampler slot only under a pipeline made for a nearest pixel state
+  (`SpecKey::NearestPixelSampler`), never under a normalized one; through an argument buffer's
+  sampler `argument-pixel-sampler-scaling` records it instead.
 - `metal2vulkan-degrade-pixel-sampler-scaling` (precision). `PrecisionNote::PixelSamplerScaling`:
   A pixel-coordinate sampler's coordinate reaches the device's normalized sampler divided by the
   texture's level-0 size in the shader, and the device reads its texels and weights from that
@@ -3251,8 +3257,10 @@ bound.
   coordinate scaled by the texture's size, where the sampler states pixel coordinates, with
   `pixel-sampler-scaling`'s bound. A sample through a state of nearest filters, one level and no
   anisotropy hands the device its texel's centre instead, where the device reads exactly Metal's
-  texel. Announced at the first draw or dispatch of a pipeline that records it while the device
-  holds a sampler state of pixel coordinates.
+  texel but at a negative subnormal coordinate, whose `floor` is the device's
+  (`device-denormals`' reading, which this note records for such a sampler). Announced at the first
+  draw or dispatch of a pipeline that records it while the device holds a sampler state of pixel
+  coordinates.
 - `metal2vulkan-degrade-half-output-precision` (precision). `PrecisionNote::HalfOutputPrecision`: A
   fragment function returns a `half` color output (a scalar or vector of AIR's `half`) to an
   attachment the pipeline has, and either its module is compiled without fast math

@@ -2003,15 +2003,11 @@ fn select_one(
     // A texel's centre is `floor(x) + 0.5`, whose `floor` reads a subnormal `x` as the device
     // does, where Metal's sampler reads its texel from `x` itself: the zero of either sign is
     // texel 0, and a negative subnormal texel -1. So does a pixel fetch's texel `floor(x) + k`,
-    // where an offset moves that texel off the edge the clamp sends both to.
-    if matches!(
-        position,
-        PixelPosition::Texel
-            | PixelPosition::TexelBySpec
-            | PixelPosition::TexelByWord
-            | PixelPosition::UnnormalizedTexel
-    ) || matches!(op, SampleOp::PixelFetch { offset: Some(_) })
-    {
+    // where an offset moves that texel off the edge the clamp sends both to. The note holds where
+    // the centre can be the sample's coordinate (`centre_denormals`).
+    let when = centre_denormals(pixel, position);
+    cx.note_when(PrecisionNote::DeviceDenormals, when, m)?;
+    if matches!(op, SampleOp::PixelFetch { offset: Some(_) }) {
         cx.precision.insert(PrecisionNote::DeviceDenormals);
     }
     // A `half` texel's NaN is the device's decode, a bicubic sample's taps included: where the
@@ -2451,8 +2447,9 @@ fn clamps_reference(
 ///   where that does not hold.
 /// - An argument buffer's sampler ([`PrecisionNote::ArgumentPixelSamplerScaling`]): always, since
 ///   its word, which the specialized module cannot read, may state pixel coordinates (through a
-///   linear filter, where its sample's position is [`PixelPosition::TexelByWord`]); the runtime
-///   announces it only while such a state lives.
+///   linear filter, where its sample's position is [`PixelPosition::TexelByWord`], whose nearest
+///   centre's `floor` the note records too: `centre_denormals`); the runtime announces it only
+///   while such a state lives.
 fn pixel_note(pixel: Pixel, position: PixelPosition) -> Vec<crate::lower::select::NoteClause> {
     use crate::lower::select::NoteClause;
     match (pixel, position) {
@@ -2470,6 +2467,44 @@ fn pixel_note(pixel: Pixel, position: PixelPosition) -> Vec<crate::lower::select
             }
             vec![clause]
         }
+    }
+}
+
+/// Where a sampling through a sampler of pixel coordinates `pixel` at `position` hands the device
+/// its texel's centre, `floor(x) + 0.5`, whose `floor` reads a subnormal `x` by the device's float
+/// controls (`PrecisionNote::DeviceDenormals`): the clauses of the arms that do (empty: none).
+/// Code behind a constant that no other state takes cannot change that state's answer, so:
+///
+/// - a constexpr sampler's centre ([`PixelPosition::Texel`], [`PixelPosition::UnnormalizedTexel`]):
+///   always;
+/// - a runtime sampler slot's: where its word states pixel coordinates (an integer texture's
+///   centre, [`PixelPosition::Texel`]), or where its `NearestPixelSampler` specialization holds
+///   ([`PixelPosition::TexelBySpec`]), never under a normalized state;
+/// - an argument buffer's sampler's ([`PixelPosition::TexelByWord`]): never here, its table entry's
+///   word deciding it where no specialization can; `PrecisionNote::ArgumentPixelSamplerScaling`,
+///   which the runtime announces only while a state of pixel coordinates lives, records it
+///   (`pixel_note`).
+fn centre_denormals(
+    pixel: Pixel,
+    position: PixelPosition,
+) -> Vec<crate::lower::select::NoteClause> {
+    use crate::lower::select::NoteClause;
+    match (pixel, position) {
+        (Pixel::Spec(n), PixelPosition::Texel) => vec![NoteClause::from([NoteTest::differ(
+            NoteOn::Sampler(n),
+            SamplerWord::PIXEL_COORDINATES,
+            0,
+        )])],
+        (Pixel::Spec(n), PixelPosition::TexelBySpec) => {
+            vec![NoteClause::from([NoteTest::equal(
+                NoteOn::NearestPixel(n),
+                1,
+                1,
+            )])]
+        }
+        (Pixel::Heap(_), _) => Vec::new(),
+        (_, PixelPosition::Texel | PixelPosition::UnnormalizedTexel) => vec![NoteClause::new()],
+        _ => Vec::new(),
     }
 }
 

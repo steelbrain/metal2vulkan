@@ -405,7 +405,8 @@ fn a_runtime_samples_level_is_the_device_s() {
 /// held where the bound sampler states pixel coordinates (each clause tests that bit). A gather
 /// emits no texel centre (no `Floor`). A sample and a comparison also read the slot's
 /// `NearestPixelSampler` specialization, behind which they hand the device their texel's centre
-/// (one `Floor`), so their note's clause also tests that it does not hold.
+/// (one `Floor`), so their note's clause also tests that it does not hold, and record
+/// `DeviceDenormals` for that `Floor` held only where it holds.
 #[test]
 fn runtime_pixel_accesses_hand_the_device_the_scaled_coordinate() {
     use crate::pipeline::artifact::SpecializedNote;
@@ -456,8 +457,169 @@ fn runtime_pixel_accesses_hand_the_device_the_scaled_coordinate() {
                     && c.all.iter().all(|t| pixel(t) || scaled(t))),
                 "{what}: {held:?}"
             );
+            // The centre's `floor` reads a subnormal by the device's float controls: noted only
+            // under the specialization that runs it.
+            let centre = |t: &crate::pipeline::SpecTest| {
+                t.key == SpecKey::NearestPixelSampler(s) && t.mask == 1 && t.bits == 1 && t.equal
+            };
+            let denormals: Vec<&SpecializedNote> = a
+                .specialized
+                .iter()
+                .filter(|n| n.note == PrecisionNote::DeviceDenormals)
+                .collect();
+            match nearest {
+                true => assert!(
+                    denormals.len() == 1
+                        && denormals[0].when.iter().all(|c| c.all.iter().all(centre)),
+                    "{what}: {denormals:?}"
+                ),
+                false => assert!(
+                    !a.precision.contains(&PrecisionNote::DeviceDenormals),
+                    "{what}"
+                ),
+            }
             assert_eq!(glsl_count(&a, GLSL_FLOOR), usize::from(nearest), "{what}");
             assert!(count(&a, OP_FDIV) >= 1, "{what}");
+        }
+    }
+}
+
+/// The notes a stage that samples through a runtime sampler slot or an argument buffer's sampler,
+/// or a runtime cubic sampler's variant, records on the M3 Max under MoltenVK where its state is
+/// normalized: the unconditional ones are these, as before a nearest pixel sample took its texel's
+/// centre, and that centre's `DeviceDenormals` is held only where the slot's `NearestPixelSampler`
+/// specialization is 1, which no normalized state's is (`Resources::nearest_pixel_sampler`), or,
+/// for an integer texture's centre, where the slot's word states pixel coordinates. An argument
+/// buffer's sampler records no `DeviceDenormals`: `ArgumentPixelSamplerScaling`, which the runtime
+/// announces only while a pixel state lives, records its centre's reading.
+#[test]
+fn normalized_and_cubic_stages_record_no_note_their_states_cannot_run() {
+    use crate::pipeline::sym::SpecKey;
+    use crate::pipeline::testing::compile_with;
+    use std::collections::BTreeSet;
+    use PrecisionNote as N;
+    let p = profile("moltenvk-m3", DevicePolicy::default()).expect("profile");
+    let assembled = |name: &str| match llvm_assemble(&engine_dir().join(format!("{name}.ll"))) {
+        Ok(b) => Some(b),
+        Err(AssembleError::Missing(why)) => {
+            eprintln!("SKIPPED: {why}");
+            None
+        }
+        Err(AssembleError::Rejected(why)) => panic!("llvm-as rejected {name}: {why}"),
+    };
+    let s = slot(Stage::Kernel, SlotClass::Sampler, 0);
+    // Each stage, the cubic variant's bound word where it is one, and its unconditional notes.
+    let cubic_half = [
+        N::BicubicFilterArithmetic,
+        N::NativeHalfConversion,
+        N::NativeNanEncoding,
+    ];
+    let stages: [(&str, &str, Option<u32>, &[PrecisionNote]); 14] = [
+        ("sampling", "sample_level", None, &[]),
+        ("sampling", "sample_base", None, &[]),
+        (
+            "sampling",
+            "sample_grad",
+            None,
+            &[N::NativeHalfConversion, N::NativeNanEncoding],
+        ),
+        (
+            "sampling",
+            "sample_fragment",
+            None,
+            &[N::FastMathRewrites, N::CubeGradientFootprint],
+        ),
+        ("sampling", "sample_compare_depth", None, &[]),
+        ("handles", "sampler_select", None, &[]),
+        (
+            "handles",
+            "fragment_select_sample",
+            None,
+            &[N::GradFromBias],
+        ),
+        (
+            "handles",
+            "argument_buffer_runtime_sampler",
+            None,
+            &[N::BicubicFilterArithmetic],
+        ),
+        (
+            "px_samplers",
+            "px_sample_argument",
+            None,
+            &[N::ArgumentPixelSamplerScaling],
+        ),
+        (
+            "gsm2_cubic_samplers",
+            "gsm2_cubic_samples",
+            None,
+            &[N::BicubicFilterArithmetic],
+        ),
+        (
+            "gsm2_cubic_samplers",
+            "gsm2_cubic_half_samples",
+            None,
+            &cubic_half,
+        ),
+        (
+            "gsm2_cubic_samplers",
+            "gsm2_cubic_samples",
+            Some(0),
+            &[N::BicubicFilterArithmetic],
+        ),
+        (
+            "gsm2_cubic_samplers",
+            "gsm2_cubic_samples",
+            Some(SamplerWord::PIXEL_COORDINATES),
+            &[N::BicubicFilterArithmetic],
+        ),
+        (
+            "gsm2_cubic_samplers",
+            "gsm2_cubic_half_samples",
+            Some(SamplerWord::PIXEL_COORDINATES),
+            &cubic_half,
+        ),
+    ];
+    for (fixture, entry, cubic, unconditional) in stages {
+        let Some(bc) = assembled(fixture) else {
+            return;
+        };
+        let what = format!("{fixture} {entry} (cubic word {cubic:?})");
+        let mut inputs = crate::lower::select::LowerInputs::new();
+        if let Some(word) = cubic {
+            inputs.cubic_samplers.insert(s, word);
+        }
+        let a = compile_with(&bc, entry, &p, &inputs).unwrap_or_else(|e| panic!("{what}: {e}"));
+        let held: BTreeSet<N> = a.specialized.iter().map(|n| n.note).collect();
+        let always: BTreeSet<N> = a
+            .precision
+            .iter()
+            .copied()
+            .filter(|n| !held.contains(n))
+            .collect();
+        assert_eq!(
+            always,
+            unconditional.iter().copied().collect(),
+            "{what}: {:?}",
+            a.specialized
+        );
+        // The centre's note: under a nearest pixel state's specialization alone.
+        let pixel_state = |t: &crate::pipeline::SpecTest| match t.key {
+            SpecKey::NearestPixelSampler(_) => t.mask == 1 && t.bits == 1 && t.equal,
+            SpecKey::SamplerState { .. } => {
+                t.mask == SamplerWord::PIXEL_COORDINATES && t.bits == 0 && !t.equal
+            }
+            _ => false,
+        };
+        for n in a
+            .specialized
+            .iter()
+            .filter(|n| n.note == N::DeviceDenormals)
+        {
+            assert!(
+                !fixture.starts_with("px_") && n.when.iter().all(|c| c.all.iter().any(pixel_state)),
+                "{what}: {n:?}"
+            );
         }
     }
 }

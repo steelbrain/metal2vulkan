@@ -558,3 +558,95 @@ fn pixel_edges_answer_metal_s_texels() {
     }
     layer_reported_nothing_at_all(&messages);
 }
+
+/// A runtime slot's or an argument buffer's sample under a normalized state announces neither
+/// pixel note nor the texel centre's `device-denormals`: the slot's centre runs only under a
+/// pipeline made for a nearest pixel state (`SpecKey::NearestPixelSampler`), and an argument
+/// buffer's note waits for a pixel state to live. Under a nearest pixel state, the slot's
+/// pipeline announces `device-denormals` (its centre's `floor` reads a negative subnormal
+/// coordinate by the device's float controls, where Metal's sampler reads texel -1), and the
+/// argument buffer's dispatch `argument-pixel-sampler-scaling`.
+#[test]
+fn normalized_states_announce_no_pixel_note() {
+    use super::degrade_notices::counts;
+    use metal2vulkan_runtime::Degradation as D;
+    let cache = ScratchCache::new().unwrap();
+    let messages = Messages::default();
+    let device = validated_device(TEST_DEVICE, &messages, cache.path()).unwrap();
+    let name = device.name().to_owned();
+    let bitcode = llvm_assemble(&engine_dir().join("px_edges.ll")).unwrap();
+    let uv: Vec<u8> = [0.25f32, 0.5]
+        .iter()
+        .flat_map(|v| v.to_le_bytes())
+        .collect();
+    let k: Vec<u8> = K.iter().flat_map(|v| v.to_le_bytes()).collect();
+    let (uv, k) = (
+        buffer_with(&device, &uv).unwrap(),
+        buffer_with(&device, &k).unwrap(),
+    );
+    let t = textures(&device, (21, 13));
+    let (slot, argument) = (
+        pipeline_of(&device, &bitcode, "pe_slot_sample"),
+        pipeline_of(&device, &bitcode, "pe_argument_sample"),
+    );
+    let pixel_notes = [
+        D::DeviceDenormals,
+        D::PixelSamplerScaling,
+        D::ArgumentPixelSamplerScaling,
+    ];
+    for filter in [SamplerMinMagFilter::Nearest, SamplerMinMagFilter::Linear] {
+        let mut d = SamplerDescriptor::new();
+        d.min_filter = filter;
+        d.mag_filter = filter;
+        let mut options = SamplerStateOptions::default();
+        options.support_argument_buffers = true;
+        let normalized = device.new_sampler_state_with_options(&d, options).unwrap();
+        dispatch(
+            &device,
+            &slot,
+            (&uv, &k),
+            1,
+            Bound::Slots(&t.plane, Some(&normalized)),
+        );
+        dispatch(
+            &device,
+            &argument,
+            (&uv, &k),
+            1,
+            Bound::Argument(&t.plane, &normalized),
+        );
+    }
+    let announced = counts(&messages.take_notices());
+    for kind in pixel_notes {
+        assert!(
+            !announced.contains_key(&kind),
+            "{name}: {kind:?} under normalized states: {announced:?}"
+        );
+    }
+    let nearest = state(&device, SamplerMinMagFilter::Nearest, &ADDRESSES[1]);
+    dispatch(
+        &device,
+        &slot,
+        (&uv, &k),
+        1,
+        Bound::Slots(&t.plane, Some(&nearest)),
+    );
+    let announced = counts(&messages.take_notices());
+    assert!(
+        announced.contains_key(&D::DeviceDenormals),
+        "{name}: a nearest pixel state's slot: {announced:?}"
+    );
+    dispatch(
+        &device,
+        &argument,
+        (&uv, &k),
+        1,
+        Bound::Argument(&t.plane, &nearest),
+    );
+    let announced = counts(&messages.take_notices());
+    assert!(
+        announced.contains_key(&D::ArgumentPixelSamplerScaling),
+        "{name}: a nearest pixel state's argument buffer: {announced:?}"
+    );
+    layer_reported_nothing_at_all(&messages);
+}

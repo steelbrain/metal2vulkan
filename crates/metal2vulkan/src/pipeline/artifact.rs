@@ -627,8 +627,17 @@ pub enum PrecisionNote {
     /// functions the device answers as Metal's own. Where the minimum and maximum functions
     /// (`llvm.minnum` and `llvm.maxnum` among them, with any flags) and `saturate` are the device's
     /// `NMin`, `NMax` and `NClamp`, their pick of a denormal is
-    /// [`PrecisionNote::NativeMinMax`]'s. Validation derives no tolerance and no explanation from
-    /// it: every `float` computation is exposed to it.
+    /// [`PrecisionNote::NativeMinMax`]'s. A nearest pixel-coordinate sample at its texel's centre
+    /// `floor(x) + 0.5`, and a pixel fetch's texel `floor(x) + k` under an offset, records it for
+    /// that `floor`: Metal's sampler reads a subnormal `x` itself, a negative one as texel -1,
+    /// where the device's `floor` reads it by its float controls (MoltenVK's as the zero of its
+    /// sign, texel 0, measured on an Apple M3 Max). Recorded only where the centre can be the
+    /// sample's coordinate: through a constexpr sampler always, through a runtime sampler slot
+    /// held where the bound state is a nearest pixel sampler (`SpecKey::NearestPixelSampler`; for
+    /// an integer texture, where it states pixel coordinates), never under a normalized state;
+    /// through an argument buffer's sampler [`PrecisionNote::ArgumentPixelSamplerScaling`]
+    /// records it instead. Validation derives no tolerance and no explanation from it: every
+    /// `float` computation is exposed to it.
     DeviceDenormals,
     /// A pixel-coordinate sampler's coordinate reaches the device's normalized sampler divided by
     /// the texture's level-0 size in the shader, and the device's sampler reads its texels from
@@ -641,10 +650,11 @@ pub enum PrecisionNote {
     /// device where no other form takes the coordinate: a linear sample or a gather through a
     /// constexpr pixel sampler of an array or a 3D texture (Vulkan's unnormalized sampler takes
     /// neither) or of a texture whose residency the function observes (whose footprint is read
-    /// from the normalized coordinate), a level query, and every linear sample, gather and comparison through a runtime sampler slot
-    /// (whose state the function does not know), held where the bound sampler states pixel
-    /// coordinates and, for a sample or comparison, that it is not a nearest one of one isotropic
-    /// level (`SpecKey::NearestPixelSampler`). Not recorded where Metal's texel or footprint
+    /// from the normalized coordinate), a level query, and every linear sample, gather and
+    /// comparison through a runtime sampler slot (whose state the function does not know), held
+    /// where the bound sampler states pixel coordinates and, for a sample or comparison, that it
+    /// is not a nearest one of one isotropic level (`SpecKey::NearestPixelSampler`). Not
+    /// recorded where Metal's texel or footprint
     /// follows from `x` itself: a constexpr pixel sampler's sample or gather of a 1D or 2D texture
     /// that is no array hands `x` (moved by its offset) to the device's unnormalized sampler; a
     /// nearest sample elsewhere hands the device its texel's centre `floor(x) + 0.5` over the size,
@@ -1268,7 +1278,10 @@ pub enum PrecisionNote {
     /// units in the last place of an edge of one). Recorded on every device for every such access;
     /// a sample through a sampler whose word states a nearest pixel sampler of one isotropic level
     /// (`SamplerWord::nearest_pixel`) hands the device its texel's centre instead, where the device
-    /// reads exactly Metal's texel. It is its own note, apart from
+    /// reads exactly Metal's texel but at a negative subnormal coordinate, which the centre's
+    /// `floor` reads by the device's float controls where Metal's sampler reads texel -1
+    /// ([`PrecisionNote::DeviceDenormals`]'s reading, which this note records for such a sampler,
+    /// the runtime announcing it only while a pixel state lives). It is its own note, apart from
     /// [`PrecisionNote::PixelSamplerScaling`], because only the bound states decide it: the runtime
     /// announces it at the first draw or dispatch of a pipeline that records it while the device
     /// lists a sampler state of pixel coordinates, never at the pipeline's making.
