@@ -310,7 +310,7 @@ use crate::pipeline::{
 };
 use crate::rate_mapped_pass::RateMappedPass;
 use crate::render_pass::{ColorTarget, PassLayout, Target};
-use crate::render_state::EncoderState;
+use crate::render_state::{EncoderState, ScissorRects};
 use crate::render_target::{self, Feedback, PassShape, Position, RenderPassObject};
 use crate::render_values::DrawPrimitiveType;
 use crate::residency::{every_render_stage, Residency};
@@ -665,6 +665,7 @@ impl RenderLowering {
         let snapshot = Snapshot {
             layout: self.layout.clone(),
             state,
+            scissors: self.scissors.clone(),
             vertex: if inherited {
                 self.vertex.clone()
             } else {
@@ -974,6 +975,7 @@ pub(crate) struct RenderExecution {
 struct Snapshot {
     layout: PassLayout,
     state: EncoderState,
+    scissors: ScissorRects,
     vertex: ArgumentTable,
     fragment: ArgumentTable,
     object: ArgumentTable,
@@ -2359,6 +2361,7 @@ impl RenderExecution {
             passes: vec![(snapshot.shape.clone(), Arc::clone(&snapshot.compatible))],
             render_target_array_length: snapshot.render_target_array_length,
             state: Versioned::new(snapshot.state.clone()),
+            scissors: snapshot.scissors.clone(),
             pipeline: None,
             routed: None,
             vertex: snapshot.vertex.clone(),

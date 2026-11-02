@@ -4254,12 +4254,13 @@ pub struct WorkCounts {
     pub set_zero_sets_found: u64,
     /// Render encoders' draws that took their shape, what they derive from the encoder's state
     /// alone, from an earlier draw of their encoder that derived it from the same inputs, rather
-    /// than deriving it again: their settings, their draw state (fixed state, viewports, scissors,
-    /// depth bias) and their `VkPipeline`. The inputs are the drawing state, variant, plan and
-    /// instance's compatible pass by identity, the pass's layout, the encoder's state and vertex
-    /// amplification and the instance's shape by version, and the assembly, the vertex strides,
-    /// the fixed state and the topology by value (`render/draw_shape.rs`). None of a shape whose
-    /// derivation announces a notice the device announces at every occurrence
+    /// than deriving it again: their settings, their draw state (fixed state, viewports, depth
+    /// bias; its scissors are each draw's own, from the encoder's scissor rectangles) and their
+    /// `VkPipeline`. The inputs are the drawing state, variant, plan and instance's compatible
+    /// pass by identity, the pass's layout, the encoder's state but its scissor rectangles and
+    /// vertex amplification and the instance's shape by version, and the assembly, the vertex
+    /// strides, the fixed state and the topology by value (`render/draw_shape.rs`). None of a
+    /// shape whose derivation announces a notice the device announces at every occurrence
     /// (`DeviceOptions::announce_each`).
     pub draw_shapes_reused: u64,
     /// Compute encoders' dispatches that took the bind state, variant, plan, commands and made

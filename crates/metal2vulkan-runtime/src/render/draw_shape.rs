@@ -7,7 +7,10 @@
 //!   encoder's state and vertex amplification, whether a visibility query counts the draws, the
 //!   pass's rasterization-rate map, whether the encoder records an execution's commands, and the
 //!   routing the encoder kept for its drawing state (a cache of a function of the state and the
-//!   pass's colors, which changes no piece). Beside them each piece takes the draw's own: its
+//!   pass's colors, which changes no piece). The encoder's scissor rectangles are no input: the
+//!   state holds none (`render_state::ScissorRects`), and the draw state's Vulkan scissors, the
+//!   one piece that reads them, are each draw's own, set again on a draw state it reuses, so a
+//!   draw after a new rectangle reuses its shape. Beside them each piece takes the draw's own: its
 //!   drawing state, assembly and whether it may draw a primitive
 //!   (`line_width::draws_primitives`); for the draw state its
 //!   variant's compiled state and what the draw's failing depth and shader-side tests make of it;
@@ -53,7 +56,7 @@ use crate::pipeline::{FixedState, GraphicsState as DrawingState};
 use crate::pipeline::{RawPipeline, RenderVariant};
 use crate::rate_mapped_pass::RateMappedPass;
 use crate::render_pass::{PassLayout, HIDDEN_DEPTH_FORMAT};
-use crate::render_state::{self, DepthBiasRecord, EncoderState, ViewportList};
+use crate::render_state::{self, DepthBiasRecord, EncoderState, ScissorRects, ViewportList};
 use crate::render_state::{Compensation, DepthBiasEffect, WrittenDepthClamp};
 use crate::render_target::RenderPassObject;
 use crate::render_values::Viewport;
@@ -537,7 +540,8 @@ impl ShapeInputs<'_> {
     }
 
     /// The state a draw of `graphics`, its variant's, records with under `settings`
-    /// ([`DrawState`]: statically, or as dynamic state), failing as `failing` says, its fragment
+    /// ([`DrawState`]: statically, or as dynamic state), through the encoder's `scissors`, failing
+    /// as `failing` says, its fragment
     /// function the stencil test (`shadow`, a shader-side stencil) or the depth test (`tests`);
     /// with the viewports in Metal's terms and the compensated
     /// depth range a rate-mapped pass draws each region through (`rate_mapped_pass.rs`). A 16-bit
@@ -547,6 +551,7 @@ impl ShapeInputs<'_> {
         graphics: &GraphicsState,
         settings: &DrawSettings,
         (failing, shadow, tests): (Option<&FailingDraw>, bool, bool),
+        scissors: &ScissorRects,
     ) -> Result<ShapedState, Error> {
         let device = self.device;
         let profile = device.compile_device().profile();
@@ -596,7 +601,7 @@ impl ShapeInputs<'_> {
                 depth,
                 compensation.and_then(|c| c.guard),
             ),
-            scissors: self.state.vk_scissors(selects),
+            scissors: self.state.vk_scissors(scissors, selects),
             fixed,
             stencil_reference: self.state.stencil_reference(),
             depth_bias,

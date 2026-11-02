@@ -256,16 +256,17 @@ impl CallChecks {
                     .set_viewports("set_viewports", viewports, refused))
                 .map(logged)
             }
+            // Checked alone: no later check reads the rectangles.
             C::ScissorRect(rect) => {
                 let rects = std::slice::from_ref(rect);
                 self.state
-                    .set_scissors("set_scissor_rect", rects)
-                    .map(logged)
+                    .scissor_rects("set_scissor_rect", rects)
+                    .map(|_| Checked::Logged)
             }
             C::ScissorRects(rects) => self
                 .state
-                .set_scissors("set_scissor_rects", rects)
-                .map(logged),
+                .scissor_rects("set_scissor_rects", rects)
+                .map(|_| Checked::Logged),
             C::CullMode(mode) => {
                 self.state.set_cull_mode(*mode);
                 Ok(Checked::Logged)

@@ -315,7 +315,8 @@ use super::render_pass::{
     self, AspectTarget, Attachment, DepthStencilTarget, PassLayout, RenderPassDescriptor,
     RenderPassProblem, Target, MAX_COLOR_ATTACHMENTS,
 };
-use super::render_state::{self, DepthBiasRecord, EncoderState, ViewportList, MAX_VIEWPORTS};
+use super::render_state::MAX_VIEWPORTS;
+use super::render_state::{self, DepthBiasRecord, EncoderState, ScissorRects, ViewportList};
 use super::render_state::{Compensation, DepthBiasEffect, WrittenDepthClamp};
 use super::render_target::{self, covers, Feedback, PassShape, Position, RenderPassObject};
 use super::render_values::{
@@ -1385,6 +1386,8 @@ pub(crate) struct RenderLowering {
     /// layered pass (`PassLayout::layers`).
     render_target_array_length: u32,
     state: Versioned<EncoderState>,
+    /// Apart from `state`: setting them keeps the draws' shapes (`ScissorRects`).
+    scissors: ScissorRects,
     pipeline: Option<RenderPipelineState>,
     /// The routing of the drawing state last set (`ShapeInputs::routing`), which its check
     /// and each of its draws (their settings and their coverage) read.
@@ -1969,6 +1972,10 @@ impl RenderLowering {
         let live = core.device().shared().live_binds.take();
         // The views and sampler descriptions its binds made or found (`binding::BindMemo`).
         let bind_memo = core.device().shared().bind_memos.take();
+        // Metal's default viewport and scissor rectangle cover the render area: a rate map's.
+        let area = rate_map
+            .as_ref()
+            .map_or(layout.extent, RateMappedPass::area);
         Box::new(RenderLowering {
             core,
             earlier: Vec::new(),
@@ -2001,11 +2008,8 @@ impl RenderLowering {
                 feedback: Feedback::NONE,
                 storage_colors: 0,
             },
-            state: Versioned::new(EncoderState::metal_defaults(
-                rate_map
-                    .as_ref()
-                    .map_or(layout.extent, RateMappedPass::area),
-            )),
+            state: Versioned::new(EncoderState::metal_defaults(area)),
+            scissors: ScissorRects::metal_default(area),
             render_target_array_length,
             visibility: Visibility::new(layout.visibility.clone()),
             layout: Versioned::new(layout),
@@ -3075,13 +3079,15 @@ impl RenderLowering {
     /// The lowering of [`RenderCommandEncoder::set_scissor_rect`].
     pub(crate) fn set_scissor_rect(&mut self, rect: ScissorRect) -> Result<(), Error> {
         self.log(|_| RenderCall::ScissorRect(rect));
-        self.state.set_scissors("set_scissor_rect", &[rect])
+        self.scissors = self.state.scissor_rects("set_scissor_rect", &[rect])?;
+        Ok(())
     }
 
     /// The lowering of [`RenderCommandEncoder::set_scissor_rects`].
     pub(crate) fn set_scissor_rects(&mut self, rects: &[ScissorRect]) -> Result<(), Error> {
         self.log(|_| RenderCall::ScissorRects(rects.into()));
-        self.state.set_scissors("set_scissor_rects", rects)
+        self.scissors = self.state.scissor_rects("set_scissor_rects", rects)?;
+        Ok(())
     }
 
     /// The lowering of [`RenderCommandEncoder::set_cull_mode`].
@@ -6501,7 +6507,9 @@ impl RenderLowering {
             return false;
         };
         let mut scissors = [vk::Rect2D::default(); MAX_VIEWPORTS];
-        let rects = self.state.vk_scissors_in(selects, &mut scissors);
+        let rects = self
+            .state
+            .vk_scissors_in(&self.scissors, selects, &mut scissors);
         let mut drawn: Option<[u32; 4]> = None;
         for r in rects
             .iter()
@@ -7133,7 +7141,9 @@ impl RenderLowering {
                 false => {
                     let selects = selects || self.amplification.offsets_viewports();
                     let mut scissors = [vk::Rect2D::default(); MAX_VIEWPORTS];
-                    let rects = self.state.vk_scissors_in(selects, &mut scissors);
+                    let rects = self
+                        .state
+                        .vk_scissors_in(&self.scissors, selects, &mut scissors);
                     self.drawn.add(rects);
                     // And its instance's, the one it recorded into.
                     self.current.drawn.add(rects);
@@ -8388,10 +8398,14 @@ impl RenderLowering {
             viewports,
             depth,
         } = match kept_state {
-            Some(kept) => {
+            // Through the scissor rectangles the draw finds, which no other piece of it reads
+            // (`ScissorRects`).
+            Some(mut kept) => {
+                let selects = graphics.writes_viewport_index;
+                kept.state.scissors = self.state.vk_scissors(&self.scissors, selects);
                 debug_assert!(
                     (self.shape_inputs())
-                        .draw_state(graphics, &settings, failed)
+                        .draw_state(graphics, &settings, failed, &self.scissors)
                         .is_ok_and(|fresh| fresh == kept),
                     "a draw's state derived again differs from the one kept for its inputs"
                 );
@@ -8400,7 +8414,7 @@ impl RenderLowering {
             None => {
                 let watch = EachWatch::start();
                 let inputs = self.shape_inputs();
-                let shaped = inputs.draw_state(graphics, &settings, failed)?;
+                let shaped = inputs.draw_state(graphics, &settings, failed, &self.scissors)?;
                 // Kept where its derivation announced nothing at each occurrence.
                 if let (Some(token), false) = (shape_token, watch.met()) {
                     self.shape_memo.keep_state(token, &variant, &shaped);
@@ -8434,7 +8448,7 @@ impl RenderLowering {
                         let regions = pass.draws(
                             slice,
                             &viewports[0],
-                            self.state.first_scissor(),
+                            self.scissors.first(),
                             graphics,
                             &device.shared().region_limits,
                             render_area,

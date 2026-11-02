@@ -389,7 +389,7 @@ impl RenderLowering {
         let mut rects = [vk::Rect2D::default(); MAX_VIEWPORTS];
         let bound: u64 = self
             .state
-            .vk_scissors_in(selects, &mut rects)
+            .vk_scissors_in(&self.scissors, selects, &mut rects)
             .iter()
             .map(|r| u64::from(r.extent.width) * u64::from(r.extent.height))
             .sum();

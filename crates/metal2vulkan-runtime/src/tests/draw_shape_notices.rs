@@ -3,7 +3,8 @@
 //! meets such a kind derives it anew and announces it at every draw, as a device without the memo
 //! would; a draw whose shape meets none takes it from the memo, whatever other kinds the device
 //! announces at each (`WorkCounts::draw_shapes_reused`), as a device that announces every kind
-//! once does.
+//! once does. A draw after a new scissor rectangle reuses its shape too, through its own scissor
+//! (`render_state::ScissorRects`).
 //!
 //! Device tests: compiled only under the validation crate's GPU safety cfgs (`m2v_gpu`,
 //! `m2v_cpu_icd`), on the kind of device the cfg selects. The functions are the owned fixture
@@ -14,7 +15,8 @@ use super::encoder_holds::{bytes_of, library, pass};
 use crate::{
     CommandBufferStatus, Degradation, DegradeNotice, DepthStencilState, Device, DeviceKind,
     DeviceOptions, MessageSink, PipelineOptions, RenderCommandEncoder, RenderPassDescriptor,
-    RenderPipelineState, ResourceOptions, ShaderCacheOptions, Texture, TextureDescriptor,
+    RenderPipelineState, ResourceOptions, ScissorRect, ShaderCacheOptions, Texture,
+    TextureDescriptor,
 };
 use metal2vulkan::metal::state::DepthStencilDescriptor;
 use metal2vulkan::metal::{CompareFunction, PixelFormat, PrimitiveType, TextureUsage};
@@ -120,11 +122,13 @@ fn target(device: &Device, format: PixelFormat) -> Texture {
 /// What an encoder of a test draws: a rectangle of `state` over the whole target, as triangles,
 /// and before each, where `points`, as points (whose vertex function writes no point size, of no
 /// point class: `UnsizedPoints`, `ShapeInputs::settings`), each [`DRAWS`] times; tested against
-/// `depth` where given.
+/// `depth` where given; each triangles' draw through a scissor rectangle of its own set before it
+/// where `scissors`.
 struct Draws<'a> {
     state: &'a RenderPipelineState,
     points: bool,
     depth: Option<(&'a Texture, &'a DepthStencilState)>,
+    scissors: bool,
 }
 
 impl Draws<'_> {
@@ -162,7 +166,11 @@ impl Draws<'_> {
         encoder.set_vertex_bytes(&corners, 0).unwrap();
         let color = bytes_of(&[0.2f32, 0.4, 0.6, 1.0], f32::to_le_bytes);
         encoder.set_fragment_bytes(&color, 0).unwrap();
-        for _ in 0..DRAWS {
+        for at in 0..DRAWS as u64 {
+            if self.scissors {
+                let rect = ScissorRect::new(at, 0, SIDE - at, SIDE);
+                assert_eq!(encoder.set_scissor_rect(rect), Ok(()));
+            }
             if self.points {
                 let drawn = encoder.draw_primitives(PrimitiveType::Point, 0, 4, 1, 0);
                 assert_eq!(drawn, Ok(()));
@@ -196,6 +204,7 @@ fn second_run(each: &[Degradation], points: bool, depth: bool) -> (u64, Counts) 
         state: &state,
         points,
         depth: depth.then_some((&texture, &depth_stencil)),
+        scissors: false,
     };
     until("every key's own pipeline made", || {
         let residual = device.work_counts().residual_form_draws;
@@ -255,6 +264,7 @@ fn a_kind_a_draws_state_meets_is_announced_at_every_draw() {
             state: &state,
             points: false,
             depth: Some((&texture, &depth_stencil)),
+            scissors: false,
         };
         draws.run(&device);
         counts(&heard)
@@ -274,4 +284,31 @@ fn a_kind_a_draws_state_meets_is_announced_at_every_draw() {
         false => 0,
     };
     assert_eq!(reused, expected, "{met:?}");
+}
+
+/// Draws that each set a scissor rectangle of their own before they draw, as a window compositor's
+/// do, reuse their shapes as draws through one rectangle do (the rectangles are no input of a
+/// shape: `render_state::ScissorRects`), each after the first, and each records its own scissor.
+#[test]
+fn draws_after_new_scissor_rectangles_reuse_shapes() {
+    let scratch = Scratch::new("draw-shape-scissors");
+    let heard = Heard::default();
+    let device = device(&scratch.0, &[], &heard);
+    let state = rectangle_state(&device, false);
+    let draws = Draws {
+        state: &state,
+        points: false,
+        depth: None,
+        scissors: true,
+    };
+    until("every key's own pipeline made", || {
+        let residual = device.work_counts().residual_form_draws;
+        draws.run(&device);
+        device.work_counts().residual_form_draws == residual
+    });
+    let scissors = device.work_counts().commands_recorded.cmd_set_scissor;
+    let reused = draws.run(&device);
+    assert_eq!(reused, DRAWS as u64 - 1);
+    let recorded = device.work_counts().commands_recorded.cmd_set_scissor - scissors;
+    assert_eq!(recorded, DRAWS as u64, "a scissor each");
 }

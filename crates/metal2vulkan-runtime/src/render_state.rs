@@ -185,13 +185,35 @@ pub enum RenderStateProblem {
     ViewportNotFinite,
 }
 
-/// The render encoder's state, in Metal's terms.
+/// The render encoder's scissor rectangles (`setScissorRect:`, `setScissorRects:count:`), as
+/// [`EncoderState::scissor_rects`] clipped them. Kept apart from the [`EncoderState`]: a draw's
+/// shape reads none of them but its draw state's Vulkan scissors, which each draw takes from the
+/// rectangles it finds ([`EncoderState::vk_scissors`]), so the draws of a program that sets a
+/// rectangle before each, as a window compositor's do, find their shapes kept
+/// (`render/draw_shape.rs`).
+#[derive(Clone, Debug, PartialEq)]
+pub(super) struct ScissorRects(ViewportList<ScissorRect>);
+
+impl ScissorRects {
+    /// Metal's default: the render area of `extent`.
+    pub(super) fn metal_default([width, height]: [u32; 2]) -> ScissorRects {
+        let area = ScissorRect::new(0, 0, u64::from(width), u64::from(height));
+        ScissorRects(ViewportList::One(area))
+    }
+
+    /// The first rectangle, which a draw of a pipeline that selects no viewport uses.
+    pub(super) fn first(&self) -> &ScissorRect {
+        &self.0[0]
+    }
+}
+
+/// The render encoder's state, in Metal's terms, but for its scissor rectangles
+/// ([`ScissorRects`]).
 #[derive(Clone)]
 pub(super) struct EncoderState {
     /// The render area's width and height.
     extent: [u32; 2],
     viewports: ViewportList<Viewport>,
-    scissors: ViewportList<ScissorRect>,
     cull_mode: CullMode,
     winding: Winding,
     /// `None` is Metal's default state, the default descriptor's.
@@ -229,12 +251,6 @@ impl EncoderState {
                 f64::from(height),
                 0.0,
                 1.0,
-            )),
-            scissors: ViewportList::One(ScissorRect::new(
-                0,
-                0,
-                u64::from(width),
-                u64::from(height),
             )),
             cull_mode: CullMode::None,
             winding: Winding::Clockwise,
@@ -293,13 +309,13 @@ impl EncoderState {
         Ok(())
     }
 
-    /// `setScissorRects:count:` (one rectangle for `setScissorRect:`), checked as the module
-    /// says.
-    pub(super) fn set_scissors(
-        &mut self,
+    /// The rectangles `setScissorRects:count:` (one rectangle for `setScissorRect:`) sets,
+    /// checked and clipped to the render area as the module says.
+    pub(super) fn scissor_rects(
+        &self,
         call: &'static str,
         scissors: &[ScissorRect],
-    ) -> Result<(), Error> {
+    ) -> Result<ScissorRects, Error> {
         // More than 16 rectangles stop Metal's validation, and plain Metal draws (Metal probe case
         // `scissors_17` on an M4): a draw goes through the rectangles its viewports name
         // (`EncoderState::vk_scissors`). None, unmeasured, is refused.
@@ -315,7 +331,7 @@ impl EncoderState {
             let start = origin.min(end);
             (start, origin.saturating_add(size).min(end) - start)
         };
-        self.scissors = scissors
+        let rects = scissors
             .iter()
             .map(|s| {
                 let (x, width) = clip(s.x, s.width, width);
@@ -323,7 +339,7 @@ impl EncoderState {
                 ScissorRect::new(x, y, width, height)
             })
             .collect();
-        Ok(())
+        Ok(ScissorRects(rects))
     }
 
     pub(super) fn set_cull_mode(&mut self, mode: CullMode) {
@@ -812,11 +828,6 @@ impl EncoderState {
         Ok(biased.then_some(self.depth_bias))
     }
 
-    /// The first scissor rectangle, which a draw of a pipeline that selects no viewport uses.
-    pub(super) fn first_scissor(&self) -> &ScissorRect {
-        &self.scissors[0]
-    }
-
     /// The powers of two `[sx, sy]` a draw of points widens the Vulkan viewports it uses by,
     /// about their centers ([`EncoderState::vk_viewports`]), its vertex stage scaling the
     /// position by their inverses and culling at Metal's guard band ([`guard_points`]): on each
@@ -912,40 +923,50 @@ impl EncoderState {
             .collect()
     }
 
-    /// The draw's scissors in Vulkan's terms: one per viewport it uses, the Metal rectangle of
-    /// its index, the one rectangle where the encoder holds one, and an empty one past two or
-    /// more (the module docs), each clipped to the pixels its viewport overlaps, Metal's implicit
-    /// scissor ([`viewport_pixels`]).
-    pub(super) fn vk_scissors(&self, selects: bool) -> ViewportList<vk::Rect2D> {
-        self.each_vk_scissor(selects).collect()
+    /// The draw's scissors in Vulkan's terms, through the encoder's `scissors`: one per viewport
+    /// it uses, the Metal rectangle of its index, the one rectangle where the encoder holds one,
+    /// and an empty one past two or more (the module docs), each clipped to the pixels its
+    /// viewport overlaps, Metal's implicit scissor ([`viewport_pixels`]).
+    pub(super) fn vk_scissors(
+        &self,
+        scissors: &ScissorRects,
+        selects: bool,
+    ) -> ViewportList<vk::Rect2D> {
+        self.each_vk_scissor(scissors, selects).collect()
     }
 
     /// [`vk_scissors`](Self::vk_scissors) into `rects`, of [`MAX_VIEWPORTS`] (the most a draw
     /// uses), without allocating.
     pub(super) fn vk_scissors_in<'a>(
         &self,
+        scissors: &ScissorRects,
         selects: bool,
         rects: &'a mut [vk::Rect2D; MAX_VIEWPORTS],
     ) -> &'a [vk::Rect2D] {
         let count = rects
             .iter_mut()
-            .zip(self.each_vk_scissor(selects))
+            .zip(self.each_vk_scissor(scissors, selects))
             .map(|(rect, scissor)| *rect = scissor)
             .count();
         &rects[..count]
     }
 
     /// Each of [`vk_scissors`](Self::vk_scissors), in order.
-    fn each_vk_scissor(&self, selects: bool) -> impl Iterator<Item = vk::Rect2D> + '_ {
+    fn each_vk_scissor<'a>(
+        &'a self,
+        scissors: &'a ScissorRects,
+        selects: bool,
+    ) -> impl Iterator<Item = vk::Rect2D> + 'a {
         let extent = self.extent.map(i64::from);
         let none = ScissorRect::new(0, 0, 0, 0);
+        let rects = &scissors.0;
         self.used_viewports(selects)
             .iter()
             .enumerate()
             .map(move |(i, viewport)| {
-                let s = match self.scissors.len() {
-                    1 => &self.scissors[0],
-                    _ => self.scissors.get(i).unwrap_or(&none),
+                let s = match rects.len() {
+                    1 => &rects[0],
+                    _ => rects.get(i).unwrap_or(&none),
                 };
                 // Inside the render area (checked at the setter).
                 let scissor = [
@@ -2203,15 +2224,20 @@ mod tests {
             vec![[0.0, 0.0, 4.0, 4.0, 0.0, 1.0]]
         );
         assert_eq!(state.used_viewports(true).len(), 2);
-        assert_eq!(state.vk_scissors(true).len(), 2, "one scissor each");
+        let scissors = ScissorRects::metal_default([8, 4]);
+        assert_eq!(
+            state.vk_scissors(&scissors, true).len(),
+            2,
+            "one scissor each"
+        );
     }
 
     /// The scissor rules (probe 4): inside the render area, an empty one included; past it,
     /// clipped to it, as plain Metal draws it; 1 to 16 of them.
     #[test]
     fn scissors_stay_inside_the_render_area() {
-        let mut state = EncoderState::metal_defaults([4, 4]);
-        let set = |state: &mut EncoderState, s: &[ScissorRect]| state.set_scissors("t", s);
+        let state = EncoderState::metal_defaults([4, 4]);
+        let set = |s: &[ScissorRect]| state.scissor_rects("t", s).map(|rects| rects.0);
         for (given, kept) in [
             (ScissorRect::new(1, 1, 2, 2), ScissorRect::new(1, 1, 2, 2)),
             (ScissorRect::new(0, 0, 0, 0), ScissorRect::new(0, 0, 0, 0)),
@@ -2223,18 +2249,18 @@ mod tests {
                 ScissorRect::new(4, 0, 0, 1),
             ),
         ] {
-            assert_eq!(set(&mut state, &[given]), Ok(()), "{given:?}");
-            assert_eq!(*state.scissors, [kept], "{given:?}");
+            assert_eq!(set(&[given]), Ok(ViewportList::One(kept)), "{given:?}");
         }
         assert_eq!(
-            set(&mut state, &[]),
+            set(&[]),
             Err(invalid(
                 "t",
                 Problem::RenderState(RenderStateProblem::Count { count: 0 })
             ))
         );
         // More than 16, as plain Metal takes them (Metal probe case `scissors_17`).
-        assert_eq!(set(&mut state, &[ScissorRect::new(0, 0, 1, 1); 17]), Ok(()));
+        let many = set(&[ScissorRect::new(0, 0, 1, 1); 17]);
+        assert_eq!(many.map(|rects| rects.len()), Ok(17));
     }
 
     /// A viewport's pixels are those it overlaps (probes 4, 4b and 4c: a 1-pixel viewport at x 4
@@ -2261,7 +2287,8 @@ mod tests {
         state.viewports = [Viewport::new(4.0, 0.0, 0.0, 8.0, 0.0, 1.0)]
             .into_iter()
             .collect();
-        assert_eq!(state.vk_scissors(false)[0].extent.width, 0);
+        let area = ScissorRects::metal_default([8, 8]);
+        assert_eq!(state.vk_scissors(&area, false)[0].extent.width, 0);
         assert_eq!(
             EncoderState::vk_viewports(state.used_viewports(false), None, None)[0].width,
             1.0
@@ -2269,8 +2296,8 @@ mod tests {
         state.viewports = [Viewport::new(2.0, 2.0, 4.0, 4.0, 0.0, 1.0)]
             .into_iter()
             .collect();
-        state.scissors = [ScissorRect::new(3, 0, 5, 8)].into_iter().collect();
-        let clipped = state.vk_scissors(false)[0];
+        let rects = state.scissor_rects("t", &[ScissorRect::new(3, 0, 5, 8)]);
+        let clipped = state.vk_scissors(&rects.unwrap(), false)[0];
         assert_eq!(
             (
                 clipped.offset.x,
