@@ -2808,6 +2808,12 @@ fn compile_kept<K>(
             .properties
             .insert(crate::device::requirements::VkProperty::MetalNanMoves);
     }
+    // A packed format's conversion left to the device with no note because it is Metal's.
+    if plan.families.arith.metal_packs {
+        requirements
+            .properties
+            .insert(crate::device::requirements::VkProperty::MetalPackConversions);
+    }
     // Metal's `float` and `half` minimum and maximum family left to the device's `NMin`, `NMax`
     // and `NClamp` because they are Metal's.
     if plan.families.arith.device_min_max {

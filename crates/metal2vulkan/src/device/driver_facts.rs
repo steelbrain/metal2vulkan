@@ -414,6 +414,23 @@ pub(crate) fn among<F: Copy + Ord>(
 /// widened `half` elsewhere or reads its bits is outside the measurement
 /// (`narrow::moves_unfolded`). One row per GPU, as measured.
 ///
+/// `MetalPackConversions`: MoltenVK 1.4.2 hands `GLSL.std.450`'s `PackUnorm4x8`, `PackSnorm4x8`,
+/// `PackUnorm2x16`, `PackSnorm2x16` and their unpacks to Metal's own `pack_float_to_*` and
+/// `unpack_*_to_float`, and the other formats' definition to Metal's arithmetic; on the M3 Max
+/// under macOS 27.0.1 (2026-11-02) the module's conversion answers Metal's, word for word against plain Metal with and without fast math, for
+/// `unpack_unorm565_to_float` (every word: the code times the `float` nearest `1 / D`, as Metal's
+/// does), `pack_float_to_unorm565` (3,083,776 `float`s and 385,152 around its products' ties:
+/// Metal rounds the product to `float` first), the `half` unpacks of `unorm4x8`, `snorm4x8`,
+/// `unorm10a2` and `unorm565` (every code: Metal's quotient rounded once to `half`), and the
+/// `half` packs
+/// of `unorm4x8`, `snorm4x8`, `unorm2x16`, `snorm2x16`, `unorm10a2` and `unorm565` (every `half`
+/// in every channel). The AIR of `runtime_lane::pack_conversions`, which checks the runtime
+/// against Metal's answers, run on Metal too, matches its model in every word. Measured to
+/// differ, so outside it: the sRGB format (85,511 of 3,083,776 `float` packs, 3,286 `half` ones),
+/// `unorm10a2` in `float` (9,163 of 131,072 unpacked words, 1,257 packed `float`s), and the `half`
+/// unpacks of `unorm2x16` and `snorm2x16` (8 lanes, a `float` quotient rounded twice);
+/// `snorm10a2` is unmeasured. One row per GPU, as measured.
+///
 /// Another driver has none of them, as Vulkan states, and a listed driver on another vendor's GPU
 /// (or another GPU than a row's) is unmeasured: the profile then takes each one's route without
 /// it, which the deviation's docs name (`derive.rs`).
@@ -603,6 +620,10 @@ pub(crate) const DEVIATIONS: &[Measured<DriverDeviation>] = &[
     Measured {
         device: Some(APPLE9),
         ..moltenvk_on_apple(DriverDeviation::MetalNanMoves)
+    },
+    Measured {
+        device: Some(APPLE9),
+        ..moltenvk_on_apple(DriverDeviation::MetalPackConversions)
     },
 ];
 

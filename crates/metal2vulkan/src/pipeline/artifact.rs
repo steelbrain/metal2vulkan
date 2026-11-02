@@ -1847,13 +1847,20 @@ pub enum PrecisionNote {
     /// `RoundEven` and conversion (a pack) or its multiply by the scale's reciprocal (an unpack);
     /// `unorm4x8_srgb`'s colour channels take the MSL transfer functions by the device's multiply,
     /// division and `Pow` around the 8-bit instruction. Metal rounds the exact product to its code
-    /// and divides correctly rounded, answers code 0 for a NaN channel, and takes an sRGB colour
+    /// and divides correctly rounded (`unorm565` in `float`: it rounds the product to `float`
+    /// first, and multiplies by the `float` nearest the reciprocal, as the definition does),
+    /// answers code 0 for a NaN channel, and takes an sRGB colour
     /// through its twelve-bit table: a decode answers its step `k / 4095` nearest the transfer, an
     /// encode the byte of that table's step. Also: a write of an 8-bit sRGB storage texture held
     /// through its UNORM alias (`StorageImageClass::SrgbEncode`, Vulkan having no sRGB storage
     /// view) encodes by `unorm4x8_srgb`'s pack. Recorded on every device but for
     /// a `float` conversion of the four named formats on a device whose functions are Metal's own
-    /// (MoltenVK: Metal's own `pack_float_to_*` and `unpack_*_to_float`). **Recorded bound:**
+    /// (MoltenVK: Metal's own `pack_float_to_*` and `unpack_*_to_float`), and but for the forms
+    /// measured to answer Metal's on a profile that takes
+    /// [`DriverDeviation::MetalPackConversions`](crate::error::DriverDeviation::MetalPackConversions)
+    /// (MoltenVK on the Apple M3 Max's macOS 27 identity: `unorm565` in `float`, and in `half`
+    /// `unorm4x8`, `snorm4x8`, `unorm10a2` and `unorm565` both ways and `unorm2x16` and
+    /// `snorm2x16` packed), which require `VkProperty::MetalPackConversions`. **Recorded bound:**
     /// Vulkan bounds the instructions by their definition (`round(clamp(c) * scale)` and
     /// `c / scale`): a packed code within one of Metal's, apart only where `clamp(c) * scale` lies
     /// within its `float` rounding of a half-integer (`Round` may tie either way); an unpacked

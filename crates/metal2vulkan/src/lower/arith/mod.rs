@@ -723,6 +723,11 @@ pub struct ArithPlan {
     /// `VkProperty::MetalNanMoves`, but where it holds a `half` the device's conversions did not
     /// make ([`narrow::moves_unfolded`]), where it records `PrecisionNote::NativeNanEncoding`.
     pub held_nan_moves: bool,
+    /// Whether an `air.pack` or `air.unpack` takes the device's conversion with no note because
+    /// its form is measured to answer Metal's (`DriverDeviation::MetalPackConversions`,
+    /// [`pack::measured`]), recorded at selection: the module then requires
+    /// `VkProperty::MetalPackConversions`.
+    pub metal_packs: bool,
     /// The precision notes the plan's operations record unless their entry's quotient and
     /// functions are Metal's own (the profile's `float` functions are Metal's and Metal compiles
     /// the entry with fast math), recorded at selection ([`OpNotes::unless_metal_fast`]);
@@ -2619,11 +2624,21 @@ fn select_pack(
     // The device's conversion: GLSL.std.450's instruction for the format, or its multiply,
     // `RoundEven` and clamp, whose rounding Vulkan leaves to the device (`DevicePackConversion`).
     // Where the profile's `float` functions are Metal's, a `float` one of the four formats
-    // GLSL.std.450 names reaches Metal's own `pack_float_to_*` or `unpack_*_to_float`.
+    // GLSL.std.450 names reaches Metal's own `pack_float_to_*` or `unpack_*_to_float`. Where the
+    // profile takes `MetalPackConversions`, the forms measured to be Metal's (`pack::measured`)
+    // are, and the module requires that property.
+    let fmt = floats.float_fmt();
     let own = FloatFacts::on(cx.profile).metal_functions
-        && floats.float_fmt() == Some(FloatFmt::F32)
+        && fmt == Some(FloatFmt::F32)
         && pack::instruction(p.format, p.dir).is_some();
-    if !own {
+    let measured = !own
+        && cx
+            .profile
+            .takes_driver_deviation(crate::error::DriverDeviation::MetalPackConversions)
+        && fmt.is_some_and(|f| pack::measured(p.format, p.dir, f));
+    if measured {
+        cx.families.arith.metal_packs = true;
+    } else if !own {
         cx.precision.insert(PrecisionNote::DevicePackConversion);
     }
     Ok(ArithStrategy::Pack {

@@ -40,6 +40,31 @@ pub fn instruction(format: PackFormat, dir: PackDir) -> Option<GlslOp> {
     })
 }
 
+/// Whether the device's conversion of `format` in direction `dir` on float lanes of `fmt` is one
+/// measured to answer Metal's where the profile takes `DriverDeviation::MetalPackConversions`:
+/// `unorm.rgb565` in `float`, and in `half` `unorm4x8`, `snorm4x8`, `unorm.rgb10a2` and
+/// `unorm.rgb565` both ways and `unorm2x16` and `snorm2x16` packed.
+pub fn measured(format: PackFormat, dir: PackDir, fmt: FloatFmt) -> bool {
+    use PackFormat as F;
+    match (fmt, dir) {
+        (FloatFmt::F32, _) => format == F::UnormRgb565,
+        (FloatFmt::Half, PackDir::Pack) => matches!(
+            format,
+            F::Unorm4x8
+                | F::Snorm4x8
+                | F::Unorm2x16
+                | F::Snorm2x16
+                | F::UnormRgb10a2
+                | F::UnormRgb565
+        ),
+        (FloatFmt::Half, PackDir::Unpack) => matches!(
+            format,
+            F::Unorm4x8 | F::Snorm4x8 | F::UnormRgb10a2 | F::UnormRgb565
+        ),
+        _ => false,
+    }
+}
+
 /// The error of a conversion whose format or lanes the emission cannot take (a packed float
 /// format to pack to, a lane count not the format's): selection rules both out.
 fn unpackable() -> BuildError {

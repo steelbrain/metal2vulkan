@@ -836,6 +836,17 @@ pub enum DriverDeviation {
     /// keeps its flipped sign unless the driver's compiler moves the negation onto the `half`.
     /// Unmeasured, each records it.
     MetalNanMoves,
+    /// The device's conversions of Metal's packed normalized formats outside the four
+    /// `GLSL.std.450` names in `float` answer Metal's codes and values
+    /// (`VkProperty::MetalPackConversions`): `unpack_unorm565_to_float` and
+    /// `pack_float_to_unorm565`, and the `half` forms of `unorm4x8`, `snorm4x8` and `unorm10a2`
+    /// (both ways), `unorm565` (both ways) and `unorm2x16` and `snorm2x16` (packing). The module
+    /// takes each as it does on every profile (the format's `GLSL.std.450` instruction, or its
+    /// definition on the format's fields, around a `half`'s widening or rounding); where the
+    /// profile takes this deviation, each records no `PrecisionNote::DevicePackConversion` and
+    /// the module requires the property. The sRGB format, `unorm10a2` in `float`, `snorm10a2`, and
+    /// the `half` unpacks of `unorm2x16` and `snorm2x16` stay noted. Unmeasured, each records it.
+    MetalPackConversions,
 }
 
 /// A defect of a device's driver in a command the runtime records for itself, never in a

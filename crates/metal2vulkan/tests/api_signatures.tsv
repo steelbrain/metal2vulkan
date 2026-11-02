@@ -12974,6 +12974,7 @@ variant	metal2vulkan::device::VkProperty::MetalNanMoves	MetalNanMoves
 variant	metal2vulkan::device::VkProperty::MetalNorm16ColorWrites	MetalNorm16ColorWrites
 variant	metal2vulkan::device::VkProperty::MetalNormStorageWrites	MetalNormStorageWrites
 variant	metal2vulkan::device::VkProperty::MetalNormalizedVertexFetch	MetalNormalizedVertexFetch
+variant	metal2vulkan::device::VkProperty::MetalPackConversions	MetalPackConversions
 variant	metal2vulkan::device::VkProperty::MetalSampler	MetalSampler
 variant	metal2vulkan::device::VkProperty::MetalSmallFloatColorWrites	MetalSmallFloatColorWrites
 variant	metal2vulkan::device::VkProperty::MetalVertexSimdgroups	MetalVertexSimdgroups
@@ -13132,6 +13133,7 @@ variant	metal2vulkan::error::DriverDeviation::MetalNanMoves	MetalNanMoves
 variant	metal2vulkan::error::DriverDeviation::MetalNorm16ColorWrites	MetalNorm16ColorWrites
 variant	metal2vulkan::error::DriverDeviation::MetalNormStorageWrites	MetalNormStorageWrites
 variant	metal2vulkan::error::DriverDeviation::MetalNormalizedVertexFetch	MetalNormalizedVertexFetch
+variant	metal2vulkan::error::DriverDeviation::MetalPackConversions	MetalPackConversions
 variant	metal2vulkan::error::DriverDeviation::MetalSampler	MetalSampler
 variant	metal2vulkan::error::DriverDeviation::MetalSmallFloatColorWrites	MetalSmallFloatColorWrites
 variant	metal2vulkan::error::DriverDeviation::MetalVertexSimdgroups	MetalVertexSimdgroups

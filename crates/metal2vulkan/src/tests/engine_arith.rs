@@ -468,18 +468,16 @@ fn kernels() -> Vec<Kernel> {
         note: Some(PrecisionNote::DeviceTranscendentals),
     });
     // `rgb565` is the device's product rounded by `RoundEven` (0.5 * 63 = 31.5 -> 32, exact in
-    // f32), noted, and `rg11b10f` unpacks the half with the field's bits (0x3C0 -> red 1.0).
-    v.push(Kernel {
-        note: Some(PrecisionNote::DevicePackConversion),
-        ..k(
-            "rgb565_pack_rounds_the_float_product_to_even",
-            format!(
-                "{}  %v = insertelement <3 x float> <float 0.0, float 0.5, float 0.0>, float %a, i32 0\n  %p = call i16 @air.pack.unorm.rgb565.v3f32(<3 x float> %v)\n  %r = zext i16 %p to i32\n",
-                of("a", 1.0)
-            ),
-            31 | (32 << 5),
-        )
-    });
+    // f32), noted but where measured (`pack_conversions_are_metals_where_measured`), and
+    // `rg11b10f` unpacks the half with the field's bits (0x3C0 -> red 1.0).
+    v.push(k(
+        "rgb565_pack_rounds_the_float_product_to_even",
+        format!(
+            "{}  %v = insertelement <3 x float> <float 0.0, float 0.5, float 0.0>, float %a, i32 0\n  %p = call i16 @air.pack.unorm.rgb565.v3f32(<3 x float> %v)\n  %r = zext i16 %p to i32\n",
+            of("a", 1.0)
+        ),
+        31 | (32 << 5),
+    ));
     v.push(Kernel {
         name: "rg11b10f_unpacks_half_fields",
         body: format!(
@@ -3820,6 +3818,148 @@ fn half_moves_are_metals_only_where_the_device_folds_them() {
                     .properties
                     .contains(&crate::device::requirements::VkProperty::MetalNanMoves),
                 widens && folded,
+                "{what}"
+            );
+        }
+    }
+}
+
+/// Every normalized format's `air.pack` and `air.unpack`, in `float` and `half`: the device's
+/// conversion, noted `DevicePackConversion` but where it reaches Metal's own function (a `float`
+/// form `GLSL.std.450` names, where the profile's `float` functions are Metal's) or where the
+/// profile takes `DriverDeviation::MetalPackConversions` and the form is one measured to be
+/// Metal's (`moltenvk-m3`: `unorm.rgb565` in `float`; in `half` `unorm4x8`, `snorm4x8`,
+/// `unorm.rgb10a2` and `unorm.rgb565` both ways and `unorm2x16` and `snorm2x16` packed), where
+/// the module requires `VkProperty::MetalPackConversions`. The sRGB format, `unorm.rgb10a2` in
+/// `float`, `snorm.rgb10a2` and the `half` unpacks of the 16-bit formats stay noted everywhere.
+#[test]
+fn pack_conversions_are_metals_where_measured() {
+    use crate::device::requirements::VkProperty;
+    // Each format's name, its lanes and its packed integer's width.
+    let formats = [
+        ("unorm4x8", 4, 32),
+        ("unorm4x8.srgb", 4, 32),
+        ("snorm4x8", 4, 32),
+        ("unorm2x16", 2, 32),
+        ("snorm2x16", 2, 32),
+        ("unorm.rgb10a2", 4, 32),
+        ("snorm.rgb10a2", 4, 32),
+        ("unorm.rgb565", 3, 16),
+    ];
+    // The forms measured on the M3 Max: (format, packs, half).
+    let measured = [
+        ("unorm.rgb565", true, false),
+        ("unorm.rgb565", false, false),
+        ("unorm4x8", true, true),
+        ("snorm4x8", true, true),
+        ("unorm2x16", true, true),
+        ("snorm2x16", true, true),
+        ("unorm.rgb10a2", true, true),
+        ("unorm.rgb565", true, true),
+        ("unorm4x8", false, true),
+        ("snorm4x8", false, true),
+        ("unorm.rgb10a2", false, true),
+        ("unorm.rgb565", false, true),
+    ];
+    let (mut forms, mut ks) = (Vec::new(), Vec::new());
+    let mut decls = String::new();
+    for (format, lanes, width) in formats {
+        for packs in [true, false] {
+            for half in [false, true] {
+                let (fty, fname) = if half {
+                    ("half", "f16")
+                } else {
+                    ("float", "f32")
+                };
+                let vty = format!("<{lanes} x {fty}>");
+                let call = format!(
+                    "air.{}.{format}.v{lanes}{fname}",
+                    if packs { "pack" } else { "unpack" }
+                );
+                let iw = format!("i{width}");
+                let decl = match packs {
+                    true => format!("declare {iw} @{call}({vty})\n"),
+                    false => format!("declare {vty} @{call}({iw})\n"),
+                };
+                if !DECLS.contains(&decl) && !decls.contains(&decl) {
+                    decls.push_str(&decl);
+                }
+                let body = if packs {
+                    let mut b = of("a", 0.25);
+                    if half {
+                        b.push_str("  %h = fptrunc float %a to half\n");
+                    }
+                    let x = if half { "%h" } else { "%a" };
+                    let mut prev = "undef".to_string();
+                    for i in 0..lanes {
+                        b.push_str(&format!(
+                            "  %v{i} = insertelement {vty} {prev}, {fty} {x}, i32 {i}\n"
+                        ));
+                        prev = format!("%v{i}");
+                    }
+                    b.push_str(&format!("  %p = call {iw} @{call}({vty} {prev})\n"));
+                    b.push_str(&match width {
+                        16 => "  %r = zext i16 %p to i32\n".to_string(),
+                        _ => "  %r = add i32 %p, 0\n".to_string(),
+                    });
+                    b
+                } else {
+                    let mut b = oi("w", 0x8901_37FF);
+                    let w = match width {
+                        16 => {
+                            b.push_str("  %w16 = trunc i32 %w to i16\n");
+                            "%w16"
+                        }
+                        _ => "%w",
+                    };
+                    b.push_str(&format!("  %v = call {vty} @{call}({iw} {w})\n"));
+                    b.push_str(&format!("  %x = extractelement {vty} %v, i32 0\n"));
+                    b.push_str(&match half {
+                        true => "  %b = bitcast half %x to i16\n  %r = zext i16 %b to i32\n",
+                        false => "  %r = bitcast float %x to i32\n",
+                    });
+                    b
+                };
+                let name = format!(
+                    "{}_{}_{fname}",
+                    if packs { "pack" } else { "unpack" },
+                    format.replace('.', "_")
+                );
+                forms.push((format, packs, half));
+                ks.push(Kernel {
+                    want: None,
+                    ..k(Box::leak(name.into_boxed_str()), body, 0)
+                });
+            }
+        }
+    }
+    let text = module(&ks).replace(DECLS, &format!("{DECLS}{decls}"));
+    let Some(bitcode) = assemble("pack-conversions", &text) else {
+        return;
+    };
+    for stem in ["lavapipe", "moltenvk-m3"] {
+        let p = profile(stem, DevicePolicy::default()).expect("profile");
+        let takes = p.takes_driver_deviation(crate::error::DriverDeviation::MetalPackConversions);
+        assert_eq!(takes, stem == "moltenvk-m3", "{stem}");
+        let metal_functions = p.fields().float_functions == FloatFunctions::Metal;
+        for (&(format, packs, half), kk) in forms.iter().zip(&ks) {
+            let what = format!("{} on {stem}", kk.name);
+            let a = compile(&bitcode, kk.name, &p).unwrap_or_else(|e| panic!("{what}: {e:?}"));
+            link_and_validate(&a, &p).unwrap_or_else(|e| panic!("{what}: L3: {e}"));
+            let glsl = matches!(format, "unorm4x8" | "snorm4x8" | "unorm2x16" | "snorm2x16");
+            let own = metal_functions && !half && glsl;
+            let metals = takes && measured.contains(&(format, packs, half));
+            assert_eq!(
+                a.precision.contains(&PrecisionNote::DevicePackConversion),
+                !own && !metals,
+                "{what}: {:?}",
+                a.precision
+            );
+            assert_eq!(
+                a.requirements
+                    .properties
+                    .contains(&VkProperty::MetalPackConversions),
+                metals,
                 "{what}"
             );
         }

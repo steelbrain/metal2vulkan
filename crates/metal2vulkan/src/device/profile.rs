@@ -339,6 +339,10 @@ impl DeviceProfile {
             DriverDeviation::MetalNanMoves => {
                 f.enabled.properties.contains(&VkProperty::MetalNanMoves)
             }
+            DriverDeviation::MetalPackConversions => f
+                .enabled
+                .properties
+                .contains(&VkProperty::MetalPackConversions),
         }
     }
 

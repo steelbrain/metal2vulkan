@@ -389,7 +389,6 @@ fn a_half_decode_is_the_devices_widening_inside_loops_and_out() {
         0x3800 | (0x3400 << 16),
         0,
     ];
-    let nan = PrecisionNote::NativeNanEncoding;
     let conversion = PrecisionNote::NativeHalfConversion;
     // Each profile, whether its widening is noted `NativeHalfConversion` (else measured), and
     // whether it unpacks words (no `shaderFloat16`).

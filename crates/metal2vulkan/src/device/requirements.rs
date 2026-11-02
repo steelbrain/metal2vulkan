@@ -841,6 +841,14 @@ pub enum VkProperty {
     /// [`PrecisionNote::NativeNanEncoding`](crate::pipeline::PrecisionNote::NativeNanEncoding)
     /// for it requires it.
     MetalNanMoves,
+    /// The device's conversions of the packed normalized formats measured to answer Metal's
+    /// (the driver's measured deviation
+    /// [`DriverDeviation::MetalPackConversions`](crate::error::DriverDeviation::MetalPackConversions)).
+    /// No Vulkan query reports it: Vulkan leaves the conversions' rounding to the device. A
+    /// module that converts one of those forms and records no
+    /// [`PrecisionNote::DevicePackConversion`](crate::pipeline::PrecisionNote::DevicePackConversion)
+    /// for it requires it.
+    MetalPackConversions,
     /// `GLSL.std.450 InterpolateAtOffset` at offset `v` reads Metal's `interpolate_at_offset` at
     /// `v + 7/16`, measured from the pixel's upper-left corner: a device whose description reports
     /// a MoltenVK driver, whose SPIRV-Cross hands the instruction to Metal so at any release

@@ -625,6 +625,8 @@ mod normalized_vertex_fetch;
 #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
 mod numbered_samplers;
 #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+mod pack_conversions;
+#[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
 mod padded_loads;
 #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
 mod pass_start_reads;

@@ -3490,12 +3490,22 @@ bound.
   device's: `GLSL.std.450`'s `Pack`/`Unpack` `Unorm4x8`, `Snorm4x8`, `Unorm2x16` and `Snorm2x16`,
   their definition by the device's `NClamp`, multiply, `RoundEven` and reciprocal for `rgb10a2` and
   `rgb565`, and the MSL transfer functions by the device's `Pow` for `unorm4x8_srgb`'s colour. Metal
-  rounds the exact product and divides correctly rounded, answers code 0 for a NaN channel, and
+  rounds the exact product and divides correctly rounded (`unorm565` in `float`: the product
+  rounded to `float` first, and the code times the `float` nearest the reciprocal, as the
+  definition does), answers code 0 for a NaN channel, and
   takes an sRGB colour through its twelve-bit table; a packed code is within one of Metal's, an
   unpacked value within 2.5 ulp, a decoded sRGB colour within half a twelve-bit step (`1 / 8190`)
   of Metal's step beyond its `Pow`'s bound. Also a write of an 8-bit sRGB storage texture held
   through its UNORM alias, which encodes by `unorm4x8_srgb`'s pack. Not recorded for a
-  `float` conversion of the four named formats on MoltenVK, Metal's own there. The same conversions
+  `float` conversion of the four named formats on MoltenVK, Metal's own there. **Exempt:** on a
+  profile that takes `DriverDeviation::MetalPackConversions`, MoltenVK on Apple's GPUs of the
+  Apple M3 Max's macOS 27 identity, the forms measured to answer Metal's at every code and every
+  `half` (on Metal and on the runtime, `runtime_lane::pack_conversions`) record no note and
+  require `VkProperty::MetalPackConversions`: `unorm565` in `float`, and in `half` `unorm4x8`,
+  `snorm4x8`, `unorm10a2` and `unorm565` both ways and `unorm2x16` and `snorm2x16` packed. The
+  sRGB format, `unorm10a2` in `float` (9,163 of 131,072 unpacked words and 1,257 of 3,083,776
+  packed `float`s differ), `snorm10a2`, and the `half` unpacks of `unorm2x16` and `snorm2x16`
+  (Metal's single rounding, 8 lanes differ) stay noted there. The same conversions
   serve an implicit imageblock access of a normalized attachment (a `half` load rounding the
   unpacked `float` once more), a fragment function's read and write of an 8-bit sRGB attachment
   in the interlocked storage form or through its word view, and a snapshot read's decode of a
