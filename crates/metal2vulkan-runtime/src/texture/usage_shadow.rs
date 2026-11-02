@@ -223,6 +223,7 @@ impl Texture {
 
     /// A new shadow of the texture (the module docs).
     fn new_usage_shadow(&self, call: &'static str) -> Result<UsageShadow, Error> {
+        self.check_plane_copied()?;
         let device = self.device();
         let record = &self.0.record.bound();
         let wider = ViewRecord {

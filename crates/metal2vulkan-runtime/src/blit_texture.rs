@@ -476,6 +476,7 @@ impl BlitCommandEncoder {
                 const CALL: &str = "copy_from_buffer_to_texture";
                 this.core().check_device(CALL, source_buffer.device())?;
                 this.check_texture(CALL, destination_texture)?;
+                destination_texture.check_plane_copied()?;
                 if this.fails_on_memoryless(&[destination_texture]) {
                     return Ok(());
                 }
@@ -655,6 +656,7 @@ impl BlitCommandEncoder {
             |this| {
                 const CALL: &str = "copy_from_texture_to_buffer";
                 this.check_texture(CALL, source_texture)?;
+                source_texture.check_plane_copied()?;
                 this.core()
                     .check_device(CALL, destination_buffer.device())?;
                 if this.fails_on_memoryless(&[source_texture]) {
@@ -1280,6 +1282,8 @@ impl BlitCommandEncoder {
     ) -> Result<(), Error> {
         self.check_texture(call, source)?;
         self.check_texture(call, destination)?;
+        source.check_plane_copied()?;
+        destination.check_plane_copied()?;
         source.check_rotated_reach()?;
         destination.check_rotated_reach()?;
         check_depth_view(source)?;
@@ -1903,6 +1907,7 @@ impl BlitCommandEncoder {
             return Ok(());
         }
         self.check_texture(CALL, texture)?;
+        texture.check_plane_copied()?;
         if self.fails_on_memoryless(&[texture]) {
             return Ok(());
         }

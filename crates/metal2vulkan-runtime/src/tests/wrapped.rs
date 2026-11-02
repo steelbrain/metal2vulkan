@@ -530,6 +530,7 @@ fn image(layouts: VkImageLayouts) -> WrappedImage {
         3,
         layouts,
         "the test's image".to_owned(),
+        None,
     )
 }
 
@@ -698,4 +699,162 @@ fn a_wrapped_image_is_never_destroyed_or_freed() {
     let caller = Owner::Caller(Arc::new(image(VkImageLayouts::general())));
     let (destroyed, freed) = caller.releases();
     assert!(!destroyed && freed.is_none());
+}
+
+/// A texture over one plane of the caller's multi-planar image
+/// (`Device::new_texture_with_vk_image_plane`): planned in the descriptor's format at the plane's
+/// extent (the registry's divisors), with the plane's aspect and the image's shader usages alone,
+/// mutable and of extended usage; each contradiction refused by name.
+#[test]
+fn a_plane_of_a_multi_planar_image_is_planned_by_its_plane() {
+    use crate::texture::wrapped::{plane_plan, planes_of};
+    let (_, desc, device) = committed()
+        .into_iter()
+        .find(|(n, ..)| n == "lavapipe")
+        .expect("the lavapipe profile");
+    let facts = facts(&desc, &device);
+    let plan = |format: PixelFormat, side: u64, usage: TextureUsage| {
+        let descriptor = TextureDescriptor {
+            texture_type: TextureType::Type2D,
+            pixel_format: format,
+            width: side,
+            height: side,
+            usage,
+            ..TextureDescriptor::default()
+        };
+        let layout = descriptor.check(APPLE).expect("a valid descriptor");
+        plan_image(
+            &layout,
+            texture_usage(usage, descriptor.swizzle),
+            false,
+            &facts,
+        )
+        .unwrap()
+    };
+    let read = TextureUsage::SHADER_READ;
+    let image = |format: vk::Format| {
+        vk::ImageCreateInfo::default()
+            .flags(vk::ImageCreateFlags::MUTABLE_FORMAT | vk::ImageCreateFlags::EXTENDED_USAGE)
+            .image_type(vk::ImageType::TYPE_2D)
+            .format(format)
+            .extent(vk::Extent3D {
+                width: 16,
+                height: 16,
+                depth: 1,
+            })
+            .mip_levels(1)
+            .array_layers(1)
+            .samples(vk::SampleCountFlags::TYPE_1)
+            .tiling(vk::ImageTiling::OPTIMAL)
+            .usage(vk::ImageUsageFlags::SAMPLED | vk::ImageUsageFlags::TRANSFER_DST)
+    };
+    let sharing = Sharing::new(&[FAMILY]);
+    let nv12 = image(vk::Format::G8_B8R8_2PLANE_420_UNORM);
+    let (luma, aspect) = plane_plan(
+        plan(PixelFormat::R8Unorm, 16, read),
+        &nv12,
+        0,
+        read,
+        &[],
+        sharing,
+    )
+    .unwrap();
+    assert_eq!(
+        (luma.format, luma.extent, aspect),
+        (Format::R8_UNORM, [16, 16, 1], ImageAspectFlags::PLANE_0)
+    );
+    assert_eq!(luma.usage, ImageUsageFlags::SAMPLED);
+    assert_eq!(
+        luma.flags,
+        ImageCreateFlags::MUTABLE_FORMAT | ImageCreateFlags::EXTENDED_USAGE
+    );
+    assert!(luma.view_formats.is_empty());
+    let chroma = plan(PixelFormat::RG8Unorm, 8, read);
+    let (planned, aspect) = plane_plan(chroma.clone(), &nv12, 1, read, &[], sharing).unwrap();
+    assert_eq!(
+        (planned.format, planned.extent, aspect),
+        (Format::R8G8_UNORM, [8, 8, 1], ImageAspectFlags::PLANE_1)
+    );
+    // P010's chroma plane, viewed as `RG16Unorm`: one compatibility class.
+    let p010 = image(vk::Format::G10X6_B10X6R10X6_2PLANE_420_UNORM_3PACK16);
+    let rg16 = plan(PixelFormat::RG16Unorm, 8, read);
+    assert!(plane_plan(rg16, &p010, 1, read, &[], sharing).is_ok());
+    use WrappedImageProblem as P;
+    let refused = |plan: ImagePlan, info: &vk::ImageCreateInfo<'_>, plane, usage| {
+        plane_plan(plan, info, plane, usage, &[], sharing).unwrap_err()
+    };
+    assert_eq!(
+        refused(chroma.clone(), &nv12, 2, read),
+        P::Plane {
+            plane: 2,
+            planes: 2
+        }
+    );
+    let rgba = image(vk::Format::R8G8B8A8_UNORM);
+    assert_eq!(
+        refused(chroma.clone(), &rgba, 0, read),
+        P::Plane {
+            plane: 0,
+            planes: 0
+        }
+    );
+    assert_eq!(
+        refused(plan(PixelFormat::R8Unorm, 8, read), &nv12, 1, read),
+        P::PlaneFormat {
+            plane: Format::R8G8_UNORM,
+            texture: Format::R8_UNORM
+        }
+    );
+    assert_eq!(
+        refused(plan(PixelFormat::RG8Unorm, 16, read), &nv12, 1, read),
+        P::Extent {
+            image: [8, 8, 1],
+            texture: [16, 16, 1]
+        }
+    );
+    let fixed = nv12.flags(vk::ImageCreateFlags::MUTABLE_FORMAT);
+    assert_eq!(
+        refused(chroma.clone(), &fixed, 1, read),
+        P::Flags {
+            missing: ImageCreateFlags::EXTENDED_USAGE
+        }
+    );
+    let write = read | TextureUsage::SHADER_WRITE;
+    assert_eq!(
+        refused(plan(PixelFormat::RG8Unorm, 8, write), &nv12, 1, write),
+        P::Usage {
+            missing: ImageUsageFlags::STORAGE
+        }
+    );
+    let linear = nv12.tiling(vk::ImageTiling::LINEAR);
+    assert_eq!(
+        refused(chroma.clone(), &linear, 1, read),
+        P::Tiling {
+            image: ImageTiling::LINEAR
+        }
+    );
+    // A concurrent image that leaves out one of the device's families.
+    let concurrent = nv12.sharing_mode(vk::SharingMode::CONCURRENT);
+    assert_eq!(
+        plane_plan(
+            chroma,
+            &concurrent,
+            1,
+            read,
+            &[1, 2],
+            Sharing::new(&[FAMILY, 1])
+        ),
+        Err(P::QueueFamily)
+    );
+    // The table: a two-plane format's name says two planes, a three-plane one's three.
+    for raw in 1_000_156_000..1_000_156_034 {
+        let format = Format::from(vk::Format::from_raw(raw));
+        let name = format!("{format:?}");
+        let planes = planes_of(format).len();
+        let named = [("_2PLANE_", 2), ("_3PLANE_", 3)]
+            .into_iter()
+            .find(|(part, _)| name.contains(part))
+            .map_or(0, |(_, count)| count);
+        assert_eq!(planes, named, "{name}");
+    }
 }

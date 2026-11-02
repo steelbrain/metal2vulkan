@@ -1854,6 +1854,7 @@ fn target(
     }
     let facts = Facts::of(texture.record());
     let sub = check_target(call, which, &facts, subresource, length)?;
+    texture.check_plane_copied()?;
     // A 2D texture over a buffer renders into its aliasing image, or into its shadow, which the
     // encoder copies in before the pass and back after it (`render/shadows.rs`); a texture
     // buffer renders through its attachment twin, such a texture of one row over its bytes, and a

@@ -1030,10 +1030,30 @@ impl Image {
     ///
     /// `image` is live, and `view` fits its plan (format, usage, levels and layers).
     unsafe fn make_view(&self, image: vk::Image, view: &VkView) -> Result<vk::ImageView, Error> {
+        // A plane of the caller's multi-planar image is viewed through its plane's aspect, where
+        // every other image's colour is the colour aspect (`texture/wrapped.rs`).
+        let plane;
+        let view = match self.caller_plane() {
+            Some(aspect) if view.aspect == ImageAspectFlags::COLOR => {
+                plane = VkView { aspect, ..*view };
+                &plane
+            }
+            _ => view,
+        };
         let mut usage = vk::ImageViewUsageCreateInfo::default();
         let info = view.create_info(image, &mut usage);
         // SAFETY: the caller's.
         unsafe { crate::creation::image_view(self.device.shared().vk(), &info) }.map_err(vulkan)
+    }
+
+    /// The plane of the caller's multi-planar image the image presents
+    /// (`Device::new_texture_with_vk_image_plane`), whose views name its aspect; `None` for every
+    /// other image.
+    pub(super) fn caller_plane(&self) -> Option<ImageAspectFlags> {
+        match &self.owner {
+            Owner::Caller(wrapped) => wrapped.plane,
+            _ => None,
+        }
     }
 
     /// Exchange the image's `VkImage` and views with `objects`'s: the image is `objects`'s new
@@ -4367,6 +4387,16 @@ impl Texture {
             | Owner::Heap(_)
             | Owner::HeapShadow(_)
             | Owner::HeapUnaliased(_) => None,
+        }
+    }
+
+    /// Refuse what would copy the texels of a texture over a plane of the caller's multi-planar
+    /// image (`Device::new_texture_with_vk_image_plane`): a copy, fill or mipmap generation, a
+    /// render pass, a shadow (`NotImplemented(VkImagePlaneCopy)`). `Ok` for every other texture.
+    pub(crate) fn check_plane_copied(&self) -> Result<(), Error> {
+        match self.image().ok().and_then(|image| image.caller_plane()) {
+            Some(_) => Err(Error::NotImplemented(RuntimeGap::VkImagePlaneCopy)),
+            None => Ok(()),
         }
     }
 

@@ -1523,6 +1523,13 @@ pub enum RuntimeGap {
     /// Metal's calls do). Vulkan semaphores do not cross devices unless exported, which the runtime
     /// does not do (no venue has two GPUs in one process).
     SharedEventAcrossDevices,
+    /// A copy, fill or mipmap generation of a texture over a plane of the caller's multi-planar
+    /// `VkImage` (`Device::new_texture_with_vk_image_plane`), a render pass that renders it, and a
+    /// view or binding that would hold its texels apart in an image of the runtime's (a shadow):
+    /// each copies the plane, which Vulkan names by its plane aspect where the runtime's copies
+    /// name the color aspect. Its views, which sampling and shader reads and writes bind, are the
+    /// exact path and run.
+    VkImagePlaneCopy,
     /// A viewport depth range past `[0, 1]`, which Metal takes, on a device without the features
     /// to take it natively or by the vertex stage's compensation (a driver that draws the
     /// compensated depths inexactly refuses it `Unsupported`, `Feature::ViewportDepthRange`), or

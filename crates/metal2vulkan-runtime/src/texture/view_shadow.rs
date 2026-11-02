@@ -56,7 +56,7 @@
 use super::{IdUse, Image, Owner, Storage, Texture};
 use crate::degradation::Degradation;
 use crate::device::lock;
-use crate::error::{internal, Error};
+use crate::error::{internal, Error, RuntimeGap};
 use crate::image_plan::plan_image;
 use crate::image_plan::{copies_between, takes_views_of};
 use crate::memory::Placement;
@@ -311,6 +311,9 @@ impl Device {
         view: &ViewRecord,
         rendered: bool,
     ) -> Result<Image, Error> {
+        if base.caller_plane().is_some() {
+            return Err(Error::NotImplemented(RuntimeGap::VkImagePlaneCopy));
+        }
         let apart =
             || Error::Unsupported(self.apart_refusal(Some(base.as_ref()), view.pixel_format));
         let image = self.image_shadow(call, base, texture, view, apart)?;

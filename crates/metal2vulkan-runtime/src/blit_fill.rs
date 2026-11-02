@@ -1017,6 +1017,7 @@ impl BlitCommandEncoder {
         (value, color): (vk::ClearColorValue, [f64; 4]),
     ) -> Result<(), Error> {
         self.core().check_device(call, texture.device())?;
+        texture.check_plane_copied()?;
         self.see(texture);
         let Size {
             width,
@@ -1271,6 +1272,7 @@ impl BlitCommandEncoder {
         pattern: &[u8],
     ) -> Result<(), Error> {
         self.core().check_device(call, texture.device())?;
+        texture.check_plane_copied()?;
         self.see(texture);
         check_pattern(call, texture.texture_type(), pattern)?;
         let unit = fill_unit(texture.pixel_format())
