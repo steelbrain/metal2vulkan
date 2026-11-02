@@ -444,10 +444,11 @@ impl RenderLowering {
                 .as_ref()
                 .is_some_and(|color| color.load == LoadAction::Load)
         }))?;
+        let attached = render_target::attachment_uses(&self.layout)?;
         let planned = shadows::plan(
             &mut self.core,
             std::iter::once((&instance.shadows, bound)),
-            &self.layout,
+            (&self.layout, &attached),
             (true, area.map(|area| (area, &loaded[..]))),
             area.is_some().then_some(&self.drawn),
         )?;

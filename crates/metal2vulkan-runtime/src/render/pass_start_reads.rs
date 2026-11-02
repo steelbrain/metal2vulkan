@@ -47,7 +47,6 @@ use crate::buffer::Buffer;
 use crate::degradation::Degradation;
 use crate::encoder::EncoderCore;
 use crate::error::Error;
-use crate::key_hash::KeyMap;
 use crate::resource::ResourceKey;
 use crate::tracker::{Barrier, Use, UseRange};
 use crate::values::{CpuCacheMode, HazardTrackingMode, ResourceOptions, StorageMode};
@@ -71,13 +70,31 @@ const MESH_STAGES: vk::PipelineStageFlags2 = vk::PipelineStageFlags2::from_raw(
         | vk::PipelineStageFlags2::MESH_SHADER_EXT.as_raw(),
 );
 
-/// Byte ranges of buffers, tracked or not, by key.
+/// Byte ranges of buffers, tracked or not, by key, in its order: the first `held` lists, each
+/// with its ranges; those past them are lists left empty with their room
+/// ([`clear`](Self::clear)), which the next keys take.
 #[derive(Clone, Default)]
-struct Written(KeyMap<ResourceKey, Vec<Range<u64>>>);
+struct Written {
+    lists: Vec<(ResourceKey, Vec<Range<u64>>)>,
+    held: usize,
+}
 
 impl Written {
     fn add(&mut self, key: ResourceKey, range: &Range<u64>) {
-        let ranges = self.0.entry(key).or_default();
+        let held = self.held;
+        let at = match self.lists[..held].binary_search_by_key(&key, |&(at, _)| at) {
+            Ok(at) => at,
+            Err(at) => {
+                match self.lists.get_mut(held) {
+                    Some(left) => left.0 = key,
+                    None => self.lists.push((key, Vec::new())),
+                }
+                self.lists[at..=held].rotate_right(1);
+                self.held += 1;
+                at
+            }
+        };
+        let ranges = &mut self.lists[at].1;
         ranges.push(range.clone());
         if ranges.len() > RANGES_PER_KEY {
             let start = ranges.iter().map(|r| r.start).min().unwrap_or(0);
@@ -88,11 +105,26 @@ impl Written {
     }
 
     fn overlaps(&self, key: ResourceKey, range: &Range<u64>) -> bool {
-        self.0.get(&key).is_some_and(|ranges| {
-            ranges
+        let held = &self.lists[..self.held];
+        let at = held.binary_search_by_key(&key, |&(at, _)| at).ok();
+        at.is_some_and(|at| {
+            held[at]
+                .1
                 .iter()
                 .any(|r| r.start < range.end && range.start < r.end)
         })
+    }
+
+    fn is_empty(&self) -> bool {
+        self.held == 0
+    }
+
+    /// No ranges, its lists' room kept.
+    fn clear(&mut self) {
+        for (_, ranges) in &mut self.lists[..self.held] {
+            ranges.clear();
+        }
+        self.held = 0;
     }
 }
 
@@ -169,10 +201,26 @@ impl PassStartReads {
         }
     }
 
+    /// The entries its lists and copies hold room for.
+    pub(super) fn room(&self) -> usize {
+        let maps = [&self.fragment, &self.fragment_reads, &self.other];
+        maps.iter().map(|map| map.lists.len()).sum::<usize>() + self.copies.capacity()
+    }
+
+    /// Note nothing, keeping its lists' room for a next pass's
+    /// ([`DrawRoom`](super::draw_room::DrawRoom)). Its copies go: their scratch buffers are held
+    /// by the command buffer of the pass that took them.
+    pub(super) fn clear(&mut self) {
+        self.fragment.clear();
+        self.fragment_reads.clear();
+        self.other.clear();
+        self.copies.clear();
+    }
+
     /// Whether a fragment stage of the pass wrote any bytes so far: a later draw's stages before
     /// its fragments read none from a copy, wherever they read.
     pub(super) fn fragment_wrote(&self) -> bool {
-        !self.fragment.0.is_empty()
+        !self.fragment.is_empty()
     }
 
     /// What the pass noted so far, without its copies: what an execution's recording starts from
@@ -216,7 +264,7 @@ impl PassStartReads {
         encoder: &ArgumentTable,
         interface: &PipelineInterface,
     ) -> Result<Option<ArgumentTable>, Error> {
-        if self.fragment.0.is_empty() || encoder.buffers.is_empty() {
+        if self.fragment.is_empty() || encoder.buffers.is_empty() {
             return Ok(None);
         }
         // The bytes the stage's function writes, from each written slot's offset.
@@ -396,5 +444,39 @@ impl PassStartReads {
                 (object, reason)
             });
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Written;
+    use crate::resource::ResourceKey;
+
+    /// A buffer's written ranges overlap what they meet and nothing else, by buffer; cleared,
+    /// none is noted and the lists keep their room, which the next buffers take.
+    #[test]
+    fn written_ranges_keep_their_lists_when_cleared() {
+        let (a, b) = (ResourceKey::new(), ResourceKey::new());
+        let mut written = Written::default();
+        assert!(written.is_empty());
+        written.add(b, &(0..16));
+        written.add(a, &(32..48));
+        written.add(b, &(64..80));
+        assert!(written.overlaps(b, &(8..9)) && written.overlaps(b, &(70..90)));
+        assert!(!written.overlaps(b, &(16..64)) && !written.overlaps(a, &(0..32)));
+        assert!(written.overlaps(a, &(40..41)));
+        let room: Vec<*const std::ops::Range<u64>> =
+            written.lists.iter().map(|(_, r)| r.as_ptr()).collect();
+        written.clear();
+        assert!(written.is_empty() && !written.overlaps(a, &(40..41)));
+        written.add(a, &(0..1));
+        written.add(b, &(0..1));
+        assert!(written.overlaps(a, &(0..1)) && !written.overlaps(a, &(40..41)));
+        let mut taken: Vec<*const std::ops::Range<u64>> =
+            written.lists.iter().map(|(_, r)| r.as_ptr()).collect();
+        let mut room = room;
+        taken.sort();
+        room.sort();
+        assert_eq!(taken, room, "the lists kept");
     }
 }

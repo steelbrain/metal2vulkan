@@ -393,6 +393,7 @@ mod bound;
 mod call_checks;
 mod color_groups;
 mod deferral;
+mod draw_room;
 mod draw_shape;
 mod executions;
 mod extended_shadow;
@@ -428,6 +429,9 @@ use deferral::Logged;
 pub(crate) use deferral::{lowering, DeferredEncoders, EndInFlight};
 #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
 pub(crate) use deferral::{BATCH_CALLS, HANDED_BATCHES};
+#[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+pub(crate) use draw_room::made as draw_rooms_made;
+pub(crate) use draw_room::SpareDrawRooms;
 pub(crate) use inline_splits::SpareKept;
 use replay::{
     DrawIndexed, DrawIndexedIndirect, DrawIndexedPatches, DrawIndexedPatchesIndirect, DrawPatches,
@@ -1377,7 +1381,9 @@ pub(crate) struct RenderLowering {
     core: EncoderCore,
     /// The pass's instances before the current one, which the draws record into.
     earlier: Vec<Instance>,
-    current: Instance,
+    /// The instance the draws record into, in a box: the encoder moves as its pass ends, and
+    /// the instance with it by its box (`end_pass`).
+    current: Box<Instance>,
     /// Versioned, as the state and the amplification are: a draw's shape is derived from them
     /// (`render/draw_shape.rs`).
     layout: Versioned<PassLayout>,
@@ -1973,6 +1979,9 @@ impl RenderLowering {
         let live = core.device().shared().live_binds.take();
         // The views and sampler descriptions its binds made or found (`binding::BindMemo`).
         let bind_memo = core.device().shared().bind_memos.take();
+        // What its draws gather into, with the room an ended encoder's left
+        // (`render/draw_room.rs`).
+        let room = core.device().shared().draw_rooms.take();
         // Metal's default viewport and scissor rectangle cover the render area: a rate map's.
         let area = rate_map
             .as_ref()
@@ -1980,7 +1989,7 @@ impl RenderLowering {
         Box::new(RenderLowering {
             core,
             earlier: Vec::new(),
-            current: Instance {
+            current: Box::new(Instance {
                 draws,
                 shape: Versioned::new(shape.clone()),
                 compatible: Arc::clone(&compatible),
@@ -1995,20 +2004,20 @@ impl RenderLowering {
                 barriers: false,
                 views: ViewSetup::default(),
                 pieces: Vec::new(),
-                shadows: InstanceShadows::default(),
+                shadows: room.shadows,
                 before: Vec::new(),
                 reformats: Vec::new(),
                 positioned: None,
                 rerecord: rerecord.then(Vec::new),
                 bound: Bound::default(),
-                drawn: clear_reach::DrawnArea::default(),
+                drawn: room.first_drawn,
                 inline: false,
                 continues: false,
                 kept: None,
                 planned: false,
                 feedback: Feedback::NONE,
                 storage_colors: 0,
-            },
+            }),
             state: Versioned::new(EncoderState::metal_defaults(area)),
             scissors: ScissorRects::metal_default(area),
             render_target_array_length,
@@ -2064,13 +2073,13 @@ impl RenderLowering {
             depth_writes: false,
             drew_depth_writes: false,
             drew: false,
-            drawn: clear_reach::DrawnArea::default(),
+            drawn: room.drawn,
             coverage: linear_attachment::Coverage::default(),
             inputs_read: BTreeSet::new(),
             kept_attachments: None,
             extended_written,
             extended,
-            pass_start: PassStartReads::default(),
+            pass_start: room.pass_start,
             restart: None,
             live,
             log,
@@ -3936,7 +3945,15 @@ impl RenderLowering {
     pub(crate) fn end_encoding(self: Box<Self>) -> Result<(), Error> {
         self.core.device().shared().counts.render_encoder_ended();
         // And the pass's later color groups, where it draws in groups (`render/color_groups.rs`).
-        let (mut core, residency, log) = self.end_pass()?.with_later_groups()?;
+        let color_groups::Ended {
+            mut core,
+            residency,
+            log,
+            later,
+        } = self.end_pass()?;
+        if let Some(later) = later {
+            core = color_groups::Ended::later_groups(core, &later, log.as_ref())?;
+        }
         // A notice of a kind the device refuses while lowering, announced by the end of an encoder
         // that logged its calls, refuses the end (`render/deferral.rs`).
         if let (Some(call), Some(notice)) = (lowering::current(), lowering::take_refusal()) {
@@ -3954,7 +3971,17 @@ impl RenderLowering {
     /// (`render/replay.rs`), ended as [`end_encoding`](Self::end_encoding) ends one, into its
     /// place: what it recorded, and what it made resident.
     pub(super) fn finish_replay(self: Box<Self>) -> Result<(Replayed, Option<Residency>), Error> {
-        let (core, residency, _) = self.end_pass()?.with_later_groups()?;
+        let color_groups::Ended {
+            mut core,
+            residency,
+            log,
+            later,
+        } = self.end_pass()?;
+        if let Some(later) = later {
+            core = color_groups::Ended::later_groups(core, &later, log.as_ref())?;
+        }
+        // Its log goes before what it recorded is placed, as it went once its groups were drawn.
+        drop(log);
         Ok((core.finish_replay()?, Some(residency)))
     }
 
@@ -4020,7 +4047,7 @@ impl RenderLowering {
             self.barrier_inside || self.reaches_unnamed || !self.executions.is_empty();
         let RenderLowering {
             mut core,
-            mut earlier,
+            earlier,
             current,
             mut layout,
             passes,
@@ -4052,6 +4079,7 @@ impl RenderLowering {
             grouped,
             live,
             bind_memo,
+            pass_start,
             ..
         } = *self;
         // The views and sampler descriptions its binds made or found, which the device's next
@@ -4060,8 +4088,11 @@ impl RenderLowering {
         // The bind state its last draw left, which the device's next render encoder starts from
         // (`live_bind.rs`): no draw holds it once the encoder ends.
         core.device().shared().live_binds.give(live);
-        earlier.push(current);
-        let mut instances = earlier;
+        // The pass's instances in order, each by a box: the current one's, and the earlier ones'
+        // (a pass split) each moved into one.
+        let mut instances = Vec::with_capacity(earlier.len() + 1);
+        instances.extend(earlier.into_iter().map(Box::new));
+        instances.push(current);
         // The first instance's render pass and framebuffer, where it recorded inline in the
         // command buffer the encoder holds for the pass (`render/inline_first.rs`), and the
         // instances' after a split that recorded inline there too (`render/inline_splits.rs`):
@@ -4461,6 +4492,8 @@ impl RenderLowering {
             shapes.push(resolving.clone());
         }
         let mut uses = render_target::attachment_uses(&layout)?;
+        // The attachments' uses lead the pass's: the shadows' plan below takes them.
+        let attached = uses.len();
         if let Some(planes) = &planes {
             uses.extend(planes.uses.iter().cloned());
         }
@@ -4955,7 +4988,7 @@ impl RenderLowering {
             let planned = shadows::plan(
                 &mut core,
                 order.iter().map(|&(s, bound, _)| (s, bound)),
-                &layout,
+                (&layout, &uses[..attached]),
                 (reached, drawn_bounds.map(|area| (area, loaded_colors))),
                 drawn_bounds.is_some().then_some(&drawn),
             )?;
@@ -5208,6 +5241,8 @@ impl RenderLowering {
         // its executions (`render/pass_steps.rs`). An empty list of the extended-range shadows'
         // settings or of the stand-ins' copies leaves every instance's empty.
         let dispatch_count = dispatches.len();
+        // The pass's drawn area, which the device keeps for a next encoder's (below).
+        let pass_drawn = drawn;
         let mut drawn = Vec::with_capacity(count - inlined);
         let mut instance_steps = Vec::with_capacity(count);
         let shadow_fills = (shadow_fills.into_iter()).chain(std::iter::repeat_with(Vec::new));
@@ -5215,6 +5250,10 @@ impl RenderLowering {
         let reformat_copies = (reformat_copies.into_iter()).chain(std::iter::repeat_with(none));
         let fills_and_copies = shadow_fills.zip(reformat_copies);
         let moved_images = (std::iter::repeat_with(Vec::new).take(inlined)).chain(later_moved);
+        // The first instance's gathering and drawn area, which the device keeps for a next
+        // encoder's with the pass's drawn area and fragment writes and reads
+        // (`render/draw_room.rs`).
+        let mut first_gathered = None;
         for (index, ((instance, (shadow_fills, (reformat_in, reformat_out))), moved)) in instances
             .into_iter()
             .zip(fills_and_copies)
@@ -5230,8 +5269,13 @@ impl RenderLowering {
                 before,
                 positioned,
                 kept,
+                shadows: gathered,
+                drawn: instance_drawn,
                 ..
-            } = instance;
+            } = *instance;
+            if index == 0 {
+                first_gathered = Some((gathered, instance_drawn));
+            }
             // Its commands, kept as it recorded inline after a split, were recorded at the pass's
             // end (`render/inline_splits.rs`): their room goes back to the device.
             if let Some(kept) = kept {
@@ -5256,6 +5300,15 @@ impl RenderLowering {
             if index >= inlined {
                 drawn.push((draws, pieces, shape));
             }
+        }
+        if let Some((shadows, first_drawn)) = first_gathered {
+            let room = draw_room::DrawRoom {
+                shadows,
+                first_drawn,
+                drawn: pass_drawn,
+                pass_start,
+            };
+            device.shared().draw_rooms.give(room);
         }
         let mut dispatch_copies = dispatch_copies.into_iter();
         let steps = PassSteps {
@@ -6020,7 +6073,7 @@ impl RenderLowering {
             let viewed = self
                 .earlier
                 .iter()
-                .chain([&self.current])
+                .chain([&*self.current])
                 .any(|i| i.reformats.iter().any(|r| r.index == index as usize));
             if copies.is_some() && viewed {
                 return Err(Error::NotImplemented(RuntimeGap::Render));
@@ -6388,18 +6441,18 @@ impl RenderLowering {
                     (false, false) => cause,
                 };
                 self.core.device().shared().counts.instance_split(cause);
-                let previous = std::mem::replace(&mut self.current, *instance);
-                self.earlier.push(previous);
+                let previous = std::mem::replace(&mut self.current, instance);
+                self.earlier.push(*previous);
                 self.barrier_splits += usize::from(self.barrier);
                 if self.barrier {
                     self.reload_at.insert(self.earlier.len());
                 }
             } else {
                 // It takes the place of the current one, whose draws it records again.
-                let mut instance = *instance;
+                let mut instance = instance;
                 instance.drawn.join(&self.current.drawn);
                 let replaced = std::mem::replace(&mut self.current, instance);
-                self.end_unrun(replaced);
+                self.end_unrun(&replaced);
             }
             self.dispatched = false;
             self.barrier = false;
@@ -6412,7 +6465,7 @@ impl RenderLowering {
     /// device's spares unreset (`CommandBuffer::give_up_raw`). One with pieces (the secondaries
     /// of draws whose pipelines were being made) is left to the pool's reset; one whose secondary
     /// never began has none to give up.
-    fn end_unrun(&self, instance: Instance) {
+    fn end_unrun(&self, instance: &Instance) {
         // Nor one recorded inline, in the pass's command buffer or kept (`render/inline_first.rs`,
         // `render/inline_splits.rs`).
         if !instance.pieces.is_empty()
@@ -6637,7 +6690,7 @@ impl RenderLowering {
             && self
                 .earlier
                 .iter()
-                .chain([&self.current])
+                .chain([&*self.current])
                 .any(|instance| instance.reformats.iter().any(|r| r.copies))
     }
 

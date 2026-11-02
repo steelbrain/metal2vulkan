@@ -1421,21 +1421,17 @@ impl<K: Copy + Ord + Hash> EncoderUses<K> {
             .map(|part| {
                 // By key, each resource's uses in the order they were recorded, as a stable sort
                 // of the uses by key leaves them: a resource's uses are one list, so ordering
-                // the resources orders them, and only their keys, each once, are sorted.
-                let tracked: Vec<(K, Few<Use<K>>)> = part.tracked.into_iter().collect();
-                let mut order: Vec<(K, usize)> = (tracked.iter().enumerate())
-                    .map(|(at, (key, _))| (*key, at))
+                // the resources orders them, and only their keys, each once, are sorted, each
+                // beside its list where the part holds it.
+                let mut order: Vec<(K, &Few<Use<K>>)> = (part.tracked.iter())
+                    .map(|(&key, few)| (key, few))
                     .collect();
-                order.sort_unstable();
+                order.sort_unstable_by_key(|&(key, _)| key);
                 // Sized once: a flattened iterator tells no length, which would grow the vector
                 // use by use.
-                let count = tracked.iter().map(|(_, uses)| uses.len()).sum();
+                let count = order.iter().map(|(_, uses)| uses.len()).sum();
                 let mut uses: Vec<Use<K>> = Vec::with_capacity(count);
-                uses.extend(
-                    order
-                        .iter()
-                        .flat_map(|&(_, at)| tracked[at].1.iter().cloned()),
-                );
+                uses.extend(order.iter().flat_map(|(_, few)| few.iter().cloned()));
                 Summary {
                     uses,
                     stages: part.stages,

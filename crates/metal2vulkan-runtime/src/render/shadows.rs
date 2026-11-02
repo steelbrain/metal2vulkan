@@ -64,7 +64,6 @@ use crate::work_counts::{ColorTaken, Counters};
 use crate::Device;
 use ash::vk;
 use metal2vulkan::metal::TextureType;
-use std::collections::BTreeMap;
 use std::ops::Range;
 use std::sync::Arc;
 
@@ -74,19 +73,24 @@ use std::sync::Arc;
 /// in the gap.
 const RANGES_PER_BUFFER: usize = 16;
 
-/// What one render pass instance's draws gathered (the module docs).
+/// What one render pass instance's draws gathered (the module docs). Its lists keep their room
+/// when it is cleared ([`clear`](Self::clear)), so a render encoder's next pass that takes it
+/// gathers into them without allocating ([`DrawRoom`](super::draw_room::DrawRoom)).
 #[derive(Default)]
 pub(super) struct InstanceShadows {
     /// The shadowed textures the draws use, each once.
     shadows: Vec<ShadowUse>,
-    /// The bytes of buffers the draws use, by buffer and whether they write: ranges in order,
-    /// apart, merged where they meet (at most [`RANGES_PER_BUFFER`]).
-    bytes: BTreeMap<(ResourceKey, bool), Vec<Range<u64>>>,
-    /// The images the draws use, by image and whether they write: the aspects, levels and
-    /// layers of every such use, one range spanning them all (which can only add a copy, or
-    /// refuse an instance that writes one image apart two ways), for the shadows of images'
-    /// views of another layout (`texture/view_shadow.rs`).
-    images: BTreeMap<(ResourceKey, bool), UseRange>,
+    /// The bytes of buffers the draws use, by buffer and whether they write, in that order: the
+    /// first [`held`](Self::held), each with its ranges in order, apart, merged where they meet
+    /// (at most [`RANGES_PER_BUFFER`]). Those past them are lists left empty with their room,
+    /// which the next buffers take.
+    bytes: Vec<((ResourceKey, bool), Vec<Range<u64>>)>,
+    held: usize,
+    /// The images the draws use, by image and whether they write, in that order: the aspects,
+    /// levels and layers of every such use, one range spanning them all (which can only add a
+    /// copy, or refuse an instance that writes one image apart two ways), for the shadows of
+    /// images' views of another layout (`texture/view_shadow.rs`).
+    images: Vec<((ResourceKey, bool), UseRange)>,
     /// The uses the last [`add`](InstanceShadows::add) gathered, in order: a use equal to the
     /// one at its position there is gathered already (gathering one again changes nothing, as
     /// each range only grows), so a draw that uses what the last one did gathers nothing new.
@@ -155,6 +159,30 @@ fn range_use(key: ResourceKey, write: bool, range: UseRange) -> Use<ResourceKey>
     }
 }
 
+/// The ranges of `key`'s bytes, a buffer's read or written, among an instance's `bytes`, of which
+/// the first `held` are gathered ([`InstanceShadows`]): a new list in its place among them where
+/// there are none, the first left empty past them where one is left
+/// ([`clear`](InstanceShadows::clear)).
+fn ranges_mut<'a>(
+    bytes: &'a mut Vec<((ResourceKey, bool), Vec<Range<u64>>)>,
+    held: &mut usize,
+    key: (ResourceKey, bool),
+) -> &'a mut Vec<Range<u64>> {
+    let at = match bytes[..*held].binary_search_by_key(&key, |&(at, _)| at) {
+        Ok(at) => at,
+        Err(at) => {
+            match bytes.get_mut(*held) {
+                Some(left) => left.0 = key,
+                None => bytes.push((key, Vec::new())),
+            }
+            bytes[at..=*held].rotate_right(1);
+            *held += 1;
+            at
+        }
+    };
+    &mut bytes[at].1
+}
+
 /// Add `range` to `ranges` (in order, apart): merged with those it meets or touches, and past
 /// [`RANGES_PER_BUFFER`] the two nearest merged.
 fn insert(ranges: &mut Vec<Range<u64>>, mut range: Range<u64>) {
@@ -220,14 +248,18 @@ impl InstanceShadows {
                 }
                 match &used.range {
                     UseRange::Bytes(range) => {
-                        let ranges = self.bytes.entry((used.key, write)).or_default();
+                        let ranges = ranges_mut(&mut self.bytes, &mut self.held, (used.key, write));
                         insert(ranges, range.clone());
                     }
                     image => {
-                        self.images
-                            .entry((used.key, write))
-                            .and_modify(|held| *held = span(held, image))
-                            .or_insert_with(|| image.clone());
+                        let key = (used.key, write);
+                        match self.images.binary_search_by_key(&key, |&(at, _)| at) {
+                            Ok(at) => {
+                                let held = &mut self.images[at].1;
+                                *held = span(held, image);
+                            }
+                            Err(at) => self.images.insert(at, (key, image.clone())),
+                        }
                     }
                 }
             }
@@ -237,17 +269,52 @@ impl InstanceShadows {
         self.last.extend_from_slice(uses);
     }
 
+    /// The gathered buffers' byte ranges, by buffer and whether they write, in that order.
+    fn held(&self) -> &[((ResourceKey, bool), Vec<Range<u64>>)] {
+        &self.bytes[..self.held]
+    }
+
+    /// The ranges of `key`'s bytes it gathered.
+    #[cfg(test)]
+    fn ranges(&self, key: (ResourceKey, bool)) -> &Vec<Range<u64>> {
+        let at = self.held().binary_search_by_key(&key, |&(at, _)| at);
+        &self.bytes[at.expect("the buffer's bytes are gathered")].1
+    }
+
+    /// The entries it holds room for: its buffers' lists, gathered or kept, its images' and its
+    /// shadowed textures'.
+    pub(super) fn room(&self) -> usize {
+        self.bytes.len() + self.images.capacity() + self.shadows.capacity()
+    }
+
+    /// Gather nothing, keeping the lists' room for the next draws.
+    pub(super) fn clear(&mut self) {
+        for (_, ranges) in &mut self.bytes[..self.held] {
+            ranges.clear();
+        }
+        self.held = 0;
+        self.shadows.clear();
+        self.images.clear();
+        self.last.clear();
+    }
+
+    /// How many uses [`uses`](Self::uses) gives.
+    fn uses_len(&self) -> usize {
+        let bytes: usize = self.held().iter().map(|(_, ranges)| ranges.len()).sum();
+        bytes + self.images.len()
+    }
+
     /// The gathered bytes and images as uses.
     fn uses(&self) -> impl Iterator<Item = Use<ResourceKey>> + '_ {
-        let bytes = self.bytes.iter().flat_map(|(&(key, write), ranges)| {
+        let bytes = self.held().iter().flat_map(|((key, write), ranges)| {
             ranges
                 .iter()
-                .map(move |range| bytes_use(key, write, range.clone()))
+                .map(move |range| bytes_use(*key, *write, range.clone()))
         });
         let images = self
             .images
             .iter()
-            .map(|(&(key, write), range)| range_use(key, write, range.clone()));
+            .map(|((key, write), range)| range_use(*key, *write, range.clone()));
         bytes.chain(images)
     }
 }
@@ -293,7 +360,8 @@ pub(super) fn meets_truths(device: &Device, shadows: &[Arc<ShadowCopies>], used:
 
 /// The copies before each of `instances` of a pass of `layout` (its render pass instances and
 /// tile dispatches, in order), planned through `core`'s shadowed textures
-/// (`EncoderCore::plan_shadows`), the attachments a use of each, a pass whose draws reach tiles
+/// (`EncoderCore::plan_shadows`), the attachments a use of each (`attached`, the pass's
+/// `render_target::attachment_uses`), a pass whose draws reach tiles
 /// where `reached` (`clear_reach::PassReach`), inside `drawn` where its draws' scissors bound
 /// them (`clear_reach::DrawnArea::bounds`) and nothing but they write the color attachments it
 /// names as loaded by index (their loads as the encoder set them). Each of `instances` comes
@@ -306,11 +374,10 @@ pub(super) fn meets_truths(device: &Device, shadows: &[Arc<ShadowCopies>], used:
 pub(super) fn plan<'a>(
     core: &mut EncoderCore,
     instances: impl Iterator<Item = (&'a InstanceShadows, Option<[u32; 4]>)>,
-    layout: &PassLayout,
+    (layout, attached): (&PassLayout, &[Use<ResourceKey>]),
     (reached, drawn): (bool, Option<([u32; 4], &[bool])>),
     area: Option<&DrawnArea>,
 ) -> Result<Vec<Vec<ShadowCopy>>, Error> {
-    let attached = render_target::attachment_uses(layout)?;
     // The writes an instance bounds, made at the first that bounds its own: none in a pass of one
     // instance, which no step before the pass's instances leaves alone.
     let mut bounded: Option<BoundedWrites> = None;
@@ -328,7 +395,10 @@ pub(super) fn plan<'a>(
         for shadow in attachments.iter().chain(&instance.shadows) {
             shadow::join(&mut shadows, shadow);
         }
-        let uses: Vec<Use<ResourceKey>> = instance.uses().chain(attached.iter().cloned()).collect();
+        // Sized once: the chained iterators tell no exact length, which would grow the list as
+        // it fills.
+        let mut uses = Vec::with_capacity(instance.uses_len() + attached.len());
+        uses.extend(instance.uses().chain(attached.iter().cloned()));
         copies.push(core.plan_shadows(&shadows, &uses)?);
         if bound.is_some() && bounded.is_none() {
             bounded = Some(BoundedWrites::of(layout, drawn)?);
@@ -766,12 +836,12 @@ mod tests {
             ..bytes(c, 0..0, true)
         };
         gathered.add(&[], &[image]);
-        let keys: Vec<_> = gathered.bytes.keys().copied().collect();
+        let keys: Vec<_> = gathered.held().iter().map(|&(key, _)| key).collect();
         assert_eq!(keys, [(a, false), (a, true), (b, false)]);
-        assert_eq!(gathered.bytes[&(a, false)], [0..64, 100..130]);
+        assert_eq!(*gathered.ranges((a, false)), [0..64, 100..130]);
         let one = |start, end| [Range { start, end }];
-        assert_eq!(gathered.bytes[&(a, true)], one(8, 24));
-        assert_eq!(gathered.bytes[&(b, false)], one(0, 4));
+        assert_eq!(*gathered.ranges((a, true)), one(8, 24));
+        assert_eq!(*gathered.ranges((b, false)), one(0, 4));
         assert!(gathered.is_empty());
         // Seventeen ranges of one buffer 90 bytes apart: the first two merge; then one 20 bytes
         // past the third: it merges with that one.
@@ -779,15 +849,46 @@ mod tests {
         for i in 0..17 {
             bounded.add(&[], &[bytes(a, 100 * i..100 * i + 10, true)]);
         }
-        let ranges = &bounded.bytes[&(a, true)];
+        let ranges = bounded.ranges((a, true));
         assert_eq!(ranges.len(), RANGES_PER_BUFFER);
         assert_eq!(ranges[0], 0..110);
         bounded.add(&[], &[bytes(a, 330..340, true)]);
-        let ranges = &bounded.bytes[&(a, true)];
+        let ranges = bounded.ranges((a, true));
         assert_eq!(ranges.len(), RANGES_PER_BUFFER);
         assert!(ranges.contains(&(300..340)), "{ranges:?}");
         // Its list took room for every range it keeps and the merge's one at its first, and
         // never grew.
         assert_eq!(ranges.capacity(), RANGES_PER_BUFFER + 1);
+    }
+
+    /// Cleared, an instance's gathering gathers nothing, keeps its lists' room, and gathers the
+    /// next draws' uses as a new one does, in the same order, into the lists it kept.
+    #[test]
+    fn a_cleared_instance_gathers_into_the_room_it_kept() {
+        let (a, b) = (ResourceKey::new(), ResourceKey::new());
+        let draws = [
+            bytes(b, 0..4, false),
+            bytes(a, 8..24, true),
+            bytes(a, 100..120, false),
+        ];
+        let mut kept = InstanceShadows::default();
+        kept.add(&[], &draws);
+        let room: Vec<*const Range<u64>> = (kept.bytes.iter()).map(|(_, r)| r.as_ptr()).collect();
+        kept.clear();
+        assert_eq!(kept.uses().count(), 0);
+        assert!(kept.held().is_empty() && kept.images.is_empty() && kept.is_empty());
+        // Gathered again, in another order of buffers: the lists are those it kept.
+        let again = [draws[2].clone(), draws[1].clone(), draws[0].clone()];
+        kept.add(&[], &again);
+        let mut fresh = InstanceShadows::default();
+        fresh.add(&[], &again);
+        let uses = |gathered: &InstanceShadows| gathered.uses().collect::<Vec<_>>();
+        assert_eq!(uses(&kept), uses(&fresh));
+        let mut taken: Vec<*const Range<u64>> =
+            (kept.held().iter()).map(|(_, r)| r.as_ptr()).collect();
+        let mut room = room;
+        taken.sort();
+        room.sort();
+        assert_eq!(taken, room);
     }
 }

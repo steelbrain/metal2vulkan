@@ -78,7 +78,6 @@ use super::Device;
 use ash::vk;
 use metal2vulkan::metal::format::ClearRoute;
 use metal2vulkan::metal::PixelFormat;
-use std::collections::BTreeSet;
 
 /// The side, in pixels, of the tiles a `Clear` load's clear reaches past the render area in, on
 /// both axes: Metal's on the M3 Max and an M4, the same at every format, sample count and tile
@@ -355,12 +354,13 @@ pub(super) struct DrawnArea {
 }
 
 /// Distinct pixel rectangles: the first held in place, as a pass's draws mostly reach one (its
-/// render area), so such a pass allocates none for them; the others in a set.
+/// render area), so such a pass allocates none for them; the others in order, each once, in a
+/// list that keeps its room when cleared ([`DrawnArea::clear`]).
 #[derive(Clone, Debug, Default)]
 struct Rects {
     first: Option<[u32; 4]>,
     /// Empty while `first` is `None`; never holds `first`.
-    rest: BTreeSet<[u32; 4]>,
+    rest: Vec<[u32; 4]>,
 }
 
 impl Rects {
@@ -370,7 +370,9 @@ impl Rects {
             None => self.first = Some(rect),
             Some(first) if first == rect => {}
             Some(_) => {
-                self.rest.insert(rect);
+                if let Err(at) = self.rest.binary_search(&rect) {
+                    self.rest.insert(at, rect);
+                }
             }
         }
     }
@@ -491,6 +493,18 @@ impl DrawnArea {
         if self.rects.len() > MOST_RECTS {
             self.everywhere();
         }
+    }
+
+    /// No rectangle, as a new area: its list's room kept for a next pass's draws
+    /// (`render/draw_room.rs`).
+    pub(super) fn clear(&mut self) {
+        self.whole = false;
+        self.rects.clear();
+    }
+
+    /// The rectangles it holds room for.
+    pub(super) fn room(&self) -> usize {
+        self.rects.rest.capacity()
     }
 
     /// Bound nothing: the draws may write anywhere in the render area.
@@ -992,6 +1006,44 @@ mod tests {
                 "case {case}"
             );
         }
+    }
+
+    /// Cleared, an area bounds nothing as a new one does and keeps its list's room; rectangles
+    /// added to it then are a new area's, in the same order, each once.
+    #[test]
+    fn a_cleared_area_is_a_new_one_with_its_room() {
+        let rect = |x: i32, y: i32| vk::Rect2D {
+            offset: vk::Offset2D { x, y },
+            extent: vk::Extent2D {
+                width: 8,
+                height: 8,
+            },
+        };
+        let rects = [
+            rect(40, 0),
+            rect(0, 40),
+            rect(0, 0),
+            rect(40, 0),
+            rect(20, 20),
+        ];
+        let mut kept = DrawnArea::default();
+        kept.add(&rects);
+        kept.everywhere();
+        kept.clear();
+        kept.add(&rects);
+        let room = kept.room();
+        assert!(room >= 3, "{room}");
+        kept.clear();
+        assert_eq!((kept.bounds(), kept.room()), (None, room));
+        let mut reversed = rects;
+        reversed.reverse();
+        kept.add(&reversed);
+        let mut fresh = DrawnArea::default();
+        fresh.add(&reversed);
+        let all = |area: &DrawnArea| area.rects.iter().copied().collect::<Vec<_>>();
+        assert_eq!(all(&kept), all(&fresh));
+        assert_eq!(all(&fresh).len(), 4);
+        assert_eq!(kept.room(), room, "no list made again");
     }
 
     /// The tiles a pass's rectangles reach are the tiles each overlaps, whether one of them

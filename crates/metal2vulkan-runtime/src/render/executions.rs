@@ -2251,7 +2251,7 @@ impl RenderExecution {
         // begun against a pass compatible with it: a pass of one subpass ignores its resolves.
         let ending = PassShape::of(pass)?;
         let mut runs = Vec::with_capacity(earlier.len() + 1);
-        for run in earlier.into_iter().chain([current]) {
+        for run in earlier.into_iter().chain([*current]) {
             let other =
                 (*run.shape != snapshot.shape || run.views != ViewSetup::default()).then(|| {
                     let mut shape = run.shape.clone();
@@ -2324,7 +2324,7 @@ impl RenderExecution {
         RenderLowering {
             core,
             earlier: Vec::new(),
-            current: Instance {
+            current: Box::new(Instance {
                 draws,
                 shape: Versioned::new(snapshot.shape.clone()),
                 compatible: Arc::clone(&snapshot.compatible),
@@ -2358,7 +2358,7 @@ impl RenderExecution {
                 planned: false,
                 feedback: Feedback::NONE,
                 storage_colors: 0,
-            },
+            }),
             layout: Versioned::new(layout),
             passes: vec![(snapshot.shape.clone(), Arc::clone(&snapshot.compatible))],
             render_target_array_length: snapshot.render_target_array_length,

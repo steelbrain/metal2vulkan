@@ -180,7 +180,7 @@ impl RenderLowering {
         };
         let previous_layout = stood.map(|layout| std::mem::replace(&mut *self.layout, *layout));
         self.kept_attachments = None;
-        let mut previous = std::mem::replace(&mut self.current, *instance);
+        let mut previous = std::mem::replace(&mut self.current, instance);
         let mut again = Ok(());
         if let Some(draws) = previous.rerecord.as_mut() {
             for kept in draws.iter_mut() {
@@ -202,14 +202,14 @@ impl RenderLowering {
                     self.passes.push(pass);
                 }
                 // The instance it took the place of is never executed.
-                self.end_unrun(previous);
+                self.end_unrun(&previous);
                 Ok(true)
             }
             // A draw that cannot record so leaves the instance and the pass's layout as they
             // were: the rerouted instance is never executed.
             Err(_) => {
                 let rerouted = std::mem::replace(&mut self.current, previous);
-                self.end_unrun(rerouted);
+                self.end_unrun(&rerouted);
                 if let Some(layout) = previous_layout {
                     *self.layout = layout;
                     self.kept_attachments = None;

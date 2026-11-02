@@ -316,7 +316,7 @@ impl Grouped {
 }
 
 /// What the first group's pass leaves the later groups of a pass of more
-/// ([`Ended::with_later_groups`]).
+/// ([`Ended::later_groups`]).
 pub(super) struct Later {
     group: ColorGroup,
     full: PassLayout,
@@ -422,36 +422,28 @@ pub(super) struct Ended {
 }
 
 impl Ended {
-    /// The pass's later color groups drawn (the module docs), each over the encoder's core from
-    /// its log: the core, what the first group's encoder made resident, and the log, from which
-    /// a rebind may encode the encoder again.
-    pub(super) fn with_later_groups(
-        self,
-    ) -> Result<(EncoderCore, Residency, Option<RenderLog>), Error> {
-        let Ended {
-            mut core,
-            residency,
-            log,
-            later,
-        } = self;
-        if let Some(later) = later {
-            let log = log
-                .as_ref()
-                .ok_or_else(|| internal("a pass of several color groups without its log"))?;
-            for group in 1..later.group.groups() {
-                let mut encoder = RenderLowering::later_group(core, &later, group, log)?;
-                log.replay_into(&mut encoder);
-                if encoder.group_diverged() {
-                    return Err(internal(
-                        "a later color group's call ran otherwise than the first group's",
-                    ));
-                }
-                let ended = encoder.end_pass()?;
-                core = ended.core;
-                core.device().shared().counts.color_group_pass();
+    /// The pass's later color groups drawn (the module docs), each over the encoder's `core`
+    /// from the first group's `log`: the core they leave. A pass of one group has none
+    /// (`later` `None`), and its end calls nothing here.
+    pub(super) fn later_groups(
+        mut core: EncoderCore,
+        later: &Later,
+        log: Option<&RenderLog>,
+    ) -> Result<EncoderCore, Error> {
+        let log = log.ok_or_else(|| internal("a pass of several color groups without its log"))?;
+        for group in 1..later.group.groups() {
+            let mut encoder = RenderLowering::later_group(core, later, group, log)?;
+            log.replay_into(&mut encoder);
+            if encoder.group_diverged() {
+                return Err(internal(
+                    "a later color group's call ran otherwise than the first group's",
+                ));
             }
+            let ended = encoder.end_pass()?;
+            core = ended.core;
+            core.device().shared().counts.color_group_pass();
         }
-        Ok((core, residency, log))
+        Ok(core)
     }
 }
 

@@ -371,6 +371,10 @@ impl HeapKeys {
     /// The live heaps `keys` name.
     pub(super) fn among(&self, keys: impl IntoIterator<Item = ResourceKey>) -> Vec<Heap> {
         let heaps = lock(&self.heaps);
+        // A device without a live heap's key: none of `keys` names one.
+        if heaps.is_empty() {
+            return Vec::new();
+        }
         keys.into_iter()
             .filter_map(|key| heaps.get(&key)?.0.upgrade().map(Heap))
             .collect()

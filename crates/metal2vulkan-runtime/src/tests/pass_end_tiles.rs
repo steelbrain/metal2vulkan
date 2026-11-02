@@ -10,12 +10,17 @@
 //! The assertion is a count of the work done on this thread (`clear_reach::made`), never a time:
 //! a pass end that works the tiles out again where nothing reads them turns it red at once.
 //!
+//! What a pass's draws gather into (`render/draw_room.rs`) is the room an earlier pass's end
+//! left, from the second pass on: counted as the rooms made on this thread
+//! (`render::draw_rooms_made`), which a pass end that drops its room again moves.
+//!
 //! Device tests: compiled only under the validation crate's GPU safety cfgs (`m2v_gpu`,
 //! `m2v_cpu_icd`), on the kind of device the cfg selects. The functions are `tob_rect` and
 //! `tob_read` of the owned fixture `validation/fixtures/public/engine/tob_renders.ll` (`llvm-as`).
 
 use super::blit_holds::{device, Host, Scratch, WAIT};
 use crate::clear_reach::made;
+use crate::render::draw_rooms_made;
 use crate::{
     CommandQueue, Device, Error, LoadAction, PipelineOptions, RenderPassDescriptor,
     RenderPipelineState, ResourceOptions, ScissorRect, StoreAction, Texture, TextureDescriptor,
@@ -184,4 +189,23 @@ fn a_pass_end_works_out_its_tiles_only_where_they_are_read() {
         tiles_bounded: counted,
     };
     assert_eq!(ended, within);
+}
+
+/// A pass's draws gather into the room an earlier pass's end left: after the first, the passes
+/// make none, loaded, cleared or `DontCare`.
+#[test]
+fn a_pass_takes_the_room_an_earlier_pass_left() {
+    let scratch = Scratch::new("pass-end-rooms");
+    let device = device(&scratch.0);
+    let queue = device.new_command_queue().unwrap();
+    let state = state(&device);
+    let mut private = descriptor();
+    private.resource_options = ResourceOptions::private();
+    let target = device.new_texture(&private).unwrap();
+    end_one_pass(&device, &queue, &state, &target, LoadAction::Load);
+    let first = draw_rooms_made::so_far();
+    for load in [LoadAction::Load, LoadAction::Clear, LoadAction::DontCare] {
+        end_one_pass(&device, &queue, &state, &target, load);
+    }
+    assert_eq!(draw_rooms_made::so_far(), first, "a room made again");
 }
