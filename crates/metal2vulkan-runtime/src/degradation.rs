@@ -1250,10 +1250,13 @@ degradations! {
         /// the device's pass keeps the bytes its draws do not write, on every device. Announced at
         /// every draw, an indirect command buffer's executed commands' too, naming every such
         /// attachment of the pass. Also a GPU blit into, out of or between textures of which one
-        /// is a `BGRA10_XR` or `BGRA10_XR_sRGB` texture Metal keeps losslessly compressed
-        /// (`compressed_blit.rs`): Metal's blit moves the texels through the compression, which
-        /// clears the same bits and clamps the same alpha, where the device's copy keeps the
-        /// bytes; once per device.
+        /// is a `BGRA10_XR` or `BGRA10_XR_sRGB` texture Metal keeps losslessly compressed, and a
+        /// fill of one (`compressed_blit.rs`): Metal's blit moves the texels through the
+        /// compression, which clears the same bits and clamps the same alpha (its fill clears the
+        /// bits alone), where the device's copy keeps the bytes; once per device, under
+        /// `ExtendedRangeBlitPolicy::Kept` (the default). Under `Canonical` the runtime writes
+        /// Metal's encoding, and announces only a blit out of one into a buffer whose words the
+        /// device cannot bind or into a texture over a buffer whose rows share bytes.
         ExtendedRangeBitsKept = "extended-range-bits-kept", Precision,
             "the texels the pass's draws do not write keep their bytes; Metal's pass rewrites, in \
              each tile a draw reaches, the bits their codes leave unused (BGR10_XR's bits 30 and \

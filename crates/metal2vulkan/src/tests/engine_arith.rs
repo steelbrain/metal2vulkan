@@ -3914,7 +3914,7 @@ fn pack_conversions_are_metals_where_measured() {
                     };
                     b.push_str(&format!("  %v = call {vty} @{call}({iw} {w})\n"));
                     b.push_str(&format!("  %x = extractelement {vty} %v, i32 0\n"));
-                    b.push_str(&match half {
+                    b.push_str(match half {
                         true => "  %b = bitcast half %x to i16\n  %r = zext i16 %b to i32\n",
                         false => "  %r = bitcast float %x to i32\n",
                     });

@@ -232,6 +232,7 @@ surface! {
         enum HalfChainPolicy N;
         enum PipelineWaitPolicy N;
         enum WideLinePolicy N;
+        enum ExtendedRangeBlitPolicy N;
         struct DeviceProfile O;
         struct SpirvValidation N;
         struct EnabledCaps N;
@@ -641,6 +642,9 @@ surface! {
         struct ShadowCopyInModule N;
         fn rows_copy_module;
         struct RowsCopyModule N;
+        fn extended_canonical_module;
+        fn extended_range_canonical;
+        struct ExtendedCanonicalModule N;
         fn dynamic_views_module;
         struct DynamicViewsModule N;
         fn shadow_merge_module;

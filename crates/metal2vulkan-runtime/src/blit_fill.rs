@@ -173,7 +173,7 @@ use super::blit_texture;
 use super::chroma_pairs::{is_four_two_two, TEXEL_BYTES};
 use super::clear_value;
 use super::clear_value::has_channels;
-use super::compressed_blit::degrade_compressed_blit;
+use super::compressed_blit::{self, degrade_compressed_blit, Writer};
 use super::copy_plan::{
     block_bytes, block_extent, level_extent, BlitOption, CopyUnit, ImageRegion,
 };
@@ -1309,7 +1309,11 @@ impl BlitCommandEncoder {
         if texture.record().samples > 1 {
             return self.sample_fill(call, texture, (level_u32, slice), option, (x, y), pattern);
         }
-        let unit_bytes = unit_of(pattern, bytes);
+        let mut unit_bytes = unit_of(pattern, bytes);
+        // Into a texture Metal keeps compressed: Metal's encoding of the texel, written as it is.
+        if compressed_blit::canonical(texture) {
+            compressed_blit::canonical_fill_unit(&mut unit_bytes);
+        }
         if unit == FillUnit::PackedCodes {
             return self.packed_code_fill(texture, (x, y));
         }
@@ -1441,16 +1445,11 @@ impl BlitCommandEncoder {
                 let top = row * block[1];
                 let height = (end * block[1]).min(size[1]) - top;
                 self.unlogged(|this| {
-                    this.copy_from_buffer_to_texture(
-                        &staging,
-                        0,
-                        row_bytes,
-                        row_bytes * (end - row),
+                    this.buffer_into_texture(
+                        Writer::Fill,
+                        (&staging, 0, row_bytes, row_bytes * (end - row)),
                         Size::new(width, height, 1),
-                        texture,
-                        slice,
-                        level,
-                        Origin::new(left, top, z),
+                        (texture, slice, level, Origin::new(left, top, z)),
                         option,
                     )
                 })?;

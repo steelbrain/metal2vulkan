@@ -90,6 +90,7 @@ mod event;
 mod event_timeline;
 mod exactness;
 mod execution;
+mod extended_canonical;
 mod families;
 #[doc(hidden)]
 pub use execution::{ExecutedPipeline, Execution};

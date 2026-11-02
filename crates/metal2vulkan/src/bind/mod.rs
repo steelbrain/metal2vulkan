@@ -86,7 +86,9 @@
 //! [`shadow_copy_in_module`] copies a merged texture's texels in and keeps them with one dispatch.
 //! A copy of many
 //! equal rows between two buffers is one dispatch of [`rows_copy_module`] where a copy's region
-//! per row costs more. A blit between a buffer
+//! per row costs more. A blit through a `BGRA10_XR` texture Metal keeps losslessly compressed
+//! writes Metal's canonical encoding of its texels through [`extended_canonical_module`] where
+//! the policy asks for it. A blit between a buffer
 //! and a two-plane extended-range texture moves its color words through [`plane_words_module`],
 //! and a blit between two such textures moves both planes as Metal's blit does through
 //! [`plane_copy_module`]. A rotated texture's texels move between its
@@ -135,6 +137,7 @@ pub(crate) mod depth_stencil_resolve;
 pub(crate) mod dispatch;
 pub(crate) mod dynamic_views;
 pub(crate) mod etc_decode;
+pub(crate) mod extended_canonical;
 pub(crate) mod extended_shadow;
 pub(crate) mod graphics;
 pub(crate) mod heap;
@@ -206,6 +209,9 @@ pub use depth_stencil_resolve::{
 };
 pub use dispatch::{Dispatch, DispatchCommands, DispatchRegion, IndirectArgs};
 pub use etc_decode::{etc_decode_module, EtcDecode, EtcTexels};
+pub use extended_canonical::{
+    extended_canonical_module, extended_range_canonical, ExtendedCanonicalModule,
+};
 pub use extended_shadow::{extended_shadow_module, ExtendedShadowModule};
 pub use graphics::{
     DrawCall, DrawCommands, IndexOverrun, MeshDispatch, MeshGroups, MeshRecordsRegion,

@@ -60,7 +60,7 @@ use super::blit_plan::{
     plan_texels_rows_copy, plan_whole_copy, texel_layout, BufferCopyPlan, BufferImageRegion,
     BufferLayout, BufferRange, CopyPair, ImageCopyRegion, RowsCopy,
 };
-use super::compressed_blit::degrade_compressed_blit;
+use super::compressed_blit::{self, degrade_compressed_blit, Writer};
 use super::copy_plan::{
     check_region, colour_unit, copy_unit, depth_bytes, level_extent, shape, BlitOption,
     CopyProblem, CopyRefusal, CopyUnit, ImageRegion, TextureRegion,
@@ -473,147 +473,185 @@ impl BlitCommandEncoder {
                 }))
             },
             |this| {
-                const CALL: &str = "copy_from_buffer_to_texture";
-                this.core().check_device(CALL, source_buffer.device())?;
-                this.check_texture(CALL, destination_texture)?;
-                destination_texture.check_plane_copied()?;
-                if this.fails_on_memoryless(&[destination_texture]) {
-                    return Ok(());
-                }
-                destination_texture.check_rotated_reach()?;
-                let Some(size) = copy_size(source_size, &[destination_texture.texture_type()])
-                else {
-                    return Ok(());
-                };
-                // Vulkan copies no multisampled image from a buffer, so the buffer-image path below
-                // cannot take one. The empty copy is the no-op Metal makes (above); a real one into
-                // a multisampled texture is emulated per sample through a wide image and a scratch
-                // (`sample_interleave.rs`), or refused typed where the device cannot run that.
-                let samples = destination_texture.record().samples;
-                if samples > 1 {
-                    let layout = BufferLayout {
-                        offset: source_offset,
-                        bytes_per_row: source_bytes_per_row,
-                        bytes_per_image: source_bytes_per_image,
-                    };
-                    let region = region(
-                        CALL,
-                        destination_origin,
-                        size,
-                        destination_level,
-                        destination_slice,
-                    )?;
-                    let region = multisampled_region(CALL, destination_texture, region)?;
-                    let (raw_buffer, base) = this.core().blit_at(source_buffer, 0)?;
-                    let aspect = multisampled_aspect(CALL, destination_texture, options)?;
-                    let planned = sample_interleave::InterleaveCopy::plan(
-                        CALL,
-                        this.core().command_buffer(),
-                        raw_buffer,
-                        base,
-                        source_buffer.copy_reach(),
-                        &layout,
-                        destination_texture,
-                        &region,
-                        aspect,
-                        samples,
-                        true,
-                    )?;
-                    return match planned {
-                        Some(copy) => {
-                            // Every sample of the region written: a heap shadow it covers takes no
-                            // copy in.
-                            let covered = [multisampled_box(destination_texture, aspect, &region)?];
-                            let boxes = (&[][..], &covered[..]);
-                            this.command_in_reading(
-                                copy.stages,
-                                &copy.uses,
-                                boxes,
-                                |device, raw| {
-                                    // SAFETY: the encoder's command buffer is recording outside a
-                                    // render pass; the buffer (held by `blit_at`), the texture and
-                                    // the copy's images and objects (held by the copy; both
-                                    // retained below) are live until it completes.
-                                    unsafe { copy.record(device, raw) };
-                                },
-                            )?;
-                            // A depth written as the single-sample path writes one announces as it
-                            // does.
-                            destination_texture.degrade_depth_upload(CALL, aspect, true);
-                            destination_texture.degrade_depth_denormals(CALL, aspect, false);
-                            copy.announce(this.core().device(), CALL, destination_texture);
-                            let format = destination_texture.pixel_format();
-                            copy.announce_staging(this.core().device(), format, true);
-                            this.core().retain(copy);
-                            this.core().retain(destination_texture.clone());
-                            // Every sample of the region written, as the single-sample path's.
-                            let written = multisampled_texels(&region);
-                            this.scrub(destination_texture, vec![(aspect.into(), written)])
-                        }
-                        None => Err(Error::NotImplemented(RuntimeGap::MultisampledBufferCopy)),
-                    };
-                }
-                let texture = destination_texture;
-                let layout = BufferLayout {
-                    offset: source_offset,
-                    bytes_per_row: source_bytes_per_row,
-                    bytes_per_image: source_bytes_per_image,
-                };
-                if two_planes::holds_planes(texture.pixel_format()) && !texture.over_buffer() {
-                    let region = region(
-                        CALL,
-                        destination_origin,
-                        size,
-                        destination_level,
-                        destination_slice,
-                    )?;
-                    return this.plane_copy(CALL, source_buffer, texture, &region, &layout, true);
-                }
-                let unit = unit(CALL, texture, options)?;
-                let region = region(
-                    CALL,
-                    destination_origin,
-                    size,
-                    destination_level,
-                    destination_slice,
-                )?;
-                if let Some(texels) = texture.buffer_texels() {
-                    // Rows that share bytes (an IOSurface plane's on Metal's GPU): the row
-                    // copies would write every shared byte from one fixed row, where Metal
-                    // leaves it from whichever row its own command wrote last -- an order that
-                    // follows the command, the GPU pitch and the row count, and that one shape
-                    // does not settle from run to run (`linear_plan.rs`'s **Rows that
-                    // overlap**). The other direction reads those rows instead of writing them
-                    // and is served (`copy_from_texture_to_buffer`).
-                    if texels.plane_rows_overlap() {
-                        return Err(Error::NotImplemented(RuntimeGap::OverlappingSurfaceRows));
-                    }
-                    let (from, to) = plan_rows_copy(
-                        texture.record(),
-                        &region,
-                        &unit,
-                        &layout,
-                        source_buffer.copy_reach(),
-                        &texels.layout,
-                    )
-                    .map_err(|problem| invalid(CALL, Problem::Copy(problem)))?;
-                    return this.rows_copy(
+                this.buffer_into_texture(
+                    Writer::Blit,
+                    (
                         source_buffer,
-                        &texels.buffer,
-                        &RowsCopy::new(&from, &to),
-                    );
-                }
-                let plan = plan_copy(CALL, texture, &region, &unit, &layout, source_buffer, true)?;
-                let written: Vec<ImageRegion> = plan.regions.iter().map(|r| r.image).collect();
-                this.buffer_texture_copy(source_buffer, texture, plan, true)?;
-                texture.degrade_depth_upload(CALL, unit.aspect, true);
-                texture.degrade_depth_denormals(CALL, unit.aspect, false);
-                // Into a texture Metal keeps compressed: the device's copy keeps the bytes.
-                degrade_compressed_blit(CALL, texture)?;
-                // Into a texture with a decoded twin: the twin's texels of what the copy wrote.
-                this.decode_twin(texture, &written)
+                        source_offset,
+                        source_bytes_per_row,
+                        source_bytes_per_image,
+                    ),
+                    source_size,
+                    (
+                        destination_texture,
+                        destination_slice,
+                        destination_level,
+                        destination_origin,
+                    ),
+                    options,
+                )
             },
         )
+    }
+
+    /// [`copy_from_buffer_to_texture`](Self::copy_from_buffer_to_texture), unlogged, its texels
+    /// written by `writer`: a blit's copy, or a fill's rows of its texel (`blit_fill.rs`), which
+    /// differ in what Metal's compression writes of a `BGRA10_XR` texture's texels
+    /// (`compressed_blit.rs`).
+    pub(super) fn buffer_into_texture(
+        &mut self,
+        writer: Writer,
+        (source_buffer, source_offset, source_bytes_per_row, source_bytes_per_image): (
+            &Buffer,
+            u64,
+            u64,
+            u64,
+        ),
+        source_size: Size,
+        (destination_texture, destination_slice, destination_level, destination_origin): (
+            &Texture,
+            u64,
+            u64,
+            Origin,
+        ),
+        options: BlitOption,
+    ) -> Result<(), Error> {
+        const CALL: &str = "copy_from_buffer_to_texture";
+        self.core().check_device(CALL, source_buffer.device())?;
+        self.check_texture(CALL, destination_texture)?;
+        destination_texture.check_plane_copied()?;
+        if self.fails_on_memoryless(&[destination_texture]) {
+            return Ok(());
+        }
+        destination_texture.check_rotated_reach()?;
+        let Some(size) = copy_size(source_size, &[destination_texture.texture_type()]) else {
+            return Ok(());
+        };
+        // Vulkan copies no multisampled image from a buffer, so the buffer-image path below
+        // cannot take one. The empty copy is the no-op Metal makes (above); a real one into
+        // a multisampled texture is emulated per sample through a wide image and a scratch
+        // (`sample_interleave.rs`), or refused typed where the device cannot run that.
+        let samples = destination_texture.record().samples;
+        if samples > 1 {
+            let layout = BufferLayout {
+                offset: source_offset,
+                bytes_per_row: source_bytes_per_row,
+                bytes_per_image: source_bytes_per_image,
+            };
+            let region = region(
+                CALL,
+                destination_origin,
+                size,
+                destination_level,
+                destination_slice,
+            )?;
+            let region = multisampled_region(CALL, destination_texture, region)?;
+            let (raw_buffer, base) = self.core().blit_at(source_buffer, 0)?;
+            let aspect = multisampled_aspect(CALL, destination_texture, options)?;
+            let planned = sample_interleave::InterleaveCopy::plan(
+                CALL,
+                self.core().command_buffer(),
+                raw_buffer,
+                base,
+                source_buffer.copy_reach(),
+                &layout,
+                destination_texture,
+                &region,
+                aspect,
+                samples,
+                true,
+            )?;
+            return match planned {
+                Some(copy) => {
+                    // Every sample of the region written: a heap shadow it covers takes no
+                    // copy in.
+                    let covered = [multisampled_box(destination_texture, aspect, &region)?];
+                    let boxes = (&[][..], &covered[..]);
+                    self.command_in_reading(copy.stages, &copy.uses, boxes, |device, raw| {
+                        // SAFETY: the encoder's command buffer is recording outside a
+                        // render pass; the buffer (held by `blit_at`), the texture and
+                        // the copy's images and objects (held by the copy; both
+                        // retained below) are live until it completes.
+                        unsafe { copy.record(device, raw) };
+                    })?;
+                    // A depth written as the single-sample path writes one announces as it
+                    // does.
+                    destination_texture.degrade_depth_upload(CALL, aspect, true);
+                    destination_texture.degrade_depth_denormals(CALL, aspect, false);
+                    copy.announce(self.core().device(), CALL, destination_texture);
+                    let format = destination_texture.pixel_format();
+                    copy.announce_staging(self.core().device(), format, true);
+                    self.core().retain(copy);
+                    self.core().retain(destination_texture.clone());
+                    // Every sample of the region written, as the single-sample path's.
+                    let written = multisampled_texels(&region);
+                    self.scrub(destination_texture, vec![(aspect.into(), written)])
+                }
+                None => Err(Error::NotImplemented(RuntimeGap::MultisampledBufferCopy)),
+            };
+        }
+        let texture = destination_texture;
+        let layout = BufferLayout {
+            offset: source_offset,
+            bytes_per_row: source_bytes_per_row,
+            bytes_per_image: source_bytes_per_image,
+        };
+        if two_planes::holds_planes(texture.pixel_format()) && !texture.over_buffer() {
+            let region = region(
+                CALL,
+                destination_origin,
+                size,
+                destination_level,
+                destination_slice,
+            )?;
+            return self.plane_copy(CALL, source_buffer, texture, &region, &layout, true);
+        }
+        let unit = unit(CALL, texture, options)?;
+        let region = region(
+            CALL,
+            destination_origin,
+            size,
+            destination_level,
+            destination_slice,
+        )?;
+        if let Some(texels) = texture.buffer_texels() {
+            // Rows that share bytes (an IOSurface plane's on Metal's GPU): the row
+            // copies would write every shared byte from one fixed row, where Metal
+            // leaves it from whichever row its own command wrote last -- an order that
+            // follows the command, the GPU pitch and the row count, and that one shape
+            // does not settle from run to run (`linear_plan.rs`'s **Rows that
+            // overlap**). The other direction reads those rows instead of writing them
+            // and is served (`copy_from_texture_to_buffer`).
+            if texels.plane_rows_overlap() {
+                return Err(Error::NotImplemented(RuntimeGap::OverlappingSurfaceRows));
+            }
+            let (from, to) = plan_rows_copy(
+                texture.record(),
+                &region,
+                &unit,
+                &layout,
+                source_buffer.copy_reach(),
+                &texels.layout,
+            )
+            .map_err(|problem| invalid(CALL, Problem::Copy(problem)))?;
+            return self.rows_copy(source_buffer, &texels.buffer, &RowsCopy::new(&from, &to));
+        }
+        let plan = plan_copy(CALL, texture, &region, &unit, &layout, source_buffer, true)?;
+        let written: Vec<ImageRegion> = plan.regions.iter().map(|r| r.image).collect();
+        self.buffer_texture_copy(source_buffer, texture, plan, true)?;
+        texture.degrade_depth_upload(CALL, unit.aspect, true);
+        texture.degrade_depth_denormals(CALL, unit.aspect, false);
+        // Into a texture Metal keeps compressed: Metal's encoding of what the copy wrote, else
+        // the device's copy keeps the bytes (a fill's texel was encoded before it, `blit_fill.rs`).
+        match writer {
+            Writer::Blit
+                if compressed_blit::canonical(texture)
+                    && self.canonical_texels(texture, &written)? => {}
+            Writer::Blit => degrade_compressed_blit(CALL, texture)?,
+            Writer::Fill => compressed_blit::degrade_compressed_fill(texture),
+        }
+        // Into a texture with a decoded twin: the twin's texels of what the copy wrote.
+        self.decode_twin(texture, &written)
     }
 
     /// `copyFromTexture:sourceSlice:sourceLevel:sourceOrigin:sourceSize:toBuffer:
@@ -779,7 +817,14 @@ impl BlitCommandEncoder {
                     false,
                 )?;
                 this.buffer_texture_copy(destination_buffer, source_texture, plan, false)?;
-                // Out of a texture Metal keeps compressed: the device's copy keeps the bytes.
+                // Out of a texture Metal keeps compressed: Metal's encoding of what the copy
+                // wrote, where the device binds the buffer's words, else the device's copy keeps
+                // the bytes.
+                if compressed_blit::canonical(source_texture)
+                    && this.canonical_words(destination_buffer, &layout, region.size)?
+                {
+                    return Ok(());
+                }
                 degrade_compressed_blit(CALL, source_texture)
             },
         )
@@ -1306,7 +1351,20 @@ impl BlitCommandEncoder {
         // Into a texture with a decoded twin: the twin's texels of what the copies wrote.
         let written: Vec<ImageRegion> = copies.iter().map(|copy| copy.dst).collect();
         self.decode_twin(destination, &written)?;
-        // Out of or into a texture Metal keeps compressed: the device's copy keeps the bytes.
+        // Out of or into a texture Metal keeps compressed: Metal's encoding of what the copies
+        // wrote, where the destination holds its texels in an image of the format or at their
+        // rows in a buffer's bytes; else the device's copy keeps the bytes.
+        let canonical =
+            compressed_blit::canonical(source) || compressed_blit::canonical(destination);
+        if canonical {
+            let rewritten = match compressed_blit::holds_canonical(destination) {
+                true => self.canonical_texels(destination, &written)?,
+                false => self.canonical_texel_words(destination, copies)?,
+            };
+            if rewritten {
+                return Ok(());
+            }
+        }
         degrade_compressed_blit(call, source)?;
         degrade_compressed_blit(call, destination)
     }

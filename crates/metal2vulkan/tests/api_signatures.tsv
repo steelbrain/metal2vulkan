@@ -103,6 +103,10 @@ assoc-const	metal2vulkan::bind::DynamicViewsModule::SET	pub const SET: u32
 assoc-const	metal2vulkan::bind::EtcDecode::ALL	pub const ALL: [EtcDecode; 7]
 assoc-const	metal2vulkan::bind::ExecutionStatus::BYTES	pub const BYTES: usize
 assoc-const	metal2vulkan::bind::ExecutionStatus::WORDS	pub const WORDS: usize
+assoc-const	metal2vulkan::bind::ExtendedCanonicalModule::LOCAL_SIZE	pub const LOCAL_SIZE: u32
+assoc-const	metal2vulkan::bind::ExtendedCanonicalModule::PUSH_BYTES	pub const PUSH_BYTES: u32
+assoc-const	metal2vulkan::bind::ExtendedCanonicalModule::SET	pub const SET: u32
+assoc-const	metal2vulkan::bind::ExtendedCanonicalModule::TEXELS_BINDING	pub const TEXELS_BINDING: u32
 assoc-const	metal2vulkan::bind::ExtendedShadowModule::CODES_BINDING	pub const CODES_BINDING: u32
 assoc-const	metal2vulkan::bind::ExtendedShadowModule::LOCAL_SIZE	pub const LOCAL_SIZE: u32
 assoc-const	metal2vulkan::bind::ExtendedShadowModule::SET	pub const SET: u32
@@ -571,6 +575,10 @@ assoc-const-value	metal2vulkan::bind::DynamicViewsModule::SET	0
 assoc-const-value	metal2vulkan::bind::EtcDecode::ALL	[EtcDecode::Rgb8, EtcDecode::Rgb8A1, EtcDecode::Rgba8, EtcDecode::R11Unorm, EtcDecode::R11Snorm, EtcDecode::Rg11Unorm, EtcDecode::Rg11Snorm]
 assoc-const-value	metal2vulkan::bind::ExecutionStatus::BYTES	32
 assoc-const-value	metal2vulkan::bind::ExecutionStatus::WORDS	8
+assoc-const-value	metal2vulkan::bind::ExtendedCanonicalModule::LOCAL_SIZE	64
+assoc-const-value	metal2vulkan::bind::ExtendedCanonicalModule::PUSH_BYTES	16
+assoc-const-value	metal2vulkan::bind::ExtendedCanonicalModule::SET	0
+assoc-const-value	metal2vulkan::bind::ExtendedCanonicalModule::TEXELS_BINDING	0
 assoc-const-value	metal2vulkan::bind::ExtendedShadowModule::CODES_BINDING	0
 assoc-const-value	metal2vulkan::bind::ExtendedShadowModule::LOCAL_SIZE	8
 assoc-const-value	metal2vulkan::bind::ExtendedShadowModule::SET	0
@@ -1389,6 +1397,7 @@ enum	metal2vulkan::device::ContainmentPolicy	#[cfg_attr(feature = "serde", deriv
 enum	metal2vulkan::device::DriverFact	#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] #[non_exhaustive] pub enum DriverFact
 enum	metal2vulkan::device::DriverWorkaround	#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] #[non_exhaustive] pub enum DriverWorkaround
 enum	metal2vulkan::device::Exposure	#[derive(Clone, Copy, Debug, PartialEq, Eq)] #[non_exhaustive] pub enum Exposure
+enum	metal2vulkan::device::ExtendedRangeBlitPolicy	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum ExtendedRangeBlitPolicy
 enum	metal2vulkan::device::FloatControl	#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] #[non_exhaustive] pub enum FloatControl
 enum	metal2vulkan::device::FloatWidth	#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] #[non_exhaustive] pub enum FloatWidth
 enum	metal2vulkan::device::FormatUsage	#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] #[non_exhaustive] pub enum FormatUsage
@@ -3203,6 +3212,8 @@ field	metal2vulkan::bind::DrawReplayPreprocess.push_holes	pub push_holes: Vec<Pu
 field	metal2vulkan::bind::DrawReplayPreprocess.resident	pub resident: RootTable
 field	metal2vulkan::bind::DynamicViewsModule.requirements	pub requirements: Requirements
 field	metal2vulkan::bind::DynamicViewsModule.spirv	pub spirv: Arc<[u32]>
+field	metal2vulkan::bind::ExtendedCanonicalModule.requirements	pub requirements: Requirements
+field	metal2vulkan::bind::ExtendedCanonicalModule.spirv	pub spirv: Arc<[u32]>
 field	metal2vulkan::bind::ExtendedShadowModule.requirements	pub requirements: Requirements
 field	metal2vulkan::bind::ExtendedShadowModule.spirv	pub spirv: Arc<[u32]>
 field	metal2vulkan::bind::FlatDispatchModule.layout	pub layout: PipelineLayout
@@ -3706,6 +3717,7 @@ field	metal2vulkan::device::DeviceDescription.vendor_id	pub vendor_id: u32
 field	metal2vulkan::device::DevicePolicy.batch_order	pub batch_order: BatchOrderPolicy
 field	metal2vulkan::device::DevicePolicy.completion	pub completion: CompletionPolicy
 field	metal2vulkan::device::DevicePolicy.containment	pub containment: ContainmentPolicy
+field	metal2vulkan::device::DevicePolicy.extended_range_blits	pub extended_range_blits: ExtendedRangeBlitPolicy
 field	metal2vulkan::device::DevicePolicy.half_chains	pub half_chains: HalfChainPolicy
 field	metal2vulkan::device::DevicePolicy.handle_domain	pub handle_domain: HandleDomain
 field	metal2vulkan::device::DevicePolicy.heap_compression	pub heap_compression: HeapCompressionPolicy
@@ -4593,6 +4605,8 @@ fn	metal2vulkan::bind::draw_replay_slots	pub fn draw_replay_slots(interface: &Pi
 fn	metal2vulkan::bind::draw_replay_state	pub fn draw_replay_state(graphics: &GraphicsState, merged: bool) -> Result<(), DrawReplayRule>
 fn	metal2vulkan::bind::dynamic_views_module	pub fn dynamic_views_module(device: &Device) -> Result<DynamicViewsModule, Error>
 fn	metal2vulkan::bind::etc_decode_module	pub fn etc_decode_module(device: &Device, decode: EtcDecode, texels: EtcTexels) -> Result<BlockDecodeModule, Error>
+fn	metal2vulkan::bind::extended_canonical_module	pub fn extended_canonical_module(device: &Device) -> Result<ExtendedCanonicalModule, Error>
+fn	metal2vulkan::bind::extended_range_canonical	pub fn extended_range_canonical([low, high]: [u32; 2]) -> [u32; 2]
 fn	metal2vulkan::bind::extended_shadow_module	pub fn extended_shadow_module(device: &Device, form: ExtendedRange) -> Result<ExtendedShadowModule, Error>
 fn	metal2vulkan::bind::flat_dispatch_module	pub fn flat_dispatch_module(device: &Device) -> Result<FlatDispatchModule, Error>
 fn	metal2vulkan::bind::fold_object_grid	pub fn fold_object_grid(groups: [u32; 3], threads: [u32; 3], task: MeshGridLimits, direct: bool) -> Option<ObjectFold>
@@ -8421,6 +8435,8 @@ method	metal2vulkan::bind::EtcDecode::texel_format	pub fn texel_format(self, tex
 method	metal2vulkan::bind::EtcDecode::texel_pixel_format	pub fn texel_pixel_format(self, texels: EtcTexels) -> PixelFormat
 method	metal2vulkan::bind::ExecutionStatus::decode	pub fn decode(bytes: &[u8; ExecutionStatus::BYTES]) -> StatusReport
 method	metal2vulkan::bind::ExecutionStatus::initial	pub const fn initial() -> [u8; ExecutionStatus::BYTES]
+method	metal2vulkan::bind::ExtendedCanonicalModule::groups	pub fn groups(width: u32, rows: u32, images: u32) -> [u32; 3]
+method	metal2vulkan::bind::ExtendedCanonicalModule::shape	pub fn shape(first: u32, width: u32, row_words: u32, image_words: u32) -> [u8; 16]
 method	metal2vulkan::bind::FlatArguments::bytes	pub fn bytes(self) -> u64
 method	metal2vulkan::bind::FlatDispatchModule::push_constants	pub fn push_constants(scratch: u64, status: u64) -> [u8; 16]
 method	metal2vulkan::bind::FlatIndirect::inputs	pub fn inputs(&self) -> [u8; 32]
@@ -9504,6 +9520,7 @@ struct	metal2vulkan::bind::DrawReplayModule	#[derive(Clone, Debug, PartialEq, Eq
 struct	metal2vulkan::bind::DrawReplayPreprocess	#[derive(Clone, Debug, PartialEq, Eq)] #[non_exhaustive] pub struct DrawReplayPreprocess
 struct	metal2vulkan::bind::DynamicViewsModule	#[derive(Clone, Debug, PartialEq, Eq)] #[non_exhaustive] pub struct DynamicViewsModule
 struct	metal2vulkan::bind::ExecutionStatus	#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] pub struct ExecutionStatus
+struct	metal2vulkan::bind::ExtendedCanonicalModule	#[derive(Clone, Debug, PartialEq, Eq)] #[non_exhaustive] pub struct ExtendedCanonicalModule
 struct	metal2vulkan::bind::ExtendedShadowModule	#[derive(Clone, Debug, PartialEq, Eq)] #[non_exhaustive] pub struct ExtendedShadowModule
 struct	metal2vulkan::bind::FlatDispatchModule	#[derive(Clone, Debug, PartialEq, Eq)] #[non_exhaustive] pub struct FlatDispatchModule
 struct	metal2vulkan::bind::FlatIndirect	#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub struct FlatIndirect
@@ -12514,6 +12531,8 @@ variant	metal2vulkan::device::Exposure::Core	Core(ApiVersion)
 variant	metal2vulkan::device::Exposure::Extension	Extension(&'static [VkExtension])
 variant	metal2vulkan::device::Exposure::Implied	Implied { version: ApiVersion, extensions: &'static [VkExtension] }
 variant	metal2vulkan::device::Exposure::Promoted	Promoted { version: ApiVersion, extensions: &'static [VkExtension] }
+variant	metal2vulkan::device::ExtendedRangeBlitPolicy::Canonical	Canonical
+variant	metal2vulkan::device::ExtendedRangeBlitPolicy::Kept	Kept
 variant	metal2vulkan::device::FloatControl::DenormFlushToZero	DenormFlushToZero
 variant	metal2vulkan::device::FloatControl::DenormPreserve	DenormPreserve
 variant	metal2vulkan::device::FloatControl::RoundingModeRte	RoundingModeRte

@@ -15,6 +15,14 @@
 //! - A copy out into a buffer writes only the texels' bytes at the buffer's rows.
 //! - Each format's blits announce the note of the encoding they keep: `extended-range-bits-kept`,
 //!   `device-nan-encoding`, `shared-exponent-kept`.
+//! - Under `ExtendedRangeBlitPolicy::Canonical` a `BGRA10_XR` texture's blits write Metal's
+//!   encoding (each field's low six bits cleared, the alpha code clamped to `[384, 894]`): a buffer
+//!   into a compressed texture, it into a buffer (the bytes between the rows kept), and a texture
+//!   into or out of it, with no `extended-range-bits-kept`; a fill writes its texel with each
+//!   field's low six bits cleared and the alpha code as given (Metal's fill on the M3 Max under
+//!   macOS 27.0.1); a copy out into a texture over a buffer writes it at the texels' rows, the
+//!   bytes between them kept. Under `Kept` each keeps the bytes. An uncompressed texture's keep
+//!   them under either.
 //! - A heap answers a `Shared` compressed texture's size and alignment as a `Private` one's, and
 //!   two `Shared` textures placed back to back in a heap at that size keep their CPU bytes (on
 //!   MoltenVK, whose copies of a compressed `RG11B10Float` or `RGB9E5Float` image rewrite texels,
@@ -24,6 +32,7 @@
 use super::degrade_notices::counts;
 use super::{layer_reported_nothing_at_all, validated_device_with, Messages, ScratchCache};
 use crate::gpu::TEST_DEVICE;
+use metal2vulkan::device::ExtendedRangeBlitPolicy;
 use metal2vulkan::error::RuntimeDriverDefect;
 use metal2vulkan::metal::{PixelFormat, TextureUsage};
 use metal2vulkan_runtime::{
@@ -243,7 +252,11 @@ fn get(texture: &Texture, height: u64, per: u64) -> Vec<u8> {
 fn blits_through_a_compressed_texture_keep_their_bytes_and_announce_it() {
     let messages = Messages::default();
     let cache = ScratchCache::new().unwrap();
-    let device = validated_device_with(TEST_DEVICE, &messages, cache.path(), |_| {}).unwrap();
+    // The lane's devices take `exact_answers()`; the bytes kept are `Kept`'s.
+    let device = validated_device_with(TEST_DEVICE, &messages, cache.path(), |options| {
+        options.policy.extended_range_blits = ExtendedRangeBlitPolicy::Kept;
+    })
+    .unwrap();
     let name = device.name().to_owned();
     let lane = Lane {
         queue: device.new_command_queue().unwrap(),
@@ -400,4 +413,188 @@ fn blits_through_a_compressed_texture_keep_their_bytes_and_announce_it() {
         assert!(announced.contains(&note), "{pf:?} on {name}: {announced:?}");
     }
     layer_reported_nothing_at_all(&messages);
+}
+
+/// `bytes`, `BGRA10_XR` texels, as Metal's blit through its compression writes them: each 16-bit
+/// field's low six bits cleared, the alpha code (the fourth field) clamped to `[384, 894]`; a
+/// fill's (`fill`) the low six bits alone.
+fn canonical(bytes: &[u8], fill: bool) -> Vec<u8> {
+    let mut out = bytes.to_vec();
+    for texel in out.as_chunks_mut::<8>().0 {
+        for (k, field) in texel.as_chunks_mut::<2>().0.iter_mut().enumerate() {
+            let code = u16::from_le_bytes(*field) >> 6;
+            let code = match (k, fill) {
+                (3, false) => code.clamp(384, 894),
+                _ => code,
+            };
+            *field = (code << 6).to_le_bytes();
+        }
+    }
+    out
+}
+
+/// Under each value of `extended_range_blits`, a `BGRA10_XR` texture Metal keeps compressed takes
+/// Metal's encoding through every blit and fill under `Canonical`, and keeps the bytes under `Kept`
+/// (the module docs): a buffer into a `Private` texture and back; level 3 of a mipmapped one out
+/// into a buffer's padded rows at an offset, the padding kept; a `Shared` texture's CPU bytes
+/// (kept under both), blitted out, and a blit's into it read back by the CPU; a copy out of it
+/// into a plain texture and from a plain one into it; a fill. An uncompressed texture keeps the
+/// bytes under both. A copy out of it into a texture over a buffer whose rows run 256 bytes past
+/// its texels' takes Metal's encoding at the texels' rows under `Canonical`, the bytes between
+/// them kept. Only `Kept` announces `extended-range-bits-kept`.
+#[test]
+fn extended_range_blits_write_metal_s_encoding_under_the_canonical_policy() {
+    let pattern = 0x0123_4567_89ab_cdefu64.to_le_bytes();
+    for policy in [
+        ExtendedRangeBlitPolicy::Kept,
+        ExtendedRangeBlitPolicy::Canonical,
+    ] {
+        let messages = Messages::default();
+        let cache = ScratchCache::new().unwrap();
+        let device = validated_device_with(TEST_DEVICE, &messages, cache.path(), |options| {
+            options.policy.extended_range_blits = policy;
+        })
+        .unwrap();
+        let name = format!("{} under {policy:?}", device.name());
+        let lane = Lane {
+            queue: device.new_command_queue().unwrap(),
+            device,
+        };
+        let canon = policy == ExtendedRangeBlitPolicy::Canonical;
+        let metal = |bytes: &[u8], fill: bool| match canon {
+            true => canonical(bytes, fill),
+            false => bytes.to_vec(),
+        };
+        let mut rng = Rng(0x10_c0de);
+        for pf in [PixelFormat::BGRA10XR, PixelFormat::BGRA10XRSRGB] {
+            let per = 8;
+            let whole = [SIDE, SIDE];
+            let n = (SIDE * SIDE * per) as usize;
+            for (optimized, height, compressed) in
+                [(true, SIDE, true), (false, SIDE, false), (true, 8, false)]
+            {
+                let bytes = rng.bytes((SIDE * height * per) as usize);
+                let texture = lane.texture(pf, optimized, StorageMode::Private, height, 1);
+                lane.blit_in(&texture, 0, [SIDE, height], per, &bytes);
+                let out = lane.blit_out(&texture, 0, [SIDE, height], (0, SIDE * per));
+                let want = match compressed {
+                    true => metal(&bytes, false),
+                    false => bytes,
+                };
+                assert!(
+                    out == want,
+                    "{pf:?} optimized {optimized}, {height} high on {name}"
+                );
+            }
+            // Level 3, out at an offset of 4 into rows 12 bytes longer than the texels'.
+            let texture = lane.texture(pf, true, StorageMode::Private, SIDE, 4);
+            let small = [SIDE >> 3, SIDE >> 3];
+            let bytes = rng.bytes((small[0] * small[1] * per) as usize);
+            lane.blit_in(&texture, 3, small, per, &bytes);
+            let row = small[0] * per + 12;
+            let out = lane.blit_out(&texture, 3, small, (4, row));
+            let want = metal(&bytes, false);
+            let texels = (small[0] * per) as usize;
+            for y in 0..small[1] as usize {
+                let at = 4 + y * row as usize;
+                assert!(
+                    out[at..at + texels] == want[y * texels..(y + 1) * texels],
+                    "{pf:?} level 3 row {y} on {name}"
+                );
+                assert!(out[at + texels..at + row as usize]
+                    .iter()
+                    .all(|&b| b == 0xee));
+            }
+            assert!(out[..4].iter().all(|&b| b == 0xee));
+            // A Shared texture's CPU bytes, kept; blitted out; a blit's read back by the CPU.
+            let shared = lane.texture(pf, true, StorageMode::Shared, SIDE, 1);
+            let bytes = rng.bytes(n);
+            put(&shared, SIDE, per, &bytes);
+            assert!(get(&shared, SIDE, per) == bytes, "{pf:?} CPU on {name}");
+            let out = lane.blit_out(&shared, 0, whole, (0, SIDE * per));
+            assert!(
+                out == metal(&bytes, false),
+                "{pf:?} CPU in, blit out on {name}"
+            );
+            let bytes = rng.bytes(n);
+            lane.blit_in(&shared, 0, whole, per, &bytes);
+            assert!(
+                get(&shared, SIDE, per) == metal(&bytes, false),
+                "{pf:?} blit in, CPU out on {name}"
+            );
+            // Out of it into a plain texture, and from a plain one into it.
+            let plain = lane.texture(pf, false, StorageMode::Shared, SIDE, 1);
+            let bytes = rng.bytes(n);
+            put(&shared, SIDE, per, &bytes);
+            lane.copy(&shared, &plain, SIDE);
+            assert!(
+                get(&plain, SIDE, per) == metal(&bytes, false),
+                "{pf:?} out of compressed on {name}"
+            );
+            let bytes = rng.bytes(n);
+            put(&plain, SIDE, per, &bytes);
+            lane.copy(&plain, &shared, SIDE);
+            assert!(
+                get(&shared, SIDE, per) == metal(&bytes, false),
+                "{pf:?} into compressed on {name}"
+            );
+            // A fill of it, and of the plain one.
+            let region = Region::new_2d(0, 0, SIDE, SIDE);
+            for (texture, compressed) in [(&shared, true), (&plain, false)] {
+                lane.run(|blit| blit.fill_texture(texture, 0, 0, region, &pattern).unwrap());
+                let texel = match compressed {
+                    true => metal(&pattern, true),
+                    false => pattern.to_vec(),
+                };
+                assert!(
+                    get(texture, SIDE, per) == texel.repeat((SIDE * SIDE) as usize),
+                    "{pf:?} fill, compressed {compressed}, on {name}"
+                );
+            }
+            let notices = counts(&messages.take_notices());
+            eprintln!("EXTENDED-BLITS {pf:?} on {name}: announced {notices:?}");
+            assert_eq!(
+                notices.contains_key(&Degradation::ExtendedRangeBitsKept),
+                !canon && pf == PixelFormat::BGRA10XR,
+                "{pf:?} on {name}: {notices:?}"
+            );
+        }
+        // Out of a compressed texture into one over a buffer, its rows 256 bytes past the
+        // texels': Metal's encoding at the texels' rows, the bytes between them kept. `Kept`
+        // announced the note once above, so neither value announces it again here.
+        let pf = PixelFormat::BGRA10XR;
+        let per = 8;
+        let shared = lane.texture(pf, true, StorageMode::Shared, SIDE, 1);
+        let row = SIDE * per + 256;
+        let backing = lane.buffer(&vec![0xee; (row * SIDE) as usize]);
+        let mut d = TextureDescriptor::texture_2d(pf, SIDE, SIDE, false);
+        d.usage = TextureUsage::SHADER_READ;
+        d.resource_options = ResourceOptions::shared();
+        let over = backing.new_texture(&d, 0, row).unwrap();
+        let bytes = rng.bytes((SIDE * SIDE * per) as usize);
+        put(&shared, SIDE, per, &bytes);
+        lane.copy(&shared, &over, SIDE);
+        // SAFETY: every command buffer completed; the buffer holds `row * SIDE` bytes.
+        let held = unsafe {
+            std::slice::from_raw_parts(backing.contents().unwrap().as_ptr(), (row * SIDE) as usize)
+        };
+        let want = metal(&bytes, false);
+        let texels = (SIDE * per) as usize;
+        for y in 0..SIDE as usize {
+            let at = y * row as usize;
+            assert!(
+                held[at..at + texels] == want[y * texels..(y + 1) * texels],
+                "over a buffer row {y} on {name}"
+            );
+            assert!(held[at + texels..at + row as usize]
+                .iter()
+                .all(|&b| b == 0xee));
+        }
+        let notices = counts(&messages.take_notices());
+        assert!(
+            !notices.contains_key(&Degradation::ExtendedRangeBitsKept),
+            "over a buffer on {name}: {notices:?}"
+        );
+        layer_reported_nothing_at_all(&messages);
+    }
 }

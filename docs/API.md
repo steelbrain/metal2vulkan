@@ -100,8 +100,9 @@ compile does. `DevicePolicy::default()` is `DevicePolicy::UNTRUSTED`:
   with their bounds. On MoltenVK on an Apple GPU, whose sampler and `float` functions are Metal's
   own, most of them change nothing.
 - `DevicePolicy::exact_answers()` selects Metal's answer for each of the runtime's choices that
-  offers one (the batch order, render lowering and wide lines below, the heap texture
-  compression, command buffer completion and textures over host pages) and the AIR's rounding of each `half` operation
+  offers one (the batch order, render lowering, wide lines and extended-range blits below, the
+  heap texture compression, command buffer completion and textures over host pages) and the AIR's
+  rounding of each `half` operation
   on a device without `shaderFloat16` (below), each listed in [FAST-PATHS.md](FAST-PATHS.md)
   with its bound and the measured cost of its exact form.
 - **`half` chains held at `float` precision without `shaderFloat16`** (`HalfChainPolicy::AtExits`,
@@ -203,6 +204,19 @@ compile does. `DevicePolicy::default()` is `DevicePolicy::UNTRUSTED`:
   device with `tessellationShader`. Every other width other than 1 is the band under either value,
   and what neither draws the device's lines at the nearest width they draw, announced
   `lines-at-nearest-width` (the runtime's README, line widths).
+- **A compressed extended-range texture's blits keep the bytes** (`ExtendedRangeBlitPolicy::Kept`,
+  the default; the runtime's choice, no pipeline differs). Metal's GPU blit into, out of or between
+  `BGRA10_XR` or `BGRA10_XR_sRGB` textures it keeps losslessly compressed
+  (`allowGPUOptimizedContents`, 16 texels or more a side, neither `ShaderWrite` nor
+  `PixelFormatView` usage) writes each texel's canonical encoding, each 16-bit field's low six bits
+  cleared and the alpha code clamped to `[384, 894]`, and its fill clears the low six bits alone;
+  the device's copy keeps the bytes, the same value, announced `extended-range-bits-kept`.
+  `extended_range_blits = ExtendedRangeBlitPolicy::Canonical`, which `exact_answers()` selects,
+  writes Metal's encoding: a compute dispatch after each such blit rewrites the texels it wrote (an
+  image's through a scratch copy, a buffer's or a texture over a buffer's in place), and a fill's
+  texel is encoded before it is written. A blit out of one into a buffer whose words the device
+  cannot bind (an offset or pitch off 4 bytes, past `maxStorageBufferRange`), or into a texture over
+  a buffer whose rows share bytes, keeps the bytes under either value, announced.
 
 Loops run as written: no execution bound is translated in.
 
@@ -2177,10 +2191,14 @@ bound.
   (`BGR10_XR`, `BGRA10_XR`, `RGB10A8_2P_XR10`, `R10Unorm_X6`, `RG10Unorm_X12` and their sRGB twins,
   `RGB10A2Unorm_sRGB`, `R16Bfloat`, `RG16Bfloat` and `RGBA16Bfloat`) and does not discard it at the
   store, on every device: the device's pass keeps the bytes its draws do not write, where Metal's
-  pass writes each 32 x 32 tile a draw reaches back through its tile store. Also, once per device, a
-  GPU blit into, out of or between textures of which one is a `BGRA10_XR` or `BGRA10_XR_sRGB`
-  texture Metal keeps losslessly compressed: Metal's blit moves the texels through the compression,
-  which clears the same bits and clamps the same alpha, where the device's copy keeps the bytes.
+  pass writes each 32 x 32 tile a draw reaches back through its tile store. Also, once per device
+  under `ExtendedRangeBlitPolicy::Kept` (the default), a GPU blit into, out of or between textures
+  of which one is a `BGRA10_XR` or `BGRA10_XR_sRGB` texture Metal keeps losslessly compressed, and a
+  fill of one: Metal's blit moves the texels through the compression, which clears the same bits
+  and clamps the same alpha (its fill clears the bits alone), where the device's copy keeps the
+  bytes. Under `extended_range_blits = ExtendedRangeBlitPolicy::Canonical` the runtime writes
+  Metal's encoding (section 1), and announces only a blit out of one into a buffer whose words the
+  device cannot bind or into a texture over a buffer whose rows share bytes.
   Cost: the texels the pass's draws do not write keep their bytes; Metal's pass rewrites, in each
   tile a draw reaches, the bits their codes leave unused (BGR10_XR's bits 30 and 31 to ones,
   BGRA10_XR's low six bits of each field, the two-plane color word's top two bits and a padded

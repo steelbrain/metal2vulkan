@@ -6,12 +6,13 @@ use std::time::Duration;
 
 /// Policy inputs of `Device::new`. Every field but `heap_compression`, `completion`,
 /// `batch_order`, `render_lowering`, `host_page_textures`, `pipeline_waits`,
-/// `pipeline_creation_wait`, `pipeline_commit_wait` and `wide_lines` can change emitted code, so
-/// the profile carries it (containment as the encoding it selects) and its fingerprint covers it;
-/// those nine are the runtime's alone (a heap's compressed texture's image, when the host sees a
-/// command buffer complete, how a batch begins after the earlier ones of its queue, where a render
-/// encoder's calls are lowered, what holds a sampled texture over host pages, whether and how
-/// long a pipeline the driver is still making is waited for, and which lines draw a wide line),
+/// `pipeline_creation_wait`, `pipeline_commit_wait`, `wide_lines` and `extended_range_blits` can
+/// change emitted code, so the profile carries it (containment as the encoding it selects) and
+/// its fingerprint covers it; those ten are the runtime's alone (a heap's compressed texture's
+/// image, when the host sees a command buffer complete, how a batch begins after the earlier ones
+/// of its queue, where a render encoder's calls are lowered, what holds a sampled texture over
+/// host pages, whether and how long a pipeline the driver is still making is waited for, which
+/// lines draw a wide line, and what a blit through a compressed extended-range texture writes),
 /// and no profile carries them.
 #[non_exhaustive]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -81,6 +82,10 @@ pub struct DevicePolicy {
     /// the pipeline's band variant, two triangles that cover Metal's parallelogram. The runtime's
     /// choice alone: no emitted code of a pipeline changes, the band being a variant of its own.
     pub wide_lines: WideLinePolicy,
+    /// Whether a blit or fill through a `BGRA10_XR` or `BGRA10_XR_sRGB` texture Metal keeps
+    /// losslessly compressed keeps the texels' bytes (the default) or writes Metal's canonical
+    /// encoding of them. The runtime's choice alone: no emitted code changes.
+    pub extended_range_blits: ExtendedRangeBlitPolicy,
 }
 
 impl DevicePolicy {
@@ -106,6 +111,7 @@ impl DevicePolicy {
         pipeline_creation_wait: Duration::from_millis(4500),
         pipeline_commit_wait: Duration::from_millis(4500),
         wide_lines: WideLinePolicy::Device,
+        extended_range_blits: ExtendedRangeBlitPolicy::Kept,
     };
 
     /// This policy with Metal's answer wherever the choices offer it: a heap's texture whose bytes
@@ -119,9 +125,10 @@ impl DevicePolicy {
     /// copies touch its texels alone ([`HostPageTexturePolicy::Shadow`]), each `half`
     /// operation rounded on a device without `shaderFloat16` ([`HalfChainPolicy::EachOperation`]),
     /// a render state's predicted pipeline made at its creation, each draw's pipeline waited
-    /// for until it is made ([`PipelineWaitPolicy::Exact`]), and every wide line Metal's
-    /// parallelogram where the device's own line differs ([`WideLinePolicy::Exact`]). Every other
-    /// field is kept.
+    /// for until it is made ([`PipelineWaitPolicy::Exact`]), every wide line Metal's
+    /// parallelogram where the device's own line differs ([`WideLinePolicy::Exact`]), and every
+    /// blit and fill through a compressed `BGRA10_XR` texture Metal's canonical encoding of its
+    /// texels ([`ExtendedRangeBlitPolicy::Canonical`]). Every other field is kept.
     pub const fn exact_answers(self) -> DevicePolicy {
         DevicePolicy {
             heap_compression: HeapCompressionPolicy::Uncompressed,
@@ -132,6 +139,7 @@ impl DevicePolicy {
             half_chains: HalfChainPolicy::EachOperation,
             pipeline_waits: PipelineWaitPolicy::Exact,
             wide_lines: WideLinePolicy::Exact,
+            extended_range_blits: ExtendedRangeBlitPolicy::Canonical,
             ..self
         }
     }
@@ -372,4 +380,33 @@ pub enum WideLinePolicy {
     /// Metal's parallelogram. On a device without `tessellationShader`, the device's own line,
     /// announced as under `Device`.
     Exact,
+}
+
+/// What a blit or fill writes through a `BGRA10_XR` or `BGRA10_XR_sRGB` texture Metal keeps
+/// losslessly compressed (`allowGPUOptimizedContents`, the shorter side of level 0 16 texels or
+/// more, neither `ShaderWrite` nor `PixelFormatView` usage, one sample, not over a buffer). Metal's
+/// GPU blit that reads or writes such a texture (a buffer into it, it into a buffer, a texture into
+/// it or out of it) moves the texels through its compression, which writes their canonical
+/// encoding: each 16-bit field's low six bits cleared and the alpha code clamped to `[384, 894]`;
+/// its fill clears the low six bits alone. The texel reads the same value either way: the low six
+/// bits are not read, and a read clamps the alpha. Measured on an Apple M3 Max under macOS 27.0.1:
+/// random texels through each direction, both formats, every storage mode, the usages and sizes
+/// that decide the compression; CPU copies (`replaceRegion`, `getBytes`) keep the bytes on Metal
+/// too. The runtime's choice alone: no emitted code changes.
+#[non_exhaustive]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub enum ExtendedRangeBlitPolicy {
+    /// The device's copy, which keeps the bytes it moves (the default): no work past the copy.
+    /// Announced `extended-range-bits-kept` at the first such blit or fill.
+    #[default]
+    Kept,
+    /// Metal's canonical encoding: after a blit writes such a texture's region, or a blit out of
+    /// one writes a buffer's or another texture's, a compute dispatch rewrites the texels it
+    /// wrote (an image's through a scratch buffer, a copy in and out around the dispatch; a
+    /// buffer's or a texture over a buffer's in place); a fill's texel is encoded before it is
+    /// written. A blit out of one into a buffer whose bytes the device cannot bind there (an
+    /// offset or pitch off 4 bytes, a region past `maxStorageBufferRange`), or into a texture over
+    /// a buffer whose rows share bytes, keeps the bytes, announced as under `Kept`.
+    Canonical,
 }

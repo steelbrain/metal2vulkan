@@ -7,7 +7,10 @@
 //! the same value in its canonical encoding. The runtime's answer is the device's copy, which keeps
 //! the bytes, announced by the note of the encoding it keeps (`compressed_blit.rs`): where the
 //! device's own copy of the compressed image is not Metal's blit, those sites are `known-gaps.tsv`
-//! rows that name the note.
+//! rows that name the note. `BGRA10_XR` and its sRGB twin have an exact form: under the suite's
+//! `Policy::Exact` (`ExtendedRangeBlitPolicy::Canonical`) the runtime writes Metal's encoding, so
+//! their sites hold Metal's bytes and announce nothing; their note's declaration covers a
+//! `--default-policy` run, where the device's copy keeps the bytes.
 //!
 //! Record mode runs the whole program on this M3 Max, because every call it makes is public Metal:
 //! a texture of any descriptor, a texture over a buffer, the blit copies, `replaceRegion:` and
@@ -104,7 +107,9 @@ const FORMATS: [Format; 4] = [
 /// native notes the suite declares for every case (`crate::replay::NATIVE_NOTES`):
 /// `extended-range-bits-kept` for `BGRA10_XR` and its sRGB twin, `shared-exponent-kept` for
 /// `RGB9E5Float`. Every case whose program blits through such a texture declares it, at the
-/// notices site alone: each value still compares against Metal's.
+/// notices site alone: each value still compares against Metal's. Under `Policy::Exact` the
+/// `BGRA10_XR` formats' note does not fire (`ExtendedRangeBlitPolicy::Canonical` writes Metal's
+/// encoding), and the report counts its declaration as unfired.
 pub(crate) fn kept_encoding_notice(format: u32) -> Option<Allowance> {
     FORMATS
         .iter()

@@ -44,7 +44,7 @@ Its limits, measured rather than asserted:
 | committed recordings | 1122 |
 | distinct SDK items the Metal leg reaches, of any status | 800 |
 | of those, reached only where this cannot name the family | 2 |
-| ledger rows (a case whose gap is recorded) | 1324 |
+| ledger rows (a case whose gap is recorded) | 1296 |
 | declared crossings of the option space (pairs put to Metal at once) | 26 |
 | declared crossings that are no pair of it (a boolean or numeric field, or one type in two slots) | 30 |
 
@@ -3143,20 +3143,6 @@ A case whose difference from Metal is recorded rather than compared away. The le
 | `astc-12x12-srgb` | A read of an ASTC sRGB form's texels through its decoded twin's `R8G8B8A8_SRGB` view, which holds Metal's own codes: the device decodes each 8-bit code by its o… |
 | `read-write-tier-round-trip-float` | A read of the round-tripped 8-bit sRGB texels through the texture's sRGB view: the device decodes each 8-bit code by its own sRGB transfer function, where Metal… |
 | `read-write-tier-round-trip-float` | A read of the round-tripped 8-bit sRGB texels through the texture's sRGB view: the device decodes each 8-bit code by its own sRGB transfer function, where Metal… |
-| `compressed-blits-bgra10xr` | Metal's blit through the lossless compression it keeps this `BGRA10_XR` texture in writes each texel in its canonical encoding -- each 16-bit field's low six bi… |
-| `compressed-blits-bgra10xr` | Metal's blit through the lossless compression it keeps this `BGRA10_XR` texture in writes each texel in its canonical encoding -- each 16-bit field's low six bi… |
-| `compressed-blits-bgra10xr` | Metal's blit through the lossless compression it keeps this `BGRA10_XR` texture in writes each texel in its canonical encoding -- each 16-bit field's low six bi… |
-| `compressed-blits-bgra10xr` | Metal's blit through the lossless compression it keeps this `BGRA10_XR` texture in writes each texel in its canonical encoding -- each 16-bit field's low six bi… |
-| `compressed-blits-bgra10xr` | Metal's blit through the lossless compression it keeps this `BGRA10_XR` texture in writes each texel in its canonical encoding -- each 16-bit field's low six bi… |
-| `compressed-blits-bgra10xr` | Metal's blit through the lossless compression it keeps this `BGRA10_XR` texture in writes each texel in its canonical encoding -- each 16-bit field's low six bi… |
-| `compressed-blits-bgra10xr` | Metal's blit through the lossless compression it keeps this `BGRA10_XR` texture in writes each texel in its canonical encoding -- each 16-bit field's low six bi… |
-| `compressed-blits-bgra10xr-srgb` | Metal's blit through the lossless compression it keeps this `BGRA10_XR_sRGB` texture in writes each texel in its canonical encoding -- each 16-bit field's low s… |
-| `compressed-blits-bgra10xr-srgb` | Metal's blit through the lossless compression it keeps this `BGRA10_XR_sRGB` texture in writes each texel in its canonical encoding -- each 16-bit field's low s… |
-| `compressed-blits-bgra10xr-srgb` | Metal's blit through the lossless compression it keeps this `BGRA10_XR_sRGB` texture in writes each texel in its canonical encoding -- each 16-bit field's low s… |
-| `compressed-blits-bgra10xr-srgb` | Metal's blit through the lossless compression it keeps this `BGRA10_XR_sRGB` texture in writes each texel in its canonical encoding -- each 16-bit field's low s… |
-| `compressed-blits-bgra10xr-srgb` | Metal's blit through the lossless compression it keeps this `BGRA10_XR_sRGB` texture in writes each texel in its canonical encoding -- each 16-bit field's low s… |
-| `compressed-blits-bgra10xr-srgb` | Metal's blit through the lossless compression it keeps this `BGRA10_XR_sRGB` texture in writes each texel in its canonical encoding -- each 16-bit field's low s… |
-| `compressed-blits-bgra10xr-srgb` | Metal's blit through the lossless compression it keeps this `BGRA10_XR_sRGB` texture in writes each texel in its canonical encoding -- each 16-bit field's low s… |
 | `compressed-blits-rg11b10f` | Metal's blit through the lossless compression it keeps this `RG11B10Float` texture in makes each NaN field the quiet NaN, and the device's copy keeps the field'… |
 | `compressed-blits-rg11b10f` | Metal's blit through the lossless compression it keeps this `RG11B10Float` texture in makes each NaN field the quiet NaN, and the device's copy keeps the field'… |
 | `compressed-blits-rg11b10f` | Metal's blit through the lossless compression it keeps this `RG11B10Float` texture in makes each NaN field the quiet NaN, and the device's copy keeps the field'… |
@@ -3171,20 +3157,6 @@ A case whose difference from Metal is recorded rather than compared away. The le
 | `compressed-blits-rgb9e5f` | Metal's blit through the lossless compression it keeps this `RGB9E5Float` texture in lowers each texel's shared exponent to the least that holds its value, and … |
 | `compressed-blits-rgb9e5f` | Metal's blit through the lossless compression it keeps this `RGB9E5Float` texture in lowers each texel's shared exponent to the least that holds its value, and … |
 | `compressed-blits-rgb9e5f` | Metal's blit through the lossless compression it keeps this `RGB9E5Float` texture in lowers each texel's shared exponent to the least that holds its value, and … |
-| `compressed-blits-bgra10xr` | Metal's blit through the lossless compression it keeps this `BGRA10_XR` texture in writes each texel in its canonical encoding -- each 16-bit field's low six bi… |
-| `compressed-blits-bgra10xr` | Metal's blit through the lossless compression it keeps this `BGRA10_XR` texture in writes each texel in its canonical encoding -- each 16-bit field's low six bi… |
-| `compressed-blits-bgra10xr` | Metal's blit through the lossless compression it keeps this `BGRA10_XR` texture in writes each texel in its canonical encoding -- each 16-bit field's low six bi… |
-| `compressed-blits-bgra10xr` | Metal's blit through the lossless compression it keeps this `BGRA10_XR` texture in writes each texel in its canonical encoding -- each 16-bit field's low six bi… |
-| `compressed-blits-bgra10xr` | Metal's blit through the lossless compression it keeps this `BGRA10_XR` texture in writes each texel in its canonical encoding -- each 16-bit field's low six bi… |
-| `compressed-blits-bgra10xr` | Metal's blit through the lossless compression it keeps this `BGRA10_XR` texture in writes each texel in its canonical encoding -- each 16-bit field's low six bi… |
-| `compressed-blits-bgra10xr` | Metal's blit through the lossless compression it keeps this `BGRA10_XR` texture in writes each texel in its canonical encoding -- each 16-bit field's low six bi… |
-| `compressed-blits-bgra10xr-srgb` | Metal's blit through the lossless compression it keeps this `BGRA10_XR_sRGB` texture in writes each texel in its canonical encoding -- each 16-bit field's low s… |
-| `compressed-blits-bgra10xr-srgb` | Metal's blit through the lossless compression it keeps this `BGRA10_XR_sRGB` texture in writes each texel in its canonical encoding -- each 16-bit field's low s… |
-| `compressed-blits-bgra10xr-srgb` | Metal's blit through the lossless compression it keeps this `BGRA10_XR_sRGB` texture in writes each texel in its canonical encoding -- each 16-bit field's low s… |
-| `compressed-blits-bgra10xr-srgb` | Metal's blit through the lossless compression it keeps this `BGRA10_XR_sRGB` texture in writes each texel in its canonical encoding -- each 16-bit field's low s… |
-| `compressed-blits-bgra10xr-srgb` | Metal's blit through the lossless compression it keeps this `BGRA10_XR_sRGB` texture in writes each texel in its canonical encoding -- each 16-bit field's low s… |
-| `compressed-blits-bgra10xr-srgb` | Metal's blit through the lossless compression it keeps this `BGRA10_XR_sRGB` texture in writes each texel in its canonical encoding -- each 16-bit field's low s… |
-| `compressed-blits-bgra10xr-srgb` | Metal's blit through the lossless compression it keeps this `BGRA10_XR_sRGB` texture in writes each texel in its canonical encoding -- each 16-bit field's low s… |
 | `compressed-blits-rg11b10f` | Metal's blit through the lossless compression it keeps this `RG11B10Float` texture in makes each NaN field the quiet NaN, and the device's copy keeps the field'… |
 | `compressed-blits-rg11b10f` | Metal's blit through the lossless compression it keeps this `RG11B10Float` texture in makes each NaN field the quiet NaN, and the device's copy keeps the field'… |
 | `compressed-blits-rg11b10f` | Metal's blit through the lossless compression it keeps this `RG11B10Float` texture in makes each NaN field the quiet NaN, and the device's copy keeps the field'… |

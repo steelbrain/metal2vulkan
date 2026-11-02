@@ -6,8 +6,9 @@
 //! classed, and so reaches the ledger.
 
 use crate::device::{
-    BatchOrderPolicy, CompletionPolicy, DevicePolicy, HalfChainPolicy, HeapCompressionPolicy,
-    HostPageTexturePolicy, PipelineWaitPolicy, RenderLoweringPolicy, WideLinePolicy,
+    BatchOrderPolicy, CompletionPolicy, DevicePolicy, ExtendedRangeBlitPolicy, HalfChainPolicy,
+    HeapCompressionPolicy, HostPageTexturePolicy, PipelineWaitPolicy, RenderLoweringPolicy,
+    WideLinePolicy,
 };
 use crate::pipeline::PrecisionNote;
 use std::collections::BTreeSet;
@@ -61,7 +62,8 @@ fn choices() -> Vec<Choice> {
         // complete, how a batch begins after the earlier ones of its queue, where a render
         // encoder's calls are lowered, what holds a sampled texture over host pages, whether and
         // how long a pipeline being made is waited for (the bounds' values:
-        // `the_ledger_states_the_pipeline_wait_bounds`), and which lines draw a wide line.
+        // `the_ledger_states_the_pipeline_wait_bounds`), which lines draw a wide line, and what a
+        // blit through a compressed extended-range texture writes.
         heap_compression: _,
         completion: _,
         batch_order: _,
@@ -71,6 +73,7 @@ fn choices() -> Vec<Choice> {
         pipeline_creation_wait: _,
         pipeline_commit_wait: _,
         wide_lines: _,
+        extended_range_blits: _,
         // The translator's: how a `half` chain rounds without `shaderFloat16`.
         half_chains: _,
     } = p;
@@ -83,6 +86,7 @@ fn choices() -> Vec<Choice> {
         choice!(p.half_chains: HalfChainPolicy { AtExits, EachOperation }),
         choice!(p.pipeline_waits: PipelineWaitPolicy { Bounded, Exact }),
         choice!(p.wide_lines: WideLinePolicy { Device, Exact }),
+        choice!(p.extended_range_blits: ExtendedRangeBlitPolicy { Kept, Canonical }),
     ]
 }
 
@@ -531,6 +535,39 @@ fn exact_answers_draw_wide_lines_as_metal_s_parallelogram() {
     assert_eq!(
         DevicePolicy::UNTRUSTED.exact_answers().wide_lines,
         WideLinePolicy::Exact
+    );
+}
+
+/// The runtime's choice of what a blit through a compressed `BGRA10_XR` texture writes
+/// (`extended_range_blits`) moves no committed profile's fingerprint: no profile carries it, so no
+/// translation follows it.
+#[test]
+fn the_runtime_s_extended_range_blits_choice_keys_no_profile() {
+    use crate::spirv::testing::committed_profiles_with;
+    let kept = committed_profiles_with(DevicePolicy::UNTRUSTED).expect("profiles");
+    let canonical = committed_profiles_with(DevicePolicy {
+        extended_range_blits: ExtendedRangeBlitPolicy::Canonical,
+        ..DevicePolicy::UNTRUSTED
+    })
+    .expect("profiles");
+    assert_eq!(kept.len(), canonical.len());
+    for ((stem, k), (other, c)) in kept.iter().zip(&canonical) {
+        assert_eq!(stem, other);
+        assert_eq!(k.fingerprint(), c.fingerprint(), "{stem}");
+    }
+}
+
+/// `DevicePolicy::exact_answers()` writes Metal's canonical encoding through a compressed
+/// `BGRA10_XR` texture's blits, and the default keeps the bytes.
+#[test]
+fn exact_answers_write_metal_s_canonical_extended_range_texels() {
+    assert_eq!(
+        DevicePolicy::UNTRUSTED.extended_range_blits,
+        ExtendedRangeBlitPolicy::Kept
+    );
+    assert_eq!(
+        DevicePolicy::UNTRUSTED.exact_answers().extended_range_blits,
+        ExtendedRangeBlitPolicy::Canonical
     );
 }
 

@@ -93,6 +93,10 @@ pub(super) enum OwnedModule {
     /// `bind::rows_copy_module`: many equal rows of words copied from one buffer into another by
     /// a dispatch, in place of a copy's region per row (`row_copies.rs`).
     RowsCopy,
+    /// `bind::extended_canonical_module`: Metal's canonical encoding of `BGRA10_XR` texels
+    /// written in place over a buffer's words, after a blit through a texture Metal keeps
+    /// losslessly compressed (`extended_canonical.rs`).
+    ExtendedCanonical,
     /// `bind::shadow_merge_image_module` of one read of a texel (`ShadowMergeRead`): a shadowed
     /// texture's writes merged into its buffer's bytes, reading its shadow's texels through its
     /// unsigned-integer view or its own 8-bit unsigned normalized view, its sampled image
@@ -331,6 +335,12 @@ impl OwnedModule {
                 let push_bytes = metal2vulkan::bind::RowsCopyModule::PUSH_BYTES;
                 Ok((module.spirv.to_vec(), 2, push_bytes))
             }
+            OwnedModule::ExtendedCanonical => {
+                let module = metal2vulkan::bind::extended_canonical_module(device.compile_device())
+                    .map_err(Error::Compile)?;
+                let push_bytes = metal2vulkan::bind::ExtendedCanonicalModule::PUSH_BYTES;
+                Ok((module.spirv.to_vec(), 1, push_bytes))
+            }
             OwnedModule::ShadowMergeImage(read, stores) => {
                 let module = metal2vulkan::bind::shadow_merge_image_module(
                     device.compile_device(),
@@ -558,6 +568,7 @@ pub(super) struct OwnedKernels {
     index_rewrite_runs: HashMap<RewriteProgram, OwnedKernel>,
     rotate_texels: Option<OwnedKernel>,
     rows_copy: Option<OwnedKernel>,
+    extended_canonical: Option<OwnedKernel>,
     ycbcr_refresh: Option<OwnedKernel>,
     ycbcr_converts: HashMap<(YCbCrConversion, bool), OwnedKernel>,
     ycbcr_samples: HashMap<(YCbCrSampler, YCbCrCodes), OwnedKernel>,
@@ -604,6 +615,7 @@ impl OwnedKernels {
             self.plane_copy,
             self.rotate_texels,
             self.rows_copy,
+            self.extended_canonical,
             self.ycbcr_refresh,
             self.two_plane_texels,
             self.plane_bytes_copy,
@@ -786,6 +798,7 @@ impl OwnedKernels {
             OwnedModule::PlaneCopy => &mut self.plane_copy,
             OwnedModule::RotateTexels => &mut self.rotate_texels,
             OwnedModule::RowsCopy => &mut self.rows_copy,
+            OwnedModule::ExtendedCanonical => &mut self.extended_canonical,
             OwnedModule::YCbCrRefresh => &mut self.ycbcr_refresh,
 
             OwnedModule::TwoPlaneTexels => &mut self.two_plane_texels,
