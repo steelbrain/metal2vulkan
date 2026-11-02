@@ -8365,8 +8365,10 @@ method	metal2vulkan::bind::ColorResolveFormat::exact	pub fn exact(self) -> bool
 method	metal2vulkan::bind::ColorResolveFormat::extended	pub fn extended(self) -> Option<ExtendedRange>
 method	metal2vulkan::bind::ColorResolveFormat::extended_range	pub fn extended_range(form: ExtendedRange) -> Option<ColorResolveFormat>
 method	metal2vulkan::bind::ColorResolveFormat::format	pub fn format(self) -> Format
+method	metal2vulkan::bind::ColorResolveFormat::held_word	pub fn held_word(self) -> Option<WordAttachment>
 method	metal2vulkan::bind::ColorResolveFormat::of	pub fn of(format: Format) -> Option<ColorResolveFormat>
 method	metal2vulkan::bind::ColorResolveFormat::raw_format	pub fn raw_format(self) -> Format
+method	metal2vulkan::bind::ColorResolveFormat::word	pub fn word(word: WordAttachment) -> Option<ColorResolveFormat>
 method	metal2vulkan::bind::ColorResolveFormat::written_format	pub fn written_format(self) -> Format
 method	metal2vulkan::bind::ColorResolveFormat::written_raw	pub fn written_raw(self) -> ColorResolveFormat
 method	metal2vulkan::bind::CompensatedViewport::new	pub fn new(compensation: ViewportCompensation, values: [f32; 4]) -> CompensatedViewport

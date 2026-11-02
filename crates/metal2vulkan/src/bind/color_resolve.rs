@@ -1,9 +1,9 @@
-//! The crate-owned multisample color resolves: the two no device's `AVERAGE` resolve writes.
+//! The crate-owned multisample color resolves: the ones no device's `AVERAGE` resolve writes.
 //!
 //! A device resolves a color attachment in its pass by Vulkan's `AVERAGE`, into a resolve
 //! attachment of the color attachment's own format
 //! (`VUID-VkSubpassDescription-pResolveAttachments-00850`), over the values the format holds.
-//! These modules draw the two resolves that cannot be:
+//! These modules draw the resolves that cannot be:
 //!
 //! - **into the attachment's format's sRGB twin** ([`ColorResolveFormat::of`]: the 8-bit unorm
 //!   formats and their sRGB twins), which Metal resolves in the resolve texture's encoding. Metal's
@@ -29,7 +29,9 @@
 //!   tests' model); the device's own conversions decide the rest. The crate's tables serve a
 //!   device that lacks the sRGB format, through the raw twin's views.
 //! - **of an extended-range attachment** ([`ColorResolveFormat::extended_range`], below), held in
-//!   its raw format's codes, which no device's resolve averages.
+//!   its raw format's codes, which no device's resolve averages;
+//! - **of an attachment held in its word** ([`ColorResolveFormat::word`], below), whose unsigned
+//!   format no device's resolve averages.
 //!
 //! **The modules** ([`color_resolve_modules`]): a `Vertex` entry `main` that draws one triangle
 //! over the whole viewport from `VertexIndex` 0 to 2 (the sample planes merge's), and a `Fragment`
@@ -95,6 +97,32 @@
 //! encode. The rules apply at every count; Apple's GPUs have no texture past 4 samples.
 //! [`ColorResolveFormat::exact`] says which forms are Metal's at every texel.
 //!
+//! **Word forms** ([`ColorResolveFormat::word`]): a multisampled texture the device renders only
+//! through the view of its word (`metal::format::WordAttachment`) is held in the word's unsigned
+//! format, every sample the word Metal stores, so these modules read each sample's word (lane 0 of
+//! the source's `uvec4`) and write the resolved word, a `uvec4` with the word in lane 0, to a
+//! resolve attachment in the word's format. Metal's resolve, measured by our probe
+//! `msaa_word_formats.m` on the M3 Max under macOS 27.0.1 (256 pixels at 2 and at 4 samples per
+//! format, the samples each pixel's own values or one or two values shared, resolved in the pass
+//! that drew them, in a pass that only loaded them, and after a blend):
+//!
+//! - `RGB9E5Float`: the same answer from the pass that drew the samples as from one that loaded
+//!   their stored words, so Metal resolves the words: each sample's channels decoded, their mean
+//!   rounded to the nearest `half`, and that value's word with its mantissas rounded half up
+//!   (raising the exponent where one reaches 512), Metal's store of a `half` output. Every pixel,
+//!   every leg: the modules apply it.
+//! - A packed 16-bit format (`A1BGR5Unorm`, `ABGR4Unorm`): from a pass that drew the samples,
+//!   Metal averages its tile's values, the outputs as `half`s, finer than the stored codes; from
+//!   a pass that loaded them, values of the codes by a rule no model closed. The modules average
+//!   the codes, a tie rounded down and a one-bit field's up: Metal's loaded resolve at 97% to 99%
+//!   of the 4-bit channels, 90% to 96% of the 5-bit ones and every 1-bit one, its drawn resolve at
+//!   74% to 88%, every channel within one code, and every pixel whose samples hold one word its
+//!   word. A near-equivalent ([`ColorResolveFormat::exact`]).
+//!
+//! An 8-bit sRGB word (`R8Unorm_sRGB`, `RG8Unorm_sRGB`) resolves by its format's sRGB rules
+//! ([`ColorResolveFormat::of`]) through the views of its UNORM twin: Metal's answer at every pixel
+//! the probe measured, from the pass that drew and from the one that loaded alike.
+//!
 //! **Synchronization** (consumer): the samples' writes before the draw's reads, and the resolve
 //! texture's earlier accesses before its color writes.
 
@@ -105,7 +133,7 @@ use crate::device::requirements::Requirements;
 use crate::device::Device;
 use crate::error::{Error, Feature, InternalError, InternalKind, Unsupported};
 use crate::lower::arith::extended_range as xr;
-use crate::metal::format::ExtendedRange;
+use crate::metal::format::{ExtendedRange, WordAttachment};
 use crate::pipeline::sym::{ResourceKind, ResourceSlot, Stage, Symbol};
 use crate::spirv::builder::constructs::{ArmEnd, ArmFn};
 use crate::spirv::builder::{FunctionBuilder, ModuleBuilder};
@@ -157,6 +185,8 @@ pub struct ColorResolveFormat {
     /// The extended-range form whose raw codes the format holds
     /// ([`ColorResolveFormat::extended_range`]).
     extended: Option<ExtendedRange>,
+    /// The word whose attachment's samples the format holds ([`ColorResolveFormat::word`]).
+    word: Option<WordAttachment>,
 }
 
 /// A channel of `rule` at bit `offset`.
@@ -188,6 +218,7 @@ impl ColorResolveFormat {
             written_raw: false,
             device_srgb: false,
             extended: None,
+            word: None,
         })
     }
 
@@ -207,9 +238,38 @@ impl ColorResolveFormat {
                 written_raw: false,
                 device_srgb: false,
                 extended: Some(form),
+                word: None,
             }),
             _ => None,
         }
+    }
+
+    /// The resolve of a multisampled color attachment held in `word`'s format
+    /// (`metal::format::WordAttachment`: a texture the device renders only through the view of
+    /// its word): a packed 16-bit word's or `RGB9E5Float`'s, whose modules read each sample's word
+    /// and write the resolved word, a `uvec4` of it in lane 0, by the rules the module docs state.
+    /// `None` for an 8-bit sRGB word, whose codes resolve by its format's sRGB rules
+    /// ([`ColorResolveFormat::of`]) through the views of its UNORM twin ([`written_raw`] and
+    /// [`ResolveSource::RawInputAttachment`]). It has no [`channels`](Self::channels).
+    ///
+    /// [`written_raw`]: Self::written_raw
+    pub fn word(word: WordAttachment) -> Option<ColorResolveFormat> {
+        match word {
+            WordAttachment::Srgb8 { .. } => None,
+            WordAttachment::Packed16 { .. } | WordAttachment::Rgb9e5 => Some(ColorResolveFormat {
+                format: word.word_format(),
+                channels: [None; 4],
+                written_raw: false,
+                device_srgb: false,
+                extended: None,
+                word: Some(word),
+            }),
+        }
+    }
+
+    /// The word whose attachment's samples the format holds ([`word`](Self::word)), if any.
+    pub fn held_word(self) -> Option<WordAttachment> {
+        self.word
     }
 
     /// The extended-range form whose raw codes the format holds
@@ -220,10 +280,12 @@ impl ColorResolveFormat {
 
     /// Whether the resolve writes Metal's resolve at every texel: every format's but an
     /// extended-range form's whose resolve averages values its codes do not keep (`BGRA10_XR`'s
-    /// alpha, an `_sRGB` twin's color, `RGB10A2Unorm_sRGB`'s channels), which the modules write a
+    /// alpha, an `_sRGB` twin's color, `RGB10A2Unorm_sRGB`'s channels), and a packed 16-bit
+    /// word's, whose resolve Metal draws from its tile's values, which the modules write a
     /// near-equivalent of where a pixel's samples differ (the module docs).
     pub fn exact(self) -> bool {
-        matches!(
+        let word = !matches!(self.word, Some(WordAttachment::Packed16 { .. }));
+        word && matches!(
             self.extended,
             None | Some(ExtendedRange::Bgr10 { srgb: false })
         )
@@ -884,6 +946,9 @@ pub fn fragment_typed_module(
     if let Some(form) = format.extended {
         return extended_fragment(form, samples, source);
     }
+    if let Some(word) = format.word {
+        return word_fragment(word, samples, source);
+    }
     // The device's sRGB decode reads the attachment in the sRGB format itself.
     if matches!(source, ResolveSource::Planes(_))
         || (format.device_srgb && source != ResolveSource::InputAttachment)
@@ -1211,6 +1276,220 @@ fn resolve_extended(
         .ok_or(crate::spirv::error::BuildError::IdSpaceExhausted)
 }
 
+/// The fragment stage of an attachment held in `word`'s format at `samples` reading `source`
+/// (the module docs' word forms): each sample's word in, from lane 0 of the source's `uvec4`, the
+/// resolved word out, in lane 0 of a `uvec4` at `Location` 0. Refused where `source` is the raw
+/// twin's view, which a word has not, or sample planes whose copy does not move the word's bits.
+fn word_fragment(
+    word: WordAttachment,
+    samples: u32,
+    source: ResolveSource,
+) -> BResult<TypedModule> {
+    let refused = match source {
+        ResolveSource::InputAttachment => false,
+        ResolveSource::RawInputAttachment => true,
+        ResolveSource::Planes(copy) => !copy.moves_bits(),
+    };
+    if refused {
+        return Err(crate::spirv::error::BuildError::Type(
+            crate::spirv::error::TypeRule::FunctionSignature,
+        ));
+    }
+    let mut b = ModuleBuilder::new();
+    let t = Types::new(&mut b)?;
+    let uvec4 = b.ty(Type::Vector {
+        elem: t.u32_,
+        len: 4,
+    })?;
+    let read = declare_source(&mut b, t, source, t.u32_)?;
+    let output = b.fixed_io(0, IoDir::Output, uvec4, false)?;
+    let void = b.ty(Type::Void)?;
+    let mut f = b.function(void)?;
+    let mut words = Vec::with_capacity(samples as usize);
+    for texel in read_samples(&mut f, t, read, samples)? {
+        words.push(f.composite_extract(texel, &[0])?);
+    }
+    let resolved = resolve_word(&mut f, t, word, &words)?;
+    let zero = uint(&mut f, t, 0)?;
+    let value = f.composite_construct(uvec4, &[resolved, zero, zero, zero])?;
+    let output = f.module().global_value(output)?;
+    f.store(output, value, MemAccess::default())?;
+    f.ret(None)?;
+    let id = f.finish()?;
+    b.entry(ExecModel::Fragment, id, vec![ExecMode::OriginUpperLeft])?;
+    b.finalize()
+}
+
+/// The word the resolve of `word`'s attachment writes from each sample's word `words` (each a
+/// `u32`; the module docs' word forms).
+fn resolve_word(
+    f: &mut FunctionBuilder<'_>,
+    t: Types,
+    word: WordAttachment,
+    words: &[Value],
+) -> BResult<Value> {
+    match word {
+        WordAttachment::Rgb9e5 => resolve_shared_exponent(f, t, words),
+        WordAttachment::Packed16 { .. } => resolve_fields(f, t, word, words),
+        // An 8-bit sRGB word's codes resolve by its format's sRGB rules.
+        WordAttachment::Srgb8 { .. } => Err(crate::spirv::error::BuildError::Type(
+            crate::spirv::error::TypeRule::FunctionSignature,
+        )),
+    }
+}
+
+/// A packed word's resolve: each field's codes averaged, a tie rounded down (a one-bit field's
+/// up), the sum plus the tie's bias shifted down by the count's power of two.
+fn resolve_fields(
+    f: &mut FunctionBuilder<'_>,
+    t: Types,
+    word: WordAttachment,
+    words: &[Value],
+) -> BResult<Value> {
+    let n = words.len() as u32;
+    let shift = uint(f, t, n.trailing_zeros())?;
+    let mut out = uint(f, t, 0)?;
+    for field in word.fields().into_iter().flatten() {
+        let at = uint(f, t, u32::from(field.shift))?;
+        let mask = uint(f, t, (1u32 << field.bits) - 1)?;
+        let bias = match field.bits {
+            1 => n / 2,
+            _ => n / 2 - 1,
+        };
+        let mut sum = uint(f, t, bias)?;
+        for &w in words {
+            let code = f.binary(BinOp::ShiftRightLogical, w, at)?;
+            let code = f.binary(BinOp::BitwiseAnd, code, mask)?;
+            sum = f.binary(BinOp::IAdd, sum, code)?;
+        }
+        let code = f.binary(BinOp::ShiftRightLogical, sum, shift)?;
+        let code = f.binary(BinOp::ShiftLeftLogical, code, at)?;
+        out = f.binary(BinOp::BitwiseOr, out, code)?;
+    }
+    Ok(out)
+}
+
+/// The `f32` whose biased exponent field is `biased` (a `u32`), a power of two.
+fn power_of_two(f: &mut FunctionBuilder<'_>, t: Types, biased: Value) -> BResult<Value> {
+    let at = uint(f, t, 23)?;
+    let bits = f.binary(BinOp::ShiftLeftLogical, biased, at)?;
+    f.convert(ConvOp::Bitcast, bits, t.f32_)
+}
+
+/// `x` (an `f32`, zero or positive and finite) rounded to the nearest `half`, a tie to even: on
+/// the `half` grid of `x`'s binade, `2^(⌊log2 x⌋ - 10)`, or `2^-24` below the smallest normal
+/// `half`. Exact: the scalings are powers of two and the rounded quotient has at most 11 bits.
+fn nearest_half(f: &mut FunctionBuilder<'_>, t: Types, x: Value) -> BResult<Value> {
+    let bits = f.convert(ConvOp::Bitcast, x, t.u32_)?;
+    let at = uint(f, t, 23)?;
+    let field = f.binary(BinOp::ShiftRightLogical, bits, at)?;
+    // The grid's biased exponent: the field less 10, at least `-24`'s, 103.
+    let normal = uint(f, t, 113)?;
+    let field = f.glsl(GlslOp::UMax, &[field, normal])?;
+    let ten = uint(f, t, 10)?;
+    let grid = f.binary(BinOp::ISub, field, ten)?;
+    let top = uint(f, t, 254)?;
+    let inverse = f.binary(BinOp::ISub, top, grid)?;
+    let grid = power_of_two(f, t, grid)?;
+    let inverse = power_of_two(f, t, inverse)?;
+    let steps = f.binary_no_contraction(BinOp::FMul, x, inverse)?;
+    let steps = f.glsl(GlslOp::RoundEven, &[steps])?;
+    f.binary_no_contraction(BinOp::FMul, steps, grid)
+}
+
+/// The `RGB9E5Float` word of `rgb` (three `f32`s, each zero or positive, at most 65408) with each
+/// mantissa rounded half up: the exponent `e = max(⌊log2 m⌋, -16) + 16` of the largest channel
+/// `m`, raised by one where a rounded mantissa reaches 512, and each mantissa
+/// `⌊x · 2^(24 - e) + 1/2⌋`, exact (the scaling is a power of two and the sum below 1024).
+fn shared_exponent_half_up(
+    f: &mut FunctionBuilder<'_>,
+    t: Types,
+    rgb: [Value; 3],
+) -> BResult<Value> {
+    let mut largest = f.convert(ConvOp::Bitcast, rgb[0], t.u32_)?;
+    for &x in &rgb[1..] {
+        let bits = f.convert(ConvOp::Bitcast, x, t.u32_)?;
+        largest = f.glsl(GlslOp::UMax, &[largest, bits])?;
+    }
+    let at = uint(f, t, 23)?;
+    let field = f.binary(BinOp::ShiftRightLogical, largest, at)?;
+    let floor = uint(f, t, 111)?;
+    let field = f.glsl(GlslOp::UMax, &[field, floor])?;
+    let e = f.binary(BinOp::ISub, field, floor)?;
+    let half = float(f, t, 0.5)?;
+    let mantissas = |f: &mut FunctionBuilder<'_>, e: Value| -> BResult<[Value; 3]> {
+        // `2^(24 - e)`: the `f32` of biased exponent `151 - e`.
+        let top = uint(f, t, 151)?;
+        let biased = f.binary(BinOp::ISub, top, e)?;
+        let scale = power_of_two(f, t, biased)?;
+        let mut out = [half; 3];
+        for (m, &x) in out.iter_mut().zip(&rgb) {
+            let scaled = f.binary_no_contraction(BinOp::FMul, x, scale)?;
+            let lifted = f.binary_no_contraction(BinOp::FAdd, scaled, half)?;
+            *m = f.convert(ConvOp::ConvertFToU, lifted, t.u32_)?;
+        }
+        Ok(out)
+    };
+    let [r, g, b] = mantissas(f, e)?;
+    let most = f.glsl(GlslOp::UMax, &[r, g])?;
+    let most = f.glsl(GlslOp::UMax, &[most, b])?;
+    let limit = uint(f, t, 511)?;
+    let over = f.binary(BinOp::UGreaterThan, most, limit)?;
+    let one = uint(f, t, 1)?;
+    let zero = uint(f, t, 0)?;
+    let raise = f.select(over, one, zero)?;
+    let e = f.binary(BinOp::IAdd, e, raise)?;
+    let exponent_at = uint(f, t, 27)?;
+    let mut word = f.binary(BinOp::ShiftLeftLogical, e, exponent_at)?;
+    for (c, m) in (0u32..).zip(mantissas(f, e)?) {
+        let m = f.glsl(GlslOp::UMin, &[m, limit])?;
+        let shift = uint(f, t, 9 * c)?;
+        let m = f.binary(BinOp::ShiftLeftLogical, m, shift)?;
+        word = f.binary(BinOp::BitwiseOr, word, m)?;
+    }
+    Ok(word)
+}
+
+/// An `RGB9E5Float` word's resolve (Metal's rule, the module docs): each sample's channels
+/// decoded (`m · 2^(e - 24)`, exact in `f32`), their `f32` sum in sample order times `1 / n`
+/// (exact at a power of two), rounded to the nearest `half` ([`nearest_half`]), and the word of
+/// those values with its mantissas rounded half up ([`shared_exponent_half_up`]).
+fn resolve_shared_exponent(
+    f: &mut FunctionBuilder<'_>,
+    t: Types,
+    words: &[Value],
+) -> BResult<Value> {
+    let mantissa = uint(f, t, 0x1ff)?;
+    let exponent_at = uint(f, t, 27)?;
+    // `2^(e - 24)`: the `f32` of biased exponent `e + 103`.
+    let bias = uint(f, t, 103)?;
+    let mut sums: [Option<Value>; 3] = [None; 3];
+    for &w in words {
+        let e = f.binary(BinOp::ShiftRightLogical, w, exponent_at)?;
+        let biased = f.binary(BinOp::IAdd, e, bias)?;
+        let scale = power_of_two(f, t, biased)?;
+        for (c, sum) in (0u32..).zip(sums.iter_mut()) {
+            let shift = uint(f, t, 9 * c)?;
+            let m = f.binary(BinOp::ShiftRightLogical, w, shift)?;
+            let m = f.binary(BinOp::BitwiseAnd, m, mantissa)?;
+            let m = f.convert(ConvOp::ConvertUToF, m, t.f32_)?;
+            let v = f.binary_no_contraction(BinOp::FMul, m, scale)?;
+            *sum = Some(match *sum {
+                None => v,
+                Some(s) => f.binary_no_contraction(BinOp::FAdd, s, v)?,
+            });
+        }
+    }
+    let inverse = float(f, t, 1.0 / words.len() as f32)?;
+    let mut rgb = [inverse; 3];
+    for (out, sum) in rgb.iter_mut().zip(sums) {
+        let sum = sum.ok_or(crate::spirv::error::BuildError::IdSpaceExhausted)?;
+        let mean = f.binary_no_contraction(BinOp::FMul, sum, inverse)?;
+        *out = nearest_half(f, t, mean)?;
+    }
+    shared_exponent_half_up(f, t, rgb)
+}
+
 /// The fixed binding numbers of the modules' symbols.
 fn binding_of(sym: &Symbol) -> Option<u32> {
     match sym {
@@ -1298,3 +1577,5 @@ pub fn color_resolve_modules(
 mod extended_tests;
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod word_tests;
