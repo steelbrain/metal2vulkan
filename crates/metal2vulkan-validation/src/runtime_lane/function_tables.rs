@@ -26,6 +26,7 @@
 
 use super::executions::on_device_with;
 use super::host_memory::{on_device, run};
+use super::pool_slots::holding_the_space;
 use super::read_buffer;
 use crate::air_library::AirLibrary;
 use metal2vulkan::device::VkFeature;
@@ -322,6 +323,31 @@ fn a_kernel_calls_the_functions_its_table_holds() {
             .map(|tid| if tid % 5 == 2 { tid + 3 } else { expect(tid) })
             .collect();
         assert_eq!(late, with_add, "the entry set before the commit");
+    });
+}
+
+/// A table's words take no range of the Metal address space (the runtime's `address.rs`): Metal
+/// shows no address of a table. With the whole space held, a table is made, and once the space is
+/// free again for the dispatch's own buffer, a kernel calls the functions it holds, bound at its
+/// index. A table whose words took a range of the space would find none (`OutOfMemory`).
+#[test]
+fn a_table_s_words_lie_outside_the_metal_address_space() {
+    on_device(|device| {
+        let (caller, functions) = libraries(device);
+        let function = |name: &str| functions.new_function_with_name(name).unwrap();
+        let state = dispatch_state(&caller, &functions);
+        let handle = |name: &str| state.function_handle(&function(name)).unwrap().unwrap();
+        let space = holding_the_space(device);
+        let two = state
+            .new_visible_function_table(&VisibleFunctionTableDescriptor::new(2))
+            .unwrap_or_else(|error| panic!("a table made while the space is held: {error}"));
+        drop(space);
+        two.set_functions(&[Some(&handle("table_add")), Some(&handle("table_mul"))], 0)
+            .unwrap();
+        let expect: Vec<u32> = (0..N)
+            .map(|tid| if tid % 2 == 0 { tid + 3 } else { tid * 3 })
+            .collect();
+        assert_eq!(words_of(device, &state, Some(&two), || {}), expect);
     });
 }
 

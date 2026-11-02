@@ -5,6 +5,7 @@
 //! shareable texture buffers, whose handles open texture buffers over the same texels. Their
 //! ordering against other uses of the bytes is `buffer_texture_order.rs`'s.
 
+use super::pool_slots::holding_the_space;
 use super::{
     bound_buffers, buffer_with, encode_case, layer_reported_nothing_at_all, pipeline_state,
     public_case, read_buffer, run_case, texture_descriptor, validated_device, CaseResources,
@@ -465,6 +466,37 @@ fn a_shared_texture_buffer_opens_over_its_texels() {
         command_buffer.wait_until_completed_for(WAIT).unwrap();
         assert_eq!(command_buffer.error(), None);
         assert_eq!(read_buffer(&readback, 0, length).unwrap(), written);
+    });
+}
+
+/// A texture buffer the device makes, plain or shareable, takes no range of the Metal address
+/// space (the runtime's `address.rs`): Metal shows no address of a texture's texels. With the
+/// whole space held, each is made, and the CPU reads back what it wrote through the plain one; a
+/// texture buffer whose texels took a range of the space would find none (`OutOfMemory`).
+#[test]
+fn texture_buffers_the_device_makes_lie_outside_the_metal_address_space() {
+    on_device(|device| {
+        let space = holding_the_space(device);
+        let d = texture_buffer(PixelFormat::RGBA8Uint, 16);
+        let made = device.new_texture(&d).unwrap_or_else(|error| {
+            panic!("a texture buffer made while the space is held: {error}")
+        });
+        let written = pattern(64, 11);
+        made.replace_region(Region::new_1d(0, 16), 0, 0, &written, 64, 0)
+            .unwrap();
+        let mut got = vec![0u8; 64];
+        made.get_bytes(&mut got, 64, 0, Region::new_1d(0, 16), 0, 0)
+            .unwrap();
+        assert_eq!(got, written);
+        let mut shareable = d;
+        shareable.resource_options = ResourceOptions::private();
+        let shared = device
+            .new_shared_texture(&shareable)
+            .unwrap_or_else(|error| {
+                panic!("a shareable texture buffer made while the space is held: {error}")
+            });
+        assert_eq!(shared.texture_type(), TextureType::TextureBuffer);
+        drop((made, shared, space));
     });
 }
 

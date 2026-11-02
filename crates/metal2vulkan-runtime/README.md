@@ -221,7 +221,10 @@ the runtime made.
   pipeline states and indirect command buffers a `gpu_resource_id`. Translated shaders read both
   from argument buffers, as on Metal 3. A consumer may pin either (`AddressPlacement`,
   `IdPlacement`, `Device::reserve_resource_ids`); a pin the space cannot honour is
-  `Error::PlacementConflict`.
+  `Error::PlacementConflict`. The runtime's own buffers (its in-place check's among them), and
+  the storage of objects Metal shows no address of (a texture buffer the device makes, a visible
+  function table), lie outside the space, so no pin meets them and no buffer's address depends
+  on them.
 - **Host memory without a copy.** `unsafe Device::new_buffer_with_bytes_no_copy` imports host
   memory, given as a `HostMemory`, through `VK_EXT_external_memory_host`; memory the device cannot
   import exactly is refused. `unsafe Device::new_heap_with_bytes_no_copy` is its heap twin.

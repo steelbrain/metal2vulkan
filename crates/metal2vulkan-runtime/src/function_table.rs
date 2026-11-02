@@ -4,11 +4,14 @@
 //! - **A table is a buffer of words.** The translation reads a `visible_function_table` as a
 //!   read-only buffer of `pipeline::table`'s words at its Metal buffer index: 1 for a bound table,
 //!   its size, then one word per entry, 0 for a null entry and else a handle's. A table is one
-//!   runtime buffer of those words, `Shared`, written through its mapping, so a dispatch reads
-//!   the entries as they are when it runs: as on Metal (measured on an M3 Max and an M4), an
-//!   entry set after the dispatch was encoded and before the commit is the one it calls. The
-//!   encoder binds the table's buffer at the table's index (`set_visible_function_table`); an
-//!   unbound index reads the zero-filled neutral, a null table of size 0, Metal's plain answer.
+//!   runtime buffer of those words, `Shared`, outside the Metal address space (`address.rs`):
+//!   Metal shows no address of a table, which a function reaches through its binding, its
+//!   resource ID or its words' device address, so no program buffer's address depends on it. It
+//!   is written through its mapping, so a dispatch reads the entries as they are when it runs: as
+//!   on Metal (measured on an M3 Max and an M4), an entry set after the dispatch was encoded and
+//!   before the commit is the one it calls. The encoder binds the table's buffer at the table's
+//!   index (`set_visible_function_table`); an unbound index reads the zero-filled neutral, a null
+//!   table of size 0, Metal's plain answer.
 //! - **Handles are the pipeline's.** `function_handle` is the word `pipeline::table` numbers the
 //!   function by among the kernel's linked functions (`functions`, then `binary_functions`):
 //!   one per function, none for a private function, an unlinked one or the kernel, as Metal
@@ -316,7 +319,7 @@ impl Maker {
             modes,
             MemoryClass::WriteCombined,
             false,
-            AddressPlacement::Any,
+            AddressPlacement::Outside,
         )?;
         let table = VisibleFunctionTable(Arc::new(TableShared {
             state: self,

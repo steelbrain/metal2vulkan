@@ -58,6 +58,30 @@ fn at(address: u64) -> AddressPlacement {
     AddressPlacement::At(GpuAddress(address))
 }
 
+/// The Metal address space, `[2^32, 2^47)` (the runtime's `address.rs`).
+const SPACE: std::ops::Range<u64> = (1 << 32)..(1 << 47);
+
+/// A pool holding the whole Metal address space of `device` (its pages and guard page end at the
+/// space's end), checked: a buffer the runtime places in the space is refused `OutOfMemory` while
+/// it lives, and one outside the space (`AddressPlacement::Outside`) is made.
+pub(super) fn holding_the_space(device: &Device) -> AddressPool {
+    let pool = device
+        .reserve_address_pool(at(SPACE.start), SPACE.end - SPACE.start - PAGE)
+        .unwrap();
+    let zero = |placement| {
+        device.new_buffer_with_descriptor(
+            BufferDescriptor::new(PAGE, ResourceOptions::shared(), BufferContents::Zero)
+                .with_placement(placement),
+        )
+    };
+    assert!(
+        matches!(zero(AddressPlacement::Any), Err(Error::OutOfMemory(_))),
+        "a buffer in the space while it is held"
+    );
+    zero(AddressPlacement::Outside).unwrap();
+    pool
+}
+
 /// A `Shared` buffer holding `bytes` in the slot at `offset` of `pool`.
 fn slot(pool: &AddressPool, offset: u64, bytes: &[u8]) -> Result<Buffer, Error> {
     pool.device().new_buffer_with_descriptor(

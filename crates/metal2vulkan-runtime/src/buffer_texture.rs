@@ -10,7 +10,10 @@
 //!   the first bind that needs it and kept with the texture. Their uses are uses of the buffer's
 //!   bytes, so the tracker orders them against every other use of the buffer. A
 //!   `Device::new_texture` texture buffer is a texture buffer over a new buffer of the
-//!   descriptor's options, as long as its row of texels.
+//!   descriptor's options, as long as its row of texels, outside the Metal address space
+//!   (`address.rs`): Metal shows no address of a texture's texels, which a function reaches
+//!   through the texture's binding or its resource ID, so no program buffer's address depends on
+//!   it.
 //! - **CPU access** (`replace_region`, `get_bytes`) reads and writes the buffer's bytes where
 //!   the texture lies in them, as the buffer's own `contents` would, for every texture over a
 //!   buffer.
@@ -22,7 +25,7 @@
 //! - **Not yet** (`NotImplemented`): that view on a device that did not enable `maintenance5`;
 //!   views, blits and mipmaps of textures over buffers.
 
-use super::address::ObjectsToken;
+use super::address::{AddressPlacement, ObjectsToken};
 use super::apple_only::AppleOnly;
 use super::buffer::{Buffer, ReadApart};
 use super::chroma_pairs;
@@ -953,7 +956,8 @@ impl Device {
             }
             _ => options,
         };
-        let buffer = self.new_buffer(row_bytes, bytes)?;
+        // Metal shows no address of a texture's texels: they lie outside the space (`address.rs`).
+        let buffer = self.new_buffer_placed(row_bytes, bytes, AddressPlacement::Outside)?;
         texture_buffer_over(buffer, descriptor, layout, id_use, home)
     }
 }

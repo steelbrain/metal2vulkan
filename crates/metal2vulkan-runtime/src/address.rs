@@ -46,7 +46,14 @@
 //!   in-place check, `in_place_check.rs`, which runs on a thread of its own while the program makes
 //!   its resources) take ranges of a second space above it, `[2^47, 2^48)`, so a program's buffer
 //!   addresses never depend on whether or when the runtime's own work runs or completes, as
-//!   Metal's own allocations never move a program's, and no pin of the program's meets them.
+//!   Metal's own allocations never move a program's, and no pin of the program's meets them. So
+//!   does the storage of a program's object whose address Metal shows no program: a texture
+//!   buffer's texels the device makes (`newTextureWithDescriptor:`,
+//!   `newSharedTextureWithDescriptor:`) and a visible function table's words, each reached
+//!   through its binding or its `gpuResourceID`, never at an address of the space, as a texture
+//!   of its own memory takes none of it. The space holds only what Metal gives an address (a
+//!   buffer's `gpuAddress`; a heap's range, which its resources lie in) and the pools a caller
+//!   reserves.
 //!   [`AddressPlacement::Outside`], a runtime extension, puts a caller's helper buffer there too. A
 //!   pin never reaches it.
 //! - **Indirect command buffers' records**: an indirect command buffer's ID is the one Metal's pool
