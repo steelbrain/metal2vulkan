@@ -123,8 +123,8 @@ impl From<vk::SpecializationMapEntry> for ash::vk::SpecializationMapEntry {
 }
 
 /// The `VkSamplerCreateInfo` of a sampler description, with the reduction mode chained through
-/// `reduction` when it is not the default weighted average (a `SamplerDesc` is never
-/// unnormalized), and the border's component mapping through `border` when the description has one
+/// `reduction` when it is not the default weighted average, and the border's component mapping
+/// through `border` when the description has one
 /// (`SamplerDesc::border_components`). A description of a Y′CbCr conversion
 /// (`SamplerDesc::ycbcr`) also needs the caller's `VkSamplerYcbcrConversionInfo` of its conversion
 /// chained, which this does not make.
@@ -150,7 +150,7 @@ pub fn sampler_create_info<'a>(
         .min_lod(desc.min_lod)
         .max_lod(desc.max_lod)
         .border_color(desc.border_color.into())
-        .unnormalized_coordinates(false);
+        .unnormalized_coordinates(desc.unnormalized);
     if desc.reduction != vk::SamplerReductionMode::WEIGHTED_AVERAGE {
         *reduction = ash::vk::SamplerReductionModeCreateInfo::default()
             .reduction_mode(desc.reduction.into());

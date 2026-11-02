@@ -59,7 +59,7 @@ kernel void sample_grad(texture2d<half> t [[texture(0)]],
 
 constexpr sampler pixel_linear(coord::pixel, filter::linear, address::clamp_to_edge);
 
-// A constexpr pixel-coordinate sampler: the coordinate is scaled in the shader (lower B3).
+// A constexpr pixel-coordinate sampler: the device's unnormalized sampler reads the coordinate.
 kernel void sample_pixel(texture2d<float> t [[texture(0)]],
                          device float4 *out [[buffer(0)]],
                          uint gid [[thread_position_in_grid]]) {

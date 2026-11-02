@@ -1458,6 +1458,11 @@ fn status_use(cx: &mut SelectCx<'_>, at: InstId) -> Option<StatusUse> {
         .and_then(|s| s.get(&at).copied())
 }
 
+/// Whether the function observes the `{T, i8}` status word of texture call `at` at all.
+pub(crate) fn status_observed(cx: &mut SelectCx<'_>, at: InstId) -> bool {
+    status_use(cx, at).is_some()
+}
+
 /// Whether the function observes the residency of texture call `at` on `image`: bit 0 of its status
 /// word alone, on a slot. A heap element's word (its residency needs a word per handle-table
 /// entry), and a word with another bit observed, are refused. A read's and a fetch's residency and

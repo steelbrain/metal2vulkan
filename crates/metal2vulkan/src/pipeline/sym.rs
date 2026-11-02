@@ -470,12 +470,18 @@ impl SamplerRef {
 /// How a combined image sampler samples: its sampler, and the use facts that change or check the
 /// `VkSampler` (`metal::sampler::SamplerUse`): depth comparison, which is static in AIR, whether
 /// the texture is an integer one (integer border colors), whether it samples a cube with explicit
-/// gradients (no anisotropy).
+/// gradients (no anisotropy), and whether it reads a pixel sampler's texel coordinates through the
+/// device's unnormalized sampler.
 #[non_exhaustive]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct CombinedSampler {
     pub sampler: SamplerRef,
+    /// The shader hands the binding a pixel sampler's coordinate in texels: its `VkSampler` is
+    /// the device's unnormalized one (`SamplerUse::unnormalized`), and its image a view of the
+    /// texture's first level alone (`bind::ImageViewDesc::level`).
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub unnormalized: bool,
     /// The shader samples with depth comparison through this binding.
     pub compare: bool,
     /// The texture's sampled type is an integer type.
@@ -483,42 +489,59 @@ pub struct CombinedSampler {
 }
 
 impl CombinedSampler {
-    /// Sampler `sampler` used with `compare` on a texture that is `integer` or not.
+    /// Sampler `sampler` used with `compare` on a texture that is `integer` or not, in normalized
+    /// coordinates.
     pub fn new(sampler: SamplerRef, compare: bool, integer: bool) -> CombinedSampler {
         CombinedSampler {
             sampler,
             compare,
             integer,
+            unnormalized: false,
+        }
+    }
+
+    /// This use, reading texel coordinates where `unnormalized` holds
+    /// ([`CombinedSampler::unnormalized`]).
+    pub fn with_unnormalized(self, unnormalized: bool) -> CombinedSampler {
+        CombinedSampler {
+            unnormalized,
+            ..self
         }
     }
 
     /// The use as a heap sampler symbol's index, or a separate sampler's: bit 0 comparison, bit 1
-    /// an integer texel.
+    /// an integer texel, bit 2 texel coordinates.
     pub fn heap_index(&self) -> u32 {
-        u32::from(self.compare) | (u32::from(self.integer) << 1)
+        u32::from(self.compare)
+            | (u32::from(self.integer) << 1)
+            | (u32::from(self.unnormalized) << 2)
     }
 
     /// Sampler `sampler` with the use a heap or separate sampler symbol's index `index` states
     /// ([`CombinedSampler::heap_index`]).
     pub fn from_heap_index(sampler: SamplerRef, index: u32) -> CombinedSampler {
         CombinedSampler::new(sampler, index & 1 != 0, index & 2 != 0)
+            .with_unnormalized(index & 4 != 0)
     }
 
-    /// The use's rank in a separate texture symbol's index: comparison, then an integer texel,
-    /// from the most significant bit down, so the ranks order as the uses' fields do in
-    /// `CombinedSampler`'s derived order.
+    /// The use's rank in a separate texture symbol's index: texel coordinates, comparison, then
+    /// an integer texel, from the most significant bit down, so the ranks order as the uses'
+    /// fields do in `CombinedSampler`'s derived order.
     fn use_rank(&self) -> u32 {
-        (u32::from(self.compare) << 1) | u32::from(self.integer)
+        (u32::from(self.unnormalized) << 2)
+            | (u32::from(self.compare) << 1)
+            | u32::from(self.integer)
     }
 
     /// Sampler `sampler` with the use of rank `rank` ([`CombinedSampler::use_rank`]).
     fn from_use_rank(sampler: SamplerRef, rank: u32) -> CombinedSampler {
-        CombinedSampler::new(sampler, rank & 2 != 0, rank & 1 != 0)
+        CombinedSampler::new(sampler, rank & 2 != 0, rank & 1 != 0).with_unnormalized(rank & 4 != 0)
     }
 
     /// The use the binder (and link, for a constexpr sampler) builds the `VkSampler` for.
     pub fn sampler_use(&self) -> crate::metal::sampler::SamplerUse {
         crate::metal::sampler::SamplerUse::new(self.compare, self.integer)
+            .with_unnormalized(self.unnormalized)
     }
 }
 
@@ -779,6 +802,14 @@ pub enum SpecKey {
     /// which an emulated anisotropic sample reads. A slot bound to an isotropic sampler, or to
     /// none, takes 0.
     SamplerAnisotropy(SlotRef),
+    /// Boolean: the runtime sampler bound to the slot is a nearest pixel sampler of one level
+    /// (default false): it reads pixel coordinates (`normalizedCoordinates` false) through nearest
+    /// minification and magnification filters, without a mip filter and isotropically (its word
+    /// masked by `SamplerWord::nearest_pixel(false)` is `SamplerWord::PIXEL_COORDINATES`). Where it
+    /// holds, a pixel sample through the slot hands the device its texel's centre, from which the
+    /// device's sampler reads exactly the texel Metal's reads. A slot bound to a normalized sampler,
+    /// or to none, takes false, so a normalized sampler's filter makes no pipeline of its own.
+    NearestPixelSampler(SlotRef),
     /// Boolean: the descriptor range bound at the buffer slot, which the function reads through a
     /// uniform view, starts at the bind offset, so its `SlotBindOffset` residual is 0 (default
     /// false): the slot holds inline bytes, which the consumer places at an aligned offset, or a

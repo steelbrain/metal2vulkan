@@ -105,6 +105,7 @@ const PLANES: ResourceSlot = ResourceSlot {
         sampler: SamplerRef::Slot(0),
         compare: false,
         integer: false,
+        unnormalized: false,
     }),
     index: 0,
 };

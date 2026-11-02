@@ -11,8 +11,10 @@
 //! with a texel depends on the bound pixel format, which an immutable `VK_FILTER_CUBIC_EXT` sampler
 //! cannot follow (and no committed profile has `VK_EXT_filter_cubic`); a gather through a bicubic
 //! sampler ignores the filter, so the `VkSampler` of a bicubic sampler has nearest filters and its
-//! address modes. Pixel coordinates are not a sampler property on the Vulkan side: the shader
-//! scales them, so the `VkSampler` is always normalized.
+//! address modes. Pixel coordinates are a sampler property on the Vulkan side only where a binding
+//! reads them through the device's unnormalized sampler (`SamplerUse::unnormalized`, a linear
+//! sample's); elsewhere the shader hands a pixel coordinate over the texture's size to a normalized
+//! `VkSampler` (`lower::sampler`'s pixel coordinates).
 
 use crate::air::abi::{
     AddressMode, BorderColor, CompareFunction, Coordinates, Filter, MipFilter, Reduction,
@@ -240,6 +242,12 @@ fn descriptor(s: &SamplerState) -> Result<SamplerDescriptor, Error> {
     })
 }
 
+/// Whether the device's unnormalized sampler reads constexpr sampler state `s` in pixel
+/// coordinates as it is (`metal::sampler::unnormalized_reads` of its descriptor).
+pub(crate) fn unnormalized_reads(s: &SamplerState) -> Result<bool, Error> {
+    Ok(crate::metal::sampler::unnormalized_reads(&descriptor(s)?))
+}
+
 /// The immutable `VkSampler` of constexpr sampler `words` used as `use_` on `profile`. Every
 /// refusal is a feature check of the constexpr state (bicubic filtering, anisotropy, border colors,
 /// mirror-clamp, comparison and any LOD bias where the portability subset withholds
@@ -253,7 +261,11 @@ pub fn constexpr_desc(
 ) -> Result<vk::SamplerDesc, Error> {
     let s = state_of(words)?;
     let mut desc = crate::metal::sampler::vk_sampler(&descriptor(&s)?, use_, profile)?;
-    let bias = s.lod_bias.to_f32();
+    // A sampler that reads texel coordinates reads level 0 by one filter: a bias selects nothing.
+    let bias = match use_.unnormalized {
+        true => 0.0,
+        false => s.lod_bias.to_f32(),
+    };
     if bias.is_nan() {
         return Err(Unsupported::not_representable(Feature::SamplerLodBias).into());
     }

@@ -3979,6 +3979,7 @@ field	metal2vulkan::metal::format::YCbCrFormat.reads	pub reads: YCbCrReads
 field	metal2vulkan::metal::format::YCbCrFormat.subsampling	pub subsampling: ChromaSubsampling
 field	metal2vulkan::metal::sampler::SamplerUse.compare	pub compare: bool
 field	metal2vulkan::metal::sampler::SamplerUse.integer_texture	pub integer_texture: bool
+field	metal2vulkan::metal::sampler::SamplerUse.unnormalized	pub unnormalized: bool
 field	metal2vulkan::metal::state::DepthBias.clamp	pub clamp: f32
 field	metal2vulkan::metal::state::DepthBias.constant_factor	pub constant_factor: f32
 field	metal2vulkan::metal::state::DepthBias.enable	pub enable: bool
@@ -4044,6 +4045,7 @@ field	metal2vulkan::pipeline::ColorGroup.width	pub width: u32
 field	metal2vulkan::pipeline::CombinedSampler.compare	pub compare: bool
 field	metal2vulkan::pipeline::CombinedSampler.integer	pub integer: bool
 field	metal2vulkan::pipeline::CombinedSampler.sampler	pub sampler: SamplerRef
+field	metal2vulkan::pipeline::CombinedSampler.unnormalized	pub unnormalized: bool
 field	metal2vulkan::pipeline::CommandWrites.operations	pub operations: u32
 field	metal2vulkan::pipeline::CommandWrites.primitive_types	pub primitive_types: u8
 field	metal2vulkan::pipeline::CompileReport.ledger_peak	pub ledger_peak: u64
@@ -4529,6 +4531,7 @@ field	metal2vulkan::vk::SamplerDesc.min_lod	pub min_lod: f32
 field	metal2vulkan::vk::SamplerDesc.mip_lod_bias	pub mip_lod_bias: f32
 field	metal2vulkan::vk::SamplerDesc.mipmap_mode	pub mipmap_mode: SamplerMipmapMode
 field	metal2vulkan::vk::SamplerDesc.reduction	pub reduction: SamplerReductionMode
+field	metal2vulkan::vk::SamplerDesc.unnormalized	pub unnormalized: bool
 field	metal2vulkan::vk::SamplerDesc.ycbcr	pub ycbcr: Option<crate::bind::YCbCrPlanesSampler>
 field	metal2vulkan::vk::SpecializationMapEntry.constant_id	pub constant_id: u32
 field	metal2vulkan::vk::SpecializationMapEntry.offset	pub offset: u32
@@ -8938,7 +8941,8 @@ method	metal2vulkan::metal::sampler::AddressModeMap::mode	pub fn mode(&self, fro
 method	metal2vulkan::metal::sampler::AddressModeMap::sampler	pub fn sampler(&self, mut desc: SamplerDescriptor) -> SamplerDescriptor
 method	metal2vulkan::metal::sampler::AddressModeMap::with	pub fn with(mut self, from: SamplerAddressMode, to: SamplerAddressMode) -> AddressModeMap
 method	metal2vulkan::metal::sampler::SamplerUse::new	pub fn new(compare: bool, integer_texture: bool) -> SamplerUse
-method	metal2vulkan::metal::sampler::SamplerWord::exact_fetch	pub fn exact_fetch(plane: u8, integer: bool) -> u32
+method	metal2vulkan::metal::sampler::SamplerUse::with_unnormalized	pub fn with_unnormalized(self, unnormalized: bool) -> SamplerUse
+method	metal2vulkan::metal::sampler::SamplerWord::nearest_pixel	pub fn nearest_pixel(integer: bool) -> u32
 method	metal2vulkan::metal::sampler::SamplerWord::of	pub fn of(desc: &SamplerDescriptor) -> SamplerWord
 method	metal2vulkan::pipeline::AliasView::new	pub fn new(image_format: vk::Format) -> AliasView
 method	metal2vulkan::pipeline::AmplificationDraws::new	pub fn new(layered: bool, viewports: bool) -> AmplificationDraws
@@ -8958,6 +8962,7 @@ method	metal2vulkan::pipeline::CombinedSampler::from_heap_index	pub fn from_heap
 method	metal2vulkan::pipeline::CombinedSampler::heap_index	pub fn heap_index(&self) -> u32
 method	metal2vulkan::pipeline::CombinedSampler::new	pub fn new(sampler: SamplerRef, compare: bool, integer: bool) -> CombinedSampler
 method	metal2vulkan::pipeline::CombinedSampler::sampler_use	pub fn sampler_use(&self) -> crate::metal::sampler::SamplerUse
+method	metal2vulkan::pipeline::CombinedSampler::with_unnormalized	pub fn with_unnormalized(self, unnormalized: bool) -> CombinedSampler
 method	metal2vulkan::pipeline::CommandWrites::is_empty	pub const fn is_empty(self) -> bool
 method	metal2vulkan::pipeline::CommandWrites::may	pub const fn may(self, bits: u32) -> bool
 method	metal2vulkan::pipeline::CommandWrites::may_draw_primitive_type	pub const fn may_draw_primitive_type(self, raw: u32) -> bool
@@ -13810,6 +13815,7 @@ variant	metal2vulkan::pipeline::SpecKey::ImageblockHeight	ImageblockHeight
 variant	metal2vulkan::pipeline::SpecKey::ImageblockWidth	ImageblockWidth
 variant	metal2vulkan::pipeline::SpecKey::LocalSize	LocalSize(Axis)
 variant	metal2vulkan::pipeline::SpecKey::MultiRegion	MultiRegion
+variant	metal2vulkan::pipeline::SpecKey::NearestPixelSampler	NearestPixelSampler(SlotRef)
 variant	metal2vulkan::pipeline::SpecKey::ObjectFlatLocalSize	ObjectFlatLocalSize
 variant	metal2vulkan::pipeline::SpecKey::ObjectLocalSize	ObjectLocalSize(Axis)
 variant	metal2vulkan::pipeline::SpecKey::ObjectMultiRegion	ObjectMultiRegion

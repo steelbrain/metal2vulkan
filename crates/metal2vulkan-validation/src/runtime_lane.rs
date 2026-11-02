@@ -643,6 +643,8 @@ mod pitched_surfaces;
 #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
 mod pixel_downscales;
 #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+mod pixel_edges;
+#[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
 mod pixel_samplers;
 #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
 mod placement;

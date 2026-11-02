@@ -23,7 +23,7 @@ use crate::pipeline::sym::{ImageAccess, SamplerRef, SlotClass, SlotRef, Stage};
 
 use super::{
     BiasReach, BindingKey, CubeFootprint, HeapKey, HeapSamplerKey, Lod, MinLevel, Offset, Pixel,
-    SampleOp, Sampling, Source, Unmapped,
+    PixelPosition, SampleOp, Sampling, Source, Unmapped,
 };
 
 fn refuse() -> Error {
@@ -1002,6 +1002,28 @@ fn nearest_fetch(r: SamplerRef, dim: ImageDim, integer: bool) -> Result<bool, Er
         && edge)
 }
 
+/// Whether a sample or gather without comparison through constexpr sampler `words` of a texture of
+/// `shape` hands `x` itself to the device's unnormalized sampler (`PixelPosition::Unnormalized`):
+/// pixel coordinates, which that sampler reads as it is (`metal::sampler::unnormalized_reads`:
+/// one filter, no mip filter, no anisotropy, clamping addressing; Metal's own rule for a
+/// `coord::pixel` sampler), of a 1D or 2D texture that is no array (Vulkan's views for such a
+/// sampler, `VUID-vkCmdDraw-None-08609` and `-09635`).
+fn unnormalized(words: [u64; 2], shape: ImageShape) -> Result<bool, Error> {
+    let s = super::state_of(words)?;
+    Ok(s.coordinates == Coordinates::Pixel
+        && matches!(shape.dim, ImageDim::D1 | ImageDim::D2)
+        && !shape.array
+        && super::constexpr::unnormalized_reads(&s)?)
+}
+
+/// Whether constexpr sampler `words` reads a texture whose texels are `integer` or not nearest:
+/// its filters are, or the texture is integer, which no filter blends
+/// (`metal::sampler::vk_sampler`).
+fn constexpr_nearest(words: [u64; 2], integer: bool) -> Result<bool, Error> {
+    let s = super::state_of(words)?;
+    Ok(integer || (s.min_filter == Filter::Nearest && s.mag_filter == Filter::Nearest))
+}
+
 /// Select sampling call `call` of texture slot `index` through static sampler `sampler`: an
 /// extended-range sample where the slot's variant binds such a format ([`select_extended`]), else
 /// [`select_one`]'s sampling. `arm` is set for an arm of a switch-at-use, whether it reads the
@@ -1661,6 +1683,15 @@ fn select_one(
         Some((r, _)) => nearest_fetch(r, shape.dim, integer)?,
         None => false,
     };
+    // A sample the exact fetch takes (its arm comes first) is no unnormalized one; its sampler's
+    // gather is.
+    let native = bicubic.is_none()
+        && matches!(image, ImageRef::Slot(_))
+        && !crate::lower::texture::status_observed(cx, at)
+        && match stat {
+            Some((SamplerRef::Constexpr(words), _)) => unnormalized(words, shape)?,
+            _ => false,
+        };
     let (op, form, class, tangled) = match t.op {
         // A bicubic sample is fetches of the base level: its level, bias, gradients, and fragment
         // derivatives select nothing, so it is not tangled. A `min_lod_clamp` has no Metal
@@ -1712,6 +1743,29 @@ fn select_one(
                 Some(class),
                 false,
             )
+        }
+        // A sample the device's unnormalized sampler reads at `x` itself: level 0 (Metal's pixel
+        // sampler has no mip filter, and one filter for both), its offset added to `x` on any
+        // profile (`PixelPosition::Unnormalized`), its bias, gradients and minimum-LOD clamp
+        // selecting nothing, so it is not tangled.
+        TexOp::Sample {
+            compare: false,
+            offset: has_offset,
+            ..
+        }
+        | TexOp::SampleGrad {
+            compare: false,
+            offset: has_offset,
+        } if native => {
+            let offset = fetch_offset(cx, &ops, has_offset, lanes)?;
+            let (form, class) = texel_in(t, cross, if shape.depth { 1 } else { 4 })?;
+            let op = SampleOp::Sample {
+                lod: Lod::Level(None),
+                dref: None,
+                min_lod: None,
+                offset,
+            };
+            (op, Some(form), Some(class), false)
         }
         TexOp::Sample {
             compare,
@@ -1860,7 +1914,12 @@ fn select_one(
                 Some(C::W) => 3,
             };
             let dref = compare_ref(cx, &ops, compare)?;
-            let off = offset(cx, &ops, has_offset, lanes, true)?;
+            // The device's unnormalized sampler takes no offset: it is added to `x`, on any
+            // profile (`PixelPosition::Unnormalized`).
+            let off = match native && !compare {
+                true => fetch_offset(cx, &ops, has_offset, lanes)?,
+                false => offset(cx, &ops, has_offset, lanes, true)?,
+            };
             let (form, class) = texel_in(t, cross, 4)?;
             (
                 SampleOp::Gather {
@@ -1926,6 +1985,35 @@ fn select_one(
         SamplerArg::Static(SamplerRef::Constexpr(_), Coordinates::Pixel) if !cube => Pixel::Always,
         _ => Pixel::None,
     };
+    let position = match (native, &op, stat) {
+        (
+            true,
+            SampleOp::Sample {
+                dref: None,
+                offset: Some(_),
+                ..
+            },
+            Some((SamplerRef::Constexpr(words), _)),
+        ) if constexpr_nearest(words, integer)? => PixelPosition::UnnormalizedTexel,
+        (true, SampleOp::Sample { dref: None, .. } | SampleOp::Gather { dref: None, .. }, _) => {
+            PixelPosition::Unnormalized
+        }
+        _ => pixel_position(&op, pixel, stat.map(|(r, _)| r), integer)?,
+    };
+    // A texel's centre is `floor(x) + 0.5`, whose `floor` reads a subnormal `x` as the device
+    // does, where Metal's sampler reads its texel from `x` itself: the zero of either sign is
+    // texel 0, and a negative subnormal texel -1. So does a pixel fetch's texel `floor(x) + k`,
+    // where an offset moves that texel off the edge the clamp sends both to.
+    if matches!(
+        position,
+        PixelPosition::Texel
+            | PixelPosition::TexelBySpec
+            | PixelPosition::TexelByWord
+            | PixelPosition::UnnormalizedTexel
+    ) || matches!(op, SampleOp::PixelFetch { offset: Some(_) })
+    {
+        cx.precision.insert(PrecisionNote::DeviceDenormals);
+    }
     // A `half` texel's NaN is the device's decode, a bicubic sample's taps included: where the
     // bound format may hold one.
     let half = form.is_some_and(|f| f.conv == TexelConv::F16);
@@ -1963,6 +2051,7 @@ fn select_one(
         };
         s.compare |= compare;
         s.coordinates |= pixel != Pixel::None;
+        s.nearest |= position == PixelPosition::TexelBySpec;
         // A cube's gradients whose footprint the word chooses read its anisotropy.
         s.anisotropy |= matches!(
             op,
@@ -2087,7 +2176,7 @@ fn select_one(
     // texels at a texel edge or a filter step's edge are the device's arithmetic's on that
     // coordinate (`pixel_note`). An argument buffer's sampler records a note of its own, which the
     // runtime announces only while a bound state can need it.
-    let when = pixel_note(pixel);
+    let when = pixel_note(pixel, position);
     let note = match pixel {
         Pixel::Heap(_) => PrecisionNote::ArgumentPixelSamplerScaling,
         _ => PrecisionNote::PixelSamplerScaling,
@@ -2170,6 +2259,7 @@ fn select_one(
                 texture,
                 sampler,
                 compare,
+                unnormalized: position.unnormalized(),
             };
             cx.families.sampler.combined.insert(key);
             Source::Combined(key)
@@ -2288,6 +2378,7 @@ fn select_one(
         depth: shape.depth,
         result,
         pixel,
+        position,
         residency,
         footprint,
         cube,
@@ -2349,25 +2440,73 @@ fn clamps_reference(
 
 /// Where a sampling through a sampler of pixel coordinates `pixel` hands the device a coordinate
 /// scaled by the texture's level-0 size, whose texels the device's sampler decides
-/// (`PrecisionNote::PixelSamplerScaling`): the clauses of the arms that do (empty: none).
+/// (`PrecisionNote::PixelSamplerScaling`): the clauses of the arms that do (empty: none). Neither
+/// `x` itself to the device's unnormalized sampler nor a texel's centre (`position`) is such a
+/// coordinate: the device reads exactly Metal's texel from a centre, and its own footprint from `x`.
 ///
 /// - A constexpr pixel sampler: always (its exact fetch, `SampleOp::PixelFetch`, reaches here with
 ///   [`Pixel::None`]).
-/// - A runtime sampler slot: where its word states pixel coordinates.
+/// - A runtime sampler slot: where its word states pixel coordinates, and, for a sample at its
+///   texel's centre by its `NearestPixelSampler` specialization ([`PixelPosition::TexelBySpec`]),
+///   where that does not hold.
 /// - An argument buffer's sampler ([`PrecisionNote::ArgumentPixelSamplerScaling`]): always, since
-///   its word, which the specialized module cannot read, may state pixel coordinates; the runtime
-///   announces it only while a state of pixel coordinates lives.
-fn pixel_note(pixel: Pixel) -> Vec<crate::lower::select::NoteClause> {
+///   its word, which the specialized module cannot read, may state pixel coordinates (through a
+///   linear filter, where its sample's position is [`PixelPosition::TexelByWord`]); the runtime
+///   announces it only while such a state lives.
+fn pixel_note(pixel: Pixel, position: PixelPosition) -> Vec<crate::lower::select::NoteClause> {
     use crate::lower::select::NoteClause;
-    match pixel {
-        Pixel::None => Vec::new(),
-        Pixel::Always | Pixel::Heap(_) => vec![NoteClause::new()],
-        Pixel::Spec(n) => {
-            let coordinates =
-                NoteTest::differ(NoteOn::Sampler(n), SamplerWord::PIXEL_COORDINATES, 0);
-            vec![[coordinates].into()]
+    match (pixel, position) {
+        (Pixel::None, _) | (_, PixelPosition::Texel) => Vec::new(),
+        (_, p) if p.unnormalized() => Vec::new(),
+        (Pixel::Always | Pixel::Heap(_), _) => vec![NoteClause::new()],
+        (Pixel::Spec(n), position) => {
+            let mut clause = NoteClause::from([NoteTest::differ(
+                NoteOn::Sampler(n),
+                SamplerWord::PIXEL_COORDINATES,
+                0,
+            )]);
+            if position == PixelPosition::TexelBySpec {
+                clause.insert(NoteTest::equal(NoteOn::NearestPixel(n), 1, 0));
+            }
+            vec![clause]
         }
     }
+}
+
+/// What the device's normalized sampler is handed of the pixel coordinate of `op` through a sampler
+/// of pixel coordinates `pixel` (the static sampler `stat`, of a texture whose texels are `integer`
+/// or not), where the device's unnormalized sampler does not take `x` itself:
+///
+/// - a sample through a constexpr pixel sampler that filters nearest, without a mip filter or
+///   anisotropy, or of an integer texture (which every filter reads nearest): its texel's centre;
+/// - a sample through a runtime sampler slot: its texel's centre where the slot's
+///   `NearestPixelSampler` specialization states such a sampler, or always of an integer texture;
+/// - a sample through an argument buffer's sampler: its texel's centre where the table entry's
+///   word states such a sampler (`SamplerWord::nearest_pixel`);
+/// - else the quotient: a linear filter's sample, a gather (whose block the device's sampler
+///   reads from its own reading of the coordinate, as Metal's does), and a level query.
+fn pixel_position(
+    op: &SampleOp,
+    pixel: Pixel,
+    stat: Option<SamplerRef>,
+    integer: bool,
+) -> Result<PixelPosition, Error> {
+    Ok(match (op, pixel, stat) {
+        (_, Pixel::None, _) => PixelPosition::Scaled,
+        (SampleOp::Sample { .. }, Pixel::Always, Some(SamplerRef::Constexpr(words))) => {
+            let s = super::state_of(words)?;
+            let nearest =
+                integer || (s.min_filter == Filter::Nearest && s.mag_filter == Filter::Nearest);
+            match nearest && s.mip_filter == MipFilter::None && s.max_anisotropy <= 1 {
+                true => PixelPosition::Texel,
+                false => PixelPosition::Scaled,
+            }
+        }
+        (SampleOp::Sample { .. }, Pixel::Spec(_), _) if integer => PixelPosition::Texel,
+        (SampleOp::Sample { .. }, Pixel::Spec(_), _) => PixelPosition::TexelBySpec,
+        (SampleOp::Sample { .. }, Pixel::Heap(_), _) => PixelPosition::TexelByWord,
+        _ => PixelPosition::Scaled,
+    })
 }
 
 /// Whether sampling `op` through `sampler` reads one texel of one level: a 2D gather and a pixel

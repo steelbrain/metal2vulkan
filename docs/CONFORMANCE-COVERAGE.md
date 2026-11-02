@@ -44,7 +44,7 @@ Its limits, measured rather than asserted:
 | committed recordings | 1122 |
 | distinct SDK items the Metal leg reaches, of any status | 800 |
 | of those, reached only where this cannot name the family | 2 |
-| ledger rows (a case whose gap is recorded) | 1326 |
+| ledger rows (a case whose gap is recorded) | 1324 |
 | declared crossings of the option space (pairs put to Metal at once) | 26 |
 | declared crossings that are no pair of it (a boolean or numeric field, or one type in two slots) | 30 |
 
@@ -3200,29 +3200,27 @@ A case whose difference from Metal is recorded rather than compared away. The le
 | `sampler-mip-filter-pairs-nearest` | Under a nearest mip filter and `lodMinClamp` 1.5 Metal reads level 1 (`ceil(clamp + 0.5) - 1`, the case's table); the device's own sampler takes the descriptor'… |
 | `sampler-mip-filter-pairs-nearest` | Under a nearest mip filter and `lodMinClamp` 1.5 Metal reads level 1 (`ceil(clamp + 0.5) - 1`, the case's table); the device's own sampler takes the descriptor'… |
 | `sampler-mip-filter-pairs-nearest` | Under a nearest mip filter and `lodMinClamp` 1.5 Metal reads level 1 (`ceil(clamp + 0.5) - 1`, the case's table); the device's own sampler takes the descriptor'… |
-| `pixel-samplers-rgba8-nearest-mirror` | A pixel-coordinate sample through the device's own sampler at the coordinate divided by the texture's size (`pixel-sampler-scaling`, `argument-pixel-sampler-sca… |
-| `pixel-samplers-rgba8-nearest-mirror` | A pixel-coordinate sample through the device's own sampler at the coordinate divided by the texture's size (`pixel-sampler-scaling`): the digest of the site's o… |
+| `pixel-samplers-rgba8-nearest-mirror` | A nearest pixel-coordinate sample through the device's own sampler at its texel's centre over the texture's size, where the device reads Metal's texel itself; t… |
+| `pixel-samplers-rgba8-nearest-mirror` | A nearest pixel-coordinate sample through the device's own sampler at its texel's centre over the texture's size, where the device reads Metal's texel itself; t… |
 | `pixel-samplers-rgba8-linear-edge` | A pixel-coordinate sample through the device's own sampler at the coordinate divided by the texture's size (`pixel-sampler-scaling`, `argument-pixel-sampler-sca… |
-| `pixel-samplers-rgba8-linear-edge` | A pixel-coordinate sample through the device's own sampler at the coordinate divided by the texture's size (`pixel-sampler-scaling`): the digest of the site's o… |
+| `pixel-samplers-rgba8-linear-edge` | A linear pixel-coordinate sample through the device's own sampler in unnormalized coordinates, at the coordinate itself: the digest of the site's output differs… |
 | `pixel-samplers-rgba8-linear-edge` | A pixel-coordinate sample through the device's own sampler at the coordinate divided by the texture's size (`pixel-sampler-scaling`): the digest of the site's o… |
 | `pixel-samplers-rgba8-linear-zero` | A pixel-coordinate sample through the device's own sampler at the coordinate divided by the texture's size (`pixel-sampler-scaling`, `argument-pixel-sampler-sca… |
-| `pixel-samplers-rgba8-linear-zero` | A pixel-coordinate sample through the device's own sampler at the coordinate divided by the texture's size (`pixel-sampler-scaling`): the digest of the site's o… |
+| `pixel-samplers-rgba8-linear-zero` | A linear pixel-coordinate sample through the device's own sampler in unnormalized coordinates, at the coordinate itself: the digest of the site's output differs… |
 | `pixel-samplers-rgba8-linear-zero` | A pixel-coordinate sample through the device's own sampler at the coordinate divided by the texture's size (`pixel-sampler-scaling`): the digest of the site's o… |
 | `pixel-samplers-rgba8-linear-border` | A pixel-coordinate sample through the device's own sampler at the coordinate divided by the texture's size (`pixel-sampler-scaling`, `argument-pixel-sampler-sca… |
-| `pixel-samplers-rgba8-linear-border` | A pixel-coordinate sample through the device's own sampler at the coordinate divided by the texture's size (`pixel-sampler-scaling`): the digest of the site's o… |
+| `pixel-samplers-rgba8-linear-border` | A linear pixel-coordinate sample through the device's own sampler in unnormalized coordinates, at the coordinate itself: the digest of the site's output differs… |
 | `pixel-samplers-rgba8-linear-border` | A pixel-coordinate sample through the device's own sampler at the coordinate divided by the texture's size (`pixel-sampler-scaling`): the digest of the site's o… |
 | `pixel-samplers-rgba8-linear-mirror` | A pixel-coordinate sample through the device's own sampler at the coordinate divided by the texture's size (`pixel-sampler-scaling`, `argument-pixel-sampler-sca… |
 | `pixel-samplers-rgba8-linear-mirror` | A pixel-coordinate sample through the device's own sampler at the coordinate divided by the texture's size (`pixel-sampler-scaling`): the digest of the site's o… |
-| `pixel-samplers-rgba16f-nearest-mirror` | A pixel-coordinate sample through the device's own sampler at the coordinate divided by the texture's size (`pixel-sampler-scaling`, `argument-pixel-sampler-sca… |
-| `pixel-samplers-rgba16f-nearest-mirror` | A pixel-coordinate sample through the device's own sampler at the coordinate divided by the texture's size (`pixel-sampler-scaling`): the digest of the site's o… |
 | `pixel-samplers-rgba16f-linear-edge` | A pixel-coordinate sample through the device's own sampler at the coordinate divided by the texture's size (`pixel-sampler-scaling`, `argument-pixel-sampler-sca… |
-| `pixel-samplers-rgba16f-linear-edge` | A pixel-coordinate sample through the device's own sampler at the coordinate divided by the texture's size (`pixel-sampler-scaling`): the digest of the site's o… |
+| `pixel-samplers-rgba16f-linear-edge` | A linear pixel-coordinate sample through the device's own sampler in unnormalized coordinates, at the coordinate itself: the digest of the site's output differs… |
 | `pixel-samplers-rgba16f-linear-edge` | A pixel-coordinate sample through the device's own sampler at the coordinate divided by the texture's size (`pixel-sampler-scaling`): the digest of the site's o… |
 | `pixel-samplers-rgba16f-linear-zero` | A pixel-coordinate sample through the device's own sampler at the coordinate divided by the texture's size (`pixel-sampler-scaling`, `argument-pixel-sampler-sca… |
-| `pixel-samplers-rgba16f-linear-zero` | A pixel-coordinate sample through the device's own sampler at the coordinate divided by the texture's size (`pixel-sampler-scaling`): the digest of the site's o… |
+| `pixel-samplers-rgba16f-linear-zero` | A linear pixel-coordinate sample through the device's own sampler in unnormalized coordinates, at the coordinate itself: the digest of the site's output differs… |
 | `pixel-samplers-rgba16f-linear-zero` | A pixel-coordinate sample through the device's own sampler at the coordinate divided by the texture's size (`pixel-sampler-scaling`): the digest of the site's o… |
 | `pixel-samplers-rgba16f-linear-border` | A pixel-coordinate sample through the device's own sampler at the coordinate divided by the texture's size (`pixel-sampler-scaling`, `argument-pixel-sampler-sca… |
-| `pixel-samplers-rgba16f-linear-border` | A pixel-coordinate sample through the device's own sampler at the coordinate divided by the texture's size (`pixel-sampler-scaling`): the digest of the site's o… |
+| `pixel-samplers-rgba16f-linear-border` | A linear pixel-coordinate sample through the device's own sampler in unnormalized coordinates, at the coordinate itself: the digest of the site's output differs… |
 | `pixel-samplers-rgba16f-linear-border` | A pixel-coordinate sample through the device's own sampler at the coordinate divided by the texture's size (`pixel-sampler-scaling`): the digest of the site's o… |
 | `pixel-samplers-rgba16f-linear-mirror` | A pixel-coordinate sample through the device's own sampler at the coordinate divided by the texture's size (`pixel-sampler-scaling`, `argument-pixel-sampler-sca… |
 | `pixel-samplers-rgba16f-linear-mirror` | A pixel-coordinate sample through the device's own sampler at the coordinate divided by the texture's size (`pixel-sampler-scaling`): the digest of the site's o… |

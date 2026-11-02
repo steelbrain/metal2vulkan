@@ -16,19 +16,22 @@
 //! reads its border color, here opaque white, as clamp to the border does, and a constexpr one
 //! transparent black.
 //!
-//! Each configuration here runs the same grid through the runtime. A pixel coordinate reaches
-//! the device divided by the texture's size, and the device's sampler reads that normalized
-//! coordinate in its own arithmetic: the stages record it (`PrecisionNote::PixelSamplerScaling`,
-//! and `ArgumentPixelSamplerScaling` for an argument buffer's sampler) and every device announces
-//! it. Each pixel configuration is held to its normalized control on the same device (the runtime
-//! state's `norm`; for `const`, a constexpr sampler of the same words in normalized coordinates):
-//! a cell that differs from the control at the same coordinate must be the control's answer at a
-//! coordinate within [`REACH`] ulps of it on each axis, and the widest shift each configuration
-//! needed is printed (`PIXEL-SAMPLER-REACH` lines). On a device with `VkProperty::MetalSampler`
-//! (MoltenVK) each `norm` control's hash must be Metal's. Elsewhere every sample is the device's
-//! sampler's, which the stages record (`PrecisionNote::DeviceSampling`) and the device announces.
-//! Every configuration that is not Metal's is printed (`PIXEL-SAMPLER-DIFFERS` lines) without
-//! failing. An argument buffer's note waits for a dispatch while a pixel state lives
+//! Each configuration here runs the same grid through the runtime. A constexpr sampler's sample
+//! of this 2D texture hands the device's unnormalized sampler the coordinate itself; a nearest
+//! runtime or argument buffer's sampler's hands the device's normalized sampler its texel's centre
+//! over the size, where the device reads exactly that texel; a linear one hands it the coordinate
+//! over the size, which the device's sampler reads in its own arithmetic: the stages record it
+//! (`PrecisionNote::PixelSamplerScaling`, and `ArgumentPixelSamplerScaling` for an argument
+//! buffer's sampler) and every device announces it. Each pixel configuration is held to its
+//! normalized control on the same device (the runtime state's `norm`; for `const`, a constexpr
+//! sampler of the same words in normalized coordinates): a cell that differs from the control at
+//! the same coordinate must be the control's answer at a coordinate within [`REACH`] ulps of it on
+//! each axis, and the widest shift each configuration needed is printed (`PIXEL-SAMPLER-REACH`
+//! lines). On a device with `VkProperty::MetalSampler` (MoltenVK) each `norm` control's hash, each
+//! `const` configuration's and each nearest configuration's must be Metal's. Elsewhere every
+//! sample is the device's sampler's, which the stages record (`PrecisionNote::DeviceSampling`) and
+//! the device announces. Every configuration that is not Metal's is printed
+//! (`PIXEL-SAMPLER-DIFFERS` lines) without failing where it need not be Metal's. An argument buffer's note waits for a dispatch while a pixel state lives
 //! ([`the_argument_buffer_note_waits_for_a_pixel_state`]).
 
 use super::argument_linear_samples::kernel;
@@ -632,9 +635,10 @@ fn compare(device: &Device) -> Vec<Outcome> {
 
 /// Every device announces both pixel samplers' notes, and every pixel configuration's cell is its
 /// normalized control's within [`REACH`] ulps of the control's coordinate (the module docs). On a
-/// device with Metal's own sampler each `norm` control answers Metal's results; elsewhere the
-/// samples are the device's sampler's and the device announces `device-sampling`. Each
-/// configuration that is not Metal's is printed with the cells where it differs from its control.
+/// device with Metal's own sampler each `norm` control, each `const` configuration and each
+/// nearest configuration answers Metal's results; elsewhere the samples are the device's sampler's
+/// and the device announces `device-sampling`. Each configuration that is not Metal's is printed
+/// with the cells where it differs from its control.
 #[test]
 fn pixel_samplers_answer_metal_s_texels() {
     let cache = ScratchCache::new().unwrap();
@@ -703,6 +707,14 @@ fn pixel_samplers_answer_metal_s_texels() {
         assert!(
             controls.is_empty(),
             "{name}: normalized controls not Metal's: {controls:?}"
+        );
+        let exact: Vec<&&str> = wrong
+            .keys()
+            .filter(|n| n.contains("_const_") || n.contains("_nearest_"))
+            .collect();
+        assert!(
+            exact.is_empty(),
+            "{name}: constexpr and nearest configurations not Metal's: {exact:?}"
         );
     }
 }

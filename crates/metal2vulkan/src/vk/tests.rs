@@ -211,6 +211,7 @@ fn sampler_desc_equality_is_total() {
         reduction: SamplerReductionMode::WEIGHTED_AVERAGE,
         border_components: None,
         ycbcr: None,
+        unnormalized: false,
     };
     assert_eq!(desc, desc);
     let set: HashSet<SamplerDesc> = [desc, desc].into_iter().collect();
@@ -227,6 +228,12 @@ fn sampler_desc_equality_is_total() {
         ..desc
     };
     assert_ne!(desc, mapped);
+    // So is one that reads texel coordinates.
+    let pixel = SamplerDesc {
+        unnormalized: true,
+        ..desc
+    };
+    assert_ne!(desc, pixel);
     assert_eq!(ComponentMapping::default(), ComponentMapping::IDENTITY);
 }
 

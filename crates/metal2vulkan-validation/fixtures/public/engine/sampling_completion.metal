@@ -49,7 +49,7 @@ fragment float4 fragment_select_pixel(float4 pos [[position]],
 }
 
 // A nearest pixel sampler that clamps to zero: the zero's alpha depends on the pixel format, so
-// the coordinate is scaled and the device samples (PixelSamplerScaling).
+// the device's unnormalized sampler reads the coordinate and applies its own border.
 kernel void sample_pixel_zero(texture2d<float> t [[texture(0)]],
                               device float4 *out [[buffer(0)]],
                               uint gid [[thread_position_in_grid]]) {

@@ -1749,6 +1749,56 @@ engine/pull_model_interpolants.ll	pm_offset_after_discard	Unsupported{PullModelI
 engine/pull_model_interpolants.ll	pm_narrow	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	Unsupported{PullModelInterpolation; AnyOf[[Feature(SampleRateShading)]]}
 engine/pull_model_interpolants.ll	pm_half	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	Unsupported{PullModelInterpolation; AnyOf[[Feature(SampleRateShading)]]}
 engine/pull_model_interpolants.ll	pm_selected	Unsupported{PullModelInterpolation; NotImplemented}	Unsupported{PullModelInterpolation; NotImplemented}	Unsupported{PullModelInterpolation; NotImplemented}	Unsupported{PullModelInterpolation; NotImplemented}	Unsupported{PullModelInterpolation; NotImplemented}	Unsupported{PullModelInterpolation; NotImplemented}	Unsupported{PullModelInterpolation; NotImplemented}	Unsupported{PullModelInterpolation; NotImplemented}	Unsupported{PullModelInterpolation; NotImplemented}	Unsupported{PullModelInterpolation; NotImplemented}	Unsupported{PullModelInterpolation; NotImplemented}	Unsupported{PullModelInterpolation; NotImplemented}	Unsupported{PullModelInterpolation; NotImplemented}	Unsupported{PullModelInterpolation; NotImplemented}	Unsupported{PullModelInterpolation; NotImplemented}	Unsupported{PullModelInterpolation; NotImplemented}	Unsupported{PullModelInterpolation; NotImplemented}	Unsupported{PullModelInterpolation; NotImplemented}	Unsupported{PullModelInterpolation; NotImplemented}
+engine/px_edges.air.ll	pe_nearest_zero	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
+engine/px_edges.air.ll	pe_nearest_black	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
+engine/px_edges.air.ll	pe_nearest_white	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
+engine/px_edges.air.ll	pe_nearest_zero_offset	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
+engine/px_edges.air.ll	pe_nearest_white_dynamic	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
+engine/px_edges.air.ll	pe_nearest_edge_offset	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
+engine/px_edges.air.ll	pe_linear_edge	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
+engine/px_edges.air.ll	pe_linear_zero	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
+engine/px_edges.air.ll	pe_linear_black	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
+engine/px_edges.air.ll	pe_linear_white	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
+engine/px_edges.air.ll	pe_linear_zero_offset	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
+engine/px_edges.air.ll	pe_linear_black_dynamic	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
+engine/px_edges.air.ll	pe_gather_zero	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
+engine/px_edges.air.ll	pe_gather_black	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
+engine/px_edges.air.ll	pe_gather_white_offset	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
+engine/px_edges.air.ll	pe_gather_edge_dynamic	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
+engine/px_edges.air.ll	pe_slot_sample	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
+engine/px_edges.air.ll	pe_slot_sample_offset	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
+engine/px_edges.air.ll	pe_slot_gather	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
+engine/px_edges.air.ll	pe_argument_sample	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	Unsupported{ArgumentBufferTextures; AnyOf[[Feature(RuntimeDescriptorArray), Feature(DescriptorBindingPartiallyBound), Feature(ShaderSampledImageArrayNonUniformIndexing), Feature(DescriptorBindingSampledImageUpdateAfterBind)]]}
+engine/px_edges.air.ll	pe_argument_sample_offset	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	Unsupported{ArgumentBufferTextures; AnyOf[[Feature(RuntimeDescriptorArray), Feature(DescriptorBindingPartiallyBound), Feature(ShaderSampledImageArrayNonUniformIndexing), Feature(DescriptorBindingSampledImageUpdateAfterBind)]]}
+engine/px_edges.air.ll	pe_argument_gather	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	Unsupported{ArgumentBufferTextures; AnyOf[[Feature(RuntimeDescriptorArray), Feature(DescriptorBindingPartiallyBound), Feature(ShaderSampledImageArrayNonUniformIndexing), Feature(DescriptorBindingSampledImageUpdateAfterBind)]]}
+engine/px_edges.air.ll	pe_linear_zero_1d	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
+engine/px_edges.air.ll	pe_nearest_white_array	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
+engine/px_edges.air.ll	pe_linear_zero_array	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
+engine/px_edges.ll	pe_nearest_zero	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
+engine/px_edges.ll	pe_nearest_black	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
+engine/px_edges.ll	pe_nearest_white	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
+engine/px_edges.ll	pe_nearest_zero_offset	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
+engine/px_edges.ll	pe_nearest_white_dynamic	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
+engine/px_edges.ll	pe_nearest_edge_offset	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
+engine/px_edges.ll	pe_linear_edge	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
+engine/px_edges.ll	pe_linear_zero	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
+engine/px_edges.ll	pe_linear_black	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
+engine/px_edges.ll	pe_linear_white	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
+engine/px_edges.ll	pe_linear_zero_offset	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
+engine/px_edges.ll	pe_linear_black_dynamic	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
+engine/px_edges.ll	pe_gather_zero	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
+engine/px_edges.ll	pe_gather_black	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
+engine/px_edges.ll	pe_gather_white_offset	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
+engine/px_edges.ll	pe_gather_edge_dynamic	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
+engine/px_edges.ll	pe_slot_sample	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
+engine/px_edges.ll	pe_slot_sample_offset	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
+engine/px_edges.ll	pe_slot_gather	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
+engine/px_edges.ll	pe_argument_sample	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	Unsupported{ArgumentBufferTextures; AnyOf[[Feature(RuntimeDescriptorArray), Feature(DescriptorBindingPartiallyBound), Feature(ShaderSampledImageArrayNonUniformIndexing), Feature(DescriptorBindingSampledImageUpdateAfterBind)]]}
+engine/px_edges.ll	pe_argument_sample_offset	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	Unsupported{ArgumentBufferTextures; AnyOf[[Feature(RuntimeDescriptorArray), Feature(DescriptorBindingPartiallyBound), Feature(ShaderSampledImageArrayNonUniformIndexing), Feature(DescriptorBindingSampledImageUpdateAfterBind)]]}
+engine/px_edges.ll	pe_argument_gather	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	Unsupported{ArgumentBufferTextures; AnyOf[[Feature(RuntimeDescriptorArray), Feature(DescriptorBindingPartiallyBound), Feature(ShaderSampledImageArrayNonUniformIndexing), Feature(DescriptorBindingSampledImageUpdateAfterBind)]]}
+engine/px_edges.ll	pe_linear_zero_1d	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
+engine/px_edges.ll	pe_nearest_white_array	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
+engine/px_edges.ll	pe_linear_zero_array	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
 engine/px_samplers.air.ll	px_sample_argument	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	Unsupported{ArgumentBufferTextures; AnyOf[[Feature(RuntimeDescriptorArray), Feature(DescriptorBindingPartiallyBound), Feature(ShaderSampledImageArrayNonUniformIndexing), Feature(DescriptorBindingSampledImageUpdateAfterBind)]]}
 engine/px_samplers.air.ll	px_const_nearest_edge	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
 engine/px_samplers.air.ll	px_const_nearest_zero	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok

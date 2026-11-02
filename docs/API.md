@@ -2889,16 +2889,22 @@ bound.
   `float` by that multiply, round a result whose exact value is below `2^-126` up to `2^-126`, which
   Metal flushes (`float-tininess-after-rounding`).
 - `metal2vulkan-degrade-pixel-sampler-scaling` (precision). `PrecisionNote::PixelSamplerScaling`:
-  A pixel-coordinate sampler's coordinate reaches the device's sampler divided by the texture's
-  level-0 size in the shader, on every device, and the device reads its texels from that coordinate
-  in its own arithmetic: within a few units in the last place of a texel edge (a nearest sample's
-  texel, a gather's block, a linear filter's pair) or of one of the device's sub-texel steps (a
-  linear filter's weight) it may read the neighbouring texel, block or step, where Metal reads the
-  coordinate as given. Measured: the device's normalized sampler's answer within one `f32` ulp of
-  the quotient on MoltenVK and at the quotient on lavapipe; a linear downscale by 8 within 1/255 of
-  Metal's on MoltenVK and 2/255 on lavapipe. A constexpr pixel sampler that filters nearest and
-  clamps to the edge fetches its texel instead and records nothing; a runtime sampler slot's access
-  announces it where the bound sampler states pixel coordinates.
+  A pixel-coordinate sampler's coordinate reaches the device's normalized sampler divided by the
+  texture's level-0 size in the shader, and the device reads its texels and weights from that
+  coordinate in its own arithmetic: within a few units in the last place of the edge of a linear
+  filter's pair of texels, a gather's block or one of the filter's sub-texel steps it may read the
+  neighbouring pair, block or step, where Metal's sampler reads the coordinate as given. Recorded
+  for a linear sample, a gather and a level query through a constexpr pixel sampler of an array, a
+  3D texture or a texture whose residency the function observes, and through a runtime sampler
+  slot (announced where the bound state reads pixel coordinates, and for a sample or comparison
+  where it is not a nearest one of one isotropic level). Measured: the device's normalized
+  sampler's answer within one `f32` ulp of the quotient on MoltenVK and at the quotient on
+  lavapipe; a linear downscale by 8 within 1/255 of Metal's on MoltenVK and 2/255 on lavapipe.
+  Nothing is recorded where Metal's texel or footprint follows from the coordinate itself: a
+  constexpr pixel sampler's sample or gather of a 1D or 2D texture that is no array hands the
+  coordinate, moved by its offset, to the device's unnormalized sampler; a nearest sample elsewhere
+  hands the device its texel's centre, where the device reads exactly Metal's texel; and a nearest
+  constexpr sampler clamped to the edge fetches its texel.
 - `metal2vulkan-degrade-device-arithmetic` (precision). `PrecisionNote::DeviceArithmetic`: Float
   division, remainder, square root, fused multiply-add, and dot products use Vulkan's precision
   bounds (e.g. 2.5 ULP division, a possibly unfused `Fma`) rather than correct rounding.
@@ -3243,9 +3249,10 @@ bound.
   `PrecisionNote::ArgumentPixelSamplerScaling`: A sample, gather or comparison through an argument
   buffer's sampler whose word the specialized module cannot read may hand the device a pixel
   coordinate scaled by the texture's size, where the sampler states pixel coordinates, with
-  `pixel-sampler-scaling`'s bound. A sample without a comparison through a state that filters
-  nearest and clamps to the edge fetches its texel instead. Announced at the first draw or dispatch
-  of a pipeline that records it while the device holds a sampler state of pixel coordinates.
+  `pixel-sampler-scaling`'s bound. A sample through a state of nearest filters, one level and no
+  anisotropy hands the device its texel's centre instead, where the device reads exactly Metal's
+  texel. Announced at the first draw or dispatch of a pipeline that records it while the device
+  holds a sampler state of pixel coordinates.
 - `metal2vulkan-degrade-half-output-precision` (precision). `PrecisionNote::HalfOutputPrecision`: A
   fragment function returns a `half` color output (a scalar or vector of AIR's `half`) to an
   attachment the pipeline has, and either its module is compiled without fast math
@@ -3555,8 +3562,9 @@ each item named states the rule in full.
   waiting for it. On MoltenVK every key reads its buffer slots at their residual (the two forms
   measured alike there), so a draw's bind offsets choose no pipeline there. A constant with no arm
   that serves every binding stays a pipeline per value, made at the first draw of it: a sampler's
-  state (`SamplerState`, each sampler word a sampling emulation of its own) and how the bicubic
-  filter treats the bound format's texels (`BicubicTexels`).
+  state (`SamplerState`, each sampler word a sampling emulation of its own), whether a pixel
+  sampler is a nearest one (`NearestPixelSampler`, whose sample reads its texel's centre) and how
+  the bicubic filter treats the bound format's texels (`BicubicTexels`).
 - **A dispatch's `VkPipeline` is made while the dispatch goes on**, the same way: one pipeline per
   threadgroup size and edge region, made on the pool. A compute state whose descriptor states
   `requiredThreadsPerThreadgroup` -- the threadgroup every dispatch of the state must have -- makes

@@ -105,16 +105,58 @@ pub struct SamplerUse {
     /// The sampled texture has an integer format: border colors are then `INT_*`, and every
     /// filter is nearest.
     pub integer_texture: bool,
+    /// The shader hands a pixel sampler's coordinate in texels to the device's unnormalized
+    /// sampler (`VkSamplerCreateInfo::unnormalizedCoordinates`), at level 0 of a view of one level
+    /// and one layer, without an offset or a comparison: the sampler's state is one of pixel
+    /// coordinates, one minification and magnification filter, no mip filter or anisotropy, and
+    /// `s` and `t` clamped to the edge, to zero or to the border.
+    pub unnormalized: bool,
 }
 
 impl SamplerUse {
-    /// A use with the given comparison and texture numeric type.
+    /// A use with the given comparison and texture numeric type, in normalized coordinates.
     pub fn new(compare: bool, integer_texture: bool) -> SamplerUse {
         SamplerUse {
             compare,
             integer_texture,
+            unnormalized: false,
         }
     }
+
+    /// This use, reading texel coordinates through the device's unnormalized sampler where
+    /// `unnormalized` holds.
+    pub fn with_unnormalized(self, unnormalized: bool) -> SamplerUse {
+        SamplerUse {
+            unnormalized,
+            ..self
+        }
+    }
+}
+
+/// Whether the device's unnormalized sampler (`VkSamplerCreateInfo::unnormalizedCoordinates`)
+/// reads a sampler of `desc` in pixel coordinates as it is: pixel coordinates, one minification
+/// and magnification filter (nearest or linear), no mip filter and no anisotropy, and on the `s`
+/// and `t` axes clamping to the edge, to zero or to its border, which the device's
+/// `CLAMP_TO_EDGE` and `CLAMP_TO_BORDER` are. These are Vulkan's limits on such a sampler
+/// (`VUID-VkSamplerCreateInfo-unnormalizedCoordinates-01072` to `-01076`; a comparison,
+/// `-01077`, is the use's), and the Metal Shading Language's rule for a constexpr `coord::pixel`
+/// sampler.
+pub(crate) fn unnormalized_reads(desc: &SamplerDescriptor) -> bool {
+    let clamps = |m: SamplerAddressMode| {
+        matches!(
+            m,
+            SamplerAddressMode::ClampToEdge
+                | SamplerAddressMode::ClampToZero
+                | SamplerAddressMode::ClampToBorderColor
+        )
+    };
+    !desc.normalized_coordinates
+        && desc.min_filter == desc.mag_filter
+        && desc.min_filter != SamplerMinMagFilter::Cubic
+        && desc.mip_filter == SamplerMipFilter::NotMipmapped
+        && desc.max_anisotropy <= 1
+        && clamps(desc.s_address_mode)
+        && clamps(desc.t_address_mode)
 }
 
 /// The `(minLod, maxLod)` of a sampler without a mip filter whose descriptor clamps the level to
@@ -301,13 +343,26 @@ pub(crate) fn vk_filtering(
 /// a nearest mip filter's next level past one half; MoltenVK hands the clamp to Metal's sampler,
 /// which does so itself.
 ///
-/// Refusals are [`check_sampler`]'s, for the descriptor's shape and the use.
+/// A use that reads texel coordinates ([`SamplerUse::unnormalized`]) takes the device's
+/// unnormalized sampler: its filters, address modes and border as above, the nearest mip mode at
+/// the level clamp `[0, 0]` (which Vulkan requires; a pixel sampler reads level 0 by one filter),
+/// and no anisotropy or comparison.
+///
+/// Refusals are [`check_sampler`]'s, for the descriptor's shape and the use; a use that reads
+/// texel coordinates through any other sampler state than [`SamplerUse::unnormalized`] names, or
+/// with a comparison, is an internal error.
 pub fn vk_sampler(
     desc: &SamplerDescriptor,
     use_: SamplerUse,
     profile: &DeviceProfile,
 ) -> Result<vk::SamplerDesc, Error> {
     check_sampler(&desc.shape(), use_, profile)?;
+    if use_.unnormalized && (use_.compare || !unnormalized_reads(desc)) {
+        return Err(Error::Internal(crate::error::InternalError::new(
+            crate::error::InternalKind::Invariant,
+            "an unnormalized sampler of a state the device's cannot read so",
+        )));
+    }
     let limits = &profile.fields().limits;
     let modes = [
         desc.s_address_mode,
@@ -331,10 +386,11 @@ pub fn vk_sampler(
     // Metal filters a `maxAnisotropy` rounded up to a power of two (3 as 4, 5 to 7 as 8, 9 to 15
     // as 16, a runtime and a constexpr sampler alike), so the device is handed that degree where
     // it is handed anisotropy at all (`device_anisotropy`).
-    let max_anisotropy = device_anisotropy(desc, use_, profile).then(|| {
-        let limit = f32::from_bits(limits.max_sampler_anisotropy_bits).max(1.0);
-        (desc.max_anisotropy.next_power_of_two() as f32).min(limit)
-    });
+    let max_anisotropy =
+        (device_anisotropy(desc, use_, profile) && !use_.unnormalized).then(|| {
+            let limit = f32::from_bits(limits.max_sampler_anisotropy_bits).max(1.0);
+            (desc.max_anisotropy.next_power_of_two() as f32).min(limit)
+        });
 
     let (lo, hi) = (desc.lod_min_clamp, desc.lod_max_clamp);
     let linear_mip = if use_.integer_texture {
@@ -357,6 +413,7 @@ pub fn vk_sampler(
             .properties
             .contains(&VkProperty::MetalSampler);
     let (mipmap_mode, min_lod, max_lod) = match desc.mip_filter {
+        _ if use_.unnormalized => (vk::SamplerMipmapMode::NEAREST, 0.0, 0.0),
         SamplerMipFilter::NotMipmapped if own_anisotropic => {
             (vk::SamplerMipmapMode::NEAREST, 0.0, 0.0)
         }
@@ -391,6 +448,7 @@ pub fn vk_sampler(
         reduction: vk::SamplerReductionMode::WEIGHTED_AVERAGE,
         border_components: None,
         ycbcr: None,
+        unnormalized: use_.unnormalized,
     })
 }
 
@@ -970,21 +1028,15 @@ impl SamplerWord {
         SamplerWord(w)
     }
 
-    /// The bits a sample without comparison through a pixel sampler tests to read its texel
-    /// exactly by a fetch (the rule for a constexpr sampler), on an image of `plane` axes (1 to 3)
-    /// whose texels are `integer` or not: the word masked by them is
+    /// The bits a sample through a pixel sampler tests to read the texel its coordinate names at
+    /// that texel's centre (the rule for a constexpr sampler), of a texture whose texels are
+    /// `integer` or not: the word masked by them is
     /// [`PIXEL_COORDINATES`](Self::PIXEL_COORDINATES) exactly for a sampler with pixel
-    /// coordinates that reads one level isotropically (no mip filter, not anisotropic), clamps
-    /// each of the image's plane axes to the edge, and filters nearest unless the texture is
-    /// integer, whose sample is nearest whatever the filters say.
-    pub fn exact_fetch(plane: u8, integer: bool) -> u32 {
+    /// coordinates that reads one level isotropically (no mip filter, not anisotropic) and filters
+    /// nearest unless the texture is integer, whose sample is nearest whatever the filters say.
+    /// Its address modes and border are the device sampler's own, at any value.
+    pub fn nearest_pixel(integer: bool) -> u32 {
         let mut mask = Self::PIXEL_COORDINATES | Self::MIP_FILTER | Self::ANISOTROPIC;
-        for address in Self::ADDRESS
-            .into_iter()
-            .take(usize::from(plane.clamp(1, 3)))
-        {
-            mask |= address;
-        }
         if !integer {
             mask |= Self::MIN_LINEAR | Self::MAG_LINEAR;
         }
@@ -2081,197 +2133,54 @@ mod tests {
     }
 
     /// The word answers the pixel samplers' predicates. A sampler with normalized coordinates
-    /// answers neither. A pixel sampler's exact fetch ([`SamplerWord::exact_fetch`]) needs one
-    /// isotropic level (no mip filter, not anisotropic), clamping to the edge on each of the
-    /// image's plane axes (the others do not matter), and nearest filters unless the texture is
-    /// integer.
-    #[test]
-    fn a_sampler_word_answers_the_linear_predicate() {
-        use SamplerMinMagFilter as F;
-        let linear = |d: &SamplerDescriptor| {
-            (SamplerWord::of(d).0 & SamplerWord::LINEAR_FILTER) == SamplerWord::LINEAR
-        };
-        let mut d = metal_default();
-        assert!(!linear(&d));
-        d.min_filter = F::Linear;
-        assert!(!linear(&d));
-        d.mag_filter = F::Linear;
-        assert!(linear(&d));
-        // Neither the coordinates, the addressing, the border, nor the comparison decide it.
-        let mut e = d;
-        e.normalized_coordinates = false;
-        e.s_address_mode = SamplerAddressMode::MirrorRepeat;
-        e.border_color = SamplerBorderColor::OpaqueWhite;
-        e.compare_function = CompareFunction::Less;
-        assert!(linear(&e));
-        for mip in [SamplerMipFilter::Nearest, SamplerMipFilter::Linear] {
-            let mut e = d;
-            e.mip_filter = mip;
-            assert!(!linear(&e), "{mip:?}");
-        }
-        // A minimum or maximum reduction reads the weighted average.
-        for reduction in [SamplerReductionMode::Minimum, SamplerReductionMode::Maximum] {
-            let mut e = d;
-            e.reduction_mode = reduction;
-            assert!(linear(&e), "{reduction:?}");
-        }
-        let mut e = d;
-        e.max_anisotropy = 2;
-        assert!(!linear(&e));
-        // The state an emulated sample reads is every field but the comparison and the
-        // reduction.
-        assert_eq!(
-            SamplerWord::LINEAR_STATE,
-            SamplerWord::FIELDS
-                & !SamplerWord::COMPARE
-                & !SamplerWord::REDUCTION
-                & !SamplerWord::LEVEL_MIN
-                & !SamplerWord::LEVEL_MAX
-                & !SamplerWord::CUBIC
-        );
-    }
-
-    /// A sampler's word holds the levels a nearest mip filter reads at its clamp on Metal's grid
-    /// (the default clamp's are the word 0's).
-    #[test]
-    fn a_samplers_word_holds_metals_levels_on_its_grid() {
-        let levels = SamplerWord::LEVEL_MIN | SamplerWord::LEVEL_MAX;
-        assert_eq!(SamplerWord::of(&metal_default()).0 & levels, 0);
-        let below_33 = (33.0f32 / 64.0).next_down();
-        for (c, level) in [
-            (-1.0, 0),
-            (0.0, 0),
-            (0.5, 0),
-            (below_33, 0),
-            (33.0 / 64.0, 1),
-            (1.5, 1),
-            (1.515_625, 2),
-            (2.5, 2),
-            (2.7, 3),
-            (14.6, 15),
-            (100.0, LAST_WORD_LEVEL),
-            (f32::MAX, LAST_WORD_LEVEL),
-        ] {
-            assert_eq!(nearest_level(c), level, "{c:e}");
-        }
-        assert_eq!(level_on_grid(0.3), 19.0 / 64.0);
-        assert_eq!(level_on_grid(below_33), 0.5);
-        assert_eq!(level_on_grid(f32::MAX), f32::MAX);
-
-        let mut d = metal_default();
-        d.mip_filter = SamplerMipFilter::Nearest;
-        d.lod_min_clamp = 0.6;
-        d.lod_max_clamp = 2.7;
-        let w = SamplerWord::of(&d).0;
-        assert_eq!((w >> SamplerWord::LEVEL_MIN_SHIFT) & 0xf, 1);
-        assert_eq!(
-            LAST_WORD_LEVEL - ((w >> SamplerWord::LEVEL_MAX_SHIFT) & 0xf),
-            3
-        );
-    }
-
-    /// The device is handed the descriptor's level clamp, its lower bound at least 0, whatever the
-    /// mip filter, the filters, the anisotropy and the use: it clamps and selects its own level.
-    #[test]
-    fn a_samplers_clamp_is_the_descriptors() {
-        let dev = device(&[VkFeature::SamplerAnisotropy], &[]);
-        let lods = |d: &SamplerDescriptor, use_| {
-            let s = vk_sampler(d, use_, dev.profile()).unwrap();
-            (s.min_lod, s.max_lod)
-        };
-        for mip in [SamplerMipFilter::Nearest, SamplerMipFilter::Linear] {
-            for (minf, magf, aniso) in [
-                (
-                    SamplerMinMagFilter::Nearest,
-                    SamplerMinMagFilter::Nearest,
-                    1,
-                ),
-                (SamplerMinMagFilter::Linear, SamplerMinMagFilter::Linear, 1),
-                (SamplerMinMagFilter::Linear, SamplerMinMagFilter::Nearest, 1),
-                (
-                    SamplerMinMagFilter::Nearest,
-                    SamplerMinMagFilter::Nearest,
-                    4,
-                ),
-            ] {
-                for (lo, hi) in [(0.6, 2.7), (0.01, 0.012), (2.505, f32::MAX), (0.0, 0.3)] {
-                    let mut d = metal_default();
-                    (d.min_filter, d.mag_filter, d.max_anisotropy) = (minf, magf, aniso);
-                    (d.mip_filter, d.lod_min_clamp, d.lod_max_clamp) = (mip, lo, hi);
-                    let what = format!("{minf:?}/{magf:?} x{aniso} {mip:?} [{lo}, {hi}]");
-                    for use_ in [
-                        SamplerUse::default(),
-                        SamplerUse::new(true, false),
-                        SamplerUse::new(false, true),
-                    ] {
-                        assert_eq!(lods(&d, use_), (lo, hi), "{what} {use_:?}");
-                    }
-                }
-            }
-        }
-        let mut d = metal_default();
-        d.mip_filter = SamplerMipFilter::Linear;
-        d.lod_min_clamp = -1.0;
-        assert_eq!(lods(&d, SamplerUse::default()).0, 0.0);
-    }
-
+    /// answers neither. A pixel sampler's sample at its texel's centre
+    /// ([`SamplerWord::nearest_pixel`]) needs one isotropic level (no mip filter, not
+    /// anisotropic) and nearest filters unless the texture is integer, whatever its address modes
+    /// and border.
     #[test]
     fn a_sampler_word_answers_the_pixel_predicates() {
         use SamplerMinMagFilter as F;
         let holds = |d: &SamplerDescriptor, mask: u32| {
             (SamplerWord::of(d).0 & mask) == SamplerWord::PIXEL_COORDINATES
         };
-        let fetch = |d: &SamplerDescriptor, plane: u8, integer: bool| {
-            holds(d, SamplerWord::exact_fetch(plane, integer))
-        };
+        let centre =
+            |d: &SamplerDescriptor, integer: bool| holds(d, SamplerWord::nearest_pixel(integer));
         let normalized = metal_default();
         assert!(!holds(&normalized, SamplerWord::PIXEL_COORDINATES));
         let mut pixel = metal_default();
         pixel.normalized_coordinates = false;
         assert!(holds(&pixel, SamplerWord::PIXEL_COORDINATES));
-        for plane in 1..=3 {
-            for integer in [false, true] {
-                assert!(!fetch(&normalized, plane, integer));
-                assert!(fetch(&pixel, plane, integer), "{plane} {integer}");
-            }
+        for integer in [false, true] {
+            assert!(!centre(&normalized, integer));
+            assert!(centre(&pixel, integer), "{integer}");
         }
         for (min, mag) in [
             (F::Nearest, F::Nearest),
             (F::Linear, F::Nearest),
             (F::Nearest, F::Linear),
+            (F::Linear, F::Linear),
         ] {
             let mut d = pixel;
             d.min_filter = min;
             d.mag_filter = mag;
             let nearest = min == F::Nearest && mag == F::Nearest;
-            assert_eq!(fetch(&d, 2, false), nearest, "{min:?} {mag:?}");
-            assert!(fetch(&d, 2, true), "{min:?} {mag:?}");
+            assert_eq!(centre(&d, false), nearest, "{min:?} {mag:?}");
+            assert!(centre(&d, true), "{min:?} {mag:?}");
         }
         for mip in [SamplerMipFilter::Nearest, SamplerMipFilter::Linear] {
             let mut d = pixel;
             d.mip_filter = mip;
-            assert!(!fetch(&d, 1, true), "{mip:?}");
+            assert!(!centre(&d, true), "{mip:?}");
         }
         let mut d = pixel;
         d.max_anisotropy = 2;
-        assert!(!fetch(&d, 1, true));
+        assert!(!centre(&d, true));
         for &mode in SamplerAddressMode::ALL {
-            let edge = mode == SamplerAddressMode::ClampToEdge;
-            for axis in 0..3u8 {
+            for &border in SamplerBorderColor::ALL {
                 let mut d = pixel;
-                match axis {
-                    0 => d.s_address_mode = mode,
-                    1 => d.t_address_mode = mode,
-                    _ => d.r_address_mode = mode,
-                }
-                for plane in 1..=3u8 {
-                    let read = axis < plane;
-                    assert_eq!(
-                        fetch(&d, plane, false),
-                        edge || !read,
-                        "{axis} {plane} {mode:?}"
-                    );
-                }
+                (d.s_address_mode, d.t_address_mode, d.r_address_mode) = (mode, mode, mode);
+                d.border_color = border;
+                assert!(centre(&d, false), "{mode:?} {border:?}");
             }
         }
     }

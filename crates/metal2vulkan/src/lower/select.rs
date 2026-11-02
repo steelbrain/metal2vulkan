@@ -1748,12 +1748,14 @@ fn finish(
     })
 }
 
-/// The constant a [`NoteTest`] reads: a sampler slot's `SamplerState` word, by the function's slot
-/// index, or a texture slot's `UnmeasuredTexels` boolean, or the class of the format bound at a
-/// texture slot, which no constant carries (`SpecKey::BoundTexelFormat`).
+/// The constant a [`NoteTest`] reads: a sampler slot's `SamplerState` word or its
+/// `NearestPixelSampler` boolean, by the function's slot index, or a texture slot's
+/// `UnmeasuredTexels` boolean, or the class of the format bound at a texture slot, which no
+/// constant carries (`SpecKey::BoundTexelFormat`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) enum NoteOn {
     Sampler(u32),
+    NearestPixel(u32),
     Unmeasured(u32),
     Bound(u32),
 }
@@ -1828,6 +1830,10 @@ fn declared(families: &FamilyPlans, t: NoteTest) -> Option<SpecTest> {
                 slot: r.slot,
                 fields,
             })?
+        }
+        NoteOn::NearestPixel(index) => {
+            let r = families.sampler.slots.get(&index)?;
+            r.nearest.then_some(SpecKey::NearestPixelSampler(r.slot))?
         }
     };
     Some(SpecTest {

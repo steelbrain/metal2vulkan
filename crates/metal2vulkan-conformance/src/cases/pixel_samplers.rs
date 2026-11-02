@@ -28,11 +28,14 @@
 //! `the_recorded_digests_are_the_lanes_m4_answers` hold the recorded M3 answers against the lane's
 //! M4 constants: same question, two chips.
 //!
-//! **What may differ, and what justifies it.** Every pixel source hands the device the coordinate
-//! divided by the size, which the device's sampler reads in its own arithmetic: at a texel edge or
-//! a sub-texel step it may read the neighbouring texel or step, which the runtime announces on
-//! every device (`pixel-sampler-scaling`, and `argument-pixel-sampler-scaling` for `arg`). A
-//! device that converts an 8-bit texel to a float its own way announces `float-sample-filter`.
+//! **What may differ, and what justifies it.** A `const` site hands the device's unnormalized
+//! sampler the coordinate itself, and a nearest `slot` or `arg` site hands the device's normalized
+//! sampler its texel's centre over the size, where the device reads exactly Metal's texel. A linear
+//! `slot` or `arg` site hands it the coordinate divided by the size, which the device's sampler
+//! reads in its own arithmetic: at a sub-texel step it may read the neighbouring step, which the
+//! runtime announces on every device (`pixel-sampler-scaling`, and
+//! `argument-pixel-sampler-scaling` for `arg`). A device that converts an 8-bit texel to a float
+//! its own way announces `float-sample-filter`.
 //! Each notice is declared at the notices site alone, so a texel that differs still fails the case
 //! where it differs, and is a `known-gaps.tsv` row naming the note.
 //!
@@ -463,26 +466,32 @@ impl Case for PixelSamplers {
 
     fn allowances(&self) -> Vec<Allowance> {
         // Metal announces nothing, so a notice of ours is a difference at the notices site.
-        // Every venue hands its sampler the pixel coordinate divided by the size (the two pixel
-        // notes). A venue that announces another kind reads as divergent at that site until
-        // whoever adds the venue names it with a run behind it. The device's own conversion of a
-        // texel, its filter and its sRGB decode are native notes the suite declares for every case
-        // (`crate::replay::NATIVE_NOTES`).
+        // Every venue hands a linear `slot` site's sampler the pixel coordinate divided by the
+        // size (`pixel-sampler-scaling`); a nearest one reads its texel's centre and announces
+        // nothing. The `arg` site's state is unknown where the shader is made, so it announces
+        // `argument-pixel-sampler-scaling` whatever its filter. A venue that announces another
+        // kind reads as divergent at that site until whoever adds the venue names it with a run
+        // behind it. The device's own conversion of a texel, its filter and its sRGB decode are
+        // native notes the suite declares for every case (`crate::replay::NATIVE_NOTES`).
         //
         // **Each is a declaration and loosens nothing.** Each sits at the notices site alone, so
         // a texel that differs still fails the case wherever it differs.
-        vec![
-            notice_allowance(Degradation::PixelSamplerScaling.code()),
-            notice_allowance(Degradation::ArgumentPixelSamplerScaling.code()),
-            // The buffer each pass writes its sampled texels into is `Shared`
-            // ([`crate::replay::shared_memory_notice`]).
-            crate::replay::shared_memory_notice(),
-            // The `arg` source samples a texture and a sampler held in an argument buffer, whose
-            // heap set MoltenVK's layout query refuses
-            // ([`crate::replay::set_past_layout_notice`]): announced by all 16 cases of the family
-            // on the M3 Max under MoltenVK 1.4.2, by none on lavapipe.
-            crate::replay::set_past_layout_notice(),
-        ]
+        let scaled = (self.filter == SamplerMinMagFilter::Linear)
+            .then(|| notice_allowance(Degradation::PixelSamplerScaling.code()));
+        scaled
+            .into_iter()
+            .chain([
+                notice_allowance(Degradation::ArgumentPixelSamplerScaling.code()),
+                // The buffer each pass writes its sampled texels into is `Shared`
+                // ([`crate::replay::shared_memory_notice`]).
+                crate::replay::shared_memory_notice(),
+                // The `arg` source samples a texture and a sampler held in an argument buffer, whose
+                // heap set MoltenVK's layout query refuses
+                // ([`crate::replay::set_past_layout_notice`]): announced by all 16 cases of the family
+                // on the M3 Max under MoltenVK 1.4.2, by none on lavapipe.
+                crate::replay::set_past_layout_notice(),
+            ])
+            .collect()
     }
 
     fn run(&self, side: &mut dyn Side, sites: &mut Sites) -> Result<(), Abort> {

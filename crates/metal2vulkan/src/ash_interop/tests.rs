@@ -1224,6 +1224,7 @@ fn sampler_create_info_chains_reduction_only_when_needed() {
         reduction: vk::SamplerReductionMode::WEIGHTED_AVERAGE,
         border_components: None,
         ycbcr: None,
+        unnormalized: false,
     };
     let mut reduction = avk::SamplerReductionModeCreateInfo::default();
     let mut border = avk::SamplerBorderColorComponentMappingCreateInfoEXT::default();
@@ -1243,6 +1244,15 @@ fn sampler_create_info_chains_reduction_only_when_needed() {
         (avk::TRUE, avk::CompareOp::LESS.as_raw())
     );
     assert_eq!(info.unnormalized_coordinates, avk::FALSE);
+    // A pixel sampler's description reads texel coordinates.
+    let pixel = vk::SamplerDesc {
+        unnormalized: true,
+        ..desc
+    };
+    let mut reduction = avk::SamplerReductionModeCreateInfo::default();
+    let mut border = avk::SamplerBorderColorComponentMappingCreateInfoEXT::default();
+    let info = sampler_create_info(&pixel, &mut reduction, &mut border);
+    assert_eq!(info.unnormalized_coordinates, avk::TRUE);
     let min = vk::SamplerDesc {
         reduction: vk::SamplerReductionMode::MIN,
         compare: None,

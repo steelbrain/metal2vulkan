@@ -2817,16 +2817,12 @@ fn heap_linear_samples_are_the_device_s() {
             };
             link_and_validate(&a, &p).unwrap_or_else(|e| panic!("{what}: L3: {e}"));
             assert_eq!(count(&a, OP_IMAGE_SAMPLE_EXPLICIT_LOD), 1, "{what}");
-            // An argument buffer's sampler also fetches the texel where its word states an exact
-            // fetch.
+            // An argument buffer's sampler's sample reads its texel's centre where its word states
+            // a nearest pixel sampler: no fetch.
             let argument = matches!(through, CompareThrough::Argument);
             // The raw-held emulation: four filtered taps and a nearest one from the twin.
             let raw = !three && !argument;
-            assert_eq!(
-                count(&a, OP_IMAGE_FETCH),
-                usize::from(argument) + 5 * usize::from(raw),
-                "{what}"
-            );
+            assert_eq!(count(&a, OP_IMAGE_FETCH), 5 * usize::from(raw), "{what}");
             assert_eq!(count(&a, OP_SAMPLED_IMAGE), 1, "{what}");
             assert_eq!(
                 a.strategies.entries.contains_key(HEAP_CLASS_CENSUS),
@@ -2969,8 +2965,9 @@ fn heap_half_texels_convert_by_the_handle_s_class() {
 }
 
 /// A heap texture's plain gather, and its nearest sample through a constexpr sampler, a runtime
-/// sampler or an argument buffer's sampler, are the device's access, made once; an argument
-/// buffer's sampler's sample keeps its fetch. Through a constexpr or runtime sampler the raw-held
+/// sampler or an argument buffer's sampler, are the device's access, made once, with no fetch of
+/// their own (an argument buffer's sampler's sample reads its texel's centre where its word states
+/// a nearest pixel sampler). Through a constexpr or runtime sampler the raw-held
 /// emulation fetches from the twin in a branch on the class the handle carries. The module states
 /// no `TexelFormat` specialization.
 #[test]
@@ -3012,8 +3009,6 @@ fn heap_gathers_and_nearest_samples_are_the_device_s() {
                 OP_IMAGE_SAMPLE_EXPLICIT_LOD
             };
             assert_eq!(count(&a, device), 1, "{what}");
-            // The fetch of an argument buffer's sampler's sample.
-            let exact = usize::from(argument && !gather);
             // Through a constexpr or runtime sampler, the raw-held emulation's fetches from the
             // twin: a gather's four, a nearest sample's one, a runtime sampler's four filtered and
             // one nearest.
@@ -3024,7 +3019,7 @@ fn heap_gathers_and_nearest_samples_are_the_device_s() {
                 (true, false, false) => 1,
                 (true, false, true) => 5,
             };
-            assert_eq!(count(&a, OP_IMAGE_FETCH), exact + twin, "{what}");
+            assert_eq!(count(&a, OP_IMAGE_FETCH), twin, "{what}");
             assert_eq!(count(&a, OP_SAMPLED_IMAGE), 1, "{what}");
             assert_eq!(
                 a.strategies.entries.contains_key(HEAP_CLASS_CENSUS),
@@ -4239,10 +4234,11 @@ fn is_sampler_table(k: &ResourceKind) -> bool {
 /// its use; every access in the sampler's coordinates carries the argument buffer's
 /// pixel-coordinate near-equivalent (`ArgumentPixelSamplerScaling`; never `PixelSamplerScaling`),
 /// a comparison or an integer texel samples through its own use, and a fragment samples at its
-/// implicit level. A sample without comparison also fetches the texel the rule names, which the
-/// sampler's word selects; no access reads a texel's centre (no test of the word's filters beside
-/// its coordinates, `SamplerWord::PIXEL_COORDINATES | SamplerWord::MIN_LINEAR |
-/// SamplerWord::MAG_LINEAR`). A profile without the heap's features refuses each naming them.
+/// implicit level. Each sample reads its texel's centre where the sampler's word states a nearest
+/// pixel sampler of one isotropic level (its test of the word's coordinates, filters, mip filter
+/// and anisotropy, `SamplerWord::nearest_pixel`; an integer texel's leaves out the filters, which
+/// it reads nearest whatever they say) and fetches nothing. A profile without the heap's features
+/// refuses each naming them.
 #[test]
 fn argument_buffer_samplers_are_heap_lookups() {
     let Some(bc) = argument_samplers_fixture() else {
@@ -4306,7 +4302,6 @@ fn argument_buffer_samplers_are_heap_lookups() {
             );
             assert!(texture_slots(&a).is_empty(), "{stem} {entry}");
             assert!(heap_samplers(&a).is_empty(), "{stem} {entry}");
-            let compare = use_.0;
             assert_eq!(sampler_arrays(&a), [use_], "{stem} {entry}");
             let tables = bindings_of(&t, is_sampler_table);
             assert_eq!(tables.len(), 1, "{stem} {entry}");
@@ -4329,14 +4324,9 @@ fn argument_buffer_samplers_are_heap_lookups() {
             );
             assert_eq!(count(&a, OP_SWITCH), 0, "{stem} {entry}");
             // Non-uniform: the image's element and the sampler's (chain and load each), their
-            // sampled image, the image the pixel-coordinate scaling queries, and (without
-            // comparison) the image the flagged fetch reads.
-            assert_eq!(
-                count(&a, OP_IMAGE_FETCH),
-                usize::from(!compare),
-                "{stem} {entry}"
-            );
-            assert_eq!(non_uniform(&a), 6 + usize::from(!compare), "{stem} {entry}");
+            // sampled image, and the image the pixel-coordinate scaling queries.
+            assert_eq!(count(&a, OP_IMAGE_FETCH), 0, "{stem} {entry}");
+            assert_eq!(non_uniform(&a), 6, "{stem} {entry}");
             assert!(
                 a.precision
                     .contains(&PrecisionNote::ArgumentPixelSamplerScaling),
@@ -4346,12 +4336,11 @@ fn argument_buffer_samplers_are_heap_lookups() {
                 !a.precision.contains(&PrecisionNote::PixelSamplerScaling),
                 "{stem} {entry}"
             );
-            // No texel centre: no mask of the word's coordinates and filters.
-            let centre =
-                SamplerWord::PIXEL_COORDINATES | SamplerWord::MIN_LINEAR | SamplerWord::MAG_LINEAR;
+            // The texel centre's test of the word's nearest pixel sampler.
+            let centre = SamplerWord::nearest_pixel(use_.1);
             assert!(
-                !u32_constants(&a).contains(&centre),
-                "{stem} {entry}: a test of the word's nearest pixel sampler"
+                u32_constants(&a).contains(&centre),
+                "{stem} {entry}: no test of the word's nearest pixel sampler"
             );
             compiled += 1;
         }

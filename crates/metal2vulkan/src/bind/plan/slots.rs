@@ -194,6 +194,7 @@ pub(crate) fn bound_value(
         SpecKey::SamplerState { slot, fields } => resources.sampler_state(slot, fields),
         SpecKey::SamplerMinLevel(slot) => resources.sampler_min_level(slot),
         SpecKey::SamplerAnisotropy(slot) => resources.sampler_anisotropy(slot),
+        SpecKey::NearestPixelSampler(slot) => resources.nearest_pixel_sampler(slot),
         // An unbound slot, or one bound to a placeholder format, reads its neutral: its
         // out-of-bounds texel is all zero.
         SpecKey::OutOfBoundsAlpha(slot) => bound_texture(shape, slot)

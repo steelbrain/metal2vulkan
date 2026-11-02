@@ -195,7 +195,7 @@ attributes #11 = { argmemonly nounwind readonly willreturn }
 !air.version = !{!56}
 !air.language_version = !{!57}
 
-!0 = !{i32 2, !"SDK Version", [2 x i32] [i32 26, i32 5]}
+!0 = !{i32 2, !"SDK Version", [2 x i32] [i32 27, i32 2]}
 !1 = !{i32 1, !"wchar_size", i32 4}
 !2 = !{i32 7, !"frame-pointer", i32 2}
 !3 = !{i32 7, !"air.max_device_buffers", i32 31}
@@ -250,7 +250,7 @@ attributes #11 = { argmemonly nounwind readonly willreturn }
 !52 = !{!"air.sampler_state", [2 x i64] addrspace(2)* @__air_sampler_state}
 !53 = !{!"air.sampler_state", [2 x i64] addrspace(2)* @__air_sampler_state.1}
 !54 = !{!"air.sampler_state", [2 x i64] addrspace(2)* @__air_sampler_state.2}
-!55 = !{!"Apple metal version 32023.883 (metalfe-32023.883)"}
+!55 = !{!"Apple metal version 32023.922 (metalfe-32023.922.4)"}
 !56 = !{i32 2, i32 8, i32 0}
 !57 = !{!"Metal", i32 4, i32 0, i32 0}
 !58 = !{!59, !61}

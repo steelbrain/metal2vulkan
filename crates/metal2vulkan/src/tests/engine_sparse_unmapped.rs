@@ -380,6 +380,7 @@ fn a_pixel_fetch_reads_metals_value_of_an_unmapped_texel() {
                     sampler: SamplerRef::Constexpr([PIXEL_NEAREST, 0]),
                     compare: false,
                     integer: false,
+                    unnormalized: false,
                 }),
                 index: 0,
             };
@@ -597,6 +598,7 @@ fn an_access_that_does_not_read_its_residency_reads_metals_constant_lanes() {
                         sampler: SamplerRef::Constexpr([PIXEL_NEAREST, 0]),
                         compare: false,
                         integer: false,
+                        unnormalized: false,
                     }),
                     index: 0,
                 }

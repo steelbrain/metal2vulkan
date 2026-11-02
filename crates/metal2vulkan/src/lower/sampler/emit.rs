@@ -23,7 +23,7 @@ use crate::metal::sampler::SamplerWord;
 
 use super::{
     BiasReach, Binding, CombinedImage, CubeFootprint, Hoist, Lod, MinLevel, Offset, Pixel,
-    SampleOp, Sampling, Source, Unmapped,
+    PixelPosition, SampleOp, Sampling, Source, Unmapped,
 };
 
 impl Binding {
@@ -960,31 +960,30 @@ pub(super) fn sampled_value(
         let x = live_or_zero(fb, live, x)?;
         return with_word(cx, fb, &s.result, x, None);
     }
-    // An argument buffer's sampler whose flags select the exact fetch: the fetch, made here from
-    // the sampled image the sample reads too, and chosen after the sample by the handle's flags.
-    // Both run, so no branch puts the sample in divergent flow.
-    let flagged_fetch = match (&s.pixel, &s.op) {
-        (
-            Pixel::Heap(handle),
-            SampleOp::Sample {
-                dref: None, offset, ..
-            },
-        ) => {
-            let (x, word) = pixel_fetch(cx, fb, s, si, image, offset.as_ref(), arm)?;
-            Some((*handle, x, word))
-        }
-        _ => None,
-    };
     let (mut coord, mut grad) = plane_and_gradients(cx, fb, s, grads)?;
-    // Pixel coordinates: the plane coordinate (and any gradient) over the level-0 size, always
-    // or behind the runtime sampler's word.
-    if let Some(spec) = pixel_coordinates(cx, fb, s)? {
+    // Pixel coordinates: the plane coordinate (or its texel's centre) moved by its offset to the
+    // device's unnormalized sampler; or the plane coordinate (or its texel's centre) and any
+    // gradient over the level-0 size, always or behind the runtime sampler's word.
+    if s.position == PixelPosition::UnnormalizedTexel {
+        let centre = placed(fb, coord, s.lanes, Centre::Texel)?;
+        coord = offset_texels(cx, fb, s, centre)?;
+    } else if s.position == PixelPosition::Unnormalized {
+        coord = offset_texels(cx, fb, s, coord)?;
+    } else if let Some(spec) = pixel_coordinates(cx, fb, s)? {
         let img = fb.image(si)?;
         let zero = fb.u32_const(0)?;
         let zero = fb.module().const_value(zero)?;
         let size = fb.query(ImageQuery::SizeLod(zero), img)?;
         let size_lanes = image.plane + u8::from(image.arrayed);
-        (coord, grad) = scaled(fb, s.lanes, (size, size_lanes), spec, (coord, grad))?;
+        let position = centre(cx, fb, s, image)?;
+        (coord, grad) = scaled(
+            fb,
+            s.lanes,
+            (size, size_lanes),
+            spec,
+            position,
+            (coord, grad),
+        )?;
     }
     // The plane coordinate as the sample reads it (pixel coordinates scaled), whose derivatives a
     // bias past the device's limit scales, and from which Metal's footprint of an observed access
@@ -1017,6 +1016,11 @@ pub(super) fn sampled_value(
             min_lod,
             offset,
         } => {
+            // The device's unnormalized sampler takes no offset operand: the coordinate holds it.
+            let offset = match s.position.unnormalized() {
+                true => &None,
+                false => offset,
+            };
             let (ops, dref, beyond) = sample_operands(
                 cx,
                 fb,
@@ -1059,31 +1063,18 @@ pub(super) fn sampled_value(
             } else {
                 x
             };
-            match flagged_fetch {
-                None => (x, word),
-                // The fetch where the sampler's word states what the image needs: pixel
-                // coordinates, one isotropic level clamped to the edge on each plane axis, and
-                // nearest filters unless the texture is integer.
-                Some((handle, fetched, fetched_word)) => {
-                    let integer = image.texel != TexelClass::Float;
-                    let mask = SamplerWord::exact_fetch(image.plane, integer);
-                    let state = heap_sampler_field(cx, fb, handle, EntryField::Flags)?;
-                    let take = word_states(fb, state, mask)?;
-                    let x = fb.select(take, fetched, x)?;
-                    let word = match (fetched_word, word) {
-                        (Some(f), Some(w)) => Some(fb.select(take, f, w)?),
-                        (None, None) => None,
-                        _ => return Err(cx.fail("a fetch and a sample of different residency")),
-                    };
-                    (x, word)
-                }
-            }
+            (x, word)
         }
         SampleOp::Gather {
             component,
             dref,
             offset,
         } => {
+            // The device's unnormalized sampler's coordinate holds its offset.
+            let offset = match s.position.unnormalized() {
+                true => &None,
+                false => offset,
+            };
             let mut ops = ImageOperands::default();
             offset_operands(cx, fb, offset, s.lanes, &mut ops)?;
             let component = *component;
@@ -1236,7 +1227,7 @@ fn heap_sampler_field(
 
 /// Whether sampler word `word` masked by `mask` is exactly [`SamplerWord::PIXEL_COORDINATES`] (a
 /// `bool`): every predicate a sampling tests of a runtime sampler is a pixel sampler's, with the
-/// other fields of `mask` at their zero values ([`SamplerWord::exact_fetch`]).
+/// other fields of `mask` at their zero values ([`SamplerWord::nearest_pixel`]).
 fn word_states(fb: &mut FunctionBuilder<'_>, word: SValue, mask: u32) -> BResult<SValue> {
     let m = fb.u32_const(mask)?;
     let m = fb.module().const_value(m)?;
@@ -1246,25 +1237,146 @@ fn word_states(fb: &mut FunctionBuilder<'_>, word: SValue, mask: u32) -> BResult
     fb.binary(BinOp::IEqual, have, pixel)
 }
 
-/// The plane coordinate `coord` (`lanes` floats) and gradients `grad` over the level-0 size
-/// `size` (`size_lanes` components): always, or where `spec` holds.
+/// Where [`scaled`] places a pixel coordinate before its quotient: the access's
+/// [`PixelPosition`], with a runtime slot's specialization or an argument
+/// buffer's sampler's word test read.
+#[derive(Clone, Copy, Debug)]
+pub(super) enum Centre {
+    /// The coordinate as given.
+    None,
+    /// Its texel's centre, `floor(x) + 0.5`.
+    Texel,
+    /// Its texel's centre where `bool` `c` holds, else the coordinate as given.
+    TexelWhere(SValue),
+}
+
+/// The plane coordinate `x` of sample or gather `s` read in texels by the device's unnormalized
+/// sampler, moved by its texel offset `k` as Metal reads it ([`metal_offset`]): `x + float(k)` in
+/// the device's `float` add, which is `x + k` exactly wherever that is a float (always while it
+/// stays in `x`'s binade; leaving it upward, `x`'s lowest bit may round). The offset is no operand
+/// of such a sampler's instruction (`VUID-vkCmdDraw-None-08611`), and the add takes a dynamic one on
+/// any profile.
+fn offset_texels(
+    cx: &mut EmitCx<'_>,
+    fb: &mut FunctionBuilder<'_>,
+    s: &Sampling,
+    x: SValue,
+) -> BResult<SValue> {
+    let (SampleOp::Sample {
+        offset: Some(offset),
+        ..
+    }
+    | SampleOp::Gather {
+        offset: Some(offset),
+        ..
+    }) = &s.op
+    else {
+        return Ok(x);
+    };
+    let k = match offset {
+        Offset::Const(k) => const_offset(fb, k)?,
+        Offset::Dynamic(v, _) => metal_offset(cx, fb, *v, s.lanes)?,
+    };
+    let f = f32_ty(fb)?;
+    let fvec = vec(fb, f, s.lanes)?;
+    let k = fb.convert(ConvOp::ConvertSToF, k, fvec)?;
+    fb.binary(BinOp::FAdd, x, k)
+}
+
+/// The [`Centre`] of sampling `s` of `image`: through a runtime sampler slot its texel's centre
+/// where the slot's `NearestPixelSampler` specialization holds, through an argument buffer's
+/// sampler where its table entry's word states a nearest pixel sampler of one isotropic level
+/// (`SamplerWord::nearest_pixel`; any filter of an integer texture).
+pub(super) fn centre(
+    cx: &mut EmitCx<'_>,
+    fb: &mut FunctionBuilder<'_>,
+    s: &Sampling,
+    image: CombinedImage,
+) -> BResult<Centre> {
+    Ok(match s.position {
+        PixelPosition::Scaled | PixelPosition::Unnormalized | PixelPosition::UnnormalizedTexel => {
+            Centre::None
+        }
+        PixelPosition::Texel => Centre::Texel,
+        PixelPosition::TexelBySpec => {
+            let Pixel::Spec(n) = s.pixel else {
+                return Err(cx.fail("a specialized texel centre without a runtime sampler slot"));
+            };
+            match cx.decl.families.sampler.nearest.get(&n).copied() {
+                Some(c) => Centre::TexelWhere(c),
+                None => return Err(cx.fail(format!("sampler slot {n} has no nearest constant"))),
+            }
+        }
+        PixelPosition::TexelByWord => {
+            let Pixel::Heap(handle) = s.pixel else {
+                return Err(cx.fail("a word's texel centre without an argument buffer's sampler"));
+            };
+            let mask = SamplerWord::nearest_pixel(image.texel != TexelClass::Float);
+            let word = heap_sampler_field(cx, fb, handle, EntryField::Flags)?;
+            Centre::TexelWhere(word_states(fb, word, mask)?)
+        }
+    })
+}
+
+/// The `lanes`-float splat of the `f32` of bits `bits`.
+fn f32_splat(fb: &mut FunctionBuilder<'_>, bits: u32, lanes: u8) -> BResult<SValue> {
+    let f = f32_ty(fb)?;
+    let c = fb.module().constant(Constant::Scalar {
+        ty: f,
+        bits: ConstBits(u64::from(bits)),
+    })?;
+    let c = match lanes {
+        1 => c,
+        n => {
+            let ty = vec(fb, f, n)?;
+            fb.module().constant(Constant::Composite {
+                ty,
+                parts: vec![c; usize::from(n)].into(),
+            })?
+        }
+    };
+    fb.module().const_value(c)
+}
+
+/// The plane coordinate `x` (`lanes` floats) placed at `centre`: `floor(x) + 0.5` is exact wherever
+/// a texel can be, below `2^23`.
+fn placed(fb: &mut FunctionBuilder<'_>, x: SValue, lanes: u8, centre: Centre) -> BResult<SValue> {
+    let half = |fb: &mut FunctionBuilder<'_>| f32_splat(fb, 0.5f32.to_bits(), lanes);
+    match centre {
+        Centre::None => Ok(x),
+        Centre::Texel => {
+            let floor = fb.glsl(GlslOp::Floor, &[x])?;
+            let h = half(fb)?;
+            fb.binary(BinOp::FAdd, floor, h)
+        }
+        Centre::TexelWhere(c) => {
+            let at = placed(fb, x, lanes, Centre::Texel)?;
+            fb.select(c, at, x)
+        }
+    }
+}
+
+/// The plane coordinate `coord` (`lanes` floats) placed at `centre`, and gradients `grad`, over
+/// the level-0 size `size` (`size_lanes` components): always, or where `spec` holds.
 pub(super) fn scaled(
     fb: &mut FunctionBuilder<'_>,
     lanes: u8,
     (size, size_lanes): (SValue, u8),
     spec: Option<SValue>,
+    centre: Centre,
     (coord, grad): (SValue, Option<(SValue, SValue)>),
 ) -> BResult<(SValue, Option<(SValue, SValue)>)> {
-    let pick = |fb: &mut FunctionBuilder<'_>, x: SValue| -> BResult<SValue> {
-        let scaled = scale(fb, x, size, lanes, size_lanes)?;
+    let pick = |fb: &mut FunctionBuilder<'_>, x: SValue, at: SValue| -> BResult<SValue> {
+        let scaled = scale(fb, at, size, lanes, size_lanes)?;
         match spec {
             Some(c) => fb.select(c, scaled, x),
             None => Ok(scaled),
         }
     };
-    let coord = pick(fb, coord)?;
+    let at = placed(fb, coord, lanes, centre)?;
+    let coord = pick(fb, coord, at)?;
     let grad = match grad {
-        Some((dx, dy)) => Some((pick(fb, dx)?, pick(fb, dy)?)),
+        Some((dx, dy)) => Some((pick(fb, dx, dx)?, pick(fb, dy, dy)?)),
         None => None,
     };
     Ok((coord, grad))

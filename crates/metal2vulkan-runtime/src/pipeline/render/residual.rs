@@ -86,8 +86,10 @@
 //! device's own conversion.
 //!
 //! Constants with no arm that serves every binding stay as before, each value a pipeline of its
-//! own: `SpecKey::SamplerState` (each sampler word a sampling emulation of its own) and
-//! `SpecKey::BicubicTexels` (how Metal's bicubic filter treats each format's texels).
+//! own: `SpecKey::SamplerState` (each sampler word a sampling emulation of its own),
+//! `SpecKey::NearestPixelSampler` (a nearest pixel sampler's sample at its texel's centre, which
+//! the other arm's quotient does not read exactly) and `SpecKey::BicubicTexels` (how Metal's bicubic
+//! filter treats each format's texels).
 //!
 //! [`general_form`]: RenderVariant::general_form
 //! [`residual_form`]: RenderVariant::residual_form

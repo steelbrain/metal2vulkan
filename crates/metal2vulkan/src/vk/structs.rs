@@ -200,9 +200,7 @@ impl Default for ComponentMapping {
     }
 }
 
-/// The translation-relevant subset of `VkSamplerCreateInfo`, always with normalized coordinates
-/// (`unnormalizedCoordinates` is never set: Metal pixel-coordinate samplers are handled in the
-/// shader).
+/// The translation-relevant subset of `VkSamplerCreateInfo`.
 ///
 /// Floating-point fields compare and hash by bit pattern, so a descriptor is a usable map key
 /// (`-0.0` and `0.0` are distinct keys; both are valid Vulkan values).
@@ -240,6 +238,13 @@ pub struct SamplerDesc {
     /// and views the image with the same conversion. Only a layout's immutable sampler sets it.
     #[cfg_attr(feature = "serde", serde(default))]
     pub ycbcr: Option<crate::bind::YCbCrPlanesSampler>,
+    /// `unnormalizedCoordinates`: the sampler reads a Metal pixel sampler's coordinate in texels
+    /// (`metal::sampler::SamplerUse::unnormalized`). Vulkan's limits hold for such a sampler: equal
+    /// filters, the nearest mip mode, the level clamp `[0, 0]`, clamp to the edge or a border on
+    /// the `u` and `v` axes, no anisotropy and no comparison; the image views it reads have one
+    /// level and one layer, of a 1D or 2D type.
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub unnormalized: bool,
 }
 
 impl SamplerDesc {
@@ -265,6 +270,7 @@ impl SamplerDesc {
             reduction: SamplerReductionMode::WEIGHTED_AVERAGE,
             border_components: None,
             ycbcr: Some(ycbcr),
+            unnormalized: false,
         }
     }
 }
@@ -283,6 +289,7 @@ struct SamplerKey {
     reduction: SamplerReductionMode,
     border_components: Option<ComponentMapping>,
     ycbcr: Option<crate::bind::YCbCrPlanesSampler>,
+    unnormalized: bool,
 }
 
 impl SamplerDesc {
@@ -303,6 +310,7 @@ impl SamplerDesc {
             reduction: self.reduction,
             border_components: self.border_components,
             ycbcr: self.ycbcr,
+            unnormalized: self.unnormalized,
         }
     }
 }

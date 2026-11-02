@@ -796,7 +796,7 @@ codec_struct! {
     SamplerDesc {
         mag_filter, min_filter, mipmap_mode, address_mode_u, address_mode_v, address_mode_w,
         mip_lod_bias, max_anisotropy, compare, min_lod, max_lod, border_color, reduction,
-        border_components, ycbcr,
+        border_components, ycbcr, unnormalized,
     }
     ComponentMapping { r, g, b, a }
     YCbCrPlanesSampler { conversion }
@@ -814,7 +814,7 @@ codec_struct! {
 codec_struct! {
     SlotRef { stage, class, index }
     ImageHandleClass { dim, arrayed, multisampled, sampled_type, depth_compare, access, format }
-    CombinedSampler { sampler, compare, integer }
+    CombinedSampler { sampler, compare, integer, unnormalized }
     ResourceSlot { stage, kind, index }
 }
 
@@ -864,6 +864,7 @@ codec_enum! {
         ObjectLocalSize(f0), ObjectFlatLocalSize, ObjectMultiRegion, SamplerMinLevel(f0),
         ConstantLanes(f0), UnmeasuredTexels(f0), BoundTexelFormat(f0), OffsetBaseAxes(f0),
         SamplerAnisotropy(f0), RangeAtBindOffset(f0), PlainHalfTexels(f0),
+        NearestPixelSampler(f0),
     }
     PushField {
         RootTableAddress, ExecutionStatusAddress, DispatchRegion, BaseVertexInstance,

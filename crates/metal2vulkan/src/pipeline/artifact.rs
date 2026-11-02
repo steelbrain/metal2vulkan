@@ -190,7 +190,8 @@ pub struct StageModule {
     /// The notes of `precision_notes` that hold only under some specializations: a note whose
     /// every access keeps its near-equivalent only on the arms the module selects by its
     /// specialization constants (the bound format's class, `SpecKey::TexelFormat`; the bound
-    /// sampler's word, `SpecKey::SamplerState`), with the condition under which a specialized
+    /// sampler's word, `SpecKey::SamplerState`, and whether it is a nearest pixel sampler,
+    /// `SpecKey::NearestPixelSampler`), with the condition under which a specialized
     /// module runs such an arm. Sorted by note, each note at most once. Empty for a module whose
     /// every note holds under every specialization. [`StageModule::precision_notes_under`]
     /// gives the notes of the module as a pipeline specializes it.
@@ -462,7 +463,8 @@ impl SpecClause {
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct SpecTest {
     /// The constant: a texture slot's `SpecKey::TexelFormat` or a sampler slot's
-    /// `SpecKey::SamplerState`, as the stage's [`SpecializationLayout`] declares it.
+    /// `SpecKey::SamplerState` or `SpecKey::NearestPixelSampler`, as the stage's
+    /// [`SpecializationLayout`] declares it.
     pub key: SpecKey,
     pub mask: u32,
     pub bits: u32,
@@ -628,28 +630,40 @@ pub enum PrecisionNote {
     /// [`PrecisionNote::NativeMinMax`]'s. Validation derives no tolerance and no explanation from
     /// it: every `float` computation is exposed to it.
     DeviceDenormals,
-    /// A pixel-coordinate sampler's coordinate reaches the device's sampler divided by the
-    /// texture's level-0 size in the shader (Vulkan's unnormalized samplers take no gather,
-    /// offset, comparison, array, 3D image or level of detail), and the device's sampler reads its
-    /// texels from that coordinate in its own arithmetic: the position it reads, `(x / N) N` in
-    /// the device's rounding and its sub-texel precision, lies within a few units in the last place
-    /// of the coordinate `x` as given, where Metal reads `x` itself. So a sample or gather reads
-    /// Metal's texels and weights but where `x` lies that close to a texel edge (a nearest
-    /// sample's texel, a gather's 2x2 block, a linear filter's pair of texels) or to the edge of
-    /// one of the device's sub-texel steps (a linear filter's weight), where it may read the
-    /// neighbouring texel, block or step. Measured: the device answers as its normalized sampler at
-    /// a coordinate within one `f32` ulp of the quotient `x / N` on MoltenVK, and at the quotient
-    /// itself on lavapipe (800 coordinates at and around each texel edge of a 5x3 texture, every
-    /// filter and address mode); a linear downscale by 8 of textures 1000 to 1920 texels wide is
-    /// within 1/255 of Metal's on MoltenVK and 2/255 on lavapipe (a weight one 1/256 step off on
-    /// each axis); other devices unmeasured. Recorded on every device for every access through a
-    /// constexpr pixel sampler but its exact fetch (nearest, clamped to the edge,
-    /// `sampler.pixel_fetch`), and for every access through a runtime sampler slot, held where the
-    /// bound sampler states pixel coordinates. A cube's pixel sampler is a normalized one. An
-    /// argument buffer's sampler records [`PrecisionNote::ArgumentPixelSamplerScaling`] instead.
+    /// A pixel-coordinate sampler's coordinate reaches the device's normalized sampler divided by
+    /// the texture's level-0 size in the shader, and the device's sampler reads its texels from
+    /// that coordinate in its own arithmetic: the position it reads, `(x / N) N` in the device's
+    /// rounding and its sub-texel precision, lies within a few units in the last place of the
+    /// coordinate `x` as given, where Metal's sampler reads `x` itself on its own sub-texel grid. So
+    /// a linear sample or a gather reads Metal's texels and weights but where `x` lies that close
+    /// to the edge of a texel pair, a gather's 2x2 block or one of the sub-texel steps of the
+    /// filter's weight, where it may read the neighbouring pair, block or step. Recorded on every
+    /// device where no other form takes the coordinate: a linear sample or a gather through a
+    /// constexpr pixel sampler of an array or a 3D texture (Vulkan's unnormalized sampler takes
+    /// neither) or of a texture whose residency the function observes (whose footprint is read
+    /// from the normalized coordinate), a level query, and every linear sample, gather and comparison through a runtime sampler slot
+    /// (whose state the function does not know), held where the bound sampler states pixel
+    /// coordinates and, for a sample or comparison, that it is not a nearest one of one isotropic
+    /// level (`SpecKey::NearestPixelSampler`). Not recorded where Metal's texel or footprint
+    /// follows from `x` itself: a constexpr pixel sampler's sample or gather of a 1D or 2D texture
+    /// that is no array hands `x` (moved by its offset) to the device's unnormalized sampler; a
+    /// nearest sample elsewhere hands the device its texel's centre `floor(x) + 0.5` over the size,
+    /// where the device reads exactly that texel (through a runtime slot behind the slot's
+    /// `NearestPixelSampler` specialization); and a nearest constexpr sampler clamped to the edge
+    /// fetches its texel (`sampler.pixel_fetch`). Measured: the device answers as its normalized
+    /// sampler at a coordinate within one `f32` ulp of the quotient `x / N` on MoltenVK, and at the
+    /// quotient itself on lavapipe (800 coordinates at and around each texel edge of a 5x3
+    /// texture, every filter and address mode); on MoltenVK a linear sample through a runtime or
+    /// argument buffer's sampler or of an array reads another weight step than Metal's at under 1%
+    /// of the coordinates at and around each texel edge of textures 258, 21 and 37 texels wide
+    /// (where `x - 0.5` lies at a half step of Metal's `1/256` grid); a linear downscale by 8 of
+    /// textures 1000 to 1920 texels wide is within 1/255 of Metal's on MoltenVK and 2/255 on
+    /// lavapipe (a weight one 1/256 step off on each axis); other devices unmeasured. A cube's
+    /// pixel sampler is a normalized one. An argument buffer's sampler records
+    /// [`PrecisionNote::ArgumentPixelSamplerScaling`] instead.
     ///
-    /// Validation derives no tolerance from it: at a texel edge the value is the neighbouring
-    /// texel's, whatever it holds.
+    /// Validation derives no tolerance from it: at an edge the value is the neighbouring pair's,
+    /// block's or step's, whatever it holds.
     PixelSamplerScaling,
     /// Float division, remainder, square root, fused multiply-add, and dot products use Vulkan's
     /// precision bounds (e.g. 2.5 ULP division, a possibly unfused `Fma`) rather than correct
@@ -1250,16 +1264,17 @@ pub enum PrecisionNote {
     /// may hand the device a pixel coordinate scaled by the texture's size, where the sampler
     /// states pixel coordinates: the device's sampler reads its texels from that coordinate in its
     /// own arithmetic, with [`PrecisionNote::PixelSamplerScaling`]'s measured bound (the
-    /// neighbouring texel, block or sub-texel step where the coordinate lies within a few units in
-    /// the last place of an edge of one). Recorded on every device for every such access; a sample
-    /// without a comparison through a sampler whose word states the exact fetch (nearest, clamped
-    /// to the edge, one level, isotropic) reads that fetch instead. It is its own note, apart from
+    /// neighbouring texel pair, block or sub-texel step where the coordinate lies within a few
+    /// units in the last place of an edge of one). Recorded on every device for every such access;
+    /// a sample through a sampler whose word states a nearest pixel sampler of one isotropic level
+    /// (`SamplerWord::nearest_pixel`) hands the device its texel's centre instead, where the device
+    /// reads exactly Metal's texel. It is its own note, apart from
     /// [`PrecisionNote::PixelSamplerScaling`], because only the bound states decide it: the runtime
     /// announces it at the first draw or dispatch of a pipeline that records it while the device
     /// lists a sampler state of pixel coordinates, never at the pipeline's making.
     ///
-    /// Validation derives no tolerance from it: at a texel edge the value is the neighbouring
-    /// texel's, whatever it holds.
+    /// Validation derives no tolerance from it: at an edge the value is the neighbouring pair's,
+    /// block's or step's, whatever it holds.
     ArgumentPixelSamplerScaling,
     /// A fragment function returns a `half` color output (a scalar or vector of AIR's `half`) to
     /// an attachment the pipeline has, and either its module is compiled without fast math

@@ -236,6 +236,18 @@ fn combined(a: &FunctionArtifact) -> Vec<(u32, SamplerRef, bool, bool)> {
         .collect()
 }
 
+/// The combined image-sampler uses of `a`'s bindings.
+fn combined_kinds(a: &FunctionArtifact) -> Vec<crate::pipeline::sym::CombinedSampler> {
+    a.interface
+        .descriptors
+        .iter()
+        .filter_map(|d| match d.slot.kind {
+            ResourceKind::CombinedTextureSampler(c) => Some(c),
+            _ => None,
+        })
+        .collect()
+}
+
 /// Every sampling entry compiles and passes L3, or is refused with a typed error, on every
 /// committed profile; the minimum-LOD clamp exactly where `shaderResourceMinLod` is.
 #[test]
@@ -390,18 +402,20 @@ fn a_runtime_samples_level_is_the_device_s() {
 /// A sample, a gather and a comparison through a runtime sampler slot read only the coordinates
 /// bit of the slot's word (`SamplerWord::PIXEL_COORDINATES`), and hand the device's sampler the
 /// coordinate scaled behind it, on every committed profile: each records `PixelSamplerScaling`,
-/// held where the bound sampler states pixel coordinates (its one clause tests that bit), and
-/// emits no texel centre, footprint cell or block (no `Floor`).
+/// held where the bound sampler states pixel coordinates (each clause tests that bit). A gather
+/// emits no texel centre (no `Floor`). A sample and a comparison also read the slot's
+/// `NearestPixelSampler` specialization, behind which they hand the device their texel's centre
+/// (one `Floor`), so their note's clause also tests that it does not hold.
 #[test]
 fn runtime_pixel_accesses_hand_the_device_the_scaled_coordinate() {
     use crate::pipeline::artifact::SpecializedNote;
     let s = slot(Stage::Kernel, SlotClass::Sampler, 0);
     let kernels = [
-        ("pixel_sample", dynamic_offset_kernel(false)),
-        ("pixel_gather", dynamic_offset_kernel(true)),
-        ("pixel_compare", COMPARE_KERNEL.to_owned()),
+        ("pixel_sample", dynamic_offset_kernel(false), true),
+        ("pixel_gather", dynamic_offset_kernel(true), false),
+        ("pixel_compare", COMPARE_KERNEL.to_owned(), true),
     ];
-    for (name, text) in kernels {
+    for (name, text, nearest) in kernels {
         let Some(bc) = assemble(name, &text) else {
             return;
         };
@@ -430,14 +444,19 @@ fn runtime_pixel_accesses_hand_the_device_the_scaled_coordinate() {
                 .filter(|n| n.note == PrecisionNote::PixelSamplerScaling)
                 .collect();
             assert_eq!(held.len(), 1, "{what}: {held:?}");
+            let pixel = |t: &crate::pipeline::SpecTest| {
+                t.key == key && t.mask == SamplerWord::PIXEL_COORDINATES && !t.equal
+            };
+            let scaled = |t: &crate::pipeline::SpecTest| {
+                t.key == SpecKey::NearestPixelSampler(s) && t.mask == 1 && t.bits == 0 && t.equal
+            };
             assert!(
-                held[0].when.iter().all(|c| c
-                    .all
-                    .iter()
-                    .all(|t| t.key == key && t.mask == SamplerWord::PIXEL_COORDINATES)),
+                held[0].when.iter().all(|c| c.all.iter().any(pixel)
+                    && c.all.iter().any(scaled) == nearest
+                    && c.all.iter().all(|t| pixel(t) || scaled(t))),
                 "{what}: {held:?}"
             );
-            assert_eq!(glsl_count(&a, GLSL_FLOOR), 0, "{what}");
+            assert_eq!(glsl_count(&a, GLSL_FLOOR), usize::from(nearest), "{what}");
             assert!(count(&a, OP_FDIV) >= 1, "{what}");
         }
     }
@@ -777,12 +796,13 @@ fn gathers_gradients_and_pixel_constexpr_samplers() {
     // device's decode.
     assert_half_rounding(&h);
     assert!(h.precision.contains(&PrecisionNote::DeviceNanEncoding));
-    // A linear pixel sample, the device's sampler's at the coordinate scaled in the shader:
-    // `PixelSamplerScaling`, on Metal's own sampler too.
+    // A linear pixel sample of a 2D texture, the device's unnormalized sampler's at the coordinate
+    // as given: no division, no `PixelSamplerScaling`.
     let x = ok(&bc, "sample_pixel", &p);
-    assert!(x.precision.contains(&PrecisionNote::PixelSamplerScaling));
-    assert_eq!(uses(&x, "sampler.sample"), 1);
-    assert!(count(&x, OP_FDIV) >= 1);
+    assert!(!x.precision.contains(&PrecisionNote::PixelSamplerScaling));
+    assert_eq!(uses(&x, "sampler.pixel_unnormalized"), 1);
+    assert_eq!(count(&x, OP_FDIV), 0);
+    assert!(combined_kinds(&x).iter().any(|c| c.unnormalized));
     assert!(x
         .interface
         .read_keys()

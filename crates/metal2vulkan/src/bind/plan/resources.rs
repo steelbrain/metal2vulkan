@@ -1507,7 +1507,8 @@ impl ResourcePlanner<'_> {
     /// modes and color) must read it exactly through its view
     /// (`metal::sampler::check_border_view`). The immutable sampler's filters must be ones the
     /// bound view's format supports ([`check_filter_features`]), as a runtime sampler's are when it
-    /// is instantiated.
+    /// is instantiated. A use that reads texel coordinates (`CombinedSampler::unnormalized`) views
+    /// the texture's first level alone.
     pub fn combined(
         &mut self,
         texture: SlotRef,
@@ -1690,10 +1691,18 @@ impl ResourcePlanner<'_> {
                     if shader_swizzle {
                         self.variant.swizzled_storage.insert(texture);
                     }
+                    // A pixel sampler's texel coordinates read through the device's unnormalized
+                    // sampler, which reads a view of one level (and one layer: the slot's texture
+                    // is no array).
+                    let level = match sampler.unnormalized {
+                        true => Some(0),
+                        false => view.level,
+                    };
                     let image = ImageSource::Texture {
                         slot: texture,
                         view: ImageViewDesc {
                             shader_swizzle,
+                            level,
                             ..view
                         },
                     };
@@ -1815,6 +1824,19 @@ impl ResourcePlanner<'_> {
         self.stage_shape(slot.stage)
             .and_then(|s| s.samplers.get(&slot.index))
             .map_or(0, |s| u64::from(s.degree))
+    }
+
+    /// The `NearestPixelSampler(slot)` specialization: 1 where the sampler bound to `slot` is a
+    /// nearest pixel sampler of one isotropic level (its word masked by
+    /// `SamplerWord::nearest_pixel(false)` is `SamplerWord::PIXEL_COORDINATES`), else 0; 0 for a
+    /// slot bound to no sampler.
+    pub fn nearest_pixel_sampler(&self, slot: SlotRef) -> u64 {
+        use crate::metal::sampler::SamplerWord;
+        let word = self
+            .stage_shape(slot.stage)
+            .and_then(|s| s.samplers.get(&slot.index))
+            .map_or(0, |s| s.word.0);
+        u64::from(word & SamplerWord::nearest_pixel(false) == SamplerWord::PIXEL_COORDINATES)
     }
 
     /// The `BicubicTexels(slot)` specialization: how Metal's bicubic filter treats the texels of

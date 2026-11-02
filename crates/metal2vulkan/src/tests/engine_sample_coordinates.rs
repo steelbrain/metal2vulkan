@@ -1,11 +1,14 @@
 //! The coordinates a device's gathers and samples read. A gather and a sample through a constexpr
 //! normalized sampler are the device's sampler's on every device (Metal's own on MoltenVK), at the
 //! coordinate as given: a subnormal coordinate reaches the device unflushed, the border axes'
-//! included. A pixel sampler's coordinate reaches the device's sampler divided by the level-0
-//! size, on every device, under the operation's own census name and noted `PixelSamplerScaling`;
-//! a cube reads it as a normalized sampler. A runtime sampler's gather and sample read only its
-//! word's coordinates bit. Every module requires the device's sampler (`VkProperty::MetalSampler`
-//! or `VkProperty::DeviceSampling`) and validates on every committed profile, and the plan's word
+//! included. A constexpr pixel sampler's sample or gather of a 1D or 2D texture that is no array
+//! hands the device's unnormalized sampler the coordinate itself (a nearest sample with an offset,
+//! its texel's centre moved by the offset), with no `PixelSamplerScaling`; of an array or a 3D
+//! texture its nearest sample hands its texel's centre and the rest the coordinate divided by the
+//! level-0 size, noted; a cube reads it as a normalized sampler. A runtime sampler's gather reads
+//! only its word's coordinates bit, and its sample also its `NearestPixelSampler` specialization.
+//! Every module requires the device's sampler (`VkProperty::MetalSampler` or
+//! `VkProperty::DeviceSampling`) and validates on every committed profile, and the plan's word
 //! estimate bounds what it emits.
 //!
 //! `llvm-as` assembles the kernels; without it the tests skip visibly.
@@ -79,6 +82,10 @@ enum Op {
     Sample1D,
     /// `texture2d<float>::sample(s, uv)`.
     Sample2D,
+    /// `texture2d<float>::sample(s, uv, offset)`.
+    Sample2DOffset { offset: (i32, i32) },
+    /// `texture2d_array<float>::sample(s, uv, 1)`.
+    SampleArray,
     /// `texture2d<float>::sample(s, uv, level(lod))` with a dynamic level (buffer 2).
     SampleLevel,
     /// `texture3d<float>::sample(s, float3(uv, 0.5))`.
@@ -122,6 +129,16 @@ fn kernel_of(op: Op, words: Option<u64>, flushed: bool) -> String {
             "texture2d<float, sample>",
             format!("@air.sample_texture_2d.v4f32(ptr addrspace(1) %t, ptr addrspace(2) {s}, <2 x float> %uv, i1 true, <2 x i32> zeroinitializer, i1 false, float 0.0, float 0.0, i32 0)"),
             "@air.sample_texture_2d.v4f32(ptr addrspace(1), ptr addrspace(2), <2 x float>, i1, <2 x i32>, i1, float, float, i32)",
+        ),
+        Op::Sample2DOffset { offset: (ox, oy) } => (
+            "texture2d<float, sample>",
+            format!("@air.sample_texture_2d.v4f32(ptr addrspace(1) %t, ptr addrspace(2) {s}, <2 x float> %uv, i1 true, <2 x i32> <i32 {ox}, i32 {oy}>, i1 false, float 0.0, float 0.0, i32 0)"),
+            "@air.sample_texture_2d.v4f32(ptr addrspace(1), ptr addrspace(2), <2 x float>, i1, <2 x i32>, i1, float, float, i32)",
+        ),
+        Op::SampleArray => (
+            "texture2d_array<float, sample>",
+            format!("@air.sample_texture_2d_array.v4f32(ptr addrspace(1) %t, ptr addrspace(2) {s}, <2 x float> %uv, i32 1, i1 true, <2 x i32> zeroinitializer, i1 false, float 0.0, float 0.0, i32 0)"),
+            "@air.sample_texture_2d_array.v4f32(ptr addrspace(1), ptr addrspace(2), <2 x float>, i32, i1, <2 x i32>, i1, float, float, i32)",
         ),
         Op::SampleLevel => (
             "texture2d<float, sample>",
@@ -375,65 +392,129 @@ fn the_fixture_cube_gathers_are_the_device_s() {
     }
 }
 
-/// The kernels of the pixel sampler test: each through a constexpr pixel sampler, with its census
-/// name (`None`: a cube's, which compiles as through the same sampler with normalized
-/// coordinates).
-fn pixel_cases() -> Vec<(&'static str, Op, u64, Option<&'static str>)> {
+/// What a pixel sampler test kernel's module hands the device.
+#[derive(Clone, Copy, Debug)]
+enum Hands {
+    /// The coordinate itself, its bits unchanged, to the device's unnormalized sampler, under the
+    /// census name: no `Floor`.
+    Itself(&'static str),
+    /// The coordinate moved by its offset, to the device's unnormalized sampler, under the census
+    /// name, with this many `Floor`s (a nearest sample's texel centre).
+    Moved(&'static str, usize),
+    /// Its texel's centre over the level-0 size to the normalized sampler, under the census name:
+    /// one `Floor`.
+    Centre(&'static str),
+    /// The coordinate over the level-0 size, under the census name, noted `PixelSamplerScaling`:
+    /// no `Floor`.
+    Scaled(&'static str),
+    /// As through the same sampler with normalized coordinates (a cube).
+    AsNormalized,
+}
+
+/// The kernels of the pixel sampler test: each through a constexpr pixel sampler, with what its
+/// module hands the device.
+fn pixel_cases() -> Vec<(&'static str, Op, u64, Hands)> {
     let pixel = |filter, address| sampler(filter, 0, address, true);
-    let gather = Some("sampler.gather");
-    let sample = Some("sampler.sample");
+    let gather = "sampler.pixel_unnormalized_gather";
+    let sample = "sampler.pixel_unnormalized";
     vec![
         (
             "pixel gather edge",
             Op::Gather { offset: (0, 0) },
             pixel(0, [EDGE; 3]),
-            gather,
+            Hands::Itself(gather),
         ),
         (
             "pixel gather zero offset",
             Op::Gather { offset: (2, -3) },
             pixel(0, [ZERO; 3]),
-            gather,
+            Hands::Moved(gather, 0),
         ),
         (
             "pixel gather linear sampler",
             Op::Gather { offset: (0, 0) },
             pixel(1, [EDGE; 3]),
-            gather,
+            Hands::Itself(gather),
         ),
         (
             "pixel gather array",
             Op::GatherArray,
             pixel(0, [ZERO, EDGE, EDGE]),
-            gather,
+            Hands::Scaled("sampler.gather"),
         ),
-        ("pixel linear 1d", Op::Sample1D, pixel(1, [EDGE; 3]), sample),
+        (
+            "pixel linear 1d",
+            Op::Sample1D,
+            pixel(1, [EDGE; 3]),
+            Hands::Itself(sample),
+        ),
         (
             "pixel linear 2d",
             Op::Sample2D,
             pixel(1, [ZERO, EDGE, EDGE]),
-            sample,
+            Hands::Itself(sample),
         ),
-        ("pixel linear 3d", Op::Sample3D, pixel(1, [EDGE; 3]), sample),
+        (
+            "pixel linear 2d offset",
+            Op::Sample2DOffset { offset: (2, -3) },
+            pixel(1, [ZERO; 3]),
+            Hands::Moved(sample, 0),
+        ),
+        (
+            "pixel linear 3d",
+            Op::Sample3D,
+            pixel(1, [EDGE; 3]),
+            Hands::Scaled("sampler.sample"),
+        ),
+        (
+            "pixel linear array",
+            Op::SampleArray,
+            pixel(1, [ZERO; 3]),
+            Hands::Scaled("sampler.sample"),
+        ),
         (
             "pixel nearest zero 2d",
             Op::Sample2D,
             pixel(0, [ZERO; 3]),
-            sample,
+            Hands::Itself(sample),
+        ),
+        (
+            "pixel nearest zero 2d offset",
+            Op::Sample2DOffset { offset: (1, -1) },
+            pixel(0, [ZERO; 3]),
+            Hands::Moved(sample, 1),
+        ),
+        (
+            "pixel nearest zero array",
+            Op::SampleArray,
+            pixel(0, [ZERO; 3]),
+            Hands::Centre("sampler.pixel_texel"),
         ),
         (
             "pixel nearest cube",
             Op::SampleCube,
             pixel(0, [EDGE; 3]),
-            None,
+            Hands::AsNormalized,
         ),
         (
             "pixel linear cube",
             Op::SampleCube,
             pixel(1, [EDGE, ZERO, EDGE]),
-            None,
+            Hands::AsNormalized,
         ),
     ]
+}
+
+/// The combined bindings of compiled `a` that read through the device's unnormalized sampler.
+fn unnormalized_bindings(a: &FunctionArtifact) -> usize {
+    use crate::pipeline::sym::ResourceKind;
+    a.interface
+        .descriptors
+        .iter()
+        .filter(
+            |d| matches!(d.slot.kind, ResourceKind::CombinedTextureSampler(c) if c.unnormalized),
+        )
+        .count()
 }
 
 /// The `GLSL.std.450` instructions numbered `glsl` the module of `a` calls.
@@ -455,45 +536,76 @@ fn glsl_count(a: &FunctionArtifact, glsl: u32) -> usize {
 /// `GLSL.std.450 Floor`, which a texel centre, a footprint cell and a gather's block all take.
 const GLSL_FLOOR: u32 = 8;
 
-/// On every committed profile, a constexpr pixel sampler's gather and linear or clamp-to-zero
-/// sample compile to their operation's census names, hand the device the coordinate divided by
-/// the level-0 size as given (no `Floor` of it: no texel centre, footprint cell or block),
-/// record `PixelSamplerScaling`, require the device's sampler and validate; a cube through a pixel
-/// sampler compiles as through the same sampler with normalized coordinates, to the same census,
-/// notes, and requirements.
+/// On every committed profile, a constexpr pixel sampler's gather and sample hand the device what
+/// [`pixel_cases`] states, under its census name: of a 1D or 2D texture that is no array, `x`
+/// itself (its bits unchanged where no offset moves it) through a combined binding of the device's
+/// unnormalized sampler, without `PixelSamplerScaling`, a nearest sample with an offset its texel's
+/// centre (one `Floor`, noted `DeviceDenormals`); an array's nearest sample its texel's centre over
+/// the size; the rest the coordinate over the size (no `Floor`), noted. Each requires the device's
+/// sampler and validates; a cube through a pixel sampler compiles as through the same sampler with
+/// normalized coordinates, to the same census, notes, and requirements.
 #[test]
-fn pixel_samplers_hand_the_device_the_scaled_coordinate() {
+fn pixel_samplers_hand_the_device_their_coordinate() {
     let profiles = crate::spirv::testing::committed_profiles().expect("profiles");
-    for (name, op, words, expect) in pixel_cases() {
+    for (name, op, words, hands) in pixel_cases() {
         let Some(bc) = assemble(name, &kernel(op, Some(words))) else {
             return;
         };
-        let normalized = match expect {
-            Some(_) => None,
-            None => assemble(name, &kernel(op, Some(words & !(1 << 15)))),
+        let normalized = match hands {
+            Hands::AsNormalized => assemble(name, &kernel(op, Some(words & !(1 << 15)))),
+            _ => None,
         };
         for (stem, p) in &profiles {
             let what = format!("{name} on {stem}");
             let a = compile(&bc, "k", p).unwrap_or_else(|e| panic!("{what}: {e}"));
             link_and_validate(&a, p).unwrap_or_else(|e| panic!("{what}: {e}"));
-            match (expect, &normalized) {
-                (Some(census), _) => {
+            let scaling = a.precision.contains(&PrecisionNote::PixelSamplerScaling);
+            let floors = glsl_count(&a, GLSL_FLOOR);
+            let (sampled, through) = coordinates_pass_through(&a.module.words);
+            assert!(sampled, "{what}: no sample or gather");
+            match hands {
+                Hands::Itself(census) | Hands::Moved(census, _) => {
                     assert_eq!(uses(&a, census), 1, "{what}");
-                    assert!(
-                        a.precision.contains(&PrecisionNote::PixelSamplerScaling),
+                    assert_eq!(unnormalized_bindings(&a), 1, "{what}");
+                    assert!(!scaling, "{what}");
+                    assert_eq!(through, matches!(hands, Hands::Itself(_)), "{what}");
+                    let expected = match hands {
+                        Hands::Moved(_, n) => n,
+                        _ => 0,
+                    };
+                    assert_eq!(floors, expected, "{what}");
+                    assert_eq!(
+                        a.precision.contains(&PrecisionNote::DeviceDenormals),
+                        expected != 0,
                         "{what}"
                     );
-                    assert_eq!(glsl_count(&a, GLSL_FLOOR), 0, "{what}");
-                    assert!(requires_the_sampler(&a, p), "{what}");
                 }
-                (None, Some(nbc)) => {
+                Hands::Centre(census) => {
+                    assert_eq!(uses(&a, census), 1, "{what}");
+                    assert_eq!(unnormalized_bindings(&a), 0, "{what}");
+                    assert!(!scaling, "{what}");
+                    assert_eq!(floors, 1, "{what}");
+                    assert!(
+                        a.precision.contains(&PrecisionNote::DeviceDenormals),
+                        "{what}"
+                    );
+                }
+                Hands::Scaled(census) => {
+                    assert_eq!(uses(&a, census), 1, "{what}");
+                    assert_eq!(unnormalized_bindings(&a), 0, "{what}");
+                    assert!(scaling, "{what}");
+                    assert_eq!(floors, 0, "{what}");
+                    assert!(!through, "{what}");
+                }
+                Hands::AsNormalized => {
+                    let Some(nbc) = &normalized else { return };
                     let b = compile(nbc, "k", p).unwrap_or_else(|e| panic!("{what}: {e}"));
                     assert_eq!(a.strategies.entries, b.strategies.entries, "{what}");
                     assert_eq!(a.precision, b.precision, "{what}");
                     assert_eq!(a.requirements, b.requirements, "{what}");
                 }
-                (None, None) => return,
             }
+            assert!(requires_the_sampler(&a, p), "{what}");
         }
     }
 }
@@ -511,19 +623,33 @@ fn sampler_fields(a: &FunctionArtifact) -> u32 {
         .expect("a `SamplerState` specialization")
 }
 
+/// Whether compiled `a` reads its runtime sampler slot's `NearestPixelSampler` specialization.
+fn reads_nearest_pixels(a: &FunctionArtifact) -> bool {
+    use crate::pipeline::sym::SpecKey;
+    a.interface
+        .read_keys()
+        .into_iter()
+        .any(|k| matches!(k, SpecKey::NearestPixelSampler(_)))
+}
+
 /// On every committed profile, a runtime sampler's gather of a 2D texture or array and its 2D
-/// sample read only the coordinates bit of its word (none of its address modes or filters), hand
-/// the device the coordinate scaled behind it (no `Floor`), and record `PixelSamplerScaling`. Each
-/// requires the device's sampler.
+/// sample read only the coordinates bit of its word (none of its address modes or filters) and
+/// record `PixelSamplerScaling`. A gather hands the device the coordinate scaled behind it (no
+/// `Floor`); a sample also reads the slot's `NearestPixelSampler` specialization, behind which it
+/// hands the device its texel's centre (one `Floor`). Each requires the device's sampler.
 #[test]
 fn a_runtime_samplers_gather_and_sample_read_only_its_coordinates() {
     use crate::metal::sampler::SamplerWord;
     let profiles = crate::spirv::testing::committed_profiles().expect("profiles");
-    for (name, op) in [
-        ("runtime gather", Op::Gather { offset: (0, 0) }),
-        ("runtime gather offset", Op::Gather { offset: (2, -1) }),
-        ("runtime gather array", Op::GatherArray),
-        ("runtime sample", Op::Sample2D),
+    for (name, op, nearest) in [
+        ("runtime gather", Op::Gather { offset: (0, 0) }, false),
+        (
+            "runtime gather offset",
+            Op::Gather { offset: (2, -1) },
+            false,
+        ),
+        ("runtime gather array", Op::GatherArray, false),
+        ("runtime sample", Op::Sample2D, true),
     ] {
         let Some(bc) = assemble(name, &kernel(op, None)) else {
             return;
@@ -538,7 +664,8 @@ fn a_runtime_samplers_gather_and_sample_read_only_its_coordinates() {
                 a.precision.contains(&PrecisionNote::PixelSamplerScaling),
                 "{what}"
             );
-            assert_eq!(glsl_count(&a, GLSL_FLOOR), 0, "{what}");
+            assert_eq!(reads_nearest_pixels(&a), nearest, "{what}");
+            assert_eq!(glsl_count(&a, GLSL_FLOOR), usize::from(nearest), "{what}");
         }
     }
 }

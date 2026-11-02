@@ -19,14 +19,14 @@ source_filename = "-"
 c23 = %t2 [34901797601050697, 0]
 c24 = %t2 [34901797601050624, 0]
 c25 = %t2 [34901797601036946, 0]
-c27 = %t27 [26, 5]
-c40 = <2 x float> [0x3E800000, poison]
-c48 = <2 x i32> [0, 1]
-c49 = <2 x float> [0x3D800000, 0x3D800000]
-c54 = <2 x i32> [poison, 1]
-c55 = <2 x float> [0x3F000000, poison]
-c57 = <2 x float> [poison, 0x40400000]
-c59 = <2 x float> [poison, 0x0]
+c26 = %t27 [27, 2]
+c39 = <2 x float> [0x3E800000, poison]
+c47 = <2 x i32> [0, 1]
+c48 = <2 x float> [0x3D800000, 0x3D800000]
+c53 = <2 x i32> [poison, 1]
+c54 = <2 x float> [0x3F000000, poison]
+c56 = <2 x float> [poison, 0x40400000]
+c58 = <2 x float> [poison, 0x0]
 @g0 "__air_sampler_state" = internal addrspace(2) constant %t2 c23, align 8
 @g1 "__air_sampler_state.1" = internal addrspace(2) constant %t2 c24, align 8
 @g2 "__air_sampler_state.2" = internal addrspace(2) constant %t2 c25, align 8
@@ -38,7 +38,7 @@ bb0:
   %i2 = select ptr addrspace(2) %i1, ptr addrspace(2) @g2, %a1
   %i3 = tail call reassoc nnan ninf nsz arcp contract afn float @f1 [air Convert(Convert { dst: NumTy { elem: F32, lanes: 1 }, dst_kind: Float, src: NumTy { elem: I32, lanes: 1 }, src_kind: Unsigned, src_fp8: None })](%a3)
   %i4 = insertelement <2 x float> poison, %i3, i64 0
-  %i5 = fmul reassoc nnan ninf nsz arcp contract afn <2 x float> %i4, <2 x float> c40
+  %i5 = fmul reassoc nnan ninf nsz arcp contract afn <2 x float> %i4, <2 x float> c39
   %i6 = shufflevector <2 x float> %i5, <2 x float> poison, <0, 0>
   %i7 = tail call %t18 @f10 [air Texture(Texture { op: Sample { compare: false, lod: Level, offset: true }, image: ImageShape { dim: D2, array: false, ms: false, depth: false }, texel: Some(Texel { ty: NumTy { elem: F32, lanes: 4 }, sign: None }), coord16: false, form: Current, status: true, access: Some(Sample), states_access: true })](%a0, %i2, %i6, i1 1, <2 x i32> zeroinitializer, i1 1, float 0x3F800000, float 0x0, i32 0) convergent arg0( Ref nocapture ) arg1( Ref nocapture )
   %i8 = extractvalue <4 x float> %i7, 0
@@ -56,7 +56,7 @@ bb0:
   %i1 = fcmp reassoc nnan ninf nsz arcp contract afn ogt %i0, float 0x41000000
   %i2 = select ptr addrspace(2) %i1, %a2, ptr addrspace(2) @g2
   %i3 = shufflevector <2 x float> %a0, <4 x float> poison, <0, 1>
-  %i4 = fmul reassoc nnan ninf nsz arcp contract afn <2 x float> %i3, <2 x float> c49
+  %i4 = fmul reassoc nnan ninf nsz arcp contract afn <2 x float> %i3, <2 x float> c48
   %i5 = tail call %t18 @f10 [air Texture(Texture { op: Sample { compare: false, lod: Bias, offset: true }, image: ImageShape { dim: D2, array: false, ms: false, depth: false }, texel: Some(Texel { ty: NumTy { elem: F32, lanes: 4 }, sign: None }), coord16: false, form: Current, status: true, access: Some(Sample), states_access: true })](%a1, %i2, %i4, i1 1, <2 x i32> zeroinitializer, i1 0, float 0x3F000000, float 0x0, i32 0) convergent arg0( Ref nocapture ) arg1( Ref nocapture )
   %i6 = extractvalue <4 x float> %i5, 0
   %i7 = tail call %t18 @f11 [air Texture(Texture { op: Gather { component: Some(X), compare: false, offset: true }, image: ImageShape { dim: D2, array: false, ms: false, depth: false }, texel: Some(Texel { ty: NumTy { elem: F32, lanes: 4 }, sign: None }), coord16: false, form: Current, status: true, access: Some(Sample), states_access: true })](%a1, %i2, %i4, i1 1, <2 x i32> zeroinitializer, i32 0, i32 0) arg0( Ref nocapture ) arg1( Ref nocapture )
@@ -69,14 +69,14 @@ define %t12 @f3 "sample_pixel_nearest" convergent "approx-func-fp-math"="true" "
 bb0:
   %i0 = and i32 %a3, i32 7
   %i1 = add nsw i32 %i0, i32 4294967292
-  %i2 = insertelement <2 x i32> c54, %i1, i64 0
+  %i2 = insertelement <2 x i32> c53, %i1, i64 0
   %i3 = tail call reassoc nnan ninf nsz arcp contract afn float @f1 [air Convert(Convert { dst: NumTy { elem: F32, lanes: 1 }, dst_kind: Float, src: NumTy { elem: I32, lanes: 1 }, src_kind: Unsigned, src_fp8: None })](%a3)
   %i4 = insertelement <2 x float> poison, %i3, i64 0
-  %i5 = fadd reassoc nnan ninf nsz arcp contract afn <2 x float> %i4, <2 x float> c55
+  %i5 = fadd reassoc nnan ninf nsz arcp contract afn <2 x float> %i4, <2 x float> c54
   %i6 = shufflevector <2 x float> %i5, <2 x float> poison, <0, 0>
   %i7 = tail call %t18 @f10 [air Texture(Texture { op: Sample { compare: false, lod: Bias, offset: true }, image: ImageShape { dim: D2, array: false, ms: false, depth: false }, texel: Some(Texel { ty: NumTy { elem: F32, lanes: 4 }, sign: None }), coord16: false, form: Current, status: true, access: Some(Sample), states_access: true })](%a0, ptr addrspace(2) @g0, %i6, i1 1, %i2, i1 0, float 0x0, float 0x0, i32 0) convergent arg0( Ref nocapture ) arg1( Ref nocapture )
   %i8 = extractvalue <4 x float> %i7, 0
-  %i9 = insertelement <2 x float> c57, %i3, i64 0
+  %i9 = insertelement <2 x float> c56, %i3, i64 0
   %i10 = and i32 %a3, i32 3
   %i11 = tail call %t18 @f12 [air Texture(Texture { op: Sample { compare: false, lod: Bias, offset: true }, image: ImageShape { dim: D2, array: true, ms: false, depth: false }, texel: Some(Texel { ty: NumTy { elem: F32, lanes: 4 }, sign: None }), coord16: false, form: Current, status: true, access: Some(Sample), states_access: true })](%a1, ptr addrspace(2) @g0, %i9, %i10, i1 1, <2 x i32> zeroinitializer, i1 0, float 0x0, float 0x0, i32 0) convergent arg0( Ref nocapture ) arg1( Ref nocapture )
   %i12 = extractvalue <4 x float> %i11, 0
@@ -102,7 +102,7 @@ define %t14 @f5 "sample_pixel_zero" convergent memory(ModRef, NoModRef, NoModRef
 bb0:
   %i0 = tail call reassoc nnan ninf nsz arcp contract afn float @f1 [air Convert(Convert { dst: NumTy { elem: F32, lanes: 1 }, dst_kind: Float, src: NumTy { elem: I32, lanes: 1 }, src_kind: Unsigned, src_fp8: None })](%a2)
   %i1 = insertelement <2 x float> poison, %i0, i64 0
-  %i2 = fadd reassoc nnan ninf nsz arcp contract afn <2 x float> %i1, <2 x float> c55
+  %i2 = fadd reassoc nnan ninf nsz arcp contract afn <2 x float> %i1, <2 x float> c54
   %i3 = shufflevector <2 x float> %i2, <2 x float> poison, <0, 0>
   %i4 = tail call %t18 @f10 [air Texture(Texture { op: Sample { compare: false, lod: Bias, offset: true }, image: ImageShape { dim: D2, array: false, ms: false, depth: false }, texel: Some(Texel { ty: NumTy { elem: F32, lanes: 4 }, sign: None }), coord16: false, form: Current, status: true, access: Some(Sample), states_access: true })](%a0, ptr addrspace(2) @g1, %i3, i1 1, <2 x i32> zeroinitializer, i1 0, float 0x0, float 0x0, i32 0) convergent arg0( Ref nocapture ) arg1( Ref nocapture )
   %i5 = extractvalue <4 x float> %i4, 0
@@ -116,7 +116,7 @@ define %t7 @f6 "sample_bias_kernel" convergent "approx-func-fp-math"="true" "fra
 bb0:
   %i0 = tail call reassoc nnan ninf nsz arcp contract afn float @f1 [air Convert(Convert { dst: NumTy { elem: F32, lanes: 1 }, dst_kind: Float, src: NumTy { elem: I32, lanes: 1 }, src_kind: Unsigned, src_fp8: None })](%a3)
   %i1 = insertelement <2 x float> poison, %i0, i64 0
-  %i2 = fmul reassoc nnan ninf nsz arcp contract afn <2 x float> %i1, <2 x float> c40
+  %i2 = fmul reassoc nnan ninf nsz arcp contract afn <2 x float> %i1, <2 x float> c39
   %i3 = shufflevector <2 x float> %i2, <2 x float> poison, <0, 0>
   %i4 = and i32 %a3, i32 3
   %i5 = tail call reassoc nnan ninf nsz arcp contract afn float @f1 [air Convert(Convert { dst: NumTy { elem: F32, lanes: 1 }, dst_kind: Float, src: NumTy { elem: I32, lanes: 1 }, src_kind: Unsigned, src_fp8: None })](%i4)
@@ -139,7 +139,7 @@ define %t16 @f7 "vertex_bias" convergent memory(Ref, NoModRef, NoModRef) "approx
 bb0:
   %i0 = tail call reassoc nnan ninf nsz arcp contract afn float @f1 [air Convert(Convert { dst: NumTy { elem: F32, lanes: 1 }, dst_kind: Float, src: NumTy { elem: I32, lanes: 1 }, src_kind: Unsigned, src_fp8: None })](%a0)
   %i1 = fmul reassoc nnan ninf nsz arcp contract afn float %i0, float 0x3F000000
-  %i2 = insertelement <2 x float> c59, %i1, i64 0
+  %i2 = insertelement <2 x float> c58, %i1, i64 0
   %i3 = tail call %t18 @f10 [air Texture(Texture { op: Sample { compare: false, lod: Bias, offset: true }, image: ImageShape { dim: D2, array: false, ms: false, depth: false }, texel: Some(Texel { ty: NumTy { elem: F32, lanes: 4 }, sign: None }), coord16: false, form: Current, status: true, access: Some(Sample), states_access: true })](%a1, %a2, %i2, i1 1, <2 x i32> zeroinitializer, i1 0, float 0x3F800000, float 0x0, i32 0) convergent arg0( Ref nocapture ) arg1( Ref nocapture )
   %i4 = extractvalue <4 x float> %i3, 0
   %i5 = insertvalue %t15 undef %i4, 0
@@ -150,10 +150,10 @@ define %t7 @f8 "sample_dynamic_offset" convergent "approx-func-fp-math"="true" "
 bb0:
   %i0 = and i32 %a3, i32 7
   %i1 = add nsw i32 %i0, i32 4294967292
-  %i2 = insertelement <2 x i32> c54, %i1, i64 0
+  %i2 = insertelement <2 x i32> c53, %i1, i64 0
   %i3 = tail call reassoc nnan ninf nsz arcp contract afn float @f1 [air Convert(Convert { dst: NumTy { elem: F32, lanes: 1 }, dst_kind: Float, src: NumTy { elem: I32, lanes: 1 }, src_kind: Unsigned, src_fp8: None })](%a3)
   %i4 = insertelement <2 x float> poison, %i3, i64 0
-  %i5 = fmul reassoc nnan ninf nsz arcp contract afn <2 x float> %i4, <2 x float> c40
+  %i5 = fmul reassoc nnan ninf nsz arcp contract afn <2 x float> %i4, <2 x float> c39
   %i6 = shufflevector <2 x float> %i5, <2 x float> poison, <0, 0>
   %i7 = tail call %t18 @f10 [air Texture(Texture { op: Sample { compare: false, lod: Level, offset: true }, image: ImageShape { dim: D2, array: false, ms: false, depth: false }, texel: Some(Texel { ty: NumTy { elem: F32, lanes: 4 }, sign: None }), coord16: false, form: Current, status: true, access: Some(Sample), states_access: true })](%a0, %a1, %i6, i1 1, %i2, i1 1, float 0x0, float 0x0, i32 0) convergent arg0( Ref nocapture ) arg1( Ref nocapture )
   %i8 = extractvalue <4 x float> %i7, 0
@@ -167,7 +167,7 @@ define %t7 @f9 "lod_query_kernel" convergent memory(ModRef, NoModRef, NoModRef) 
 bb0:
   %i0 = tail call reassoc nnan ninf nsz arcp contract afn float @f1 [air Convert(Convert { dst: NumTy { elem: F32, lanes: 1 }, dst_kind: Float, src: NumTy { elem: I32, lanes: 1 }, src_kind: Unsigned, src_fp8: None })](%a3)
   %i1 = insertelement <2 x float> poison, %i0, i64 0
-  %i2 = fmul reassoc nnan ninf nsz arcp contract afn <2 x float> %i1, <2 x float> c40
+  %i2 = fmul reassoc nnan ninf nsz arcp contract afn <2 x float> %i1, <2 x float> c39
   %i3 = shufflevector <2 x float> %i2, <2 x float> poison, <0, 0>
   %i4 = tail call reassoc nnan ninf nsz arcp contract afn float @f13 [air Texture(Texture { op: CalculateLod { clamped: true }, image: ImageShape { dim: D2, array: false, ms: false, depth: false }, texel: None, coord16: false, form: Current, status: true, access: Some(Sample), states_access: true })](%a0, %a1, %i3, i32 0) convergent arg0( Ref nocapture ) arg1( Ref nocapture )
   %i5 = zext %a3 to i64
@@ -228,7 +228,7 @@ declare %t25 @f13 "air.calculate_clamped_lod_texture_2d" convergent memory(Ref, 
 !md42 = !"air.compile.fast_math_enable"
 !md43 = !"air.compile.framebuffer_fetch_enable"
 !md44 = !"air.sampler_state"
-!md45 = !"Apple metal version 32023.883 (metalfe-32023.883)"
+!md45 = !"Apple metal version 32023.922 (metalfe-32023.922.4)"
 !md46 = !"Metal"
 !md47 = !"omnipotent char"
 !md48 = !"Simple C++ TBAA"
@@ -236,7 +236,7 @@ declare %t25 @f13 "air.calculate_clamped_lod_texture_2d" convergent memory(Ref, 
 !md50 = !"air-alias-scope-samplers"
 !md51 = !"air-alias-scope-textures"
 !md52 = i32 2
-!md53 = %t27 c27
+!md53 = %t27 c26
 !md54 = i32 1
 !md55 = i32 4
 !md56 = i32 7
