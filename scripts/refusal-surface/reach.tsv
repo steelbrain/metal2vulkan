@@ -153,6 +153,7 @@ gap	IndirectCommandUnstridedBuffer	rare	an executed indirect command's buffer bo
 gap	SamplePositionsAtBegin	rare	custom sample positions Vulkan takes only at begin
 gap	InterpolateAtSampleWithPositions	rare	interpolate_at_sample in a pass at custom sample positions
 gap	SharedEventAcrossDevices	rare	a shared event opened on another device
+gap	VkImagePlaneCopy	none	a runtime extension's texture over a plane of the caller's VkImage copied, filled, mipmapped or rendered to
 gap	ViewportDepthRange	rare	viewport depth outside [0, 1] without the device features
 gap	NonFiniteDepthBias	rare	NaN or infinite depth bias
 gap	DepthNeverWithoutAttachment	rare	depth compare Never with no depth attachment

@@ -158,26 +158,40 @@ fn extra_queues_are_made_or_reported_and_the_video_features_enabled() {
             "a device of more than one queue makes the compute one"
         );
     }
-    // The video extensions the device enabled, and the features it reports of them.
+    // The video extensions the device enabled, and the features of their structures it reports,
+    // which the device enabled with them (`enables.rs`: every reported feature of a listed
+    // extension's structure, the required ones or the extension is left off).
     let enabled: Vec<&str> = (VIDEO_EXTENSIONS.iter())
         .filter(|name| device.enables_extension(name))
         .map(|name| name.to_str().unwrap())
         .collect();
-    let mut maintenance1 = vk::PhysicalDeviceVideoMaintenance1FeaturesKHR::default();
-    let mut features = vk::PhysicalDeviceFeatures2::default();
-    if enabled.contains(&"VK_KHR_video_maintenance1") {
-        features = features.push_next(&mut maintenance1);
-        // SAFETY: the device lists the extension; the chain lives for the call.
-        unsafe {
-            raw.instance
-                .get_physical_device_features2(raw.physical_device, &mut features)
-        };
-        assert_eq!(maintenance1.video_maintenance1, vk::TRUE);
+    let names: Vec<CString> = (VIDEO_EXTENSIONS.iter())
+        .filter(|name| device.enables_extension(name))
+        .map(|&name| CString::from(name))
+        .collect();
+    let listed = crate::enables::listed_structures(&names);
+    // SAFETY: the instance and physical device are the device's; the query reads features of
+    // extensions the device lists.
+    let reported =
+        unsafe { crate::enables::listed_reported(raw.instance, raw.physical_device, &listed) };
+    let features: Vec<(&str, bool)> = [
+        ("VK_KHR_video_maintenance1", "videoMaintenance1"),
+        ("VK_KHR_video_maintenance2", "videoMaintenance2"),
+        ("VK_KHR_unified_image_layouts", "unifiedImageLayouts"),
+        ("VK_KHR_unified_image_layouts", "unifiedImageLayoutsVideo"),
+    ]
+    .into_iter()
+    .filter(|(extension, _)| enabled.contains(extension))
+    .map(|(_, feature)| (feature, reported(feature)))
+    .collect();
+    for (feature, on) in &features {
+        if *feature != "unifiedImageLayoutsVideo" {
+            assert!(on, "{feature}: its extension is enabled only with it");
+        }
     }
     eprintln!(
-        "VIDEO-INTEROP: {}: video extensions enabled {enabled:?}, videoMaintenance1 {}",
-        device.name(),
-        maintenance1.video_maintenance1
+        "VIDEO-INTEROP: {}: video extensions enabled {enabled:?}, their features enabled {features:?}",
+        device.name()
     );
     if decode_family.is_some() {
         assert!(enabled.contains(&"VK_KHR_video_decode_queue"));

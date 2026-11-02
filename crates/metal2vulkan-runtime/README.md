@@ -158,7 +158,8 @@ Vulkan-side choices Metal has no counterpart for:
 | `loader` | A Vulkan loader library to open instead of the default ones (the platform's loader by name, then on macOS `$VULKAN_SDK/lib`, `/opt/homebrew/lib` and `/usr/local/lib`). If none opens, `Error::LoaderNotFound` lists each path tried. |
 | `layers`, `layer_settings` | Instance layers, in order, and their settings. |
 | `instance_extensions`, `device_extensions` | Extensions beyond those the runtime enables (a swapchain, for example). |
-| `optional_device_extensions` | Device extensions each device enables only where it can (it lists one, the instance has what it requires, and the device has its features), never refused for one; `Device::enables_extension` says which. |
+| `optional_device_extensions` | Device extensions each device enables only where it can (it lists one, the instance has what it requires, and the device has its features), never refused for one; `Device::enables_extension` says which. A listed extension's feature structure is enabled with it where the runtime knows one (`VK_KHR_video_maintenance1` and `2`'s, `VK_KHR_unified_image_layouts`' with `unifiedImageLayoutsVideo` where the device has it), here and for `device_extensions`. |
+| `extra_queues` | Queues each device makes for the consumer beside its own, one per `VkQueueFlags` entry (a video decode queue, for example), of the first family whose flags contain the entry's; `DeviceHandles::extra_queues` returns them. A device with no queue for an entry is made all the same, says so (`metal2vulkan-extra-queues-absent`), and leaves it out. The runtime never submits to them. Empty by default. |
 | `instance_api_version` | The instance's `apiVersion` (1.2 when unset); a version outside 1.2 to the loader's is refused, never clamped. |
 | `withheld_features`, `withheld_extensions`, `withhold_generated_commands`, `withhold_view_reinterpretation` | Parts of the recommended enables to leave off; the device then compiles for what is enabled. |
 | `messages` | A `MessageSink` for the validation layer's messages and the runtime's notices; without one, notices go to stderr. `MessageSink::with_least_severity` skips messages below a severity (never a degrade notice), and the runtime then formats none of its own lines it would skip. |
@@ -190,7 +191,10 @@ the runtime made.
 
 **The Vulkan objects underneath** (no Metal counterpart; each call is `unsafe`):
 
-- `Device::raw()` gives the entry, instance, physical device, `ash::Device` and queue family.
+- `Device::raw()` gives the entry, instance, physical device, `ash::Device`, queue families, and
+  the extra queues the options asked for (`ExtraQueue`: flags, family, `VkQueue`), which the
+  consumer alone submits to. The runtime's own buffers and images are shared among its own queue
+  families only, so work on an extra queue of another family uses the consumer's own objects.
   `CommandQueue::with_vk_queue` lends a queue's `VkQueue` under the runtime's lock.
 - `Texture::vk_image`, `Buffer::vk_buffer` and `SharedEvent::vk_semaphore` give an object's handle.
   A texture over a buffer's bytes that aliases them gives a linear image (the same one for textures
@@ -200,11 +204,30 @@ the runtime made.
   of memory plane 0.
 - `CommandBuffer::encode_wait_for_vk_semaphore` and `encode_signal_vk_semaphore` order a command
   buffer against the consumer's own work.
+- A shared event's timeline semaphore orders the consumer's submissions against command buffers'
+  `encodeWaitForEvent:` and `encodeSignalEvent:` of the event. Its counter is a signal index, not
+  the event's value: `SharedEvent::vk_wait(value)` answers the counter a submission waits for (or
+  that the value is reached, or not yet signalled), and `unsafe SharedEvent::reserve_vk_signal(value)`
+  reserves the counter one submission signals, after the counter it names, or answers that Metal
+  drops the signal. The device watches for the consumer's signals landing, so command buffers that
+  wait for them run, and keeps the event's value in step.
 - `Device::new_texture_with_vk_image` makes a `Private` texture over the consumer's `VkImage` (a
   swapchain image, for presenting). Placed `IdPlacement::Outside`, it takes no resource ID, so the
   program's textures are numbered as with no window.
 - `Device::new_buffer_with_vk_buffer` makes a buffer over the consumer's `VkBuffer` and memory,
   such as an imported dma-buf, made with `Device::vk_buffer_usage()`. The runtime never frees it.
+- `Device::new_texture_with_vk_image_plane` makes a `Private` texture over one plane of the
+  consumer's multi-planar `VkImage` (`R8`/`RG8` of NV12, `R16`/`RG16` of P010), as
+  `newTextureWithDescriptor:iosurface:plane:` does of an IOSurface plane: the consumer's image is
+  `CONCURRENT` across the runtime's queue families and its own, `MUTABLE_FORMAT` and
+  `EXTENDED_USAGE`, rests in `GENERAL`, and outlives the texture; the runtime views the plane in
+  place and never moves its layout, takes ownership or frees it. A copy, fill, mipmap generation
+  or render pass of the plane is refused (`RuntimeGap::VkImagePlaneCopy`).
+- `Buffer::vk_host_memory` answers where a no-copy buffer's bytes lie in the device's import of
+  the consumer's pages (memory, offset, size, type, `HOST_ALLOCATION` handle type), where they are
+  imported by their pointer in one allocation, so the consumer binds a buffer of its own usage
+  (a video decode's bitstream source) to the same bytes; `None` for copied, dma-buf, read-only or
+  detached pages.
 
 ## The memory model
 

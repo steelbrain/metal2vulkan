@@ -1300,6 +1300,8 @@ enum	metal2vulkan-runtime::TextureProblem	#[derive(Clone, Copy, Debug, PartialEq
 enum	metal2vulkan-runtime::ViewProblem	#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum ViewProblem
 enum	metal2vulkan-runtime::VisibilityProblem	#[derive(Clone, Debug, PartialEq, Eq)] #[non_exhaustive] pub enum VisibilityProblem
 enum	metal2vulkan-runtime::VisibilityResultMode	#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum VisibilityResultMode
+enum	metal2vulkan-runtime::VkEventSignal	#[derive(Clone, Copy, Debug, PartialEq, Eq)] #[non_exhaustive] pub enum VkEventSignal
+enum	metal2vulkan-runtime::VkEventWait	#[derive(Clone, Copy, Debug, PartialEq, Eq)] #[non_exhaustive] pub enum VkEventWait
 enum	metal2vulkan-runtime::WrappedBufferProblem	#[derive(Clone, Copy, Debug, PartialEq, Eq)] #[non_exhaustive] pub enum WrappedBufferProblem
 enum	metal2vulkan-runtime::WrappedImageProblem	#[derive(Clone, Copy, Debug, PartialEq, Eq)] #[non_exhaustive] pub enum WrappedImageProblem
 enum	metal2vulkan::bind::AccessClass	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum AccessClass
@@ -1995,6 +1997,7 @@ field	metal2vulkan-runtime::DegradeNotice.object_id	pub object_id: Option<Object
 field	metal2vulkan-runtime::DegradeNotice.reason	pub reason: String
 field	metal2vulkan-runtime::DeviceHandles.device	pub device: &'a ash::Device
 field	metal2vulkan-runtime::DeviceHandles.entry	pub entry: &'a ash::Entry
+field	metal2vulkan-runtime::DeviceHandles.extra_queues	pub extra_queues: &'a [ExtraQueue]
 field	metal2vulkan-runtime::DeviceHandles.instance	pub instance: &'a ash::Instance
 field	metal2vulkan-runtime::DeviceHandles.instance_api_version	pub instance_api_version: metal2vulkan::vk::ApiVersion
 field	metal2vulkan-runtime::DeviceHandles.physical_device	pub physical_device: vk::PhysicalDevice
@@ -2002,6 +2005,7 @@ field	metal2vulkan-runtime::DeviceHandles.queue_families	pub queue_families: &'a
 field	metal2vulkan-runtime::DeviceHandles.queue_family	pub queue_family: u32
 field	metal2vulkan-runtime::DeviceOptions.announce_each	pub announce_each: BTreeSet<crate::Degradation>
 field	metal2vulkan-runtime::DeviceOptions.device_extensions	pub device_extensions: Vec<CString>
+field	metal2vulkan-runtime::DeviceOptions.extra_queues	pub extra_queues: Vec<vk::QueueFlags>
 field	metal2vulkan-runtime::DeviceOptions.fail_in_place_check	pub fail_in_place_check: bool
 field	metal2vulkan-runtime::DeviceOptions.gpu_times_from_host	pub gpu_times_from_host: bool
 field	metal2vulkan-runtime::DeviceOptions.instance_api_version	pub instance_api_version: Option<ApiVersion>
@@ -2083,6 +2087,9 @@ field	metal2vulkan-runtime::ExecutedCommands.unread_states_can_encode	pub unread
 field	metal2vulkan-runtime::ExecutedCommands.writable	pub writable: Vec<IndirectCommandBuffer>
 field	metal2vulkan-runtime::ExtensionFeature.extension	pub extension: &'static str
 field	metal2vulkan-runtime::ExtensionFeature.feature	pub feature: &'static str
+field	metal2vulkan-runtime::ExtraQueue.family	pub family: u32
+field	metal2vulkan-runtime::ExtraQueue.flags	pub flags: vk::QueueFlags
+field	metal2vulkan-runtime::ExtraQueue.queue	pub queue: vk::Queue
 field	metal2vulkan-runtime::FailedPipeline.draw	pub draw: usize
 field	metal2vulkan-runtime::FailedPipeline.encoder	pub encoder: usize
 field	metal2vulkan-runtime::FailedPipeline.error	pub error: Error
@@ -2431,6 +2438,11 @@ field	metal2vulkan-runtime::VkBufferMemory.contents	pub contents: Option<NonNull
 field	metal2vulkan-runtime::VkBufferMemory.memory	pub memory: vk::DeviceMemory
 field	metal2vulkan-runtime::VkBufferMemory.offset	pub offset: u64
 field	metal2vulkan-runtime::VkBufferMemory.type_index	pub type_index: u32
+field	metal2vulkan-runtime::VkHostMemory.handle_type	pub handle_type: vk::ExternalMemoryHandleTypeFlags
+field	metal2vulkan-runtime::VkHostMemory.memory	pub memory: vk::DeviceMemory
+field	metal2vulkan-runtime::VkHostMemory.offset	pub offset: u64
+field	metal2vulkan-runtime::VkHostMemory.size	pub size: u64
+field	metal2vulkan-runtime::VkHostMemory.type_index	pub type_index: u32
 field	metal2vulkan-runtime::VkImageLayouts.home	pub home: ImageLayout
 field	metal2vulkan-runtime::VkImageLayouts.initial	pub initial: ImageLayout
 field	metal2vulkan-runtime::WarmStatistics.libraries_kept	pub libraries_kept: u64
@@ -7550,6 +7562,7 @@ method	metal2vulkan-runtime::Buffer::set_label	pub fn set_label(&self, label: &s
 method	metal2vulkan-runtime::Buffer::set_purgeable_state	pub fn set_purgeable_state(&self, state: PurgeableState) -> Result<PurgeableState, Error>
 method	metal2vulkan-runtime::Buffer::storage_mode	pub fn storage_mode(&self) -> StorageMode
 method	metal2vulkan-runtime::Buffer::vk_buffer	pub unsafe fn vk_buffer(&self) -> (vk::Buffer, u64)
+method	metal2vulkan-runtime::Buffer::vk_host_memory	pub unsafe fn vk_host_memory(&self) -> Option<VkHostMemory>
 method	metal2vulkan-runtime::BufferDescriptor::new	pub fn new(length: u64, resource_options: ResourceOptions, contents: BufferContents<'a>) -> BufferDescriptor<'a>
 method	metal2vulkan-runtime::BufferDescriptor::with_placement	pub fn with_placement(self, placement: AddressPlacement) -> BufferDescriptor<'a>
 method	metal2vulkan-runtime::BufferDescriptor::with_pool_slot	pub fn with_pool_slot(self, pool: &'a AddressPool, offset: u64) -> BufferDescriptor<'a>
@@ -7741,6 +7754,7 @@ method	metal2vulkan-runtime::Device::new_shared_texture_with_range_token	pub fn 
 method	metal2vulkan-runtime::Device::new_texture	pub fn new_texture(&self, descriptor: &TextureDescriptor) -> Result<Texture, Error>
 method	metal2vulkan-runtime::Device::new_texture_with_range_token	pub fn new_texture_with_range_token(&self, descriptor: &TextureDescriptor, token: RangeToken) -> Result<Texture, Error>
 method	metal2vulkan-runtime::Device::new_texture_with_vk_image	pub unsafe fn new_texture_with_vk_image(&self, descriptor: &TextureDescriptor, image: vk::Image, info: &vk::ImageCreateInfo<'_>, layouts: VkImageLayouts) -> Result<Texture, Error>
+method	metal2vulkan-runtime::Device::new_texture_with_vk_image_plane	pub unsafe fn new_texture_with_vk_image_plane(&self, descriptor: &TextureDescriptor, image: vk::Image, info: &vk::ImageCreateInfo<'_>, plane: u32) -> Result<Texture, Error>
 method	metal2vulkan-runtime::Device::new_tile_render_pipeline_state	pub fn new_tile_render_pipeline_state(&self, descriptor: &TileRenderPipelineDescriptor, options: &PipelineOptions) -> Result<RenderPipelineState, Error>
 method	metal2vulkan-runtime::Device::new_tile_render_pipeline_state_with_reflection	pub fn new_tile_render_pipeline_state_with_reflection(&self, descriptor: &TileRenderPipelineDescriptor, options: &PipelineOptions) -> Result<(RenderPipelineState, Option<RenderPipelineReflection>), Error>
 method	metal2vulkan-runtime::Device::pixel_format_capabilities	pub fn pixel_format_capabilities(&self, format: PixelFormat) -> FormatCapabilities
@@ -8198,10 +8212,12 @@ method	metal2vulkan-runtime::SharedEvent::device	pub fn device(&self) -> Option<
 method	metal2vulkan-runtime::SharedEvent::label	pub fn label(&self) -> Option<String>
 method	metal2vulkan-runtime::SharedEvent::new_shared_event_handle	pub fn new_shared_event_handle(&self) -> SharedEventHandle
 method	metal2vulkan-runtime::SharedEvent::notify_listener	pub fn notify_listener(&self, listener: &SharedEventListener, value: u64, block: SharedEventNotification)
+method	metal2vulkan-runtime::SharedEvent::reserve_vk_signal	pub unsafe fn reserve_vk_signal(&self, value: u64) -> Result<VkEventSignal, Error>
 method	metal2vulkan-runtime::SharedEvent::set_label	pub fn set_label(&self, label: &str)
 method	metal2vulkan-runtime::SharedEvent::set_signaled_value	pub fn set_signaled_value(&self, value: u64)
 method	metal2vulkan-runtime::SharedEvent::signaled_value	pub fn signaled_value(&self) -> u64
 method	metal2vulkan-runtime::SharedEvent::vk_semaphore	pub unsafe fn vk_semaphore(&self) -> vk::Semaphore
+method	metal2vulkan-runtime::SharedEvent::vk_wait	pub fn vk_wait(&self, value: u64) -> VkEventWait
 method	metal2vulkan-runtime::SharedEvent::wait_until_signaled_value	pub fn wait_until_signaled_value(&self, value: u64, timeout: Duration) -> bool
 method	metal2vulkan-runtime::SharedEventHandle::label	pub fn label(&self) -> Option<String>
 method	metal2vulkan-runtime::SharedEventListener::new	pub fn new() -> SharedEventListener
@@ -9348,6 +9364,7 @@ struct	metal2vulkan-runtime::Event	#[derive(Clone)] pub struct Event(Arc<EventSh
 struct	metal2vulkan-runtime::ExecutedCommand	#[derive(Clone, Copy, Debug, PartialEq, Eq)] #[non_exhaustive] pub struct ExecutedCommand
 struct	metal2vulkan-runtime::ExecutedCommands	#[derive(Clone, Debug)] #[non_exhaustive] pub struct ExecutedCommands
 struct	metal2vulkan-runtime::ExtensionFeature	#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub struct ExtensionFeature
+struct	metal2vulkan-runtime::ExtraQueue	#[derive(Clone, Copy, PartialEq, Eq)] #[non_exhaustive] pub struct ExtraQueue
 struct	metal2vulkan-runtime::FailedPipeline	#[derive(Clone, Debug)] #[non_exhaustive] pub struct FailedPipeline
 struct	metal2vulkan-runtime::Fence	#[derive(Clone)] pub struct Fence(Arc<FenceShared>)
 struct	metal2vulkan-runtime::FormatCapabilities	#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)] pub struct FormatCapabilities(u8)
@@ -9438,6 +9455,7 @@ struct	metal2vulkan-runtime::Viewport	#[derive(Clone, Copy, Debug, Default, Part
 struct	metal2vulkan-runtime::VisibleFunctionTable	#[derive(Clone)] pub struct VisibleFunctionTable(Arc<TableShared>)
 struct	metal2vulkan-runtime::VisibleFunctionTableDescriptor	#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)] #[non_exhaustive] pub struct VisibleFunctionTableDescriptor
 struct	metal2vulkan-runtime::VkBufferMemory	#[derive(Clone, Copy, Debug, PartialEq, Eq)] #[non_exhaustive] pub struct VkBufferMemory
+struct	metal2vulkan-runtime::VkHostMemory	#[derive(Clone, Copy, PartialEq, Eq)] #[non_exhaustive] pub struct VkHostMemory
 struct	metal2vulkan-runtime::VkImageLayouts	#[derive(Clone, Copy, Debug, PartialEq, Eq)] #[non_exhaustive] pub struct VkImageLayouts
 struct	metal2vulkan-runtime::VkResultCode	#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] pub struct VkResultCode(pub i32)
 struct	metal2vulkan-runtime::WarmStatistics	#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)] #[non_exhaustive] pub struct WarmStatistics
@@ -9856,6 +9874,7 @@ trait-impl	metal2vulkan-runtime::Error impl std::error::Error	impl std::error::E
 trait-impl	metal2vulkan-runtime::Event impl std::fmt::Debug	impl std::fmt::Debug for Event
 trait-impl	metal2vulkan-runtime::EventRef impl From<&'a Event>	impl<'a> From<&'a Event> for EventRef<'a>
 trait-impl	metal2vulkan-runtime::EventRef impl From<&'a SharedEvent>	impl<'a> From<&'a SharedEvent> for EventRef<'a>
+trait-impl	metal2vulkan-runtime::ExtraQueue impl std::fmt::Debug	impl std::fmt::Debug for ExtraQueue
 trait-impl	metal2vulkan-runtime::Fence impl Eq	impl Eq for Fence
 trait-impl	metal2vulkan-runtime::Fence impl PartialEq	impl PartialEq for Fence
 trait-impl	metal2vulkan-runtime::Fence impl std::fmt::Debug	impl std::fmt::Debug for Fence
@@ -9927,6 +9946,7 @@ trait-impl	metal2vulkan-runtime::TextureSwizzleChannels impl Default	impl Defaul
 trait-impl	metal2vulkan-runtime::VisibleFunctionTable impl Eq	impl Eq for VisibleFunctionTable
 trait-impl	metal2vulkan-runtime::VisibleFunctionTable impl PartialEq	impl PartialEq for VisibleFunctionTable
 trait-impl	metal2vulkan-runtime::VisibleFunctionTable impl std::fmt::Debug	impl std::fmt::Debug for VisibleFunctionTable
+trait-impl	metal2vulkan-runtime::VkHostMemory impl std::fmt::Debug	impl std::fmt::Debug for VkHostMemory
 trait-impl	metal2vulkan::bind::ArgumentLayoutError impl From<Error>	impl From<Error> for ArgumentLayoutError
 trait-impl	metal2vulkan::bind::DrawCommands impl Default	impl Default for DrawCommands
 trait-impl	metal2vulkan::bind::DrawReplayRule impl fmt::Display	impl fmt::Display for DrawReplayRule
@@ -11938,6 +11958,7 @@ variant	metal2vulkan-runtime::RuntimeGap::TileAndFragmentImageblocks	TileAndFrag
 variant	metal2vulkan-runtime::RuntimeGap::TileAtSampleCount	TileAtSampleCount
 variant	metal2vulkan-runtime::RuntimeGap::VertexFetchPast4GiB	VertexFetchPast4GiB { buffer_index: u32, reach: u64 }
 variant	metal2vulkan-runtime::RuntimeGap::ViewportDepthRange	ViewportDepthRange
+variant	metal2vulkan-runtime::RuntimeGap::VkImagePlaneCopy	VkImagePlaneCopy
 variant	metal2vulkan-runtime::RuntimeGap::WideLines	WideLines
 variant	metal2vulkan-runtime::RuntimeGap::WriteSwizzle	WriteSwizzle
 variant	metal2vulkan-runtime::SemaphoreProblem::Null	Null
@@ -12002,6 +12023,11 @@ variant	metal2vulkan-runtime::VisibilityProblem::OffsetReused	OffsetReused { off
 variant	metal2vulkan-runtime::VisibilityResultMode::Boolean	Boolean
 variant	metal2vulkan-runtime::VisibilityResultMode::Counting	Counting
 variant	metal2vulkan-runtime::VisibilityResultMode::Disabled	Disabled
+variant	metal2vulkan-runtime::VkEventSignal::Counter	Counter { counter: u64, after: Option<u64> }
+variant	metal2vulkan-runtime::VkEventSignal::Dropped	Dropped
+variant	metal2vulkan-runtime::VkEventWait::Counter	Counter(u64)
+variant	metal2vulkan-runtime::VkEventWait::NotYet	NotYet
+variant	metal2vulkan-runtime::VkEventWait::Reached	Reached
 variant	metal2vulkan-runtime::WrappedBufferProblem::Contents	Contents
 variant	metal2vulkan-runtime::WrappedBufferProblem::MemoryType	MemoryType { index: u32 }
 variant	metal2vulkan-runtime::WrappedBufferProblem::NullBuffer	NullBuffer
@@ -12019,6 +12045,8 @@ variant	metal2vulkan-runtime::WrappedImageProblem::Layers	Layers { image: u32, t
 variant	metal2vulkan-runtime::WrappedImageProblem::Layout	Layout { layout: ImageLayout }
 variant	metal2vulkan-runtime::WrappedImageProblem::Levels	Levels { image: u32, texture: u32 }
 variant	metal2vulkan-runtime::WrappedImageProblem::NullImage	NullImage
+variant	metal2vulkan-runtime::WrappedImageProblem::Plane	Plane { plane: u32, planes: u32 }
+variant	metal2vulkan-runtime::WrappedImageProblem::PlaneFormat	PlaneFormat { plane: Format, texture: Format }
 variant	metal2vulkan-runtime::WrappedImageProblem::Protected	Protected
 variant	metal2vulkan-runtime::WrappedImageProblem::QueueFamily	QueueFamily
 variant	metal2vulkan-runtime::WrappedImageProblem::Samples	Samples { image: SampleCountFlags, texture: SampleCountFlags }
