@@ -2716,6 +2716,7 @@ field	metal2vulkan-runtime::WorkCounts.mipmap_first_levels_fetched	pub mipmap_fi
 field	metal2vulkan-runtime::WorkCounts.mipmaps_filtered	pub mipmaps_filtered: u64
 field	metal2vulkan-runtime::WorkCounts.missed_completion_wakes	pub missed_completion_wakes: u64
 field	metal2vulkan-runtime::WorkCounts.modifier_feature_queries	pub modifier_feature_queries: u64
+field	metal2vulkan-runtime::WorkCounts.nearest_width_line_draws	pub nearest_width_line_draws: u64
 field	metal2vulkan-runtime::WorkCounts.new_buffer_bytes_cleared	pub new_buffer_bytes_cleared: u64
 field	metal2vulkan-runtime::WorkCounts.new_buffer_zero_fills	pub new_buffer_zero_fills: u64
 field	metal2vulkan-runtime::WorkCounts.no_copy_lies_read	pub no_copy_lies_read: u64
@@ -5032,6 +5033,7 @@ macro-member	metal2vulkan-runtime::Degradation::IsolatedIndexBytes	IsolatedIndex
 macro-member	metal2vulkan-runtime::Degradation::LandedVisibilityResults	LandedVisibilityResults = "landed-visibility-results", Performance,
 macro-member	metal2vulkan-runtime::Degradation::LinearAttachmentClearCopies	LinearAttachmentClearCopies = "linear-attachment-clear-copies", Performance,
 macro-member	metal2vulkan-runtime::Degradation::LinearAttachmentCopies	LinearAttachmentCopies = "linear-attachment-copies", Performance,
+macro-member	metal2vulkan-runtime::Degradation::LinesAtNearestWidth	LinesAtNearestWidth = "lines-at-nearest-width", Precision,
 macro-member	metal2vulkan-runtime::Degradation::LinkedSamplerNumbering	LinkedSamplerNumbering = "linked-sampler-numbering";
 macro-member	metal2vulkan-runtime::Degradation::LoopedSampleOutputs	LoopedSampleOutputs = "looped-sample-outputs";
 macro-member	metal2vulkan-runtime::Degradation::MemorylessBacked	MemorylessBacked = "memoryless-backed", Performance,

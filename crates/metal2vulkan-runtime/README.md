@@ -456,22 +456,28 @@ measured on an Apple M3 Max (macOS 27.0.1), Metal draws `w' = floor(16 w) / 16` 
 ordinary lines, at every other `w'` the parallelogram Vulkan's non-strict wide lines may be (its
 minor-axis edges `w'` long through the endpoints, the ends not extended), at 0 as at 1/16. A strip
 or loop draws one parallelogram per segment; triangles in fill mode `Lines` draw their edges so.
-The runtime draws each draw at `w' != 1` by one of two routes, counted
-(`WorkCounts::device_wide_line_draws`, `line_band_draws`):
+The runtime draws each draw at `w' != 1` that draws a primitive by one of three routes, counted
+(`WorkCounts::device_wide_line_draws`, `line_band_draws`, `nearest_width_line_draws`); a direct
+draw whose vertices or indices complete no primitive of its type draws nothing, as Metal's:
 
 | Device | Route |
 |---|---|
 | `wideLines`, non-strict, parallelogram wide lines, `w' > 1` on the granularity | Its own lines, exactly Metal's |
 | `wideLines`, its lines otherwise (strict, not stated as parallelograms, `w' < 1`, off the granularity) | Its own lines, announced `device-wide-lines` (`WideLinePolicy::Device`, the default); under `WideLinePolicy::Exact` (`DevicePolicy::exact_answers()`) the band |
 | No `wideLines` (MoltenVK), `w'` outside `lineWidthRange`, or `w' = 0` | The band |
+| What neither draws | Its own lines at the width nearest Metal's they draw (clamped into `lineWidthRange`, 1 without `wideLines`), announced `lines-at-nearest-width` |
 
 The band is the pipeline's band variant: two triangles over the parallelogram through a
 tessellation control and evaluation stage the translator adds (docs/API.md section 4), a strip or
-loop drawn as the list of its segments. Without `tessellationShader` a line the device's lines do
-not draw is refused `Unsupported` (`Feature::WideLines`, needing it). Refused
-`NotImplemented(RuntimeGap::WideLines)`: a triangle's edges in fill mode `Lines` and a mesh draw's
-lines the device's lines do not draw, an amplified band, and a wide line in an execution or a
-rasterization-rate-mapped pass. docs/FAST-PATHS.md records the choice and the known gaps.
+loop drawn as the list of its segments. Neither route draws, so the nearest width takes: a
+triangle's edges in fill mode `Lines` and a mesh draw's lines the device's lines do not draw (1
+pixel wide on MoltenVK), a line on a device without `tessellationShader` whose lines do not draw
+it, an amplified band, and every wide line in an execution or a rasterization-rate-mapped pass,
+whose width Metal's answer is not measured for. Refused `NotImplemented(RuntimeGap::WideLines)`: a
+strip's band whose list of segments the runtime cannot draw, and `Unsupported`
+(`Feature::WideLines`) where the translator does not build the band variant (a vertex function
+that selects a slice or viewport, barycentric weights, synthesized geometry, multiview).
+docs/FAST-PATHS.md records the choice and the known gaps.
 
 ## GPU families
 

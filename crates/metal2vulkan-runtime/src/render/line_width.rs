@@ -51,14 +51,11 @@
 //!   the parallelogram is the same either way.
 //! - **Nearest**: the device's own lines at the width nearest Metal's they draw (`w'`, 1/16 at 0,
 //!   clamped into `lineWidthRange` where it enables `wideLines`, else 1), where neither route above
-//!   draws `w'`,
-//!   announced (`Degradation::LinesAtNearestWidth`, with why): a triangle's edges in fill mode
-//!   `Lines` and a mesh draw's lines, which the band does not draw; a line without
+//!   draws `w'`, announced (`Degradation::LinesAtNearestWidth`, with why): a triangle's edges in
+//!   fill mode `Lines` and a mesh draw's lines, which the band does not draw; a line without
 //!   `tessellationShader`; a band under vertex amplification above 1 (its viewports); and every
 //!   line drawn in a rasterization-rate-mapped pass or as an execution's command, whose width
-//!   Metal's answer is not measured for (the band takes viewport 0's extent and lists its strips
-//!   before the pass, which neither has). Thinner than Metal's line above the range or without
-//!   `wideLines`, wider below it. A later band of the edges would take them from this route.
+//!   Metal's answer is not measured for. Without `wideLines` they are 1 pixel wide whatever `w'`.
 //!
 //! Refused (`NotImplemented(RuntimeGap::WideLines)`): a line strip's band whose list of segments
 //! the runtime cannot draw (`render/restart.rs`, as for a list of the last provoking vertex); and
@@ -367,34 +364,40 @@ fn announce_nearest_lines(
     (w, drawn): (f32, f32),
     why: Unrouted,
 ) {
-    let limits = device.compile_device().profile().limits();
-    let [low, high] = limits.line_width_range_bits.map(f32::from_bits);
-    let wide_lines =
-        (device.compile_device().profile().enabled().features).contains(&VkFeature::WideLines);
-    let lines = match wide_lines {
-        true => format!("its lines draw widths in [{low}, {high}] (lineWidthRange)"),
-        false => "it draws lines 1 pixel wide alone (no wideLines)".to_owned(),
+    let profile = device.compile_device().profile();
+    let [low, high] = profile.limits().line_width_range_bits.map(f32::from_bits);
+    let range = match profile.enabled().features.contains(&VkFeature::WideLines) {
+        true => format!("lineWidthRange [{low}, {high}]"),
+        false => "no wideLines: 1 pixel alone".to_owned(),
     };
-    let why = match why {
-        Unrouted::Unbanded => {
-            "a triangle's edges in fill mode Lines or a mesh draw's lines, which the runtime's \
-             band does not draw"
-        }
-        Unrouted::Untessellated => "the band of two triangles needs tessellationShader",
-        Unrouted::Amplified => "the band of two triangles does not draw amplified views",
-        Unrouted::RateMapped => {
-            "a rasterization-rate-mapped pass, whose lines Metal's width is not measured for"
-        }
-        Unrouted::Executed => {
-            "an execution's command, whose lines Metal's width is not measured for"
-        }
+    let (what, cause) = match why {
+        Unrouted::Unbanded => (
+            "a triangle's edges in fill mode Lines or a mesh's lines",
+            "the runtime's band of two triangles draws lines alone",
+        ),
+        Unrouted::Untessellated => (
+            "lines",
+            "the band of two triangles needs tessellationShader",
+        ),
+        Unrouted::Amplified => (
+            "lines",
+            "the band does not draw vertex amplification's views",
+        ),
+        Unrouted::RateMapped => (
+            "lines",
+            "Metal's width is not measured in a rasterization-rate-mapped pass",
+        ),
+        Unrouted::Executed => (
+            "lines",
+            "Metal's width is not measured for an execution's commands",
+        ),
     };
     device.degrade(Degradation::LinesAtNearestWidth, || {
         (
-            format!("{call}: a draw of lines at setLineWidth: {w}"),
+            format!("{call}: a draw of {what} at setLineWidth: {w}"),
             format!(
-                "the device draws them as its own lines {drawn} pixels wide, the width nearest \
-                 Metal's {w} it draws: {lines}, and {why}"
+                "drawn by the device's own lines {drawn} pixels wide, the width nearest Metal's \
+                 they draw ({range}), as {cause}"
             ),
         )
     });
