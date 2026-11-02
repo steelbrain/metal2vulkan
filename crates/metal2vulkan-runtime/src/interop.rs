@@ -196,6 +196,80 @@ impl Buffer {
     pub unsafe fn vk_buffer(&self) -> (vk::Buffer, u64) {
         self.at_for(0, ReadApart::VkBuffer)
     }
+
+    /// No Metal counterpart (an interop hook): where the buffer's byte 0 lies in Vulkan memory,
+    /// where its bytes are the caller's host pages in place, in one `VkDeviceMemory` the device
+    /// imported by their pointer (`VK_EXT_external_memory_host`): a no-copy buffer's
+    /// (`newBufferWithBytesNoCopy:length:options:deallocator:`), or a buffer's in a heap over the
+    /// caller's host memory, whose pages the device imported by their pointer
+    /// ([`HostBacking::ImportedByPointer`](crate::HostBacking::ImportedByPointer)) or bound in its
+    /// import of a guest RAM chunk ([`HostBacking::InHostRam`](crate::HostBacking::InHostRam)). A
+    /// `VkBuffer` of the caller's own bound there uses the bytes the runtime's commands use, with
+    /// a usage the runtime's buffers lack (a video decode's bitstream source,
+    /// `VK_BUFFER_USAGE_VIDEO_DECODE_SRC_BIT_KHR`); Vulkan asks it to name the answer's
+    /// [`handle_type`](VkHostMemory::handle_type) in its `VkExternalMemoryBufferCreateInfo`. The
+    /// import is never a dedicated allocation, so any number of buffers bind to it.
+    ///
+    /// `None` for every other buffer: one in the device's own memory or the caller's `VkBuffer`;
+    /// a copied host buffer ([`HostBacking::Copied`](crate::HostBacking::Copied)), whose memory is
+    /// a copy the runtime brings in step with the pages only at its own commits and completions;
+    /// pages imported as dma-bufs (several allocations, sparsely bound); pages of Metal's private
+    /// option bit 24, whose import is of a read-only view that drops the GPU's writes; a detached
+    /// buffer; and an import the device released while idle and could not make again (the device
+    /// is then lost). As [`vk_buffer`](Self::vk_buffer) does, the call keeps an import the device
+    /// would release while idle imported for good.
+    ///
+    /// # Safety
+    ///
+    /// The memory stays the runtime's: the caller never frees or maps it, and the buffers it
+    /// binds to it are destroyed, their submissions completed, before the answer ends. The
+    /// answer holds while the buffer lives and lies in the same pages: until the buffer's (for a
+    /// heap's buffer, its heap's) [`rebind_bytes_no_copy`](Self::rebind_bytes_no_copy) or
+    /// [`detach_backing`](Self::detach_backing). The caller orders its work on the bytes against
+    /// the runtime's (a shared event's semaphore: [`SharedEvent::vk_wait`],
+    /// [`SharedEvent::reserve_vk_signal`]) and against the host's writes to the pages, as for any
+    /// use of the buffer.
+    pub unsafe fn vk_host_memory(&self) -> Option<VkHostMemory> {
+        self.host_memory_at(0)
+    }
+}
+
+/// No Metal counterpart: where a buffer's bytes lie in the device's import of the caller's host
+/// pages ([`Buffer::vk_host_memory`]).
+#[non_exhaustive]
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub struct VkHostMemory {
+    /// The import: memory made with `VkImportMemoryHostPointerInfoEXT` over the pages, or over a
+    /// guest RAM chunk the pages lie in.
+    pub memory: vk::DeviceMemory,
+    /// Where the buffer's byte 0 lies in `memory`.
+    pub offset: u64,
+    /// The bytes of `memory` from `offset` that are the imported pages': the buffer's length, and
+    /// the rest of the import past it.
+    pub size: u64,
+    /// The memory's type (`VkMemoryAllocateInfo::memoryTypeIndex`), which a buffer bound to it
+    /// takes (`VkMemoryRequirements::memoryTypeBits`).
+    pub type_index: u32,
+    /// The handle type the memory was imported as, which a `VkBuffer` bound to it names in its
+    /// `VkExternalMemoryBufferCreateInfo::handleTypes`:
+    /// `VK_EXTERNAL_MEMORY_HANDLE_TYPE_HOST_ALLOCATION_BIT_EXT`.
+    pub handle_type: vk::ExternalMemoryHandleTypeFlags,
+}
+
+impl std::fmt::Debug for VkHostMemory {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // `ash`'s flags print only with its `debug` feature, which the runtime leaves off.
+        f.debug_struct("VkHostMemory")
+            .field("memory", &self.memory)
+            .field("offset", &self.offset)
+            .field("size", &self.size)
+            .field("type_index", &self.type_index)
+            .field(
+                "handle_type",
+                &format_args!("{:#x}", self.handle_type.as_raw()),
+            )
+            .finish()
+    }
 }
 
 impl SharedEvent {

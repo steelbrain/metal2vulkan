@@ -760,6 +760,37 @@ impl HostPages {
         self.import.copied()
     }
 
+    /// Where byte `offset` of the bytes lying in them lies in their import's memory, for the
+    /// caller ([`Buffer::vk_host_memory`](crate::Buffer::vk_host_memory)): read apart as the
+    /// buffer's `VkBuffer` is (`ReadApart::VkBuffer`), which keeps a releasable import imported
+    /// for good. `None` where that memory is not one import of the pages themselves by their
+    /// pointer, alone or a guest RAM chunk's: a copy of them, imports of dma-bufs, an import of a
+    /// read-only view of them, or the device's stand-in for an import it could not make again.
+    fn in_import(&self, offset: u64) -> Option<crate::VkHostMemory> {
+        let import = &self.import;
+        if import.copied() || import.drops_writes() || import.shape.over_dma_buf {
+            return None;
+        }
+        let pages = import.pages(ReadApart::VkBuffer);
+        #[cfg(unix)]
+        if matches!(pages, ImportPages::StandIn(_)) {
+            return None;
+        }
+        let placement = &pages.memory.placement;
+        if placement.over_dma_buf() || placement.over_read_only_view() || placement.over_own_pages()
+        {
+            return None;
+        }
+        let at = pages.offset + offset;
+        Some(crate::VkHostMemory {
+            memory: placement.memory,
+            offset: placement.offset + at,
+            size: placement.size().saturating_sub(at),
+            type_index: placement.type_index(),
+            handle_type: vk::ExternalMemoryHandleTypeFlags::HOST_ALLOCATION_EXT,
+        })
+    }
+
     /// Whether they are bound in the device's import of a chunk of a guest RAM (`host_ram.rs`),
     /// with no import of their own.
     pub(super) fn in_ram_chunk(&self) -> bool {
@@ -3232,6 +3263,23 @@ impl Buffer {
             }) => cell.watch(views),
             Bytes::Own(_) => {}
             Bytes::Heap(bytes) => bytes.bytes.watch_views(views),
+        }
+    }
+
+    /// Where the buffer's byte `offset` lies in the device's import of the caller's host pages
+    /// it lies in now ([`HostPages::in_import`]): `None` for a buffer over no host pages, a
+    /// detached one, or one whose pages' memory is no such import.
+    pub(super) fn host_memory_at(&self, offset: u64) -> Option<crate::VkHostMemory> {
+        match &self.0.bytes {
+            Bytes::Own(OwnBytes {
+                lie: Lie::Host(cell),
+                ..
+            }) => match cell.lying() {
+                Lying::In(pages) => pages.in_import(offset),
+                Lying::Detached(_) => None,
+            },
+            Bytes::Own(_) => None,
+            Bytes::Heap(bytes) => bytes.bytes.host_memory_at(bytes.offset + offset),
         }
     }
 

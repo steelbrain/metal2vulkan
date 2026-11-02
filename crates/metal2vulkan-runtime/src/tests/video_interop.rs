@@ -16,9 +16,9 @@
 use super::blit_holds::{Scratch, WAIT};
 use crate::{
     Buffer, CommandBufferStatus, CommandQueue, ComputePipelineState, Device, DeviceKind,
-    DeviceOptions, ExtraQueue, Library, MessageSink, PipelineOptions, Region, ResourceOptions,
-    ShaderCacheOptions, Size, Texture, TextureDescriptor, VkBufferMemory, VkEventSignal,
-    VkEventWait,
+    DeviceOptions, ExtraQueue, HostBacking, HostMemory, Library, MessageSink, PipelineOptions,
+    Region, ResourceOptions, ShaderCacheOptions, Size, Texture, TextureDescriptor, VkBufferMemory,
+    VkEventSignal, VkEventWait,
 };
 use ash::vk;
 use metal2vulkan::metal::{PixelFormat, TextureUsage};
@@ -922,4 +922,148 @@ fn a_texture_over_each_plane_of_an_nv12_image_reads_its_bytes() {
     );
     drop((command_buffer, luma_texture, chroma_texture));
     drop(nv12);
+}
+
+/// Page-aligned host memory of the test's own, zeroed.
+struct Pages(NonNull<u8>);
+
+impl Pages {
+    const BYTES: usize = 1 << 20;
+
+    fn layout() -> std::alloc::Layout {
+        // 16 KiB: a page on every host the tests run on.
+        std::alloc::Layout::from_size_align(Pages::BYTES, 1 << 14).unwrap()
+    }
+
+    fn new() -> Pages {
+        // SAFETY: a layout of non-zero size.
+        let pointer = unsafe { std::alloc::alloc_zeroed(Pages::layout()) };
+        Pages(NonNull::new(pointer).unwrap())
+    }
+
+    /// Its bytes.
+    fn bytes(&self) -> &[u8] {
+        // SAFETY: allocated in `new`, and no command writes them now.
+        unsafe { std::slice::from_raw_parts(self.0.as_ptr(), Pages::BYTES) }
+    }
+}
+
+impl Drop for Pages {
+    fn drop(&mut self) {
+        // SAFETY: allocated with this layout in `new`.
+        unsafe { std::alloc::dealloc(self.0.as_ptr(), Pages::layout()) };
+    }
+}
+
+/// A no-copy buffer whose pages the device imported by their pointer answers where its byte 0
+/// lies in the import (`Buffer::vk_host_memory`): a `VkBuffer` of the test's own, made for host
+/// allocations and bound there, takes a raw fill that the host reads in the pages, from the
+/// buffer's byte 0 (256 bytes into a page) over its length and nowhere else. A buffer in the
+/// device's own memory answers none, and a copied host buffer none.
+#[test]
+fn a_no_copy_buffer_s_import_takes_a_buffer_of_the_caller_s() {
+    const SKIP: usize = 256;
+    const LENGTH: u64 = 64 << 10;
+    const WORD: u32 = 0xabcd_1234;
+    let scratch = Scratch::new("video-interop-host-memory");
+    let messages = Arc::new(Mutex::new(Vec::new()));
+    let device = device(&scratch.0, &messages);
+    let raw_queue = RawQueue::of(&device);
+    let own = device.new_buffer(4096, ResourceOptions::shared()).unwrap();
+    // SAFETY: the answer is not used.
+    assert_eq!(unsafe { own.vk_host_memory() }, None);
+    let pages = Pages::new();
+    // SAFETY: inside the allocation, which outlives the buffer.
+    let pointer = unsafe { NonNull::new_unchecked(pages.0.as_ptr().add(SKIP)) };
+    // SAFETY: the pages outlive the buffer, and only its commands and the test's buffer bound to
+    // their import (destroyed before the buffer goes) use them while it lives.
+    let made = unsafe {
+        device.new_buffer_with_bytes_no_copy(
+            HostMemory::new(pointer),
+            LENGTH,
+            ResourceOptions::default(),
+            None,
+        )
+    };
+    let buffer = match made {
+        Ok(buffer) => buffer,
+        Err(crate::Error::Unsupported(gap)) => {
+            eprintln!(
+                "VIDEO-INTEROP: {}: the device imports no host memory: {gap:?}",
+                device.name()
+            );
+            return;
+        }
+        Err(error) => panic!("new_buffer_with_bytes_no_copy: {error:?}"),
+    };
+    let backing = buffer.host_backing();
+    // SAFETY: the memory is used below while the buffer lives in the same pages.
+    let answer = unsafe { buffer.vk_host_memory() };
+    eprintln!(
+        "VIDEO-INTEROP: {}: a no-copy buffer {backing:?}, its import {answer:?}",
+        device.name()
+    );
+    if backing != Some(HostBacking::ImportedByPointer) {
+        assert_eq!(answer, None, "{backing:?}");
+        return;
+    }
+    let answer = answer.unwrap();
+    assert!(answer.size >= LENGTH, "{answer:?}");
+    assert!(answer.handle_type == vk::ExternalMemoryHandleTypeFlags::HOST_ALLOCATION_EXT);
+    // SAFETY: the test's buffer is bound to the import inside it, filled once on the raw queue,
+    // waited for, and destroyed before the no-copy buffer goes.
+    unsafe {
+        let raw = device.raw();
+        let make = |size: u64| {
+            let mut external =
+                vk::ExternalMemoryBufferCreateInfo::default().handle_types(answer.handle_type);
+            let info = vk::BufferCreateInfo::default()
+                .size(size)
+                .usage(vk::BufferUsageFlags::TRANSFER_DST)
+                .sharing_mode(vk::SharingMode::EXCLUSIVE)
+                .push_next(&mut external);
+            raw.device.create_buffer(&info, None).unwrap()
+        };
+        let probe = make(LENGTH);
+        let requirements = raw.device.get_buffer_memory_requirements(probe);
+        raw.device.destroy_buffer(probe, None);
+        assert_ne!(
+            requirements.memory_type_bits & (1 << answer.type_index),
+            0,
+            "the import's type takes the caller's buffer"
+        );
+        // Bound at the alignment below byte 0, and filled from byte 0.
+        let below = answer.offset % requirements.alignment.max(1);
+        let mine = make(below + LENGTH);
+        raw.device
+            .bind_buffer_memory(mine, answer.memory, answer.offset - below)
+            .unwrap();
+        submit_raw(
+            &device,
+            &raw_queue,
+            &[],
+            &[],
+            // The buffer lives and takes transfers; the command buffer is recording.
+            |vk_device, command_buffer| {
+                vk_device.cmd_fill_buffer(command_buffer, mine, below, LENGTH, WORD)
+            },
+        );
+        raw.device.destroy_buffer(mine, None);
+    }
+    let bytes = pages.bytes();
+    let filled = &bytes[SKIP..SKIP + LENGTH as usize];
+    let word = WORD.to_ne_bytes();
+    assert!(
+        filled.chunks(4).all(|chunk| chunk == word),
+        "the fill reached the pages from byte 0"
+    );
+    assert!(
+        bytes[..SKIP].iter().all(|&b| b == 0),
+        "nothing before byte 0"
+    );
+    assert!(
+        bytes[SKIP + LENGTH as usize..].iter().all(|&b| b == 0),
+        "nothing past the length"
+    );
+    drop(buffer);
 }
