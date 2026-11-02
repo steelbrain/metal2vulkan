@@ -212,6 +212,26 @@ pub struct DeviceOptions {
     /// devices of one option (it is compared by identity, as [`messages`](Self::messages) is).
     /// No Metal counterpart: Metal keeps its own compiled pipelines in the OS's caches.
     pub pipeline_records: Option<Arc<dyn Fn(crate::PipelineRecord) + Send + Sync>>,
+    /// Queues each device makes for the caller beside its own, one per entry, of a family whose
+    /// flags contain the entry's (`VIDEO_DECODE_KHR` for a consumer's video decode, for
+    /// example), which [`DeviceHandles::extra_queues`](crate::DeviceHandles::extra_queues)
+    /// returns. Each is a queue no runtime work uses: of the first family whose flags contain
+    /// the entry's and that has a queue the device's own plan leaves free, at its lowest free
+    /// index; where no such family has one left, the last queue of such a family the device would
+    /// take for itself, which it then leaves to the caller (a queue reserved for presenting
+    /// first, then the round robin's last, then the staging queue's), never its first queue,
+    /// where internal submissions go. A device with no queue for an entry (no family whose flags
+    /// contain it, empty flags, or only the device's first queue) is made all the same, without
+    /// it, and says so once in an informational message
+    /// (`metal2vulkan-extra-queues-absent`, through [`messages`](Self::messages) or on stderr).
+    /// The runtime never submits to these queues: the caller is their only submitter, and
+    /// orders its work against the runtime's through semaphores
+    /// ([`SharedEvent::reserve_vk_signal`](crate::SharedEvent::reserve_vk_signal),
+    /// [`SharedEvent::vk_wait`](crate::SharedEvent::vk_wait)). The runtime's own buffers and
+    /// images stay shared among its own queue families
+    /// ([`DeviceHandles::queue_families`](crate::DeviceHandles::queue_families)), which need not
+    /// include an extra queue's. Empty by default. No Metal counterpart: a Vulkan-side option.
+    pub extra_queues: Vec<vk::QueueFlags>,
 }
 
 impl std::fmt::Debug for DeviceOptions {
@@ -240,6 +260,7 @@ impl std::fmt::Debug for DeviceOptions {
             fail_in_place_check,
             withheld_attachment_formats,
             pipeline_records,
+            extra_queues,
         } = self;
         f.debug_struct("DeviceOptions")
             .field("policy", policy)
@@ -269,6 +290,12 @@ impl std::fmt::Debug for DeviceOptions {
             .field(
                 "pipeline_records",
                 &pipeline_records.as_ref().map(|_| "hook"),
+            )
+            .field(
+                "extra_queues",
+                &(extra_queues.iter())
+                    .map(|&flags| super::handles::QueueFlagsText(flags))
+                    .collect::<Vec<_>>(),
             )
             .finish()
     }
@@ -975,6 +1002,80 @@ pub(crate) fn queue_plan(families: &[vk::QueueFamilyProperties]) -> Option<Queue
     })
 }
 
+/// The queue of each of `asked` (`DeviceOptions::extra_queues`) on a device of `families` whose
+/// own queues are `plan`'s, in `asked`'s order, `None` for one the device has none of: a queue the
+/// plan leaves free, of the first family whose flags contain the asked flags and that has one,
+/// at its lowest free index; else the last queue the plan reserved for presenting, then the last
+/// of the round robin's but its first (internal submissions go there), then the staging queue, of
+/// such a family, which `plan` then gives up. Flags that are empty, or that no family's contain,
+/// take none.
+pub(crate) fn extra_queue_places(
+    families: &[vk::QueueFamilyProperties],
+    plan: &mut QueuePlan,
+    asked: &[vk::QueueFlags],
+) -> Vec<Option<(u32, u32)>> {
+    let mut extra: Vec<(u32, u32)> = Vec::new();
+    let mut places = Vec::with_capacity(asked.len());
+    for &flags in asked {
+        let serves = |family: u32| {
+            !flags.is_empty()
+                && (families.get(family as usize)).is_some_and(|f| f.queue_flags.contains(flags))
+        };
+        let taken = |place: (u32, u32)| {
+            plan.queues.contains(&place)
+                || plan.present.contains(&place)
+                || plan.staging == Some(place)
+                || extra.contains(&place)
+        };
+        let free = (0..families.len() as u32)
+            .filter(|&family| serves(family))
+            .find_map(|family| {
+                (0..families[family as usize].queue_count)
+                    .map(|index| (family, index))
+                    .find(|&place| !taken(place))
+            });
+        let place = free.or_else(|| {
+            if let Some(at) = plan.present.iter().rposition(|&(f, _)| serves(f)) {
+                return Some(plan.present.remove(at));
+            }
+            let round_robin = plan.queues.iter().skip(1).rposition(|&(f, _)| serves(f));
+            if let Some(at) = round_robin {
+                return Some(plan.queues.remove(at + 1));
+            }
+            plan.staging.filter(|&(f, _)| serves(f)).inspect(|_| {
+                plan.staging = None;
+            })
+        });
+        if let Some(place) = place {
+            extra.push(place);
+        }
+        places.push(place);
+    }
+    places
+}
+
+/// The informational message a device made with extra queues it has none of for `absent`
+/// (`DeviceOptions::extra_queues`) sends as it is made; `None` where it made every one.
+pub(crate) fn extra_queues_absent(absent: &[vk::QueueFlags], device: &str) -> Option<String> {
+    if absent.is_empty() {
+        return None;
+    }
+    let flags: Vec<String> = (absent.iter())
+        .map(|&flags| format!("{:?}", super::handles::QueueFlagsText(flags)))
+        .collect();
+    Some(format!(
+        "metal2vulkan: the device on {device} has no queue for the extra queue(s) of {} the \
+         options asked for (no queue family whose flags contain them, or none left past the \
+         device's first queue); the device was made without them, and \
+         DeviceHandles::extra_queues leaves them out [{EXTRA_QUEUES_ABSENT}]",
+        flags.join("; ")
+    ))
+}
+
+/// The id name of the informational message a device made without some of the extra queues its
+/// options asked for sends as it is made ([`extra_queues_absent`]).
+pub(crate) const EXTRA_QUEUES_ABSENT: &str = "metal2vulkan-extra-queues-absent";
+
 /// `description` with each of `withheld` no color attachment
 /// (`DeviceOptions::withheld_attachment_formats`): its tilings' `COLOR_ATTACHMENT` and blend
 /// features and its attachment sample counts left out.
@@ -1361,7 +1462,8 @@ fn create_on(
             .raw
             .get_physical_device_queue_family_properties(physical)
     };
-    let plan = queue_plan(&families).ok_or(Error::NoDevice)?;
+    let mut plan = queue_plan(&families).ok_or(Error::NoDevice)?;
+    let extra_places = extra_queue_places(&families, &mut plan, &options.extra_queues);
     let queue_family = plan.primary;
     let api = description.api_version;
     let mut set = enable_set(&description, options);
@@ -1526,15 +1628,18 @@ fn create_on(
     enables.enable_sparse(&sparse_features);
     // One create info per family taken, of as many queues as the plan takes of it.
     let mut taken: Vec<(u32, usize)> = Vec::new();
-    for &(family, _) in plan.queues.iter().chain(&plan.present).chain(&plan.staging) {
+    let extra: Vec<(u32, u32)> = extra_places.iter().flatten().copied().collect();
+    let all = plan.queues.iter().chain(&plan.present).chain(&plan.staging);
+    for &(family, _) in all.chain(&extra) {
         match taken.iter_mut().find(|(at, _)| *at == family) {
             Some((_, count)) => *count += 1,
             None => taken.push((family, 1)),
         }
     }
-    // One priority per queue of the family the plan takes most of, so the slice each create info
-    // names is always within it: the round robin alone takes up to `ROUND_ROBIN_CEILING` of one
-    // family, and presenting `PRESENT_QUEUES` more.
+    // One priority per queue of the family the plan and the extra queues take most of, so the
+    // slice each create info names is always within it: the round robin alone takes up to
+    // `ROUND_ROBIN_CEILING` of one family, presenting `PRESENT_QUEUES` more, and the extra queues
+    // at most the family's own count.
     let priorities = vec![1.0f32; taken.iter().map(|&(_, count)| count).max().unwrap_or(0)];
     let queues: Vec<vk::DeviceQueueCreateInfo<'_>> = taken
         .iter()
@@ -1572,6 +1677,9 @@ fn create_on(
         present_queues: plan.present.len(),
         queues: plan.queues.into_iter().chain(plan.present).collect(),
         staging: plan.staging,
+        extra_queues: (options.extra_queues.iter().zip(&extra_places))
+            .filter_map(|(&flags, place)| place.map(|(family, index)| (flags, family, index)))
+            .collect(),
         compile,
         description: enabled,
         enabled: set,
@@ -1602,6 +1710,13 @@ fn create_on(
     let device = unsafe { Device::assemble(parts) }?;
     if let Some(text) = layers_dropped(&instance.dropped_layers, device.name()) {
         device.inform(LAYERS_DROPPED, text);
+    }
+    let absent: Vec<vk::QueueFlags> = (options.extra_queues.iter().zip(&extra_places))
+        .filter(|(_, place)| place.is_none())
+        .map(|(&flags, _)| flags)
+        .collect();
+    if let Some(text) = extra_queues_absent(&absent, device.name()) {
+        device.inform(EXTRA_QUEUES_ABSENT, text);
     }
     if let Some(why) = cache_kept {
         let object = format!("the device, on {}", device.name());
@@ -1724,6 +1839,7 @@ fn same_options(a: &DeviceOptions, b: &DeviceOptions) -> bool {
         fail_in_place_check,
         withheld_attachment_formats,
         pipeline_records: _,
+        extra_queues,
     } = a;
     *policy == b.policy
         && *layers == b.layers
@@ -1745,6 +1861,7 @@ fn same_options(a: &DeviceOptions, b: &DeviceOptions) -> bool {
         && *record_executions == b.record_executions
         && *fail_in_place_check == b.fail_in_place_check
         && *withheld_attachment_formats == b.withheld_attachment_formats
+        && *extra_queues == b.extra_queues
 }
 
 /// The group of `made` for `options`: the live one, or a new one on a new instance. Its index.

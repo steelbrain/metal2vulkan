@@ -140,6 +140,7 @@ use crate::device::create::{
     instance_version, layer_settings, layers_dropped, linear_color_attachment, open_loader,
     queue_plan, setting_values, timeline_difference, QueuePlan, LAYERS_DROPPED,
 };
+use crate::device::create::{extra_queue_places, extra_queues_absent};
 use crate::enables::host_image_copy_names;
 use crate::{DeviceOptions, Error, InstanceApiVersion, LayerSetting, LayerSettingValue};
 use ash::vk;
@@ -612,6 +613,112 @@ fn equivalent_queue_families_are_all_taken_in_turn() {
     );
     assert_eq!(queue_plan(&[transfer]), None);
     assert_eq!(queue_plan(&[family(all, 0)]), None);
+}
+
+/// The caller's extra queues (`DeviceOptions::extra_queues`): each a queue the device's own plan
+/// leaves free, of the first family whose flags contain the asked ones and that has one; where
+/// none is free, the last such queue the plan took (presenting's, then the round robin's but its
+/// first, then staging's), which the plan gives up; none for flags no family has, empty flags, or
+/// a device of one queue.
+#[test]
+fn extra_queues_take_a_free_queue_else_one_the_device_gives_up() {
+    let all = vk::QueueFlags::GRAPHICS
+        | vk::QueueFlags::COMPUTE
+        | vk::QueueFlags::TRANSFER
+        | vk::QueueFlags::SPARSE_BINDING;
+    let family = |flags: vk::QueueFlags, count: u32| vk::QueueFamilyProperties {
+        queue_flags: flags,
+        queue_count: count,
+        timestamp_valid_bits: 64,
+        min_image_transfer_granularity: vk::Extent3D {
+            width: 1,
+            height: 1,
+            depth: 1,
+        },
+    };
+    let (decode, encode) = (
+        vk::QueueFlags::VIDEO_DECODE_KHR,
+        vk::QueueFlags::VIDEO_ENCODE_KHR,
+    );
+    let (compute, transfer) = (vk::QueueFlags::COMPUTE, vk::QueueFlags::TRANSFER);
+    // NVIDIA's shape: video families of their own, a compute family with queues to spare, a copy
+    // engine whose second queue staging leaves.
+    let copy = family(vk::QueueFlags::TRANSFER | vk::QueueFlags::SPARSE_BINDING, 2);
+    let nvidia = [
+        family(all, 16),
+        copy,
+        family(all & !vk::QueueFlags::GRAPHICS, 8),
+        family(copy.queue_flags | decode, 1),
+        family(copy.queue_flags | encode, 1),
+    ];
+    let mut plan = queue_plan(&nvidia).unwrap();
+    let before = plan.clone();
+    assert_eq!(
+        extra_queue_places(
+            &nvidia,
+            &mut plan,
+            &[decode, encode, compute, transfer, decode]
+        ),
+        [Some((3, 0)), Some((4, 0)), Some((2, 0)), Some((1, 1)), None],
+        "the second decode queue: the family has one, and the graphics family none to give"
+    );
+    assert_eq!(
+        plan, before,
+        "every one was free: the device keeps all its own"
+    );
+    // MoltenVK's shape: four families of one queue each, every one the device's own. The round
+    // robin gives up its last queues, never its first.
+    let moltenvk = [family(all, 1); 4];
+    let mut plan = queue_plan(&moltenvk).unwrap();
+    assert_eq!(
+        extra_queue_places(&moltenvk, &mut plan, &[compute, decode, transfer]),
+        [Some((3, 0)), None, Some((2, 0))]
+    );
+    assert_eq!(plan.queues, [(0, 0), (1, 0)]);
+    let mut plan = queue_plan(&moltenvk).unwrap();
+    let four = [compute; 4];
+    assert_eq!(
+        extra_queue_places(&moltenvk, &mut plan, &four),
+        [Some((3, 0)), Some((2, 0)), Some((1, 0)), None]
+    );
+    assert_eq!(plan.queues, [(0, 0)]);
+    // A family of six: the presenting reserve goes first, from its last.
+    let mut plan = queue_plan(&[family(all, 6)]).unwrap();
+    assert_eq!(
+        extra_queue_places(&[family(all, 6)], &mut plan, &[compute, compute, compute]),
+        [Some((0, 5)), Some((0, 4)), Some((0, 3))]
+    );
+    assert_eq!((plan.queues.len(), plan.present.len()), (3, 0));
+    // One queue (lavapipe's), empty flags, flags no family has: none.
+    let mut plan = queue_plan(&[family(all, 1)]).unwrap();
+    assert_eq!(
+        extra_queue_places(
+            &[family(all, 1)],
+            &mut plan,
+            &[compute, vk::QueueFlags::empty(), decode]
+        ),
+        [None, None, None]
+    );
+    assert_eq!(plan.queues, [(0, 0)]);
+    // Staging's queue last of all.
+    let shape = [family(all, 1), family(copy.queue_flags, 1)];
+    let mut plan = queue_plan(&shape).unwrap();
+    assert_eq!(plan.staging, Some((1, 0)));
+    assert_eq!(
+        extra_queue_places(&shape, &mut plan, &[transfer]),
+        [Some((1, 0))]
+    );
+    assert_eq!(
+        (plan.queues.as_slice(), plan.staging),
+        (&[(0, 0)][..], None)
+    );
+    let text = extra_queues_absent(&[decode, compute | transfer], "a GPU").unwrap();
+    assert!(
+        text.contains("VIDEO_DECODE_KHR; COMPUTE | TRANSFER")
+            && text.ends_with("[metal2vulkan-extra-queues-absent]"),
+        "{text}"
+    );
+    assert_eq!(extra_queues_absent(&[], "a GPU"), None);
 }
 
 /// The runtime enables `hostImageCopy` itself wherever the device lists the extensions its

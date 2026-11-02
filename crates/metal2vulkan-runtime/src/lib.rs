@@ -254,7 +254,7 @@ pub use degradation::{Degradation, DegradationCategory, DegradeNotice};
 pub use degradation::{MisplacedNotice, NoticePlace};
 pub use depth_stencil::DepthStencilState;
 pub use device::{
-    DebugMessage, Device, DeviceHandles, DeviceKind, DeviceOptions, LayerSetting,
+    DebugMessage, Device, DeviceHandles, DeviceKind, DeviceOptions, ExtraQueue, LayerSetting,
     LayerSettingValue, MessageKind, MessageSeverity, MessageSink, PhysicalDeviceIdentity,
     RawDevice,
 };

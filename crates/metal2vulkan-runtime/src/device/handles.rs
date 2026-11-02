@@ -32,6 +32,68 @@ pub struct DeviceHandles<'a> {
     /// one family. [`CommandQueue::with_vk_queue`](super::super::CommandQueue::with_vk_queue)
     /// names the family of each queue's own `VkQueue`.
     pub queue_families: &'a [u32],
+    /// The extra queues the device made for the caller
+    /// ([`DeviceOptions::extra_queues`](super::DeviceOptions::extra_queues)), in the options'
+    /// order, leaving out each the device had no queue for: none for an adopted device. The
+    /// runtime never submits to them.
+    pub extra_queues: &'a [ExtraQueue],
+}
+
+/// No Metal counterpart: one of the queues a created device made for the caller beside its own
+/// ([`DeviceOptions::extra_queues`](super::DeviceOptions::extra_queues)), which
+/// [`DeviceHandles::extra_queues`] returns. The runtime never submits to it: the caller is its
+/// only submitter, and synchronizes its submissions to it externally, as Vulkan requires. It
+/// lives as long as the device.
+#[non_exhaustive]
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub struct ExtraQueue {
+    /// The flags the options asked for, which the family's contain.
+    pub flags: vk::QueueFlags,
+    /// The queue's family.
+    pub family: u32,
+    /// The queue.
+    pub queue: vk::Queue,
+}
+
+impl std::fmt::Debug for ExtraQueue {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ExtraQueue")
+            .field("flags", &QueueFlagsText(self.flags))
+            .field("family", &self.family)
+            .field("queue", &self.queue)
+            .finish()
+    }
+}
+
+/// `VkQueueFlags` as text: its bits' names joined by `|`, any bit without a name in hex (`ash`'s
+/// flags print only with its `debug` feature, which the runtime leaves off).
+pub(crate) struct QueueFlagsText(pub(crate) vk::QueueFlags);
+
+impl std::fmt::Debug for QueueFlagsText {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        const NAMES: [(vk::QueueFlags, &str); 8] = [
+            (vk::QueueFlags::GRAPHICS, "GRAPHICS"),
+            (vk::QueueFlags::COMPUTE, "COMPUTE"),
+            (vk::QueueFlags::TRANSFER, "TRANSFER"),
+            (vk::QueueFlags::SPARSE_BINDING, "SPARSE_BINDING"),
+            (vk::QueueFlags::PROTECTED, "PROTECTED"),
+            (vk::QueueFlags::VIDEO_DECODE_KHR, "VIDEO_DECODE_KHR"),
+            (vk::QueueFlags::VIDEO_ENCODE_KHR, "VIDEO_ENCODE_KHR"),
+            (vk::QueueFlags::OPTICAL_FLOW_NV, "OPTICAL_FLOW_NV"),
+        ];
+        let mut parts: Vec<String> = (NAMES.iter())
+            .filter(|(bit, _)| self.0.contains(*bit))
+            .map(|(_, name)| (*name).to_owned())
+            .collect();
+        let named = NAMES
+            .iter()
+            .fold(vk::QueueFlags::empty(), |all, (bit, _)| all | *bit);
+        let rest = self.0.as_raw() & !named.as_raw();
+        if rest != 0 || parts.is_empty() {
+            parts.push(format!("{rest:#x}"));
+        }
+        f.write_str(&parts.join(" | "))
+    }
 }
 
 impl std::fmt::Debug for DeviceHandles<'_> {
@@ -43,6 +105,7 @@ impl std::fmt::Debug for DeviceHandles<'_> {
             .field("device", &self.device.handle())
             .field("queue_family", &self.queue_family)
             .field("queue_families", &self.queue_families)
+            .field("extra_queues", &self.extra_queues)
             .finish_non_exhaustive()
     }
 }
@@ -73,6 +136,7 @@ impl Device {
             device: shared.vk(),
             queue_family: shared.queue_family,
             queue_families: &shared.queue_families,
+            extra_queues: &shared.extra_queues,
         }
     }
 }

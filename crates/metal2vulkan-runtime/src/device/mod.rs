@@ -37,7 +37,7 @@ pub use create::{
     DebugMessage, DeviceOptions, LayerSetting, LayerSettingValue, MessageKind, MessageSeverity,
     MessageSink,
 };
-pub use handles::DeviceHandles;
+pub use handles::{DeviceHandles, ExtraQueue};
 pub use properties::{DeviceKind, PhysicalDeviceIdentity};
 
 use super::address::AddressSpace;
@@ -287,6 +287,9 @@ pub(super) struct DeviceShared {
     bound_at: Mutex<Option<(vk::Semaphore, u64)>>,
     /// The queue reserved for staging copies, where the device has one (`staging.rs`).
     staging: Option<staging::StagingQueue>,
+    /// The caller's extra queues (`DeviceOptions::extra_queues`), to which the runtime never
+    /// submits (`handles.rs`).
+    pub(super) extra_queues: Vec<handles::ExtraQueue>,
     pub(super) scheduler: Scheduler,
     /// The scheduler's nudge, a timeline semaphore its wakers signal where its thread waits for
     /// the GPU (`scheduler/mod.rs`): made on every device, used where the driver's wait for any
@@ -1149,6 +1152,9 @@ pub(super) struct Parts {
     /// The queue reserved for staging copies, its family and index there, outside `queues`
     /// (`staging.rs`): `None` for an adopted device, or where the families have no more.
     pub(super) staging: Option<(u32, u32)>,
+    /// The caller's extra queues (`DeviceOptions::extra_queues`), each the flags asked for, its
+    /// family and its index there, outside `queues` and `staging`: none for an adopted device.
+    pub(super) extra_queues: Vec<(vk::QueueFlags, u32, u32)>,
     pub(super) compile: metal2vulkan::device::Device,
     /// The description `compile` was built from: what the device enables.
     pub(super) description: DeviceDescription,
@@ -1236,6 +1242,7 @@ impl Device {
             queues: queue_places,
             present_queues,
             staging: staging_place,
+            extra_queues: extra_places,
             compile,
             description,
             enabled,
@@ -1378,6 +1385,18 @@ impl Device {
                 staging::StagingQueue::new(family, flags_of(family), queue, &queue_families)
             }
         });
+        let extra_queues = (extra_places.iter())
+            .map(|&(flags, family, index)| handles::ExtraQueue {
+                flags,
+                family,
+                // SAFETY: the queue exists (the caller's contract), and the loader serves the
+                // call after the word is put back.
+                queue: unsafe {
+                    loader_word.restore();
+                    raw.get_device_queue(family, index)
+                },
+            })
+            .collect();
         let family = (families.get(queue_family as usize).copied()).unwrap_or_default();
         let timestamp_bits = family.timestamp_valid_bits;
         // SAFETY: as above.
@@ -1820,6 +1839,7 @@ impl Device {
             by_ends,
             bound_at: Mutex::new(None),
             staging,
+            extra_queues,
             scheduler,
             nudge,
             completion,
