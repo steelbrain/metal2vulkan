@@ -873,7 +873,7 @@ fn rect([width, height]: [u32; 2]) -> vk::Rect2D {
 
 #[cfg(test)]
 mod tests {
-    use super::{dont_care_clear, DrawnArea};
+    use super::{dont_care_clear, made, DrawnArea};
     use ash::vk;
     use metal2vulkan::metal::format::{ClearRoute, ExtendedRange};
     use metal2vulkan::metal::PixelFormat;
@@ -946,12 +946,15 @@ mod tests {
             // An L: the bounds reach the corner the rectangles leave out.
             (vec![rect(0, 0, 64, 32), rect(0, 32, 32, 32)], Some((3, 4))),
         ];
+        let [counted, _] = made::so_far();
         for (case, (rects, expected)) in cases.iter().enumerate() {
             let mut area = DrawnArea::default();
             area.add(rects);
             assert_eq!(area.covered_tiles(), *expected, "case {case}");
         }
         assert_eq!(DrawnArea::unbounded().covered_tiles(), None);
+        // Each count is noted on this thread, for the tests that hold a pass end to its counts.
+        assert_eq!(made::so_far()[0] - counted, cases.len() as u64 + 1);
         // Against the tiles counted one at a time, for rectangles spread over a large area.
         let mut seed = 0x2545_f491_u64;
         let mut next = |below: u32| {
