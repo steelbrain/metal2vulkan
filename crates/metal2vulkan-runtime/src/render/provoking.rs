@@ -333,9 +333,11 @@ impl RenderLowering {
     /// How `call`'s `draw` of `pipeline` as `assembly` takes the encoder's provoking vertex (the
     /// module docs), announcing what a listed draw cannot draw as Metal does. A draw that makes
     /// no primitive draws nothing, as on Metal, and announces nothing ([`makes_none`]). A draw of
-    /// lines as bands (`band`, `render/line_width.rs`), whose every corner takes a flat input
-    /// from its line's first vertex, takes Metal's last vertex from the list led by each line's
-    /// last vertex on every device, silently: the band covers the same pixels drawn either way.
+    /// lines or of triangles' edges as bands (`band`, `render/line_width.rs`), whose every corner
+    /// takes a flat input from its primitive's first vertex, takes Metal's last vertex from the
+    /// list led by each primitive's last vertex on every device, silently: the band covers the
+    /// same pixels drawn either way (a line's parallelogram is the same, and a triangle rotated
+    /// faces alike).
     pub(super) fn provoking(
         &self,
         call: &'static str,

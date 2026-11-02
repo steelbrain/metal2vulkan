@@ -2050,8 +2050,8 @@ degradations! {
         /// rectangle the width spans across the segment, square ends), lines Vulkan does not state
         /// as parallelograms (`nonStrictWideLinesUseParallelogram` unset, or a width below 1), or a
         /// width off the device's `lineWidthGranularity`, which rounds it. Under
-        /// `WideLinePolicy::Exact` a draw of lines takes the band variant there instead, on a
-        /// device with `tessellationShader`.
+        /// `WideLinePolicy::Exact` a draw of lines or of a triangle's edges takes the band variant
+        /// there instead, on a device with `tessellationShader`.
         DeviceWideLines = "device-wide-lines", Precision,
             "the lines can cover pixels Metal's parallelogram does not, and miss others, at each \
              end and along each edge";
@@ -2059,16 +2059,29 @@ degradations! {
         /// edges in fill mode `Lines` or of a mesh draw, that neither the device's own lines at
         /// that width nor the band variant draws (`render/line_width.rs`), drawn by the device's
         /// own lines at the width nearest it they draw: the width clamped into `lineWidthRange`
-        /// where the device enables `wideLines`, else 1. A triangle's edges and a mesh draw's
-        /// lines, which the band does not draw, where the device's lines do not draw the width
-        /// (every such draw on a device without `wideLines`, MoltenVK among them); a line on a
-        /// device without `tessellationShader` whose lines do not draw it; a band under vertex
-        /// amplification above 1; and every line in a rasterization-rate-mapped pass or of an
-        /// execution's command, whose width Metal's answer is not measured for. The reason names
-        /// which, and both widths.
+        /// where the device enables `wideLines`, else 1. A mesh draw's lines and edges and a
+        /// tessellated patch draw's edges, which the band does not draw, where the device's lines
+        /// do not draw the width (every such draw on a device without `wideLines`, MoltenVK among
+        /// them); lines and edges on a device without `tessellationShader` whose lines do not draw
+        /// them, or of a pipeline state whose band variant the translator refuses; a band under
+        /// vertex amplification above 1; and every line in a rasterization-rate-mapped pass or of
+        /// an execution's command, whose width Metal's answer is not measured for. The reason
+        /// names which, and both widths.
         LinesAtNearestWidth = "lines-at-nearest-width", Precision,
             "the lines are drawn at another width than Metal's: thinner (1 pixel without \
              wideLines) or wider, so they cover fewer or more pixels across each line";
+        /// A draw of a triangle's edges in fill mode `Lines` at a width other than 1 (Apple's
+        /// `setLineWidth:`) drawn as the band variant (`render/line_width.rs`) under a depth bias
+        /// the device can apply otherwise than Metal: a slope factor, or a constant factor over a
+        /// float depth. Metal biases the edges by the triangle's depth slope and its largest
+        /// depth's exponent (the probe `line_widths.m`'s `edges`); the device biases each of the
+        /// band's triangles by its own slope and its own largest depth's exponent (Vulkan's depth
+        /// bias), the device's native arithmetic. A constant factor over a unorm depth, which is
+        /// one unit in either API, is not announced.
+        WideEdgeDepthBias = "wide-edge-depth-bias", Precision,
+            "the edges' fragments are biased by another depth than Metal's, along the edges as \
+             their slope along them differs from the triangle's, and near a vertex of a smaller \
+             depth exponent than the triangle's largest by a smaller unit";
         /// A draw of lines, or an emulated mesh draw of lines, under Apple's last provoking vertex
         /// (`setProvokingVertexMode:` 1), of a pipeline state that reads it (a flat input, or a
         /// slice or viewport its vertex function selects), on a device without

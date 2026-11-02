@@ -30,7 +30,7 @@ use ash::vk;
 use metal2vulkan::cache::Hash256;
 use metal2vulkan::cache::SpecializationKey;
 use metal2vulkan::metal::state::DepthStencilState;
-use metal2vulkan::pipeline::{RenderPipeline, VertexStride};
+use metal2vulkan::pipeline::{BandPrimitive, RenderPipeline, VertexStride};
 use std::sync::atomic::AtomicBool;
 
 /// What one `VkPipeline` of a render variant is made from, beside the variant.
@@ -1004,9 +1004,11 @@ impl VariantObjects {
             })
             .collect();
         // Metal biases triangles only: the bias is enabled by the topology, and its factors are
-        // dynamic state (`metal::state::depth_bias`). A band's patches are lines.
-        let biased = match graphics.line_band {
-            Some(_) => metal2vulkan::vk::PrimitiveTopology::LINE_LIST,
+        // dynamic state (`metal::state::depth_bias`). A band's patches are lines, or triangles
+        // whose edges Metal biases.
+        let biased = match graphics.line_band.map(|band| band.primitive) {
+            Some(BandPrimitive::Lines) => metal2vulkan::vk::PrimitiveTopology::LINE_LIST,
+            Some(BandPrimitive::Triangles) => metal2vulkan::vk::PrimitiveTopology::TRIANGLE_LIST,
             None => key.topology,
         };
         let bias = metal2vulkan::metal::state::depth_bias(
@@ -1115,9 +1117,9 @@ impl VariantObjects {
             blends,
             blend_flags,
             logic_op: graphics.logic_op.map(Into::into),
-            // A band's patches are each line's two vertices.
+            // A band's patches are each primitive's vertices.
             patch_control_points: match graphics.line_band {
-                Some(_) => Some(metal2vulkan::pipeline::LineBandState::PATCH_CONTROL_POINTS),
+                Some(band) => Some(band.primitive.patch_control_points()),
                 None => graphics.tessellation.map(|t| t.patch_control_points),
             },
             meshes: pipeline

@@ -62,11 +62,13 @@ use std::collections::BTreeMap;
 const MEASURED: &str = include_str!("line_widths_m3_max.txt");
 
 /// The kinds the lane's runs take: a draw of lines at a width other than 1 that the device's own
-/// lines draw otherwise than Metal's parallelogram, and one they draw at the nearest width they
-/// draw where neither they nor the band draw Metal's.
-pub(super) const WIDE_LINES: [Degradation; 2] = [
+/// lines draw otherwise than Metal's parallelogram, one they draw at the nearest width they draw
+/// where neither they nor the band draw Metal's, and a band of a triangle's edges under a depth
+/// bias the device computes otherwise than Metal.
+pub(super) const WIDE_LINES: [Degradation; 3] = [
     Degradation::DeviceWideLines,
     Degradation::LinesAtNearestWidth,
+    Degradation::WideEdgeDepthBias,
 ];
 
 /// Metal's maps the lane does not draw: its width-1 lines on 4 samples, which the device's lines
@@ -757,7 +759,9 @@ fn edge_cases() -> Vec<(String, Shot, Check)> {
     let diagonal = [4.0, 8.0, 16.0, 16.0, 28.0, 24.0];
     let (none, back, front) = (CullMode::None, CullMode::Back, CullMode::Front);
     let (cwise, ccwise) = (Winding::Clockwise, Winding::CounterClockwise);
-    let facing: [(&str, PrimitiveType, &[f32], f32, (CullMode, Winding)); 18] = [
+    // (title, primitive, points, width, (cull mode, winding))
+    type Facing<'a> = (&'a str, PrimitiveType, &'a [f32], f32, (CullMode, Winding));
+    let facing: [Facing<'_>; 18] = [
         ("edges clockwise width 4", Triangle, &cw, 4.0, (none, cwise)),
         (
             "edges counter-clockwise width 4",
@@ -918,7 +922,9 @@ fn edge_cases() -> Vec<(String, Shot, Check)> {
     let tilted = [0.2, 0.2, 0.8];
     let steep = [0.3, 0.3, 0.9];
     let k = 1_048_576.0;
-    let biased: [(&str, PrimitiveType, &[f32], f32, f32, f32); 5] = [
+    // (title, primitive, each vertex's z, the depth cleared to, constant, slope)
+    type Biased<'a> = (&'a str, PrimitiveType, &'a [f32], f32, f32, f32);
+    let biased: [Biased<'_>; 5] = [
         ("depth bias: edges width 3", Triangle, &half, 0.5, k, 0.0),
         ("depth bias: line width 3", Line, &half, 0.5, k, 0.0),
         (
@@ -1073,7 +1079,7 @@ impl Lane {
         // `pv_flat`'s other two colors, and its IDs'.
         let ids = matches!(shot.read, Read::Ids(_)).then(|| {
             [PixelFormat::RGBA8Unorm, PixelFormat::RGBA8Uint].map(|format| {
-                let mut d = t.clone();
+                let mut d = t;
                 d.pixel_format = format;
                 self.device.new_texture(&d).unwrap()
             })
@@ -1273,8 +1279,8 @@ struct Found {
     facts: Option<LineFacts>,
 }
 
-/// The notices among `messages`' since the last take: the `DeviceWideLines` and
-/// `LinesAtNearestWidth` ones, and no other, and the reasons of the nearest-width ones.
+/// The notices among `messages`' since the last take: the `DeviceWideLines`,
+/// `LinesAtNearestWidth` and `WideEdgeDepthBias` ones, and the reasons of the nearest-width ones.
 fn announced_lines(messages: &Messages) -> ([usize; 3], Vec<String>) {
     let notices = messages.take_notices();
     let notices: Vec<_> = notices
@@ -1287,8 +1293,7 @@ fn announced_lines(messages: &Messages) -> ([usize; 3], Vec<String>) {
         .filter(|n| n.degradation == Degradation::LinesAtNearestWidth)
         .map(|n| n.reason.clone())
         .collect();
-    let [device, nearest] = WIDE_LINES.map(count);
-    ([device, nearest, 0], reasons)
+    (WIDE_LINES.map(count), reasons)
 }
 
 /// The draws of each route between two work counts: the band's, the device's lines' at Metal's

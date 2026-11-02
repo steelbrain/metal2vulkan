@@ -1449,8 +1449,10 @@ fn variant_fields(v: &VariantKey) -> String {
         fields.push_str(" mesh_last_first");
     }
     // The band's synthesized stages, in no stage's key.
-    if v.line_band {
-        fields.push_str(" line_band");
+    match v.line_band {
+        None => {}
+        Some(crate::pipeline::BandPrimitive::Lines) => fields.push_str(" line_band"),
+        Some(crate::pipeline::BandPrimitive::Triangles) => fields.push_str(" line_band triangles"),
     }
     fields
 }

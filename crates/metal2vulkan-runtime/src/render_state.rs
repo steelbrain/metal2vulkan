@@ -1112,6 +1112,14 @@ impl EncoderState {
         }
     }
 
+    /// The Vulkan front face of the encoder's front-facing winding.
+    pub(super) fn vk_front_face(&self) -> metal2vulkan::vk::FrontFace {
+        match self.winding {
+            Winding::Clockwise => metal2vulkan::vk::FrontFace::CLOCKWISE,
+            Winding::CounterClockwise => metal2vulkan::vk::FrontFace::COUNTER_CLOCKWISE,
+        }
+    }
+
     /// The state a pipeline takes statically, for `viewports` viewports.
     pub(super) fn fixed(
         &self,
@@ -1130,10 +1138,7 @@ impl EncoderState {
                 CullMode::Front => metal2vulkan::vk::CullModeFlags::FRONT,
                 CullMode::Back => metal2vulkan::vk::CullModeFlags::BACK,
             },
-            front_face: match self.winding {
-                Winding::Clockwise => metal2vulkan::vk::FrontFace::CLOCKWISE,
-                Winding::CounterClockwise => metal2vulkan::vk::FrontFace::COUNTER_CLOCKWISE,
-            },
+            front_face: self.vk_front_face(),
             depth_stencil: self.vk_depth_stencil(),
             polygon_mode: metal2vulkan::metal::state::polygon_mode(self.fill_mode, profile)
                 .map_err(device_error)?,

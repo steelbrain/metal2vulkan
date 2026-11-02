@@ -357,6 +357,7 @@ surface! {
         struct VertexAttributeDescriptor N;
         struct VertexBufferLayoutDescriptor N;
         struct VertexDescriptor N;
+        enum BandPrimitive E;
         struct BlendState N;
         struct ColorAttachmentState N;
         struct FragmentImageblock N;

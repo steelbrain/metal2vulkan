@@ -60,7 +60,7 @@ mod tests;
 /// unchanged version, and its bless records the version. Independent of the crate's version and of
 /// [`ARTIFACT_FORMAT_VERSION`]. The commit that bumps it says what changed; this comment keeps no
 /// history.
-pub const SEMANTICS_VERSION: u32 = 1937;
+pub const SEMANTICS_VERSION: u32 = 1940;
 
 /// The byte-layout version of encoded artifacts (`CompiledFunction::to_bytes` and the
 /// [`PipelineArtifact`] encodings). Every encoded artifact carries it, and a decode under another
@@ -93,7 +93,7 @@ pub const ARTIFACT_FORMAT_VERSION: u32 = 480;
 /// changes no behaviour, and then updates that hash alone with the commit saying why, or changes
 /// behaviour and also bumps this version. The commit that bumps it says what changed; this comment
 /// keeps no history.
-pub const RUNTIME_VERSION: u32 = 1715;
+pub const RUNTIME_VERSION: u32 = 1716;
 
 /// The digest of the sources this build of the crate was compiled from: SHA-256, as lowercase hex,
 /// of the manifest, the build script, and exactly the files the crate roots' module tree compiles
@@ -326,12 +326,13 @@ pub struct VariantKey {
     /// (`RuntimeFact::MeshLastFirst`).
     #[cfg_attr(feature = "serde", serde(default))]
     pub mesh_last_first: bool,
-    /// The pipeline draws its lines as bands of triangles through synthesized tessellation stages
-    /// (`BindShape::line_band`, `pipeline::link::band`): the variant a draw of lines at an Apple
-    /// `setLineWidth:` width the device's own lines do not draw runs. Its graphics state states
-    /// it (`GraphicsState::line_band`).
+    /// The pipeline draws its lines, or its triangles' edges, as bands of triangles through
+    /// synthesized tessellation stages, each patch one primitive of this kind
+    /// (`BindShape::line_band`, `pipeline::link::band`): the variant a draw of lines, or of
+    /// triangles in fill mode `Lines`, at an Apple `setLineWidth:` width the device's own lines do
+    /// not draw runs. Its graphics state states it (`GraphicsState::line_band`).
     #[cfg_attr(feature = "serde", serde(default))]
-    pub line_band: bool,
+    pub line_band: Option<crate::pipeline::BandPrimitive>,
     /// Storage-image texture slots bound to a texture with a swizzle (`MTLTexture.swizzle` other
     /// than the default) whose texels the function reads or writes
     /// (`LoweringInputs::swizzled_storage`): a Vulkan storage view takes no swizzle, so the
@@ -551,7 +552,7 @@ impl VariantKey {
             && !self.depth_clamp_range
             && !self.rotated_weights
             && !self.mesh_last_first
-            && !self.line_band
+            && self.line_band.is_none()
             && self.swizzled_storage.is_empty()
             && !self.addressed_function_tables
             && self.interlocked_colors.is_empty()

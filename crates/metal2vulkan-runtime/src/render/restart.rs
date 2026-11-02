@@ -32,10 +32,12 @@
 //!
 //! Under Apple's last provoking vertex, a device without it draws a line or triangle draw whose
 //! pipeline reads its primitives' vertex order as a list too, of a strip's pieces as above
-//! (`render/provoking.rs`); so is a line strip drawn as bands at a width other than 1
-//! (`render/line_width.rs`). Every list is written in the draw's order: Metal's at the encoder's
-//! provoking vertex mode, or led by each primitive's last vertex.
+//! (`render/provoking.rs`); so is a line or triangle strip drawn as bands at a width other than 1
+//! (`render/line_width.rs`), whose patches are each primitive's vertices. Every list is written in
+//! the draw's order: Metal's at the encoder's provoking vertex mode, or led by each primitive's
+//! last vertex.
 
+use super::line_width::LineRoute;
 use super::provoking::Provoking;
 use super::RenderCall;
 use super::RenderCommandEncoder;
@@ -100,14 +102,14 @@ impl RenderLowering {
     /// says, is drawn as a list: a draw of a private type, which restarts (a quad strip over
     /// indices) at the encoder's `k'`, or its index type's all-ones index without a call; an
     /// indexed strip the encoder's call restarts at another index than Vulkan would, `k'` not its
-    /// index type's all-ones index; a draw of lines or triangles `provoking` lists; and a line
-    /// strip drawn as bands (`band`, `render/line_width.rs`), whose patches are each line's two
-    /// vertices. `None` for every other draw.
+    /// index type's all-ones index; a draw of lines or triangles `provoking` lists; and a line or
+    /// triangle strip drawn as bands (`line`, `render/line_width.rs`), whose patches are each
+    /// primitive's vertices. `None` for every other draw.
     pub(super) fn restarted(
         &self,
         assembly: Assembly,
         draw: &DrawCall,
-        (provoking, band): (Provoking, bool),
+        (provoking, line): (Provoking, LineRoute),
     ) -> Option<Restarted> {
         let wide = match *draw {
             DrawCall::Indexed { index_type, .. }
@@ -144,7 +146,11 @@ impl RenderLowering {
         if let Provoking::Listed(_) = provoking {
             return listed(program, ListGap::ProvokingVertex);
         }
-        if band && program == RewriteProgram::LineStrip {
+        let strip = matches!(
+            program,
+            RewriteProgram::LineStrip | RewriteProgram::TriangleStrip
+        );
+        if line.band() && strip {
             return listed(program, ListGap::WideLines);
         }
         if !program.restarts() {

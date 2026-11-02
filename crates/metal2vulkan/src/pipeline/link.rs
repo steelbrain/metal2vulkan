@@ -195,9 +195,10 @@ pub struct RenderLinkInputs {
     /// alone [`color_attachments`](Self::color_attachments) holds, at their locations
     /// (`GraphicsState::color_group`); `None` where each attachment is at its own index.
     pub color_group: Option<ColorGroup>,
-    /// The variant draws its lines as bands through synthesized tessellation stages
-    /// (`VariantKey::line_band`, [`band`]).
-    pub line_band: bool,
+    /// The variant draws its lines, or its triangles' edges, as bands through synthesized
+    /// tessellation stages (`VariantKey::line_band`, [`band`]), each patch one primitive of this
+    /// kind; `None` for every other variant.
+    pub line_band: Option<crate::pipeline::BandPrimitive>,
 }
 
 impl RenderLinkInputs {
@@ -218,7 +219,7 @@ impl RenderLinkInputs {
             tessellation: None,
             texture_write_rounding_mode: metal::TextureWriteRoundingMode::TowardZero,
             color_group: None,
-            line_band: false,
+            line_band: None,
         }
     }
 }
@@ -246,7 +247,7 @@ impl From<&RenderPipelineDescriptor> for RenderLinkInputs {
             tessellation: d.tessellation,
             texture_write_rounding_mode: d.texture_write_rounding_mode,
             color_group: None,
-            line_band: false,
+            line_band: None,
         }
     }
 }
@@ -370,14 +371,18 @@ pub fn link(
         )?,
         LinkInputs::Standalone | LinkInputs::Compute => None,
     };
-    // A variant that draws its lines as bands draws them through synthesized tessellation stages.
+    // A variant that draws its lines, or its triangles' edges, as bands draws them through
+    // synthesized tessellation stages.
     let band = match inputs {
-        LinkInputs::Render(r) if r.line_band => Some(band::plan(
-            &ifaces,
-            geometry.is_some(),
-            r.max_vertex_amplification_count,
-            p,
-        )?),
+        LinkInputs::Render(r) => match r.line_band {
+            Some(primitive) => Some(band::plan(
+                &ifaces,
+                (primitive, geometry.is_some()),
+                r.max_vertex_amplification_count,
+                p,
+            )?),
+            None => None,
+        },
         _ => None,
     };
     // A mesh function reads its payload within its object function's. An emulated mesh
@@ -479,7 +484,7 @@ pub fn link(
                 });
                 gs.emulated_tessellation = Some(e);
             }
-            // A band variant draws each line as a patch of its two vertices, which no draw
+            // A band variant draws each primitive as a patch of its vertices, which no draw
             // changes.
             if let Some(b) = &band {
                 gs.topology = vk::PrimitiveTopology::PATCH_LIST;
@@ -492,6 +497,7 @@ pub fn link(
                 });
                 gs.line_band = Some(crate::pipeline::graphics::LineBandState {
                     push_offset: b.push_offset,
+                    primitive: b.primitive,
                 });
             }
             (vi, Some(gs))

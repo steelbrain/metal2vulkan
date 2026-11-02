@@ -893,9 +893,10 @@ struct DrawSettings {
     provoking_last: bool,
     /// How it draws its lines at the encoder's width (`render/line_width.rs`).
     line: LineRoute,
-    /// The band its band variant pushes (`BindState::line_band`): its Vulkan viewport 0's half
-    /// extent and the band's half width, in pixels.
-    line_band: Option<[f32; 4]>,
+    /// The band its band variant pushes (`BindState::line_band`): the band's primitive, and its
+    /// Vulkan viewport 0's half extent, the band's half width in pixels and a triangle's band's
+    /// front face (`LineBandState`).
+    line_band: Option<(metal2vulkan::pipeline::BandPrimitive, [f32; 4])>,
 }
 
 /// The render encoder state one draw takes, statically or as dynamic state, in Vulkan's terms
@@ -7245,15 +7246,15 @@ impl RenderLowering {
         // (`render/restart.rs`).
         // A draw under the last provoking vertex is drawn as a list on a device without it
         // (`render/provoking.rs`).
-        // A line Apple's `setLineWidth:` widens is drawn by the device's lines or as the
-        // pipeline's band, a strip or loop listed as its segments, else by the device's lines at
-        // the nearest width they draw (`render/line_width.rs`); a draw of no complete primitive
-        // as every line.
+        // A line or a triangle's edge Apple's `setLineWidth:` widens is drawn by the device's
+        // lines or as the pipeline's band, a strip, loop or fan listed as its primitives, else by
+        // the device's lines at the nearest width they draw (`render/line_width.rs`); a draw of no
+        // complete primitive as every line.
         let primitives = line_width::draws_primitives(assembly, &draw);
         let line = (self.shape_inputs()).line_route(call, (&pipeline, assembly, primitives), false);
         let provoking = self.provoking(call, &pipeline, (assembly, line.band()), &draw);
         let provoking_forms = provoking.forms(assembly, &pipeline);
-        let restarted = self.restarted(assembly, &draw, (provoking, line.band()));
+        let restarted = self.restarted(assembly, &draw, (provoking, line));
         let private = match (assembly, restarted) {
             (Assembly::Private(program), _) => PrivateForm::of(&pipeline, program, &draw),
             (_, Some(_)) => PrivateForm::listed(&draw),
@@ -8436,7 +8437,7 @@ impl RenderLowering {
             Next::New { instance, .. } => &**instance,
         };
         // The class's list topology where the pipeline makes the topology dynamic; a band's
-        // patches of each line's two vertices (`render/line_width.rs`).
+        // patches of each primitive's vertices (`render/line_width.rs`).
         let (topology, primitive_restart) = match settings.line {
             LineRoute::Band { .. } => (metal2vulkan::vk::PrimitiveTopology::PATCH_LIST, false),
             _ => (topology, primitive_restart),
@@ -9810,7 +9811,10 @@ impl RenderLowering {
                 settings.written_clamp.map(|w| w.range),
                 Option::is_some,
             );
-            reshape.shaped(&mut state.line_band, settings.line_band, Option::is_some);
+            // The shape reads the band's primitive alone (`BindShape::line_band`).
+            reshape.shaped(&mut state.line_band, settings.line_band, |band| {
+                band.map(|(primitive, _)| primitive)
+            });
             let colors = &settings.routed_colors;
             reshape.field_from(&mut state.zeroed_colors, &colors.zeroed);
             reshape.field(&mut state.primitive_id_indices, primitive_id_indices);
@@ -9846,6 +9850,17 @@ impl RenderLowering {
             let shape = live.shape(counts, |state| pipeline.kept_shape(state));
             // Through what the pipeline state settled lately (`GraphicsState::settle_shape`).
             let settled = match pipeline.settle_shape(&shape, self.forms) {
+                // A band variant the translator refuses for the draw's shape, past the one the
+                // state compiled for its first band: refused, and the state's later draws take
+                // the nearest width (`render/line_width.rs`).
+                Err(Error::Unsupported(refused))
+                    if refused.feature == metal2vulkan::error::Feature::WideLines =>
+                {
+                    if let Some((primitive, _)) = settings.line_band {
+                        pipeline.refuse_band(primitive);
+                    }
+                    return Err(Error::Unsupported(refused));
+                }
                 // A variant that reads through snapshots the compile or bind layer refuses: the
                 // draw takes the split (`render/snapshot.rs`).
                 Err(Error::Unsupported(_) | Error::Bind(BindError::Unsupported(_)))

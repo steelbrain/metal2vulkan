@@ -40,9 +40,10 @@ use crate::pipeline::artifact::{
 use crate::pipeline::descriptor::TessellationDescriptor;
 use crate::pipeline::facts::{Mechanism, RuntimeFact, UniformViewChoice};
 use crate::pipeline::graphics::{
-    BlendState, ColorAttachmentState, EmulatedTessellation, FragmentImageblock, GraphicsState,
-    ImageblockMechanism, InputAttachmentUse, LineBandState, ShaderTestsUse, ShadowStencilUse,
-    StandInUse, StandInView, StorageAttachmentUse, StorageAttachmentView, TessellationState,
+    BandPrimitive, BlendState, ColorAttachmentState, EmulatedTessellation, FragmentImageblock,
+    GraphicsState, ImageblockMechanism, InputAttachmentUse, LineBandState, ShaderTestsUse,
+    ShadowStencilUse, StandInUse, StandInView, StorageAttachmentUse, StorageAttachmentView,
+    TessellationState,
 };
 use crate::pipeline::interface::{
     AccessSet, BufferForm, BufferKind, BufferSlot, CommandWrites, DescriptorView, MeshRecords,
@@ -1364,7 +1365,7 @@ codec_struct! {
         control_point_index_type,
     }
     EmulatedTessellation { domain, control_points, descriptor }
-    LineBandState { push_offset }
+    LineBandState { push_offset, primitive }
     FragmentImageblock { mechanism, words, master, data_size, alignment }
     ColorAttachmentState { format, write_mask, blend }
     BlendState { src_color, dst_color, color_op, src_alpha, dst_alpha, alpha_op }
@@ -1383,6 +1384,7 @@ codec_enum! {
     ImageblockMechanism { StorageImageInterlock }
     StorageAttachmentView { Attachment, SamplePlanes { layers } }
     StandInView { Image, SamplePlanes { layers } }
+    BandPrimitive { Lines, Triangles }
     PrecisionNote {
         F16FmaDoubleRounding, F16IntConvDoubleRounding, GradFromBias,
         DeviceTranscendentals, ReductionOrder, DeviceDenormals,

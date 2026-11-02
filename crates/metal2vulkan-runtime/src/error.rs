@@ -1760,10 +1760,11 @@ pub enum RuntimeGap {
     /// form) where its list has no device address; and a draw over indices or from indirect
     /// arguments the index rewrite pass cannot draw, as for `RestartedStrip`.
     ProvokingVertex,
-    /// A line strip at a width other than 1 (Apple's `setLineWidth:`) drawn as the band variant
-    /// (`render/line_width.rs`), which draws the list of its segments, where that list cannot be
-    /// drawn as Metal draws, as for `ProvokingVertex`. Every other draw of lines the band does not
-    /// draw runs the device's own lines at the width nearest Metal's they draw, announced
+    /// A line or triangle strip at a width other than 1 (Apple's `setLineWidth:`), the triangle
+    /// strip in fill mode `Lines`, drawn as the band variant (`render/line_width.rs`), which draws
+    /// the list of its primitives, where that list cannot be drawn as Metal draws, as for
+    /// `ProvokingVertex`. Every other draw of lines or edges the band does not draw runs the
+    /// device's own lines at the width nearest Metal's they draw, announced
     /// (`Degradation::LinesAtNearestWidth`).
     WideLines,
     /// An indexed draw (`drawIndexedPrimitives:`) of a pipeline whose fragment function reads

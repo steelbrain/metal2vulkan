@@ -1428,10 +1428,10 @@ fn plan(p: &RenderPipeline, device: &Device, shape: &BindShape) -> Result<Bindin
         .dependencies
         .iter()
         .any(|d| d.fact == RuntimeFact::MeshLastFirst);
-    // A draw of lines as bands: the variant whose synthesized tessellation stages draw them so,
-    // which its graphics state states.
+    // A draw of lines, or of triangles' edges, as bands: the variant whose synthesized
+    // tessellation stages draw them so, which its graphics state states.
     let line_band = shape.line_band;
-    let compiled_band = p.graphics.line_band.is_some();
+    let compiled_band = p.graphics.line_band.map(|b| b.primitive);
     // A fragment function that stores a color through the interlocked storage form before the
     // depth and stencil tests, since it discards (`RuntimeFact::TestedStorageWrites`), in a
     // pipeline with a depth or stencil attachment: Metal's store, as compiled, where the draw's
@@ -4566,7 +4566,7 @@ fn instantiate(
     }
     // A band variant's draw pushes its band to the evaluation stage's own range.
     if let Some(offset) = t.line_band {
-        let band = state
+        let (_, band) = state
             .line_band
             .ok_or_else(|| internal("a draw of a band pipeline without its band"))?;
         push_constants.push(PushConstantWrite {

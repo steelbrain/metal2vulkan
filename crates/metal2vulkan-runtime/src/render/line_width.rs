@@ -19,12 +19,21 @@
 //!   1/32 pixel of the segment along its minor axis, not only those on it.
 //! - A strip or loop draws one parallelogram per segment, with no joins: where two overlap a pixel
 //!   takes two fragments (at `w' = 1` a shared vertex is drawn once, as the diamond rule's).
-//! - Triangles whose fill mode is `Lines` draw their edges by the same rule; in fill mode `Fill`
-//!   the width changes nothing, nor for points.
+//! - Triangles whose fill mode is `Lines` draw their edges by the same rule, each edge its own
+//!   parallelogram, no joins (the probe's `edges`): where two overlap a pixel takes two fragments,
+//!   at a triangle's corners and along an edge two triangles share (a strip's, a square's). Their
+//!   fragments read the triangle's facing, and the cull mode culls them by it under either
+//!   winding; a zero-area triangle is back-facing, drawn under cull modes none and front, culled
+//!   under back; a strip's triangles face alike. Each fragment reads the triangle's flat inputs
+//!   from its provoking vertex, and its primitive ID. A fragment's depth is its edge's along the
+//!   edge, the same across the width; the depth bias applies to the edges (not to lines), by the
+//!   triangle's slope and its largest depth's exponent. In fill mode `Fill` the width changes
+//!   nothing, nor for points.
 //!
-//! Not measured: other Apple GPUs; what a band's fragments read (their varyings and depth across
-//! the width); a width finer than 1/16; multisampled targets beyond 4 samples at width 1; an
-//! execution of indirect render commands' lines; a rasterization-rate-mapped pass's.
+//! Not measured: other Apple GPUs; what a line's band's fragments read (their varyings and depth
+//! across the width); a width finer than 1/16; multisampled targets beyond 4 samples at width 1;
+//! a triangle crossing the near plane; an execution of indirect render commands' lines; a
+//! rasterization-rate-mapped pass's.
 //!
 //! The runtime draws each draw of lines by a route ([`LineRoute`]):
 //!
@@ -42,29 +51,43 @@
 //!   the granularity): announced (`Degradation::DeviceWideLines`), or under
 //!   `WideLinePolicy::Exact` the band below, where it can draw.
 //! - **Band**: the pipeline's band variant (`VariantKey::line_band`, the translator's
-//!   `pipeline::link::band`), two triangles per line over Metal's parallelogram, through a
-//!   tessellation control and evaluation stage (`tessellationShader`). It is every other width's
+//!   `pipeline::link::band`), through a tessellation control and evaluation stage
+//!   (`tessellationShader`): two triangles per line over Metal's parallelogram, and per triangle in
+//!   fill mode `Lines` the three parallelograms of its edges, which face as the triangle does and
+//!   are culled by the draw's cull mode, under the draw's depth bias. It is every other width's
 //!   route: no `wideLines` (MoltenVK), `w'` outside the range, and `w' = 0`, which the band draws
-//!   at 1/16, as Metal does. A strip or a loop is drawn as the list of its segments
-//!   (`render/restart.rs`); a flat input under the last provoking vertex reads the
-//!   list led by each line's last vertex (`render/provoking.rs`), which covers the same pixels, as
-//!   the parallelogram is the same either way.
+//!   at 1/16, as Metal does. A line strip or loop, a triangle strip, a fan and Metal's private
+//!   triangle types are drawn as the list of their primitives (`render/restart.rs`); a flat input
+//!   under the last provoking vertex reads the list led by each primitive's last vertex
+//!   (`render/provoking.rs`), which covers the same pixels: a line's parallelogram is the same
+//!   either way, and a triangle rotated faces alike. The band's depth bias is the device's, of
+//!   each of its triangles' own slope and depths, where Metal's is the triangle's: a draw of
+//!   edges as the band under a slope factor, or a constant factor over a float depth, is announced
+//!   (`Degradation::WideEdgeDepthBias`).
 //! - **Nearest**: the device's own lines at the width nearest Metal's they draw (`w'`, 1/16 at 0,
 //!   clamped into `lineWidthRange` where it enables `wideLines`, else 1), where neither route above
-//!   draws `w'`, announced (`Degradation::LinesAtNearestWidth`, with why): a triangle's edges in
-//!   fill mode `Lines` and a mesh draw's lines, which the band does not draw; a line without
-//!   `tessellationShader`; a band under vertex amplification above 1 (its viewports); and every
-//!   line drawn in a rasterization-rate-mapped pass or as an execution's command, whose width
-//!   Metal's answer is not measured for. Without `wideLines` they are 1 pixel wide whatever `w'`.
+//!   draws `w'`, announced (`Degradation::LinesAtNearestWidth`, with why): a mesh draw's lines and
+//!   edges, and a tessellated patch draw's edges, which the band does not draw; lines and edges
+//!   without `tessellationShader`, or of a pipeline state whose band variant the translator
+//!   refuses (`pipeline::link::band`: a vertex function that selects a slice or viewport, a
+//!   fragment function that reads barycentric weights, synthesized geometry, multiview, stages
+//!   past `maxTessellationEvaluationOutputComponents`); a band under vertex amplification above 1
+//!   (its viewports); and every line drawn in a rasterization-rate-mapped pass or as an
+//!   execution's command, whose width Metal's answer is not measured for. Without `wideLines` they
+//!   are 1 pixel wide whatever `w'`.
 //!
-//! Refused (`NotImplemented(RuntimeGap::WideLines)`): a line strip's band whose list of segments
-//! the runtime cannot draw (`render/restart.rs`, as for a list of the last provoking vertex); and
-//! as the translator refuses the band variant (`pipeline::link::band`: a vertex function that
-//! selects a slice or viewport, a fragment function that reads barycentric weights, synthesized
-//! geometry, multiview, stages past `maxTessellationEvaluationOutputComponents`).
+//! A pipeline state's band variant of each primitive is compiled when a draw first takes it, under
+//! the state's base key; where the translator refuses it, the state's draws of that primitive take
+//! the nearest width from then on (`GraphicsState::band_refused`). A draw whose own variant the
+//! translator refuses past that (a varying the draw's variant adds that takes the band's stages
+//! past `maxTessellationEvaluationOutputComponents`) is refused with the translator's
+//! `Unsupported(WideLines)`, and the state's later draws take the nearest width.
+//!
+//! Refused (`NotImplemented(RuntimeGap::WideLines)`): a strip's band whose list of primitives the
+//! runtime cannot draw (`render/restart.rs`, as for a list of the last provoking vertex).
 //!
 //! A multisampled target is drawn by the same routes: the band's triangles cover Metal's
-//! parallelogram at each sample, as a non-strict device's lines do (the Vulkan specification's
+//! parallelograms at each sample, as a non-strict device's lines do (the Vulkan specification's
 //! Basic Line Segment Rasterization). Metal's width-1 lines there (the parallelogram at the
 //! samples) are drawn as the runtime's plain lines.
 
@@ -74,8 +97,9 @@ use crate::degradation::Degradation;
 use crate::pipeline::{FixedState, GraphicsState as DrawingState};
 use metal2vulkan::bind::{DrawCall, RewriteProgram};
 use metal2vulkan::device::{DeviceProfile, VkFeature, WideLinePolicy};
-use metal2vulkan::metal::{PrimitiveType, TriangleFillMode};
-use metal2vulkan::pipeline::LineBandState;
+use metal2vulkan::metal::state::DepthBias;
+use metal2vulkan::metal::{PixelFormat, PrimitiveType, TriangleFillMode};
+use metal2vulkan::pipeline::{BandPrimitive, LineBandState};
 use metal2vulkan::vk;
 
 /// Metal's width of a line, `w'`: in sixteenths of a pixel, 0 to 256 (the module docs).
@@ -113,8 +137,8 @@ pub(super) enum LineRoute {
     /// The device's own lines `width` pixels wide (`lineWidth`), Metal's width, which differ from
     /// Metal's parallelogram where `differs` (announced).
     Device { width: f32, differs: bool },
-    /// The pipeline's band variant, `half` pixels to each side of the segment.
-    Band { half: f32 },
+    /// The pipeline's band variant of `primitive`, `half` pixels to each side of each segment.
+    Band { half: f32, primitive: BandPrimitive },
     /// The device's own lines `width` pixels wide, the width nearest Metal's they draw, where
     /// neither route above draws Metal's, for `why` (announced).
     Nearest { width: f32, why: Unrouted },
@@ -123,11 +147,13 @@ pub(super) enum LineRoute {
 /// Why a draw's lines take the nearest width the device's lines draw (the module docs).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum Unrouted {
-    /// A triangle's edges in fill mode `Lines` or a mesh draw's lines, which the band does not
+    /// A mesh draw's lines or edges, or a tessellated patch draw's edges, which the band does not
     /// draw.
     Unbanded,
     /// No `tessellationShader`, which the band needs.
     Untessellated,
+    /// The pipeline state's band variant, which the translator refuses.
+    Refused,
     /// Vertex amplification above 1, whose views the band does not draw.
     Amplified,
     /// A rasterization-rate-mapped pass, whose lines Metal's answer is not measured for.
@@ -143,19 +169,48 @@ impl LineRoute {
     }
 
     /// `fixed` as the route draws: the device's lines at their width; a band's triangles filled,
-    /// uncullable and front-facing, as a line is (`LineBandState`).
+    /// a line's uncullable and front-facing, as a line is, and a triangle's under the draw's cull
+    /// mode and front face (`LineBandState`).
     pub(super) fn fix(self, fixed: &mut FixedState) {
         match self {
             LineRoute::Plain => {}
             LineRoute::Device { width, .. } | LineRoute::Nearest { width, .. } => {
                 fixed.line_width = width.to_bits()
             }
-            LineRoute::Band { .. } => {
-                fixed.cull_mode = vk::CullModeFlags::NONE;
-                fixed.front_face = LineBandState::FRONT_FACE;
+            LineRoute::Band { primitive, .. } => {
                 fixed.polygon_mode = vk::PolygonMode::FILL;
+                if primitive == BandPrimitive::Lines {
+                    fixed.cull_mode = vk::CullModeFlags::NONE;
+                    fixed.front_face = LineBandState::FRONT_FACE;
+                }
             }
         }
+    }
+
+    /// Whether the route draws a band of `pipeline` the translator has refused since: a draw's
+    /// own band variant, past the one the state compiled first (`GraphicsState::refuse_band`).
+    pub(super) fn band_refused_by(self, pipeline: &DrawingState) -> bool {
+        matches!(self, LineRoute::Band { primitive, .. } if pipeline.refused_band(primitive))
+    }
+
+    /// The band's push (`BindState::line_band`) through a Vulkan viewport 0 of half extent
+    /// `(sx, sy)`, drawn under front face `front_face`: its half extent, the half width, and for a
+    /// triangle's edges 1 under a clockwise front face, -1 under a counter-clockwise one
+    /// (`LineBandState`); `None` for every other route.
+    pub(super) fn band_push(
+        self,
+        [sx, sy]: [f32; 2],
+        front_face: vk::FrontFace,
+    ) -> Option<(BandPrimitive, [f32; 4])> {
+        let LineRoute::Band { half, primitive } = self else {
+            return None;
+        };
+        let facing = match (primitive, front_face) {
+            (BandPrimitive::Lines, _) => 0.0,
+            (BandPrimitive::Triangles, vk::FrontFace::CLOCKWISE) => 1.0,
+            (BandPrimitive::Triangles, _) => -1.0,
+        };
+        Some((primitive, [sx, sy, half, facing]))
     }
 }
 
@@ -166,9 +221,23 @@ enum Drawn {
     Nothing,
     /// Line primitives, which the band draws.
     Lines,
-    /// Lines the band does not draw: a triangle's edges in fill mode `Lines`, an emulated mesh's
-    /// lines, and a mesh draw's (whose lines the runtime does not tell from its triangles).
+    /// Triangles' edges in fill mode `Lines`, of a list, a strip or one of Metal's private
+    /// triangle types, which the band draws.
+    Edges,
+    /// Lines the band does not draw: a mesh draw's lines and edges (whose lines the runtime does
+    /// not tell from its triangles), and a tessellated patch draw's edges.
     Other,
+}
+
+impl Drawn {
+    /// The primitive the band draws for it, where it draws one.
+    fn banded(self) -> Option<BandPrimitive> {
+        match self {
+            Drawn::Lines => Some(BandPrimitive::Lines),
+            Drawn::Edges => Some(BandPrimitive::Triangles),
+            Drawn::Nothing | Drawn::Other => None,
+        }
+    }
 }
 
 /// Whether `draw` of `assembly` may draw a primitive: every draw but a direct one whose vertices
@@ -199,8 +268,8 @@ fn drawn(
     if discards || !primitives {
         return Drawn::Nothing;
     }
-    let edges = match fill {
-        TriangleFillMode::Lines => Drawn::Other,
+    let edges = |drawn| match fill {
+        TriangleFillMode::Lines => drawn,
         _ => Drawn::Nothing,
     };
     match assembly {
@@ -208,12 +277,12 @@ fn drawn(
         Assembly::Primitives(PrimitiveType::Line | PrimitiveType::LineStrip)
         | Assembly::Private(RewriteProgram::LineLoop) => Drawn::Lines,
         Assembly::Primitives(PrimitiveType::Triangle | PrimitiveType::TriangleStrip)
-        | Assembly::Private(_)
-        | Assembly::Patches => edges,
+        | Assembly::Private(_) => edges(Drawn::Edges),
+        Assembly::Patches => edges(Drawn::Other),
         Assembly::Meshes => match mesh_corners {
             Some(1) => Drawn::Nothing,
             Some(2) | None => Drawn::Other,
-            Some(_) => edges,
+            Some(_) => edges(Drawn::Other),
         },
     }
 }
@@ -221,13 +290,15 @@ fn drawn(
 /// The route a draw of `drawn` at Metal's width `width` takes on a device of `profile` under
 /// `policy` (the module docs), drawn with vertex amplification above 1 where `amplifies`, in a
 /// rasterization-rate-mapped pass where `rate_mapped`, and as an execution's command where
-/// `executes`.
+/// `executes`, of a pipeline state whose band variant of the draw's primitive the translator
+/// refuses where `refused`.
 fn route(
     profile: &DeviceProfile,
     policy: WideLinePolicy,
     width: LineWidth,
     drawn: Drawn,
     (amplifies, rate_mapped, executes): (bool, bool, bool),
+    refused: bool,
 ) -> LineRoute {
     if width == LineWidth::ONE || drawn == Drawn::Nothing {
         return LineRoute::Plain;
@@ -266,24 +337,27 @@ fn route(
         && w > 1.0
         && on_grid;
     let tessellates = enabled.features.contains(&VkFeature::TessellationShader);
-    // Where the band can draw the draw's lines.
-    let band = drawn == Drawn::Lines && tessellates && !amplifies;
-    if exact || (drawable && (policy == WideLinePolicy::Device || !band)) {
+    // Where the band can draw the draw's lines or edges.
+    let band = drawn
+        .banded()
+        .filter(|_| tessellates && !amplifies && !refused);
+    if exact || (drawable && (policy == WideLinePolicy::Device || band.is_none())) {
         return LineRoute::Device {
             width: w,
             differs: !exact,
         };
     }
-    if !band {
-        return nearest(match drawn {
-            Drawn::Lines if !tessellates => Unrouted::Untessellated,
-            Drawn::Lines => Unrouted::Amplified,
-            _ => Unrouted::Unbanded,
+    let Some(primitive) = band else {
+        return nearest(match drawn.banded() {
+            None => Unrouted::Unbanded,
+            Some(_) if !tessellates => Unrouted::Untessellated,
+            Some(_) if amplifies => Unrouted::Amplified,
+            Some(_) => Unrouted::Refused,
         });
-    }
+    };
     // Metal draws `w' = 0` as 1/16 (the module docs).
     let half = w.max(1.0 / 16.0) / 2.0;
-    LineRoute::Band { half }
+    LineRoute::Band { half, primitive }
 }
 
 impl ShapeInputs<'_> {
@@ -307,17 +381,26 @@ impl ShapeInputs<'_> {
         );
         let compile = self.device.compile_device();
         let width = self.state.line_width();
-        let route = route(
-            compile.profile(),
-            compile.policy().wide_lines,
-            width,
-            drawn,
-            (
-                self.amplification.amplifies(),
-                self.rate_map.is_some(),
-                self.executes,
-            ),
-        );
+        let at = |refused| {
+            route(
+                compile.profile(),
+                compile.policy().wide_lines,
+                width,
+                drawn,
+                (
+                    self.amplification.amplifies(),
+                    self.rate_map.is_some(),
+                    self.executes,
+                ),
+                refused,
+            )
+        };
+        // The band where the pipeline state's band variant of the primitive compiles, which its
+        // first band asks of the translator.
+        let route = match at(false) {
+            LineRoute::Band { primitive, .. } if pipeline.band_refused(primitive) => at(true),
+            route => route,
+        };
         match route {
             LineRoute::Device { differs: true, .. } if announce => {
                 announce_device_lines(self.device, call, width.pixels());
@@ -372,23 +455,26 @@ fn announce_nearest_lines(
     };
     let (what, cause) = match why {
         Unrouted::Unbanded => (
-            "a triangle's edges in fill mode Lines or a mesh's lines",
-            "the runtime's band of two triangles draws lines alone",
+            "a mesh's lines or edges, or a tessellated patch's edges",
+            "the runtime's band draws the lines and triangles of a vertex function alone",
         ),
-        Unrouted::Untessellated => (
-            "lines",
-            "the band of two triangles needs tessellationShader",
+        Unrouted::Untessellated => ("lines or edges", "the band needs tessellationShader"),
+        Unrouted::Refused => (
+            "lines or edges",
+            "the translator refuses the pipeline state's band (a vertex function that selects \
+             a slice or viewport, a fragment function that reads barycentric weights, or stages \
+             past the device's limits)",
         ),
         Unrouted::Amplified => (
-            "lines",
+            "lines or edges",
             "the band does not draw vertex amplification's views",
         ),
         Unrouted::RateMapped => (
-            "lines",
+            "lines or edges",
             "Metal's width is not measured in a rasterization-rate-mapped pass",
         ),
         Unrouted::Executed => (
-            "lines",
+            "lines or edges",
             "Metal's width is not measured for an execution's commands",
         ),
     };
@@ -398,6 +484,58 @@ fn announce_nearest_lines(
             format!(
                 "drawn by the device's own lines {drawn} pixels wide, the width nearest Metal's \
                  they draw ({range}), as {cause}"
+            ),
+        )
+    });
+}
+
+/// Announce a draw by `line` of a triangle's edges as the band, under the Vulkan depth bias
+/// `bias`, into a depth of `format`, where the device's bias can differ from Metal's (the module
+/// docs): a slope factor, which the device takes from each band triangle's own depth slope where
+/// Metal takes the triangle's, or a constant factor over a float depth, whose unit the device
+/// takes from each band triangle's largest depth exponent where Metal takes the triangle's. A
+/// constant factor over a unorm depth is one unit in either API.
+pub(super) fn announce_band_bias(
+    device: &crate::Device,
+    line: LineRoute,
+    format: Option<PixelFormat>,
+    bias: &DepthBias,
+) {
+    let LineRoute::Band {
+        half,
+        primitive: BandPrimitive::Triangles,
+    } = line
+    else {
+        return;
+    };
+    let Some(format) = format else {
+        return;
+    };
+    let float = matches!(
+        format,
+        PixelFormat::Depth32Float | PixelFormat::Depth32FloatStencil8
+    );
+    let slope = bias.slope_factor != 0.0;
+    if !bias.enable || !(slope || (float && bias.constant_factor != 0.0)) {
+        return;
+    }
+    device.degrade(Degradation::WideEdgeDepthBias, || {
+        let factor = match slope {
+            true => "a slope factor, which the device takes from each band triangle's own slope",
+            false => {
+                "a constant factor over a float depth, whose unit the device takes from each band \
+                 triangle's largest depth exponent"
+            }
+        };
+        (
+            format!(
+                "a draw of a triangle's edges at width {} under a depth bias, into a {format:?} \
+                 depth",
+                2.0 * half
+            ),
+            format!(
+                "drawn as the band of each edge's parallelogram, biased by {factor}, where Metal \
+                 biases the edges by the triangle's slope and largest depth exponent"
             ),
         )
     });

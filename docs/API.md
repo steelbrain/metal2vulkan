@@ -194,12 +194,12 @@ compile does. `DevicePolicy::default()` is `DevicePolicy::UNTRUSTED`:
   the predicted pipeline before the creation returns, as Metal compiles there, and waits for
   every draw's and dispatch's until made.
 - **A wide line the device's own** (`WideLinePolicy::Device`, the default; the runtime's choice,
-  no pipeline's code differs). A line Apple's `setLineWidth:` widens is drawn by the device's own
-  lines wherever it draws the width (`wideLines`, inside `lineWidthRange`), exact where they are
-  Metal's parallelogram (`strictLines` unset, `nonStrictWideLinesUseParallelogram` set, the width
-  on `lineWidthGranularity` and above 1), announced `device-wide-lines` where not.
-  `wide_lines = WideLinePolicy::Exact`, which `exact_answers()` selects, draws those as the
-  pipeline's band variant instead (section 4), two triangles over Metal's parallelogram, on a
+  no pipeline's code differs). A line Apple's `setLineWidth:` widens, and a triangle's edge in fill
+  mode `Lines`, is drawn by the device's own lines wherever it draws the width (`wideLines`,
+  inside `lineWidthRange`), exact where they are Metal's parallelogram (`strictLines` unset,
+  `nonStrictWideLinesUseParallelogram` set, the width on `lineWidthGranularity` and above 1),
+  announced `device-wide-lines` where not. `wide_lines = WideLinePolicy::Exact`, which
+  `exact_answers()` selects, draws those as the pipeline's band variant instead (section 4), on a
   device with `tessellationShader`. Every other width other than 1 is the band under either value,
   and what neither draws the device's lines at the nearest width they draw, announced
   `lines-at-nearest-width` (the runtime's README, line widths).
@@ -702,20 +702,27 @@ Where Metal's rules differ from Vulkan's, the pipeline gives Metal's answer:
   pipelines take no groups. The runtime draws such a pass group by group, each group's colors in
   a pass of its own over a twin of the depth and stencil (the runtime's `render/color_groups.rs`;
   what it refuses there is `RuntimeGap::ColorAttachmentGroups`).
-- A pipeline's band variant (`VariantKey::line_band`) draws each line as the parallelogram Metal
-  draws for a line under Apple's `setLineWidth:` at a width the device's own lines do not draw
-  (the runtime chooses where: its README's line widths). Link adds two stages after the vertex
-  stage (`pipeline::link::band`): a tessellation control stage that passes the line's two
-  vertices through, and an evaluation stage that places each corner of a quad patch at its
-  endpoint, moved across the segment along its minor axis by half the width in framebuffer
-  pixels. `graphics.line_band` (`LineBandState`) states the draw's contract: each line one patch
-  of two control points (`PATCH_LIST`), no culling, front face `LineBandState::FRONT_FACE`, and the
-  band's `[sx, sy, h, 0]` pushed to the evaluation stage at `push_offset` (`BindState::line_band`:
-  Vulkan viewport 0's half extent and the half width). A smooth varying and the clip distances are
-  each endpoint's, a flat or integer varying the first vertex's. It needs `tessellationShader`
-  (`Unsupported{WideLines}` needing it); a post-tessellation vertex function, a vertex function
-  that writes a layer or viewport index, synthesized geometry stages, a fragment function that
-  reads barycentric weights and multiview are not implemented.
+- A pipeline's band variant (`VariantKey::line_band`, of a `BandPrimitive`) draws each line, or
+  each edge of a triangle in fill mode `Lines`, as the parallelogram Metal draws for a line under
+  Apple's `setLineWidth:` at a width the device's own lines do not draw (the runtime chooses
+  where: its README's line widths). Link adds two stages after the vertex stage
+  (`pipeline::link::band`): a tessellation control stage that passes the primitive's vertices
+  through, and an evaluation stage that places each vertex of a quad patch at an endpoint, moved
+  across the segment along its minor axis by half the width in framebuffer pixels. A line's patch
+  is two triangles over its parallelogram, front-facing under `LineBandState::FRONT_FACE`; a
+  triangle's is the fans of the quad domain's degenerate inner ring over its three edges'
+  parallelograms, which face as the triangle does under the draw's front face (a zero-area
+  triangle faces back). `graphics.line_band` (`LineBandState`) states the draw's contract: each
+  primitive one patch of its vertices (`PATCH_LIST`, `BandPrimitive::patch_control_points`), a
+  line's without culling under front face `LineBandState::FRONT_FACE` and without depth bias, a
+  triangle's under the draw's cull mode, front face and depth bias, and the band's `[sx, sy, h, f]`
+  pushed to the evaluation stage at `push_offset` (`BindState::line_band`: Vulkan viewport 0's half
+  extent, the half width, and for triangles 1 under a clockwise front face, -1 under a
+  counter-clockwise one). A smooth varying and the clip distances are each endpoint's, a flat or
+  integer varying the first vertex's. It needs `tessellationShader` (`Unsupported{WideLines}`
+  needing it); a post-tessellation vertex function, a vertex function that writes a layer or
+  viewport index, synthesized geometry stages, a fragment function that reads barycentric weights
+  and multiview are not implemented.
 - `graphics` also states what the runtime needs to record draws correctly: whether the fragment
   function reads flat inputs, barycentrics or its position's depth, whether the vertex function
   writes memory or a layer or viewport index, and which colors the function may write.
@@ -2729,20 +2736,30 @@ bound.
   lines (the rectangle the width spans across the segment, square ends), lines Vulkan does not
   state as parallelograms (`nonStrictWideLinesUseParallelogram` unset, or a width below 1), or a
   width off the device's `lineWidthGranularity`, which rounds it. Under `WideLinePolicy::Exact` a
-  draw of lines takes the band variant there instead, on a device with `tessellationShader`.
-  Cost: the lines can cover pixels Metal's parallelogram does not, and miss others, at each end
-  and along each edge.
+  draw of lines or of a triangle's edges takes the band variant there instead, on a device with
+  `tessellationShader`. Cost: the lines can cover pixels Metal's parallelogram does not, and miss
+  others, at each end and along each edge.
 - `metal2vulkan-degrade-lines-at-nearest-width` (precision). `LinesAtNearestWidth`: A draw of lines
   at a width other than 1 (Apple's `setLineWidth:`), or of a triangle's edges in fill mode `Lines`
   or of a mesh draw, that neither the device's own lines at that width nor the band variant draws,
   drawn by the device's own lines at the width nearest it they draw: the width clamped into
-  `lineWidthRange` where the device enables `wideLines`, else 1. That is a triangle's edges and a
-  mesh draw's lines where the device's lines do not draw the width (every such draw on MoltenVK), a
-  line on a device without `tessellationShader` whose lines do not draw it, a band under vertex
-  amplification above 1, and every line in a rasterization-rate-mapped pass or of an execution's
-  command, whose width Metal's answer is not measured for. The reason names which, and both
-  widths. Cost: the lines are drawn at another width than Metal's: thinner (1 pixel without
+  `lineWidthRange` where the device enables `wideLines`, else 1. That is a mesh draw's lines and
+  edges and a tessellated patch draw's edges where the device's lines do not draw the width (every
+  such draw on MoltenVK), lines and edges on a device without `tessellationShader` whose lines do
+  not draw them or of a pipeline state whose band variant the translator refuses, a band under
+  vertex amplification above 1, and every line in a rasterization-rate-mapped pass or of an
+  execution's command, whose width Metal's answer is not measured for. The reason names which, and
+  both widths. Cost: the lines are drawn at another width than Metal's: thinner (1 pixel without
   wideLines) or wider, so they cover fewer or more pixels across each line.
+- `metal2vulkan-degrade-wide-edge-depth-bias` (precision). `WideEdgeDepthBias`: A draw of a
+  triangle's edges in fill mode `Lines` at a width other than 1 (Apple's `setLineWidth:`) drawn as
+  the band variant under a depth bias the device can apply otherwise than Metal: a slope factor, or
+  a constant factor over a float depth. Metal biases the edges by the triangle's depth slope and
+  its largest depth's exponent; the device biases each of the band's triangles by its own slope and
+  its own largest depth's exponent, its native arithmetic. A constant factor over a unorm depth is
+  not announced. Cost: the edges' fragments are biased by another depth than Metal's, along the
+  edges as their slope along them differs from the triangle's, and near a vertex of a smaller depth
+  exponent than the triangle's largest by a smaller unit.
 - `metal2vulkan-degrade-provoking-vertex-lines` (precision). `ProvokingVertexLines`: A draw of
   lines, or an emulated mesh draw of lines, under Apple's last provoking vertex
   (`setProvokingVertexMode:` 1), of a pipeline state that reads it (a flat input, or a slice or

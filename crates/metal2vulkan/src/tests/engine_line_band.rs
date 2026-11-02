@@ -1,15 +1,16 @@
-//! A render pipeline variant that draws its lines as bands (`VariantKey::line_band`,
-//! `pipeline::link::band`), over the owned fixtures `engine/rt6_provoking` (a vertex function that
+//! A render pipeline variant that draws its lines, or its triangles' edges, as bands
+//! (`VariantKey::line_band`, `pipeline::link::band`), over the owned fixtures `engine/rt6_provoking` (a vertex function that
 //! writes a smooth and a flat varying, and fragment functions that read them, the primitive ID and
 //! the barycentric weights) and `engine/stage_io` (a vertex function that writes clip
 //! distances, and a fragment function that reads the primitive ID):
 //!
-//! - On every committed profile with `tessellationShader` the variant carries the band's
-//!   synthesized control and evaluation stages right after the vertex stage, draws a
-//!   `PATCH_LIST` of two control points that no draw changes, places the evaluation stage's push
-//!   range where no other range lies, and every module passes L3 (`spirv-val` and requirements
-//!   within the profile); the binder plans it for a shape that draws bands. The pipeline without
-//!   the variant has no tessellation stage.
+//! - On every committed profile with `tessellationShader` the variant of either primitive carries
+//!   the band's synthesized control and evaluation stages right after the vertex stage, draws a
+//!   `PATCH_LIST` that no draw changes, of the primitive's control points (two for a line, three
+//!   for a triangle, as the control stage outputs), places the evaluation stage's push range where
+//!   no other range lies, and every module passes L3 (`spirv-val` and requirements within the
+//!   profile); the binder plans it for a shape that draws bands of its primitive. The pipeline
+//!   without the variant has no tessellation stage.
 //! - The band takes a varying the fragment stage reads flat, or an integer one, from the first
 //!   control point, and a smooth one from each corner's endpoint.
 //! - The control stage's per-vertex inputs and outputs, and the evaluation stage's inputs, are the
@@ -34,6 +35,7 @@ use crate::pipeline::descriptor::{
 };
 use crate::pipeline::link::band;
 use crate::pipeline::testing::{compile, engine_dir, llvm_assemble, AssembleError};
+use crate::pipeline::BandPrimitive;
 use crate::pipeline::RenderPipeline;
 use crate::spirv::testing::{check_words_valid, committed_profiles};
 use crate::vk;
@@ -69,11 +71,28 @@ fn render(
     d
 }
 
-/// The variant key of a band.
-fn band_key() -> VariantKey {
+/// Both primitives a band draws.
+const PRIMITIVES: [BandPrimitive; 2] = [BandPrimitive::Lines, BandPrimitive::Triangles];
+
+/// The variant key of a band of `primitive`.
+fn band_key(primitive: BandPrimitive) -> VariantKey {
     let mut key = VariantKey::new();
-    key.line_band = true;
+    key.line_band = Some(primitive);
     key
+}
+
+/// The `OutputVertices` execution mode of module `words`.
+fn output_vertices(words: &[u32]) -> Option<u32> {
+    use crate::spirv_binary::{parse_bytes, Operand};
+    use crate::spv::{ExecutionMode as M, Op as O};
+    let bytes: Vec<u8> = words.iter().flat_map(|w| w.to_le_bytes()).collect();
+    let parsed = parse_bytes(&bytes).expect("parse");
+    (parsed.instructions.iter())
+        .filter(|i| i.opcode == O::ExecutionMode)
+        .find_map(|i| match i.operands.as_slice() {
+            [_, Operand::Word(m), Operand::Word(n)] if *m == M::OutputVertices as u32 => Some(*n),
+            _ => None,
+        })
 }
 
 /// Each stage of `p` valid on `dev`; and `p`'s stages in order.
@@ -85,11 +104,12 @@ fn valid_stages(p: &RenderPipeline, dev: &Device, what: &str) -> Vec<vk::ShaderS
     p.stages.iter().map(|m| m.stage).collect()
 }
 
-/// On every committed profile with `tessellationShader`, the band variant carries the two
-/// synthesized stages after the vertex stage, each valid, draws a patch list of two control points
-/// and pushes its band to the evaluation stage's own range; without the variant, no stage.
+/// On every committed profile with `tessellationShader`, the band variant of either primitive
+/// carries the two synthesized stages after the vertex stage, each valid, draws a patch list of
+/// the primitive's control points and pushes its band to the evaluation stage's own range; without
+/// the variant, no stage.
 #[test]
-fn the_band_variant_draws_patches_of_two_points_through_valid_stages() {
+fn the_band_variant_draws_patches_of_its_primitive_through_valid_stages() {
     let Some(provoking) = assemble("rt6_provoking.ll") else {
         return;
     };
@@ -121,11 +141,14 @@ fn the_band_variant_draws_patches_of_two_points_through_valid_stages() {
         ),
     ];
     let budget = Budget::standard();
-    let mut drawn = 0;
+    let mut drawn = [0; 2];
     for (stem, dev) in committed_devices() {
         let tessellates = (dev.profile().enabled().features).contains(&F::TessellationShader);
-        for (what, d) in &pipelines {
-            let what = format!("{stem} {what}");
+        for ((what, d), (k, primitive)) in pipelines
+            .iter()
+            .flat_map(|p| std::iter::repeat(p).zip(PRIMITIVES.into_iter().enumerate()))
+        {
+            let what = format!("{stem} {what} {primitive:?}");
             let plain = match dev.compile_render_pipeline(d, &budget) {
                 Ok(p) => p,
                 // A pipeline the profile refuses without a band has no band to test.
@@ -137,7 +160,7 @@ fn the_band_variant_draws_patches_of_two_points_through_valid_stages() {
                 !valid_stages(&plain, &dev, &what).contains(&vk::ShaderStage::TESSELLATION_CONTROL),
                 "{what}"
             );
-            let banded = match dev.compile_render_variant(d, &band_key(), &budget) {
+            let banded = match dev.compile_render_variant(d, &band_key(primitive), &budget) {
                 Ok(p) => p,
                 Err(Error::Unsupported(u)) if !tessellates => {
                     assert_eq!(u.feature, Feature::WideLines, "{what}");
@@ -172,6 +195,12 @@ fn the_band_variant_draws_patches_of_two_points_through_valid_stages() {
                 "{what}"
             );
             let band = g.line_band.expect("the band's state");
+            assert_eq!(band.primitive, primitive, "{what}");
+            assert_eq!(
+                output_vertices(&banded.stages[1].spirv),
+                Some(primitive.patch_control_points()),
+                "{what}"
+            );
             let ranges = &banded.layout.push_constants;
             let own = ranges
                 .iter()
@@ -195,16 +224,19 @@ fn the_band_variant_draws_patches_of_two_points_through_valid_stages() {
             // The binder plans it for a shape that draws bands: its synthesized stages run no
             // Metal function.
             let state = BindState {
-                line_band: Some([8.0, -8.0, 1.0, 0.0]),
+                line_band: Some((primitive, [8.0, -8.0, 1.0, 1.0])),
                 ..BindState::default()
             };
             banded
                 .plan(&dev, &state.shape())
                 .unwrap_or_else(|e| panic!("{what}: the band's plan: {e:?}"));
-            drawn += 1;
+            drawn[k] += 1;
         }
     }
-    assert!(drawn > 0, "no profile drew a band");
+    assert!(
+        drawn.iter().all(|&n| n > 0),
+        "a primitive no profile drew: {drawn:?}"
+    );
 }
 
 /// A flat varying, or an integer one, is the first control point's at every corner; a smooth one
@@ -221,21 +253,23 @@ fn the_band_takes_flat_varyings_from_the_first_control_point() {
         .expect("moltenvk-m3");
     let vertex = compile(&bc, "pv_vertex", &profile).expect("vertex");
     let fragment = compile(&bc, "pv_flat", &profile).expect("fragment");
-    let plan = band::plan(
-        &[&vertex.interface, &fragment.interface],
-        false,
-        1,
-        &profile,
-    )
-    .expect("plan");
-    let flats: Vec<(u8, bool)> = plan
-        .varyings
-        .iter()
-        .map(|v| (v.ty.components, v.flat))
-        .collect();
-    // The smooth `float` vertex ID, then the flat `uint` one.
-    assert_eq!(flats, [(1, false), (1, true)], "{:?}", plan.varyings);
-    assert_eq!(plan.clip_distances, 0);
+    for primitive in PRIMITIVES {
+        let plan = band::plan(
+            &[&vertex.interface, &fragment.interface],
+            (primitive, false),
+            1,
+            &profile,
+        )
+        .expect("plan");
+        let flats: Vec<(u8, bool)> = plan
+            .varyings
+            .iter()
+            .map(|v| (v.ty.components, v.flat))
+            .collect();
+        // The smooth `float` vertex ID, then the flat `uint` one.
+        assert_eq!(flats, [(1, false), (1, true)], "{:?}", plan.varyings);
+        assert_eq!((plan.primitive, plan.clip_distances), (primitive, 0));
+    }
 }
 
 /// Without `tessellationShader` a band is refused needing it, and a fragment function that reads
@@ -252,25 +286,29 @@ fn a_band_needs_tessellation_and_no_barycentric_weights() {
     let budget = Budget::standard();
     let both = render(&bc, "pv_vertex", "pv_both", PixelFormat::RGBA8Unorm);
     let dev = Device::new(desc.clone(), DevicePolicy::default()).expect("device");
-    match dev.compile_render_variant(&both, &band_key(), &budget) {
-        Err(Error::Unsupported(u)) => {
-            assert_eq!(u.feature, Feature::WideLines);
-            assert_eq!(u.needs, Needs::NotImplemented);
+    for primitive in PRIMITIVES {
+        match dev.compile_render_variant(&both, &band_key(primitive), &budget) {
+            Err(Error::Unsupported(u)) => {
+                assert_eq!(u.feature, Feature::WideLines);
+                assert_eq!(u.needs, Needs::NotImplemented);
+            }
+            other => panic!("{primitive:?}: {:?}", other.map(|p| p.key)),
         }
-        other => panic!("{:?}", other.map(|p| p.key)),
     }
     desc.features.remove(&F::TessellationShader);
     let dev = Device::new(desc, DevicePolicy::default()).expect("device");
     let flat = render(&bc, "pv_vertex", "pv_flat", PixelFormat::RGBA8Unorm);
-    match dev.compile_render_variant(&flat, &band_key(), &budget) {
-        Err(Error::Unsupported(u)) => {
-            assert_eq!(u.feature, Feature::WideLines);
-            assert_eq!(
-                u.needs,
-                Needs::AnyOf(vec![vec![Capability::Feature(F::TessellationShader)]])
-            );
+    for primitive in PRIMITIVES {
+        match dev.compile_render_variant(&flat, &band_key(primitive), &budget) {
+            Err(Error::Unsupported(u)) => {
+                assert_eq!(u.feature, Feature::WideLines);
+                assert_eq!(
+                    u.needs,
+                    Needs::AnyOf(vec![vec![Capability::Feature(F::TessellationShader)]])
+                );
+            }
+            other => panic!("{primitive:?}: {:?}", other.map(|p| p.key)),
         }
-        other => panic!("{:?}", other.map(|p| p.key)),
     }
 }
 
@@ -355,10 +393,13 @@ fn the_control_stage_takes_every_value_the_vertex_stage_writes() {
         if !(dev.profile().enabled().features).contains(&F::TessellationShader) {
             continue;
         }
-        for (what, d) in &pipelines {
-            let what = format!("{stem} {what}");
+        for ((what, d), primitive) in pipelines
+            .iter()
+            .flat_map(|p| std::iter::repeat(p).zip(PRIMITIVES))
+        {
+            let what = format!("{stem} {what} {primitive:?}");
             let p = dev
-                .compile_render_variant(d, &band_key(), &budget)
+                .compile_render_variant(d, &band_key(primitive), &budget)
                 .unwrap_or_else(|e| panic!("{what}: {e}"));
             let [vertex, control, evaluation, _] = &p.stages[..] else {
                 panic!(

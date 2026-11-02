@@ -71,12 +71,13 @@ use crate::Device;
 use metal2vulkan::bind::{BindShape, BindState, BindingPlan, FragmentTests};
 use metal2vulkan::cache::{Hash256, PipelineKey, SpecializationKey, VariantKey};
 use metal2vulkan::device::PipelineWaitPolicy;
+use metal2vulkan::error::Feature;
 use metal2vulkan::library::{CompiledFunction, FunctionCompileKey};
 use metal2vulkan::metal::{BindingAccess, PixelFormat, PrimitiveTopologyClass, RenderStages};
 use metal2vulkan::pipeline::{
-    ColorAttachmentDescriptor, CommandWrites, MeshPipelineDescriptor, PipelineInterface,
-    RenderPipeline, RenderPipelineDescriptor, RuntimeFact, SpecKey, Stage, StageEntries,
-    StageModule, StageSource, TessellationDescriptor,
+    BandPrimitive, ColorAttachmentDescriptor, CommandWrites, MeshPipelineDescriptor,
+    PipelineInterface, RenderPipeline, RenderPipelineDescriptor, RuntimeFact, SpecKey, Stage,
+    StageEntries, StageModule, StageSource, TessellationDescriptor,
 };
 use metal2vulkan::reflection::{LinkedUseAnswers, RenderPipelineReflection};
 use std::any::Any;
@@ -257,6 +258,9 @@ pub(crate) struct Program {
     /// Its buffer slots whose bind offset class tells the device's view base alignment apart
     /// (`argument_table::AtBindViews`), of its base's interface.
     at_bind_views: AtBindViews,
+    /// Whether the translator refuses its band variant of lines, then of triangles
+    /// ([`GraphicsState::band_refused`]): `None` until a draw first asks.
+    band_refusals: Mutex<[Option<bool>; 2]>,
 }
 
 /// The state's release returns at once: it lets go of what its pool pieces held on its own
@@ -1845,6 +1849,7 @@ impl GraphicsState {
                 routed: Mutex::new(None),
                 pieces: PieceHolds::new(),
                 at_bind_views,
+                band_refusals: Mutex::new([None; 2]),
             };
             StateShared {
                 id,
@@ -2275,6 +2280,41 @@ impl GraphicsState {
         (plan.variant == base.key && !self.0.stand_in).then_some((base, plan))
     }
 
+    /// Whether the translator refuses the state's band variant of `primitive`
+    /// (`VariantKey::line_band`, `render/line_width.rs`), whose draws then take the nearest width:
+    /// asked once per primitive, the first time a draw would take the band, by compiling the
+    /// variant of the base's key that draws bands of it, which a draw whose own key is that one
+    /// then finds compiled. A compile that fails otherwise refuses no band: the draw that needs
+    /// the variant meets the failure. Answered `true` from then on where a draw's own band variant
+    /// was refused ([`refuse_band`](Self::refuse_band)).
+    pub(crate) fn band_refused(&self, primitive: BandPrimitive) -> bool {
+        let at = band_index(primitive);
+        if let Some(refused) = lock(&self.0.band_refusals)[at] {
+            return refused;
+        }
+        let mut key = self.0.base.key.clone();
+        key.line_band = Some(primitive);
+        let refused = matches!(
+            self.variant(&key),
+            Err(Error::Unsupported(u)) if u.feature == Feature::WideLines
+        );
+        lock(&self.0.band_refusals)[at] = Some(refused);
+        refused
+    }
+
+    /// Whether the translator has refused the state's band variant of `primitive`, as far as its
+    /// draws asked ([`band_refused`](Self::band_refused)); compiling nothing.
+    pub(crate) fn refused_band(&self, primitive: BandPrimitive) -> bool {
+        lock(&self.0.band_refusals)[band_index(primitive)] == Some(true)
+    }
+
+    /// The translator refused a draw's band variant of `primitive`, past the one
+    /// [`band_refused`](Self::band_refused) compiled: the state's later draws of it take the
+    /// nearest width.
+    pub(crate) fn refuse_band(&self, primitive: BandPrimitive) {
+        lock(&self.0.band_refusals)[band_index(primitive)] = Some(true);
+    }
+
     /// The variant of `key`: the large-buffer form's compiled at creation, or another compiled
     /// when first needed.
     fn variant(&self, key: &VariantKey) -> Result<Arc<RenderVariant>, Error> {
@@ -2307,6 +2347,14 @@ impl GraphicsState {
         let variant = RenderVariant::of(&self.0.device, key.clone(), found)?;
         others.insert(key.clone(), Arc::clone(&variant), 1);
         Ok(variant)
+    }
+}
+
+/// The place of `primitive`'s answer among a state's band refusals (`Program::band_refusals`).
+fn band_index(primitive: BandPrimitive) -> usize {
+    match primitive {
+        BandPrimitive::Lines => 0,
+        BandPrimitive::Triangles => 1,
     }
 }
 

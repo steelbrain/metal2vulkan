@@ -15,7 +15,9 @@
 //! - **Reuse.** A draw takes a piece an earlier draw of the encoder derived where every input is
 //!   the same: the drawing state and variant by identity (each held), the assembly, whether it
 //!   may draw a primitive and whether a query counts by value, and the layout, the state and the
-//!   amplification by version (`versioned.rs`: any mutable access moves it); its pipeline where
+//!   amplification by version (`versioned.rs`: any mutable access moves it), but settings that
+//!   draw a band the translator has since refused for a draw of the state
+//!   (`GraphicsState::band_refused`); its pipeline where
 //!   each field of its key is, by value or by what it is made of ([`PipelineInputs`]). The device,
 //!   the rate map and whether it records an execution's commands do not change in an encoder,
 //!   whose memo this is; what the pieces read of the device is fixed at its
@@ -39,7 +41,7 @@
 //!   `WorkCounts::draw_shapes_reused` counts the draws that reused all three.
 
 use super::draw_problem;
-use super::line_width::LineRoute;
+use super::line_width::{self, LineRoute};
 use super::provoking;
 use super::{Assembly, DrawSettings, DrawState, Routed, RoutedColors};
 use crate::amplification::Amplification;
@@ -428,15 +430,16 @@ impl ShapeInputs<'_> {
         let compensated = compensation.is_some_and(|c| c.depth.is_some());
         let native = native && !compensated;
         // How it draws its lines at the encoder's width, and a band's push: Vulkan viewport 0's
-        // half extent, its height negative as the Y-flipped viewport's is, and the half width
-        // (`render/line_width.rs`). A band takes its flat inputs from its first vertex.
+        // half extent, its height negative as the Y-flipped viewport's is, the half width, and a
+        // triangle's band's front face (`render/line_width.rs`). A band takes its flat inputs
+        // from its first vertex.
         let line = self.line_route(call, (pipeline, assembly, primitives), announce);
         let line_band = match line {
-            LineRoute::Band { half } => {
+            LineRoute::Band { .. } => {
                 let viewports =
                     EncoderState::vk_viewports(&self.state.used_viewports(false)[..1], None, None);
                 let v = viewports[0];
-                Some([v.width / 2.0, v.height / 2.0, half, 0.0])
+                line.band_push([v.width / 2.0, v.height / 2.0], self.state.vk_front_face())
             }
             _ => None,
         };
@@ -564,6 +567,9 @@ impl ShapeInputs<'_> {
             .or(settings.hidden.then_some(HIDDEN_DEPTH_FORMAT));
         let bias = self.state.vk_depth_bias(topology, profile)?;
         let depth_bias = DepthBiasRecord::of(&bias);
+        // A band of a triangle's edges is biased by its own triangles' slopes and depths
+        // (`render/line_width.rs`).
+        line_width::announce_band_bias(device, settings.line, depth_format, &bias);
         // A 16-bit unorm depth, biased or not, stores Metal's codes where the driver is measured
         // to (`render_state::announce_unorm_depth`).
         render_state::announce_unorm_depth(device, depth_format, &fixed.depth_stencil, &bias);
@@ -716,6 +722,7 @@ impl ShapeMemo {
                     && entry.primitives == primitives
                     && entry.versions == versions
                     && entry.counts_visibility == counts_visibility
+                    && !entry.settings.line.band_refused_by(pipeline)
             })?;
             Some((at, entry))
         })?;

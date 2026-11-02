@@ -6,6 +6,7 @@ use metal2vulkan::bind::{DrawCall, IndexBufferRef, IndirectRef, RewriteProgram};
 use metal2vulkan::device::WideLinePolicy;
 use metal2vulkan::device::{Device, DeviceDescription, DevicePolicy, DeviceProfile, VkFeature};
 use metal2vulkan::metal::{PrimitiveType, TriangleFillMode};
+use metal2vulkan::pipeline::BandPrimitive;
 use metal2vulkan::vk;
 
 /// A route as the table below writes it.
@@ -19,9 +20,9 @@ enum Cell {
     Announced,
     /// `B`: the band.
     Band,
-    /// `T`, `U`, `V`: the device's own lines at the nearest width they draw, announced, the band
-    /// lacking `tessellationShader`, not drawing the draw's lines (edges, mesh lines), or not its
-    /// amplified views.
+    /// `T`, `U`, `V`, `R`: the device's own lines at the nearest width they draw, announced, the
+    /// band lacking `tessellationShader`, not drawing the draw's lines (a mesh's lines, a patch's
+    /// edges), not its amplified views, or refused by the translator.
     Nearest(Unrouted),
 }
 
@@ -36,6 +37,7 @@ impl Cell {
                 "T" => Cell::Nearest(Unrouted::Untessellated),
                 "U" => Cell::Nearest(Unrouted::Unbanded),
                 "V" => Cell::Nearest(Unrouted::Amplified),
+                "R" => Cell::Nearest(Unrouted::Refused),
                 other => panic!("no cell {other}"),
             })
             .collect()
@@ -69,17 +71,25 @@ fn nearest(profile: &DeviceProfile, w: f32) -> f32 {
 }
 
 /// The cell of `drawn` at `width` on `profile`'s device under `policy`, amplified where
-/// `amplifies`; each route's own value checked (the device's width, the band's half width, the
+/// `amplifies`, of a pipeline state whose band the translator refuses where `refused`; each
+/// route's own value checked (the device's width, the band's half width and primitive, the
 /// nearest width).
 fn cell(
     profile: &DeviceProfile,
     policy: WideLinePolicy,
     width: LineWidth,
     drawn: Drawn,
-    amplifies: bool,
+    (amplifies, refused): (bool, bool),
 ) -> Cell {
     let w = width.pixels();
-    match route(profile, policy, width, drawn, (amplifies, false, false)) {
+    match route(
+        profile,
+        policy,
+        width,
+        drawn,
+        (amplifies, false, false),
+        refused,
+    ) {
         LineRoute::Plain => Cell::Plain,
         LineRoute::Device { width, differs } => {
             assert_eq!(width, w);
@@ -88,8 +98,13 @@ fn cell(
                 true => Cell::Announced,
             }
         }
-        LineRoute::Band { half } => {
+        LineRoute::Band { half, primitive } => {
             assert_eq!(half, if w == 0.0 { 1.0 / 32.0 } else { w / 2.0 });
+            let banded = match drawn {
+                Drawn::Lines => BandPrimitive::Lines,
+                _ => BandPrimitive::Triangles,
+            };
+            assert_eq!(primitive, banded);
             Cell::Band
         }
         LineRoute::Nearest { width, why } => {
@@ -100,18 +115,21 @@ fn cell(
 }
 
 /// The route of every draw at a width other than 1 on each committed device profile the
-/// table names, under both `WideLinePolicy` values: a list of lines, a triangle's edges in
-/// fill mode `Lines` and an emulated mesh's lines (which the band does not draw, under either
-/// value), and a list of lines under vertex amplification above 1. The widths: 0, 0.5, 1,
-/// 1.5, a width on the device's `lineWidthGranularity` and one off it where Metal has one
-/// (every sixteenth is on a granularity of 1/16 or finer), the top of `lineWidthRange` and a
-/// sixteenth above it where Metal draws them, and 16. Where neither the device's lines nor the
-/// band draw the width, the device's lines at the nearest width they draw: no draw is refused.
-/// A rate-mapped pass's lines and an execution's command's, whose width Metal's answer is not
+/// table names, under both `WideLinePolicy` values: a list of lines and a triangle's edges in
+/// fill mode `Lines` (of a list, a strip and a fan), alike; an emulated mesh's lines and a
+/// tessellated patch's edges, which the band does not draw, under either value; both under
+/// vertex amplification above 1; and both of a pipeline state whose band the translator refuses,
+/// which take the nearest width where they would take the band. The widths: 0, 0.5, 1, 1.5, a
+/// width on the device's `lineWidthGranularity` and one off it where Metal has one (every
+/// sixteenth is on a granularity of 1/16 or finer), the top of `lineWidthRange` and a sixteenth
+/// above it where Metal draws them, and 16. Where neither the device's lines nor the band draw
+/// the width, the device's lines at the nearest width they draw: no draw is refused. A
+/// rate-mapped pass's lines and an execution's command's, whose width Metal's answer is not
 /// measured for, take the nearest width at every width other than 1.
 #[test]
 fn each_device_routes_each_width_as_its_lines_allow() {
-    // (profile, widths, list Device, list Exact, edges and mesh lines, amplified list)
+    // (profile, widths, lines and edges Device, lines and edges Exact, mesh lines and patch
+    // edges, amplified lines and edges)
     let table: [(&str, &[f32], [&str; 4]); 11] = [
         // wideLines, [0, 8] by 1/8, non-strict parallelograms, tessellation.
         (
@@ -202,13 +220,15 @@ fn each_device_routes_each_width_as_its_lines_allow() {
         None,
         true,
     );
-    let edges = drawn(
-        Assembly::Primitives(PrimitiveType::Triangle),
-        TriangleFillMode::Lines,
-        false,
-        None,
-        true,
-    );
+    let edges_of = |assembly| drawn(assembly, TriangleFillMode::Lines, false, None, true);
+    let edges = edges_of(Assembly::Primitives(PrimitiveType::Triangle));
+    for assembly in [
+        Assembly::Primitives(PrimitiveType::TriangleStrip),
+        Assembly::Private(RewriteProgram::TriangleFan),
+        Assembly::Private(RewriteProgram::Quads),
+    ] {
+        assert_eq!(edges_of(assembly), Drawn::Edges);
+    }
     let mesh_lines = drawn(
         Assembly::Meshes,
         TriangleFillMode::Fill,
@@ -216,9 +236,10 @@ fn each_device_routes_each_width_as_its_lines_allow() {
         Some(2),
         true,
     );
+    let patch_edges = edges_of(Assembly::Patches);
     assert_eq!(
-        (lines, edges, mesh_lines),
-        (Drawn::Lines, Drawn::Other, Drawn::Other)
+        (lines, edges, mesh_lines, patch_edges),
+        (Drawn::Lines, Drawn::Edges, Drawn::Other, Drawn::Other)
     );
     for (stem, widths, rows) in table {
         let device = device(stem);
@@ -235,58 +256,68 @@ fn each_device_routes_each_width_as_its_lines_allow() {
             limits.strict_lines,
             limits.non_strict_wide_lines_use_parallelogram,
         );
-        let at = |policy, drawn, amplifies| -> Vec<Cell> {
+        let at = |policy, drawn, (amplifies, refused)| -> Vec<Cell> {
             (widths.iter())
-                .map(|&w| cell(profile, policy, LineWidth::of(w), drawn, amplifies))
+                .map(|&w| {
+                    cell(
+                        profile,
+                        policy,
+                        LineWidth::of(w),
+                        drawn,
+                        (amplifies, refused),
+                    )
+                })
                 .collect()
         };
         let [device_lines, exact_lines, other, amplified] = rows.map(Cell::parse);
-        let found = [
-            (
-                "lines, Device",
-                at(WideLinePolicy::Device, lines, false),
-                &device_lines,
-            ),
-            (
-                "lines, Exact",
-                at(WideLinePolicy::Exact, lines, false),
-                &exact_lines,
-            ),
-            (
-                "edges, Device",
-                at(WideLinePolicy::Device, edges, false),
-                &other,
-            ),
-            (
-                "edges, Exact",
-                at(WideLinePolicy::Exact, edges, false),
-                &other,
-            ),
-            (
-                "mesh lines, Device",
-                at(WideLinePolicy::Device, mesh_lines, false),
-                &other,
-            ),
-            (
-                "mesh lines, Exact",
-                at(WideLinePolicy::Exact, mesh_lines, false),
-                &other,
-            ),
-            (
-                "amplified, Device",
-                at(WideLinePolicy::Device, lines, true),
-                &amplified,
-            ),
-            (
-                "amplified, Exact",
-                at(WideLinePolicy::Exact, lines, true),
-                &amplified,
-            ),
-        ];
-        for (what, cells, expected) in found {
+        // Refused, either policy routes as `Device` does without the band: its band's cells
+        // are the nearest width's.
+        let refused = |row: &[Cell]| -> Vec<Cell> {
+            (row.iter())
+                .map(|&c| match c {
+                    Cell::Band => Cell::Nearest(Unrouted::Refused),
+                    c => c,
+                })
+                .collect()
+        };
+        let mut found = Vec::new();
+        for (policy, row) in [
+            (WideLinePolicy::Device, &device_lines),
+            (WideLinePolicy::Exact, &exact_lines),
+        ] {
+            for (what, drawn) in [("lines", lines), ("edges", edges)] {
+                found.push((
+                    what,
+                    policy,
+                    "",
+                    at(policy, drawn, (false, false)),
+                    row.clone(),
+                ));
+                found.push((
+                    what,
+                    policy,
+                    ", amplified",
+                    at(policy, drawn, (true, false)),
+                    amplified.clone(),
+                ));
+                found.push((
+                    what,
+                    policy,
+                    ", refused",
+                    at(policy, drawn, (false, true)),
+                    refused(&device_lines),
+                ));
+            }
+            for (what, drawn) in [("mesh lines", mesh_lines), ("patch edges", patch_edges)] {
+                for place in [(false, false), (true, false), (false, true)] {
+                    found.push((what, policy, "", at(policy, drawn, place), other.clone()));
+                }
+            }
+        }
+        for (what, policy, how, cells, expected) in found {
             assert_eq!(
-                &cells, expected,
-                "{stem}, {what}, widths {widths:?} ({facts})"
+                cells, expected,
+                "{stem}, {what}{how}, {policy:?}, widths {widths:?} ({facts})"
             );
         }
         // A rate-mapped pass and an execution's command draw every line at a width other than 1
@@ -303,11 +334,19 @@ fn each_device_routes_each_width_as_its_lines_allow() {
                         LineWidth::of(w),
                         drawn,
                         place,
+                        false,
                     );
                     let width = nearest(profile, w);
                     assert_eq!(routed, LineRoute::Nearest { width, why }, "{stem}: {w}");
                 }
-                let routed = route(profile, WideLinePolicy::Exact, LineWidth::ONE, drawn, place);
+                let routed = route(
+                    profile,
+                    WideLinePolicy::Exact,
+                    LineWidth::ONE,
+                    drawn,
+                    place,
+                    false,
+                );
                 assert_eq!(routed, LineRoute::Plain, "{stem}");
             }
         }
@@ -380,6 +419,7 @@ fn a_draw_of_no_complete_primitive_draws_nothing() {
                                     wide,
                                     drawn,
                                     (true, false, false),
+                                    true,
                                 );
                                 assert_eq!(routed, LineRoute::Plain, "{draw:?}");
                             }
@@ -398,6 +438,7 @@ fn a_draw_of_no_complete_primitive_draws_nothing() {
                         wide,
                         edges,
                         (false, false, false),
+                        false,
                     );
                     assert_ne!(routed, LineRoute::Plain, "{draw:?}");
                 }

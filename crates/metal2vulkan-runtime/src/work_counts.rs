@@ -1711,8 +1711,8 @@ impl Counters {
         self.device_wide_line_draws.fetch_add(1, Ordering::Relaxed);
     }
 
-    /// A draw of lines at a width other than 1 ran the pipeline's band variant
-    /// (`render/line_width.rs`).
+    /// A draw of lines, or of a triangle's edges, at a width other than 1 ran the pipeline's band
+    /// variant (`render/line_width.rs`).
     pub(crate) fn line_band_draw(&self) {
         self.line_band_draws.fetch_add(1, Ordering::Relaxed);
     }
@@ -4150,12 +4150,14 @@ pub struct WorkCounts {
     /// among them.
     pub device_wide_line_draws: u64,
     /// Draws of lines at a width other than 1 that ran the pipeline's band variant
-    /// (`VariantKey::line_band`): each line two triangles over Metal's parallelogram.
+    /// (`VariantKey::line_band`): each line two triangles over Metal's parallelogram, and each
+    /// triangle in fill mode `Lines` its three edges' parallelograms.
     pub line_band_draws: u64,
     /// Draws of lines at a width other than 1 that neither route above draws, which ran the
     /// device's own lines at the width nearest Metal's they draw (`lineWidthRange`, 1 without
-    /// `wideLines`), announced `lines-at-nearest-width`: a triangle's edges in fill mode `Lines`
-    /// and mesh draws among them.
+    /// `wideLines`), announced `lines-at-nearest-width`: mesh draws, tessellated patches' edges,
+    /// and lines and edges without `tessellationShader` or of a pipeline state whose band the
+    /// translator refuses among them.
     pub nearest_width_line_draws: u64,
     /// Draws drawn as a list (a restarted strip's, a private primitive type's, or one led by its
     /// primitives' last vertices) whose list a run wrote: the index gather pass's (one dispatch
