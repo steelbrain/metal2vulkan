@@ -90,7 +90,7 @@ const FORMATS: [PixelFormat; 28] = [
 ];
 
 /// The side, in texels, of every texture the lane reads.
-const SIDE: u32 = 16;
+pub(super) const SIDE: u32 = 16;
 
 /// The most an 8-bit code is off Metal's value (`decoded-texel-precision`), with room for `f32`.
 const UNORM8_BOUND: f32 = 1.0 / 510.0 + 1e-6;
@@ -146,7 +146,7 @@ pub(super) fn reader(device: &Device) -> ComputePipelineState {
 }
 
 /// `bytes` as `float4` texels.
-fn texels_of(bytes: &[u8]) -> Vec<[f32; 4]> {
+pub(super) fn texels_of(bytes: &[u8]) -> Vec<[f32; 4]> {
     bytes
         .as_chunks::<16>()
         .0
@@ -209,24 +209,24 @@ pub(super) fn texture(device: &Device, pf: PixelFormat, usage: TextureUsage) -> 
 }
 
 /// The blocks across and down a level of `width` x `height` texels of `decode`'s.
-fn blocks_of(decode: AstcDecode, width: u64, height: u64) -> [u64; 2] {
+pub(super) fn blocks_of(decode: AstcDecode, width: u64, height: u64) -> [u64; 2] {
     let [bw, bh] = decode.block_extent().map(u64::from);
     [width.div_ceil(bw), height.div_ceil(bh)]
 }
 
 /// The bytes of a row of `decode`'s blocks across a `SIDE`-texel level.
-fn row_bytes(decode: AstcDecode) -> u64 {
+pub(super) fn row_bytes(decode: AstcDecode) -> u64 {
     blocks_of(decode, SIDE.into(), SIDE.into())[0] * u64::from(AstcDecode::BLOCK_BYTES)
 }
 
 /// The blocks of a `SIDE` x `SIDE` level of `decode`.
-fn block_count(decode: AstcDecode) -> usize {
+pub(super) fn block_count(decode: AstcDecode) -> usize {
     let [across, down] = blocks_of(decode, SIDE.into(), SIDE.into());
     (across * down) as usize
 }
 
 /// Metal's texels of `blocks`, a `SIDE` x `SIDE` level of `decode`.
-fn metal_texels(decode: AstcDecode, blocks: &[u8]) -> Vec<[f32; 4]> {
+pub(super) fn metal_texels(decode: AstcDecode, blocks: &[u8]) -> Vec<[f32; 4]> {
     texels_of(&decode.decode(AstcTexels::Float, blocks, [SIDE, SIDE, 1]))
 }
 

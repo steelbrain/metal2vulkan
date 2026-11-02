@@ -250,6 +250,8 @@ mod argument_buffers;
 #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
 mod argument_linear_samples;
 #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+mod astc_hdr_textures;
+#[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
 mod astc_textures;
 #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
 mod attachment_read_costs;
