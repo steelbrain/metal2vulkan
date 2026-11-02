@@ -1,17 +1,18 @@
 //! A draw's shape: what it derives from the encoder's state alone, not from what its tables bind
 //! (its settings, [`ShapeInputs::settings`]; its draw state, [`ShapeInputs::draw_state`]; and its
-//! `VkPipeline`), and the memo that keeps it from one draw of the encoder to the next
-//! ([`ShapeMemo`]).
+//! `VkPipeline`), the memo that keeps it from one draw of the encoder to the next
+//! ([`ShapeMemo`]), and the shapes a drawing state keeps for later encoders ([`KeptShapes`]).
 //!
-//! - **Inputs.** The derivation reads [`ShapeInputs`] alone: the device, the pass's layout, the
-//!   encoder's state and vertex amplification, whether a visibility query counts the draws, the
-//!   pass's rasterization-rate map, whether the encoder records an execution's commands, and the
-//!   routing the encoder kept for its drawing state (a cache of a function of the state and the
-//!   pass's colors, which changes no piece). The encoder's scissor rectangles are no input: the
-//!   state holds none (`render_state::ScissorRects`), and the draw state's Vulkan scissors, the
-//!   one piece that reads them, are each draw's own, set again on a draw state it reuses, so a
-//!   draw after a new rectangle reuses its shape. Beside them each piece takes the draw's own: its
-//!   drawing state, assembly and whether it may draw a primitive
+//! - **Inputs.** The derivation reads [`ShapeInputs`] alone: the device, what the pass's layout
+//!   holds of formats, depth, samples, area and tile memory (`LayoutView`, through which alone it
+//!   reads the layout), the encoder's state and vertex amplification, whether a visibility query
+//!   counts the draws, the pass's rasterization-rate map, whether the encoder records an
+//!   execution's commands, and the routing the encoder kept for its drawing state (a cache of a
+//!   function of the state and the pass's colors, which changes no piece). The encoder's scissor
+//!   rectangles are no input: the state holds none (`render_state::ScissorRects`), and the draw
+//!   state's Vulkan scissors, the one piece that reads them, are each draw's own, set again on a
+//!   draw state it reuses, so a draw after a new rectangle reuses its shape. Beside them each
+//!   piece takes the draw's own: its drawing state, assembly and whether it may draw a primitive
 //!   (`line_width::draws_primitives`); for the draw state its
 //!   variant's compiled state and what the draw's failing depth and shader-side tests make of it;
 //!   for the pipeline its graphics key (`DrawKey`) and variant.
@@ -27,6 +28,18 @@
 //!   creation (its profile, its depth ranges, its depth bias command, its region limits). Only a
 //!   piece derived without a refusal is kept, and each is taken at the step of the draw that
 //!   derives it, so a refused draw is refused by the same step as before.
+//! - **Across encoders.** A drawing state keeps the pieces its draws derived, each with the values
+//!   it was derived from ([`ShapeKey`]: the assembly, whether it may draw a primitive and gives the
+//!   pass its hidden depth and stencil, whether a query counts it and the encoder records an
+//!   execution's commands, the layout's facts, every field of the encoder's state but its scissor
+//!   rectangles, each float by its bits and the depth/stencil state by identity, and the vertex
+//!   amplification), its latest few ([`KEPT_SHAPES`]). A draw whose encoder's memo holds none of its
+//!   inputs takes the kept pieces of its own values, as the next frame's pass draws as the one
+//!   before it (`WorkCounts::draw_shapes_carried`), and its encoder's memo keeps them from then on:
+//!   the derivation reads nothing those values leave out (the device is the state's, and the rate
+//!   map and execution are fixed in an encoder; a rate-mapped pass takes and keeps none). A
+//!   pipeline is taken by its key's fields, the instance's shape and the pass's sample positions
+//!   by value. Values, not versions: two encoders' layouts and states are other objects.
 //! - **Notices.** A derivation announces its notices once per device (`Device::degrade`): a
 //!   reused piece's were announced as it was derived. A piece whose derivation met a notice the
 //!   device announces at every occurrence (`DeviceOptions::announce_each`), or refuses at every
@@ -40,8 +53,13 @@
 //!   take only whether it gives them. Nor a pipeline still being made, nor a residual form a draw
 //!   takes meanwhile (`render/residual.rs`), nor a mesh draw's, of its own specialization.
 //! - **Checked.** A debug build derives reused settings and draw states again from the same
-//!   inputs and asserts them equal; a reused pipeline's key is compared whole.
+//!   inputs and asserts them equal, those taken from another encoder too; a reused pipeline's key
+//!   is compared whole.
 //!   `WorkCounts::draw_shapes_reused` counts the draws that reused all three.
+
+mod layout_view;
+
+pub(super) use layout_view::{LayoutFacts, LayoutView};
 
 use super::draw_problem;
 use super::line_width::{self, LineRoute};
@@ -51,27 +69,31 @@ use crate::amplification::Amplification;
 use crate::color_reformat::{self, Routing};
 use crate::degradation::Degradation;
 use crate::depth_stencil::FailingDraw;
+use crate::device::lock;
 use crate::error::{internal, Error, RuntimeGap};
 use crate::pipeline::{FixedState, GraphicsState as DrawingState};
 use crate::pipeline::{RawPipeline, RenderVariant};
 use crate::rate_mapped_pass::RateMappedPass;
-use crate::render_pass::{PassLayout, HIDDEN_DEPTH_FORMAT};
+use crate::render_pass::HIDDEN_DEPTH_FORMAT;
 use crate::render_state::{self, DepthBiasRecord, EncoderState, ScissorRects, ViewportList};
 use crate::render_state::{Compensation, DepthBiasEffect, WrittenDepthClamp};
-use crate::render_target::RenderPassObject;
+use crate::render_target::PassShape;
 use crate::render_values::Viewport;
+use crate::sample_positions::Sixteenths;
+use crate::versioned::Versioned;
 use crate::Device;
 use metal2vulkan::bind::BindingPlan;
 use metal2vulkan::metal::{PixelFormat, PrimitiveTopologyClass, PrimitiveType};
 use metal2vulkan::pipeline::{GraphicsState, Stage};
 use std::collections::{BTreeMap, BTreeSet};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 /// The encoder's part of what a draw's shape is derived from (the module docs):
 /// `RenderCommandEncoder::shape_inputs`.
 pub(super) struct ShapeInputs<'a> {
     pub(super) device: &'a Device,
-    pub(super) layout: &'a PassLayout,
+    /// What it reads of the pass's layout ([`LayoutView`]).
+    pub(super) layout: LayoutView<'a>,
     pub(super) state: &'a EncoderState,
     pub(super) amplification: &'a Amplification,
     /// Whether the pass's draws draw as a visibility query counts them
@@ -103,7 +125,7 @@ impl ShapeInputs<'_> {
     /// (`RenderCommandEncoder::set_render_pipeline_state`) where the pass's colors
     /// are still the ones it was found for, else found again.
     pub(super) fn routing(&self, pipeline: &DrawingState) -> Result<Arc<Routing>, u32> {
-        let pass = self.layout.pass_formats();
+        let pass = self.layout.formats();
         match self.routed {
             Some(routed) if routed.state.same(pipeline) && routed.pass == pass => {
                 routed.routing.clone()
@@ -145,7 +167,7 @@ impl ShapeInputs<'_> {
                 pass,
                 colors: Some(colors),
                 ..
-            }) if state.same(pipeline) && *pass == self.layout.pass_formats() => Arc::clone(colors),
+            }) if state.same(pipeline) && *pass == self.layout.formats() => Arc::clone(colors),
             _ => Arc::new(self.colors_by(pipeline, routing)),
         }
     }
@@ -179,12 +201,13 @@ impl ShapeInputs<'_> {
         {
             return BTreeMap::new();
         }
+        let formats = self.layout.formats();
         routing
             .uncovered
             .iter()
             .filter_map(|(&location, &index)| {
-                let color = self.layout.colors.get(index as usize)?.as_ref()?;
-                Some((location, color.target.texture.pixel_format()))
+                let format = (*formats.get(index as usize)?)?;
+                Some((location, format))
             })
             .collect()
     }
@@ -286,8 +309,8 @@ impl ShapeInputs<'_> {
         // The pass's depth and stencil: its attachment's, or the hidden ones a draw whose state
         // uses depth or the stencil the pass lacks gives it from that draw on, as plain Metal
         // tests such a draw (its validation stops it; `render_state.rs`).
-        let ds = self.layout.depth_stencil.as_ref();
-        let (depth, _) = self.layout.aspects();
+        let ds = self.layout.depth_stencil();
+        let depth = ds.is_some_and(|ds| ds.depth);
         // A compare of `Never` without Metal's depth attachment fails every fragment (probes), the
         // hidden depth's too: the draw runs as `FailingDraw` says.
         let metal_depth = depth && !ds.is_some_and(|ds| ds.hidden);
@@ -564,10 +587,7 @@ impl ShapeInputs<'_> {
         settings.line.fix(&mut fixed);
         // The depth the draw renders against: the pass's attachment's, or the hidden one's,
         // which Metal biases as the 32-bit float depth it is.
-        let depth_format = self
-            .layout
-            .depth_stencil
-            .as_ref()
+        let depth_format = (self.layout.depth_stencil())
             .and_then(|ds| ds.depth_format)
             .or(settings.hidden.then_some(HIDDEN_DEPTH_FORMAT));
         let bias = self.state.vk_depth_bias(topology, profile)?;
@@ -654,10 +674,13 @@ struct Entry {
     /// [`ShapeInputs::versions`] and [`ShapeInputs::counts_visibility`].
     versions: [u64; 3],
     counts_visibility: bool,
-    settings: DrawSettings,
-    /// The draw state of a draw of the variant, held.
-    state: Option<(Arc<RenderVariant>, ShapedState)>,
-    found: Option<FoundPipeline>,
+    /// Held behind one count, which the drawing state's kept shapes share ([`KeptShapes`]): a
+    /// draw that finds them copies none.
+    settings: Arc<DrawSettings>,
+    /// The draw state of a draw of the variant, held, which the drawing state's kept shapes
+    /// share.
+    state: Option<Arc<KeptState>>,
+    found: Option<Arc<FoundPipeline>>,
 }
 
 /// A draw's hold on the memo entry its settings came from or went into, where its draw state and
@@ -670,15 +693,17 @@ pub(super) struct ShapeToken {
 
 /// What a draw finds its `VkPipeline` by (its graphics key, `DrawKey`, and its variant), each
 /// field by value or by what it is made of: its variant and plan (the plan's specialization),
-/// its instance's shape (by version) and compatible pass, its vertex strides (the pipeline's own,
-/// none where it takes them as dynamic state), its fixed state before the pipeline's dynamic
-/// states are left out, and its keyed topology. The pass's sample positions are the layout's,
-/// whose version the entry holds.
+/// its instance's shape (by version, else by value: another instance of the same shape, a later
+/// encoder's among them, finds it), the pass's sample positions, its vertex strides (the
+/// pipeline's own, none where it takes them as dynamic state), its fixed state before the
+/// pipeline's dynamic states are left out, and its keyed topology. Not the pass it was made
+/// against: the key names the shape (`DrawKey::pass`), and one pipeline of a key draws in every
+/// pass of that shape, each compatible with the others.
 pub(super) struct PipelineInputs<'k> {
     pub(super) variant: &'k Arc<RenderVariant>,
     pub(super) plan: &'k Arc<BindingPlan>,
-    pub(super) shape: u64,
-    pub(super) compatible: &'k Arc<RenderPassObject>,
+    pub(super) shape: &'k Versioned<PassShape>,
+    pub(super) sample_positions: &'k [Sixteenths],
     pub(super) strides: &'k [(u32, u32)],
     pub(super) fixed: FixedState,
     pub(super) topology: (metal2vulkan::vk::PrimitiveTopology, bool),
@@ -688,8 +713,9 @@ pub(super) struct PipelineInputs<'k> {
 struct FoundPipeline {
     variant: Arc<RenderVariant>,
     plan: Arc<BindingPlan>,
-    shape: u64,
-    compatible: Arc<RenderPassObject>,
+    /// The instance's shape, by its version and its value.
+    shape: (u64, PassShape),
+    sample_positions: Vec<Sixteenths>,
     /// Inline: a draw's strides are few, none where the pipeline takes them as dynamic state.
     strides: ViewportList<(u32, u32)>,
     fixed: FixedState,
@@ -698,15 +724,197 @@ struct FoundPipeline {
 }
 
 impl FoundPipeline {
+    /// Found by `inputs` and made as `made`.
+    fn of(inputs: &PipelineInputs<'_>, made: &Arc<RawPipeline>) -> FoundPipeline {
+        FoundPipeline {
+            variant: Arc::clone(inputs.variant),
+            plan: Arc::clone(inputs.plan),
+            shape: (inputs.shape.version(), (**inputs.shape).clone()),
+            sample_positions: inputs.sample_positions.to_vec(),
+            strides: inputs.strides.iter().copied().collect(),
+            fixed: inputs.fixed,
+            topology: inputs.topology,
+            made: Arc::clone(made),
+        }
+    }
+
     /// Whether it was found by `inputs`.
     fn by(&self, inputs: &PipelineInputs<'_>) -> bool {
         Arc::ptr_eq(&self.variant, inputs.variant)
             && Arc::ptr_eq(&self.plan, inputs.plan)
-            && self.shape == inputs.shape
-            && Arc::ptr_eq(&self.compatible, inputs.compatible)
+            && (self.shape.0 == inputs.shape.version() || self.shape.1 == **inputs.shape)
+            && *self.sample_positions == *inputs.sample_positions
             && *self.strides == *inputs.strides
             && self.fixed == inputs.fixed
             && self.topology == inputs.topology
+    }
+}
+
+/// What a draw's settings, draw state and pipeline are derived from but its drawing state, by
+/// value: its assembly, whether it may draw a primitive and gives the pass its hidden depth and
+/// stencil, whether a query counts it, whether the encoder records an execution's commands, the
+/// pass's [`LayoutFacts`], the encoder's state (`EncoderState::same_values`) and its vertex
+/// amplification. The device is the drawing state's, and the pieces read nothing else of it
+/// that changes (the module docs).
+struct ShapeKey {
+    assembly: Assembly,
+    primitives: bool,
+    hidden: bool,
+    counts_visibility: bool,
+    executes: bool,
+    layout: LayoutFacts,
+    state: EncoderState,
+    amplification: Amplification,
+}
+
+impl ShapeKey {
+    /// The key of a draw as `assembly`, which may draw a primitive where `primitives` and gives
+    /// the pass its hidden depth and stencil where `hidden`, under `inputs`.
+    fn of(
+        inputs: &ShapeInputs<'_>,
+        (assembly, primitives): (Assembly, bool),
+        hidden: bool,
+    ) -> Self {
+        ShapeKey {
+            assembly,
+            primitives,
+            hidden,
+            counts_visibility: inputs.counts_visibility,
+            executes: inputs.executes,
+            layout: inputs.layout.facts(),
+            state: inputs.state.clone(),
+            amplification: inputs.amplification.clone(),
+        }
+    }
+
+    /// Whether it is [`of`](Self::of) those, compared by value, `layout` the facts of `inputs`'s.
+    fn holds(
+        &self,
+        (inputs, layout): (&ShapeInputs<'_>, &LayoutFacts),
+        (assembly, primitives): (Assembly, bool),
+        hidden: bool,
+    ) -> bool {
+        self.assembly == assembly
+            && self.primitives == primitives
+            && self.hidden == hidden
+            && self.counts_visibility == inputs.counts_visibility
+            && self.executes == inputs.executes
+            && self.layout == *layout
+            && self.state.same_values(inputs.state)
+            && self.amplification == *inputs.amplification
+    }
+}
+
+/// The most shapes a drawing state keeps of those its draws derived ([`KeptShapes`]): a window
+/// server's frame draws one state in a few passes of their own sizes, as a few assemblies, each
+/// a shape of its own.
+const KEPT_SHAPES: usize = 8;
+
+/// The shapes the draws of one drawing state derived, each with the values it was derived from
+/// ([`ShapeKey`]), held in place: at most [`KEPT_SHAPES`], the one found or kept least lately
+/// giving its place to a new one. Where a draw finds no piece in its encoder's memo, it takes the
+/// one of these its own values derived, as an earlier encoder's draw derived it (the module docs).
+#[derive(Default)]
+pub(crate) struct KeptShapes(Mutex<Kept>);
+
+/// [`KeptShapes`]' places, and the count of the draws that found or kept one: a place's last use.
+#[derive(Default)]
+struct Kept {
+    shapes: [Option<KeptShape>; KEPT_SHAPES],
+    ticks: u64,
+}
+
+/// One of a drawing state's kept shapes: the pieces a draw of its key derived ([`Entry`]), each
+/// behind a count the encoders' memos share.
+struct KeptShape {
+    key: ShapeKey,
+    used: u64,
+    settings: Arc<DrawSettings>,
+    state: Option<Arc<KeptState>>,
+    found: Option<Arc<FoundPipeline>>,
+}
+
+/// A draw state a draw of the variant derived, held.
+type KeptState = (Arc<RenderVariant>, ShapedState);
+
+/// The pieces a draw takes from its drawing state's kept shapes ([`ShapeInputs::carried`]).
+pub(super) struct Carried {
+    settings: Arc<DrawSettings>,
+    state: Option<Arc<KeptState>>,
+    found: Option<Arc<FoundPipeline>>,
+}
+
+impl Carried {
+    /// The settings.
+    pub(super) fn settings(&self) -> &Arc<DrawSettings> {
+        &self.settings
+    }
+}
+
+impl Kept {
+    /// The shape kept under `settings` (the very ones).
+    fn under(&mut self, settings: &Arc<DrawSettings>) -> Option<&mut KeptShape> {
+        (self.shapes.iter_mut().flatten()).find(|shape| Arc::ptr_eq(&shape.settings, settings))
+    }
+}
+
+impl ShapeInputs<'_> {
+    /// The pieces a draw of `pipeline` as `assembly`, which may draw a primitive where
+    /// `primitives` and gives the pass its hidden depth and stencil where `hidden`, takes from
+    /// the shapes the state's draws derived ([`KeptShapes`]): those of its own values, used now;
+    /// none in a rate-mapped pass, whose map they would read.
+    pub(super) fn carried(
+        &self,
+        (pipeline, assembly, primitives): (&DrawingState, Assembly, bool),
+        hidden: bool,
+    ) -> Option<Carried> {
+        if self.rate_map.is_some() {
+            return None;
+        }
+        let layout = self.layout.facts();
+        let mut kept = lock(&pipeline.kept_shapes().0);
+        kept.ticks += 1;
+        let ticks = kept.ticks;
+        let shape = (kept.shapes.iter_mut().flatten()).find(|shape| {
+            shape
+                .key
+                .holds((self, &layout), (assembly, primitives), hidden)
+                && !shape.settings.line.band_refused_by(pipeline)
+        })?;
+        shape.used = ticks;
+        Some(Carried {
+            settings: Arc::clone(&shape.settings),
+            state: shape.state.clone(),
+            found: shape.found.clone(),
+        })
+    }
+
+    /// Keep `settings`, derived for a draw of `pipeline` as `assembly`, which may draw a
+    /// primitive where `primitives` and gives the pass its hidden depth and stencil where
+    /// `hidden`, among the state's kept shapes ([`KeptShapes`]); not in a rate-mapped pass.
+    pub(super) fn keep_carried(
+        &self,
+        (pipeline, assembly, primitives): (&DrawingState, Assembly, bool),
+        hidden: bool,
+        settings: &Arc<DrawSettings>,
+    ) {
+        if self.rate_map.is_some() {
+            return;
+        }
+        let key = ShapeKey::of(self, (assembly, primitives), hidden);
+        let mut kept = lock(&pipeline.kept_shapes().0);
+        kept.ticks += 1;
+        let used = kept.ticks;
+        let at = (0..KEPT_SHAPES)
+            .min_by_key(|&at| kept.shapes[at].as_ref().map_or(0, |shape| shape.used))
+            .unwrap_or_default();
+        kept.shapes[at] = Some(KeptShape {
+            key,
+            used,
+            settings: Arc::clone(settings),
+            state: None,
+            found: None,
+        });
     }
 }
 
@@ -718,7 +926,7 @@ impl ShapeMemo {
         &mut self,
         (pipeline, assembly, primitives): (&DrawingState, Assembly, bool),
         (versions, counts_visibility): ([u64; 3], bool),
-    ) -> Option<(DrawSettings, ShapeToken)> {
+    ) -> Option<(Arc<DrawSettings>, ShapeToken)> {
         self.ticks += 1;
         let (at, entry) = (0..).zip(&mut self.entries).find_map(|(at, entry)| {
             let entry = entry.as_mut().filter(|entry| {
@@ -733,7 +941,7 @@ impl ShapeMemo {
         })?;
         entry.used = self.ticks;
         let token = ShapeToken { at, id: entry.id };
-        Some((entry.settings.clone(), token))
+        Some((Arc::clone(&entry.settings), token))
     }
 
     /// Keep `settings`, derived for a draw of `pipeline` as `assembly`, which may draw a
@@ -741,14 +949,37 @@ impl ShapeMemo {
     /// entry, in place of the least recently used of [`ENTRIES`]: its token.
     pub(super) fn keep_settings(
         &mut self,
+        drawn: (&DrawingState, Assembly, bool),
+        inputs: ([u64; 3], bool),
+        settings: &Arc<DrawSettings>,
+    ) -> ShapeToken {
+        let carried = Carried {
+            settings: Arc::clone(settings),
+            state: None,
+            found: None,
+        };
+        self.keep(drawn, inputs, carried)
+    }
+
+    /// Keep `carried`, the pieces an earlier encoder's draw derived for a draw of `pipeline` as
+    /// `assembly`, which may draw a primitive where `primitives` ([`ShapeInputs::carried`]),
+    /// under the encoder's `versions` and query count, as [`keep_settings`](Self::keep_settings)
+    /// keeps settings: its token.
+    pub(super) fn keep(
+        &mut self,
         (pipeline, assembly, primitives): (&DrawingState, Assembly, bool),
         (versions, counts_visibility): ([u64; 3], bool),
-        settings: &DrawSettings,
+        carried: Carried,
     ) -> ShapeToken {
         self.ticks += 1;
         let at = (0..ENTRIES)
             .min_by_key(|&at| self.entries[at].as_ref().map_or(0, |entry| entry.used))
             .unwrap_or_default();
+        let Carried {
+            settings,
+            state,
+            found,
+        } = carried;
         self.entries[at] = Some(Entry {
             id: self.ticks,
             used: self.ticks,
@@ -757,9 +988,9 @@ impl ShapeMemo {
             primitives,
             versions,
             counts_visibility,
-            settings: settings.clone(),
-            state: None,
-            found: None,
+            settings,
+            state,
+            found,
         });
         ShapeToken { at, id: self.ticks }
     }
@@ -778,11 +1009,12 @@ impl ShapeMemo {
         token: ShapeToken,
         variant: &Arc<RenderVariant>,
     ) -> Option<ShapedState> {
-        let (kept, state) = self.entry(token)?.state.as_ref()?;
+        let (kept, state) = &**self.entry(token)?.state.as_ref()?;
         Arc::ptr_eq(kept, variant).then(|| state.clone())
     }
 
-    /// Keep `state`, a draw of `variant`'s derived under `token`'s settings.
+    /// Keep `state`, a draw of `variant`'s derived under `token`'s settings, here and among the
+    /// drawing state's kept shapes where it keeps the settings.
     pub(super) fn keep_state(
         &mut self,
         token: ShapeToken,
@@ -790,7 +1022,11 @@ impl ShapeMemo {
         state: &ShapedState,
     ) {
         if let Some(entry) = self.entry_mut(token) {
-            entry.state = Some((Arc::clone(variant), state.clone()));
+            let kept = Arc::new((Arc::clone(variant), state.clone()));
+            if let Some(shape) = lock(&entry.pipeline.kept_shapes().0).under(&entry.settings) {
+                shape.state = Some(Arc::clone(&kept));
+            }
+            entry.state = Some(kept);
         }
     }
 
@@ -805,7 +1041,8 @@ impl ShapeMemo {
         found.by(inputs).then(|| Arc::clone(&found.made))
     }
 
-    /// Keep `made`, the `VkPipeline` a draw found made by `inputs` under `token`'s settings.
+    /// Keep `made`, the `VkPipeline` a draw found made by `inputs` under `token`'s settings, here
+    /// and among the drawing state's kept shapes where it keeps the settings.
     pub(super) fn keep_pipeline(
         &mut self,
         token: ShapeToken,
@@ -813,16 +1050,11 @@ impl ShapeMemo {
         made: &Arc<RawPipeline>,
     ) {
         if let Some(entry) = self.entry_mut(token) {
-            entry.found = Some(FoundPipeline {
-                variant: Arc::clone(inputs.variant),
-                plan: Arc::clone(inputs.plan),
-                shape: inputs.shape,
-                compatible: Arc::clone(inputs.compatible),
-                strides: inputs.strides.iter().copied().collect(),
-                fixed: inputs.fixed,
-                topology: inputs.topology,
-                made: Arc::clone(made),
-            });
+            let found = Arc::new(FoundPipeline::of(inputs, made));
+            if let Some(shape) = lock(&entry.pipeline.kept_shapes().0).under(&entry.settings) {
+                shape.found = Some(Arc::clone(&found));
+            }
+            entry.found = Some(found);
         }
     }
 }

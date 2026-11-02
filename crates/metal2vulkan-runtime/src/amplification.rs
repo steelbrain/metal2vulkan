@@ -47,7 +47,7 @@ impl VertexAmplificationViewMapping {
 
 /// The encoder's vertex amplification: Metal's default, a count of 1 without mappings, until
 /// set.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub(super) struct Amplification {
     count: u64,
     /// The first `count` mappings; empty for `nil`.

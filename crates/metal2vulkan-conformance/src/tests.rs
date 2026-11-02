@@ -4735,6 +4735,9 @@ fn a_count_that_says_which_thread_arrived_first_is_never_gated() {
         // `integer-vertex-attributes` reads 0 alone and reached 19 and then 11 in two whole-set
         // replays.
         "draw_shapes_reused",
+        // A shape an earlier encoder's draw of the state derived, kept by the rule
+        // `draw_shapes_reused`'s shapes are.
+        "draw_shapes_carried",
     ] {
         assert!(racy(count).is_some(), "{count}");
     }

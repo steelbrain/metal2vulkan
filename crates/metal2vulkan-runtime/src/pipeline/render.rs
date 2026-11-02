@@ -57,6 +57,7 @@ use crate::degradation::{BoundFormats, CompiledPipeline, Degradation, Occurrence
 use crate::device::{device_error, lock};
 use crate::error::{internal, invalid, ArchivedPipeline, Error, Problem, RuntimeGap};
 use crate::released_programs::KeptProgram;
+use crate::render::KeptShapes;
 use crate::render_pass::MAX_COLOR_ATTACHMENTS;
 use crate::render_target::RenderPassObject;
 use crate::residency::{every_render_stage, handle_stages};
@@ -261,6 +262,9 @@ pub(crate) struct Program {
     /// Whether the translator refuses its band variant of lines, then of triangles
     /// ([`GraphicsState::band_refused`]): `None` until a draw first asks.
     band_refusals: Mutex<[Option<bool>; 2]>,
+    /// The shapes its draws derived, with the values each was derived from, which a later
+    /// encoder's draw of the same values takes (`render/draw_shape.rs`).
+    kept_shapes: KeptShapes,
 }
 
 /// The state's release returns at once: it lets go of what its pool pieces held on its own
@@ -1850,6 +1854,7 @@ impl GraphicsState {
                 pieces: PieceHolds::new(),
                 at_bind_views,
                 band_refusals: Mutex::new([None; 2]),
+                kept_shapes: KeptShapes::default(),
             };
             StateShared {
                 id,
@@ -2278,6 +2283,11 @@ impl GraphicsState {
         let base = Arc::clone(&self.0.base);
         let plan = base.plan(&self.0.device, shape).ok()?;
         (plan.variant == base.key && !self.0.stand_in).then_some((base, plan))
+    }
+
+    /// The shapes its draws derived (`render/draw_shape.rs`).
+    pub(crate) fn kept_shapes(&self) -> &KeptShapes {
+        &self.0.kept_shapes
     }
 
     /// Whether the translator refuses the state's band variant of `primitive`

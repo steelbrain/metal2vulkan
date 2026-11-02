@@ -30,7 +30,7 @@
 //!   variant, its instance or its resources; out of memory; a Vulkan error) fails the command
 //!   buffer, naming the call (`CommandBufferError::CallRefused`), the end's as `endEncoding`.
 
-use super::draw_shape::ShapeInputs;
+use super::draw_shape::{LayoutView, ShapeInputs};
 use super::replay::{DrawIndexed, Table};
 use super::table_facts::{check_samplers, check_textures, TableFacts};
 use super::{check_arguments, drawn_as, drawn_by, Assembly, RenderCall, RenderLowering};
@@ -419,7 +419,7 @@ impl CallChecks {
     fn shape_inputs<'a>(&'a self, device: &'a Device) -> ShapeInputs<'a> {
         ShapeInputs {
             device,
-            layout: &self.layout,
+            layout: LayoutView::of(&self.layout),
             state: &self.state,
             amplification: &self.amplification,
             // Which reads no refusal: `ShapeInputs::settings` reads it after its last.
@@ -455,7 +455,7 @@ impl CallChecks {
             return FROM_NOW;
         }
         let drawn = drawn_as(self.layout.samples, state)?;
-        self.shape_inputs(device).check_pipeline(CALL, &drawn)?;
+        (self.shape_inputs(device)).check_pipeline(CALL, &drawn, &self.layout)?;
         self.pipeline = Some(drawn);
         Ok(Checked::Logged)
     }

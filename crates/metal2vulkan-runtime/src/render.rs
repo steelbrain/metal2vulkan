@@ -348,7 +348,8 @@ use crate::work_counts::Begun;
 use crate::work_counts::NotInline;
 use crate::work_counts::Split;
 use ash::vk;
-use draw_shape::{PipelineInputs, ShapeInputs, ShapeMemo, ShapeToken, ShapedState};
+pub(crate) use draw_shape::KeptShapes;
+use draw_shape::{LayoutView, PipelineInputs, ShapeInputs, ShapeMemo, ShapeToken, ShapedState};
 pub(super) use executions::DeferredPass;
 use executions::{PassInstance, PassStorage, RenderExecution, RunPasses};
 use extended_shadow::ExtendedShadows;
@@ -912,7 +913,7 @@ struct RoutedDraw {
     private: PrivateForm,
     /// The assembly it draws: its list's where it is listed.
     assembly: Assembly,
-    settings: DrawSettings,
+    settings: Arc<DrawSettings>,
     /// The pass's hidden depth and stencil it gives (`RenderCommandEncoder::needed_hidden`).
     hidden: Option<Target>,
     /// Its settings' entry in the encoder's memo (`render/draw_shape.rs`), `None` where they are
@@ -2231,12 +2232,13 @@ const RECORDED: [vk::DynamicState; 16] = [
 /// The checks of a pipeline state set on an encoder, over the encoder's pass and state as they stand
 /// (`ShapeInputs`): the lowering's, and the program's encoder's at the call (`render/call_checks.rs`).
 impl ShapeInputs<'_> {
-    /// Refuse `pipeline` for this pass in `call` as [`RenderCommandEncoder::set_render_pipeline_state`]
-    /// says.
+    /// Refuse `pipeline` for this pass, of `layout`, in `call` as
+    /// [`RenderCommandEncoder::set_render_pipeline_state`] says.
     pub(super) fn check_pipeline(
         &self,
         call: &'static str,
         state: &RenderPipelineState,
+        layout: &PassLayout,
     ) -> Result<(), Error> {
         let pipeline = match state.kind() {
             RenderStateKind::Graphics(state) => state,
@@ -2317,8 +2319,7 @@ impl ShapeInputs<'_> {
                 .copied()
                 .flatten()
                 .ok_or_else(|| internal("a placed color the state lacks"))?;
-            let pass = self
-                .layout
+            let pass = layout
                 .colors
                 .get(other as usize)
                 .and_then(Option::as_ref)
@@ -2361,7 +2362,8 @@ impl ShapeInputs<'_> {
         // probes). A state of more samples in a pass of one is its single-sample twin here where
         // Metal draws it as one (`drawn_as`). A state that rasterizes nothing has no samples to
         // draw at, and Metal binds it in a pass of any sample count (`unrasterized.rs`).
-        if descriptor.raster_sample_count() != self.layout.samples && !graphics.rasterizer_discard {
+        if descriptor.raster_sample_count() != self.layout.samples() && !graphics.rasterizer_discard
+        {
             return Err(draw_problem(call, DrawProblem::SampleCount));
         }
         // Its formats are the pass's, so a state without an explicit imageblock packs as the
@@ -2491,10 +2493,10 @@ impl ShapeInputs<'_> {
     /// descriptor's `imageblock_sample_length` and its attachments' texels
     /// ([`imageblock_sample_length`](metal2vulkan::metal::format::imageblock_sample_length)).
     pub(super) fn pass_sample_length(&self) -> Result<u64, Error> {
-        let formats = self.layout.pass_formats();
+        let formats = self.layout.formats();
         let packed = metal2vulkan::metal::format::imageblock_sample_length(&formats)
             .ok_or_else(|| internal("a pass attachment without a texel size"))?;
-        Ok(u64::from(packed).max(self.layout.tile.sample_length))
+        Ok(u64::from(packed).max(self.layout.tile().sample_length))
     }
 
     /// Refuse the tile pipeline's state `state` for this pass in `call`: a color format other
@@ -2526,8 +2528,7 @@ impl ShapeInputs<'_> {
                 .map(|last| last as usize + 1)
         };
         for index in 0..checked.unwrap_or(0).min(MAX_COLOR_ATTACHMENTS) {
-            let pass = self.layout.colors.get(index).and_then(Option::as_ref);
-            let pass = pass.map(|c| c.target.texture.pixel_format());
+            let pass = self.layout.formats().get(index).copied().flatten();
             let wanted = descriptor
                 .color_attachment_formats
                 .get(index)
@@ -2541,7 +2542,7 @@ impl ShapeInputs<'_> {
                 ));
             }
         }
-        if descriptor.raster_sample_count != self.layout.samples {
+        if descriptor.raster_sample_count != self.layout.samples() {
             return Err(draw_problem(call, DrawProblem::SampleCount));
         }
         // Without an explicit imageblock the colors the function reaches are the pass's, at the
@@ -2604,7 +2605,8 @@ impl RenderLowering {
                 pass,
             });
         }
-        self.shape_inputs().check_pipeline(CALL, &state)?;
+        self.shape_inputs()
+            .check_pipeline(CALL, &state, &self.layout)?;
         self.writers.state_set(state.indirect_command_writes());
         self.pipeline = Some(state);
         self.grouped_set(&drawn);
@@ -7418,7 +7420,7 @@ impl RenderLowering {
             amplification,
             routing,
             ..
-        } = &settings;
+        } = &*settings;
         let graphics = &variant.pipeline().graphics;
         // A fragment function that runs the draw's depth test itself computes and clamps its
         // depth by the draw's own Vulkan depth range, read as push data.
@@ -8580,8 +8582,8 @@ impl RenderLowering {
         let looked = PipelineInputs {
             variant: &variant,
             plan: &plan,
-            shape: instance.shape.version(),
-            compatible: &instance.compatible,
+            shape: &instance.shape,
+            sample_positions: &self.layout.sample_positions,
             strides,
             fixed,
             topology: (keyed_topology, keyed_restart),
@@ -9719,7 +9721,7 @@ impl RenderLowering {
     fn shape_inputs(&self) -> ShapeInputs<'_> {
         ShapeInputs {
             device: self.core.device(),
-            layout: &self.layout,
+            layout: LayoutView::of(&self.layout),
             state: &self.state,
             amplification: &self.amplification,
             counts_visibility: self.counts_visibility(),
@@ -9797,15 +9799,16 @@ impl RenderLowering {
     /// A draw's settings ([`draw_settings`](Self::draw_settings), of a draw of `assembly` that may
     /// draw a primitive where `primitives`), with the hidden depth and
     /// stencil it gives the pass: those an earlier draw of the encoder derived from the same
-    /// inputs, else derived and kept (`render/draw_shape.rs`); with the token of their memo
-    /// entry, `None` where their derivation met a notice the device announces at every
-    /// occurrence ([`EachWatch`]), which keeps nothing.
+    /// inputs, else those an earlier encoder's draw of the drawing state derived from the same
+    /// values (`draw_shape::KeptShapes`), else derived and kept (`render/draw_shape.rs`); with
+    /// the token of their memo entry, `None` where their derivation met a notice the device
+    /// announces at every occurrence ([`EachWatch`]), which keeps nothing.
     fn shaped_settings(
         &mut self,
         call: &'static str,
         pipeline: &DrawingState,
         (assembly, primitives): (Assembly, bool),
-    ) -> Result<(DrawSettings, Option<Target>, Option<ShapeToken>), Error> {
+    ) -> Result<(Arc<DrawSettings>, Option<Target>, Option<ShapeToken>), Error> {
         let hidden = self.needed_hidden()?;
         let given = hidden.is_some();
         let inputs = self.shape_inputs();
@@ -9815,18 +9818,32 @@ impl RenderLowering {
             debug_assert!(
                 (self.shape_inputs())
                     .settings(call, drawn, given, false)
-                    .is_ok_and(|fresh| fresh == kept),
+                    .is_ok_and(|fresh| fresh == *kept),
                 "a draw's settings derived again differ from those kept for its inputs"
             );
             return Ok((kept, hidden, Some(token)));
         }
+        if let Some(carried) = self.shape_inputs().carried(drawn, given) {
+            debug_assert!(
+                (self.shape_inputs())
+                    .settings(call, drawn, given, false)
+                    .is_ok_and(|fresh| fresh == **carried.settings()),
+                "a draw's settings derived again differ from those an earlier encoder kept for \
+                 its values"
+            );
+            self.core.device().shared().counts.draw_shape_carried();
+            let settings = Arc::clone(carried.settings());
+            let token = self.shape_memo.keep(drawn, inputs, carried);
+            return Ok((settings, hidden, Some(token)));
+        }
         let watch = EachWatch::start();
-        let settings = self.shape_inputs().settings(call, drawn, given, true)?;
+        let settings = Arc::new(self.shape_inputs().settings(call, drawn, given, true)?);
         // Derived again at each draw, which announces it again.
         if watch.met() {
             return Ok((settings, hidden, None));
         }
         let token = (self.shape_memo).keep_settings(drawn, inputs, &settings);
+        self.shape_inputs().keep_carried(drawn, given, &settings);
         Ok((settings, hidden, Some(token)))
     }
 

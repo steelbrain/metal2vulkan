@@ -457,7 +457,7 @@ const POOLED: &str = "an object made because no spare was free, where a spare co
 /// replays of a larger case set — which reads like a regression and is not one. See [`BORROWED`].
 /// `slot_returns` beside it stays gated: it counts work items, one a command buffer, and has held
 /// still alone and in both case sets.
-const RACY: [(&str, &str); 33] = [
+const RACY: [(&str, &str); 34] = [
     ("fences_made", POOLED),
     // What is alive, parked or waiting at the instant the counts were read.
     ("memory_blocks_live", INSTANTANEOUS),
@@ -488,6 +488,10 @@ const RACY: [(&str, &str); 33] = [
     ("sampler_sets_shared", FOUND),
     ("variants_taken_back", FOUND),
     ("draw_shapes_reused", FOUND),
+    // A draw's shape taken from an earlier encoder's draw of its drawing state: kept, or not, by
+    // the same rule as a shape `draw_shapes_reused` counts, so reported beside it (its own
+    // movement with the selection is unmeasured).
+    ("draw_shapes_carried", FOUND),
     ("completed_waits", BORROWED),
     ("pipeline_pool_busy", POOL_STATE),
     ("encoder_primaries_begun_ahead", AHEAD),

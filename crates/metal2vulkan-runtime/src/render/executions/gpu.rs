@@ -341,7 +341,7 @@ impl RenderExecution {
         );
         let slots = encoder
             .shape_inputs()
-            .check_pipeline(CALL, pipeline)
+            .check_pipeline(CALL, pipeline, &encoder.layout)
             .and_then(|()| {
                 encoder.pipeline = Some(pipeline.clone());
                 encoder.replay_draw_of(state, primitive_type)
@@ -606,7 +606,7 @@ impl RenderExecution {
             offset: scratch.offset(),
             layout: pre.layout,
         });
-        encoder.shape_inputs().check_pipeline(CALL, pipeline)?;
+        (encoder.shape_inputs()).check_pipeline(CALL, pipeline, &encoder.layout)?;
         encoder.pipeline = Some(pipeline.clone());
         let buffers = DrawBuffers {
             indirect: Some(first),

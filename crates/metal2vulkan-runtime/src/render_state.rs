@@ -271,6 +271,49 @@ impl EncoderState {
         }
     }
 
+    /// Whether `other` holds the same state: each field equal, a float by its bits (a NaN equal to
+    /// itself, a zero of the other sign not), the depth/stencil state the same object. A draw's
+    /// shape is a function of the state (`render/draw_shape.rs`), so two states equal so give it
+    /// alike.
+    pub(super) fn same_values(&self, other: &EncoderState) -> bool {
+        let EncoderState {
+            extent,
+            viewports,
+            cull_mode,
+            winding,
+            depth_stencil,
+            stencil_reference,
+            depth_bias,
+            blend_color,
+            alpha_test_reference,
+            fill_mode,
+            clip_mode,
+            provoking_last,
+            provoking_third,
+            line_width,
+        } = self;
+        let viewport_bits = |v: &Viewport| {
+            [v.origin_x, v.origin_y, v.width, v.height, v.znear, v.zfar].map(f64::to_bits)
+        };
+        *extent == other.extent
+            && viewports.len() == other.viewports.len()
+            && (viewports.iter().zip(other.viewports.iter()))
+                .all(|(a, b)| viewport_bits(a) == viewport_bits(b))
+            && *cull_mode == other.cull_mode
+            && *winding == other.winding
+            && *depth_stencil == other.depth_stencil
+            && *stencil_reference == other.stencil_reference
+            && depth_bias.same_bits(&other.depth_bias)
+            && blend_color.map(f32::to_bits) == other.blend_color.map(f32::to_bits)
+            && alpha_test_reference.map(f32::to_bits)
+                == other.alpha_test_reference.map(f32::to_bits)
+            && *fill_mode == other.fill_mode
+            && *clip_mode == other.clip_mode
+            && *provoking_last == other.provoking_last
+            && *provoking_third == other.provoking_third
+            && *line_width == other.line_width
+    }
+
     /// `setViewports:count:` (one viewport for `setViewport:`), checked as the module says: a
     /// depth range past `[0, 1]` refused as `refused` says (`depth_ranges_refused`), `None` on a
     /// device that takes it natively or by the vertex stage's compensation.
@@ -2076,6 +2119,32 @@ pub(super) enum DepthBiasEffect {
     Saturated { high: bool },
     /// Every fragment's depth its own plus the offset: an infinite or NaN bias a clamp bounds.
     Offset(f32),
+}
+
+impl DepthBiasEffect {
+    /// Whether `other` is the same effect, each float by its bits
+    /// (`EncoderState::same_values`).
+    fn same_bits(&self, other: &DepthBiasEffect) -> bool {
+        match (*self, *other) {
+            (
+                DepthBiasEffect::Factors {
+                    constant,
+                    slope,
+                    clamp,
+                },
+                DepthBiasEffect::Factors {
+                    constant: c,
+                    slope: s,
+                    clamp: k,
+                },
+            ) => [constant, slope, clamp].map(f32::to_bits) == [c, s, k].map(f32::to_bits),
+            (DepthBiasEffect::Saturated { high }, DepthBiasEffect::Saturated { high: h }) => {
+                high == h
+            }
+            (DepthBiasEffect::Offset(a), DepthBiasEffect::Offset(b)) => a.to_bits() == b.to_bits(),
+            _ => false,
+        }
+    }
 }
 
 /// Metal's depth bias of `constant`, `slope` and `clamp` factors (`setDepthBias:slopeScale:clamp:`)

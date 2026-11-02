@@ -4,7 +4,10 @@
 //! would; a draw whose shape meets none takes it from the memo, whatever other kinds the device
 //! announces at each (`WorkCounts::draw_shapes_reused`), as a device that announces every kind
 //! once does. A draw after a new scissor rectangle reuses its shape too, through its own scissor
-//! (`render_state::ScissorRects`).
+//! (`render_state::ScissorRects`). An encoder's first draw takes the shape an earlier encoder's
+//! draw of its drawing state derived from the same values (`WorkCounts::draw_shapes_carried`), so
+//! once a run derived them every draw of the next reuses its shape; a draw of other values derives
+//! its own.
 //!
 //! Device tests: compiled only under the validation crate's GPU safety cfgs (`m2v_gpu`,
 //! `m2v_cpu_icd`), on the kind of device the cfg selects. The functions are the owned fixture
@@ -19,7 +22,7 @@ use crate::{
     TextureDescriptor,
 };
 use metal2vulkan::metal::state::DepthStencilDescriptor;
-use metal2vulkan::metal::{CompareFunction, PixelFormat, PrimitiveType, TextureUsage};
+use metal2vulkan::metal::{CompareFunction, CullMode, PixelFormat, PrimitiveType, TextureUsage};
 use metal2vulkan::pipeline::{ColorAttachmentDescriptor, RenderPipelineDescriptor, StageSource};
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -113,7 +116,12 @@ fn rectangle_state(device: &Device, depth: bool) -> RenderPipelineState {
 
 /// A `Private` texture of `format` that a pass renders.
 fn target(device: &Device, format: PixelFormat) -> Texture {
-    let mut descriptor = TextureDescriptor::texture_2d(format, SIDE, SIDE, false);
+    target_of(device, format, SIDE)
+}
+
+/// A `Private` texture of `format`, `side` pixels a side, that a pass renders.
+fn target_of(device: &Device, format: PixelFormat, side: u64) -> Texture {
+    let mut descriptor = TextureDescriptor::texture_2d(format, side, side, false);
     descriptor.usage = TextureUsage::RENDER_TARGET;
     descriptor.resource_options = ResourceOptions::private();
     device.new_texture(&descriptor).unwrap()
@@ -186,10 +194,9 @@ type Counts = BTreeMap<Degradation, usize>;
 
 /// On a new device announcing the kinds of `each` at every occurrence, [`Draws`] of points where
 /// `points` and against a `Depth16Unorm` depth tested `Less` and written where `depth`, run until
-/// a run draws no key's residual form, then once more: that run's reused draws and notices. Every
-/// draw of it finds its key's own pipeline made (a draw whose key's own is still made on the pool
-/// draws its residual form, `pipeline/render/residual.rs`, which keeps no shape), so the first
-/// draw of each assembly derives its shape and every later one may reuse it.
+/// they find their keys' own pipelines made ([`warm`]), then once more: that run's reused draws and
+/// notices. Each draw of it may reuse its shape: the first of each assembly the one an earlier
+/// run's encoder derived.
 fn second_run(each: &[Degradation], points: bool, depth: bool) -> (u64, Counts) {
     let scratch = Scratch::new("draw-shape-notices");
     let heard = Heard::default();
@@ -206,23 +213,35 @@ fn second_run(each: &[Degradation], points: bool, depth: bool) -> (u64, Counts) 
         depth: depth.then_some((&texture, &depth_stencil)),
         scissors: false,
     };
-    until("every key's own pipeline made", || {
-        let residual = device.work_counts().residual_form_draws;
-        draws.run(&device);
-        device.work_counts().residual_form_draws == residual
-    });
+    warm(&device, &draws);
     counts(&heard);
     let reused = draws.run(&device);
     (reused, counts(&heard))
 }
 
+/// Run `draws` on `device` until a run draws no key's residual form, the device's pool is idle,
+/// and once more: each draw of that last run found its key's own pipeline made, so every shape it
+/// kept holds its pipeline, for a later encoder's draws to take (a draw whose key's own is still
+/// made on the pool draws its residual form, `pipeline/render/residual.rs`, or records against
+/// the making, and keeps no pipeline).
+fn warm(device: &Device, draws: &Draws<'_>) {
+    until("every key's own pipeline made", || {
+        let residual = device.work_counts().residual_form_draws;
+        draws.run(device);
+        device.work_counts().residual_form_draws == residual
+    });
+    until("the pipeline pool idle", || {
+        device.work_counts().pipeline_pool_busy == 0
+    });
+    draws.run(device);
+}
+
 /// Draws whose shapes meet no notice reuse them on a device that announces kinds no shape meets
-/// at every occurrence (a consumer's), as on one that announces every kind once: each draw after
-/// the first.
+/// at every occurrence (a consumer's), as on one that announces every kind once: each draw.
 #[test]
 fn draws_reuse_shapes_beside_kinds_announced_at_each_occurrence() {
     let (once, _) = second_run(&[], false, false);
-    assert_eq!(once, DRAWS as u64 - 1);
+    assert_eq!(once, DRAWS as u64);
     let (each, heard) = second_run(&UNRELATED, false, false);
     assert_eq!(each, once, "{heard:?}");
 }
@@ -238,10 +257,10 @@ fn a_kind_a_draws_settings_meet_is_announced_at_every_draw() {
         Some(&DRAWS),
         "{heard:?}"
     );
-    assert_eq!(reused, DRAWS as u64 - 1, "the triangles' draws");
+    assert_eq!(reused, DRAWS as u64, "the triangles' draws");
     let (reused, heard) = second_run(&[], true, false);
     assert_eq!(heard.get(&Degradation::UnsizedPoints), None, "{heard:?}");
-    assert_eq!(reused, 2 * (DRAWS as u64 - 1));
+    assert_eq!(reused, 2 * DRAWS as u64);
 }
 
 /// A kind a draw's state meets (those of a `Depth16Unorm` depth, [`UNORM_DEPTH`], which the
@@ -280,7 +299,7 @@ fn a_kind_a_draws_state_meets_is_announced_at_every_draw() {
         assert_eq!(heard.get(&kind), expected, "{kind:?}: {heard:?}");
     }
     let expected = match met.is_empty() {
-        true => DRAWS as u64 - 1,
+        true => DRAWS as u64,
         false => 0,
     };
     assert_eq!(reused, expected, "{met:?}");
@@ -288,7 +307,7 @@ fn a_kind_a_draws_state_meets_is_announced_at_every_draw() {
 
 /// Draws that each set a scissor rectangle of their own before they draw, as a window compositor's
 /// do, reuse their shapes as draws through one rectangle do (the rectangles are no input of a
-/// shape: `render_state::ScissorRects`), each after the first, and each records its own scissor.
+/// shape: `render_state::ScissorRects`), each of them, and each records its own scissor.
 #[test]
 fn draws_after_new_scissor_rectangles_reuse_shapes() {
     let scratch = Scratch::new("draw-shape-scissors");
@@ -301,14 +320,58 @@ fn draws_after_new_scissor_rectangles_reuse_shapes() {
         depth: None,
         scissors: true,
     };
-    until("every key's own pipeline made", || {
-        let residual = device.work_counts().residual_form_draws;
-        draws.run(&device);
-        device.work_counts().residual_form_draws == residual
-    });
+    warm(&device, &draws);
     let scissors = device.work_counts().commands_recorded.cmd_set_scissor;
     let reused = draws.run(&device);
-    assert_eq!(reused, DRAWS as u64 - 1);
+    assert_eq!(reused, DRAWS as u64);
     let recorded = device.work_counts().commands_recorded.cmd_set_scissor - scissors;
     assert_eq!(recorded, DRAWS as u64, "a scissor each");
+}
+
+/// The draws of [`Draws`] of `state` (triangles alone) in one pass into a new `RGBA8Unorm` target
+/// `side` pixels a side, behind a back-face cull where `culled`, committed and waited for: those
+/// that took their shape from an earlier encoder's draw (`WorkCounts::draw_shapes_carried`).
+fn carried_run(device: &Device, state: &RenderPipelineState, side: u64, culled: bool) -> u64 {
+    let target = target_of(device, PixelFormat::RGBA8Unorm, side);
+    let queue = device.new_command_queue().unwrap();
+    let command_buffer = queue.command_buffer().unwrap();
+    let carried = device.work_counts().draw_shapes_carried;
+    let mut encoder = command_buffer
+        .render_command_encoder(&pass(&target))
+        .unwrap();
+    if culled {
+        encoder.set_cull_mode(CullMode::Back);
+    }
+    let draws = Draws {
+        state,
+        points: false,
+        depth: None,
+        scissors: false,
+    };
+    draws.encode(&mut encoder);
+    encoder.end_encoding().unwrap();
+    let carried = device.work_counts().draw_shapes_carried - carried;
+    command_buffer.commit().unwrap();
+    command_buffer.wait_until_completed_for(WAIT).unwrap();
+    assert_eq!(command_buffer.status(), CommandBufferStatus::Completed);
+    carried
+}
+
+/// An encoder's first draw of a drawing state takes the shape an earlier encoder's draw of the
+/// state derived from the same values, and its later draws their own encoder's; a draw of other
+/// values derives its own: behind another cull mode, or in a pass of another size (its render
+/// area and viewport). The state keeps the shapes of each, so the first values are found again.
+#[test]
+fn an_encoders_first_draw_takes_the_shape_of_the_same_values() {
+    let scratch = Scratch::new("draw-shape-carried");
+    let heard = Heard::default();
+    let device = device(&scratch.0, &[], &heard);
+    let state = rectangle_state(&device, false);
+    let run = |side, culled| carried_run(&device, &state, side, culled);
+    assert_eq!(run(SIDE, false), 0, "the state's first encoder");
+    assert_eq!(run(SIDE, false), 1, "the same values");
+    assert_eq!(run(SIDE, true), 0, "another cull mode");
+    assert_eq!(run(2 * SIDE, false), 0, "a pass of another size");
+    assert_eq!(run(SIDE, true), 1, "the culled values again");
+    assert_eq!(run(SIDE, false), 1, "the first values again");
 }

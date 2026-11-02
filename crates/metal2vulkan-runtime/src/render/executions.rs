@@ -1813,7 +1813,9 @@ impl RenderLowering {
         let vertex = state.descriptor().vertex();
         if crate::tessellation::patches(&state.base().graphics).is_some()
             || vertex.is_none()
-            || self.shape_inputs().check_pipeline(CALL, pipeline).is_err()
+            || (self.shape_inputs())
+                .check_pipeline(CALL, pipeline, &self.layout)
+                .is_err()
         {
             return;
         }
@@ -2114,7 +2116,7 @@ impl RenderExecution {
                 None => pipeline,
             };
             encoder.factors.scale = scale;
-            encoder.shape_inputs().check_pipeline(CALL, &pipeline)?;
+            (encoder.shape_inputs()).check_pipeline(CALL, &pipeline, &encoder.layout)?;
             // A mesh draw's object function takes the command's threadgroup memory lengths, 0
             // where it set none, never the encoder's (the M3 Max); a patch draw's take none.
             encoder.object_threadgroup_lengths = match &draw {

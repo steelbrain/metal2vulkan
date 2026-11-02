@@ -263,6 +263,7 @@ pub(crate) struct Counters {
     set_zero_sets_reused: AtomicU64,
     set_zero_sets_found: AtomicU64,
     draw_shapes_reused: AtomicU64,
+    draw_shapes_carried: AtomicU64,
     host_holds_looked_up: AtomicU64,
     dispatches_settled_as_before: AtomicU64,
     dispatches_planned_as_before: AtomicU64,
@@ -1829,6 +1830,12 @@ impl Counters {
     /// draws of the same inputs (`render/draw_shape.rs`).
     pub(crate) fn draw_shape_reused(&self) {
         self.draw_shapes_reused.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// A draw that found no shape in its encoder's memo and took its settings from an earlier
+    /// encoder's draw of the same drawing state and values (`render/draw_shape.rs`).
+    pub(crate) fn draw_shape_carried(&self) {
+        self.draw_shapes_carried.fetch_add(1, Ordering::Relaxed);
     }
 
     /// An encoder's hold of a key its commands named first that looked the key up among the
@@ -4260,16 +4267,26 @@ pub struct WorkCounts {
     /// such offsets write the same set.
     pub set_zero_sets_found: u64,
     /// Render encoders' draws that took their shape, what they derive from the encoder's state
-    /// alone, from an earlier draw of their encoder that derived it from the same inputs, rather
-    /// than deriving it again: their settings, their draw state (fixed state, viewports, depth
-    /// bias; its scissors are each draw's own, from the encoder's scissor rectangles) and their
-    /// `VkPipeline`. The inputs are the drawing state, variant, plan and instance's compatible
-    /// pass by identity, the pass's layout, the encoder's state but its scissor rectangles and
-    /// vertex amplification and the instance's shape by version, and the assembly, the vertex
+    /// alone, from an earlier draw that derived it from the same inputs, rather than deriving it
+    /// again: their settings, their draw state (fixed state, viewports, depth bias; its scissors
+    /// are each draw's own, from the encoder's scissor rectangles) and their `VkPipeline`. The
+    /// inputs are the drawing state, variant and plan by identity, the pass's layout, the
+    /// encoder's state but its scissor rectangles and vertex amplification (by version within an
+    /// encoder, by value from an earlier encoder's draw: `draw_shapes_carried`), the instance's
+    /// shape by version or value, and the assembly, the pass's sample positions, the vertex
     /// strides, the fixed state and the topology by value (`render/draw_shape.rs`). None of a
     /// shape whose derivation announces a notice the device announces at every occurrence
     /// (`DeviceOptions::announce_each`).
     pub draw_shapes_reused: u64,
+    /// Render encoders' draws that found no shape in their encoder's memo and took their
+    /// settings, with the draw state and `VkPipeline` an earlier draw of them found, from an
+    /// earlier encoder's draw of the same drawing state that derived them from the same values:
+    /// the assembly, the pass's pixel formats, depth and stencil, samples, extent and tile memory,
+    /// the encoder's state but its scissor rectangles (each float by its bits) and its vertex
+    /// amplification (`render/draw_shape.rs`, the drawing state's last 8 such shapes). None in a
+    /// rate-mapped pass, nor of a shape whose derivation announces a notice the device announces
+    /// at every occurrence.
+    pub draw_shapes_carried: u64,
     /// Keys an encoder's commands named first, while the device has a buffer over host pages
     /// (`new_buffer_with_bytes_no_copy`), that were looked up among those buffers under the lock
     /// their command buffers' submissions take: the keys of such buffers, and the rare other key
@@ -5506,6 +5523,7 @@ impl Device {
             set_zero_sets_reused: counters.set_zero_sets_reused.load(Ordering::Relaxed),
             set_zero_sets_found: counters.set_zero_sets_found.load(Ordering::Relaxed),
             draw_shapes_reused: counters.draw_shapes_reused.load(Ordering::Relaxed),
+            draw_shapes_carried: counters.draw_shapes_carried.load(Ordering::Relaxed),
             host_holds_looked_up: counters.host_holds_looked_up.load(Ordering::Relaxed),
             dispatches_settled_as_before: (counters.dispatches_settled_as_before)
                 .load(Ordering::Relaxed),
