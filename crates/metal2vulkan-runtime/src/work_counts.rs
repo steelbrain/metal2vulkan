@@ -263,6 +263,7 @@ pub(crate) struct Counters {
     set_zero_sets_reused: AtomicU64,
     set_zero_sets_found: AtomicU64,
     draw_shapes_reused: AtomicU64,
+    host_holds_looked_up: AtomicU64,
     dispatches_settled_as_before: AtomicU64,
     dispatches_planned_as_before: AtomicU64,
     baked_sampler_dispatches_apart: AtomicU64,
@@ -1828,6 +1829,12 @@ impl Counters {
     /// draws of the same inputs (`render/draw_shape.rs`).
     pub(crate) fn draw_shape_reused(&self) {
         self.draw_shapes_reused.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// An encoder's hold of a key its commands named first that looked the key up among the
+    /// device's buffers over host pages (`rebind::HostedKeys`).
+    pub(crate) fn host_hold_looked_up(&self) {
+        self.host_holds_looked_up.fetch_add(1, Ordering::Relaxed);
     }
 
     /// A compute encoder's dispatch that took what its last dispatch settled
@@ -4263,6 +4270,12 @@ pub struct WorkCounts {
     /// shape whose derivation announces a notice the device announces at every occurrence
     /// (`DeviceOptions::announce_each`).
     pub draw_shapes_reused: u64,
+    /// Keys an encoder's commands named first, while the device has a buffer over host pages
+    /// (`new_buffer_with_bytes_no_copy`), that were looked up among those buffers under the lock
+    /// their command buffers' submissions take: the keys of such buffers, and the rare other key
+    /// that shares a bit of their filter with one (`rebind.rs`). A texture's key, or a buffer's of
+    /// the runtime's memory, is told apart without the lookup.
+    pub host_holds_looked_up: u64,
     /// Compute encoders' dispatches that took the bind state, variant, plan, commands and made
     /// `VkPipeline`s their encoder's last dispatch settled, rather than settling them again:
     /// those of the same pipeline state, dispatch, table (no call changed it since), threadgroup
@@ -5493,6 +5506,7 @@ impl Device {
             set_zero_sets_reused: counters.set_zero_sets_reused.load(Ordering::Relaxed),
             set_zero_sets_found: counters.set_zero_sets_found.load(Ordering::Relaxed),
             draw_shapes_reused: counters.draw_shapes_reused.load(Ordering::Relaxed),
+            host_holds_looked_up: counters.host_holds_looked_up.load(Ordering::Relaxed),
             dispatches_settled_as_before: (counters.dispatches_settled_as_before)
                 .load(Ordering::Relaxed),
             dispatches_planned_as_before: (counters.dispatches_planned_as_before)

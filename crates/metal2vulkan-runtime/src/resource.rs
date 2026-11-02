@@ -16,6 +16,11 @@ impl ResourceKey {
         static NEXT: AtomicU64 = AtomicU64::new(1);
         ResourceKey(NEXT.fetch_add(1, Ordering::Relaxed))
     }
+
+    /// Its place among the process's keys, made in order: the first is 1.
+    pub(super) fn ordinal(self) -> u64 {
+        self.0
+    }
 }
 
 /// A buffer's, texture's or heap's identity (`Buffer::object_id`, `Texture::object_id`,

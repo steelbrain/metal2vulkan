@@ -138,6 +138,8 @@ mod hold_sites;
 mod host_aliases;
 mod host_bytes;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
+mod host_hold_filter;
+#[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod host_import_counts;
 mod host_memory;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]

@@ -83,7 +83,7 @@ use super::resource::{ObjectId, ResourceKey};
 use super::Device;
 use std::any::Any;
 use std::collections::BTreeSet;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, Weak};
 
 /// What `rebind_bytes_no_copy` refuses as Metal's validation would a misuse (`Invalid`).
@@ -107,6 +107,9 @@ pub enum RebindProblem {
 pub(super) struct Rebinds {
     live: AtomicUsize,
     buffers: Mutex<KeyMap<ResourceKey, Entry>>,
+    /// The keys `buffers` may hold ([`HostedKeys`]): a use of any other names no buffer over host
+    /// pages, which an encoder's hold tells without taking `buffers`' lock.
+    hosted: HostedKeys,
     /// How many of them are detached (`detach.rs`): else no command names a detached one.
     detached: AtomicUsize,
     /// Signaled as the hold of a submitted batch that took one of them goes, its work having
@@ -203,6 +206,45 @@ struct Entry {
     resident: bool,
 }
 
+/// The keys a device registered buffers over host pages under ([`Rebinds::register`]), as a filter
+/// of bits by key that never forgets one: a key whose bit is clear names no such buffer, for a
+/// buffer registers its key as it is made, before any command can name it, and a key is never
+/// another resource's. A set bit may be another key's, or a buffer's gone since: such a key is
+/// looked up as every key was before. So an encoder's commands, which name each texture and
+/// buffer they use, take the lock that a submission holds as it judges its holds
+/// (`Submitting`) only for a buffer over host pages, and the rare key that shares its bit
+/// (`WorkCounts::host_holds_looked_up`).
+pub(super) struct HostedKeys([AtomicU64; HostedKeys::WORDS]);
+
+impl HostedKeys {
+    /// The filter's 64-bit words: 4096 bits.
+    const WORDS: usize = 64;
+
+    /// The word and bit of `key`.
+    fn bit(key: ResourceKey) -> (usize, u64) {
+        let at = key.ordinal() as usize % (Self::WORDS * 64);
+        (at / 64, 1 << (at % 64))
+    }
+
+    /// Note `key`, a buffer's over host pages, before any command can name it.
+    fn insert(&self, key: ResourceKey) {
+        let (word, bit) = Self::bit(key);
+        self.0[word].fetch_or(bit, Ordering::Release);
+    }
+
+    /// Whether `key` may be one noted: `false` only for a key never noted.
+    pub(super) fn may_hold(&self, key: ResourceKey) -> bool {
+        let (word, bit) = Self::bit(key);
+        self.0[word].load(Ordering::Acquire) & bit != 0
+    }
+}
+
+impl Default for HostedKeys {
+    fn default() -> HostedKeys {
+        HostedKeys(std::array::from_fn(|_| AtomicU64::new(0)))
+    }
+}
+
 impl Rebinds {
     /// The host addresses of the bytes of the buffer of `key` over host pages
     /// (`HostCell::host_range`); `None` for any other key, and for a buffer gone or detached.
@@ -225,6 +267,7 @@ impl Rebinds {
             detached: false,
             resident: false,
         };
+        self.hosted.insert(key);
         if lock(&self.buffers).insert(key, entry).is_none() {
             self.live.fetch_add(1, Ordering::Relaxed);
         }
@@ -665,8 +708,15 @@ impl Holds {
 
     /// Hold `key` where it names a buffer over host pages: the pages the commands took, to
     /// retain until the command buffer completes (none while it is detached).
+    /// A key whose bit the device's filter of such keys never set names none, told without the
+    /// lock (`HostedKeys`).
     pub(super) fn hold(&mut self, key: ResourceKey) -> Option<Pinned> {
-        let pinned = self.device.shared().rebinds.hold(key)?;
+        let shared = self.device.shared();
+        if !shared.rebinds.hosted.may_hold(key) {
+            return None;
+        }
+        shared.counts.host_hold_looked_up();
+        let pinned = shared.rebinds.hold(key)?;
         self.keys.push(key);
         Some(pinned)
     }
