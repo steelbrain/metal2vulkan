@@ -35,6 +35,16 @@
 //! The held batch goes once the value is reached: a host set wakes the scheduler, and so does a
 //! completion turn that observes the GPU signal (`event.rs`).
 //!
+//! **The caller's signals** ([`EventTimeline::signal_apart`]). A shared event's semaphore takes
+//! signals of the caller's own submissions too (`SharedEvent::reserve_vk_signal`): the caller
+//! reserves the next index for a value, as a batch of the scheduler's does, and its submission
+//! signals that index, after the last pending signal's index, whatever queue that one is on (the
+//! runtime knows none of the caller's queues), so the semaphore's signals still execute in index
+//! order. No completion turn sees such a signal: the device's watcher of the caller's signals
+//! waits for it on the host and reports it landed ([`EventTimeline::landed`]), which observes it
+//! and every signal before it but past a signal behind a merge, which its completion turn still
+//! observes first.
+//!
 //! **A signal behind a merge is seen at its completion turn alone** ([`EventTimeline::keep`]).
 //! A batch submitted while the device keeps a copied host buffer may write the copy, whose bytes
 //! reach the caller's pages only at the batch's completion turn (`copied.rs`); Metal's writes
@@ -53,8 +63,9 @@ use std::collections::VecDeque;
 struct Pending<Q> {
     index: u64,
     value: u64,
-    /// The `VkQueue` of the batch that signals it.
-    queue: Q,
+    /// The `VkQueue` of the batch that signals it; `None` for one of the caller's submissions
+    /// ([`EventTimeline::signal_apart`]).
+    queue: Option<Q>,
     /// Seen at its batch's completion turn alone, after the copied host buffers merged (the
     /// module docs).
     behind_merge: bool,
@@ -94,6 +105,9 @@ pub(super) struct EventTimeline<Q> {
     /// Whether the host may set the value: a shared event's (`MTLSharedEvent`), whose set must
     /// release a wait at once, which no Vulkan wait can do (the module docs).
     settable: bool,
+    /// The highest index a host wait returned for, of the caller's signals the device's watcher
+    /// waited for (the module docs): every pending signal up to it landed.
+    landed: u64,
 }
 
 impl<Q> EventTimeline<Q> {
@@ -106,6 +120,7 @@ impl<Q> EventTimeline<Q> {
             pending: VecDeque::new(),
             floor: 0,
             settable,
+            landed: 0,
         }
     }
 
@@ -129,11 +144,13 @@ impl<Q: Copy + Eq> EventTimeline<Q> {
             .map_or(self.value(), |last| last.value.max(self.value()))
     }
 
-    /// The semaphore reached `index`. Whether the value rose.
+    /// The semaphore reached `index`. Whether the value rose. A signal behind no merge up to the
+    /// index a host wait returned for ([`EventTimeline::landed`]) is observed too.
     pub(super) fn observe(&mut self, index: u64) -> bool {
         let before = self.value();
         while let Some(&front) = self.pending.front() {
-            if front.index > index {
+            let landed = !front.behind_merge && front.index <= self.landed;
+            if front.index > index && !landed {
                 break;
             }
             self.pending.pop_front();
@@ -160,6 +177,14 @@ impl<Q: Copy + Eq> EventTimeline<Q> {
         };
         let index = seen(self.reached, None, read, reaches)?;
         Ok(self.observe(index))
+    }
+
+    /// A host wait returned for the semaphore to reach `index`, the index of one of the caller's
+    /// signals (the module docs): observed up to it, but never past a signal behind a merge, which
+    /// its completion turn observes first; the rest are observed then. Whether the value rose.
+    pub(super) fn landed(&mut self, index: u64) -> bool {
+        self.landed = self.landed.max(index);
+        self.observe(self.reached)
     }
 
     /// The host set `value`. Whether the value rose.
@@ -220,13 +245,33 @@ impl<Q: Copy + Eq> EventTimeline<Q> {
         match self.pending.back() {
             Some(last) => Signal::Kept {
                 index: last.index + 1,
-                after: (last.queue != queue).then_some(last.index),
+                after: (last.queue != Some(queue)).then_some(last.index),
             },
             None => Signal::Kept {
                 index: self.reached + 1,
                 after: None,
             },
         }
+    }
+
+    /// What a signal of `value` by one of the caller's submissions becomes, kept at once where it
+    /// is kept (the module docs): its index is the next, after the last pending signal whatever
+    /// queue that one is on.
+    pub(super) fn signal_apart(&mut self, value: u64) -> Signal {
+        if value <= self.known() {
+            return Signal::Dropped;
+        }
+        let (index, after) = match self.pending.back() {
+            Some(last) => (last.index + 1, Some(last.index)),
+            None => (self.reached + 1, None),
+        };
+        self.pending.push_back(Pending {
+            index,
+            value,
+            queue: None,
+            behind_merge: false,
+        });
+        Signal::Kept { index, after }
     }
 
     /// The batch of a kept signal (`index` from [`EventTimeline::signal`]) of `value` on `queue`
@@ -236,7 +281,7 @@ impl<Q: Copy + Eq> EventTimeline<Q> {
         self.pending.push_back(Pending {
             index,
             value,
-            queue,
+            queue: Some(queue),
             behind_merge,
         });
     }

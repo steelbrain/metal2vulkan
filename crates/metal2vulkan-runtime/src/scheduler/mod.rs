@@ -807,6 +807,15 @@ impl Scheduler {
             .is_some_and(|handle| handle.thread().id() == std::thread::current().id())
     }
 
+    /// `f`'s answer under the state's lock, which every submission holds from an event signal's
+    /// index to its keep (`command_buffer/submit.rs`): an index `f` takes of an event's timeline
+    /// (`EventShared::reserve_signal`) is never one a batch takes meanwhile. `f` takes no lock the
+    /// scheduler takes before the state's.
+    pub(crate) fn under_lock<R>(&self, f: impl FnOnce() -> R) -> R {
+        let _state = lock(self.shared.inbox.state());
+        f()
+    }
+
     /// Look for work again: an event's value rose, a pipeline was made, a rebind encoded a
     /// command buffer again, or the device was lost (each a host signal). Where a pass is under
     /// way, it passes again once done, and wakes the thread for a step or a check that finds;

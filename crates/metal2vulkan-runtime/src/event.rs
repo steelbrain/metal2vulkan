@@ -35,6 +35,14 @@
 //! - **Shared event handles** are in-process: a handle shares the event, and opening it gives a
 //!   new `SharedEvent` of the same event. Opening it on another device is refused: Vulkan
 //!   semaphores do not cross devices unless exported, which the runtime does not do.
+//! - **The caller's signals** (`SharedEvent::reserve_vk_signal`, `interop.rs`). A shared event's
+//!   semaphore takes signals of the caller's own submissions (a video queue's, say): the caller
+//!   reserves the next signal index for a Metal value under the scheduler's lock, so no batch
+//!   takes that index meanwhile, and its submission signals it (`event_timeline.rs`). No
+//!   completion turn sees such a signal, so the device's watcher ([`CallerSignals`]) waits for
+//!   each on the host, in reservation order, and observes it as a completion turn would: the
+//!   value rises, host waits wake, notifications come due, and the scheduler looks again. Its
+//!   thread starts at the first reservation, and ends once none was left for [`WATCH_LINGER`].
 //! - **Listeners** run notifications on a thread of their own, one after another in the order they
 //!   came due, started as the first notification is asked for: a listener no notification is
 //!   asked of starts no thread, as Metal's runs its blocks on a dispatch queue, whose threads
@@ -53,6 +61,13 @@ use std::time::{Duration, Instant};
 
 /// How long a host wait goes at most without reading the semaphore's counter.
 const POLL: Duration = Duration::from_millis(50);
+
+/// How long the watcher of the caller's signals waits on the GPU at once, so it sees a lost device
+/// or the process's exit.
+const WATCH_SLICE: Duration = Duration::from_millis(100);
+
+/// How long the watcher's thread lingers with no reserved signal left before it ends.
+const WATCH_LINGER: Duration = Duration::from_secs(1);
 
 /// A Metal event (`MTLEvent`): command buffers signal it and wait for it. Cheap to clone (a
 /// retain); `Send + Sync`.
@@ -236,6 +251,81 @@ impl EventShared {
         self.woke();
     }
 
+    /// Reserve the next signal index for a signal of `value` by one of the caller's submissions
+    /// (`event_timeline.rs`, `EventTimeline::signal_apart`), under the scheduler's lock, so no
+    /// batch takes that index meanwhile; where it is kept, the device's watcher waits for it to
+    /// land, and the scheduler looks again, as a batch held for the value may now wait for it on
+    /// the GPU. Refused where the device is lost, or where the watcher's thread cannot start then:
+    /// nothing is reserved.
+    pub(super) fn reserve_signal(self: &Arc<Self>, value: u64) -> Result<Signal, Error> {
+        if self.device.is_lost() {
+            return Err(Error::DeviceLost);
+        }
+        let shared = self.device.shared();
+        let watcher = &shared.interop.caller_signals;
+        let mut watched = lock(&watcher.state);
+        if !watched.running {
+            let thread = Arc::clone(watcher);
+            exit_guard::spawn_user_interactive(
+                std::thread::Builder::new().name("metal2vulkan-caller-signals".into()),
+                move || watch(&thread),
+            )
+            .map_err(|_| Error::OutOfMemory(crate::error::MemoryKind::Host))?;
+            watched.running = true;
+        }
+        let signal =
+            (shared.scheduler).under_lock(|| lock(&self.state).timeline.signal_apart(value));
+        if let Signal::Kept { index, .. } = signal {
+            watched.pending.push_back((Arc::clone(self), index));
+            watcher.wake.notify_all();
+        }
+        drop(watched);
+        if matches!(signal, Signal::Kept { .. }) {
+            self.woke();
+        }
+        Ok(signal)
+    }
+
+    /// Whether the semaphore reached `index` within `slice`, on the host: `None` where it never
+    /// will as far as the runtime can tell (a lost device, or the process exiting, when the
+    /// runtime makes no Vulkan call).
+    fn wait_landed(&self, index: u64, slice: Duration) -> Option<bool> {
+        let _busy = exit_guard::enter()?;
+        if self.device.is_lost() {
+            return None;
+        }
+        let semaphores = [self.semaphore];
+        let values = [index];
+        let info = vk::SemaphoreWaitInfo::default()
+            .semaphores(&semaphores)
+            .values(&values);
+        let nanos = u64::try_from(slice.as_nanos()).unwrap_or(u64::MAX);
+        // SAFETY: the semaphore is the device's and live while `self` is.
+        let waited = unsafe { self.device.shared().vk().wait_semaphores(&info, nanos) };
+        exit_guard::called(Call::WaitSemaphores);
+        match waited {
+            Ok(()) => Some(true),
+            Err(vk::Result::TIMEOUT) => Some(false),
+            Err(_) => None,
+        }
+    }
+
+    /// A host wait returned for the semaphore to reach `index`, one of the caller's signals
+    /// (`EventTimeline::landed`): wake the host's waits and post the notifications that came due,
+    /// as [`reached`](Self::reached) does.
+    fn landed(self: &Arc<Self>, index: u64) {
+        let due = {
+            let mut state = lock(&self.state);
+            if !state.timeline.landed(index) {
+                return;
+            }
+            self.rose(&state);
+            due(&mut state)
+        };
+        self.post(due);
+        self.woke();
+    }
+
     /// The value now, from the semaphore's counter and the host's floor. A counter the read
     /// shows past the index last seen is waited for, a wait that returns at once, before it is
     /// observed (the module docs). Once the process is exiting, the counter is not read
@@ -377,6 +467,60 @@ impl EventShared {
                 block,
             } = notification;
             listener.post(Box::new(move || block(&event, value)));
+        }
+    }
+}
+
+/// The caller's reserved signals one device's watcher waits for (the module docs), in reservation
+/// order, each its event and index.
+#[derive(Default)]
+pub(super) struct CallerSignals {
+    state: Mutex<Watched>,
+    /// Signalled as a signal is reserved.
+    wake: Condvar,
+}
+
+#[derive(Default)]
+struct Watched {
+    pending: VecDeque<(Arc<EventShared>, u64)>,
+    /// The watcher's thread runs: a reservation starts it where it does not.
+    running: bool,
+}
+
+/// The watcher's thread (the module docs): wait for each reserved signal to land, in reservation
+/// order, and observe it; end once none was left for [`WATCH_LINGER`], or where none will land (a
+/// lost device, the process exiting), letting go of every event it held.
+fn watch(signals: &CallerSignals) {
+    loop {
+        let (event, index) = {
+            let mut watched = lock(&signals.state);
+            loop {
+                if let Some((event, index)) = watched.pending.front() {
+                    break (Arc::clone(event), *index);
+                }
+                let (now, waited) = signals
+                    .wake
+                    .wait_timeout(watched, WATCH_LINGER)
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                watched = now;
+                if waited.timed_out() && watched.pending.is_empty() {
+                    watched.running = false;
+                    return;
+                }
+            }
+        };
+        match event.wait_landed(index, WATCH_SLICE) {
+            Some(true) => {
+                event.landed(index);
+                lock(&signals.state).pending.pop_front();
+            }
+            Some(false) => {}
+            None => {
+                let mut watched = lock(&signals.state);
+                watched.pending.clear();
+                watched.running = false;
+                return;
+            }
         }
     }
 }

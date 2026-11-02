@@ -303,7 +303,7 @@ pub use indirect_command_buffer::{
     IndirectCommandCheck, IndirectCommandCheckNeeds, IndirectComputeCommand, IndirectDispatch,
     IndirectDraw, IndirectRenderCommand, NIL_PATCH_BUFFER_ADDRESS,
 };
-pub use interop::SemaphoreProblem;
+pub use interop::{SemaphoreProblem, VkEventSignal, VkEventWait};
 pub use library::{Function, FunctionDescriptor, Library};
 pub use linear_plan::BufferTextureProblem;
 pub use metal2vulkan::device::DriverFact;

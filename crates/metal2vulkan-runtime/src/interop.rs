@@ -4,7 +4,11 @@
 //! - **Raw handles.** Unsafe accessors give the Vulkan objects behind a texture
 //!   ([`Texture::vk_image`]), a buffer ([`Buffer::vk_buffer`]), a shared event
 //!   ([`SharedEvent::vk_semaphore`]), the device ([`Device::raw`]) and a queue
-//!   ([`CommandQueue::with_vk_queue`]). The runtime keeps owning them: the caller never destroys
+//!   ([`CommandQueue::with_vk_queue`]).
+//! - **The caller's submissions and a shared event** ([`SharedEvent::vk_wait`],
+//!   [`SharedEvent::reserve_vk_signal`]): the event's semaphore counts signals, not Metal's
+//!   values, so the caller asks the counter value a Metal value is, or reserves the next one for a
+//!   value it signals (`event_timeline.rs`). The runtime keeps owning them: the caller never destroys
 //!   one, and orders its own use of one against the runtime's through semaphores or completion.
 //!   A queue's `VkQueue` is lent under the runtime's lock of it, which every submission takes,
 //!   since Vulkan requires a queue's submissions to be externally synchronized.
@@ -21,12 +25,54 @@
 use super::buffer::ReadApart;
 use super::device::relay::By;
 use super::device::submit_stalls::Uses;
-use super::event::EventRef;
+use super::error::Error;
+use super::event::{CallerSignals, EventRef};
+use super::event_timeline::{Signal, WaitFor};
 use super::texture::wrapped::Wrapped;
 use super::{Buffer, CommandQueue, Device, SharedEvent, Texture};
 use ash::vk;
 use std::collections::HashSet;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
+
+/// No Metal counterpart: how a submission of the caller's waits for a shared event's value
+/// ([`SharedEvent::vk_wait`]).
+#[non_exhaustive]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum VkEventWait {
+    /// The value is reached: the submission needs no wait.
+    Reached,
+    /// The submission waits for the event's timeline semaphore
+    /// ([`SharedEvent::vk_semaphore`]) to reach this counter value: the index of the signal,
+    /// submitted by the runtime or reserved by the caller, that reaches the value.
+    Counter(u64),
+    /// No counter value names the value yet: no signal submitted or reserved, and no host set,
+    /// reaches it; or the one that does is seen only at its command buffer's completion, after
+    /// the copied host buffers it may write took its writes (`event_timeline.rs`). A submission
+    /// cannot wait for it on the GPU now: ask again once the signalling command buffer is
+    /// scheduled ([`CommandBuffer::wait_until_scheduled`](super::CommandBuffer::wait_until_scheduled)),
+    /// or wait on the host ([`SharedEvent::wait_until_signaled_value`]).
+    NotYet,
+}
+
+/// No Metal counterpart: what a submission of the caller's signals for a shared event's value
+/// ([`SharedEvent::reserve_vk_signal`]).
+#[non_exhaustive]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum VkEventSignal {
+    /// The value is not above what the event's signals, submitted or reserved, and its host sets
+    /// already reach: Metal's signal would change nothing (an event's value only rises), so the
+    /// submission signals nothing.
+    Dropped,
+    /// The submission signals the event's timeline semaphore ([`SharedEvent::vk_semaphore`]) to
+    /// `counter`, once the semaphore reached `after` where given.
+    Counter {
+        /// The counter value the submission signals: the next index, reserved for the caller.
+        counter: u64,
+        /// The counter value the semaphore must reach before the signal: the signal reserved or
+        /// submitted before it, on whatever queue, so the semaphore's signals run in order.
+        after: Option<u64>,
+    },
+}
 
 /// Why a semaphore cannot be one of the caller's binary semaphores.
 #[non_exhaustive]
@@ -45,6 +91,9 @@ pub enum SemaphoreProblem {
 pub(super) struct Interop {
     pub(super) wrapped: Wrapped,
     timelines: Mutex<HashSet<vk::Semaphore>>,
+    /// The caller's reserved signals of the device's events, which its watcher waits for
+    /// (`event.rs`).
+    pub(super) caller_signals: Arc<CallerSignals>,
 }
 
 impl Interop {
@@ -150,15 +199,87 @@ impl Buffer {
 }
 
 impl SharedEvent {
-    /// The event's timeline semaphore. Its counter is the runtime's signal index, which the
-    /// runtime maps to Metal's values, not the event's value.
+    /// No Metal counterpart (an interop hook; Metal's `MTLSharedEvent` is backed by no Vulkan
+    /// object): the event's timeline semaphore, which the caller's submissions wait for and
+    /// signal to order their work against the runtime's command buffers' `encodeWaitForEvent:`
+    /// and `encodeSignalEvent:` of the event.
+    ///
+    /// **Its counter is a signal index, not the event's value.** Metal's value only rises: a
+    /// signal not above it changes nothing, two signals land as their maximum, and a host set
+    /// (`setSignaledValue:`) takes effect at once. A Vulkan timeline semaphore takes only rising
+    /// signals, and no host signal while a GPU signal is pending
+    /// (`VUID-VkSemaphoreSignalInfo-value-03258`). So each signal the runtime keeps, its
+    /// batches' and the caller's, raises the counter by one, and the runtime maps each index to
+    /// its Metal value; a host set never touches the semaphore (`event_timeline.rs`). A
+    /// submission waits for the counter value [`vk_wait`](Self::vk_wait) answers for a Metal
+    /// value, and signals only the one [`reserve_vk_signal`](Self::reserve_vk_signal) reserved.
     ///
     /// # Safety
     ///
-    /// The semaphore stays the runtime's: the caller never signals or destroys it, and uses it
-    /// only while the event lives.
+    /// The semaphore stays the runtime's: the caller never destroys it, never uses it as a
+    /// binary semaphore, signals it only as a reservation names (never from the host but as
+    /// that call says), and uses it only while the event lives: it keeps the event (a clone of
+    /// it) until every submission of its own that waits for or signals the semaphore completed.
     pub unsafe fn vk_semaphore(&self) -> vk::Semaphore {
         EventRef::from(self).shared().semaphore()
+    }
+
+    /// No Metal counterpart (an interop hook): how a submission of the caller's waits for the
+    /// event's value to reach `value`, as a command buffer's `encodeWaitForEvent:value:` waits:
+    /// no wait where the value is reached, a wait for the event's timeline semaphore
+    /// ([`vk_semaphore`](Self::vk_semaphore)) to reach the counter value the answer names, or
+    /// none yet ([`VkEventWait::NotYet`]).
+    ///
+    /// Unlike Metal's wait, a GPU wait for a counter value is released only by the signal it
+    /// names, not by a host set of the value meanwhile (`setSignaledValue:`), which Metal's wait
+    /// would take at once: the signal comes, so the wait ends, later at most. A counter value the
+    /// semaphore already reached is a wait that ends at once.
+    pub fn vk_wait(&self, value: u64) -> VkEventWait {
+        match EventRef::from(self).shared().landing(value) {
+            Some(WaitFor::Reached) => VkEventWait::Reached,
+            Some(WaitFor::Index(index)) => VkEventWait::Counter(index),
+            None => VkEventWait::NotYet,
+        }
+    }
+
+    /// No Metal counterpart (an interop hook): reserve a signal of `value` for a submission of
+    /// the caller's, as a command buffer's `encodeSignalEvent:value:` signals. Where `value` is
+    /// above everything the event's signals and host sets reach, the answer names the next
+    /// counter value of the event's timeline semaphore ([`vk_semaphore`](Self::vk_semaphore)),
+    /// which the caller's submission signals, after a wait for the signal before it (`after`,
+    /// on whatever queue that one runs); else the signal is dropped, as Metal's maximum makes it
+    /// a no-op.
+    ///
+    /// From the reservation, the runtime counts that signal among the event's: a command
+    /// buffer's wait for `value` (or less) waits for it, a later command buffer's signal of the
+    /// event waits for it to land, and the device's watcher waits for it on the host and, once
+    /// it landed, raises the event's value, wakes its host waits and posts its listeners'
+    /// notifications, as for a command buffer's signal. The signal is ordered after the work the
+    /// caller's submission orders it after, as Vulkan orders a semaphore signal; work the runtime
+    /// submitted is no part of it.
+    ///
+    /// Refused where the device is lost (`DeviceLost`), and where the watcher's thread cannot
+    /// start (`OutOfMemory(Host)`): nothing is reserved then.
+    ///
+    /// # Safety
+    ///
+    /// For a [`VkEventSignal::Counter`] answer, the caller submits exactly one signal operation of
+    /// the semaphore to `counter`, in a submission that first waits for the semaphore to reach
+    /// `after` where given, to a queue of the event's device, soon: every later signal of the
+    /// event and every wait for a value it reaches waits for it, the runtime's command buffers'
+    /// on their queues included, and a reservation never signalled stalls them for good. Where
+    /// the submission fails, the caller signals the semaphore to `counter` from the host
+    /// (`vkSignalSemaphore`) once the semaphore reached `after`, so the rest goes on. The
+    /// semaphore's other contract is [`vk_semaphore`](Self::vk_semaphore)'s; the runtime holds
+    /// the event until the signal landed.
+    pub unsafe fn reserve_vk_signal(&self, value: u64) -> Result<VkEventSignal, Error> {
+        Ok(match EventRef::from(self).shared().reserve_signal(value)? {
+            Signal::Dropped => VkEventSignal::Dropped,
+            Signal::Kept { index, after } => VkEventSignal::Counter {
+                counter: index,
+                after,
+            },
+        })
     }
 }
 

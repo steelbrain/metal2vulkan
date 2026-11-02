@@ -274,3 +274,69 @@ fn a_signal_behind_a_merge_is_seen_at_its_completion_turn_alone() {
         assert_eq!(timeline.value(), 7, "{settable}");
     }
 }
+
+/// The caller's signals (`SharedEvent::reserve_vk_signal`): each takes the next index at once,
+/// after the last pending signal whatever queue it is on, and a later batch's signal waits for it
+/// in turn; one not above what is known is dropped; once a host wait returned for one (the
+/// watcher's), every pending signal up to it is observed, but never past a signal behind a merge,
+/// whose completion turn observes it and then the rest.
+#[test]
+fn the_caller_s_signals_take_the_next_index_and_land_through_the_watcher() {
+    let mut timeline = EventTimeline::<usize>::new(true);
+    assert_eq!(
+        timeline.signal_apart(3),
+        Signal::Kept {
+            index: 1,
+            after: None
+        }
+    );
+    assert_eq!(timeline.known(), 3);
+    assert_eq!(timeline.signal_apart(3), Signal::Dropped);
+    // A batch's signal after it, on any queue, waits for it; and the caller's next after that.
+    assert_eq!(
+        submit(&mut timeline, 5, 0),
+        Signal::Kept {
+            index: 2,
+            after: Some(1)
+        }
+    );
+    assert_eq!(
+        timeline.signal_apart(7),
+        Signal::Kept {
+            index: 3,
+            after: Some(2)
+        }
+    );
+    assert_eq!(
+        timeline.signal_apart(8),
+        Signal::Kept {
+            index: 4,
+            after: Some(3)
+        }
+    );
+    assert_eq!(timeline.landing(7), Some(WaitFor::Index(3)));
+    // Nothing is seen until the watcher's wait returned.
+    assert_eq!(timeline.value(), 0);
+    assert!(timeline.landed(3));
+    assert_eq!((timeline.value(), timeline.pending()), (7, 1));
+    assert_eq!(timeline.landing(7), Some(WaitFor::Reached));
+    assert!(timeline.landed(4));
+    assert_eq!((timeline.value(), timeline.pending()), (8, 0));
+    // A merge's signal before the caller's: the caller's waits for its completion turn.
+    let mut timeline = EventTimeline::<usize>::new(true);
+    let Signal::Kept { index, .. } = timeline.signal(2, 0) else {
+        panic!("kept");
+    };
+    timeline.keep(index, 2, 0, true);
+    assert_eq!(
+        timeline.signal_apart(4),
+        Signal::Kept {
+            index: 2,
+            after: Some(1)
+        }
+    );
+    assert!(!timeline.landed(2), "behind the merge's signal");
+    assert_eq!(timeline.value(), 0);
+    assert!(timeline.observe(1), "the merge's completion turn");
+    assert_eq!((timeline.value(), timeline.pending()), (4, 0));
+}
