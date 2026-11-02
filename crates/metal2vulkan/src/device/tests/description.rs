@@ -460,6 +460,50 @@ fn acceleration_structure_limits_read_their_property_structure() {
     assert_eq!(l.max_descriptor_set_acceleration_structures, 0);
 }
 
+/// `nonStrictWideLinesUseParallelogram` is read where `VK_KHR_maintenance5` is exposed, from its
+/// extension's property structure as from the Vulkan 1.4 one (a capture of a Vulkan 1.3 device
+/// carries only the first), and is false without the extension or where unstated.
+#[test]
+fn wide_line_parallelograms_read_the_maintenance5_structure() {
+    assert!(
+        profile("amd-780m-radv")
+            .limits
+            .non_strict_wide_lines_use_parallelogram
+    );
+    assert!(
+        !profile("lavapipe")
+            .limits
+            .non_strict_wide_lines_use_parallelogram
+    );
+    let read = |api: &str, blocks: &str| {
+        DeviceDescription::from_khronos_json(&doc(api, r#""a""#, blocks), None)
+            .unwrap()
+            .limits
+            .non_strict_wide_lines_use_parallelogram
+    };
+    let extension = r#""extensions": {"VK_KHR_maintenance5": 1}"#;
+    for structure in [
+        "VkPhysicalDeviceMaintenance5PropertiesKHR",
+        "VkPhysicalDeviceMaintenance5Properties",
+    ] {
+        let props = format!(
+            r#""properties": {{"{structure}": {{"nonStrictWideLinesUseParallelogram": true}}}}"#
+        );
+        assert!(
+            read("1.3.0", &format!(r#""a": {{{extension}, {props}}}"#)),
+            "{structure}"
+        );
+        assert!(
+            !read("1.3.0", &format!(r#""a": {{{props}}}"#)),
+            "{structure}"
+        );
+    }
+    let v14 = r#""properties": {"VkPhysicalDeviceVulkan14Properties":
+        {"nonStrictWideLinesUseParallelogram": true}}"#;
+    assert!(read("1.4.0", &format!(r#""a": {{{v14}}}"#)));
+    assert!(!read("1.3.0", &format!(r#""a": {{{extension}}}"#)));
+}
+
 #[test]
 fn profile_documents_imply_version_required_features() {
     // The LunarG baseline lists 1.2 structures but not every member 1.2 requires.

@@ -238,6 +238,7 @@ EXTENSION_PROPERTIES = {
         "requiredSubgroupSizeStages": [],
     },
     "VkPhysicalDeviceVertexAttributeDivisorPropertiesEXT": {"maxVertexAttribDivisor": 0},
+    "VkPhysicalDeviceMaintenance5Properties": {"nonStrictWideLinesUseParallelogram": False},
     "VkPhysicalDeviceSampleLocationsPropertiesEXT": {
         "sampleLocationSampleCounts": [],
         "variableSampleLocations": False,

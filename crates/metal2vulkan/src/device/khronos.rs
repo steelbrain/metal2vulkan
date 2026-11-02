@@ -1086,6 +1086,8 @@ const PROPERTY_STRUCTS: &[&str] = &[
     "VkPhysicalDeviceSubgroupSizeControlPropertiesEXT",
     "VkPhysicalDeviceMaintenance4Properties",
     "VkPhysicalDeviceMaintenance4PropertiesKHR",
+    "VkPhysicalDeviceMaintenance5Properties",
+    "VkPhysicalDeviceMaintenance5PropertiesKHR",
     "VkPhysicalDevicePushDescriptorProperties",
     "VkPhysicalDevicePushDescriptorPropertiesKHR",
     "VkPhysicalDeviceVertexAttributeDivisorProperties",
