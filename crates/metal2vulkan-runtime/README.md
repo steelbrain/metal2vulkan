@@ -454,9 +454,9 @@ Apple's private `setLineWidth:` (`RenderCommandEncoder::set_line_width`) takes e
 measured on an Apple M3 Max (macOS 27.0.1), Metal draws `w' = floor(16 w) / 16` clamped to
 `[0, 16]` (NaN and negative widths as 0), the encoder's from 1 at its start: at `w' = 1` its
 ordinary lines, at every other `w'` the parallelogram Vulkan's non-strict wide lines may be (its
-minor-axis edges `w'` long through the endpoints, the ends not extended), at 0 the pixel centres on
-the segment. A strip or loop draws one parallelogram per segment; triangles in fill mode `Lines`
-draw their edges so. The runtime draws each draw at `w' != 1` by one of two routes, counted
+minor-axis edges `w'` long through the endpoints, the ends not extended), at 0 as at 1/16. A strip
+or loop draws one parallelogram per segment; triangles in fill mode `Lines` draw their edges so.
+The runtime draws each draw at `w' != 1` by one of two routes, counted
 (`WorkCounts::device_wide_line_draws`, `line_band_draws`):
 
 | Device | Route |

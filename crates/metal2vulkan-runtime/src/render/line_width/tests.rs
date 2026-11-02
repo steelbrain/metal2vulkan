@@ -59,8 +59,7 @@ fn cell(
             }
         }
         Ok((LineRoute::Band { half }, false)) => {
-            let bits = profile.limits().sub_pixel_precision_bits as f32;
-            assert_eq!(half, if w == 0.0 { (-bits).exp2() } else { w / 2.0 });
+            assert_eq!(half, if w == 0.0 { 1.0 / 32.0 } else { w / 2.0 });
             Cell::Band
         }
         Err(Error::Unsupported(u)) => {

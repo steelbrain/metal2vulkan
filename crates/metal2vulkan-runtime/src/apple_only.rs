@@ -349,7 +349,7 @@ impl RenderCommandEncoder {
     /// macOS 27.0.1): `floor(16 width) / 16` clamped to `[0, 16]`, NaN and every width not
     /// above 0 as 0. At 1 a line is Metal's ordinary one; at any other width the parallelogram
     /// whose minor-axis edges pass through the endpoints, each that width long, a strip's
-    /// segments each their own; at 0 the pixel centres on the segment. Points and filled
+    /// segments each their own; at 0 as at 1/16. Points and filled
     /// triangles do not change. Every width is accepted. A draw at another width than 1 runs the
     /// device's own lines where they draw it (announced `device-wide-lines` where they differ
     /// from Metal's, or under `WideLinePolicy::Exact` the band below where they do), else the

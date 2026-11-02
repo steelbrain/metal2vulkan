@@ -14,8 +14,9 @@
 //!   x on a tie; its two minor-axis edges through the endpoints, each `w'` long and centred on
 //!   its endpoint; its other two edges parallel to the segment; the ends not extended; a pixel
 //!   drawn where its centre lies inside, by the polygon rules' ties (top and left edges in). The
-//!   width is not rounded to whole pixels. At `w' = 0` a line draws exactly the pixel centres on
-//!   the segment, by the same end rule.
+//!   width is not rounded to whole pixels. The endpoints are first snapped to 1/256 pixel, a half
+//!   rounded up. At `w' = 0` a line draws exactly as at 1/16, pixel for pixel: the centres within
+//!   1/32 pixel of the segment along its minor axis, not only those on it.
 //! - A strip or loop draws one parallelogram per segment, with no joins: where two overlap a pixel
 //!   takes two fragments (at `w' = 1` a shared vertex is drawn once, as the diamond rule's).
 //! - Triangles whose fill mode is `Lines` draw their edges by the same rule; in fill mode `Fill`
@@ -40,9 +41,8 @@
 //!   `pipeline::link::band`), two triangles per line over Metal's parallelogram, through a
 //!   tessellation control and evaluation stage (`tessellationShader`). It is every other width's
 //!   route: no `wideLines` (MoltenVK), `w'` outside the range, and `w' = 0`, which the band draws
-//!   at half a width of `2^-subPixelPrecisionBits` (a pixel centre on the segment inside, one
-//!   off it by more than the rasterizer's snapping outside). A strip or a loop is drawn as the list
-//!   of its segments (`render/restart.rs`); a flat input under the last provoking vertex reads the
+//!   at 1/16, as Metal does. A strip or a loop is drawn as the list of its segments
+//!   (`render/restart.rs`); a flat input under the last provoking vertex reads the
 //!   list led by each line's last vertex (`render/provoking.rs`), which covers the same pixels, as
 //!   the parallelogram is the same either way. Refused (`Unsupported`, `Feature::WideLines`,
 //!   needing `tessellationShader`) without it.
@@ -221,10 +221,8 @@ fn route(
             false => Error::NotImplemented(RuntimeGap::WideLines),
         });
     }
-    let half = match width.0 {
-        0 => (-(limits.sub_pixel_precision_bits as f32)).exp2(),
-        _ => w / 2.0,
-    };
+    // Metal draws `w' = 0` as 1/16 (the module docs).
+    let half = w.max(1.0 / 16.0) / 2.0;
     Ok((LineRoute::Band { half }, false))
 }
 

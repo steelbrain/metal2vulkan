@@ -7,9 +7,9 @@
 //! `nonStrictWideLinesUseParallelogram`): the segment's major axis is the larger of its
 //! framebuffer extents, x on a tie; the parallelogram's two minor-axis edges pass through the
 //! endpoints, each `w` long and centred on its endpoint, and its other two edges are parallel to
-//! the segment; a pixel is drawn where its centre lies inside, by the polygon rules' ties (Metal
-//! probes on the Apple M3 Max, macOS 27.0.1). At width 0 Metal draws exactly the pixel centres on
-//! the segment, by the same end rule.
+//! the segment; a pixel is drawn where its centre lies inside, by the polygon rules' ties, the
+//! endpoints first snapped to 1/256 pixel (Metal probes on the Apple M3 Max, macOS 27.0.1). Metal
+//! draws width 0 exactly as 1/16.
 //!
 //! The variant's pipeline draws each line as one patch of two control points (a `PATCH_LIST`,
 //! the line's vertices in order) through two stages link adds between the vertex and fragment
@@ -29,8 +29,9 @@
 //!   cover the parallelogram exactly and wind alike in every direction ([`LineBand::FRONT_FACE`]).
 //!   The offset is taken to clip space through the draw's Vulkan viewport 0, whose half extent
 //!   `(sx, sy)` the draw pushes beside `h` (`PushField::LineBand`, the stage's own push range).
-//!   Width 0 takes `h = 2^-subPixelPrecisionBits`, one unit of the device's subpixel grid: a pixel
-//!   centre on the segment lies inside, one off it by at least that much outside.
+//!   The rasterizer snaps each corner to the device's subpixel grid, where Metal snaps the
+//!   endpoints to 1/256 pixel and then offsets them: on a grid of 1/256 the two agree, `h` being a
+//!   multiple of 1/32 pixel.
 //!
 //! An endpoint at `w < 2^-20` (at or behind the eye) is first moved along the segment to `w =
 //! 2^-20`, its clip distances and float varyings with it, so the band's direction is the visible
