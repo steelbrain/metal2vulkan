@@ -509,20 +509,11 @@ fn normalized_and_cubic_stages_record_no_note_their_states_cannot_run() {
     };
     let s = slot(Stage::Kernel, SlotClass::Sampler, 0);
     // Each stage, the cubic variant's bound word where it is one, and its unconditional notes.
-    let cubic_half = [
-        N::BicubicFilterArithmetic,
-        N::NativeHalfConversion,
-        N::NativeNanEncoding,
-    ];
+    let cubic_half = [N::BicubicFilterArithmetic, N::NativeHalfConversion];
     let stages: [(&str, &str, Option<u32>, &[PrecisionNote]); 14] = [
         ("sampling", "sample_level", None, &[]),
         ("sampling", "sample_base", None, &[]),
-        (
-            "sampling",
-            "sample_grad",
-            None,
-            &[N::NativeHalfConversion, N::NativeNanEncoding],
-        ),
+        ("sampling", "sample_grad", None, &[N::NativeHalfConversion]),
         (
             "sampling",
             "sample_fragment",

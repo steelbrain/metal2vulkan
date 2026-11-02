@@ -153,7 +153,7 @@ fn float_words() -> Vec<u32> {
         0x0080_0000,
         0x7f7f_ffff,
     ]);
-    while words.len() % 64 != 0 {
+    while !words.len().is_multiple_of(64) {
         words.push(0x3f80_0000);
     }
     words
