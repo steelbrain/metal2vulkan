@@ -4933,6 +4933,7 @@ macro-member	metal2vulkan-runtime::Degradation::AbsentArgumentRead	AbsentArgumen
 macro-member	metal2vulkan-runtime::Degradation::AmplificationDraws	AmplificationDraws = "amplification-draws", Performance,
 macro-member	metal2vulkan-runtime::Degradation::AnisotropicFilter	AnisotropicFilter = "anisotropic-filter";
 macro-member	metal2vulkan-runtime::Degradation::ArgumentPixelSamplerScaling	ArgumentPixelSamplerScaling = "argument-pixel-sampler-scaling";
+macro-member	metal2vulkan-runtime::Degradation::AstcStorageNeutral	AstcStorageNeutral = "astc-storage-neutral", Precision,
 macro-member	metal2vulkan-runtime::Degradation::AttachmentReadInPlace	AttachmentReadInPlace = "attachment-read-in-place", Precision,
 macro-member	metal2vulkan-runtime::Degradation::BiasedDepthPastUnitRange	BiasedDepthPastUnitRange = "biased-depth-past-unit-range", Precision,
 macro-member	metal2vulkan-runtime::Degradation::BicubicFilterArithmetic	BicubicFilterArithmetic = "bicubic-filter-arithmetic";
@@ -12158,6 +12159,7 @@ variant	metal2vulkan::bind::NeutralResource::Sampler	Sampler { compare: bool }
 variant	metal2vulkan::bind::NeutralResource::Sink	Sink { min_bytes: u32 }
 variant	metal2vulkan::bind::NeutralResource::TexelBuffer	TexelBuffer { format: vk::Format }
 variant	metal2vulkan::bind::NeutralResource::ZeroBuffer	ZeroBuffer { min_bytes: u32 }
+variant	metal2vulkan::bind::PlanDiagnostic::AstcStorageNeutral	AstcStorageNeutral { slot: SlotRef, substituted: NeutralResource }
 variant	metal2vulkan::bind::PlanDiagnostic::CrossClassHeapNeutral	CrossClassHeapNeutral { stage: Stage, class: HandleClass, element: u32, source: HeapSource }
 variant	metal2vulkan::bind::PlanDiagnostic::CrossClassNeutral	CrossClassNeutral { slot: SlotRef, substituted: NeutralResource }
 variant	metal2vulkan::bind::PlanDiagnostic::IncompatibleBinding	IncompatibleBinding { slot: SlotRef, substituted: NeutralResource }

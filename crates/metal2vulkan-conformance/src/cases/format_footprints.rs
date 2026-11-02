@@ -560,7 +560,10 @@ impl Case for FootprintCase {
         // the case reads bytes, every one compared with Metal's exactly. Measured: lavapipe
         // announced all three, MoltenVK over an M3 Max the first and the last, and every other
         // field was Metal's on both.
-        let astc = self.round_trips.iter().any(|&pf| AstcDecode::of(pf).is_some());
+        let astc = self
+            .round_trips
+            .iter()
+            .any(|&pf| AstcDecode::of(pf).is_some());
         if !astc {
             return Vec::new();
         }

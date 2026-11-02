@@ -44,7 +44,7 @@ Its limits, measured rather than asserted:
 | committed recordings | 1122 |
 | distinct SDK items the Metal leg reaches, of any status | 800 |
 | of those, reached only where this cannot name the family | 2 |
-| ledger rows (a case whose gap is recorded) | 1327 |
+| ledger rows (a case whose gap is recorded) | 1326 |
 | declared crossings of the option space (pairs put to Metal at once) | 26 |
 | declared crossings that are no pair of it (a boolean or numeric field, or one type in two slots) | 30 |
 
@@ -534,7 +534,7 @@ An implemented container no case's Metal leg touches. These are the families of 
 | cases whose Metal answer is `never_returned` | 4 |
 | modules that loosen a measured value | 8 |
 | tolerances in all | 8 |
-| modules declaring a notice (loosening no value) | 118 |
+| modules declaring a notice (loosening no value) | 119 |
 | loosenings used | `Unchecked`, `Absolute` |
 | justifications named | `Degradation`, `AcceptedDifference` |
 | modules forbidding a re-record | 8 |
@@ -2221,7 +2221,6 @@ A case whose difference from Metal is recorded rather than compared away. The le
 | `attribute-stride-plural-buffers` | Metal's `MTLAttributeStrideStatic` on a `[[stage_in]]` layout of `MTLBufferLayoutStrideDynamic` is not "read at stride 0"; it fetches the element at the bind of… |
 | `attribute-stride-buffer-offset` | Metal's `MTLAttributeStrideStatic` on a `[[stage_in]]` layout of `MTLBufferLayoutStrideDynamic` is not "read at stride 0"; it fetches the element at the bind of… |
 | `attribute-stride-inline-bytes` | The runtime refuses a kernel's `[[stage_in]]` fetch of INLINE BYTES bound with `MTLAttributeStrideStatic`, where plain Metal answers. Measured on this M3 Max (m… |
-| `format-footprints-astc-4x2-and-8x4` | The runtime answers Metal's heap footprint for ASTC's 4x2 and 8x4 footprints, which is arithmetic over a descriptor, but holds no image of any of them, so `newT… |
 | `format-footprints-plain-stragglers` | Plain Metal makes a texture of `ARGB8Unorm_sRGB` in all eight non-multisample texture types and takes a host `replaceRegion:`/`getBytes:` round trip through eac… |
 | `format-footprints-one-plane-ycbcr` | The runtime answers Metal's heap footprint for Apple's nine one-plane YCbCr formats, which is arithmetic over a descriptor, but holds no image of any of them, s… |
 | `format-footprints-padded-wide-channels` | The runtime answers Metal's heap footprint for the ten padded 10- and 12-bit display formats, which is arithmetic over a descriptor, but holds no image of any o… |
