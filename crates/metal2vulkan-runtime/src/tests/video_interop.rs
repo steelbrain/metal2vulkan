@@ -427,6 +427,11 @@ impl Drop for CallerBuffer<'_> {
 /// command buffer's fill wrote, and the second command buffer's copy what the raw copy wrote; the
 /// second command buffer has not completed before the raw signal. The two buffers the raw copy
 /// uses are the test's own, shared with the raw queue's family, wrapped as Metal buffers.
+///
+/// The first command buffer's short fill may complete, and its signal be seen landed, before the
+/// test reads the wait for 10 once it is scheduled: the wait is then `Reached` and the reserved
+/// signal comes after nothing, as `vk_wait` and `reserve_vk_signal` say. A test thread that wakes
+/// from `wait_until_scheduled` late (a loaded host) sees that; both answers are checked.
 #[test]
 fn a_raw_submission_is_ordered_by_a_shared_event_s_semaphore() {
     let scratch = Scratch::new("video-interop-event");
@@ -457,16 +462,28 @@ fn a_raw_submission_is_ordered_by_a_shared_event_s_semaphore() {
     assert_eq!(event.vk_wait(10), VkEventWait::NotYet, "not submitted yet");
     hold.set_signaled_value(1);
     first.wait_until_scheduled().unwrap();
-    let VkEventWait::Counter(wait) = event.vk_wait(10) else {
-        panic!("a submitted signal's counter: {:?}", event.vk_wait(10));
+    // Counter 1 while the first signal is pending; reached once it was seen landed.
+    let wait = match event.vk_wait(10) {
+        VkEventWait::Counter(index) => Some(index),
+        VkEventWait::Reached => None,
+        VkEventWait::NotYet => panic!("a submitted signal's counter: NotYet"),
     };
-    assert_eq!(wait, 1, "the first signal's index, not its value");
+    assert!(
+        matches!(wait, Some(1) | None),
+        "the first signal's index, not its value: {wait:?}"
+    );
     // SAFETY: the signal is submitted below, once, after a wait for `after`.
     let reserved = unsafe { event.reserve_vk_signal(20) }.unwrap();
     let VkEventSignal::Counter { counter, after } = reserved else {
         panic!("a signal above every value is kept: {reserved:?}");
     };
-    assert_eq!((counter, after), (2, Some(1)));
+    // After the first signal while it is pending, after nothing once it landed (which it may
+    // have between the two reads, never the other way).
+    assert_eq!(counter, 2);
+    match wait {
+        Some(_) => assert!(matches!(after, Some(1) | None), "after {after:?}"),
+        None => assert_eq!(after, None, "a signal seen landed is still waited for"),
+    }
     // SAFETY: as above; a value below one reserved is dropped.
     assert_eq!(
         unsafe { event.reserve_vk_signal(15) }.unwrap(),
@@ -492,10 +509,13 @@ fn a_raw_submission_is_ordered_by_a_shared_event_s_semaphore() {
     // SAFETY: the semaphore is used while the event lives, signalled only as reserved.
     let semaphore = unsafe { event.vk_semaphore() };
     let (from, to) = (source.buffer, middle.buffer);
+    // The fill's signal, counter 1 (`after`, or reached where none is given): the copy reads
+    // what the fill wrote, and a wait for a value reached is a dependency that ends at once.
+    let fill = after.or(wait).unwrap_or(counter - 1);
     submit_raw(
         &device,
         &raw_queue,
-        &[(semaphore, wait.max(after.unwrap_or(0)))],
+        &[(semaphore, fill)],
         &[(semaphore, counter)],
         |vk_device, command_buffer| {
             let region = vk::BufferCopy {
@@ -522,7 +542,8 @@ fn a_raw_submission_is_ordered_by_a_shared_event_s_semaphore() {
     assert!(event.wait_until_signaled_value(20, WAIT));
     assert_eq!(event.signaled_value(), 20);
     eprintln!(
-        "VIDEO-INTEROP: {}: value 10 was counter {wait}, value 20 counter {counter}",
+        "VIDEO-INTEROP: {}: value 10 was counter {wait:?}, value 20 counter {counter} after \
+         {after:?}",
         device.name()
     );
     drop((first, second, filled, copied));
