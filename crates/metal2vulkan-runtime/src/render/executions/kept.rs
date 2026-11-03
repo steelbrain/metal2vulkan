@@ -349,8 +349,9 @@ impl RenderExecution {
         // execution's own records them.
         found.misses = found.misses.wrapping_add(chunk_found.misses);
         found.faults = ReplayFaults(found.faults.0 | chunk_found.faults.0);
-        if from < range.end {
-            let (commands, released) = self.icb.render_records(from..range.end, Reader::Commit)?;
+        // A chunk at a time, as an execution recorded inline reads its range.
+        for piece in kept_commands::pieces(from..range.end, false) {
+            let (commands, released) = self.icb.render_records(piece, Reader::Commit)?;
             self.icb.degrade_released(&released);
             self.replay(&mut encoder, commands, residency, found)?;
         }

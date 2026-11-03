@@ -16,7 +16,10 @@
 //! - an execution with a check keeps its chunks as an unchecked one does where the check's needs
 //!   rule out what the records may hold, and keeps nothing where they do not;
 //! - an execution compares the resources it made resident with each list its kept chunks were
-//!   recorded under once, whole, and the chunks it records to keep share the list it met.
+//!   recorded under once, whole, and the chunks it records to keep share the list it met;
+//! - an execution that records its commands inline reads their records a chunk at a time, but
+//!   whole where its check may see something or its command buffer has an executed-commands
+//!   handler, which hears of every command once.
 //!
 //! And so do compute commands: `icb_replay_template`, command `c` binding its own parameters and
 //! output windows, so every command's dispatch writes words of its own.
@@ -33,14 +36,15 @@ use metal2vulkan::pipeline::{
 };
 use metal2vulkan_devtools::{engine_dir, llvm_assemble};
 use metal2vulkan_runtime::{
-    Buffer, ClearColor, CommandQueue, ComputePipelineState, Device, IndirectCommandBuffer,
-    IndirectCommandBufferDescriptor, IndirectCommandCheck, IndirectCommandCheckNeeds, LoadAction,
-    PipelineOptions, Region, RenderPassDescriptor, RenderPipelineState, ResourceOptions,
-    ResourceRef, Size, StoreAction, Texture, TextureDescriptor,
+    Buffer, ClearColor, CommandQueue, ComputePipelineState, Device, ExecutedCommands,
+    ExecutedCommandsHandler, IndirectCommandBuffer, IndirectCommandBufferDescriptor,
+    IndirectCommandCheck, IndirectCommandCheckNeeds, LoadAction, PipelineOptions, Region,
+    RenderPassDescriptor, RenderPipelineState, ResourceOptions, ResourceRef, Size, StoreAction,
+    Texture, TextureDescriptor,
 };
 use std::ops::Range;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 /// The target's width and height.
 const W: u64 = 64;
@@ -533,17 +537,24 @@ impl Dispatches {
     /// In a command buffer of its own, committed and waited for: the output zeroed, then a
     /// compute encoder that makes the buffers resident and executes `range` of `icb`.
     fn run(&self, icb: &IndirectCommandBuffer, range: Range<u64>) {
-        self.run_with(icb, range, None);
+        self.run_with(icb, range, None, None);
     }
 
-    /// [`run`](Self::run), the execution given a check of `checked`'s where there is one.
+    /// [`run`](Self::run), the execution given a check of `checked`'s where there is one, and
+    /// the command buffer `handler` where there is one.
     fn run_with(
         &self,
         icb: &IndirectCommandBuffer,
         range: Range<u64>,
         checked: Option<Checked<'_>>,
+        handler: Option<ExecutedCommandsHandler>,
     ) {
         let command_buffer = self.queue.command_buffer().unwrap();
+        if let Some(handler) = handler {
+            command_buffer
+                .add_executed_commands_handler(handler)
+                .unwrap();
+        }
         let mut blit = command_buffer.blit_command_encoder().unwrap();
         blit.fill_buffer(&self.out, 0..16 * N, 0).unwrap();
         blit.end_encoding().unwrap();
@@ -661,7 +672,7 @@ fn a_checked_compute_execution_keeps_where_its_check_sees_nothing() {
         let all = dispatched(0..N, |c| c);
         let calls = Arc::new(AtomicU64::new(0));
         let checked = (IndirectCommandCheckNeeds::ALL, &calls);
-        let run = || counted(device, || work.run_with(&icb, 0..N, Some(checked)));
+        let run = || counted(device, || work.run_with(&icb, 0..N, Some(checked), None));
         assert_eq!(run(), [N, 0, 0, 0], "the first execution keeps nothing");
         assert_eq!(
             run(),
@@ -675,5 +686,73 @@ fn a_checked_compute_execution_keeps_where_its_check_sees_nothing() {
             0,
             "a check with nothing to see"
         );
+    });
+}
+
+/// Across `run`: the records the host read, and the runs of consecutive commands' records it read
+/// at once (`WorkCounts::indirect_record_runs_read`).
+fn runs_read(device: &Device, run: impl FnOnce()) -> [u64; 2] {
+    let before = device.work_counts();
+    run();
+    let after = device.work_counts();
+    [
+        after.indirect_records_read - before.indirect_records_read,
+        after.indirect_record_runs_read - before.indirect_record_runs_read,
+    ]
+}
+
+/// An execution that records its commands inline reads their records a chunk at a time, a
+/// chunk's commands recorded before it reads the next; one whose check may see something reads
+/// them whole, the check seeing every command before any is recorded.
+#[test]
+fn an_inline_execution_reads_its_records_a_chunk_at_a_time() {
+    on_device(|device, _| {
+        let scene = Scene::new(device);
+        let icb = scene.icb(device);
+        let target = Scene::target(device);
+        let all = drawn(0..N, |c| c);
+        let run = || runs_read(device, || scene.run(&target, &icb, (0..N, 1), None));
+        assert_eq!(run(), [N, 3], "the first execution, a chunk at a time");
+        assert_eq!(pixels(&target), all);
+        let calls = Arc::new(AtomicU64::new(0));
+        let points = IndirectCommandCheckNeeds::new(true, false);
+        let checked = || scene.run_checked(&target, &icb, 0..N, (points, &calls));
+        assert_eq!(
+            runs_read(device, checked),
+            [N, 1],
+            "a check that sees, whole"
+        );
+        assert_eq!(pixels(&target), all);
+        assert_eq!(calls.load(Ordering::Relaxed), N, "every command checked");
+    });
+}
+
+/// A compute execution that records its commands inline reads their records a chunk at a time;
+/// one whose command buffer has an executed-commands handler reads them whole, the handler
+/// hearing of every command once.
+#[test]
+fn an_inline_compute_execution_reads_its_records_a_chunk_at_a_time() {
+    on_device(|device, _| {
+        let work = Dispatches::new(device);
+        let icb = work.icb(device);
+        let all = dispatched(0..N, |c| c);
+        let run = || runs_read(device, || work.run(&icb, 0..N));
+        assert_eq!(run(), [N, 3], "the first execution, a chunk at a time");
+        assert_eq!(work.out(), all);
+        let heard: Arc<Mutex<Vec<Vec<u64>>>> = Arc::default();
+        let hearing = Arc::clone(&heard);
+        let handler: ExecutedCommandsHandler = Arc::new(move |executed: &ExecutedCommands| {
+            let indices = executed.commands.iter().map(|command| command.index);
+            hearing.lock().unwrap().push(indices.collect());
+        });
+        let reported = || work.run_with(&icb, 0..N, None, Some(handler));
+        assert_eq!(runs_read(device, reported), [N, 1], "a handler's, whole");
+        let every: Vec<u64> = (0..N).collect();
+        assert_eq!(
+            *heard.lock().unwrap(),
+            [every],
+            "heard once, of every command"
+        );
+        assert_eq!(work.out(), all);
     });
 }

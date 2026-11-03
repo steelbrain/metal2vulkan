@@ -151,6 +151,7 @@ pub(crate) struct Counters {
     visibility_queries_begun: AtomicU64,
     indirect_draws_recorded: AtomicU64,
     indirect_records_read: AtomicU64,
+    indirect_record_runs_read: AtomicU64,
     indirect_chunks_kept: AtomicU64,
     indirect_commands_kept: AtomicU64,
     kept_contexts_made: AtomicU64,
@@ -1164,6 +1165,13 @@ impl Counters {
     pub(crate) fn indirect_records_read(&self, count: u64) {
         self.indirect_records_read
             .fetch_add(count, Ordering::Relaxed);
+    }
+
+    /// The records of a run of an indirect command buffer's consecutive commands were read at
+    /// once (`IndirectCommandBuffer::read_records`).
+    pub(crate) fn indirect_record_run_read(&self) {
+        self.indirect_record_runs_read
+            .fetch_add(1, Ordering::Relaxed);
     }
 
     /// An execution ran a chunk of `commands` of an indirect command buffer's from its kept
@@ -3904,6 +3912,12 @@ pub struct WorkCounts {
     /// `IndirectCommandCheck`) or `IndirectCommandBuffer::commands` reads it; a setter's own
     /// read of the command it changes is not counted.
     pub indirect_records_read: u64,
+    /// Runs of consecutive commands' records of indirect command buffers read at once, one a run
+    /// of one or more commands: by `IndirectCommandBuffer::commands`, and by an execution recorded
+    /// at its commit, which reads its range a chunk of 256 commands at a time
+    /// (`kept_commands::pieces`), or whole where its check, or its command buffer's
+    /// executed-commands handlers, see every command before any is recorded.
+    pub indirect_record_runs_read: u64,
     /// Chunks of indirect command buffers' commands an execution ran from the recording an
     /// earlier one kept, one each time (`kept_commands.rs`): their command buffer runs that
     /// recording again, and their records are not read.
@@ -5898,6 +5912,7 @@ impl Device {
             visibility_queries_begun: counters.visibility_queries_begun.load(Ordering::Relaxed),
             indirect_draws_recorded: counters.indirect_draws_recorded.load(Ordering::Relaxed),
             indirect_records_read: counters.indirect_records_read.load(Ordering::Relaxed),
+            indirect_record_runs_read: counters.indirect_record_runs_read.load(Ordering::Relaxed),
             indirect_chunks_kept: counters.indirect_chunks_kept.load(Ordering::Relaxed),
             indirect_commands_kept: counters.indirect_commands_kept.load(Ordering::Relaxed),
             kept_contexts_made: counters.kept_contexts_made.load(Ordering::Relaxed),

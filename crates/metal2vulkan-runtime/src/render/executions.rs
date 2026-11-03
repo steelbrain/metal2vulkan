@@ -4,11 +4,12 @@
 //! - **When.** As a compute encoder's (`indirect_execute.rs`), an execution runs the records as
 //!   they stand when its batch is submitted: Metal's reads them as it runs, so it sees CPU writes
 //!   made after the call, and the GPU's writes before it where an encoder made the buffer
-//!   resident for writing. `commit` records the CPU's records as they stand then; where the CPU
-//!   writes them again before the pass's batch is ready to submit (an event wait holds it), the
-//!   host step records the pass again from the records as they stand then, waiting for no work
-//!   on the GPU and announcing nothing. A CPU write after the batch was submitted races the GPU,
-//!   as on Metal. So the call records nothing for the commands:
+//!   resident for writing. `commit` records the CPU's records as they stand then, a chunk at a
+//!   time as a compute execution reads them (`kept_commands::pieces`); where the CPU writes them
+//!   again before the pass's batch is ready to submit (an event wait holds it), the host step
+//!   records the pass again from the records as they stand then, waiting for no work on the GPU
+//!   and announcing nothing. A CPU write after the batch was submitted races the GPU, as on
+//!   Metal. So the call records nothing for the commands:
 //!   the instance it is encoded in ends its secondary command buffer there and goes on in a new
 //!   one, the execution's own secondary standing between the two ([`Piece`](super::Piece)).
 //!   A secondary command buffer must be recorded before a primary executes it, so a pass with an
@@ -303,6 +304,7 @@ use crate::indirect_command_buffer::{
 };
 use crate::indirect_dispatch;
 use crate::indirect_execute::{self, unstrided_buffer, ExecutionRange};
+use crate::kept_commands;
 use crate::pipeline::budget::Urgency;
 use crate::pipeline::RenderPipelineState;
 use crate::pipeline::Settled;
@@ -2026,35 +2028,20 @@ impl RenderExecution {
                 );
             }
         }
-        let (commands, faults) = self.commands(&device, step)?;
+        let (range, faults) = self.range.commands(self.icb.size())?;
+        if !step && self.range.indirect() {
+            return Err(internal(
+                "a range read from a buffer recorded before its host step",
+            ));
+        }
         found.faults = ReplayFaults(found.faults.0 | faults.0);
-        // What the commands run, for the command buffer's handlers (`executed_commands.rs`).
-        let read = match step {
-            true => RecordsRead::HostStep,
-            false => RecordsRead::Commit,
-        };
-        command_buffer.report_executed(&self.icb, read, residency, || {
-            let first = self
-                .range
-                .commands(self.icb.size())
-                .map_or(0, |(range, _)| u64::from(range.start));
-            let commands = commands
-                .iter()
-                .enumerate()
-                .filter_map(|(at, command)| {
-                    let (record, own) = command.as_ref()?;
-                    let Asked::Draw(_) = Asked::of(&record.action, &self.icb) else {
-                        return None;
-                    };
-                    let pipeline = self.pipeline.as_ref().or(own.as_ref())?;
-                    Some(ExecutedCommand {
-                        index: first + at as u64,
-                        can_encode_indirect_commands: pipeline.can_encode_indirect_commands(),
-                    })
-                })
-                .collect();
-            (commands, false)
-        });
+        // The caller's check sees each command the execution will record, before it records any,
+        // where it may see something; so do the command buffer's executed-commands handlers,
+        // which hear of the execution once. `commit` reads the rest a chunk at a time
+        // (`kept_commands::pieces`), the host step the records as the GPU and the CPU left them.
+        let check = self.check.as_ref().filter(|_| self.check_sees_now());
+        let reports = command_buffer.reports_executed();
+        let whole = step || check.is_some() || reports;
         let draws = command_buffer.begin_draws(&snapshot.compatible)?;
         let raw = device.shared().vk();
         // The query the commands' draws count in, begun here and ended after the last of them.
@@ -2079,13 +2066,69 @@ impl RenderExecution {
             (storage, layout, residency),
             forms,
         );
-        self.replay(
-            &mut encoder,
-            commands.into_iter().flatten(),
-            residency,
-            found,
-        )?;
+        if !step {
+            // Counted before the records are read: a write meanwhile records it again.
+            self.read_at.store(self.icb.cpu_writes(), Ordering::Release);
+        }
+        for piece in kept_commands::pieces(range, whole) {
+            let start = piece.start;
+            if step {
+                let (commands, written) = self.written_commands(&device, piece, check)?;
+                found.faults = ReplayFaults(found.faults.0 | written.0);
+                if reports {
+                    let executed = commands.iter().map(Option::as_ref);
+                    let read = (RecordsRead::HostStep, residency);
+                    self.report(command_buffer, read, start, executed);
+                }
+                let commands = commands.into_iter().flatten();
+                self.replay(&mut encoder, commands, residency, found)?;
+                continue;
+            }
+            let (commands, released) = self.icb.render_records(piece, Reader::Commit)?;
+            // The execution announces the commands it runs otherwise than Metal's may, as it
+            // records them.
+            self.icb.degrade_released(&released);
+            if let Some(check) = check {
+                let read = commands.iter().map(|(record, _)| record);
+                self.icb.check_read(check, start, read);
+            }
+            if reports {
+                let executed = commands.iter().map(Some);
+                let read = (RecordsRead::Commit, residency);
+                self.report(command_buffer, read, start, executed);
+            }
+            self.replay(&mut encoder, commands, residency, found)?;
+        }
         self.finish(encoder, found, rendered, &device)
+    }
+
+    /// Hand the command buffer's executed-commands handlers the draws `executed` runs, commands
+    /// from `start` (`None` where a record runs nothing for a fault), read at `read` under
+    /// `residency`, the command buffer's (`executed_commands.rs`).
+    fn report<'c>(
+        &self,
+        command_buffer: &CommandBuffer,
+        (read, residency): (RecordsRead, &Residency),
+        start: u32,
+        executed: impl Iterator<Item = Option<&'c Command>>,
+    ) {
+        command_buffer.report_executed(&self.icb, read, residency, || {
+            let commands = (u64::from(start)..)
+                .zip(executed)
+                .filter_map(|(index, command)| {
+                    let (record, own) = command?;
+                    let Asked::Draw(_) = Asked::of(&record.action, &self.icb) else {
+                        return None;
+                    };
+                    let pipeline = self.pipeline.as_ref().or(own.as_ref())?;
+                    Some(ExecutedCommand {
+                        index,
+                        can_encode_indirect_commands: pipeline.can_encode_indirect_commands(),
+                    })
+                })
+                .collect();
+            (commands, false)
+        });
     }
 
     /// Replay `commands` through `encoder` (`record`'s), resolving against `residency`, the
@@ -2575,44 +2618,18 @@ impl RenderExecution {
         points || encodes
     }
 
-    /// The commands of the range, in order, `None` where a record runs nothing for a fault, and
-    /// the faults: the CPU's records, or for the host step the records as the GPU and the CPU
-    /// left them, each naming its state among the live ones made with
-    /// `supportIndirectCommandBuffers`.
-    fn commands(
+    /// For the host step, the commands of `range`, the execution's, in order, `None` where a
+    /// record runs nothing for a fault, and the faults: the records as the GPU and the CPU left
+    /// them, each naming its state among the live ones made with
+    /// `supportIndirectCommandBuffers`, each seen by `check` before any is recorded.
+    fn written_commands(
         &self,
         device: &Device,
-        step: bool,
+        range: Range<u32>,
+        check: Option<&Mutex<IndirectCommandCheck>>,
     ) -> Result<(Vec<Option<Command>>, ReplayFaults), Error> {
-        let (range, faults) = self.range.commands(self.icb.size())?;
-        if !step {
-            if self.range.indirect() {
-                return Err(internal(
-                    "a range read from a buffer recorded before its host step",
-                ));
-            }
-            // The execution announces the commands it runs otherwise than Metal's may, as it
-            // records them.
-            let start = range.start;
-            // Counted before the records are read: a write meanwhile records it again.
-            self.read_at.store(self.icb.cpu_writes(), Ordering::Release);
-            let (commands, released) = self.icb.render_records(range, Reader::Commit)?;
-            self.icb.degrade_released(&released);
-            // The caller's check sees each command `commit` will record, before it records any,
-            // where it may see something.
-            if let Some(check) = self.check.as_ref().filter(|_| self.check_sees_now()) {
-                let read = commands.iter().map(|(record, _)| record);
-                self.icb.check_read(check, start, read);
-            }
-            return Ok((
-                commands.into_iter().map(Some).collect(),
-                ReplayFaults::default(),
-            ));
-        }
         let written = self.icb.written_records(range.clone())?;
-        // The caller's check sees each command the step will record, before it records any,
-        // where it may see something.
-        if let Some(check) = self.check.as_ref().filter(|_| self.check_sees_now()) {
+        if let Some(check) = check {
             self.icb
                 .check_recorded(check, range.start, &written.records);
         }
@@ -2630,7 +2647,7 @@ impl RenderExecution {
             .zip(named)
             .map(|(record, state)| record.map(|record| (record, state)))
             .collect();
-        Ok((commands, ReplayFaults(written.faults.0 | faults.0)))
+        Ok((commands, written.faults))
     }
 
     /// The command's own buffers of `stage`, below the descriptor's `count` of it, resolved

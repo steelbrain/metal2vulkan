@@ -76,6 +76,18 @@ pub(super) fn chunks(range: Range<u32>) -> impl Iterator<Item = (u32, Range<u32>
     })
 }
 
+/// The runs of commands an execution that records `range` inline reads the records of, in order,
+/// and records before it reads the next: the chunks of `range` ([`chunks`]), so a chunk's records
+/// are recorded while the cache still holds them, as an execution that keeps its commands records
+/// them; or `range` whole, where every command must be seen before any is recorded (`whole`).
+pub(super) fn pieces(range: Range<u32>, whole: bool) -> impl Iterator<Item = Range<u32>> {
+    let (whole, chunked) = match whole {
+        true => (Some(range), None),
+        false => (None, Some(chunks(range).map(|(_, covered)| covered))),
+    };
+    whole.into_iter().chain(chunked.into_iter().flatten())
+}
+
 /// The chunks of `range`, as [`chunks`] gives them: their indices.
 fn chunks_of(range: Range<u32>) -> Range<u32> {
     match range.is_empty() {
@@ -475,7 +487,7 @@ impl KeptChunks {
 
 #[cfg(test)]
 mod tests {
-    use super::{chunks, chunks_of, Kept, KeptChunks, CHUNK};
+    use super::{chunks, chunks_of, pieces, Kept, KeptChunks, CHUNK};
 
     /// A write looks at the states of the chunks it covers alone, however many others hold one,
     /// and at none while no chunk holds a state; it forgets those, and no other.
@@ -520,5 +532,22 @@ mod tests {
         assert_eq!(chunks_of(10..CHUNK * 2 + 5), 0..3);
         assert_eq!(chunks_of(CHUNK..CHUNK * 2), 1..2);
         assert_eq!(chunks_of(7..7), 0..0);
+    }
+
+    #[test]
+    fn pieces_are_the_chunks_or_the_range_whole() {
+        let chunked: Vec<_> = pieces(10..CHUNK * 2 + 5, false).collect();
+        assert_eq!(
+            chunked,
+            [10..CHUNK, CHUNK..CHUNK * 2, CHUNK * 2..CHUNK * 2 + 5]
+        );
+        let whole = std::iter::once(10..CHUNK * 2 + 5);
+        assert!(pieces(10..CHUNK * 2 + 5, true).eq(whole));
+        assert_eq!(pieces(5..5, false).count(), 0);
+        let empty = std::iter::once(5..5);
+        assert!(
+            pieces(5..5, true).eq(empty),
+            "an empty range whole is read once"
+        );
     }
 }

@@ -2194,7 +2194,7 @@ impl IndirectCommandBuffer {
     pub fn commands(&self, range: Range<u64>) -> Result<Vec<IndirectCommand>, Error> {
         self.check_command_types("commands")?;
         let range = self.command_range("commands", range)?;
-        let (records, sets) = self.read_records(range.clone())?;
+        let (records, sets) = self.read_records(range.clone(), std::convert::identity)?;
         let read = range
             .zip(&records)
             .zip(&sets)
@@ -2968,7 +2968,8 @@ impl IndirectCommandBuffer {
     }
 
     /// The records of commands `range` as they are now, each with the state of kind `of` it
-    /// names for `reader` (`name_state`), the live states of its ID listed by `live`, once.
+    /// names for `reader` (`name_state`), the live states of its ID listed by `live`, once: read
+    /// into the list they are returned in, each state named in place.
     fn named_records<S: Clone>(
         &self,
         range: Range<u32>,
@@ -2976,29 +2977,38 @@ impl IndirectCommandBuffer {
         of: &Of<S>,
         live: impl Fn() -> Vec<S>,
     ) -> Result<(Vec<(CommandRecord, Option<S>)>, Released), Error> {
-        let (records, sets) = self.read_records(range.clone())?;
+        let (mut records, sets) = self.read_records(range.clone(), |record| (record, None))?;
         let read = range
             .zip(&records)
             .zip(&sets)
-            .map(|((index, record), set)| (index, record, set.as_ref()));
+            .map(|((index, (record, _)), set)| (index, record, set.as_ref()));
         let (named, released) = self.name_records(read, reader, of, live);
-        Ok((records.into_iter().zip(named).collect(), released))
+        for ((_, state), named) in records.iter_mut().zip(named) {
+            *state = named;
+        }
+        Ok((records, released))
     }
 
-    /// The records of commands `range` (inside the size) as they are now, and the state the CPU
-    /// set on each, read together.
-    fn read_records(
+    /// The records of commands `range` (inside the size) as they are now, each as `held` holds
+    /// it, and the state the CPU set on each, read together, each list made at its length.
+    fn read_records<T>(
         &self,
         range: Range<u32>,
-    ) -> Result<(Vec<CommandRecord>, Vec<Option<CommandState>>), Error> {
-        self.device()
-            .shared()
-            .counts
-            .indirect_records_read(range.len() as u64);
+        held: impl Fn(CommandRecord) -> T,
+    ) -> Result<(Vec<T>, Vec<Option<CommandState>>), Error> {
+        let counts = &self.device().shared().counts;
+        counts.indirect_records_read(range.len() as u64);
+        if !range.is_empty() {
+            counts.indirect_record_run_read();
+        }
         let commands = lock(&self.0.pipelines);
-        range
-            .map(|index| Ok((self.record(index)?, commands.state(index))))
-            .collect()
+        let mut records = Vec::with_capacity(range.len());
+        let mut sets = Vec::with_capacity(range.len());
+        for index in range {
+            records.push(held(self.record(index)?));
+            sets.push(commands.state(index));
+        }
+        Ok((records, sets))
     }
 
     /// The state of kind `of` each of `read` (a command's index, record and the state the CPU
