@@ -16,21 +16,23 @@
 //!   meets or are work of the draw's own. Its uses are noted as the next draw would note them
 //!   (`NotedApart`). A draw that met a notice its device announces or refuses at every occurrence
 //!   (`EachWatch`) keeps nothing: its next draw must meet it again.
-//! - **Forgotten at every call but a buffer bind.** Every call of the encoder but the two direct
-//!   draws and the vertex and fragment buffer and bytes binds forgets it as it logs itself
-//!   (`RenderLowering::log`, which every call does: at the call, on the device's lowering thread,
-//!   and encoded again), refused or not, whatever it changes. A buffer or bytes bind changes its
-//!   stage table's slots alone (and takes room in its command buffer's uploads), and a table's
-//!   stamp tells each change apart (`argument_table::Stamp`): the kept draw keeps the four
-//!   tables' stamps as it read them, and a draw whose tables kept them is the kept draw again;
-//!   one after binds is drawn again rebound where it can be (`rebound.rs`), else takes every
-//!   step. So the encoder's state a draw resolves from is the kept draw's, but for the tables'
-//!   slots the stamps tell apart, what the kept draw itself left and what changes with no call
-//!   of the encoder: the latter is [`Under`], compared at each draw: the count of no-copy
+//! - **Forgotten at every call but a bind.** Every call of the encoder but the two direct draws
+//!   and the vertex and fragment buffer, bytes, texture and sampler state binds forgets it as it
+//!   logs itself (`RenderLowering::log`, which every call does: at the call, on the device's
+//!   lowering thread, and encoded again), refused or not, whatever it changes. A bind changes its
+//!   stage table's slots alone (and a bytes bind takes room in its command buffer's uploads), and
+//!   a table's stamp tells each change apart (`argument_table::Stamp`): the kept draw keeps the
+//!   four tables' stamps as it read them, and a draw whose tables kept them is the kept draw
+//!   again; one after binds is drawn again rebound where it can be (`rebound.rs`), else takes
+//!   every step. So the encoder's state a draw resolves from is the kept draw's, but for the
+//!   tables' slots the stamps tell apart, what the kept draw itself left and what changes with no
+//!   call of the encoder: the latter is [`Under`], compared at each draw: the count of no-copy
 //!   buffers' moves (a bound buffer's binding, a detach), the residency's generation once the
 //!   draw made the heaps' new textures resident, whether the device has buffers over host pages
-//!   and its host aliases' version, and the encoder's parts and held images (what noting reads,
-//!   `noted_apart.rs`), with the command buffer the current instance records into.
+//!   and its host aliases' version, the encoder's parts and held images (what noting reads,
+//!   `noted_apart.rs`), with the command buffer the current instance records into, and the count
+//!   of the device's sampler IDs' slots' changes (a sampler state made or gone, which every step
+//!   of a draw lists again: `sampler::ArgumentSamplers`).
 //! - **What a kept draw left holds for the next.** Each of its steps adds to what the encoder
 //!   holds, and adding the same again changes nothing: its drawn area and coverage (rectangles
 //!   and boxes, `clear_reach::DrawnArea`, `linear_attachment::Coverage`), the pass's reads
@@ -180,12 +182,15 @@ impl PartialEq for KeptExecution {
 }
 
 /// What a kept draw read that changes with no call of the encoder (the module docs): the no-copy
-/// buffers' moves, the residency's generation, and what its uses were noted into.
+/// buffers' moves, the residency's generation, what its uses were noted into, and the count of
+/// the device's sampler IDs' slots' changes, at which its bind state listed the live sampler
+/// states (`LiveBind::listed_at`: a state made or gone since, every step lists them again).
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(super) struct Under {
     moved: u64,
     residency: u64,
     into: NotedInto,
+    samplers: u64,
 }
 
 /// Whether a draw is its encoder's kept draw again ([`RenderLowering::draw_again`]).
@@ -228,6 +233,7 @@ impl RenderLowering {
             moved: crate::buffer::host_cells_moved(),
             residency: self.residency.generation(),
             into: self.core.noted_into(),
+            samplers: self.core.device().sampler_slots_changed(),
         }
     }
 
