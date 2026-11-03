@@ -2,7 +2,9 @@
 //! the chunks no write reached again (`kept_commands.rs`).
 //!
 //! - **Which executions.** One `commit` records from the CPU's records (no host step, no GPU
-//!   form), of a range in the call, with no check of the caller's, no visibility result counted,
+//!   form), of a range in the call, of a buffer whose command types hold a draw of primitives
+//!   (`DRAW` or `DRAW_INDEXED`: a mesh or patch draw is never plain, so a buffer of those alone
+//!   has no chunk to keep), with no check of the caller's, no visibility result counted,
 //!   no shadowed texture, no tile threadgroup memory argument set or reached, no rasterization
 //!   rate map, no memoryless attachment or stand-in, no record barrier the buffer may hold, no
 //!   write before the fragments and no indirect read of the encoder's draws before the call, no
@@ -51,6 +53,7 @@ use crate::resource::ResourceKey;
 use crate::sample_positions::Sixteenths;
 use metal2vulkan::bind::indirect_commands::{BufferStage, CommandRecord};
 use metal2vulkan::bind::{ReplayFaults, UsedResource};
+use metal2vulkan::metal::IndirectCommandType;
 use std::collections::BTreeSet;
 use std::ops::Range;
 use std::sync::atomic::Ordering;
@@ -144,7 +147,12 @@ impl RenderExecution {
         let memoryless_target = colors.clone().any(|color| memoryless(&color.target))
             || (layout.depth_stencil.as_ref())
                 .is_some_and(|ds| ds.stand_in.is_some() || memoryless(&ds.target));
+        // A mesh or patch draw is never plain (`RenderLowering::replay_plain`), so a buffer whose
+        // commands can be no draw of primitives keeps no chunk: recording one apart would only
+        // find it not plain.
+        let primitives = IndirectCommandType::DRAW.union(IndirectCommandType::DRAW_INDEXED);
         let keeps = !range.is_empty()
+            && self.icb.descriptor().command_types.intersects(primitives)
             && !self.icb.gpu_written()
             && self.check.is_none()
             && self.lent.is_none()
