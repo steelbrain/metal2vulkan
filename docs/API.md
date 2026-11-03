@@ -1767,8 +1767,11 @@ bound.
 - `metal2vulkan-degrade-host-replayed-indirect-commands` (performance).
   `HostReplayedIndirectCommands`: An execution of an indirect command buffer
   (`executeCommandsInBuffer:withRange:`) whose commands are known only once the work before it
-  completed: an encoder made the buffer resident for writing, so the GPU may write its records; it
-  reads its range from a buffer; or it lies inside a block of command predication. The runtime
+  completed: a route that may write its records met the buffer (its command buffer made it
+  resident for writing and set a pipeline state whose functions may call an indirect-command
+  operation, or executed commands whose records may name one; or a blit copied or reset commands
+  into it), so the GPU may write them, and the notice names that route; it reads its range from a
+  buffer; or it lies inside a block of command predication. The runtime
   records such an execution on the CPU then where the GPU cannot run it alone. A render execution:
   where its records may hold, at the commit or as its batch is ready, more than draws of one
   primitive type under the encoder's state, or what its check looks for; its notice names the first
@@ -1794,9 +1797,9 @@ bound.
   commands. The commands run in the large-buffer form (their range-limited buffer slots at device
   addresses, with in-shader bounds checks), whose variants the commit compiles for every pipeline
   state a record may name (for a render execution, every state the CPU set on its commands; or,
-  for an execution committed before the buffer was made resident for writing, the use_resource
-  call that made it so); without device addresses, a command's first buffer shape compiles its
-  variant then.
+  for an execution committed before a route that may write the records met the buffer, the call
+  that met it: a later commit, a blit's, or a CPU setter's); without device addresses, a command's
+  first buffer shape compiles its variant then.
 - `metal2vulkan-degrade-uncalibrated-gpu-times` (precision). `UncalibratedGpuTimes`: A command
   buffer's GPU times on a device that calibrates its timestamps against no host clock the runtime
   reads (no `VK_KHR_calibrated_timestamps` or `VK_EXT_calibrated_timestamps` with the device's time
@@ -3791,8 +3794,15 @@ each item named states the rule in full.
   command's `draw` of primitive type 7, 8 or 9 reads as one of points (0), and `command_type` of
   an indexed draw of type 9 reads as none; `commands` keeps the type the command draws.
 - **Whether the GPU may have written the records** (`IndirectCommandBuffer::gpu_written`, no Metal
-  counterpart) turns true at the first call that lets GPU work write them; from then on an
-  execution runs the records as they stand once the work before it completed.
+  counterpart) turns true at the first route that may write them: the commit of a command buffer
+  that made the buffer resident for writing and also set, in any of its encoders, a pipeline state
+  whose functions may call an indirect-command operation (`indirect_command_writes` not empty, read
+  from their AIR), or executed commands whose records may name such a state; a later write that
+  first leaves such a state in the records of a buffer that command buffer executed; a blit's copy
+  or reset into it. From then on an execution runs the records as they stand once the work before
+  it completed. A buffer made resident for writing alongside functions that call no such operation
+  stays unmarked, and its executions run the CPU's records as a buffer made resident for reading
+  does (`WorkCounts::indirect_write_residencies_unmarked` counts each such commit's buffers).
 - **What an execution runs, where its records are read**
   (`CommandBuffer::add_executed_commands_handler`, no Metal counterpart): a handler is called each
   time the runtime reads an execution's records, at `commit`, in a host step, or not at all for an

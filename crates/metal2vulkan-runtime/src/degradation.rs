@@ -634,12 +634,15 @@ degradations! {
             "two whole-image barriers per batch that uses it: into GENERAL before its first \
              encoder, and back to its home layout at its end";
         /// An execution of an indirect command buffer (`executeCommandsInBuffer:withRange:`) whose
-        /// commands are known only once the work before it completed: an encoder made the buffer
-        /// resident for writing, so the GPU may write its records; it reads its range from a
-        /// buffer; or it lies inside a block of command predication. The runtime records such an
-        /// execution on the CPU then where the GPU cannot run it alone. A render execution: where
-        /// its records may hold, at the commit or as its batch is ready, more than draws of one
-        /// primitive type under the encoder's state, or what its check looks for
+        /// commands are known only once the work before it completed: a route that may write its
+        /// records met the buffer (`write_routes.rs`: its command buffer made it resident for
+        /// writing and set a pipeline state whose functions may call an indirect-command
+        /// operation, or executed commands whose records may name one; or a blit copied or reset
+        /// commands into it), so the GPU may write them, and the notice names that route; it reads
+        /// its range from a buffer; or it lies inside a block of command predication. The runtime
+        /// records such an execution on the CPU then where the GPU cannot run it alone. A render
+        /// execution: where its records may hold, at the commit or as its batch is ready, more
+        /// than draws of one primitive type under the encoder's state, or what its check looks for
         /// (`render/executions/gpu.rs`); its notice names the first rule that kept it from the GPU
         /// alone. A compute execution: with a caller's check (`execute_commands_in_buffer_checked`)
         /// that may see what it looks for (`IndirectCommandCheckNeeds`: a state that may encode
@@ -667,9 +670,9 @@ degradations! {
              (their range-limited buffer slots at device addresses, with in-shader bounds \
              checks), whose variants the commit compiles for every pipeline state a record may \
              name (for a render execution, every state the CPU set on its commands; or, for an \
-             execution committed before the buffer was made resident for writing, the \
-             use_resource call that made it so); without device addresses, a command's first \
-             buffer shape compiles its variant then";
+             execution committed before a route that may write the records met the buffer, the \
+             call that met it: a later commit, a blit's, or a CPU setter's); without device \
+             addresses, a command's first buffer shape compiles its variant then";
         /// A command buffer's GPU times on a device that calibrates its timestamps against no
         /// host clock the runtime reads (no `VK_KHR_calibrated_timestamps` or
         /// `VK_EXT_calibrated_timestamps` with the device's time domain and a monotonic host

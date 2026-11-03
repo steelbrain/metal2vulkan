@@ -14,17 +14,20 @@
 //!   batch is ready to submit (an event wait holds it, [`Execute::rewritten`]), a host step
 //!   records it again from the records as they stand then, waiting for no work on the GPU, and
 //!   announcing nothing. A CPU write after the batch was submitted races the GPU, as on Metal.
-//! - **Records the GPU may write**. A buffer an encoder made resident for writing
-//!   (`IndirectCommandBuffer::gpu_written`, for good) is written by functions as they run, so its
+//! - **Records the GPU may write**. A buffer a route that may write its records met
+//!   (`IndirectCommandBuffer::gpu_written`, for good, `write_routes.rs`: its command buffer made it
+//!   resident for writing and runs a function that may call an indirect-command operation, or a
+//!   blit copied or reset commands into it) is written by functions as they run, so its
 //!   records are known only once the work before the execution completed. Its segment starts a part
 //!   of the encoder, and a batch, of its own. Where every record it may hold is covered, `commit`
 //!   records it to run on the GPU alone (`gpu_execute.rs`); otherwise the scheduler submits the
 //!   batch once every batch submitted before it on any queue completed and its host step recorded
 //!   the segment from the records then (`scheduler`), which the device announces once
 //!   (`Degradation::HostReplayedIndirectCommands`). So is a segment `commit` recorded from the
-//!   CPU's records whose buffer an encoder made resident for writing after the commit
-//!   ([`Unforeseen`]). The step compiles nothing: `commit`, or for such a segment the encoder's
-//!   `use_resource` before the scheduler sees the buffer written, settles on its own thread the
+//!   CPU's records whose buffer such a route met after the commit ([`Unforeseen`]). The step
+//!   compiles nothing: `commit`, or for such a segment the call that met the buffer (a later
+//!   commit, a blit's, or a CPU setter's) before the scheduler sees the buffer written, settles on
+//!   its own thread the
 //!   variants every state a record may name needs, and the neutrals their plans bind
 //!   ([`Execute::settle`]); the step makes only what a dispatch on the CPU makes (descriptor sets,
 //!   upload chunks, views and samplers of bound textures) and the `VkPipeline` of a threadgroup
@@ -107,6 +110,7 @@ use super::residency::{whole_use, Residency};
 use super::resource::ResourceKey;
 use super::tracker::{Access, Barrier, EncoderUses, Summary, Use};
 use super::upload::Upload;
+use super::write_routes::replay_why;
 use super::Device;
 use ash::vk;
 use metal2vulkan::bind::indirect_commands::{Action, BufferBinding, BufferStage, CommandRecord};
@@ -761,26 +765,33 @@ pub(super) fn degrade_nil_offset(device: &Device, binding: &BufferBinding, index
 /// Announce, once per device, that an execution is replayed on the host (the module's records
 /// the GPU may write, and ranges read from a buffer).
 pub(super) fn degrade_host_replay(device: &Device, execute: &Execute) {
+    // The buffer's records, which a route that may write them met, named (`write_routes.rs`).
     let why = if execute.icb.gpu_written() {
-        "an encoder made it resident for writing, so the GPU may write the records an execution \
-         runs"
+        None
     } else if execute.indirect() {
-        "an execution reads its range from a buffer \
-         (executeCommandsInBuffer:indirectBuffer:indirectBufferOffset:), which the GPU may write"
+        Some(
+            "an execution reads its range from a buffer \
+             (executeCommandsInBuffer:indirectBuffer:indirectBufferOffset:), which the GPU may \
+             write",
+        )
     } else if execute.predicated() {
-        "an execution inside a block of command predication, whose condition is GPU memory"
+        Some("an execution inside a block of command predication, whose condition is GPU memory")
     } else {
         // Recorded again for the CPU's writes since the commit (`Execute::rewritten`), waiting
         // for no work on the GPU.
         return;
     };
     device.degrade(Degradation::HostReplayedIndirectCommands, || {
+        let why = match why {
+            Some(why) => why.to_owned(),
+            None => replay_why(&execute.icb, "the records an execution runs"),
+        };
         (
             format!(
                 "an indirect command buffer of {} commands",
                 execute.icb.size()
             ),
-            why.to_owned(),
+            why,
         )
     });
 }

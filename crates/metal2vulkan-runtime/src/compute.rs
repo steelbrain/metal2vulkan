@@ -448,6 +448,9 @@ impl ComputeCommandEncoder {
                     .check_device("set_compute_pipeline_state", state.device())?;
                 this.pipeline = Some(state.clone());
                 this.writers.state_set(state.indirect_command_writes());
+                (this.core.routes).state_set(state.indirect_command_writes(), || {
+                    vec![state.function_name().to_owned()]
+                });
                 Ok(())
             },
         )
@@ -1229,6 +1232,7 @@ impl ComputeCommandEncoder {
             if let ResourceRef::IndirectCommandBuffer(icb) = resource {
                 if usage.contains(ResourceUsage::WRITE) {
                     self.writers.made_writable(icb.written());
+                    self.core.routes.writable(icb);
                     self.core.retain(icb.gpu_write());
                 }
             }
@@ -1305,8 +1309,9 @@ impl ComputeCommandEncoder {
     /// commands it runs (a runtime extension; Metal has none), which looks for what `needs` names
     /// ([`IndirectCommandCheckNeeds`]; a compute command draws no points): where the commit records
     /// the execution from the CPU's records, or a host step from the records as the GPU and the CPU
-    /// left them (an encoder made `icb` resident for writing, or the execution lies inside a block
-    /// of command predication), it first calls `check` with each command it will record, in order,
+    /// left them (a route that may write `icb`'s records met it,
+    /// `IndirectCommandBuffer::gpu_written`, or the execution lies inside a block of command
+    /// predication), it first calls `check` with each command it will record, in order,
     /// before it records any of them ([`IndirectCommandCheck`]). Where what the records may hold
     /// leaves the check nothing to see, neither calls it, and an execution a host step would record
     /// may run on the GPU alone, as an unchecked one may; a route encoded after the commit that
@@ -1476,6 +1481,7 @@ impl ComputeCommandEncoder {
         // Its commands run the states their records name, where it inherits none.
         if !icb.descriptor().inherit_pipeline_state {
             self.writers.runs(icb.written().named().writes);
+            self.core.routes.executed(icb);
         }
         let table = if icb.descriptor().inherit_buffers {
             self.table.clone()

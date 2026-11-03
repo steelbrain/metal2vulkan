@@ -8,10 +8,12 @@ target triple = "air64_v28-apple-macosx26.0.0"
 %"struct.metal::texture2d" = type { ptr addrspace(1) }
 %"struct.metal::sampler" = type { ptr addrspace(2) }
 %"struct.metal::_atomic" = type { i32 }
+%struct.Commands = type { %"struct.metal::command_buffer" }
+%"struct.metal::command_buffer" = type { ptr addrspace(1) }
 
 ; Function Attrs: mustprogress nofree norecurse nosync nounwind willreturn memory(none)
 define <{ <4 x float> }> @rd_slot_vertex(i32 noundef %0, ptr addrspace(2) noundef readonly align 16 captures(none) dereferenceable(16) "air-buffer-no-alias" %1) local_unnamed_addr #0 {
-  %3 = load <4 x float>, ptr addrspace(2) %1, align 16, !alias.scope !41
+  %3 = load <4 x float>, ptr addrspace(2) %1, align 16, !alias.scope !46
   %4 = shufflevector <4 x float> %3, <4 x float> poison, <2 x i32> <i32 0, i32 1>
   %5 = icmp eq i32 %0, 1
   %6 = select fast i1 %5, float 0x3F947AE140000000, float 0.000000e+00
@@ -34,7 +36,7 @@ define <4 x half> @rd_color_fragment() local_unnamed_addr #0 {
 ; Function Attrs: mustprogress nofree norecurse nosync nounwind willreturn memory(none)
 define <{ <4 x float> }> @rd_entry_vertex(i32 noundef %0, ptr addrspace(2) noundef readonly align 8 captures(none) dereferenceable(24) "air-buffer-no-alias" %1) local_unnamed_addr #0 {
   %3 = getelementptr inbounds %struct.Entry, ptr addrspace(2) %1, i64 0, i32 0
-  %4 = load ptr addrspace(2), ptr addrspace(2) %3, align 8, !tbaa !44, !alias.scope !53
+  %4 = load ptr addrspace(2), ptr addrspace(2) %3, align 8, !tbaa !49, !alias.scope !58
   %5 = load <4 x float>, ptr addrspace(2) %4, align 16
   %6 = shufflevector <4 x float> %5, <4 x float> poison, <2 x i32> <i32 0, i32 1>
   %7 = icmp eq i32 %0, 1
@@ -53,9 +55,9 @@ define <{ <4 x float> }> @rd_entry_vertex(i32 noundef %0, ptr addrspace(2) nound
 ; Function Attrs: convergent mustprogress nofree nounwind willreturn memory(read)
 define <4 x float> @rd_entry_fragment(ptr addrspace(2) noundef readonly align 8 captures(none) dereferenceable(24) "air-buffer-no-alias" %0) local_unnamed_addr #1 {
   %2 = getelementptr inbounds %struct.Entry, ptr addrspace(2) %0, i64 0, i32 2, i32 0
-  %3 = load ptr addrspace(2), ptr addrspace(2) %2, align 8, !tbaa.struct !56, !alias.scope !58
+  %3 = load ptr addrspace(2), ptr addrspace(2) %2, align 8, !tbaa.struct !61, !alias.scope !63
   %4 = getelementptr inbounds %struct.Entry, ptr addrspace(2) %0, i64 0, i32 1, i32 0
-  %5 = load ptr addrspace(1), ptr addrspace(2) %4, align 8, !tbaa !61, !alias.scope !58
+  %5 = load ptr addrspace(1), ptr addrspace(2) %4, align 8, !tbaa !66, !alias.scope !63
   %6 = tail call { <4 x float>, i8 } @air.sample_texture_2d.v4f32(ptr addrspace(1) readonly captures(none) %5, ptr addrspace(2) readonly captures(none) %3, <2 x float> splat (float 5.000000e-01), i1 true, <2 x i32> zeroinitializer, i1 false, float 0.000000e+00, float 0.000000e+00, i32 0) #5
   %7 = extractvalue { <4 x float>, i8 } %6, 0
   ret <4 x float> %7
@@ -68,28 +70,48 @@ define void @rd_touch(ptr addrspace(1) noundef captures(none) "air-buffer-no-ali
   ret void
 }
 
-; Function Attrs: convergent mustprogress nofree nounwind willreturn memory(argmem: read)
-declare { <4 x float>, i8 } @air.sample_texture_2d.v4f32(ptr addrspace(1) readonly captures(none), ptr addrspace(2) readonly captures(none), <2 x float>, i1, <2 x i32>, i1, float, float, i32) local_unnamed_addr #3
+; Function Attrs: mustprogress nounwind willreturn
+define void @rd_encode(ptr addrspace(1) noundef captures(none) "air-buffer-no-alias" %0, ptr addrspace(1) noundef readonly align 8 captures(none) dereferenceable(8) "air-buffer-no-alias" %1) local_unnamed_addr #2 {
+  %3 = getelementptr inbounds %"struct.metal::_atomic", ptr addrspace(1) %0, i64 0, i32 0
+  %4 = tail call i32 @air.atomic.global.add.u.i32(ptr addrspace(1) captures(none) %3, i32 1, i32 0, i32 2, i1 true) #6
+  %5 = icmp eq i32 %4, -1
+  br i1 %5, label %6, label %9
+
+6:                                                ; preds = %2
+  %7 = getelementptr inbounds %struct.Commands, ptr addrspace(1) %1, i64 0, i32 0, i32 0
+  %8 = load ptr addrspace(1), ptr addrspace(1) %7, align 8, !tbaa.struct !67, !alias.scope !70, !noalias !73
+  tail call void @air.reset_render_command(ptr addrspace(1) captures(none) %8, i32 0) #6
+  br label %9
+
+9:                                                ; preds = %6, %2
+  ret void
+}
 
 ; Function Attrs: mustprogress nounwind willreturn
-declare i32 @air.atomic.global.add.u.i32(ptr addrspace(1) captures(none), i32, i32, i32, i1) local_unnamed_addr #4
+declare void @air.reset_render_command(ptr addrspace(1) captures(none), i32) local_unnamed_addr #3
+
+; Function Attrs: convergent mustprogress nofree nounwind willreturn memory(argmem: read)
+declare { <4 x float>, i8 } @air.sample_texture_2d.v4f32(ptr addrspace(1) readonly captures(none), ptr addrspace(2) readonly captures(none), <2 x float>, i1, <2 x i32>, i1, float, float, i32) local_unnamed_addr #4
+
+; Function Attrs: mustprogress nounwind willreturn
+declare i32 @air.atomic.global.add.u.i32(ptr addrspace(1) captures(none), i32, i32, i32, i1) local_unnamed_addr #3
 
 attributes #0 = { mustprogress nofree norecurse nosync nounwind willreturn memory(none) "approx-func-fp-math"="true" "frame-pointer"="all" "min-legal-vector-width"="64" "no-builtins" "no-infs-fp-math"="true" "no-nans-fp-math"="true" "no-signed-zeros-fp-math"="true" "no-trapping-math"="true" "stack-protector-buffer-size"="8" "unsafe-fp-math"="true" }
 attributes #1 = { convergent mustprogress nofree nounwind willreturn memory(read) "approx-func-fp-math"="true" "frame-pointer"="all" "min-legal-vector-width"="128" "no-builtins" "no-infs-fp-math"="true" "no-nans-fp-math"="true" "no-signed-zeros-fp-math"="true" "no-trapping-math"="true" "stack-protector-buffer-size"="8" "unsafe-fp-math"="true" }
 attributes #2 = { mustprogress nounwind willreturn "approx-func-fp-math"="true" "frame-pointer"="all" "min-legal-vector-width"="0" "no-builtins" "no-infs-fp-math"="true" "no-nans-fp-math"="true" "no-signed-zeros-fp-math"="true" "no-trapping-math"="true" "stack-protector-buffer-size"="8" "unsafe-fp-math"="true" }
-attributes #3 = { convergent mustprogress nofree nounwind willreturn memory(argmem: read) }
-attributes #4 = { mustprogress nounwind willreturn }
+attributes #3 = { mustprogress nounwind willreturn }
+attributes #4 = { convergent mustprogress nofree nounwind willreturn memory(argmem: read) }
 attributes #5 = { convergent nounwind willreturn memory(argmem: read) }
 attributes #6 = { nounwind willreturn }
 
 !llvm.module.flags = !{!0, !1, !2, !3, !4, !5, !6, !7, !8}
 !air.vertex = !{!9, !15}
 !air.fragment = !{!22, !26}
-!air.kernel = !{!31}
-!air.compile_options = !{!35, !36, !37}
-!llvm.ident = !{!38}
-!air.version = !{!39}
-!air.language_version = !{!40}
+!air.kernel = !{!31, !35}
+!air.compile_options = !{!40, !41, !42}
+!llvm.ident = !{!43}
+!air.version = !{!44}
+!air.language_version = !{!45}
 
 !0 = !{i32 2, !"SDK Version", [2 x i32] [i32 27, i32 2]}
 !1 = !{i32 1, !"wchar_size", i32 4}
@@ -126,30 +148,43 @@ attributes #6 = { nounwind willreturn }
 !32 = !{!33}
 !33 = !{i32 0, !"air.buffer", !"air.location_index", i32 0, i32 1, !"air.read_write", !"air.address_space", i32 1, !"air.struct_type_info", !34, !"air.arg_type_size", i32 4, !"air.arg_type_align_size", i32 4, !"air.arg_type_name", !"metal::_atomic", !"air.arg_name", !"count"}
 !34 = !{i32 0, i32 4, i32 0, !"uint", !"__s"}
-!35 = !{!"air.compile.denorms_disable"}
-!36 = !{!"air.compile.fast_math_enable"}
-!37 = !{!"air.compile.framebuffer_fetch_enable"}
-!38 = !{!"Apple metal version 32023.922 (metalfe-32023.922.4)"}
-!39 = !{i32 2, i32 8, i32 0}
-!40 = !{!"Metal", i32 4, i32 0, i32 0}
-!41 = !{!42}
-!42 = distinct !{!42, !43, !"air-alias-scope-arg(1)"}
-!43 = distinct !{!43, !"air-alias-scopes(rd_slot_vertex)"}
-!44 = !{!45, !46, i64 0}
-!45 = !{!"_ZTS5Entry", !46, i64 0, !49, i64 8, !51, i64 16}
-!46 = !{!"any pointer", !47, i64 0}
-!47 = !{!"omnipotent char", !48, i64 0}
-!48 = !{!"Simple C++ TBAA"}
-!49 = !{!"_ZTSN5metal9texture2dIfLNS_6accessE0ELNS_16memory_coherenceE0EvEE", !50, i64 0}
-!50 = !{!"__metal_texture_2d_t", !47, i64 0}
-!51 = !{!"_ZTSN5metal7samplerE", !52, i64 0}
-!52 = !{!"__metal_sampler_t", !47, i64 0}
-!53 = !{!54}
-!54 = distinct !{!54, !55, !"air-alias-scope-arg(1)"}
-!55 = distinct !{!55, !"air-alias-scopes(rd_entry_vertex)"}
-!56 = !{i64 0, i64 8, !57}
-!57 = !{!52, !52, i64 0}
+!35 = !{ptr @rd_encode, !25, !36}
+!36 = !{!33, !37}
+!37 = !{i32 1, !"air.indirect_buffer", !"air.buffer_size", i32 8, !"air.location_index", i32 1, i32 1, !"air.read", !"air.address_space", i32 1, !"air.struct_type_info", !38, !"air.arg_type_size", i32 8, !"air.arg_type_align_size", i32 8, !"air.arg_type_name", !"Commands", !"air.arg_name", !"table"}
+!38 = !{i32 0, i32 8, i32 0, !"command_buffer", !"commands", !"air.indirect_argument", !39}
+!39 = !{i32 0, !"air.command_buffer", !"air.location_index", i32 0, i32 1, !"air.arg_type_name", !"command_buffer", !"air.arg_name", !"commands"}
+!40 = !{!"air.compile.denorms_disable"}
+!41 = !{!"air.compile.fast_math_enable"}
+!42 = !{!"air.compile.framebuffer_fetch_enable"}
+!43 = !{!"Apple metal version 32023.922 (metalfe-32023.922.4)"}
+!44 = !{i32 2, i32 8, i32 0}
+!45 = !{!"Metal", i32 4, i32 0, i32 0}
+!46 = !{!47}
+!47 = distinct !{!47, !48, !"air-alias-scope-arg(1)"}
+!48 = distinct !{!48, !"air-alias-scopes(rd_slot_vertex)"}
+!49 = !{!50, !51, i64 0}
+!50 = !{!"_ZTS5Entry", !51, i64 0, !54, i64 8, !56, i64 16}
+!51 = !{!"any pointer", !52, i64 0}
+!52 = !{!"omnipotent char", !53, i64 0}
+!53 = !{!"Simple C++ TBAA"}
+!54 = !{!"_ZTSN5metal9texture2dIfLNS_6accessE0ELNS_16memory_coherenceE0EvEE", !55, i64 0}
+!55 = !{!"__metal_texture_2d_t", !52, i64 0}
+!56 = !{!"_ZTSN5metal7samplerE", !57, i64 0}
+!57 = !{!"__metal_sampler_t", !52, i64 0}
 !58 = !{!59}
-!59 = distinct !{!59, !60, !"air-alias-scope-arg(0)"}
-!60 = distinct !{!60, !"air-alias-scopes(rd_entry_fragment)"}
-!61 = !{!49, !50, i64 0}
+!59 = distinct !{!59, !60, !"air-alias-scope-arg(1)"}
+!60 = distinct !{!60, !"air-alias-scopes(rd_entry_vertex)"}
+!61 = !{i64 0, i64 8, !62}
+!62 = !{!57, !57, i64 0}
+!63 = !{!64}
+!64 = distinct !{!64, !65, !"air-alias-scope-arg(0)"}
+!65 = distinct !{!65, !"air-alias-scopes(rd_entry_fragment)"}
+!66 = !{!54, !55, i64 0}
+!67 = !{i64 0, i64 8, !68}
+!68 = !{!69, !69, i64 0}
+!69 = !{!"__metal_command_buffer_t", !52, i64 0}
+!70 = !{!71}
+!71 = distinct !{!71, !72, !"air-alias-scope-arg(1)"}
+!72 = distinct !{!72, !"air-alias-scopes(rd_encode)"}
+!73 = !{!74}
+!74 = distinct !{!74, !72, !"air-alias-scope-arg(0)"}

@@ -144,13 +144,13 @@ impl Deferred {
     }
 
     /// Whether the GPU may write what the work reads now: a host step records it, before its
-    /// batch is submitted. For an execution, whether its buffer was made resident for writing
-    /// (`IndirectCommandBuffer::gpu_written`, for good), or it reads its range from a buffer
+    /// batch is submitted. For an execution, whether a route that may write its buffer's records
+    /// met it (`IndirectCommandBuffer::gpu_written`, for good), or it reads its range from a buffer
     /// (`Execute::indirect`), or it lies inside a block of command predication, whose counter its
     /// host step reads (`Execute::predicated`); an indirect dispatch's arguments always are GPU
     /// memory the work
-    /// before it may write. A render pass's, whether an encoder made the buffer of one of its
-    /// executions resident for writing, or one of them reads its range from a buffer.
+    /// before it may write. A render pass's, whether such a route met the buffer of one of its
+    /// executions, or one of them reads its range from a buffer.
     pub(super) fn gpu_written(&self) -> bool {
         match self {
             Deferred::Execute(execute) => {

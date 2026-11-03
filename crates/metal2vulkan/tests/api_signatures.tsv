@@ -2744,6 +2744,7 @@ field	metal2vulkan-runtime::WorkCounts.indirect_commands_kept	pub indirect_comma
 field	metal2vulkan-runtime::WorkCounts.indirect_draws_recorded	pub indirect_draws_recorded: u64
 field	metal2vulkan-runtime::WorkCounts.indirect_record_runs_read	pub indirect_record_runs_read: u64
 field	metal2vulkan-runtime::WorkCounts.indirect_records_read	pub indirect_records_read: u64
+field	metal2vulkan-runtime::WorkCounts.indirect_write_residencies_unmarked	pub indirect_write_residencies_unmarked: u64
 field	metal2vulkan-runtime::WorkCounts.inline_memoryless_write_splits	pub inline_memoryless_write_splits: u64
 field	metal2vulkan-runtime::WorkCounts.inline_passes	pub inline_passes: u64
 field	metal2vulkan-runtime::WorkCounts.inline_passes_split	pub inline_passes_split: u64

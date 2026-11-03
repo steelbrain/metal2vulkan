@@ -15,6 +15,7 @@
 use super::blit_holds::{device, Scratch};
 use super::encoder_holds::library;
 use crate::error::{internal, invalid};
+use crate::write_routes::GpuWriter;
 use crate::written_commands::Named;
 use crate::{
     Buffer, ComputePipelineState, Device, DrawProblem, Error, IndirectCommandBuffer,
@@ -312,7 +313,7 @@ fn render_setters_write_as_a_whole_record_edit() {
         named,
         None,
     );
-    copy.written().copied_from(icb.written());
+    copy.written().copied_from(icb.written()).mark();
     let copy = Some(&copy);
     let v0 = bound(BufferStage::Vertex, 0, Some(&a), 16);
     model.edit(
@@ -448,7 +449,7 @@ fn render_setters_write_as_a_whole_record_edit() {
 
     // Once the GPU may write the records, what one left there joins at the next setter's call:
     // an indexed draw of a triangle strip.
-    icb.written_by_gpu();
+    icb.written_by_gpu(GpuWriter::Reset);
     model.gpu_write(&icb, 4, |record| {
         CommandRecord::write_field(record, RecordField::Action(indexed(4))).unwrap();
     });
@@ -647,7 +648,7 @@ fn compute_setters_write_as_a_whole_record_edit() {
     );
 
     // What the GPU left joins at the next call, and a record that does not decode refuses it.
-    icb.written_by_gpu();
+    icb.written_by_gpu(GpuWriter::Reset);
     // A draw, of no command type the buffer has: what the GPU left, whatever an execution
     // makes of it.
     model.gpu_write(&icb, 4, |record| {

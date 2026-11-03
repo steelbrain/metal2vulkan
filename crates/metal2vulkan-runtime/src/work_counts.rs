@@ -152,6 +152,7 @@ pub(crate) struct Counters {
     indirect_draws_recorded: AtomicU64,
     indirect_records_read: AtomicU64,
     indirect_record_runs_read: AtomicU64,
+    indirect_write_residencies_unmarked: AtomicU64,
     indirect_chunks_kept: AtomicU64,
     indirect_commands_kept: AtomicU64,
     kept_contexts_made: AtomicU64,
@@ -1173,6 +1174,13 @@ impl Counters {
     pub(crate) fn indirect_record_run_read(&self) {
         self.indirect_record_runs_read
             .fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// A commit left `count` indirect command buffers its command buffer made resident for
+    /// writing unmarked (`write_routes.rs`).
+    pub(crate) fn indirect_write_residencies_unmarked(&self, count: u64) {
+        self.indirect_write_residencies_unmarked
+            .fetch_add(count, Ordering::Relaxed);
     }
 
     /// An execution ran a chunk of `commands` of an indirect command buffer's from its kept
@@ -3928,6 +3936,14 @@ pub struct WorkCounts {
     /// (`kept_commands::pieces`), or whole where its check, or its command buffer's
     /// executed-commands handlers, see every command before any is recorded.
     pub indirect_record_runs_read: u64,
+    /// Indirect command buffers a committed command buffer made resident for writing
+    /// (`use_resource` or `use_resources` with `ResourceUsage::WRITE`, in any of its encoders) and
+    /// left unmarked (`IndirectCommandBuffer::gpu_written` still `false`): it set no pipeline state
+    /// whose functions may call an indirect-command operation, and executed no indirect commands
+    /// whose records may name one, so the GPU cannot write their records and their executions
+    /// stay off the host. One per buffer per commit; one the commit marked, or found marked, is
+    /// not counted.
+    pub indirect_write_residencies_unmarked: u64,
     /// Chunks of indirect command buffers' commands an execution ran from the recording an
     /// earlier one kept, one each time (`kept_commands.rs`): their command buffer runs that
     /// recording again, and their records are not read.
@@ -5930,6 +5946,8 @@ impl Device {
             indirect_draws_recorded: counters.indirect_draws_recorded.load(Ordering::Relaxed),
             indirect_records_read: counters.indirect_records_read.load(Ordering::Relaxed),
             indirect_record_runs_read: counters.indirect_record_runs_read.load(Ordering::Relaxed),
+            indirect_write_residencies_unmarked: (counters.indirect_write_residencies_unmarked)
+                .load(Ordering::Relaxed),
             indirect_chunks_kept: counters.indirect_chunks_kept.load(Ordering::Relaxed),
             indirect_commands_kept: counters.indirect_commands_kept.load(Ordering::Relaxed),
             kept_contexts_made: counters.kept_contexts_made.load(Ordering::Relaxed),

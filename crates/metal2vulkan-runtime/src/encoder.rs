@@ -63,6 +63,7 @@ use super::texture::decoded_twin::TwinWrite;
 use super::tracker::{Barrier, EncoderUses, Reach, Summary, Use};
 use super::unique_identifier::ScheduledWork;
 use super::used_resources::EncoderKind;
+use super::write_routes::Routes;
 use super::Device;
 use crate::device::functions::Vk;
 use crate::work_counts::{Begun, Counters};
@@ -371,6 +372,10 @@ pub(super) struct EncoderCore {
     /// The set 0 its last command allocated and wrote, which a later command that writes the same
     /// into a set of the same layout binds again ([`set_zero`](Self::set_zero)).
     last_set_zero: LastSetZero,
+    /// What it made resident for writing, set and executed that decides whether the GPU may
+    /// write an indirect command buffer's records, which its command buffer's commit reads
+    /// (`write_routes.rs`).
+    pub(super) routes: Routes,
     _not_sync: PhantomData<std::cell::Cell<()>>,
 }
 
@@ -537,6 +542,7 @@ impl EncoderCore {
             id: CORES.fetch_add(1, Ordering::Relaxed),
             replaying: false,
             last_set_zero: LastSetZero::default(),
+            routes: Routes::default(),
             _not_sync: PhantomData,
         })
     }
@@ -640,6 +646,7 @@ impl EncoderCore {
             // A segment a rebind records again, its command buffer committed.
             replaying: crate::replay::is_replaying(),
             last_set_zero: LastSetZero::default(),
+            routes: Routes::default(),
             _not_sync: PhantomData,
         }
     }
@@ -2245,6 +2252,7 @@ impl EncoderCore {
             fails_command_buffer,
             faults,
             twin_writes,
+            routes,
             ..
         } = self;
         ended.push(raw);
@@ -2271,6 +2279,7 @@ impl EncoderCore {
             }
         }
         state.use_heaps(heaps);
+        state.routes.join(routes);
         let encoder = state.encoder_ended(kind, keys, residency, taken);
         if let Some(why) = unlogged {
             state.encoder_unlogged(encoder, why);

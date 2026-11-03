@@ -406,6 +406,14 @@ Calls Metal does not have, for a consumer that emulates a Metal device:
   the CPU's or in the host step for records the GPU may have written, it calls the check with each
   command it will record, before it records any; an execution whose records cannot hold what the
   check looks for never calls it, and runs on the GPU alone where it can.
+- `IndirectCommandBuffer::gpu_written` says whether a route that may write a buffer's records met
+  it: its command buffer made it resident for writing (`ResourceUsage::WRITE`) and set, in any
+  encoder, a pipeline state whose functions may call an indirect-command operation
+  (`indirect_command_writes`, read from their AIR), or executed commands whose records may name
+  one; or a blit copied or reset commands into it. Only then does an execution of it wait for the
+  work before it and read its records on the host. A buffer made resident for writing beside
+  functions that call no such operation runs its executions from the CPU's records, as one made
+  resident for reading does (`WorkCounts::indirect_write_residencies_unmarked`).
 - `HostMemory::with_dma_buf` and its `DmaBufSource`: dma-bufs of a no-copy object's pages, for a
   device that refuses their pointer.
 - `HostMemory::with_dirty_pages` and its `DirtyPages` (with `DirtyStamp`): the consumer's log of

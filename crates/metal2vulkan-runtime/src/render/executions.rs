@@ -3,8 +3,8 @@
 //!
 //! - **When.** As a compute encoder's (`indirect_execute.rs`), an execution runs the records as
 //!   they stand when its batch is submitted: Metal's reads them as it runs, so it sees CPU writes
-//!   made after the call, and the GPU's writes before it where an encoder made the buffer
-//!   resident for writing. `commit` records the CPU's records as they stand then, a chunk at a
+//!   made after the call, and the GPU's writes before it where a route that may write the records
+//!   met the buffer (`write_routes.rs`). `commit` records the CPU's records as they stand then, a chunk at a
 //!   time as a compute execution reads them (`kept_commands::pieces`); where the CPU writes them
 //!   again before the pass's batch is ready to submit (an event wait holds it), the host step
 //!   records the pass again from the records as they stand then, waiting for no work on the GPU
@@ -22,8 +22,8 @@
 //!   (`render/pass_steps.rs`: the shadowed textures' copies, the sample planes', the shader-side
 //!   stencil's, the draws' steps before their instances, the tile dispatches, and the instances
 //!   of no draws that resolve after the last). `commit` records the segment from the CPU's
-//!   records; where an
-//!   encoder made a buffer the pass executes resident for writing
+//!   records; where a route
+//!   that may write the records met a buffer the pass executes
 //!   (`IndirectCommandBuffer::gpu_written`), `commit` records it for good where every such
 //!   execution of the pass runs on the GPU alone (`executions/gpu.rs`, which states which do and
 //!   when the decision is taken again), and otherwise the scheduler's host step records it once
@@ -328,6 +328,7 @@ use crate::tracker::{
 };
 use crate::versioned::Versioned;
 use crate::visibility::{Lent, Visibility};
+use crate::write_routes::replay_why;
 use crate::written_commands::{Writers, WrittenCommands};
 use crate::Device;
 use ahead::Ahead;
@@ -551,6 +552,7 @@ impl RenderLowering {
         // Its commands run the states their records name, where it inherits none.
         if !icb.descriptor().inherit_pipeline_state {
             self.writers.runs(icb.written().named().writes);
+            self.core.routes.executed(icb);
         }
         // An execution keeps an extended-range, padded or bfloat attachment's texels as a draw
         // does, of reset commands too, and a signed normalized one's minimum codes, and an
@@ -777,8 +779,11 @@ impl RenderLowering {
 impl RenderCommandEncoder {
     /// `executeCommandsInBuffer:withRange:`: run render commands `range` of `icb` here, as their
     /// records stand when the command buffer's batch that executes them is submitted (the commit
-    /// reads them, and the batch's submission again where the CPU wrote them since), or, where an
-    /// encoder made `icb` resident for writing, once the work before them completed (a host step
+    /// reads them, and the batch's submission again where the CPU wrote them since), or, where a
+    /// route that may write `icb`'s records met it (`IndirectCommandBuffer::gpu_written`: its
+    /// command buffer made it resident for writing and runs a function that may call an
+    /// indirect-command operation, or a blit copied or reset commands into it), once the work
+    /// before them completed (a host step
     /// the device announces once, `Degradation::HostReplayedIndirectCommands`). Each draws as this
     /// encoder's `draw_primitives`, `draw_indexed_primitives` or `draw_patches` would, with the
     /// encoder's state as it is now, and its own pipeline state and buffers, or the encoder's
@@ -813,7 +818,7 @@ impl RenderCommandEncoder {
     /// [`execute_commands_in_buffer`](Self::execute_commands_in_buffer) with a check of the
     /// commands it runs (a runtime extension; Metal has none), which looks for `needs`: where the
     /// commit records the pass from the CPU's records, or a host step from the records as the GPU
-    /// and the CPU left them (an encoder made `icb` resident for writing,
+    /// and the CPU left them (a route that may write `icb`'s records met it,
     /// `IndirectCommandBuffer::gpu_written`), it first calls `check` with each command of the range
     /// it will record, in order, before it records any of them ([`IndirectCommandCheck`]). Neither
     /// calls it where what `icb`'s records may hold rules out every kind `needs` names
@@ -2832,9 +2837,9 @@ impl DeferredPass {
         let _ = self.ahead.set(Arc::new(ahead));
     }
 
-    /// Whether the GPU may write what an execution of the pass reads: its records, where an
-    /// encoder made its buffer resident for writing (`IndirectCommandBuffer::gpu_written`, for
-    /// good), or the range it reads from a buffer.
+    /// Whether the GPU may write what an execution of the pass reads: its records, where a route
+    /// that may write them met its buffer (`IndirectCommandBuffer::gpu_written`, for good), or the
+    /// range it reads from a buffer.
     pub(crate) fn gpu_written(&self) -> bool {
         self.executions
             .iter()
@@ -3517,19 +3522,25 @@ impl DeferredPass {
         else {
             return;
         };
-        let why = if execution.icb.gpu_written() {
-            "an encoder made it resident for writing, so the GPU may write the render commands an \
-             execution runs: its render pass is recorded once the work before it completed"
-        } else {
-            "an execution reads its range from a buffer \
-             (executeCommandsInBuffer:indirectBuffer:indirectBufferOffset:), which the GPU may \
-             write: its render pass is recorded once the work before it completed"
-        };
+        let written = execution.icb.gpu_written();
         let cause = lock(&self.cause).clone();
         device.degrade(Degradation::HostReplayedIndirectCommands, || {
+            // The buffer's records, which a route that may write them met, named
+            // (`write_routes.rs`).
+            let why = match written {
+                true => format!(
+                    "{}: its render pass is recorded once the work before it completed",
+                    replay_why(&execution.icb, "the render commands an execution runs")
+                ),
+                false => "an execution reads its range from a buffer \
+                          (executeCommandsInBuffer:indirectBuffer:indirectBufferOffset:), which \
+                          the GPU may write: its render pass is recorded once the work before it \
+                          completed"
+                    .to_owned(),
+            };
             let why = match cause {
                 Some(cause) => format!("{why}, not on the GPU alone, as {cause}"),
-                None => why.to_owned(),
+                None => why,
             };
             (
                 format!(

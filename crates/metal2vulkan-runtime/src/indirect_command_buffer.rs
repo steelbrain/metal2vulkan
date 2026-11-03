@@ -83,6 +83,7 @@ use super::render_values::DrawPrimitiveType;
 use super::resource_ids::{records_placement, HolderThen, IdPlacement, ResourceId, StateKind};
 use super::unique_identifier::{degrade_identifier, state_value_degradation, UniqueIdentifier};
 use super::values::{Origin, Region, Size};
+use super::write_routes::{Followed, GpuWriter};
 use super::written_commands::{Named, WrittenCommands};
 use super::{
     CpuCacheMode, Device, GpuAddress, HazardTrackingMode, PurgeableState, ResourceOptions,
@@ -104,7 +105,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::num::NonZeroU64;
 use std::ops::Range;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc, Mutex, Weak};
+use std::sync::{Arc, Mutex, OnceLock, Weak};
 
 /// The threadgroup lengths a fresh descriptor binds, as Metal's answers.
 const DEFAULT_THREADGROUP_LENGTHS: u32 = 31;
@@ -634,6 +635,7 @@ impl Device {
             options,
             pipelines: Mutex::default(),
             gpu_written: AtomicBool::new(false),
+            gpu_writer: OnceLock::new(),
             unforeseen: Mutex::new(Vec::new()),
             cpu_writes: AtomicU64::new(0),
             barriers: AtomicBool::new(false),
@@ -1049,9 +1051,12 @@ struct IcbShared {
     /// The pipeline state the CPU set on each command, and the kept recordings of its chunks
     /// ([`CommandStates`]). Held while the CPU writes a record, so writes are one at a time.
     pipelines: Mutex<CommandStates>,
-    /// An encoder made the buffer resident for writing: the GPU may write its records from then
-    /// on (`written_by_gpu`). Set, and read where it decides, under `unforeseen`'s lock.
+    /// A route that may write the buffer's records met it (`write_routes.rs`): the GPU may write
+    /// them from then on (`written_by_gpu`). Set, and read where it decides, under
+    /// `unforeseen`'s lock.
     gpu_written: AtomicBool,
+    /// The route that met it first, for the host-replay notice alone.
+    gpu_writer: OnceLock<GpuWriter>,
     /// The executions `commit` recorded from the CPU's records before the flag was set, held
     /// weakly until it is (`watch`, `written_by_gpu`).
     unforeseen: Mutex<Vec<Weak<Unforeseen>>>,
@@ -1771,9 +1776,14 @@ impl IndirectCommandBuffer {
         if let Some(set) = set {
             commands.set(index, Some(set));
         }
-        if let Some(writes) = grown {
-            self.add_written(&mut commands, index, writes, named);
-        }
+        let followed = match grown {
+            Some(writes) => self.add_written(&mut commands, index, writes, named),
+            None => Followed::default(),
+        };
+        drop(commands);
+        // The buffers a commit left unmarked where this one's commands ran, which its record
+        // naming a state that may write records marks now (`write_routes.rs`), without its lock.
+        followed.mark();
         Ok(())
     }
 
@@ -1821,16 +1831,17 @@ impl IndirectCommandBuffer {
     /// `pipelines`. `set` is the state's, where the edit set one; else the command names the state
     /// an edit set before, if any. An add the edits made already would change nothing: the
     /// summary holds it, and so does every buffer a blit copied the records into, which holds
-    /// what the summary held when it was copied and gains what it gains since.
+    /// what the summary held when it was copied and gains what it gains since. The followers the
+    /// add sets off (`WrittenCommands::add`) are the caller's to mark, once it let `pipelines` go.
     fn add_written(
         &self,
         commands: &mut CommandStates,
         index: u32,
         writes: CommandWrites,
         set: Option<Named>,
-    ) {
+    ) -> Followed {
         let named = set.or_else(|| commands.states.get(&index).map(CommandState::named));
-        self.0.written.add_record(writes, named);
+        let followed = self.0.written.add_record(writes, named);
         let pipeline = CommandWrites {
             operations: named.map_or(0, |_| CommandWrites::PIPELINE),
             primitive_types: 0,
@@ -1840,6 +1851,7 @@ impl IndirectCommandBuffer {
             added.union(writes).union(pipeline),
             added_named.union(named.unwrap_or_default()),
         );
+        followed
     }
 
     /// Reset command `index` (below the size) by `reset`, which changes its whole record and the
@@ -2551,16 +2563,19 @@ impl IndirectCommandBuffer {
         &self.0.storage
     }
 
-    /// An encoder made the buffer resident for writing, so the GPU may write its records from
-    /// now on: an execution's records are known only once the work before it completed, and it
-    /// is replayed on the host then (`indirect_execute.rs`). For good: whatever the GPU wrote may
-    /// stay in records the CPU did not write again. The first call settles, on its thread, the host
-    /// steps of the executions `commit` recorded from the CPU's records and whose batches wait
+    /// A route that may write the buffer's records met it (`writer`, `write_routes.rs`), so the
+    /// GPU may write them from now on: an execution's records are known only once the work
+    /// before it completed, and it is replayed on the host then (`indirect_execute.rs`). For
+    /// good: whatever the GPU wrote may stay in records the CPU did not write again. The first
+    /// call keeps its `writer` for the host-replay notice, settles, on its thread, the host steps
+    /// of the executions `commit` recorded from the CPU's records and whose batches wait
     /// (`watch`), and only then sets the flag, which the scheduler reads.
-    pub(super) fn written_by_gpu(&self) {
+    pub(super) fn written_by_gpu(&self, writer: GpuWriter) {
         if self.gpu_written() {
             return;
         }
+        // The first route's alone: another's call meanwhile finds it set.
+        let _ = self.0.gpu_writer.set(writer);
         loop {
             let pending: Vec<Arc<Unforeseen>> = {
                 let mut watched = lock(&self.0.unforeseen);
@@ -2730,8 +2745,8 @@ impl IndirectCommandBuffer {
     }
 
     /// Watch `execution`, which `commit` recorded from the CPU's records: its host step is
-    /// settled when an encoder makes the buffer resident for writing, or now, on the committing
-    /// thread, where one did since the commit looked.
+    /// settled when a route that may write the records meets the buffer, or now, on the
+    /// committing thread, where one did since the commit looked.
     pub(super) fn watch(&self, execution: &Arc<Unforeseen>) {
         {
             let mut watched = lock(&self.0.unforeseen);
@@ -2745,16 +2760,23 @@ impl IndirectCommandBuffer {
     }
 
     /// Whether the GPU may have written the buffer's records: a runtime extension, with no Metal
-    /// counterpart. It answers `true`, for good, from the first of these calls on: an encoder's
-    /// `use_resource` or `use_resources` of the buffer with a usage holding
-    /// `ResourceUsage::WRITE` (compute or render, whatever its pipeline states can do: a kernel
-    /// or function that encodes, resets or copies commands is not asked), a blit encoder's
-    /// `copy_indirect_command_buffer` into it of a range that is not empty, and its
-    /// `reset_commands_in_buffer` of a range that is not empty. It is set at the call, before
-    /// any of that work runs or is committed, and stays set though the work never runs (its
-    /// command buffer is never committed, or fails). So it is broader than "work whose state can
-    /// encode indirect commands wrote it": a buffer made resident for writing in an encoder whose
-    /// states can encode none answers `true` too.
+    /// counterpart. It answers `true`, for good, from the first route on that may write them:
+    /// - the commit of a command buffer that made the buffer resident for writing
+    ///   (`use_resource` or `use_resources` with a usage holding `ResourceUsage::WRITE`, in any of
+    ///   its compute or render encoders) and that also set, in any of them, before or after, a
+    ///   pipeline state whose functions may call an indirect-command operation
+    ///   ([`ComputePipelineState::indirect_command_writes`] or
+    ///   [`RenderPipelineState::indirect_command_writes`] not empty, read from their AIR), or
+    ///   executed indirect commands whose records may name such a state;
+    /// - after such a commit that found neither, the first CPU or GPU write that leaves the
+    ///   records of a buffer it executed naming such a state;
+    /// - a blit encoder's `copy_indirect_command_buffer` into it of a range that is not empty, or
+    ///   its `reset_commands_in_buffer` of a range that is not empty, at the call.
+    ///
+    /// It stays set though the work never runs (its command buffer fails). A buffer made resident
+    /// for writing alongside functions that call no such operation answers `false`: they cannot
+    /// reach its records (`WorkCounts::indirect_write_residencies_unmarked` counts each such
+    /// commit's buffers).
     ///
     /// It decides when the runtime reads an execution's records (`indirect_execute.rs`,
     /// `render/executions.rs`): while it answers `false`, an execution runs the records as they
@@ -2765,6 +2787,12 @@ impl IndirectCommandBuffer {
     /// before then may not be what runs.
     pub fn gpu_written(&self) -> bool {
         self.0.gpu_written.load(Ordering::Acquire)
+    }
+
+    /// The route that first met the buffer and may write its records (`written_by_gpu`), for the
+    /// host-replay notice.
+    pub(super) fn gpu_writer(&self) -> Option<&GpuWriter> {
+        self.0.gpu_writer.get()
     }
 
     /// What the buffer's records may hold, from every route that writes them encoded so far: a

@@ -243,6 +243,7 @@ mod ycbcr_device;
 
 #[cfg(test)]
 mod tests;
+mod write_routes;
 mod written_commands;
 
 pub use address::{AddressPlacement, AddressRange, GpuAddress, PlacementConflict, RangeToken};

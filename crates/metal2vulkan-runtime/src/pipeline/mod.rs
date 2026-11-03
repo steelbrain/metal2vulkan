@@ -952,7 +952,7 @@ impl ComputePipelineState {
     }
 
     /// The kernel's name.
-    pub(super) fn function_name(&self) -> &str {
+    pub(crate) fn function_name(&self) -> &str {
         self.0.function.function.info().name
     }
 

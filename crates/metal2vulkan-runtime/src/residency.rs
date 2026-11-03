@@ -31,9 +31,10 @@
 //!   - an indirect command buffer's records are in the resident set as its buffer's range, so a
 //!     function's command encoders reach them through its resource ID, which is their address,
 //!     while the buffer holds its ID's slot (a buffer made later with the ID takes it, and then a
-//!     function reaches that one's records, or none once it is gone). Made resident for writing,
-//!     the buffer is written by the GPU from then on (`IndirectCommandBuffer::written_by_gpu`): its
-//!     executions are replayed on the host.
+//!     function reaches that one's records, or none once it is gone). Made resident for writing
+//!     in a command buffer that also runs a function that may call an indirect-command operation,
+//!     the buffer is written by the GPU from then on (`write_routes.rs`): its executions are
+//!     replayed on the host.
 //! - **The command buffer's** (the coordinator's ruling of 2026-10-07). Metal's residency belongs
 //!   to the command buffer: on an M3 Max, an indirect command buffer's compute command executed by
 //!   one compute encoder wrote a buffer that only a later encoder's `useResource:` named, and one a
@@ -330,12 +331,7 @@ impl Residency {
         let used = match resource {
             ResourceRef::Buffer(buffer) => Used::Buffer(buffer.clone()),
             ResourceRef::Texture(texture) => Used::Texture(texture.clone()),
-            ResourceRef::IndirectCommandBuffer(icb) => {
-                if usage.contains(ResourceUsage::WRITE) {
-                    icb.written_by_gpu();
-                }
-                Used::IndirectCommandBuffer(icb.clone())
-            }
+            ResourceRef::IndirectCommandBuffer(icb) => Used::IndirectCommandBuffer(icb.clone()),
         };
         self.join(used, usage, stages)
     }

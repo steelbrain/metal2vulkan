@@ -3,7 +3,7 @@
 //! 2026-10-06 and 2026-10-21).
 //!
 //! - **Totality, decided at commit.** An execution a host step would record (`indirect_execute.rs`:
-//!   its buffer an encoder made resident for writing, or it lies inside a block of command
+//!   a route that may write its buffer's records met it, or it lies inside a block of command
 //!   predication) runs here where every record it may hold is covered: its range is given as
 //!   such, not read from a buffer; a caller's check (`execute_commands_in_buffer_checked`) has
 //!   nothing to see (`Execute::check_sees`), else the host step runs it before the commands reach

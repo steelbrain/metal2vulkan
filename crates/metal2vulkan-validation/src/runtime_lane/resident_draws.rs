@@ -15,8 +15,11 @@
 //! (`one`). Three paths for each: the encoder's own draws (`encoder`), an indirect command
 //! buffer's execution of the same draws made resident for reading (`read`: `commit` records the
 //! CPU's records), and the same execution after a compute encoder made the buffer resident for
-//! writing (`write`: a host step records it, resolving each record's addresses among the
-//! resources made resident).
+//! writing, with `rd_touch`, a kernel that calls no indirect-command operation (`write`: `commit`
+//! records it from the CPU's records too, as no function that may write them met the buffer).
+//! Off the measured paths, `encode` makes the buffer resident for writing with `rd_encode`, which
+//! may reset a command (it resets none): a host step records each execution, resolving each
+//! record's addresses among the resources made resident.
 //!
 //! [`each_path_draws_what_the_encoder_draws`] checks, under the validation layer, that every path
 //! and binding of a shape draws the same pixels. [`resident_draws`] measures, without the layer:
@@ -43,10 +46,10 @@ use metal2vulkan::pipeline::{
 };
 use metal2vulkan_devtools::{engine_dir, llvm_assemble};
 use metal2vulkan_runtime::{
-    Buffer, CommandBufferStatus, CommandQueue, ComputePipelineState, Device, IndirectCommandBuffer,
-    IndirectCommandBufferDescriptor, LoadAction, PipelineOptions, Region, RenderCommandEncoder,
-    RenderPassDescriptor, RenderPipelineState, ResourceOptions, ResourceRef, SamplerState,
-    SamplerStateOptions, Size, StoreAction, Texture, TextureDescriptor, WorkCounts,
+    Buffer, CommandBufferStatus, CommandQueue, ComputePipelineState, Degradation, Device,
+    IndirectCommandBuffer, IndirectCommandBufferDescriptor, LoadAction, PipelineOptions, Region,
+    RenderCommandEncoder, RenderPassDescriptor, RenderPipelineState, ResourceOptions, ResourceRef,
+    SamplerState, SamplerStateOptions, Size, StoreAction, Texture, TextureDescriptor, WorkCounts,
 };
 use std::time::Instant;
 
@@ -89,10 +92,10 @@ enum Path {
     Encoder,
     Read,
     Write,
+    Encode,
 }
 
-/// Every path, in the order a buffer's executions take them: once made resident for writing, a
-/// buffer stays written by the GPU.
+/// The measured paths, in the order a buffer's executions take them.
 const PATHS: [Path; 3] = [Path::Encoder, Path::Read, Path::Write];
 
 /// The bytes of an argument-table entry.
@@ -104,6 +107,7 @@ struct Scene {
     slot: RenderPipelineState,
     entry: RenderPipelineState,
     touch: ComputePipelineState,
+    encode: ComputePipelineState,
     count: Buffer,
     sampled: Texture,
     sampler: SamplerState,
@@ -133,12 +137,14 @@ impl Scene {
                 .new_render_pipeline_state(&descriptor, &PipelineOptions::default())
                 .unwrap()
         };
-        let touch = device
-            .new_compute_pipeline_state(
-                &ComputePipelineDescriptor::new(function("rd_touch")),
-                &PipelineOptions::default(),
-            )
-            .unwrap();
+        let kernel = |name: &str| {
+            device
+                .new_compute_pipeline_state(
+                    &ComputePipelineDescriptor::new(function(name)),
+                    &PipelineOptions::default(),
+                )
+                .unwrap()
+        };
         let mut sampled = TextureDescriptor::texture_2d(PixelFormat::RGBA8Unorm, 4, 4, false);
         sampled.usage = TextureUsage::SHADER_READ;
         sampled.resource_options = ResourceOptions::shared();
@@ -156,7 +162,8 @@ impl Scene {
         Scene {
             slot: state("rd_slot_vertex", "rd_color_fragment"),
             entry: state("rd_entry_vertex", "rd_entry_fragment"),
-            touch,
+            touch: kernel("rd_touch"),
+            encode: kernel("rd_encode"),
             count: buffer_with(device, &[0; 4]).unwrap(),
             sampled,
             sampler,
@@ -185,6 +192,8 @@ struct Draws<'s> {
     at: Vec<(usize, u64)>,
     table: Option<Buffer>,
     icb: IndirectCommandBuffer,
+    /// `rd_encode`'s table: the buffer's resource ID.
+    commands: Buffer,
 }
 
 impl<'s> Draws<'s> {
@@ -233,6 +242,7 @@ impl<'s> Draws<'s> {
         let icb = device
             .new_indirect_command_buffer(&descriptor, n, ResourceOptions::shared())
             .unwrap();
+        let commands = buffer_with(device, &icb.gpu_resource_id().0.to_le_bytes()).unwrap();
         let draws = Draws {
             scene,
             shape,
@@ -240,6 +250,7 @@ impl<'s> Draws<'s> {
             at,
             table,
             icb,
+            commands,
         };
         for i in 0..n {
             let command = draws.icb.indirect_render_command_at(i).unwrap();
@@ -304,9 +315,15 @@ impl<'s> Draws<'s> {
         let scene = self.scene;
         let started = Instant::now();
         let command_buffer = scene.queue.command_buffer().unwrap();
-        if let Path::Write = path {
+        if let Path::Write | Path::Encode = path {
             let mut writing = command_buffer.compute_command_encoder().unwrap();
-            writing.set_compute_pipeline_state(&scene.touch).unwrap();
+            match path {
+                Path::Encode => {
+                    writing.set_compute_pipeline_state(&scene.encode).unwrap();
+                    writing.set_buffer(Some(&self.commands), 0, 1).unwrap();
+                }
+                _ => writing.set_compute_pipeline_state(&scene.touch).unwrap(),
+            }
             writing.set_buffer(Some(&scene.count), 0, 0).unwrap();
             writing
                 .use_resource(self.icb.as_resource(), ResourceUsage::WRITE)
@@ -339,7 +356,7 @@ impl<'s> Draws<'s> {
                         .unwrap();
                 }
             }
-            Path::Read | Path::Write => {
+            Path::Read | Path::Write | Path::Encode => {
                 encoder.execute_commands_in_buffer(&self.icb, 0..n).unwrap();
             }
         }
@@ -373,7 +390,8 @@ fn moved(before: &WorkCounts, after: &WorkCounts) -> Vec<(String, i128)> {
 /// What a frame of `n` draws of `shape` on `path` may cost of the resources made resident, at
 /// most, whatever their count: the ranges its root tables note of their own resident sets, the
 /// draw's own binding in each of the two stages that read through it (the entry shape's; the
-/// slot shape's functions read no pointer, so their draws upload no root table), and one index
+/// slot shape's functions read no pointer, so their draws upload no root table) and, on the
+/// `encode` path, `rd_encode`'s own two buffers, as it reads its table through a pointer; one index
 /// of the resident buffers by address for the execution's commands to resolve in (none for the
 /// encoder's draws, which resolve nothing), and one whole comparison of what was made resident
 /// with the list the execution's kept chunks were recorded under (none where it keeps none).
@@ -384,15 +402,16 @@ fn assert_bounded(
     moved: &[(String, i128)],
     frames: usize,
 ) {
-    let count = |name: &str| {
-        let found = moved.iter().find(|(field, _)| field == name);
-        found.map_or(0, |&(_, count)| count)
-    };
+    let count = |name: &str| count(moved, name);
     let frames = frames as i128;
+    let kernel = match path {
+        Path::Encode => 2,
+        Path::Encoder | Path::Read | Path::Write => 0,
+    };
     let ranges = match shape {
         Shape::Slot => 0,
         Shape::Entry => 2 * i128::from(n),
-    };
+    } + kernel;
     let noted = count("root_table_ranges_noted");
     assert!(
         noted <= ranges * frames,
@@ -400,7 +419,7 @@ fn assert_bounded(
     );
     let indexes = match path {
         Path::Encoder => 0,
-        Path::Read | Path::Write => 1,
+        Path::Read | Path::Write | Path::Encode => 1,
     };
     let made = count("resident_address_indexes_made");
     assert!(
@@ -425,7 +444,7 @@ fn hashed(bytes: &[u8]) -> u64 {
 /// Every path of each shape, with a position buffer a draw and with one buffer at offsets, draws
 /// what the encoder's own draws of positions in one buffer draw: 300 draws, past a chunk of an
 /// indirect command buffer's records, each resolving its own buffer's address among the many made
-/// resident (the `write` path's host step resolves each record's binding there), at a cost of
+/// resident (the `encode` path's host step resolves each record's binding there), at a cost of
 /// the resources made resident that their count does not set (`assert_bounded`).
 #[test]
 fn each_path_draws_what_the_encoder_draws() {
@@ -440,8 +459,9 @@ fn each_path_draws_what_the_encoder_draws() {
             for own in [true, false] {
                 let draws = Draws::new(&scene, shape, own, 300);
                 // Three frames a path: an indirect command buffer's first execution keeps
-                // nothing, its second records its chunks to keep, and its third runs them.
-                for path in PATHS {
+                // nothing, its second records its chunks to keep, and its third runs them. Once
+                // a kernel that may encode met the buffer, it stays written by the GPU.
+                for path in PATHS.into_iter().chain([Path::Encode]) {
                     for frame in 0..3 {
                         let before = device.work_counts();
                         draws.frame(path);
@@ -453,6 +473,99 @@ fn each_path_draws_what_the_encoder_draws() {
                 }
             }
         }
+    });
+}
+
+/// Dispatch `kernel` once, with the count and `table` bound, in a command buffer of its own that
+/// makes no indirect command buffer resident: so no later frame's dispatch waits for its pipeline,
+/// which a host step of its own would.
+fn warm(scene: &Scene, kernel: &ComputePipelineState, table: &Buffer) {
+    let command_buffer = scene.queue.command_buffer().unwrap();
+    let mut encoder = command_buffer.compute_command_encoder().unwrap();
+    encoder.set_compute_pipeline_state(kernel).unwrap();
+    encoder.set_buffer(Some(&scene.count), 0, 0).unwrap();
+    encoder.set_buffer(Some(table), 0, 1).unwrap();
+    let one = Size::new(1, 1, 1);
+    encoder.dispatch_threads(one, one).unwrap();
+    encoder.end_encoding().unwrap();
+    command_buffer.commit().unwrap();
+    command_buffer.wait_until_completed_for(WAIT).unwrap();
+}
+
+/// How many of the counter `name` `moved` holds.
+fn count(moved: &[(String, i128)], name: &str) -> i128 {
+    let found = moved.iter().find(|(field, _)| field == name);
+    found.map_or(0, |&(_, count)| count)
+}
+
+/// The `write` path, as a page's frame encodes it (a kernel that counts made the buffer resident
+/// for writing), leaves the buffer unmarked: `rd_touch` calls no indirect-command operation, so
+/// no host step records an execution, the second execution records its chunks to keep and the
+/// third runs them, as on the `read` path, whose pixels it draws; each commit counts the buffer it
+/// left unmarked.
+#[test]
+fn a_kernel_that_cannot_encode_leaves_the_buffer_unmarked() {
+    on_device(|device, _| {
+        let scene = Scene::new(device);
+        let read = Draws::new(&scene, Shape::Slot, false, 300);
+        warm(&scene, &scene.touch, &read.commands);
+        read.frame(Path::Read);
+        let expected = scene.pixels();
+        let draws = Draws::new(&scene, Shape::Slot, false, 300);
+        for frame in 0..3 {
+            let before = device.work_counts();
+            draws.frame(Path::Write);
+            let moved = moved(&before, &device.work_counts());
+            let listed: Vec<String> = (moved.iter())
+                .filter(|(field, _)| !field.ends_with("nanos"))
+                .map(|(field, count)| format!("{field}={count}"))
+                .collect();
+            let steps = count(&moved, "host_steps_recorded");
+            assert_eq!(steps, 0, "frame {frame}: {}", listed.join(" "));
+            let unmarked = count(&moved, "indirect_write_residencies_unmarked");
+            assert_eq!(unmarked, 1, "frame {frame}");
+            // 300 commands are two chunks of 256.
+            let kept = if frame == 2 { 2 } else { 0 };
+            assert_eq!(count(&moved, "indirect_chunks_kept"), kept, "frame {frame}");
+            assert!(!draws.icb.gpu_written(), "frame {frame}");
+            assert!(scene.pixels() == expected, "frame {frame}");
+        }
+    });
+}
+
+/// The `encode` path marks the buffer at its commit: `rd_encode` may reset a command, so a host
+/// step records each execution, from the first, with no chunk kept, and draws what the `read`
+/// path draws (it resets none); the host-replay notice names the kernel and its operation.
+#[test]
+fn a_kernel_that_may_encode_marks_the_buffer() {
+    on_device(|device, messages| {
+        let scene = Scene::new(device);
+        let read = Draws::new(&scene, Shape::Slot, false, 300);
+        warm(&scene, &scene.encode, &read.commands);
+        read.frame(Path::Read);
+        let expected = scene.pixels();
+        let draws = Draws::new(&scene, Shape::Slot, false, 300);
+        for frame in 0..3 {
+            let before = device.work_counts();
+            draws.frame(Path::Encode);
+            let moved = moved(&before, &device.work_counts());
+            assert!(count(&moved, "host_steps_recorded") > 0, "frame {frame}");
+            let unmarked = count(&moved, "indirect_write_residencies_unmarked");
+            assert_eq!(unmarked, 0, "frame {frame}");
+            assert_eq!(count(&moved, "indirect_chunks_kept"), 0, "frame {frame}");
+            assert!(draws.icb.gpu_written(), "frame {frame}");
+            assert!(scene.pixels() == expected, "frame {frame}");
+        }
+        let notices = messages.take_notices();
+        let reason = (notices.iter())
+            .filter_map(|message| message.degradation.as_ref())
+            .find(|notice| notice.degradation == Degradation::HostReplayedIndirectCommands)
+            .map(|notice| notice.reason.clone())
+            .unwrap_or_default();
+        assert!(
+            reason.contains("rd_encode") && reason.contains("(reset)"),
+            "{reason}"
+        );
     });
 }
 

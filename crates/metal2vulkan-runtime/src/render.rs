@@ -2658,6 +2658,7 @@ impl RenderLowering {
         self.shape_inputs()
             .check_pipeline(CALL, &state, &self.layout)?;
         self.writers.state_set(state.indirect_command_writes());
+        (self.core.routes).state_set(state.indirect_command_writes(), || state.function_names());
         self.pipeline = Some(state);
         self.grouped_set(&drawn);
         Ok(())

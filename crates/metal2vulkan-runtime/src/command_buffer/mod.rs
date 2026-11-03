@@ -114,6 +114,7 @@ use super::upload::{Upload, Uploads};
 use super::used_resources::{names_any, EncoderKind, EncoderRecord, Reached, ReadRecord};
 use super::values::CommandBufferStatus;
 use super::work_counts::Counters;
+use super::write_routes::{AtCommit, Routes};
 use super::{Buffer, CommandQueue, Device};
 use crate::release;
 use ash::vk;
@@ -630,6 +631,9 @@ pub(super) struct State {
     /// completed handlers ran. A drop may run the caller's code (a no-copy buffer's deallocator),
     /// which may use this command buffer, so each is released outside this state's lock.
     pub(super) retained: Vec<Box<dyn Any + Send + Sync>>,
+    /// What the ended encoders made resident for writing, set and executed that decides, at the
+    /// commit, whether the GPU may write an indirect command buffer's records (`write_routes.rs`).
+    pub(super) routes: Routes,
     /// What the ended encoders' dispatches and draws executed (`execution.rs`), kept after the
     /// command buffer completed.
     pub(super) executions: Vec<Execution>,
@@ -1982,6 +1986,7 @@ impl CommandBuffer {
                 seen: VecDeque::new(),
                 executed_handlers: Vec::new(),
                 retained: Vec::new(),
+                routes: Routes::default(),
                 executions: Vec::new(),
                 uploads: Uploads::new(),
                 heaps: HeapUse::default(),
@@ -2871,6 +2876,30 @@ impl CommandBuffer {
         committed
     }
 
+    /// Mark the indirect command buffers its encoders made resident for writing where a route that
+    /// may write their records met them (`write_routes.rs`), before its work is recorded or
+    /// stepped and outside its lock, as the mark settles the host steps of executions committed
+    /// before (`IndirectCommandBuffer::written_by_gpu`). Those it leaves unmarked are counted, and
+    /// held, where it executed indirect commands, until it completes.
+    fn mark_gpu_written(&self) {
+        let decided = self.state().routes.at_commit();
+        match decided {
+            AtCommit::Mark(buffers, writer) => {
+                for icb in buffers {
+                    icb.written_by_gpu(writer.clone());
+                }
+            }
+            AtCommit::Unmarked(count, held) => {
+                if count > 0 {
+                    (self.0.device.shared().counts).indirect_write_residencies_unmarked(count);
+                }
+                if let Some(held) = held {
+                    self.state().retained.push(Box::new(held));
+                }
+            }
+        }
+    }
+
     /// [`commit_settled`](Self::commit_settled) itself.
     fn commit_now(
         &self,
@@ -2897,6 +2926,7 @@ impl CommandBuffer {
         // the checks below refuse the commit: the cost of a shadow read again is a submission, and
         // a refusal that left the count behind would be a correctness question.
         device.shared().program_gave_gpu_work();
+        self.mark_gpu_written();
         let (segments, places, failure, reached, hangs): (
             Vec<(Deferred, bool)>,
             Vec<usize>,

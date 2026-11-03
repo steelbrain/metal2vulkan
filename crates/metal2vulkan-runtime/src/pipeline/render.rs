@@ -859,6 +859,15 @@ impl RenderPipelineState {
         }
     }
 
+    /// Its functions' names, in pipeline order (a tile state's, its tile function's), for a
+    /// notice.
+    pub(crate) fn function_names(&self) -> Vec<String> {
+        match &self.0 {
+            Kind::Graphics(state) => state.descriptor().function_names(),
+            Kind::Tile(state) => vec![state.kernel().function_name().to_owned()],
+        }
+    }
+
     /// What the state's functions may write into the indirect command buffers they reach: a
     /// runtime extension, with no Metal counterpart. It is the compiled pipeline's
     /// `PipelineInterface::command_writes` (a tile pipeline's, its tile function's), read from
