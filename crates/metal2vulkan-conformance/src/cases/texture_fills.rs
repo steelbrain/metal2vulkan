@@ -731,14 +731,17 @@ impl Case for TextureFills {
             ));
         }
         // What this work announces on a device that needs it, which is the lane's own list: a
-        // fill of a color packed where fills ignore the color, a carried texture's twin and its
-        // precision, a two-plane texture shadowed in a heap's bytes and a mipmapped one whose
-        // later levels lie apart from the shadow, the combined format's clamp, and shared storage
-        // in system memory. Metal announces none of them, so the notices site differs on such a
-        // device, and the difference is justified where one of these fired. A BC texture's device
-        // decode and a float depth's denormals are the device's own answers, which the suite
-        // declares for every case (`crate::replay::NATIVE_NOTES`). The format's own digest still
-        // compares, and only the 32-bit float depth formats' go unchecked, above.
+        // fill of a color packed where fills ignore the color, a carried texture's twin, a
+        // two-plane texture shadowed in a heap's bytes and a mipmapped one whose later levels lie
+        // apart from the shadow, the combined format's clamp, and shared storage in system memory.
+        // Metal announces none of them, so the notices site differs on such a device, and the
+        // difference is justified where one of these fired. A fill and its read-back by copies
+        // move a carried texture's blocks and read no twin, so its precision
+        // (`decoded-texel-precision`, announced at a command's first read of the twin) is not
+        // among them. A BC texture's device decode and a float depth's denormals are the device's
+        // own answers, which the suite declares for every case (`crate::replay::NATIVE_NOTES`).
+        // The format's own digest still compares, and only the 32-bit float depth formats' go
+        // unchecked, above.
         use metal2vulkan_runtime::Degradation as D;
         for kind in [
             D::UnpackedFillColor,
@@ -746,7 +749,6 @@ impl Case for TextureFills {
             D::HeapTwoPlaneLayout,
             D::RestrictedDepthUpload,
             D::CarriedDecodedTwin,
-            D::DecodedTexelPrecision,
             D::SharedInSystemMemory,
         ] {
             allowances.push(notice_allowance(kind.code()));

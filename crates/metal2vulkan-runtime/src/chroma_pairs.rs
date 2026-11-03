@@ -28,8 +28,10 @@
 //!   (`ycbcr_device.rs`: a sampler Y′CbCr conversion of `G8B8G8R8_422_UNORM` or
 //!   `B8G8R8G8_422_UNORM` at the midpoint through a linear chroma filter, MoltenVK), the twin holds
 //!   the device's conversion of the pairs instead, every write's decode a GPU pass that samples
-//!   the pairs through it (`bind::chroma_sample_module`), announced `decoded-texel-precision`. A texel reads the pair beside it, so a write's decode is of whole rows
-//!   (a host write of part of a row decodes its rows as the texture then holds them). Refused: a
+//!   the pairs through it (`bind::chroma_sample_module`), announced `decoded-texel-precision`
+//!   where a command first reads the twin. A texel reads the pair beside it, so a write's decode
+//!   is of whole rows (a host write of part of a row decodes its rows as the texture then holds
+//!   them). Refused: a
 //!   sparse heap's texture (`RuntimeGap::DecodedHeapTexture`). Without a twin (a heap's texture
 //!   over the caller's host pages or laid out apart from the heap's bytes) a command that binds
 //!   it for a read is refused.

@@ -554,12 +554,12 @@ impl Case for FootprintCase {
     fn allowances(&self) -> Vec<Allowance> {
         // An ASTC 4x2 or 8x4 texture lies in a carrier image with a decoded twin on every device
         // (no Vulkan format holds such a block), announced `carried-decoded-twin`; the round
-        // trip's `replaceRegion` decodes its blocks into the twin on the CPU (`cpu-block-decode`);
-        // an LDR form's twin holds 8-bit codes (`decoded-texel-precision`). Metal announces
-        // nothing, so the notices are declared by their codes. They loosen the notices site alone:
-        // the case reads bytes, every one compared with Metal's exactly. Measured: lavapipe
-        // announced all three, MoltenVK over an M3 Max the first and the last, and every other
-        // field was Metal's on both.
+        // trip's `replaceRegion` decodes its blocks into the twin on the CPU (`cpu-block-decode`).
+        // An LDR form's twin holds 8-bit codes, whose `decoded-texel-precision` is announced at a
+        // command's first read of the twin, which the case never makes. Metal announces nothing,
+        // so the notices are declared by their codes. They loosen the notices site alone: the
+        // case reads bytes, every one compared with Metal's exactly. Measured: lavapipe announced
+        // both, MoltenVK over an M3 Max the first, and every other field was Metal's on both.
         let astc = self
             .round_trips
             .iter()
@@ -567,14 +567,10 @@ impl Case for FootprintCase {
         if !astc {
             return Vec::new();
         }
-        [
-            Degradation::CarriedDecodedTwin,
-            Degradation::CpuBlockDecode,
-            Degradation::DecodedTexelPrecision,
-        ]
-        .into_iter()
-        .map(|kind| crate::replay::notice_allowance(kind.code()))
-        .collect()
+        [Degradation::CarriedDecodedTwin, Degradation::CpuBlockDecode]
+            .into_iter()
+            .map(|kind| crate::replay::notice_allowance(kind.code()))
+            .collect()
     }
 
     fn inputs(&self) -> Result<Vec<Input>, String> {

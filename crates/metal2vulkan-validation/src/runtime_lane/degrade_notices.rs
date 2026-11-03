@@ -2307,27 +2307,21 @@ pub(super) fn draws_depth_copies(device: &Device) -> bool {
 }
 
 /// Whether `device` holds a texture of `pf` of its own in a carrier with a decoded twin
-/// (`carried-decoded-twin`), and whether the twin's codes announce `decoded-texel-precision`: an
-/// ASTC format the device has no block for (`astc_textures::decodes_astc`), a PVRTC, ETC2 or
-/// EAC format it has no format for, or a 4:2:2 format (every device); the notice for an ASTC LDR
-/// format's 8-bit codes and an EAC 11-bit format's 16-bit ones, and for no other twin, whose codes
-/// are exact (an ASTC sRGB
-/// format's, a PVRTC format's, an 8-bit ETC2 or EAC format's, a 4:2:2 format's).
-pub(super) fn twins_carried(device: &Device, pf: PixelFormat) -> [bool; 2] {
+/// (`carried-decoded-twin`, announced where the texture is made): an ASTC format the device has no
+/// block for (`astc_textures::decodes_astc`), a PVRTC, ETC2 or EAC format it has no format for,
+/// or a 4:2:2 format (every device). A twin whose codes are not Metal's decode exactly announces
+/// `decoded-texel-precision` where a command first reads it, never where it is made, written,
+/// filled or copied.
+pub(super) fn twins_carried(device: &Device, pf: PixelFormat) -> bool {
     let astc = AstcDecode::of(pf).filter(|_| !decodes_astc(device, pf));
     let usage = [metal2vulkan::device::FormatUsage::SampledImage].into();
     let profile = device.compile_device().profile();
     let decoded = metal2vulkan::metal::format::vk_format(pf, &usage, profile)
         .is_ok_and(|m| m.emulation == metal2vulkan::metal::format::FormatEmulation::Decoded);
     let pvrtc = metal2vulkan::bind::PvrtcDecode::of(pf).is_some() && decoded;
-    let etc = metal2vulkan::bind::EtcDecode::of(pf).filter(|_| decoded);
+    let etc = metal2vulkan::bind::EtcDecode::of(pf).is_some() && decoded;
     let chroma = metal2vulkan::bind::ChromaDecode::of(pf).is_some() && decoded;
-    let eleven = etc.is_some_and(metal2vulkan::bind::EtcDecode::eleven_bit);
-    let ldr = astc.is_some_and(|decode| !decode.srgb);
-    [
-        astc.is_some() || pvrtc || etc.is_some() || chroma,
-        ldr || eleven,
-    ]
+    astc.is_some() || pvrtc || etc || chroma
 }
 
 /// Whether `device` announces `compressed-texel-decode` for a texture of `pf`: a BC texture, which

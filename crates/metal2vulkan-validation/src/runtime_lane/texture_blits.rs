@@ -1455,16 +1455,10 @@ fn mipmaps_of_every_format_run_or_are_refused_typed() {
                     outcome.push("no texture");
                     continue;
                 };
-                // A carried texture's decoded twin, and a BC texture's device decode.
+                // A carried texture's decoded twin (mipmaps read no twin, so its precision is
+                // never announced here), and a BC texture's device decode.
                 first.extend(forced(&[
-                    (
-                        Degradation::CarriedDecodedTwin,
-                        twins_carried(&device, pf)[0],
-                    ),
-                    (
-                        Degradation::DecodedTexelPrecision,
-                        twins_carried(&device, pf)[1],
-                    ),
+                    (Degradation::CarriedDecodedTwin, twins_carried(&device, pf)),
                     (
                         Degradation::CompressedTexelDecode,
                         decodes_blocks_its_way(&device, pf),

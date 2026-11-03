@@ -75,11 +75,11 @@
 //!
 //! **Tolerances.** Only a linear (`_LDR`) format has one. Its twin holds each channel as the 8-bit
 //! code nearest Metal's 12-bit value, which the runtime announces as `decoded-texel-precision`
-//! where such a texture is made, and whose catalogue entry (docs/API.md) bounds it at **1/510**.
-//! That is the notice's own number, not a round one. The fourteen sRGB forms hold Metal's own 8-bit
-//! codes, which their slots read through the twin's sRGB view, the device's own decode
-//! (`srgb-texel-decode`, a native note that loosens no value), so they name **no tolerance at
-//! all**: through Metal's own texture unit they are exact, and a value another device's decode
+//! at a command's first read of the twin, and whose catalogue entry (docs/API.md) bounds it at
+//! **1/510**. That is the notice's own number, not a round one. The fourteen sRGB forms hold
+//! Metal's own 8-bit codes, which their slots read through the twin's sRGB view, the device's own
+//! decode (`srgb-texel-decode`, a native note that loosens no value), so they name **no tolerance
+//! at all**: through Metal's own texture unit they are exact, and a value another device's decode
 //! moves is a `known-gaps.tsv` row of its venue. An `_HDR` format names none: its twin holds
 //! Metal's halves exactly.
 //!

@@ -40,9 +40,9 @@
 //! not fire.
 //!
 //! An 11-bit channel is read from a 16-bit normalized twin, which the runtime announces as
-//! `decoded-texel-precision` where such a texture is made, and whose catalogue entry (docs/API.md)
-//! bounds it at half a 16-bit step — **1/131070 unsigned, 1/65534 signed**. Those are the notice's
-//! own numbers, named per format, not a round number.
+//! `decoded-texel-precision` at a command's first read of the twin, and whose catalogue entry
+//! (docs/API.md) bounds it at half a 16-bit step — **1/131070 unsigned, 1/65534 signed**. Those
+//! are the notice's own numbers, named per format, not a round number.
 //!
 //! The `float` a function reads of a twin's 8-bit code is the **device's** conversion of that
 //! code, not Metal's `c / 255` correctly rounded (`device-texel-conversion`), and an sRGB form's

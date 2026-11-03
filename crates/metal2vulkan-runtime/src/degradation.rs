@@ -1773,7 +1773,12 @@ degradations! {
         /// 8-bit code with ties to even, where Metal's `(3 c + n + 2) >> 2` rounds its ties up:
         /// within a code of Metal's where the device's sum is within half a code of the exact one
         /// (MoltenVK 1.4.2 samples through Metal's own `GBGR422` and `BGRG422` texture unit).
-        /// Announced where such a texture is made.
+        /// Announced where a command may first read such a twin, not where the texture is made
+        /// (copies, blits, fills and CPU accesses move the carrier's blocks and read no twin): at
+        /// a command's sampled binding of the texture or of a view of it, at the first command
+        /// that binds a heap set holding the twin's view (a function may read it through its
+        /// resource ID, named or not), or as the view is placed in a heap set that a command
+        /// buffer which bound it and has not completed may read through.
         DecodedTexelPrecision = "decoded-texel-precision", Precision,
             "a read, sample or gather of its texels answers the nearest 8-bit code to Metal's \
              12-bit value, at most 1/510 off it; an EAC 11-bit texture's, the nearest 16-bit \

@@ -94,11 +94,12 @@
 //!
 //! **4:2:2 through the device's own conversion.** Where the device converts the pairs' format
 //! itself with Metal's reconstruction (`ycbcr_device.rs`, [`YCbCrSampler::pairs`]), the twin holds
-//! the device's conversion of the pairs instead (announced `decoded-texel-precision`; counted
-//! `WorkCounts::chroma_device_twins`): each decode pass's band, its pairs copied out of the
-//! carrier into the scratch, is copied into the texture's pairs' image ([`PairsSampling`]) and
-//! sampled through the conversion into the band's texels (`bind::chroma_sample_module`), which are
-//! copied into the twin. Every write's decode is such a pass: the carrier's CPU copies go through
+//! the device's conversion of the pairs instead (`decoded-texel-precision`, announced as
+//! **Reads** says; counted `WorkCounts::chroma_device_twins`): each decode pass's band, its pairs
+//! copied out of the carrier into the scratch, is copied into the texture's pairs' image
+//! ([`PairsSampling`]) and sampled through the conversion into the band's texels
+//! (`bind::chroma_sample_module`), which are copied into the twin. Every write's decode is such a
+//! pass: the carrier's CPU copies go through
 //! submissions there (no host or staging copies), each followed by its pass, so no texel of the
 //! twin is the CPU's (Metal's) decode.
 //!
@@ -106,6 +107,18 @@
 //! twin's memory, and a decode pass after each write. A `VkImage` handed out (`Texture::vk_image`)
 //! is the carrier: what the caller writes into it outside the runtime's calls leaves the twin as
 //! it was.
+//!
+//! **Reads.** Only a sampled view reads the twin ([`Texture::decoded_view`]); copies, blits, fills
+//! and CPU accesses move the carrier's blocks, and a decode pass writes it. Where its texels are
+//! not Metal's decode exactly (an ASTC LDR form's 8-bit codes, an EAC 11-bit format's 16-bit ones,
+//! a 4:2:2 texture's device conversion: [`TwinRead`]), `decoded-texel-precision` is announced,
+//! once per device, where a command may first read it, and not where the texture is made: at a
+//! command's sampled slot binding of the texture or of a view of it (`Texture::bound_view`, a
+//! draw's, a dispatch's, a tile dispatch's), at a command's binding of a heap entry that names it
+//! (`binding.rs`), at the first command that binds a heap set holding the twin's view, where a
+//! function may read it through its resource ID with no encoder naming it (`heap_sets.rs`), and
+//! as the view is placed in a heap set a command buffer that bound the set and has not completed
+//! may read through.
 //!
 //! A BC texture keeps no twin: the device samples its own BC image through its own decode,
 //! announced `compressed-texel-decode` where its driver is not measured to decode the format as
@@ -330,6 +343,75 @@ pub(super) struct Decoded {
     /// A 4:2:2 twin's pairs' image, where it holds the device's own conversion of its pairs (the
     /// module docs); `None` where it holds Metal's decode.
     pairs: Option<PairsSampling>,
+    /// What a read of it announces, where its texels are not Metal's decode exactly.
+    read: Option<TwinRead>,
+}
+
+/// What a read of a decoded twin whose texels are not Metal's decode exactly announces
+/// (`decoded-texel-precision`; the module docs' **Reads**): the texture, as its notice names it,
+/// and why.
+#[derive(Clone, Debug)]
+pub(crate) struct TwinRead {
+    object: Arc<str>,
+    why: &'static str,
+}
+
+impl TwinRead {
+    /// What a read of a twin of `decode` of a texture of `layout` announces (`pairs`: a 4:2:2
+    /// twin holds the device's own conversion of its pairs): an ASTC LDR form's 8-bit codes, each
+    /// nearest Metal's 12-bit value; an EAC 11-bit format's 16-bit normalized codes, each nearest
+    /// Metal's 11-bit value; a 4:2:2 texture's device conversion. `None` for any other twin, whose
+    /// texels are Metal's exactly: a PVRTC texture's codes, an ASTC sRGB texture's, an 8-bit ETC2
+    /// or EAC texture's, an ASTC HDR texture's halves and a 4:2:2 texture's of Metal's decode.
+    fn of(layout: &TextureLayout, decode: TwinDecode, pairs: bool) -> Option<TwinRead> {
+        let why = match decode {
+            TwinDecode::Chroma(_) if pairs => {
+                "its decoded twin holds the device's own Y′CbCr conversion of its pairs (Vulkan's \
+                 midpoint reconstruction through a linear chroma filter, at the device's \
+                 precision), each channel as the nearest 8-bit code with ties to even, where \
+                 Metal's 3:1 sum of the codes rounds its ties up"
+            }
+            TwinDecode::Astc(decode, AstcTexels::Unorm8) if !decode.srgb => {
+                "its decoded twin holds each channel as the 8-bit code nearest Metal's 12-bit \
+                 value, at most 1/510 off it"
+            }
+            TwinDecode::Etc(decode, EtcTexels::Compact) if decode.eleven_bit() => {
+                "its decoded twin holds each channel as the 16-bit normalized code nearest \
+                 Metal's 11-bit value, at most half a 16-bit step off it"
+            }
+            _ => return None,
+        };
+        Some(TwinRead {
+            object: carried_object(layout).into(),
+            why,
+        })
+    }
+
+    /// Announce it on `device`: once per device (but at each occurrence where its options ask
+    /// for that), where a command may read the twin.
+    pub(crate) fn announce(&self, device: &Device) {
+        device.degrade(Degradation::DecodedTexelPrecision, || {
+            (self.object.to_string(), self.why.to_owned())
+        });
+    }
+
+    /// Announce it on `device` once per device, whatever its options ask: as the twin's view is
+    /// placed in a heap set a pending command buffer may read through, which a submission may do
+    /// on a runtime thread (`heap_sets.rs`).
+    pub(crate) fn announce_once(&self, device: &Device) {
+        device.degrade_once(Degradation::DecodedTexelPrecision, || {
+            (self.object.to_string(), self.why.to_owned())
+        });
+    }
+}
+
+/// How a carried texture of `layout` is named in its notices.
+fn carried_object(layout: &TextureLayout) -> String {
+    let [width, height, depth] = layout.extent;
+    format!(
+        "a {:?} {:?} texture of {width}x{height}x{depth}",
+        layout.pixel_format, layout.texture_type
+    )
 }
 
 impl Decoded {
@@ -605,31 +687,25 @@ impl Device {
             );
             *lock(&twin.first_move) = Some(first.patterned(patterned));
         }
+        let read = TwinRead::of(layout, decode, pairs.is_some());
         let decoded = Decoded {
             image: twin,
             decode,
             started_on_the_cpu: routed && fresh,
             made_for: (*layout, *descriptor),
             pairs,
+            read,
         };
         self.degrade_carried_twin(layout, &decoded, placed(&image));
         image.decoded = Some(Box::new(decoded));
         Ok(image)
     }
 
-    /// Announce, for an ASTC, PVRTC, ETC2 or EAC texture of `layout` made with `decoded`:
+    /// Announce, for an ASTC, PVRTC, ETC2, EAC or 4:2:2 texture of `layout` made with `decoded`:
     /// `carried-decoded-twin`, its cost (the twin's texels' bytes and memory beside its blocks'
-    /// carrier), and where an ASTC LDR texture's twin holds 8-bit codes or an 11-bit EAC
-    /// texture's 16-bit ones, `decoded-texel-precision` (a PVRTC texture's codes are exact, and so
-    /// are an ASTC sRGB texture's, an 8-bit ETC2 or EAC texture's and a 4:2:2 texture's).
+    /// carrier). A twin whose texels are not Metal's decode exactly announces
+    /// `decoded-texel-precision` where a command may first read it, not here ([`TwinRead`]).
     fn degrade_carried_twin(&self, layout: &TextureLayout, decoded: &Decoded, image: Option<u64>) {
-        let [width, height, depth] = layout.extent;
-        let object = || {
-            format!(
-                "a {:?} {:?} texture of {width}x{height}x{depth}",
-                layout.pixel_format, layout.texture_type
-            )
-        };
         self.degrade(Degradation::CarriedDecodedTwin, || {
             let (texels, blocks) = decoded.bytes();
             let placed =
@@ -655,27 +731,7 @@ impl Device {
                 decoded.decode.texel_format(),
                 placed(decoded.placed()),
             );
-            (object(), why)
-        });
-        let why = match decoded.decode {
-            TwinDecode::Chroma(_) if decoded.pairs.is_some() => {
-                "its decoded twin holds the device's own Y′CbCr conversion of its pairs (Vulkan's \
-                 midpoint reconstruction through a linear chroma filter, at the device's \
-                 precision), each channel as the nearest 8-bit code with ties to even, where \
-                 Metal's 3:1 sum of the codes rounds its ties up"
-            }
-            TwinDecode::Astc(decode, AstcTexels::Unorm8) if !decode.srgb => {
-                "its decoded twin holds each channel as the 8-bit code nearest Metal's 12-bit \
-                 value, at most 1/510 off it"
-            }
-            TwinDecode::Etc(decode, EtcTexels::Compact) if decode.eleven_bit() => {
-                "its decoded twin holds each channel as the 16-bit normalized code nearest \
-                 Metal's 11-bit value, at most half a 16-bit step off it"
-            }
-            _ => return,
-        };
-        self.degrade(Degradation::DecodedTexelPrecision, || {
-            (object(), why.to_owned())
+            (carried_object(layout), why)
         });
     }
 }
@@ -684,14 +740,16 @@ impl Texture {
     /// The `VkImageView` of `desc` (a sampled view; `call`'s) of the texture's decoded twin, where
     /// its image (`image`) has one whose decode the texture's format takes (the module docs; an
     /// ASTC carrier's second twin for a view in the texture's other colour space): made at its
-    /// first bind, then kept with the twin. `None` elsewhere (an image with
-    /// one presents no stand-in: its detach is refused, `stand_in.rs`).
-    pub(super) fn decoded_view(
+    /// first bind, then kept with the twin. With what a read through it announces, where the
+    /// twin's texels are not Metal's decode exactly ([`TwinRead`]): the caller announces it where
+    /// a command may read the view. `None` elsewhere (an image with one presents no stand-in: its
+    /// detach is refused, `stand_in.rs`).
+    pub(super) fn decoded_view<'a>(
         &self,
         call: &'static str,
-        image: &Image,
+        image: &'a Image,
         desc: &ImageViewDesc,
-    ) -> Result<Option<vk::ImageView>, Error> {
+    ) -> Result<Option<(vk::ImageView, Option<&'a TwinRead>)>, Error> {
         let Some(decoded) = image.twin_of(self.0.record.pixel_format) else {
             return Ok(None);
         };
@@ -702,7 +760,8 @@ impl Texture {
         twin.format = format;
         let view = binding_view(decoded.image.plan(), &self.0.record, &twin, false)
             .map_err(|refusal| view_error(call, refusal))?;
-        decoded.image.view(&view).map(Some)
+        let view = decoded.image.view(&view)?;
+        Ok(Some((view, decoded.read.as_ref())))
     }
 
     /// Whether the texture's texels are held in an image with a decoded twin
@@ -1438,15 +1497,16 @@ impl Image {
             start,
             Device::runtime_owner,
         )?;
+        let mut viewed = layout;
+        viewed.pixel_format = pf;
         let second = Decoded {
             image: twin,
             decode,
             started_on_the_cpu: false,
             made_for: (layout, own),
             pairs: None,
+            read: TwinRead::of(&viewed, decode, false),
         };
-        let mut viewed = layout;
-        viewed.pixel_format = pf;
         device.degrade_carried_twin(&viewed, &second, None);
         // Made for another view meanwhile: that one stands, and this one goes unused.
         if self.second.set(Box::new(second)).is_err() {

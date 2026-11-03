@@ -2556,7 +2556,13 @@ bound.
   channel as `c / 2047`, signed `c / 1023`; a 4:2:2 chroma channel as `(3 c + n + 2) >> 2` of its
   pair's code and the code beside, whose ties the device's nearest code takes to even). An ASTC
   sRGB texture's twin holds Metal's own 8-bit codes, which its slots read through the twin's sRGB
-  view, the device's decode (`srgb-texel-decode`).
+  view, the device's decode (`srgb-texel-decode`). Announced where a command may first read such a
+  twin, not where the texture is made: making, filling, copying, blitting and CPU access move the
+  carrier's blocks and read no twin. It comes at a command's sampled binding of the texture or of a
+  view of it (a draw's, a dispatch's, a tile dispatch's), at the first command that binds the
+  device's heap set holding the twin (a function may read it through its resource ID, named or
+  not), or as the twin is placed in a heap set that a command buffer which bound it and has not
+  completed may read through.
 - `metal2vulkan-degrade-shared-present-queue` (performance). `SharedPresentQueue`: A command queue
   made for presenting (`Device::new_command_queue_for_presenting`) on a device that reserved no
   `VkQueue` for presenting: its queue family has no queue past the ones the round robin takes

@@ -648,9 +648,10 @@ fn texture_fills_write_metal_s_bytes() {
             let first_unpacked = unpacked_here && !unpacked_announced;
             unpacked_announced |= first_unpacked;
             let kinds: &[Degradation] = if first_unpacked { &UNPACKED_FILL } else { &[] };
-            // A carried texture's decoded twin, a BC texture's device decode; the uploads into a
-            // 32-bit float depth image, what such a depth may store and where it may clamp; the
-            // `Shared` buffers.
+            // A carried texture's decoded twin (a fill reads no twin, so its precision is never
+            // announced here), a BC texture's device decode; the uploads into a 32-bit float
+            // depth image, what such a depth may store and where it may clamp; the `Shared`
+            // buffers.
             let pf = format(raw);
             let mipmapped = CASES.iter().any(|name| case(raw, name, false).levels > 1);
             let depth_image = matches!(
@@ -658,14 +659,7 @@ fn texture_fills_write_metal_s_bytes() {
                 PixelFormat::Depth32Float | PixelFormat::Depth32FloatStencil8
             );
             let first = forced(&[
-                (
-                    Degradation::CarriedDecodedTwin,
-                    twins_carried(device, pf)[0],
-                ),
-                (
-                    Degradation::DecodedTexelPrecision,
-                    twins_carried(device, pf)[1],
-                ),
+                (Degradation::CarriedDecodedTwin, twins_carried(device, pf)),
                 (
                     Degradation::CompressedTexelDecode,
                     decodes_blocks_its_way(device, pf),

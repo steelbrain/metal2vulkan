@@ -598,21 +598,15 @@ impl Case for ChromaCopies {
         // the chip's GPU shares the CPU's memory, it cannot fire at all, which is why no
         // recording of this suite declares it.
         //
-        // Where the device converts the format itself with Metal's reconstruction, the twin holds
-        // the device's own Y′CbCr conversion of the pairs, its native answer (AGENTS.md rule 1),
-        // and the runtime announces `decoded-texel-precision` where it makes such a texture. A
-        // copy moves the carrier's bytes, never the twin's, so the notice loosens nothing here:
-        // it sits at the notices site alone. Measured on the M3 Max (MoltenVK 1.4.2, which samples
-        // through Metal's own `GBGR422` and `BGRG422` texture unit): it fired for both copy rows,
-        // and each was divergent on that field and nothing else. Where the twin holds Metal's
-        // decode it does not fire, which the report counts.
+        // A copy moves the carrier's bytes and reads no twin, so the twin's precision
+        // (`decoded-texel-precision`, announced at a command's first read of the twin) is not
+        // declared here.
         std::iter::once(crate::replay::shared_memory_notice())
             .chain(
                 [
                     Degradation::CarriedDecodedTwin,
                     Degradation::CpuBlockDecode,
                     Degradation::StagedTextureCopy,
-                    Degradation::DecodedTexelPrecision,
                 ]
                 .into_iter()
                 .map(|kind| notice_allowance(kind.code())),
@@ -784,8 +778,8 @@ impl Case for ChromaTexels {
         // the device's own Y′CbCr conversion of the pairs, its native answer (AGENTS.md rule 1):
         // each chroma channel the nearest 8-bit code to the device's 3:1 sum of the pair's code
         // and the code beside it, ties to even, where Metal's `(3 c + n + 2) >> 2` rounds them up.
-        // The runtime announces `decoded-texel-precision` where it makes such a texture. It is
-        // declared at the notices site alone and loosens no texel. Measured on the M3 Max
+        // The runtime announces `decoded-texel-precision` at the case's read or sample, the
+        // twin's first. It is declared at the notices site alone and loosens no texel. Measured on the M3 Max
         // (MoltenVK 1.4.2, which samples through Metal's own `GBGR422` and `BGRG422` texture
         // unit): it fired for all 4 texel rows, and each was divergent on that field and nothing
         // else, every texel Metal's bit for bit. The lane's pattern holds no tie to round: a

@@ -33,7 +33,11 @@
 //!   element is its shadow image's view, which holds the texels an encoder that named it last
 //!   copied in ([`Degradation::UnnamedShadowedTexture`], announced at the first command that
 //!   binds a set holding it while neither naming it nor making it resident, [`bind`]: one that
-//!   does has its shadow copied in). An element whose ID no texture holds
+//!   does has its shadow copied in). A carried texture's element is its decoded twin's view
+//!   (`texture/decoded_twin.rs`), and placing it is no read: where the twin's texels are not
+//!   Metal's decode exactly, `decoded-texel-precision` is announced at the first command that
+//!   binds a set holding it, named or not, or as it is placed in a set a command buffer that
+//!   bound the set and has not completed may read through. An element whose ID no texture holds
 //!   is never read: the table maps the ID to element 0. The function tables' elements are the
 //!   commands' writes ([`bind`]), each written where the set held another there.
 //! - **Who reads an element while it changes.** The arrays are `UPDATE_AFTER_BIND` and, where
@@ -105,7 +109,7 @@ use super::pipeline::{set_needs, VariantObjects};
 use super::release;
 use super::resource::ResourceKey;
 use super::sampler::{SamplerShared, SamplerState};
-use super::texture::{Texture, TextureShared};
+use super::texture::{Texture, TextureShared, TwinRead};
 use super::tracker::{Access, Use};
 use ash::vk;
 use metal2vulkan::bind::{
@@ -495,9 +499,12 @@ impl DeviceHeaps {
         }
         self.unplace(id);
         for entry in self.sets.values_mut() {
-            let (writes, shadow) = texture_writes(device, &entry.images, id, &texture, notes)?;
-            entry.write(device, writes)?;
-            entry.shadow(id, &texture, shadow);
+            let placed = texture_writes(device, &entry.images, id, &texture, notes)?;
+            entry.write(device, placed.writes)?;
+            entry.shadow(id, &texture, placed.shadow);
+            if let Some(read) = entry.twin(id, placed.twin) {
+                notes.twin_placed = Some(read);
+            }
         }
         if let Some(table) = &self.table {
             table.put(id, id, id as u32, flags);
@@ -527,6 +534,7 @@ impl DeviceHeaps {
         self.unplace(id);
         for entry in self.sets.values_mut() {
             entry.shadows.remove(&id);
+            entry.twins.remove(&id);
         }
         if let Some(table) = &self.table {
             table.put(id, id, 0, 0);
@@ -637,15 +645,18 @@ impl DeviceHeaps {
             open: Vec::new(),
             written: BTreeMap::new(),
             shadows: BTreeMap::new(),
+            twins: BTreeMap::new(),
         };
         entry.write(device, neutrals)?;
         let mut writes = Vec::new();
         for (&id, placed) in &self.textures {
             if let Some(texture) = Texture::upgrade(&placed.texture) {
                 held.push(texture.clone());
-                let (placed, shadow) = texture_writes(device, &entry.images, id, &texture, notes)?;
-                writes.extend(placed);
-                entry.shadow(id, &texture, shadow);
+                let placed = texture_writes(device, &entry.images, id, &texture, notes)?;
+                writes.extend(placed.writes);
+                entry.shadow(id, &texture, placed.shadow);
+                // A new set no command bound yet: its first binding announces.
+                entry.twin(id, placed.twin);
                 notes.placed(&texture, true);
             }
         }
@@ -991,6 +1002,11 @@ struct SetEntry {
     /// binds the set and neither names one nor makes it resident is announced
     /// (`Degradation::UnnamedShadowedTexture`).
     shadows: BTreeMap<u64, ResourceKey>,
+    /// By resource ID, the textures whose decoded twin's view an array of the set holds where
+    /// the twin's texels are not Metal's decode exactly, with what a read of it announces
+    /// (`decoded-texel-precision`, `texture/decoded_twin.rs`): a command that binds the set may
+    /// read it through its ID, named or not.
+    twins: BTreeMap<u64, TwinRead>,
 }
 
 /// An element a heap set holds ([`HeapWrite`]).
@@ -1014,6 +1030,21 @@ impl SetEntry {
             }
             false => self.shadows.remove(&id),
         };
+    }
+
+    /// Note texture `id` among the textures whose decoded twin's view the set holds, with what a
+    /// read of it announces, where `read` (else not); answer `read` where a command that bound
+    /// the set may yet read the view through its ID: the set's shared version is held by a command
+    /// buffer that bound it and has not completed (each holds it until then, [`HeapUse`]), or a
+    /// command buffer that bound its own version has not committed (which takes the element).
+    fn twin(&mut self, id: u64, read: Option<TwinRead>) -> Option<TwinRead> {
+        let Some(read) = read else {
+            self.twins.remove(&id);
+            return None;
+        };
+        self.twins.insert(id, read.clone());
+        let shared = (self.shared.as_ref()).is_some_and(|shared| Arc::strong_count(shared) > 1);
+        (shared || !self.open().is_empty()).then_some(read)
     }
 
     /// The command buffers' own versions whose command buffer has not committed.
@@ -1215,18 +1246,32 @@ fn sampler_writes(
     writes
 }
 
+/// What [`texture_writes`] places of a texture into a set's arrays.
+struct TexturePlaced {
+    writes: Vec<HeapWrite>,
+    /// An element is its shadow image's view.
+    shadow: bool,
+    /// An element is its decoded twin's view whose texels are not Metal's decode exactly: what a
+    /// read of it announces.
+    twin: Option<TwinRead>,
+}
+
 /// The writes of texture `texture`, at ID `id`, into `arrays`: element `id` of each, which it
 /// holds as the array's class takes it (the module docs). An ID past an array's count is left
-/// out, noted. With whether an element is its shadow image's view.
+/// out, noted. With whether an element is its shadow image's view, and what a read of its
+/// decoded twin's view announces where an element is that.
 fn texture_writes(
     device: &Device,
     arrays: &[ImageArray],
     id: u64,
     texture: &Texture,
     notes: &mut Notes,
-) -> Result<(Vec<HeapWrite>, bool), Error> {
-    let mut writes = Vec::with_capacity(arrays.len());
-    let mut shadow = false;
+) -> Result<TexturePlaced, Error> {
+    let mut placed = TexturePlaced {
+        writes: Vec::with_capacity(arrays.len()),
+        shadow: false,
+        twin: None,
+    };
     for array in arrays {
         let element = match u32::try_from(id) {
             Ok(element) if element < array.count => element,
@@ -1235,9 +1280,12 @@ fn texture_writes(
                 continue;
             }
         };
-        let (info, shadowed) = texture_info(device, array, texture, notes)?;
-        shadow |= shadowed;
-        writes.push(HeapWrite {
+        let (info, shadowed, twin) = texture_info(device, array, texture, notes)?;
+        placed.shadow |= shadowed;
+        if twin.is_some() {
+            placed.twin = twin;
+        }
+        placed.writes.push(HeapWrite {
             binding: array.binding,
             element,
             ty: array.ty,
@@ -1245,18 +1293,19 @@ fn texture_writes(
             keeper: None,
         });
     }
-    Ok((writes, shadow))
+    Ok(placed)
 }
 
-/// What an element of `array` holds for `texture` (the module docs), and whether it is the
-/// texture's shadow image's view.
+/// What an element of `array` holds for `texture` (the module docs), whether it is the
+/// texture's shadow image's view, and what a read of it announces where it is a decoded twin's
+/// view whose texels are not Metal's decode exactly (`Texture::held_view`).
 fn texture_info(
     device: &Device,
     array: &ImageArray,
     texture: &Texture,
     notes: &mut Notes,
-) -> Result<(Info, bool), Error> {
-    let neutral = || Ok((image_info(array.neutral), false));
+) -> Result<(Info, bool, Option<TwinRead>), Error> {
+    let neutral = || Ok((image_info(array.neutral), false, None));
     let profile = device.compile_device().profile();
     let class = HandleClass::Image(array.class);
     let desc = match heap_element(
@@ -1274,8 +1323,8 @@ fn texture_info(
         Err(error) => return Err(Error::Bind(error)),
     };
     let storage = array.ty == vk::DescriptorType::STORAGE_IMAGE;
-    match texture.bound_view("new_texture", &desc, storage) {
-        Ok(view) => Ok((image_info(view), texture.shadow().is_some())),
+    match texture.held_view("new_texture", &desc, storage) {
+        Ok((view, twin)) => Ok((image_info(view), texture.shadow().is_some(), twin)),
         // The class needs what the texture's usage or levels lack: Metal's read is undefined.
         Err(Error::Invalid(_)) => neutral(),
         Err(Error::Unsupported(_)) => {
@@ -1303,6 +1352,12 @@ struct Notes {
     /// A sampler state a sampler table or a set's sampler array cannot hold: the first one's
     /// notice (`Degradation::UnlistedArgumentSampler`).
     unlisted: Option<(String, String)>,
+    /// A decoded twin whose texels are not Metal's decode exactly in a set the command binds,
+    /// whose function may read it (`Degradation::DecodedTexelPrecision`).
+    twin_read: Option<TwinRead>,
+    /// One placed in a set a command buffer that bound it and has not completed may read through
+    /// ([`SetEntry::twin`]): announced once, as a submission may place it on a runtime thread.
+    twin_placed: Option<TwinRead>,
 }
 
 impl Notes {
@@ -1426,6 +1481,12 @@ impl Notes {
         }
         if let Some(unlisted) = self.unlisted {
             device.degrade(Degradation::UnlistedArgumentSampler, || unlisted);
+        }
+        if let Some(read) = &self.twin_read {
+            read.announce(device);
+        }
+        if let Some(read) = &self.twin_placed {
+            read.announce_once(device);
         }
     }
 }
@@ -2019,6 +2080,9 @@ pub(super) fn bind(
             .iter()
             .find(|(_, key)| !uses.iter().any(|used| used.key == **key))
             .map(|(&id, _)| id);
+        // A decoded twin whose texels are not Metal's decode exactly, which the command's
+        // function may read through its ID whether or not the command names it.
+        notes.twin_read = entry.twins.values().next().cloned();
         // The shared version, or the command buffer's own, made as it first binds the set.
         let own = heap.versions.iter().find(|v| v.key == set.key).cloned();
         let version = match (&entry.shared, own) {

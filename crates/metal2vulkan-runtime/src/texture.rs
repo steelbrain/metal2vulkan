@@ -181,6 +181,7 @@ mod view_shadow;
 pub(super) mod wrapped;
 mod ycbcr_image;
 mod ycbcr_planes;
+pub(crate) use decoded_twin::TwinRead;
 pub(crate) use ycbcr_image::{KeptImage, PlanesInPlace};
 pub(crate) use ycbcr_planes::KeptTexels;
 
@@ -4573,25 +4574,55 @@ impl Texture {
         });
     }
 
-    /// The `VkImageView` a binding write of `call` needs of the texture: `desc` is the binding
-    /// plan's view, `storage` whether the write is a storage image's. Made at the first bind
-    /// that needs it, then kept with the image. Refused as `binding_view` refuses.
+    /// The `VkImageView` a command's binding write of `call` needs of the texture: `desc` is the
+    /// binding plan's view, `storage` whether the write is a storage image's. Made at the first
+    /// bind that needs it, then kept with the image. A sampled view of a decoded twin whose
+    /// texels are not Metal's decode exactly is read by the command: announced here
+    /// (`decoded-texel-precision`, `texture/decoded_twin.rs`). Refused as `binding_view` refuses.
     pub(super) fn bound_view(
         &self,
         call: &'static str,
         desc: &ImageViewDesc,
         storage: bool,
     ) -> Result<vk::ImageView, Error> {
+        let (view, read) = self.view_reading(call, desc, storage)?;
+        if let Some(read) = read {
+            read.announce(self.device());
+        }
+        Ok(view)
+    }
+
+    /// [`bound_view`](Self::bound_view) for a heap set's element, which no command reads yet:
+    /// announcing nothing, with what a read of a decoded twin's view announces, for the set to
+    /// announce where a command may read it (`heap_sets.rs`).
+    pub(super) fn held_view(
+        &self,
+        call: &'static str,
+        desc: &ImageViewDesc,
+        storage: bool,
+    ) -> Result<(vk::ImageView, Option<TwinRead>), Error> {
+        let (view, read) = self.view_reading(call, desc, storage)?;
+        Ok((view, read.cloned()))
+    }
+
+    /// The view of [`bound_view`](Self::bound_view), and what a read of it announces where it is
+    /// a decoded twin's whose texels are not Metal's decode exactly.
+    fn view_reading(
+        &self,
+        call: &'static str,
+        desc: &ImageViewDesc,
+        storage: bool,
+    ) -> Result<(vk::ImageView, Option<&TwinRead>), Error> {
         let image: &Image = self.image()?;
         // A sampled view of a texture with a decoded twin presents the twin.
         if !storage {
-            if let Some(view) = self.decoded_view(call, image, desc)? {
-                return Ok(view);
+            if let Some(twin) = self.decoded_view(call, image, desc)? {
+                return Ok(twin);
             }
         }
         let view = binding_view(image.plan(), &self.0.record.bound(), desc, storage)
             .map_err(|refusal| view_error(call, refusal))?;
-        image.view(&view)
+        Ok((image.view(&view)?, None))
     }
 
     /// The `VkImageView` `view` of the texture's image, made at its first use and then kept with
