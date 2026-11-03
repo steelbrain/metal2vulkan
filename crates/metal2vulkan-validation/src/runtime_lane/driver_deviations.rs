@@ -348,12 +348,15 @@ const PRECISE_DEVICE_WORDS: &[usize] = &[
 
 /// The same for `FAST`, in a fast-math entry: the fast `sin`, `cos`, `tan`, `sincos`'s two,
 /// `asin`, `acos` and `atan`, the fast hyperbolic functions' own instructions (`sinh`, `cosh`,
-/// `asinh`, `acosh`, `atanh`), `tanh` (SPIRV-Cross writes `precise::tanh`), `exp2` and `log2`
-/// (Metal's fast ones are its precise ones), `sqrt`, `rsqrt` and `x / y` (the device's division
-/// in a fast-math entry). Not `atan2` (words 8 and 30: SPIRV-Cross writes `precise::atan2`, so the
-/// translation composes Metal's fast one), the fast `exp`, `log`, `exp10`, `log10`, `pow` and
-/// `powr` (15, 17, 18, 20 to 22: compositions of the device's `exp2` and `log2`), `fmod` (25: a
-/// composition of the device's reciprocal), nor `sinpi`, `cospi`, `tanpi` and `y`.
+/// `asinh`, `acosh`, `atanh`), `exp2` and `log2` (Metal's fast ones are its precise ones), `sqrt`,
+/// `rsqrt` and `x / y` (the device's division in a fast-math entry). Not `atan2` (words 8 and 30:
+/// SPIRV-Cross writes `precise::atan2`, so the translation composes Metal's fast one), the fast
+/// `tanh` (word 11: the device's `Tanh`, which SPIRV-Cross writes as `precise::tanh`, where
+/// Metal's fast one is MSL's formula `(t - 1) / (t + 1)`; the stage records
+/// `PrecisionNote::DeviceTranscendentals`, and 599 of the 1024 words differ on the Apple M3 Max
+/// through MoltenVK 1.4.2), the fast `exp`, `log`, `exp10`, `log10`, `pow` and `powr` (15, 17,
+/// 18, 20 to 22: compositions of the device's `exp2` and `log2`), `fmod` (25: a composition of the
+/// device's reciprocal), nor `sinpi`, `cospi`, `tanpi` and `y`.
 ///
 /// Words 12 and 13, `asinh` and `acosh`, are the two whose answer is not a function of the operand
 /// alone. The translation hands Metal the same `air.fast_asinh.f32`/`air.fast_acosh.f32` call on
@@ -368,7 +371,7 @@ const PRECISE_DEVICE_WORDS: &[usize] = &[
 /// index, which reads the same word and tests the same bit but branches on neither, answers every
 /// one of these words exactly.
 const FAST_DEVICE_WORDS: &[usize] = &[
-    0, 1, 2, 3, 4, 5, 6, 7, 9, 10, 11, 12, 13, 14, 16, 19, 23, 24, 29,
+    0, 1, 2, 3, 4, 5, 6, 7, 9, 10, 12, 13, 14, 16, 19, 23, 24, 29,
 ];
 
 /// The words of `words` in each 32-word thread of `output` and `metal` that differ: `(thread,
