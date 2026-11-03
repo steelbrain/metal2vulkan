@@ -88,8 +88,12 @@ fn settle(completed: &AtomicU64, count: u64, what: &str) {
     }
 }
 
-/// The wakings the thread's notifies and nudges count, and its sleeps, between `before` and
-/// `after`.
+/// The wakings the thread's notifies and nudges count between `before` and `after`, and the
+/// sleeps they may end: those the thread began between the two, and the one it may have been in
+/// as `before` was read, counted as it began, before `before`. A waking of that one is counted in
+/// the window, its sleep not: the wakings so exceed the sleeps begun by one wherever the thread
+/// was asleep at `before` and awake at `after`, as each test's device, idle at `before`, leaves
+/// it as its last command buffer completes.
 fn wakings_and_sleeps(before: &WorkCounts, after: &WorkCounts) -> (u64, u64) {
     let wakings = |counts: &WorkCounts| {
         counts.scheduler_wakes_commit
@@ -98,7 +102,7 @@ fn wakings_and_sleeps(before: &WorkCounts, after: &WorkCounts) -> (u64, u64) {
     };
     (
         wakings(after) - wakings(before),
-        after.scheduler_sleeps - before.scheduler_sleeps,
+        after.scheduler_sleeps - before.scheduler_sleeps + 1,
     )
 }
 
