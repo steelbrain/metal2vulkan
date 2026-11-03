@@ -1273,11 +1273,12 @@
         "stage_entries_specialized": 2,
         "stage_tables_read": 16,
         "submit_infos": 2,
+        "submit_stalls_on_work": 1,
         "trail_waits": 1,
         "variant_pipelines_made": 6,
         "wakes_completion_waiters": 1,
-        "wakes_handler_threads": 2,
-        "wakes_spared": 9
+        "wakes_handler_threads": 1,
+        "wakes_spared": 8
       },
       "moving": {
         "flights_followed": 0

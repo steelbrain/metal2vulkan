@@ -480,7 +480,7 @@
         "render_encoders_ended": 1,
         "render_passes_begun_instances": 1,
         "render_passes_made": 2,
-        "replay_log_bytes": 1488,
+        "replay_log_bytes": 1496,
         "replay_logs_kept": 3,
         "scheduled_where_submitted": 2,
         "scheduler_passes": 3,

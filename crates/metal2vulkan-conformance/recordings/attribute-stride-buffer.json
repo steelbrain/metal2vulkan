@@ -654,9 +654,9 @@
         "scheduled_where_submitted": 1,
         "scheduler_passes": 5,
         "scheduler_passes_by_waiters": 1,
-        "scheduler_sleeps": 3,
+        "scheduler_sleeps": 4,
         "scheduler_wakes_commit": 1,
-        "scheduler_wakes_host": 2,
+        "scheduler_wakes_host": 3,
         "shader_modules_made": 1,
         "slot_returns": 1,
         "spare_command_pools_taken": 1,
@@ -674,7 +674,8 @@
         "command_buffers_begun_segments": 4,
         "command_buffers_submitted": 10,
         "commands_recorded.end_command_buffer": 10,
-        "encoder_command_buffers_begun": 9
+        "encoder_command_buffers_begun": 9,
+        "host_steps_recorded": 0
       },
       "composed": {
         "device_memory_allocated": 201326592,

@@ -500,7 +500,7 @@
         "variant_pipelines_made": 2,
         "variants_taken_back": 1,
         "wakes_completion_waiters": 1,
-        "wakes_handler_threads": 2,
+        "wakes_handler_threads": 1,
         "wakes_spared": 12
       },
       "moving": {
@@ -527,7 +527,8 @@
         "draw_states_recorded": 49,
         "encoder_command_buffers_begun": 7,
         "gate_waits_slept": 0,
-        "graphics_pipelines_looked_up": 2
+        "graphics_pipelines_looked_up": 2,
+        "host_steps_recorded": 0
       },
       "composed": {
         "addressable_buffers_made": 1,

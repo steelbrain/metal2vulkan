@@ -477,7 +477,6 @@
         "command_buffers_begun_secondaries": 3,
         "command_buffers_begun_segments": 1,
         "command_buffers_submitted": 4,
-        "command_pools_made": 1,
         "commands_recorded.begin_command_buffer": 7,
         "commands_recorded.cmd_begin_render_pass": 1,
         "commands_recorded.cmd_bind_descriptor_sets": 2,

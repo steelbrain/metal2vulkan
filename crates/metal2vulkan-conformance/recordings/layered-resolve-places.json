@@ -1213,8 +1213,8 @@
         "trail_waits": 1,
         "variant_pipelines_made": 2,
         "wakes_completion_waiters": 1,
-        "wakes_handler_threads": 2,
-        "wakes_spared": 10
+        "wakes_handler_threads": 1,
+        "wakes_spared": 9
       },
       "moving": {
         "command_buffers_begun": 26,
@@ -1226,7 +1226,8 @@
         "commands_recorded.cmd_pipeline_barrier": 2,
         "commands_recorded.end_command_buffer": 20,
         "encoder_command_buffers_begun": 20,
-        "gate_waits_slept": 0
+        "gate_waits_slept": 0,
+        "host_steps_recorded": 0
       },
       "composed": {
         "addressable_buffers_made": 1,
