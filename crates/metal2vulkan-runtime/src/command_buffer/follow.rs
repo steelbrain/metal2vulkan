@@ -3,7 +3,9 @@
 //! its place in its own queue's context kept, until that command buffer's transition has its
 //! status final and ran its completion-seen handlers, which never block, and reaches its completed
 //! handlers, which may. Those and its own then run on two handler threads, the signaller's
-//! dispatched first, as Metal runs two queues' handlers on two threads.
+//! dispatched first, as Metal runs two queues' handlers on two threads. Which starts first is not
+//! guaranteed, as on Metal, which on the M3 Max (macOS 27.0.1) started the waiter's first in 0.1-6%
+//! of rounds with plain events.
 //!
 //! - **Who follows whom.** A command buffer whose last batch keeps GPU signals carries a
 //!   [`Follow`], which the events hold beside those signals until its transition reaches its
