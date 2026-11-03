@@ -83,13 +83,14 @@ impl LinkedFunctions {
     /// The handle of `f` in a table of a stage that links these functions
     /// (`functionHandleWithFunction:`), or `None` when neither `functions` nor
     /// `binary_functions` lists it (a function only in `private_functions` or a group cannot be
-    /// placed in a table).
+    /// placed in a table). `f` is the listed function made any way (`LinkedKey::same_definition`):
+    /// by name, by descriptor, or compiled to a binary.
     pub fn function_handle(&self, f: &LinkedFunction) -> Option<FunctionHandle> {
         let keys = crate::pipeline::compile::linked_keys(self);
         let wanted = crate::pipeline::compile::linked_key(LinkedList::Functions, f);
         let at = keys
             .iter()
-            .position(|k| callable(k.list) && k.same_function(&wanted))?;
+            .position(|k| callable(k.list) && k.same_definition(&wanted))?;
         handles(&keys).get(at).copied().flatten()
     }
 }

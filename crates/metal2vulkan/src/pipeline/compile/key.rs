@@ -62,6 +62,19 @@ impl<'a> LinkedKey<'a> {
             && self.specialized == other.specialized
             && self.constants == other.constants
     }
+
+    /// Whether Metal answers `self`'s handle for `other` (`functionHandleWithFunction:`): the same
+    /// AIR, name, specialized name and constant values, whichever way each was made. Plain Metal
+    /// answers a stage's handle for a function object made by name, by descriptor or compiled to
+    /// a binary alike, whichever of them the stage linked, and nil for another function (an M3
+    /// Max under macOS 27.0.1), where [`LinkedKey::same_function`] tells their specialization
+    /// apart for the compile.
+    pub fn same_definition(&self, other: &LinkedKey<'_>) -> bool {
+        self.air_hash == other.air_hash
+            && self.name == other.name
+            && self.specialized_name == other.specialized_name
+            && self.constants == other.constants
+    }
 }
 
 /// What a compile key records of the dynamic libraries a stage links: each library its imports are

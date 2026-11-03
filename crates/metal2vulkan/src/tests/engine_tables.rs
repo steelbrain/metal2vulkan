@@ -405,3 +405,27 @@ fn the_public_api_links_table_functions() {
         .fold(LinkedFunctions::new(), |l, name| l.with_function(f(name)));
     assert_eq!(compile(all), Ok(()));
 }
+
+/// A stage's handle answers for its function however either was made, as plain Metal's
+/// `functionHandleWithFunction:` does (an M3 Max under macOS 27.0.1): a function the stage links
+/// by descriptor and compiled to a binary, asked by name, and one it links by name, asked by
+/// descriptor, each has its handle; another function has none.
+#[test]
+fn a_handle_answers_for_its_function_made_any_way() {
+    let Some((_, functions)) = fixtures() else {
+        return;
+    };
+    let lib = Library::from_air(&functions).expect("library");
+    let by_name = |name: &str| LinkedFunction::new(lib.function(name).expect("function"));
+    let by_descriptor = |name: &str| by_name(name).with_specialized(true);
+    let mut binary = LinkedFunctions::new().with_function(by_name("table_half"));
+    binary
+        .binary_functions
+        .push(by_descriptor("table_mul").with_precompiled(true));
+    let word = |linked: &LinkedFunctions, f: &LinkedFunction| {
+        linked.function_handle(f).map(FunctionHandle::word)
+    };
+    assert_eq!(word(&binary, &by_name("table_mul")), Some(3));
+    assert_eq!(word(&binary, &by_descriptor("table_half")), Some(2));
+    assert_eq!(word(&binary, &by_name("table_add")), None);
+}
