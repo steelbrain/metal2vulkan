@@ -4,8 +4,9 @@
 //! attachment and blending one rectangle over it, as a WebGPU frame split at every indexed draw
 //! renders. The targets: over a `Shared` buffer, rows packed; over a `Private` buffer, packed rows
 //! of a multiple of 256 bytes (a `-T` stencilprobe's, rounded up to 256); over a `Shared` buffer
-//! of packed rows of no multiple of 256 bytes (an IOSurface's, `4 * width`); and over a no-copy
-//! buffer's host pages, rows likewise.
+//! of packed rows of no multiple of 256 bytes (an IOSurface's, `4 * width`); over a no-copy
+//! buffer's host pages, rows likewise; and over a `Private` buffer whose rows hold bytes between
+//! them, a shadow on every device (an image over them would hold those bytes), copied back.
 //!
 //! With the device's rule forced (`DeviceShared::linear_rule_forced`), each pass renders a target
 //! that is its own linear image apart, through the image it keeps, its changed words merged back
@@ -15,7 +16,7 @@
 //! (host pages on every device, and rows the device's linear images do not lay out) is merged
 //! back at each encoder's end (`shadow_merge.rs`): its merges after the first take the scratch an
 //! earlier encoder was done with. Either way the texels equal those the same passes leave in a
-//! private texture of the same first bytes.
+//! private texture of the same first texels, and the bytes between the rows keep theirs.
 //!
 //! Device tests: compiled only under the validation crate's GPU safety cfgs (`m2v_gpu`,
 //! `m2v_cpu_icd`), on the kind of device the cfg selects. The functions are the owned fixture
@@ -41,6 +42,9 @@ const TEXEL: u64 = 4;
 /// The passes of the command buffer.
 const PASSES: usize = 240;
 
+/// The byte the bytes between a target's rows hold, which no pass writes.
+const BETWEEN: u8 = 0xa5;
+
 /// The state that blends a half-transparent rectangle (`tob_rect`, corners from vertex buffer 0)
 /// of the color in fragment buffer 0 (`tob_solid`) over an `RGBA8Unorm` color, beside a
 /// `Depth32Float` depth attachment it does not test.
@@ -65,10 +69,24 @@ fn blending(device: &Device) -> RenderPipelineState {
         .unwrap()
 }
 
-/// What a target's bytes hold first, rows `row` bytes apart: a counting pattern no pass draws.
-/// Every target's rows are packed, with no bytes between them.
-fn first_bytes(row: u64) -> Vec<u8> {
-    (0..row * H).map(|i| (i * 7 % 251) as u8).collect()
+/// What a target's bytes hold first, of `width` texels a row, `row` bytes apart: each texel's
+/// bytes a counting pattern of its place among the texels (so a target of any rows holds the
+/// same texels), which no pass draws, and [`BETWEEN`] between the rows.
+fn first_bytes(width: u64, row: u64) -> Vec<u8> {
+    (0..row * H)
+        .map(|i| match i % row < width * TEXEL {
+            true => ((i / row * width * TEXEL + i % row) * 7 % 251) as u8,
+            false => BETWEEN,
+        })
+        .collect()
+}
+
+/// The texels of `bytes`, rows `row` bytes apart, packed.
+fn texels(bytes: &[u8], width: u64, row: u64) -> Vec<u8> {
+    (bytes.chunks(row as usize))
+        .flat_map(|r| &r[..(width * TEXEL) as usize])
+        .copied()
+        .collect()
 }
 
 /// A `Shared` buffer holding `bytes`.
@@ -146,7 +164,7 @@ fn target(
     host: &Host,
 ) -> Option<(Buffer, Texture)> {
     let device = queue.device();
-    let first = first_bytes(row);
+    let first = first_bytes(width, row);
     let length = row * H;
     let buffer = match over {
         Over::Shared => device
@@ -266,7 +284,7 @@ fn passes(queue: &CommandQueue, state: &RenderPipelineState, texture: &Texture) 
 }
 
 /// The texels [`passes`] leave in a private texture of `width` texels a row holding
-/// [`first_bytes`]'s texels first, packed.
+/// [`first_bytes`]'s texels first.
 fn reference(queue: &CommandQueue, state: &RenderPipelineState, width: u64) -> Vec<u8> {
     let device = queue.device();
     let mut d = TextureDescriptor::texture_2d(PixelFormat::RGBA8Unorm, width, H, false);
@@ -274,7 +292,7 @@ fn reference(queue: &CommandQueue, state: &RenderPipelineState, width: u64) -> V
     d.resource_options = ResourceOptions::private();
     let texture = device.new_texture(&d).unwrap();
     let packed = width * TEXEL;
-    let source = staged(device, &first_bytes(packed));
+    let source = staged(device, &first_bytes(width, packed));
     let size = Size::new(width, H, 1);
     blit(queue, |b| {
         let origin = Origin::new(0, 0, 0);
@@ -316,9 +334,10 @@ fn reference(queue: &CommandQueue, state: &RenderPipelineState, width: u64) -> V
 }
 
 /// [`passes`] over a target over `over`'s buffer of `width` texels a row, `row` bytes apart, the
-/// rule forced: its texels equal the private texture's, and its merges (where it is a linear
-/// image, or a shadow merged back) take one scratch, lent to every later one, the device's memory
-/// growing by less than an eighth of what a scratch a pass would take.
+/// rule forced: its texels equal the private texture's, the bytes between its rows keep theirs,
+/// and its merges (where it is a linear image, or a shadow merged back) take one scratch, lent to
+/// every later one, the device's memory growing by less than an eighth of what a scratch a pass
+/// would take.
 fn one_scratch(over: Over, (width, row): (u64, u64)) {
     let cache = Scratch::new(&format!("merge-scratch-{over:?}-{width}"));
     let host = Host::new(row * H);
@@ -375,7 +394,14 @@ fn one_scratch(over: Over, (width, row): (u64, u64)) {
         "encoding the passes grew the device's memory by {grown} bytes, {} merges' scratch",
         grown / scratch
     );
-    let got = bytes(&queue, over, &buffer, row * H);
+    let pages = bytes(&queue, over, &buffer, row * H);
+    let first = first_bytes(width, row);
+    let between = (0..pages.len())
+        .filter(|&i| first[i] == BETWEEN && (i as u64 % row) >= width * TEXEL)
+        .filter(|&i| pages[i] != BETWEEN)
+        .count();
+    assert_eq!(between, 0, "bytes between the rows changed");
+    let got = texels(&pages, width, row);
     let differ = (0..got.len()).filter(|&i| got[i] != expected[i]).count();
     assert_eq!(differ, 0, "the texels differ from the private texture's");
     drop((texture, buffer));
@@ -392,6 +418,12 @@ fn many_passes_over_a_shared_buffer_take_one_scratch() {
 #[test]
 fn many_passes_over_a_private_buffer_take_one_scratch() {
     one_scratch(Over::Private, (256, 1024));
+}
+
+/// Over a `Private` buffer, rows of 200 texels rounded up to 1024 bytes: 224 bytes between them.
+#[test]
+fn many_passes_over_padded_private_rows_hold_their_texels() {
+    one_scratch(Over::Private, (200, 1024));
 }
 
 /// Over a `Shared` buffer of packed rows of 300 texels, 1200 bytes, of no multiple of 256 (an
