@@ -311,8 +311,10 @@ recorded here.
   buffer, each blending one rectangle over a 1024x1024 `BGRA8Unorm` texture over host pages with
   rows of 15360 bytes, took 5 shadow copies against 1,401 and kept 2,097,152 texels against
   734,003,200; from commit to completion, 32.7-35.6 ms against 69.3-99.9 ms on the M3 Max
-  (MoltenVK 1.4.2); with a 1x1 render encoder of no attachment between every two, 61.5-67.2 ms
-  against 107.4-118.6 ms (the second to fourth of four such command buffers in a process).
+  (MoltenVK 1.4.2) and 6.5-9.1 ms against 40.6-43.0 ms on the RTX 5080 Laptop GPU (NVIDIA
+  615.71.09); with a 1x1 render encoder of no attachment between every two, 61.5-67.2 ms against
+  107.4-118.6 ms and 9.3-12.2 ms against 44.5-47.1 ms (the second to fourth of four such command
+  buffers in a process).
 - **A no-copy buffer's deallocator runs in its release.** On an M3 Max under macOS 27.0.1 an unused
   no-copy buffer's deallocator ran inside its final release, on the releasing thread, every time.
   So a release that frees the buffer's import while a deallocator waits for the free frees it
