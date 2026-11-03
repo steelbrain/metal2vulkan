@@ -1969,7 +1969,8 @@ impl BlitCommandEncoder {
             .shared()
             .textures
             .facts(device.compile_device().profile());
-        let blits = match plan_mipmaps(texture.record(), texture.image_plan()?, &facts) {
+        let defects = &device.properties().driver_defects;
+        let blits = match plan_mipmaps(texture.record(), texture.image_plan()?, &facts, defects) {
             // An integer format: plain Metal picks texels, which copies give exactly
             // (`mipmap_pick.rs`).
             Ok(MipmapPlan::Picks(picks)) => {

@@ -483,6 +483,20 @@ pub(super) struct Affected {
 ///   import fails, a copy of them, as where a pointer import fails (`copied.rs`,
 ///   `copied-host-pages`); a RAM's chunk over them is not imported, and its objects take their
 ///   own paths to the same end.
+///
+/// `VolumeBlitsUnfiltered`:
+/// - MoltenVK (`MOLTENVK`): `vkCmdBlitImage` with `VK_FILTER_LINEAR` from level 0 of an
+///   `R8G8B8A8_UNORM` 3D image of 8 x 8 x 4 random texels into level 1 (4 x 4 x 2) answers
+///   texels that are not the average of the eight around each destination texel's centre, as
+///   Vulkan's linear filter of a halving blit is: of the level's 128 bytes, 4 lie within a code
+///   of that average, 67 within a code of the average of the four of source slice `2z + 1` alone,
+///   2 of slice `2z` alone (`runtime_lane::mipmap_chains` on the M3 Max under macOS 27.0.1).
+///   The same blits of 2D, 2D array and cube images filter as Vulkan states, and NVIDIA's
+///   615.71.09 on the RTX 5080 Laptop GPU filters the 3D image as Vulkan states. Measured on 1.4.2
+///   (driverVersion 10402): known broken through 1.4.2. Nothing is refused:
+///   `generate_mipmaps` of a 3D texture takes the runtime's compute filter there
+///   (`mipmap_plan.rs`, `mipmap_filter.rs`) where it computes the format, and the device's blit
+///   chain, announced as everywhere (`device-filtered-mipmaps`), elsewhere.
 pub(super) const AFFECTED: &[Affected] = &[
     Affected {
         defect: RuntimeDriverDefect::HostTransferImagesCopiedAtBind,
@@ -624,6 +638,11 @@ pub(super) const AFFECTED: &[Affected] = &[
     Affected {
         defect: RuntimeDriverDefect::UnpinnablePagesBreakHostMemory,
         driver: DriverId::NVIDIA_PROPRIETARY,
+        clean: &[],
+    },
+    Affected {
+        defect: RuntimeDriverDefect::VolumeBlitsUnfiltered,
+        driver: DriverId::MOLTENVK,
         clean: &[],
     },
 ];

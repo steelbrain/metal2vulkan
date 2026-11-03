@@ -32,6 +32,7 @@ const LOST_SIGNALS: RuntimeDriverDefect = RuntimeDriverDefect::WaitForAnyObjectL
 const CHROMA: RuntimeDriverDefect = RuntimeDriverDefect::TwoPlaneChromaMisplaced;
 const TEN_BIT_WORDS: RuntimeDriverDefect = RuntimeDriverDefect::TenBitCodesReadAsWords;
 const UNPINNABLE: RuntimeDriverDefect = RuntimeDriverDefect::UnpinnablePagesBreakHostMemory;
+const VOLUME_BLITS: RuntimeDriverDefect = RuntimeDriverDefect::VolumeBlitsUnfiltered;
 
 /// Every committed profile's driver has its defects at every release and GPU but those a probe
 /// found clean: MoltenVK the multisampled depth/stencil colour copies, the inexact depths past
@@ -41,8 +42,9 @@ const UNPINNABLE: RuntimeDriverDefect = RuntimeDriverDefect::UnpinnablePagesBrea
 /// submission encoding meanwhile, the pushed sets' unset buffer sizes, the set layouts its support
 /// query refuses though it runs them, the textureless views of some of a lazily allocated image's
 /// levels or layers, the block-compressed image it copies out of host memory at bind time with a
-/// one-block row pitch, the signal its wait for any of several objects loses and the misplaced
-/// chroma of its two-plane Y′CbCr conversions; lavapipe the
+/// one-block row pitch, the signal its wait for any of several objects loses, the misplaced
+/// chroma of its two-plane Y′CbCr conversions and the 3D image's blits it does not filter as
+/// Vulkan states; lavapipe the
 /// colour copies, the depth/stencil resolve of the first layer and level, the explicit plane's
 /// rows past its height, the baked samplers lost after a copy and the 10-bit codes its Y′CbCr
 /// conversion reads as words;
@@ -85,6 +87,7 @@ fn the_committed_profiles_drivers_have_their_defects() {
                     BIND_COPIES,
                     LOST_SIGNALS,
                     CHROMA,
+                    VOLUME_BLITS,
                 ]
             }
             Some(DriverId::MESA_LLVMPIPE) => {

@@ -1063,6 +1063,12 @@ pub enum RuntimeDriverDefect {
     /// over them is not imported, its objects taking their own paths. Pages that are not mapped
     /// readable cannot be copied, and are refused (`Unsupported`, `HostMemory`).
     UnpinnablePagesBreakHostMemory,
+    /// `vkCmdBlitImage` with `VK_FILTER_LINEAR` from one level of a 3D image into the next does
+    /// not answer Vulkan's linear filter of the source (the eight texels around each destination
+    /// texel's scaled centre). Nothing is refused: `generate_mipmaps` of a 3D texture takes the
+    /// runtime's compute filter there, where it computes the format, and the device's blit chain,
+    /// announced as everywhere (`device-filtered-mipmaps`), elsewhere.
+    VolumeBlitsUnfiltered,
 }
 
 /// One device capability a refusal can name.

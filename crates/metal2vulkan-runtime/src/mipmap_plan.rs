@@ -18,13 +18,14 @@ use super::image_plan::{holds_srgb_twin, ImageFacts, ImagePlan};
 use super::view_plan::ViewRecord;
 use metal2vulkan::bind::MipmapFilterChain;
 use metal2vulkan::device::FormatUsage;
-use metal2vulkan::error::{Capability, Feature, Unsupported};
+use metal2vulkan::error::{Capability, Feature, RuntimeDriverDefect, Unsupported};
 use metal2vulkan::metal::format::{
     direct_format, is_depth_stencil, sampled_type, srgb_raw_twin, x_channel, ycbcr, ExtendedRange,
 };
 use metal2vulkan::metal::{PixelFormat, TextureType};
 use metal2vulkan::pipeline::SampledType;
 use metal2vulkan::vk::{FormatFeatureFlags2, ImageUsageFlags};
+use std::collections::BTreeSet;
 
 /// A `generateMipmapsForTexture:` Metal's API validation stops, and the runtime refuses.
 #[non_exhaustive]
@@ -297,9 +298,11 @@ fn filter_fits(pf: PixelFormat, image: &ImagePlan, features: FormatFeatureFlags2
 }
 
 /// The mipmaps of a texture presenting `record` whose image is `image`, on a device with
-/// `facts`: no blit for a texture Metal leaves as it is ([`leaves_as_is`]), the texel picks of an
-/// integer format ([`plan_picks`]), the device's blit chain where its blits filter the format,
-/// else the compute filter ([`MipmapPlan::Filter`]).
+/// `facts` whose driver has `defects`: no blit for a texture Metal leaves as it is
+/// ([`leaves_as_is`]), the texel picks of an integer format ([`plan_picks`]), the device's blit
+/// chain where its blits filter the format, else the compute filter ([`MipmapPlan::Filter`]),
+/// which a 3D texture takes where the compute filter computes it on a driver whose blits do not
+/// filter a volume (`RuntimeDriverDefect::VolumeBlitsUnfiltered`).
 ///
 /// Refusals: a format the runtime makes no mipmaps of (`NotImplemented(MipmapGeneration)`,
 /// [`not_implemented`]); the runtime's (`MipmapProblem`); a view of another format than its
@@ -311,6 +314,7 @@ pub(super) fn plan_mipmaps(
     record: &ViewRecord,
     image: &ImagePlan,
     facts: &ImageFacts<'_>,
+    defects: &BTreeSet<RuntimeDriverDefect>,
 ) -> Result<MipmapPlan, MipmapRefusal> {
     if leaves_as_is(record) {
         return Ok(MipmapPlan::Blits(Vec::new()));
@@ -356,6 +360,13 @@ pub(super) fn plan_mipmaps(
         } else {
             Err(lack)
         };
+    }
+    let volume = record.texture_type == TextureType::Type3D;
+    if volume
+        && defects.contains(&RuntimeDriverDefect::VolumeBlitsUnfiltered)
+        && filter_fits(record.pixel_format, image, features)
+    {
+        return Ok(MipmapPlan::Filter);
     }
     let extent = |level: u32| {
         let mut e = record

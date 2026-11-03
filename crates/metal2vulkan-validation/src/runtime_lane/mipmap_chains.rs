@@ -6,7 +6,9 @@
 //!   array, cube and 3D textures: one `vkCmdBlitImage` a level (the work counts say so), the
 //!   compute filter never, each level of a halving chain within a code (a half within a unit in
 //!   the last place) of the bilinear filter in `float` of the level above as the device read it
-//!   back, and `device-filtered-mipmaps` announced once.
+//!   back, and `device-filtered-mipmaps` announced once. On a driver whose blits do not filter a
+//!   volume (`RuntimeDriverDefect::VolumeBlitsUnfiltered`, MoltenVK's) the 3D textures take the
+//!   compute filter instead, each level within a code of the same filter.
 //! - **The compute filter** of every format it computes that the device's blits cannot filter
 //!   (the extended-range formats on every device; on lavapipe also `RGB9E5Float`, which it blits
 //!   into no image, and the 8-bit sRGB formats it holds as their UNORM twins): every level the
@@ -22,6 +24,7 @@ use super::texture_blits::MIPMAPS;
 use super::{layer_reported_nothing_at_all, validated_device, Messages, ScratchCache, WAIT};
 use crate::gpu::TEST_DEVICE;
 use metal2vulkan::bind::MipmapFilterChain;
+use metal2vulkan::error::RuntimeDriverDefect;
 use metal2vulkan::metal::{PixelFormat, TextureType, TextureUsage};
 use metal2vulkan_runtime::{
     CommandQueue, Degradation, Device, Region, ResourceOptions, Texture, TextureDescriptor,
@@ -180,10 +183,12 @@ fn filtered(
 
 /// The device's blit chain of formats every Vulkan device blits and filters linearly (`R8Unorm`,
 /// `RGBA8Unorm`, `BGRA8Unorm`, `RGBA16Float`), in 2D textures (halving and not, one two texels
-/// high), a 2D array, a cube and 3D textures: one blit a level and no compute filter, each level of a
-/// halving chain within a code (a half within a unit in the last place) of the bilinear filter in
-/// `float` of the level above as the device read it back, and `device-filtered-mipmaps` announced
-/// once, naming the first texture.
+/// high), a 2D array, a cube and 3D textures: one blit a level and no compute filter (but a 3D
+/// texture's compute filter on a driver whose blits do not filter a volume,
+/// `RuntimeDriverDefect::VolumeBlitsUnfiltered`), each level of a halving chain within a code (a
+/// half within a unit in the last place) of the bilinear filter in `float` of the level above as
+/// the device read it back, and `device-filtered-mipmaps` announced once, naming the first
+/// texture.
 #[test]
 fn the_device_s_blit_chain_filters_each_level_and_is_announced() {
     let cache = ScratchCache::new().unwrap();
@@ -192,6 +197,9 @@ fn the_device_s_blit_chain_filters_each_level_and_is_announced() {
         let device = validated_device(TEST_DEVICE, &messages, cache.path()).unwrap();
         messages.take_notices();
         let queue = device.new_command_queue().unwrap();
+        // A driver whose blits do not filter a volume: its 3D textures take the compute filter.
+        let volume_blits = (device.properties().driver_defects)
+            .contains(&RuntimeDriverDefect::VolumeBlitsUnfiltered);
         use PixelFormat as P;
         use TextureType as T;
         type Case = (
@@ -232,10 +240,13 @@ fn the_device_s_blit_chain_filters_each_level_and_is_announced() {
                 put(&t, slice, 0, extent, texel, &bytes);
             }
             let made = generate(&device, &queue, &t);
+            let want = match ty == T::Type3D && volume_blits {
+                true => Made::Filter,
+                false => Made::Blits(levels as u64 - 1),
+            };
             assert_eq!(
-                made,
-                Made::Blits(levels as u64 - 1),
-                "{pf:?} {ty:?} {extent:?}: a blit a level"
+                made, want,
+                "{pf:?} {ty:?} {extent:?}: a blit a level, or the compute filter of a volume"
             );
             if !halving {
                 continue;

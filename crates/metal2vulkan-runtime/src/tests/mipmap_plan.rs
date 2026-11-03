@@ -1,6 +1,7 @@
 //! `generateMipmapsForTexture:`: Metal's rules as probes 2 and 3 measured them, the blit chain, and
 //! the compute filter where the device's blits cannot filter a format.
 
+use super::super::driver_defects;
 use super::super::image_plan::plan_image;
 use super::super::mipmap_plan::{
     format_problem, not_implemented, picks, plan_mipmaps, plan_picks, MipBlit, MipmapPlan,
@@ -28,7 +29,7 @@ fn planned(
     let layout = desc.check(APPLE).unwrap();
     let image = plan_image(&layout, desc.usage, false, &facts).unwrap();
     let record = ViewRecord::of_texture(&layout, desc.usage, desc.swizzle);
-    let result = plan_mipmaps(&record, &image, &facts);
+    let result = plan_mipmaps(&record, &image, &facts, &driver_defects::of(&d));
     (record, result)
 }
 
@@ -189,7 +190,7 @@ fn every_filtered_format_takes_the_blit_chain_or_the_compute_filter() {
                 Some(texel),
                 "{name} {pf:?}: an image of the texel's bytes"
             );
-            match plan_mipmaps(&record, &image, &facts) {
+            match plan_mipmaps(&record, &image, &facts, &driver_defects::of(&d)) {
                 Ok(MipmapPlan::Blits(chain)) if blits => {
                     assert_eq!(chain.len(), 3, "{name} {pf:?}");
                     blitted += 1;
@@ -211,6 +212,32 @@ fn every_filtered_format_takes_the_blit_chain_or_the_compute_filter() {
             filtered.contains(&(expected.0.to_owned(), expected.1)),
             "{expected:?} takes the compute filter: {filtered:?}"
         );
+    }
+}
+
+/// A 3D texture of a format the compute filter computes takes it on a driver whose blits do not
+/// filter a volume (`RuntimeDriverDefect::VolumeBlitsUnfiltered`, MoltenVK's), and the blit chain
+/// elsewhere; its 2D and cube textures take the blit chain there too.
+#[test]
+fn a_volume_takes_the_compute_filter_where_the_driver_s_blits_do_not_filter_it() {
+    for (profile, ty, filter) in [
+        ("moltenvk-m3", TextureType::Type3D, true),
+        ("moltenvk-m3", TextureType::Type2D, false),
+        ("moltenvk-m3", TextureType::Cube, false),
+        ("lavapipe", TextureType::Type3D, false),
+    ] {
+        let extent = match ty {
+            TextureType::Type3D => [8, 8, 4],
+            _ => [8, 8, 1],
+        };
+        for pf in [PixelFormat::RGBA8Unorm, PixelFormat::RGBA16Float] {
+            let what = format!("{pf:?} {ty:?} on {profile}");
+            match planned(mipped(pf, ty, extent, 1), profile).1 {
+                Ok(MipmapPlan::Filter) => assert!(filter, "{what}"),
+                Ok(MipmapPlan::Blits(chain)) => assert!(!filter && chain.len() == 3, "{what}"),
+                other => panic!("{what}: {other:?}"),
+            }
+        }
     }
 }
 
@@ -269,7 +296,7 @@ fn a_views_chain_is_its_own_levels_and_slices() {
         device.profile(),
     )
     .unwrap();
-    let blits = blits(plan_mipmaps(&view, &image, &facts).unwrap());
+    let blits = blits(plan_mipmaps(&view, &image, &facts, &driver_defects::of(&d)).unwrap());
     assert_eq!(
         blits,
         [MipBlit {
@@ -310,7 +337,7 @@ fn an_srgb_texture_held_as_its_unorm_twin_takes_the_compute_filter() {
             }
             held += 1;
             assert_eq!(
-                plan_mipmaps(&record, &image, &facts),
+                plan_mipmaps(&record, &image, &facts, &driver_defects::of(&d)),
                 Ok(MipmapPlan::Filter),
                 "{name} {pf:?}"
             );
@@ -344,7 +371,7 @@ fn a_view_of_another_format_is_not_implemented() {
         device.profile(),
     )
     .unwrap();
-    match plan_mipmaps(&view, &image, &facts) {
+    match plan_mipmaps(&view, &image, &facts, &driver_defects::of(&d)) {
         Err(MipmapRefusal::Unsupported(u)) => {
             assert_eq!(u.feature, Feature::MipmapGeneration);
             assert_eq!(u.needs, Needs::NotImplemented);
