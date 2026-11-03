@@ -658,6 +658,42 @@ fn llvm_math_library_bases_decode() {
     }
 }
 
+/// `llvm.bitreverse` decodes as the kept integer operation of arity one on every integer width
+/// and vector of one, checked against its declaration like the other integer bases.
+#[test]
+fn llvm_bitreverse_decodes_at_every_integer_width() {
+    let num = |elem, lanes| Operand::Num(NumTy { elem, lanes });
+    for (name, elem, lanes) in [
+        ("llvm.bitreverse.i8", Elem::I8, 1),
+        ("llvm.bitreverse.i16", Elem::I16, 1),
+        ("llvm.bitreverse.i32", Elem::I32, 1),
+        ("llvm.bitreverse.i64", Elem::I64, 1),
+        ("llvm.bitreverse.v4i32", Elem::I32, 4),
+        ("llvm.bitreverse.v2i64", Elem::I64, 2),
+        ("llvm.bitreverse.v3i16", Elem::I16, 3),
+    ] {
+        let ty = num(elem, lanes);
+        assert_eq!(
+            llvm(name, ty, &[ty]),
+            DeclClass::Llvm(LlvmIntrinsic::Int {
+                op: LlvmIntOp::BitReverse,
+                ty: NumTy { elem, lanes },
+            }),
+            "{name}"
+        );
+    }
+    // A declaration that disagrees: the arity, the suffix, a float overload.
+    let (i32s, i64s, f32s) = (num(Elem::I32, 1), num(Elem::I64, 1), num(Elem::F32, 1));
+    for (name, ret, params) in [
+        ("llvm.bitreverse.i32", i32s, &[i32s, i32s][..]),
+        ("llvm.bitreverse.i64", i32s, &[i32s][..]),
+        ("llvm.bitreverse.i32", i64s, &[i64s][..]),
+        ("llvm.bitreverse.f32", f32s, &[f32s][..]),
+    ] {
+        assert_eq!(llvm(name, ret, params), DeclClass::Mismatch, "{name}");
+    }
+}
+
 #[test]
 fn llvm_bases_decode_against_their_declarations() {
     let f32s = Operand::Num(NumTy::scalar(Elem::F32));
@@ -914,7 +950,7 @@ fn markers_are_dropped() {
         );
     }
     let bases: Vec<&str> = BASES.iter().map(|(n, _)| *n).collect();
-    assert_eq!(bases.len(), 31);
+    assert_eq!(bases.len(), 32);
 }
 
 #[test]

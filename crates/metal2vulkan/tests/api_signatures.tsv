@@ -10678,6 +10678,7 @@ variant	metal2vulkan-air::intrinsics::LlvmFloatOp::Log2	Log2
 variant	metal2vulkan-air::intrinsics::LlvmFloatOp::MaxNum	MaxNum
 variant	metal2vulkan-air::intrinsics::LlvmFloatOp::MinNum	MinNum
 variant	metal2vulkan-air::intrinsics::LlvmFloatOp::Sqrt	Sqrt
+variant	metal2vulkan-air::intrinsics::LlvmIntOp::BitReverse	BitReverse
 variant	metal2vulkan-air::intrinsics::LlvmIntOp::Bswap	Bswap
 variant	metal2vulkan-air::intrinsics::LlvmIntOp::Ctpop	Ctpop
 variant	metal2vulkan-air::intrinsics::LlvmIntOp::Fshl	Fshl
