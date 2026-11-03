@@ -389,6 +389,131 @@ fn chunks_are_imported_ahead_so_no_making_waits_for_one() {
     );
 }
 
+/// Wait until `done` holds of the device's counts, at most [`WAIT`]: the counts then.
+fn counts_until(device: &Device, done: impl Fn(&crate::WorkCounts) -> bool) -> crate::WorkCounts {
+    let started = Instant::now();
+    loop {
+        let counts = device.work_counts();
+        if done(&counts) || started.elapsed() > WAIT {
+            return counts;
+        }
+        std::thread::sleep(Duration::from_millis(2));
+    }
+}
+
+#[test]
+fn the_ahead_thread_leaves_the_allocation_limit_to_the_objects() {
+    let Some(device) = ahead_device() else {
+        return;
+    };
+    let allocations = &device.shared().allocations.allocations;
+    // A device of a small `maxMemoryAllocationCount`: the smallest limit whose margin (a
+    // quarter) leaves the thread room for `AHEAD` chunks of the RAM's twelve, and no more.
+    const CHUNKS: u64 = 12;
+    const AHEAD: u32 = 4;
+    let device_limit = allocations.limit();
+    let live = allocations.live();
+    let margin = |limit: u32| (limit / 4).max(1);
+    let limit = (live + 1..)
+        .find(|&limit| limit - margin(limit) - live == AHEAD)
+        .unwrap();
+    allocations.limit_to(limit);
+    assert_eq!(allocations.limit(), limit);
+    let (ram, start, dropped) = fresh_ram(CHUNKS * 64 * MIB);
+    let before = device.work_counts();
+    let used = device.use_host_ram(&ram).unwrap();
+    let ahead = |counts: &crate::WorkCounts| {
+        counts.host_ram_chunks_imported_ahead - before.host_ram_chunks_imported_ahead
+    };
+    counts_until(&device, |counts| ahead(counts) == u64::from(AHEAD));
+    // Stopped at the margin: nothing more comes.
+    std::thread::sleep(Duration::from_millis(200));
+    let stopped = device.work_counts();
+    assert_eq!(
+        ahead(&stopped),
+        u64::from(AHEAD),
+        "it stopped at the margin"
+    );
+    assert_eq!(allocations.live(), limit - margin(limit));
+    // An object over a chunk past them imports it as it is made: an allocation the margin left
+    // room for, which brings the device within it, so the thread's chunks are given back.
+    let page = device.shared().host_import.as_ref().unwrap().page;
+    let (runs, gates): (Arc<Mutex<_>>, Arc<Mutex<_>>) = Default::default();
+    let past = start + u64::from(AHEAD) * 64 * MIB;
+    let object = buffer(
+        &device,
+        past,
+        4 * page,
+        resolver(&runs, itself),
+        gate(&gates, true),
+    )
+    .expect("an object past the thread's chunks is made");
+    let given = |counts: &crate::WorkCounts| {
+        counts.host_ram_chunks_given_back - before.host_ram_chunks_given_back
+    };
+    let back = counts_until(&device, |counts| {
+        given(counts) == u64::from(AHEAD)
+            && counts.host_ram_chunks_live - before.host_ram_chunks_live == 1
+    });
+    assert_eq!(
+        given(&back),
+        u64::from(AHEAD),
+        "the untaken chunks went back"
+    );
+    assert_eq!(
+        back.host_ram_chunks_imported - before.host_ram_chunks_imported,
+        u64::from(AHEAD) + 1
+    );
+    assert_eq!(
+        back.host_ram_chunks_live - before.host_ram_chunks_live,
+        1,
+        "the object's chunk alone stays"
+    );
+    assert_eq!(
+        back.chunk_bound_buffers_made - before.chunk_bound_buffers_made,
+        1
+    );
+    // The objects have the rest of the limit: buffers of blocks of their own are made until the
+    // device holds its limit, and the next is refused without a call of the driver, none of the
+    // thread's chunks among the live allocations then.
+    let room = limit - allocations.live();
+    let dedicated = crate::memory::BLOCK_BYTES / 2 + page;
+    let mut made = Vec::new();
+    let refused = loop {
+        match device.new_buffer(dedicated, ResourceOptions::private()) {
+            Ok(buffer) => made.push(buffer),
+            Err(error) => break error,
+        }
+        assert!(allocations.live() <= limit, "the limit holds");
+        assert!(made.len() <= room as usize + 64, "the limit holds");
+    };
+    assert!(!made.is_empty(), "the room given back is the objects'");
+    assert!(allocations.live() <= limit);
+    let full = device.work_counts();
+    assert!(
+        full.memory_allocations_refused_at_limit > before.memory_allocations_refused_at_limit,
+        "refused at the limit: {refused:?}"
+    );
+    assert_eq!(
+        full.host_ram_chunks_live - before.host_ram_chunks_live,
+        1,
+        "no chunk of the thread's was live at the refusal"
+    );
+    eprintln!(
+        "HOST-RAM: maxMemoryAllocationCount {}; a limit of {limit} with {live} live: {AHEAD} \
+         chunks imported ahead, given back as an object came within the margin of {}, then {} \
+         buffers of blocks of their own made of a room of {room}, the next refused ({refused:?})",
+        device_limit,
+        margin(limit),
+        made.len()
+    );
+    drop((made, object, used, ram));
+    assert!(
+        settles(&dropped),
+        "the keep-alive goes after the last chunk"
+    );
+}
+
 #[test]
 fn one_run_inside_a_chunk_is_bound_there_with_no_import_of_its_own() {
     let Some(device) = device() else {

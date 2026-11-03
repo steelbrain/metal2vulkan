@@ -10,6 +10,7 @@
 //! of their own). No other file of the runtime calls such an entry point: a source test fails
 //! when one does (`tests/exit_guard.rs`).
 
+use crate::allocations;
 use crate::churn_counts::{self, VkRelease};
 use crate::exit_guard::{self, Call};
 use crate::generated_commands::{Commands, Handle};
@@ -38,7 +39,8 @@ pub(crate) struct WholeDevice;
 /// Release `object` with `device`'s functions, inside a section of the exit guard, marking its
 /// entry point; once the process is exiting, leave it to the process's end. Whether it was
 /// released. Inside a section already (a whole drop's), it is always released. An image, a
-/// buffer or a memory released is counted at its caller's place (`churn_counts.rs`).
+/// buffer or a memory released is counted at its caller's place (`churn_counts.rs`), and a memory
+/// among its device's live allocations too (`allocations.rs`).
 ///
 /// # Safety
 ///
@@ -60,6 +62,9 @@ pub(crate) unsafe fn object<T: Released>(device: &ash::Device, object: T) -> boo
     };
     if let Some(what) = counted {
         churn_counts::vk_released(what, Location::caller());
+    }
+    if matches!(T::CALL, Call::FreeMemory) {
+        allocations::freed(device.handle());
     }
     true
 }

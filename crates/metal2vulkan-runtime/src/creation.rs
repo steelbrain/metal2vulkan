@@ -21,6 +21,7 @@
 //! `vkAllocateMemory`. A count is deterministic, so a test can hold a call to it where a time
 //! cannot.
 
+use crate::allocations;
 use crate::churn_counts::{vk_made, VkMaking};
 use crate::error::{vulkan, Error};
 use ash::prelude::VkResult;
@@ -98,7 +99,8 @@ pub(crate) unsafe fn image_view(
 
 /// `VkDeviceMemory` of `info`, allocated by `device`: one call of `vkAllocateMemory`, counted
 /// whether or not the driver gave it, because a caller that tries memory types in turn pays for
-/// each try.
+/// each try. Refused (`ERROR_TOO_MANY_OBJECTS`) with no call where the device has
+/// `maxMemoryAllocationCount` allocations live (`allocations.rs`).
 ///
 /// # Safety
 ///
@@ -109,9 +111,14 @@ pub(crate) unsafe fn allocate_memory(
     device: &ash::Device,
     info: &vk::MemoryAllocateInfo<'_>,
 ) -> VkResult<vk::DeviceMemory> {
+    let Some(admitted) = allocations::before_allocation(device.handle()) else {
+        return Err(vk::Result::ERROR_TOO_MANY_OBJECTS);
+    };
     vk_made(VkMaking::Memory, Location::caller());
     // SAFETY: the caller's.
-    unsafe { device.allocate_memory(info, None) }
+    let memory = unsafe { device.allocate_memory(info, None) };
+    allocations::allocated(admitted, memory.is_ok());
+    memory
 }
 
 /// `image` bound to `memory` at `offset`.

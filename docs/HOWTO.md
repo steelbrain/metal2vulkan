@@ -457,7 +457,12 @@ pages then takes a kernel mapping per page) can give the device the guest's RAM 
   yields between chunks; and on Linux it faults each chunk's pages in 2 MiB at a time
   (`MADV_POPULATE_WRITE`) before the import pins them. On that laptop with every CPU busy,
   another thread's `mmap` waited at most 7.7 ms (in 99 of 100 at most 1.6 ms) during the import
-  of 16 GiB, which took 3.7 to 6.7 s. Each import is made with the device's memory lock released. The
+  of 16 GiB, which took 3.7 to 6.7 s. Each import is made with the device's memory lock released. The thread stops where one
+  more import would leave the device less than a quarter of its `maxMemoryAllocationCount`, the
+  rest left to the objects over them; once the device's allocations come within that quarter, the
+  chunks it imported that no object took are freed again (`host_ram_chunks_given_back`). Only
+  `use_host_ram` starts the thread: objects that import their own pages, by pointer or as
+  dma-bufs, import nothing ahead. The
   object's `VkBuffer` is made as an import of its own pages would make it and bound in the chunk
   at its run (`chunk_bound_buffers_made`): no import of its own, no gate asked, its `contents`
   still the pointer, and its size reaching no page past its own, so neither its Metal range, a

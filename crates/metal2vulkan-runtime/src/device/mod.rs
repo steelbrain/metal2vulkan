@@ -261,6 +261,9 @@ pub(super) struct DeviceShared {
     /// The device's live Vulkan samplers, held to `maxSamplerAllocationCount`
     /// (`DeviceShared::create_sampler`).
     pub(super) sampler_count: SamplerCount,
+    /// The device's live `VkDeviceMemory` allocations, held to `maxMemoryAllocationCount`
+    /// (`allocations.rs`).
+    pub(crate) allocations: crate::allocations::Registered,
     /// The immutable sampler sets of the variants' layouts, by their samplers
     /// (`pipeline/objects.rs`, `pipeline/content_keyed.rs`).
     pub(crate) sampler_sets: Mutex<crate::pipeline::objects::SamplerSets>,
@@ -1690,6 +1693,9 @@ impl Device {
         // SAFETY: as above.
         let physical_properties = unsafe { instance.raw.get_physical_device_properties(physical) };
         let limits = physical_properties.limits;
+        // Counted from here, past the priming, which freed all it allocated.
+        let allocations =
+            crate::allocations::register(raw.handle(), limits.max_memory_allocation_count);
         let upload_alignment = [
             16,
             limits.min_storage_buffer_offset_alignment,
@@ -1910,6 +1916,7 @@ impl Device {
             sampler_ids,
             samplers: Mutex::default(),
             sampler_count: SamplerCount::new(limits.max_sampler_allocation_count),
+            allocations,
             sampler_sets: Mutex::default(),
             heaps: Mutex::default(),
             function_tables: Mutex::default(),
@@ -2041,6 +2048,8 @@ impl Device {
             }
         }
         let device = Device(shared);
+        // What the device allocated ahead goes back once its allocations come near the limit.
+        device.give_back_ahead_near_the_limit();
         // The verdicts of its check of textures over host pages, where a record holds them.
         device.recall_in_place_checks();
         // Its check's verdict of the GPU idling between `VkQueue`s, where none is to be measured

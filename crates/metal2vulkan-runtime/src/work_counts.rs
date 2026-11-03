@@ -342,6 +342,7 @@ pub(crate) struct Counters {
     copied_dropped_bytes: AtomicU64,
     host_ram_chunks_imported: AtomicU64,
     host_ram_chunks_imported_ahead: AtomicU64,
+    host_ram_chunks_given_back: AtomicU64,
     host_ram_chunk_bytes: AtomicU64,
     host_ram_chunks_live: AtomicU64,
     chunk_bound_buffers_made: AtomicU64,
@@ -2390,6 +2391,12 @@ impl Counters {
         (self.host_ram_chunks_imported_ahead).fetch_add(1, Ordering::Relaxed);
     }
 
+    /// The device let go of a chunk of a guest RAM its thread imported ahead and no object took,
+    /// its allocations near the device's limit (`host_ram.rs`, `allocations.rs`).
+    pub(crate) fn host_ram_chunk_given_back(&self) {
+        (self.host_ram_chunks_given_back).fetch_add(1, Ordering::Relaxed);
+    }
+
     /// The device freed a chunk of a guest RAM (`host_ram.rs`).
     pub(crate) fn host_ram_chunk_freed(&self) {
         (self.host_ram_chunks_live).fetch_sub(1, Ordering::Relaxed);
@@ -3712,6 +3719,10 @@ pub struct WorkCounts {
     /// `vkFreeMemory` each, and the allocator's whole share of
     /// `object_churn.vk_memory_freed`.
     pub memory_frees: MemoryFrees,
+    /// The `VkDeviceMemory` allocations the runtime refused without calling the driver, the
+    /// device holding `maxMemoryAllocationCount` of them live (`allocations.rs`): its blocks, its
+    /// imports of host memory and of dma-bufs, counted together.
+    pub memory_allocations_refused_at_limit: u64,
     /// Its live imports of the caller's host memory, a block each (`memory::import_host`).
     pub host_imports_live: u64,
     /// Its blocks that went while batches submitted before were in flight, on a device whose
@@ -5002,8 +5013,14 @@ pub struct WorkCounts {
     /// over it or by the first object made over it before that thread reached it.
     pub host_ram_chunks_imported: u64,
     /// Of `host_ram_chunks_imported`, those the device's own thread imported ahead of every
-    /// object over them, so that no making waited for their import.
+    /// object over them, so that no making waited for their import. The thread imports while the
+    /// device's allocations leave a quarter of its `maxMemoryAllocationCount`, and stops there.
     pub host_ram_chunks_imported_ahead: u64,
+    /// Of `host_ram_chunks_imported_ahead`, those freed again before any object took them, as the
+    /// device's other allocations came within that quarter of its limit, so that they are never
+    /// what an allocation is refused for (`memory_allocations_refused_at_limit`). An object over
+    /// one later imports it as it is made.
+    pub host_ram_chunks_given_back: u64,
     /// Their bytes.
     pub host_ram_chunk_bytes: u64,
     /// The chunks of guest RAM imported and not yet freed (a gauge): a chunk is freed once the
@@ -6182,6 +6199,10 @@ impl Device {
             host_ram_chunks_imported_ahead: counters
                 .host_ram_chunks_imported_ahead
                 .load(Ordering::Relaxed),
+            host_ram_chunks_given_back: counters.host_ram_chunks_given_back.load(Ordering::Relaxed),
+            memory_allocations_refused_at_limit: u64::from(
+                self.shared().allocations.allocations.refused(),
+            ),
             host_ram_chunk_bytes: counters.host_ram_chunk_bytes.load(Ordering::Relaxed),
             host_ram_chunks_live: counters.host_ram_chunks_live.load(Ordering::Relaxed),
             chunk_bound_buffers_made: counters.chunk_bound_buffers_made.load(Ordering::Relaxed),

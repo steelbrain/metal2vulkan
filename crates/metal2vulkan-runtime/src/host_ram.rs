@@ -25,6 +25,15 @@
 //!   the import pins pages in place rather than holding the memory map lock while it faults in
 //!   64 MiB ([`pace`], [`fault_in`]). Each import is made with the device's memory lock released
 //!   (`memory::import_host`), so the device's other placements wait for none of it.
+//! - **Short of the allocation limit.** The thread stops where one more import would leave the
+//!   device less than a quarter of its `maxMemoryAllocationCount` (`allocations.rs`), the rest
+//!   left to the objects over them. Once the device's allocations come within that quarter, the
+//!   chunks it imported that no object took are given back
+//!   ([`Device::give_back_ahead_near_the_limit`], `WorkCounts::host_ram_chunks_given_back`), so
+//!   that they are never what an allocation is refused for.
+//! - **Only here.** The thread is started by [`Device::use_host_ram`] alone, for the chunks of a
+//!   RAM imported by host pointer. A no-copy object's own imports, of its pointer or of the
+//!   caller's dma-bufs (`dma_buf.rs`), never start one and import nothing ahead.
 //! - **One run in place.** A no-copy object whose pages are one run inside one chunk is a
 //!   `VkBuffer` bound in that chunk's import (`buffer_descriptor.rs`), made and bound as an import
 //!   of the object's own pages would be: its size reaches no further than the object's last page,
@@ -218,9 +227,12 @@ pub(crate) struct RamOnDevice {
 struct ChunkSlot {
     span: Range<u64>,
     chunk: Mutex<Option<Arc<RamChunk>>>,
-    /// The device's thread failed to import the chunk: it does not try again, and the first
-    /// object over it does, as it would have.
+    /// The device's thread failed to import the chunk, or gave its import back: it does not try
+    /// again, and the first object over it imports it, as it would have.
     tried: AtomicBool,
+    /// The device's thread imported the chunk and no object took it since: given back once the
+    /// device's allocations come near its limit ([`Device::give_back_ahead_near_the_limit`]).
+    untaken: AtomicBool,
 }
 
 /// Who imports a chunk: the first object over it, on the thread making it, or the device's
@@ -267,6 +279,7 @@ impl RamOnDevice {
                 span,
                 chunk: Mutex::new(None),
                 tried: AtomicBool::new(false),
+                untaken: AtomicBool::new(false),
             })
             .collect();
         RamOnDevice {
@@ -298,6 +311,9 @@ impl RamOnDevice {
         }
         let span = &self.slots[slot];
         let mut held = lock(&span.chunk);
+        if by == By::Object {
+            span.untaken.store(false, Ordering::Relaxed);
+        }
         if let Some(chunk) = held.as_ref() {
             return Ok(Arc::clone(chunk));
         }
@@ -306,10 +322,38 @@ impl RamOnDevice {
         let chunk =
             Arc::new(unsafe { device.import_chunk(importer, &self.ram, span.span.clone()) }?);
         if by == By::Ahead {
-            device.shared().counts.host_ram_chunk_imported_ahead();
+            let shared = device.shared();
+            shared.counts.host_ram_chunk_imported_ahead();
+            span.untaken.store(true, Ordering::Relaxed);
+            shared.allocations.allocations.made_ahead();
         }
         *held = Some(Arc::clone(&chunk));
         Ok(chunk)
+    }
+
+    /// Take out of their slots the chunks the device's thread imported that no object took nor
+    /// holds, none of them imported ahead again, for the caller to let go of with no lock held:
+    /// each slot passed whose lock is held (an object importing or taking it).
+    fn untaken(&self) -> Vec<Arc<RamChunk>> {
+        let mut gone = Vec::new();
+        for slot in &self.slots {
+            if !slot.untaken.load(Ordering::Relaxed) {
+                continue;
+            }
+            let Ok(mut held) = slot.chunk.try_lock() else {
+                continue;
+            };
+            // Only the slot holds it: no buffer is bound in it, no command buffer used it.
+            if held
+                .as_ref()
+                .is_some_and(|chunk| Arc::strong_count(chunk) == 1)
+            {
+                gone.extend(held.take());
+                slot.tried.store(true, Ordering::Relaxed);
+            }
+            slot.untaken.store(false, Ordering::Relaxed);
+        }
+        gone
     }
 
     /// The chunk the device's thread imports next: the first, from the slot after the one an
@@ -336,8 +380,10 @@ impl RamOnDevice {
 /// The device's thread that imports a RAM's chunks ahead of the objects over them
 /// ([`Device::use_host_ram`]): one chunk at a time ([`RamOnDevice::next_ahead`]), each under its
 /// own lock and inside a section of the exit guard, until every chunk is imported or failed, the
-/// use ended, the device went or was lost, or the process exits. It holds the device and the RAM
-/// weakly between chunks, so neither outlives its last holder for it by more than one import. A chunk it fails to import
+/// use ended, the device went or was lost, the process exits, or one more import would leave the
+/// device less than a quarter of its `maxMemoryAllocationCount` (`allocations.rs`), the rest then
+/// left to the objects over them. It holds the device and the RAM weakly between chunks, so
+/// neither outlives its last holder for it by more than one import. A chunk it fails to import
 /// (out of memory, pages the driver or the runtime refuses) is left to the first object over it,
 /// which meets the same answer on its own thread, as without this thread.
 ///
@@ -354,7 +400,10 @@ fn import_ahead(device: WeakDevice, ram: Weak<RamOnDevice>) {
         let Ok(importer) = shared.host_import.as_ref() else {
             return;
         };
-        if device.is_lost() || !shared.host_ram.uses(&ram) {
+        if device.is_lost()
+            || !shared.host_ram.uses(&ram)
+            || !shared.allocations.allocations.room_ahead()
+        {
             return;
         }
         let Some(slot) = ram.next_ahead() else {
@@ -429,6 +478,40 @@ fn fault_in(span: &Range<u64>) {
 /// Elsewhere the import faults the chunk's pages in itself.
 #[cfg(not(target_os = "linux"))]
 fn fault_in(_: &Range<u64>) {}
+
+impl Device {
+    /// Give the chunks the device's thread imported ahead and no object took back once the
+    /// device's allocations come within a quarter of its limit (`allocations.rs`): on a thread of
+    /// its own, started then, which frees them with no lock of the allocating caller held, so
+    /// that they are gone before they could take the last allocations. An object over one later
+    /// imports it as it is made. Counted: `WorkCounts::host_ram_chunks_given_back`.
+    pub(crate) fn give_back_ahead_near_the_limit(&self) {
+        let weak = self.downgrade();
+        let give_back = move || {
+            let device = weak.clone();
+            let builder = std::thread::Builder::new().name("m2v-host-ram".to_owned());
+            // A thread the system cannot start leaves the chunks imported.
+            let _ = exit_guard::spawn(builder, move || give_back_untaken(device));
+        };
+        (self.shared().allocations.allocations).give_back_with(Box::new(give_back));
+    }
+}
+
+/// [`Device::give_back_ahead_near_the_limit`]'s thread: every RAM's untaken chunks out of their
+/// slots, then let go of, each freed as its last holder goes.
+fn give_back_untaken(device: WeakDevice) {
+    let Some(device) = device.upgrade() else {
+        return;
+    };
+    let shared = device.shared();
+    let gone: Vec<Arc<RamChunk>> = (shared.host_ram.used().iter())
+        .flat_map(|ram| ram.untaken())
+        .collect();
+    for _ in &gone {
+        shared.counts.host_ram_chunk_given_back();
+    }
+    drop(gone);
+}
 
 /// A device's import of one chunk of a RAM (`VK_EXT_external_memory_host`): the memory, and a
 /// `VkBuffer` over the whole chunk, for the runtime's own copies between the chunk and memory of
@@ -641,8 +724,10 @@ impl Device {
     /// that import, and once the thread is done no making waits for one
     /// (`WorkCounts::host_ram_chunks_imported_ahead`). So the whole RAM's pages are faulted in
     /// and pinned from soon after this call. The thread is paced (the system's batch work, a
-    /// yield between chunks). A system that cannot start the thread leaves every chunk to the
-    /// first object over it. The use lasts until the returned [`HostRamUse`] is
+    /// yield between chunks) and stops a quarter of the device's `maxMemoryAllocationCount`
+    /// short of it, the chunks it imported that no object took given back once the device's
+    /// allocations come that near (`WorkCounts::host_ram_chunks_given_back`). A system that
+    /// cannot start the thread leaves every chunk to the first object over it. The use lasts until the returned [`HostRamUse`] is
     /// dropped; a device may use several RAMs at once whose ranges are apart, and a new RAM once
     /// an earlier use of the same ranges ended (a VMM's next guest).
     ///

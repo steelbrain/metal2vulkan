@@ -26,6 +26,7 @@
 mod address;
 mod address_map;
 mod address_pool;
+mod allocations;
 mod amplification;
 mod apple_only;
 mod argument_encoder;
