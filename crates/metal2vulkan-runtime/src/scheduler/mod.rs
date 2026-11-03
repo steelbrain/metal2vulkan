@@ -396,6 +396,9 @@ struct SchedulerShared {
     gpu_waits: AtomicU64,
     /// The passes the thread made.
     passes: AtomicU64,
+    /// The commits the passes took into the order, any thread's, each counted as the pass that
+    /// took it in ends, after its submissions ([`SchedulerShared::took_in`]).
+    taken: AtomicU64,
     /// The device's nudge, where the thread waits for the GPU itself (the module docs).
     nudge: OnceLock<Nudge>,
     /// The device's cleared encoder logs (`replay.rs`): an encoder takes one, and its log comes
@@ -470,6 +473,14 @@ impl Turns {
 }
 
 impl SchedulerShared {
+    /// A pass that took in `taken` commits ended, its submissions made and counted, under the
+    /// lock: counted, released after them (`WorkCounts::commits_taken_in`).
+    fn took_in(&self, taken: usize) {
+        if taken > 0 {
+            self.taken.fetch_add(taken as u64, Ordering::Release);
+        }
+    }
+
     /// A waker marked the state for the thread, which makes no pass: wake it where it sleeps
     /// (`asleep`, read under the lock the mark was made under; one that sleeps later reads the
     /// mark first), counted as `woken`; else the notify, a system call, is spared.
@@ -727,6 +738,7 @@ impl Scheduler {
             spared: AtomicU64::new(0),
             gpu_waits: AtomicU64::new(0),
             passes: AtomicU64::new(0),
+            taken: AtomicU64::new(0),
             nudge: OnceLock::new(),
             spare_logs: SpareLogs::default(),
             stalls: OnceLock::new(),
@@ -834,7 +846,7 @@ impl Scheduler {
         let mut spent = Spent::new();
         let (mut submitted, mut left_over) = (0, false);
         let passed = shared.inbox.pass_once(|state, commits| {
-            take_in(state, commits, &mut spent);
+            let taken = take_in(state, commits, &mut spent);
             let mut none = Handlers::new();
             submitted = submit_plain_ready(state, &mut spent, (Passer::Waiting, &mut none));
             debug_assert!(
@@ -842,6 +854,7 @@ impl Scheduler {
                 "a waiting thread took a submission handler"
             );
             left_over = !state.order.is_empty() || !state.grouped.is_empty();
+            shared.took_in(taken);
         });
         if !passed {
             return;
@@ -884,7 +897,7 @@ impl Scheduler {
         let passed = shared.inbox.pass_once_then(
             |state, commits| {
                 let (mut spent, mut handlers) = (Spent::new(), Handlers::new());
-                take_in(state, commits, &mut spent);
+                let taken = take_in(state, commits, &mut spent);
                 let submitted =
                     submit_plain_ready(state, &mut spent, (Passer::Committing, &mut handlers));
                 let mut segments = Vec::new();
@@ -892,6 +905,7 @@ impl Scheduler {
                     segments.push((handlers.len(), state.handler_ticket()));
                 }
                 let left_over = !state.order.is_empty() || !state.grouped.is_empty();
+                shared.took_in(taken);
                 (spent, handlers, segments, submitted, left_over)
             },
             |(mut spent, mut handlers, mut segments, submitted, left_over)| {
@@ -1050,6 +1064,12 @@ impl Scheduler {
     /// The passes the thread made so far (`WorkCounts::scheduler_passes`).
     pub(crate) fn passes(&self) -> u64 {
         self.shared.passes.load(Ordering::Relaxed)
+    }
+
+    /// The commits the passes took in so far, each counted as its pass ended
+    /// (`WorkCounts::commits_taken_in`): read after the pass's own counts, which it makes visible.
+    pub(crate) fn commits_taken_in(&self) -> u64 {
+        self.shared.taken.load(Ordering::Acquire)
     }
 
     /// The device's cleared encoder logs (`replay.rs`).
@@ -1287,7 +1307,8 @@ fn run_work(kind: Kind, work: Work) -> bool {
 fn round(shared: &SchedulerShared, left: &mut Left<Work>, passed: &mut Passed) -> bool {
     (shared.inbox).pass(|state, commits| {
         shared.passes.fetch_add(1, Ordering::Relaxed);
-        pass(state, commits, (&mut *passed, &mut *left), &shared.awaits);
+        let taken = pass(state, commits, (&mut *passed, &mut *left), &shared.awaits);
+        shared.took_in(taken);
         !passed.exiting && left.is_empty() && !passed.more
     });
     passed.more = false;
@@ -1329,8 +1350,10 @@ struct Passed {
 /// Take `commits` into the order, in commit order: each command buffer's batches, each with what
 /// it waits for and signals, behind the batches its logical queue already holds. Each commit's own
 /// hold goes to `spent`, for the caller to drop without the lock: its batches hold the command
-/// buffer now.
-fn take_in(state: &mut State, commits: &mut Vec<Committed>, spent: &mut Spent) {
+/// buffer now. How many it took in, for the caller to count once its pass ends
+/// ([`SchedulerShared::took_in`]).
+fn take_in(state: &mut State, commits: &mut Vec<Committed>, spent: &mut Spent) -> usize {
+    let taken = commits.len();
     for Committed {
         buffer,
         queue,
@@ -1356,19 +1379,20 @@ fn take_in(state: &mut State, commits: &mut Vec<Committed>, spent: &mut Spent) {
         order.push(queue, held);
         spent.push(buffer);
     }
+    taken
 }
 
 /// A pass of the thread's: take `commits` into the order, in commit order, then submit what is
 /// ready ([`submit_ready`]) into `passed` and `left`. A pass that stopped at
 /// [`PASS_SUBMISSIONS`] marks the state, so the thread passes again at once after its round let
-/// go of them.
+/// go of them. How many commits it took in.
 fn pass(
     state: &mut State,
     commits: &mut Vec<Committed>,
     (passed, left): (&mut Passed, &mut Left<Work>),
     awaits: &Awaits,
-) {
-    take_in(state, commits, &mut passed.spent);
+) -> usize {
+    let taken = take_in(state, commits, &mut passed.spent);
     state.dirty = false;
     let before = passed.handlers.len();
     let ready = submit_ready(
@@ -1391,6 +1415,7 @@ fn pass(
         Ok(More(false)) => {}
         Err(Exiting) => passed.exiting = true,
     }
+    taken
 }
 
 /// Whether a pass of [`submit_ready`] stopped at [`PASS_SUBMISSIONS`], with batches perhaps still

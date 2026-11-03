@@ -96,17 +96,23 @@ fn merges(description: &DeviceDescription) -> bool {
     (description.driver_facts()).contains(&DriverFact::SubmissionsWithoutSignalsMerge)
 }
 
-/// Wait until the scheduler's thread has taken in every command buffer committed before the call:
-/// it counts a sleep (`WorkCounts::scheduler_sleeps`) only once its inbox holds no commit, so the
-/// first sleep counted after the last commit returned follows the pass that took that commit in.
-/// Raising a gate after this finds every command buffer behind it in the scheduler's order, where
-/// a pass that took in only the first commit could otherwise see the gate raised and submit the
-/// first batch alone.
+/// Wait until a pass has taken in every command buffer committed before the call, and ended:
+/// `WorkCounts::commits_taken_in`, counted as each pass that took commits in ends (after its
+/// submissions and the groups it made), reaches `WorkCounts::commits_handed_off`, which counted
+/// each of those commits before it returned. Passes take commits in in hand-off order, so this
+/// holds once the last one is in, whenever the pass ran: before this call or after it, and
+/// whether the thread then sleeps until woken. Raising a gate after this finds every command
+/// buffer behind it in the scheduler's order, where a pass that took in only the first commit
+/// could otherwise see the gate raised and submit the first batch alone; and the counts read
+/// after it hold what that pass submitted and kept.
 fn taken_in(device: &metal2vulkan_runtime::Device) {
-    let slept = device.work_counts().scheduler_sleeps;
+    let committed = device.work_counts().commits_handed_off;
     let start = std::time::Instant::now();
-    while device.work_counts().scheduler_sleeps == slept {
-        assert!(start.elapsed() < WAIT, "the scheduler's thread never slept");
+    while device.work_counts().commits_taken_in < committed {
+        assert!(
+            start.elapsed() < WAIT,
+            "no pass took in the commits made before the call"
+        );
         std::thread::sleep(std::time::Duration::from_micros(100));
     }
 }

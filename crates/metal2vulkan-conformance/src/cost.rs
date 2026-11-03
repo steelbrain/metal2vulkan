@@ -457,7 +457,7 @@ const POOLED: &str = "an object made because no spare was free, where a spare co
 /// replays of a larger case set — which reads like a regression and is not one. See [`BORROWED`].
 /// `slot_returns` beside it stays gated: it counts work items, one a command buffer, and has held
 /// still alone and in both case sets.
-const RACY: [(&str, &str); 36] = [
+const RACY: [(&str, &str); 37] = [
     ("fences_made", POOLED),
     // What is alive, parked or waiting at the instant the counts were read.
     ("memory_blocks_live", INSTANTANEOUS),
@@ -502,6 +502,11 @@ const RACY: [(&str, &str); 36] = [
         "completion_waiter_",
         "how many times a queue's waiter slept on its condition variable, which is when that \
          thread ran and not what the case asked for",
+    ),
+    (
+        "commits_taken_in",
+        "counted as the scheduler's pass that took a commit in ends, which can come after the \
+         command buffer completed and the case read its counts",
     ),
     (
         "completion_turns_where_taken",
@@ -800,7 +805,7 @@ const TRANSLATION: [&str; 19] = [
 
 /// The name prefixes that put a count in [`Region::Submission`]: the commit path, our own other
 /// threads and the GPU.
-const SUBMISSION: [&str; 51] = [
+const SUBMISSION: [&str; 52] = [
     "commands_recorded.",
     "command_buffers_",
     "command_pools_made",
@@ -849,6 +854,7 @@ const SUBMISSION: [&str; 51] = [
     "calibration",
     "queue_drains",
     "commits_handed_off",
+    "commits_taken_in",
     "render_log_",
     "replay_logs_kept",
     "encoders_reencoded",

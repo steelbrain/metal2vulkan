@@ -4244,6 +4244,14 @@ pub struct WorkCounts {
     /// which submits them in commit order at its next pass (`scheduler/inbox.rs`): every commit,
     /// as no commit submits anything itself.
     pub commits_handed_off: u64,
+    /// Commits a pass took into the scheduler's order (`scheduler/mod.rs`), the scheduler
+    /// thread's or a thread's own (`CommandBuffer::wait_until_completed`,
+    /// `CommandBuffer::commit_and_submit`), each counted as the pass that took it in ended,
+    /// after the submissions and the groups it made, which a later read of the counts sees.
+    /// Passes take commits in in the order they were handed off, so once this reaches
+    /// `commits_handed_off` read after a commit returned, a pass has taken that commit in and
+    /// ended.
+    pub commits_taken_in: u64,
     /// New `Shared` and `Managed` textures' images moved to `GENERAL` and zeroed on the host, with
     /// no submission (`texture/host_copy.rs`).
     pub images_started_on_the_host: u64,
@@ -5741,6 +5749,7 @@ impl Device {
             passes_not_inline_memoryless_writes: not_inline(NotInline::MemorylessWrites),
             passes_not_inline_draws: not_inline(NotInline::Draws),
             commits_handed_off: counters.commits_handed_off.load(Ordering::Relaxed),
+            commits_taken_in: self.shared().scheduler.commits_taken_in(),
             images_started_on_the_host: counters.images_started_on_the_host.load(Ordering::Relaxed),
             host_texel_copies: counters.host_texel_copies.load(Ordering::Relaxed),
             texel_shadows_made: counters.texel_shadows_made.load(Ordering::Relaxed),
