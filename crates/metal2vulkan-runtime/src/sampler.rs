@@ -536,6 +536,8 @@ impl Drop for SamplerShared {
     /// buffers that may still read them (`heap_sets::sampler_gone`), before its element is given
     /// back.
     fn drop(&mut self) {
+        #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+        going::run();
         let id = self.id.id().0;
         if id != 0 {
             super::heap_sets::sampler_gone(
@@ -737,8 +739,9 @@ impl Device {
         self.argument_samplers_at()
     }
 
-    /// The count of the changes of the sampler IDs' slots so far: while it holds, the live
-    /// sampler states are the ones [`argument_samplers`](Self::argument_samplers) answered at it.
+    /// The count of the changes of the sampler IDs' slots so far, a listing that found a state
+    /// going among them (`ResourceIds::samplers`): while it holds,
+    /// [`argument_samplers`](Self::argument_samplers) answers the states it answered at it.
     pub(super) fn sampler_slots_changed(&self) -> u64 {
         self.shared()
             .sampler_ids
@@ -919,5 +922,28 @@ impl SamplerState {
     pub(crate) fn kept_counts(&self) -> (KeptCounts, usize) {
         let kept = lock(&self.0.kept);
         (kept.counts(), kept.samplers_kept())
+    }
+}
+
+/// A step a test runs on a thread where a sampler state starts going there: its last handle gone,
+/// before its ID's slot is given back (`tests/sampler_release.rs`).
+#[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+pub(super) mod going {
+    use std::cell::RefCell;
+
+    thread_local! {
+        static STEP: RefCell<Option<Box<dyn FnOnce()>>> = const { RefCell::new(None) };
+    }
+
+    /// Run `step` where the next sampler state to go on this thread starts going.
+    pub(crate) fn at_next(step: impl FnOnce() + 'static) {
+        STEP.with(|kept| *kept.borrow_mut() = Some(Box::new(step)));
+    }
+
+    /// The step kept for this thread, once.
+    pub(super) fn run() {
+        if let Some(step) = STEP.with(|kept| kept.borrow_mut().take()) {
+            step();
+        }
     }
 }

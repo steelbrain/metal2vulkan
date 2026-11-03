@@ -325,9 +325,10 @@ pub(super) struct ResourceIds {
     /// How many holders hold a sampler ID now (the module docs' live count), shared with the
     /// device, which reads it without this lock ([`ResourceIds::sampler_id_reads`]).
     sampler_ids_live: Arc<AtomicU64>,
-    /// How many times a sampler ID's slot took a holder or let one go, shared with the device,
-    /// which reads it without this lock ([`ResourceIds::sampler_id_reads`]): while it holds, the
-    /// live states [`samplers`](Self::samplers) lists are the ones it listed.
+    /// How many times a sampler ID's slot took a holder or let one go, or a listing found its
+    /// holder going ([`samplers`](Self::samplers)), shared with the device, which reads it without
+    /// this lock ([`ResourceIds::sampler_id_reads`]): while it holds, the live states
+    /// [`samplers`](Self::samplers) lists are the ones it listed.
     sampler_slots_changed: Arc<AtomicU64>,
 }
 
@@ -417,7 +418,8 @@ impl ResourceIds {
         }
     }
 
-    /// A sampler ID's slot took a holder or let one go: the device's live states may differ.
+    /// A sampler ID's slot took a holder or let one go, or a listing found its holder going: the
+    /// device's live states may differ.
     fn sampler_slot_changed(&self) {
         self.sampler_slots_changed.fetch_add(1, Ordering::AcqRel);
     }
@@ -548,18 +550,30 @@ impl ResourceIds {
     }
 
     /// The live holders of sampler IDs, in ID order: the states a sampler table lists, with the
-    /// count of the slots' changes they are live at (`sampler_slots_changed`).
+    /// count of the slots' changes they are live at (`sampler_slots_changed`). A state going on
+    /// another thread, its last handle gone but its ID's slot not yet given back (whose step
+    /// counts a change, `IdHold`'s drop), is left out, and counted a change here first: a listing
+    /// taken while it lived, which a bind state may keep by its count, is then at another count
+    /// than this one, so every listing at one count lists the same states.
     pub(super) fn samplers(&self) -> (u64, Vec<Arc<SamplerShared>>) {
-        let changed = self.sampler_slots_changed.load(Ordering::Acquire);
+        let mut going = false;
         let states = self
             .samplers
             .slots
             .values()
             .filter_map(|slot| match &slot.holder {
-                Holder::Sampler(state) => state.upgrade(),
+                Holder::Sampler(state) => {
+                    let live = state.upgrade();
+                    going |= live.is_none();
+                    live
+                }
                 _ => None,
             })
             .collect();
+        if going {
+            self.sampler_slot_changed();
+        }
+        let changed = self.sampler_slots_changed.load(Ordering::Acquire);
         (changed, states)
     }
 }
