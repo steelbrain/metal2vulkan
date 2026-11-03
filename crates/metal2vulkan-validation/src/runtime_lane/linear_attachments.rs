@@ -80,6 +80,19 @@
 //! - [`a_rebind_while_a_pass_over_host_pages_is_open_is_refused`]: refused `EncodedUses`, before
 //!   any draw.
 //!
+//! A command buffer of [`MANY`] passes over one such target, each loading and storing it beside a
+//! cleared and stored `Depth32Float` depth attachment and blending one rectangle over it (a WebGPU
+//! frame split at every indexed draw, `stencilMask`'s), holds its texels as the same passes leave
+//! a private texture, the bytes between its rows untouched; where the device renders it apart
+//! (`linear_merge.rs`) or it is a shadow merged back (`shadow_merge.rs`), its merges take one
+//! scratch and lend it to every later merge of the command buffer (`merge_scratch.rs`), so the
+//! device's memory grows by no scratch a pass while they are encoded:
+//! [`many_passes_over_a_private_buffer_take_one_scratch`] (rows of a multiple of 256 bytes),
+//! [`many_passes_over_packed_rows_take_one_scratch`] (a `Shared` buffer of an IOSurface's packed
+//! rows, of no multiple of 256), [`many_passes_over_host_pages_take_one_scratch`] (such rows over
+//! host pages) and [`many_passes_over_host_pages_of_whole_rows_take_one_scratch`] (host pages,
+//! rows of a multiple of 256).
+//!
 //! Each prints the texture's form (`LINEAR-ATTACHMENT`).
 
 use super::degrade_notices::{counts, on_device};
@@ -1623,4 +1636,332 @@ fn a_resolve_into_a_linear_texture_resolves_through_a_scratch() {
         drop((texture, buffer, samples));
         drop(contents);
     });
+}
+
+/// The passes of [`many_passes`]: a WebGPU frame that splits its pass at every indexed draw
+/// (the `stencilMask` sample's first: 706), and the height of their targets.
+const MANY: usize = 706;
+const MANY_H: u64 = 240;
+
+/// The byte between a [`many_target`]'s rows, which no pass writes.
+const BETWEEN: u8 = 0xa5;
+
+/// Where a [`many_target`]'s bytes lie.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum ManyOver {
+    /// A `Private` buffer, written and read through blits.
+    Private,
+    /// A `Shared` buffer.
+    Shared,
+    /// A no-copy buffer over host pages.
+    HostPages,
+}
+
+/// The bytes a [`many_target`] of `width` texels a row, `row` bytes apart, holds first: a counting
+/// pattern in the texels, [`BETWEEN`] between the rows.
+fn many_first(width: u64, row: u64) -> Vec<u8> {
+    let pattern = counting((row * MANY_H) as usize, 29);
+    (0..(row * MANY_H) as usize)
+        .map(|i| match (i as u64 % row) < width * TEXEL {
+            true => pattern[i],
+            false => BETWEEN,
+        })
+        .collect()
+}
+
+/// The texels of `bytes`, rows `row` bytes apart, packed.
+fn many_texels(bytes: &[u8], width: u64, row: u64) -> Vec<u8> {
+    (bytes.chunks(row as usize))
+        .flat_map(|r| &r[..(width * TEXEL) as usize])
+        .copied()
+        .collect()
+}
+
+/// A blit encoder's commands, `encode` encoding them, in a command buffer that completes.
+fn blit_with(
+    queue: &CommandQueue,
+    encode: impl FnOnce(&mut metal2vulkan_runtime::BlitCommandEncoder),
+) {
+    let command_buffer = queue.command_buffer().unwrap();
+    let mut encoder = command_buffer.blit_command_encoder().unwrap();
+    encode(&mut encoder);
+    encoder.end_encoding().unwrap();
+    command_buffer.commit().unwrap();
+    command_buffer.wait_until_completed_for(WAIT).unwrap();
+    assert_eq!(command_buffer.error(), None);
+}
+
+/// A `BGRA8Unorm` render target of `width` x [`MANY_H`] texels, rows `row` bytes apart, over a
+/// buffer of `over`'s holding [`many_first`] (the buffer, its mapping where it is over host
+/// pages); `None`, printed, where the device imports no host memory.
+fn many_target(
+    queue: &CommandQueue,
+    over: ManyOver,
+    (width, row): (u64, u64),
+) -> Option<(Buffer, Option<Mapping>, Texture)> {
+    let device = queue.device();
+    let first = many_first(width, row);
+    let length = row * MANY_H;
+    let (buffer, mapping) = match over {
+        ManyOver::Private => {
+            let buffer = device
+                .new_buffer(length, ResourceOptions::private())
+                .unwrap();
+            let source = staged(device, &first);
+            blit_with(queue, |b| {
+                (b.copy_from_buffer_to_buffer(&source, 0, &buffer, 0, length)).unwrap()
+            });
+            (buffer, None)
+        }
+        ManyOver::Shared => {
+            let buffer = staged(device, &first);
+            (buffer, None)
+        }
+        ManyOver::HostPages => {
+            let len = (length as usize).next_multiple_of(GUEST_PAGE);
+            let mapping = Mapping::anonymous(len);
+            mapping.write(0, &first);
+            // SAFETY: the test drops the mapping after every buffer over it.
+            let made = unsafe {
+                no_copy(
+                    device,
+                    mapping.pointer(),
+                    len,
+                    ResourceOptions::default(),
+                    None,
+                )
+            };
+            match made {
+                Ok(buffer) => (buffer, Some(mapping)),
+                Err(error) if not_importable(&error) => {
+                    eprintln!("LINEAR-ATTACHMENT: the device imports no host memory: {error:?}");
+                    return None;
+                }
+                Err(error) => panic!("new_buffer_with_bytes_no_copy: {error:?}"),
+            }
+        }
+    };
+    let mut d = TextureDescriptor::texture_2d(PixelFormat::BGRA8Unorm, width, MANY_H, false);
+    d.usage = TextureUsage::RENDER_TARGET | TextureUsage::SHADER_READ;
+    d.resource_options = buffer.resource_options();
+    let texture = buffer.new_texture(&d, 0, row).unwrap();
+    Some((buffer, mapping, texture))
+}
+
+/// The first `length` bytes of `buffer`, of `over`'s, read through a blit where it is `Private`.
+fn many_bytes(queue: &CommandQueue, over: ManyOver, buffer: &Buffer, length: u64) -> Vec<u8> {
+    let device = queue.device();
+    let shared = match over {
+        ManyOver::Private => {
+            let out = device
+                .new_buffer(length, ResourceOptions::shared())
+                .unwrap();
+            blit_with(queue, |b| {
+                (b.copy_from_buffer_to_buffer(buffer, 0, &out, 0, length)).unwrap()
+            });
+            out
+        }
+        ManyOver::Shared | ManyOver::HostPages => buffer.clone(),
+    };
+    Contents(shared).read(0..length as usize)
+}
+
+/// [`MANY`] passes in one command buffer over `texture`, each loading and storing it beside a
+/// `Depth32Float` depth attachment it clears and stores, blending one half-transparent rectangle
+/// of its own color over a place of its own (overlapping its neighbours'); committed and
+/// completed. The device's work counts once they were encoded, before the commit.
+fn many_passes(
+    queue: &CommandQueue,
+    pipeline: &RenderPipelineState,
+    texture: &Texture,
+) -> WorkCounts {
+    let device = queue.device();
+    let mut d =
+        TextureDescriptor::texture_2d(PixelFormat::Depth32Float, texture.width(), MANY_H, false);
+    d.usage = TextureUsage::RENDER_TARGET;
+    d.resource_options = ResourceOptions::private();
+    let depth = device.new_texture(&d).unwrap();
+    let command_buffer = queue.command_buffer().unwrap();
+    for i in 0..MANY {
+        let mut descriptor = RenderPassDescriptor::new();
+        let color = &mut descriptor.color_attachments[0];
+        color.texture = Some(texture.clone());
+        color.load_action = LoadAction::Load;
+        color.store_action = StoreAction::Store;
+        descriptor.depth_attachment.texture = Some(depth.clone());
+        descriptor.depth_attachment.load_action = LoadAction::Clear;
+        descriptor.depth_attachment.store_action = StoreAction::Store;
+        let mut encoder = command_buffer.render_command_encoder(&descriptor).unwrap();
+        encoder.set_render_pipeline_state(pipeline).unwrap();
+        let (x, y) = ((i % 12) as f32, ((i / 12) % 6) as f32);
+        let (x0, y0) = (-1.0 + 0.125 * x, -1.0 + 0.25 * y);
+        let corners = [x0, y0, (x0 + 0.5).min(1.0), (y0 + 0.75).min(1.0)];
+        let rgba = [
+            (i % 5) as f32 / 4.0,
+            (i % 7) as f32 / 6.0,
+            (i % 3) as f32 / 2.0,
+            0.5,
+        ];
+        encoder.set_vertex_bytes(&floats(corners), 0).unwrap();
+        encoder.set_fragment_bytes(&floats(rgba), 0).unwrap();
+        encoder
+            .draw_primitives(PrimitiveType::Triangle, 0, 6, 1, 0)
+            .unwrap();
+        encoder.end_encoding().unwrap();
+    }
+    let encoded = device.work_counts();
+    command_buffer.commit().unwrap();
+    command_buffer.wait_until_completed_for(WAIT).unwrap();
+    assert_eq!(command_buffer.error(), None);
+    encoded
+}
+
+/// The texels [`many_passes`] leave in a private texture of `width` texels a row holding
+/// [`many_first`]'s texels first, packed.
+fn many_reference(queue: &CommandQueue, pipeline: &RenderPipelineState, width: u64) -> Vec<u8> {
+    let device = queue.device();
+    let mut d = TextureDescriptor::texture_2d(PixelFormat::BGRA8Unorm, width, MANY_H, false);
+    d.usage = TextureUsage::RENDER_TARGET | TextureUsage::SHADER_READ;
+    d.resource_options = ResourceOptions::private();
+    let texture = device.new_texture(&d).unwrap();
+    let packed = width * TEXEL;
+    let first = many_first(width, packed);
+    let source = staged(device, &first);
+    let size = Size::new(width, MANY_H, 1);
+    blit_with(queue, |b| {
+        let origin = Origin::new(0, 0, 0);
+        let (bpr, bpi) = (packed, packed * MANY_H);
+        (b.copy_from_buffer_to_texture(
+            &source,
+            0,
+            bpr,
+            bpi,
+            size,
+            &texture,
+            0,
+            0,
+            origin,
+            BlitOption::None,
+        ))
+        .unwrap()
+    });
+    many_passes(queue, pipeline, &texture);
+    let out = device
+        .new_buffer(packed * MANY_H, ResourceOptions::shared())
+        .unwrap();
+    blit_with(queue, |b| {
+        let origin = Origin::new(0, 0, 0);
+        let (bpr, bpi) = (packed, packed * MANY_H);
+        (b.copy_from_texture_to_buffer(
+            &texture,
+            0,
+            0,
+            origin,
+            size,
+            &out,
+            0,
+            bpr,
+            bpi,
+            BlitOption::None,
+        ))
+        .unwrap()
+    });
+    Contents(out).read(0..(packed * MANY_H) as usize)
+}
+
+/// [`many_passes`] over a target over `over`'s buffer of `width` texels a row, `row` bytes apart
+/// (`merge_scratch.rs`): its texels equal those the same passes leave in a private texture, and
+/// the bytes between its rows keep theirs. Where the device renders it apart by the rule
+/// (`linear_merge.rs`), every pass merges, the merges taking one scratch for the command buffer
+/// and lending it to every later one; where it is a shadow merged back (`shadow_merge.rs`), every
+/// merge after the first takes a scratch an earlier encoder was done with. Either way the device's
+/// memory grows by less than an eighth of a scratch a pass while they are encoded.
+fn many_passes_over(over: ManyOver, (width, row): (u64, u64)) {
+    on_device(|device, _| {
+        let queue = device.new_command_queue().unwrap();
+        let pipeline = rects_beside(
+            device,
+            PixelFormat::BGRA8Unorm,
+            true,
+            Some(PixelFormat::Depth32Float),
+        );
+        let expected = many_reference(&queue, &pipeline, width);
+        let Some((buffer, mapping, texture)) = many_target(&queue, over, (width, row)) else {
+            return;
+        };
+        let apart = by_the_rule(device) && aliased(&texture);
+        // A shadow merged back at each encoder's end: one over bytes another writer may write,
+        // all but a tracked `Private` buffer's, whose shadow is copied back.
+        let shadow = !aliased(&texture) && over != ManyOver::Private;
+        let before = device.work_counts();
+        let encoded = many_passes(&queue, &pipeline, &texture);
+        let after = device.work_counts();
+        let delta = |of: fn(&WorkCounts) -> u64| of(&after) - of(&before);
+        let through = delta(|c| c.linear_passes_through_copies);
+        let made = delta(|c| c.linear_merge_scratches_made);
+        let reused = delta(|c| c.linear_merge_scratches_reused);
+        let shadow_reused = delta(|c| c.shadow_merge_scratches_reused);
+        let grown = encoded.device_memory_allocated - before.device_memory_allocated;
+        // A merge of every texel's rows: its kept and changed parts.
+        let scratch = 2 * width * TEXEL * MANY_H;
+        println!(
+            "LINEAR-ATTACHMENT many passes over {over:?} {width}x{MANY_H}, rows of {row}, on {}: \
+             apart by the rule {apart}, shadow {shadow}; {through} passes through copies, linear \
+             scratches {made} made and {reused} reused, shadow scratches {shadow_reused} reused; \
+             device memory grew {grown} bytes while encoding",
+            device.name()
+        );
+        if apart {
+            assert_eq!(through, MANY as u64, "every pass renders the texture apart");
+            assert_eq!(made, 1, "the command buffer's merges make one scratch");
+            assert_eq!(reused, MANY as u64 - 1, "every later merge takes it");
+        }
+        if shadow {
+            assert!(
+                shadow_reused >= MANY as u64 - 1,
+                "every merge after the first takes a scratch: {shadow_reused}"
+            );
+        }
+        assert!(
+            grown < scratch * MANY as u64 / 8,
+            "encoding the passes grew the device's memory by {grown} bytes"
+        );
+        let pages = many_bytes(&queue, over, &buffer, row * MANY_H);
+        let between = (0..pages.len())
+            .filter(|&i| (i as u64 % row) >= width * TEXEL && pages[i] != BETWEEN)
+            .count();
+        assert_eq!(between, 0, "bytes between the rows changed");
+        let got = many_texels(&pages, width, row);
+        let differ = (0..got.len()).filter(|&i| got[i] != expected[i]).count();
+        assert_eq!(differ, 0, "the texels differ from the private texture's");
+        drop((texture, buffer));
+        drop(mapping);
+    });
+}
+
+/// Over a `Private` buffer, packed rows of 320 texels: 1280 bytes, a multiple of 256 (rows
+/// rounded up to 256 bytes with none between them).
+#[test]
+fn many_passes_over_a_private_buffer_take_one_scratch() {
+    many_passes_over(ManyOver::Private, (320, 1280));
+}
+
+/// Over a `Shared` buffer, packed rows of 300 texels: 1200 bytes, of no multiple of 256 (an
+/// IOSurface's).
+#[test]
+fn many_passes_over_packed_rows_take_one_scratch() {
+    many_passes_over(ManyOver::Shared, (300, 1200));
+}
+
+/// Over a no-copy buffer's host pages, packed rows of 300 texels (an IOSurface's over guest
+/// pages).
+#[test]
+fn many_passes_over_host_pages_take_one_scratch() {
+    many_passes_over(ManyOver::HostPages, (300, 1200));
+}
+
+/// Over a no-copy buffer's host pages, rows of 320 texels: 1280 bytes, a multiple of 256.
+#[test]
+fn many_passes_over_host_pages_of_whole_rows_take_one_scratch() {
+    many_passes_over(ManyOver::HostPages, (320, 1280));
 }

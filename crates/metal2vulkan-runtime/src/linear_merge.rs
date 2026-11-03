@@ -36,8 +36,11 @@
 //!   no binding of which passes `maxStorageBufferRange` and no dispatch of which passes
 //!   `maxComputeWorkGroupCount[0]` workgroups, each band's kept rows starting at a multiple of
 //!   256 bytes. One dispatch per band.
-//! - **The scratch** is the pass's (`Device::scratch_buffer`, no zeroing: every word the kernel
-//!   reads, the copies write), retained until its command buffer completes.
+//! - **The scratch** (`Device::scratch_buffer`, no zeroing: every word the kernel reads, the
+//!   copies write) is retained until its command buffer completes, and lent to the merges of its
+//!   later passes once this pass's merge is recorded (`merge_scratch.rs`): a command buffer of
+//!   hundreds of passes over one attachment makes a few, not one a pass
+//!   (`WorkCounts::linear_merge_scratches_made`, `linear_merge_scratches_reused`).
 //!
 //! - **Reloaded at a barrier.** A draw after a memory barrier inside the pass may read the
 //!   surface's bytes (a sampled texture over them, a buffer): before the render pass instance that
@@ -50,17 +53,18 @@
 //! dispatches, in place of one copy back of the box; and, at each barrier, a merge, a copy in
 //! and a keep.
 
-use super::buffer::Buffer;
+use super::command_buffer::CommandBuffer;
 use super::encoder::EncoderCore;
 use super::error::{internal, Error};
+use super::merge_scratch::{MergeScratch, Scratch, ScratchKind};
 use super::owned_kernel::{OwnedBinds, OwnedKernel, OwnedModule, OwnedSet};
 use super::render_pass::Target;
 use super::resource::ResourceKey;
 use super::tracker::{Access, Barrier, Use};
-use super::Device;
 use crate::device::functions::Vk;
 use ash::vk;
 use metal2vulkan::bind::{ShadowMergeModule, ShadowMergeStores};
+use std::sync::Arc;
 
 /// What the offsets of the bindings are rounded to: a multiple of every
 /// `minStorageBufferOffsetAlignment`.
@@ -87,7 +91,9 @@ pub(super) struct LinearMerge {
     /// Where the scratch's two parts lie in its `VkBuffer`, filled with zero before the first
     /// keep, where a row of the box starts or ends inside a word (the module's words).
     padding: Option<(u64, u64)>,
-    _held: Buffer,
+    /// The scratch, and the pool of its command buffer it goes back to as the merge is recorded.
+    held: Arc<Scratch>,
+    pool: Arc<MergeScratch>,
     kernel: OwnedKernel,
     /// One set 0 per dispatch, each binding its band of the kept part, of the changed part and of
     /// the surface's bytes; pushed where the kernel's set 0 is pushed (`OwnedBinds`).
@@ -102,12 +108,12 @@ pub(super) struct LinearMerge {
 impl LinearMerge {
     /// The merge of the box `[x0, y0, x1, y1]` (half-open, inside the render area) of the pass
     /// rendering `own`, a bound linear attachment's target, through `backing`, the image its
-    /// texture keeps: its scratch, binds and dispatches on `device`. Refused (internal) for an
-    /// attachment whose rows or their offset are not whole words, whose texel is not 1, 2, 4, 8
-    /// or 16 bytes, or whose bands no binding holds, which no device's linear attachment is; and
-    /// as `scratch_buffer` refuses the scratch.
+    /// texture keeps: its scratch (lent by `maker`'s pool, else made), binds and dispatches on
+    /// `maker`'s device. Refused (internal) for an attachment whose rows or their offset are not
+    /// whole words, whose texel is not 1, 2, 4, 8 or 16 bytes, or whose bands no binding holds,
+    /// which no device's linear attachment is; and as `scratch_buffer` refuses the scratch.
     pub(super) fn new(
-        device: &Device,
+        maker: &CommandBuffer,
         backing: &Target,
         own: &Target,
         [x0, y0, x1, y1]: [u32; 4],
@@ -137,11 +143,29 @@ impl LinearMerge {
                 "a linear attachment whose rows are not whole words",
             ));
         }
+        let device = maker.device();
         let layers = u64::from(own.layers.max(1));
         let layer_part = (rows * row_bytes).next_multiple_of(ALIGNMENT);
         let part = layers * layer_part;
-        let held = device.scratch_buffer(2 * part)?;
-        let (scratch, base) = held.at(0);
+        // The scratch of the box of every pixel of the target: a box's rows, `lead` bytes and all,
+        // are no longer than the target's row of whole words, and no more.
+        let whole_row = (u64::from(own.extent[0]) * texel).next_multiple_of(4);
+        let whole = 2 * layers * (u64::from(own.extent[1]) * whole_row).next_multiple_of(ALIGNMENT);
+        let pool = maker.merge_scratch();
+        let counts = &device.shared().counts;
+        let held = match pool.take(ScratchKind::Linear, 2 * part) {
+            Some(lent) => {
+                counts.linear_merge_scratch(false);
+                lent
+            }
+            None => {
+                let length = pool.grown(ScratchKind::Linear, 2 * part, whole);
+                let made = device.scratch_buffer(length)?;
+                counts.linear_merge_scratch(true);
+                Scratch::new(made, ScratchKind::Linear, None)
+            }
+        };
+        let (scratch, base) = held.buffer().at(0);
         let padding = (lead > 0 || row_bytes > width * texel).then_some((base, 2 * part));
         let limits = &device.properties().description.limits;
         let range = u64::from(limits.max_storage_buffer_range);
@@ -277,7 +301,8 @@ impl LinearMerge {
             scratch,
             part,
             padding,
-            _held: held,
+            held,
+            pool: Arc::clone(pool),
             kernel,
             binds,
             dispatches,
@@ -312,7 +337,9 @@ impl LinearMerge {
     }
 
     /// Record the merge in `core`'s command buffer: after the pass, in place of its copy back,
-    /// between barriers from everything before and to everything after.
+    /// between barriers from everything before and to everything after; then lend the scratch to
+    /// the command buffer's later merges, whose commands that barrier precedes
+    /// (`merge_scratch.rs`).
     pub(super) fn record_merge(&self, core: &mut EncoderCore) {
         let stages = vk::PipelineStageFlags2::COPY | vk::PipelineStageFlags2::COMPUTE_SHADER;
         core.barrier(Barrier::everything());
@@ -321,6 +348,7 @@ impl LinearMerge {
             unsafe { self.merge_in(device, raw) }
         });
         core.barrier(Barrier::everything());
+        self.pool.give(&self.held);
     }
 
     /// Record, into `command_buffer` between two render pass instances of the pass, the merge of

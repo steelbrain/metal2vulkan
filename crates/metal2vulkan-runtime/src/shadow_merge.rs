@@ -84,9 +84,12 @@
 //!   each), or a kept image in place of them. A cut merge's copies write its parts' rows back to
 //!   back, every byte its kernel reads, and a heap's tiled texture's merge in place copies the
 //!   texture's bytes whole (`texture/heap_tiled.rs`), the bytes its kernel reads, so neither
-//!   scratch is zeroed: one of those its shadow's
+//!   scratch is zeroed: one an earlier encoder of its command buffer was done with, lent by the
+//!   command buffer once that encoder ended (`merge_scratch.rs`), else one of those its shadow's
 //!   earlier merges were done with, kept once their command buffers completed (at most two,
-//!   `ScratchSpares`; `WorkCounts::shadow_merge_scratches_reused`), else a new one. A kept image
+//!   `ScratchSpares`; both counted in `WorkCounts::shadow_merge_scratches_reused`), else a new
+//!   one. Either goes back to its command buffer's pool as the encoder that took it ends, and to
+//!   its shadow's spares once every merge that used it went. A kept image
 //!   is its queue's, of any merge of the queue of the same view and extent once the encoder that
 //!   took it ended, whatever its shadow, without waiting for the command buffers that used it,
 //!   ordered by its barriers and its tracked uses (`texture/kept_image.rs`,
@@ -133,6 +136,7 @@ use super::device::lock;
 use super::error::{internal, Error};
 use super::image_plan::{ImageFacts, ImagePlan};
 use super::linear_merge::gcd;
+use super::merge_scratch::{MergeScratch, Scratch, ScratchKind, ScratchLease};
 use super::owned_kernel::{OwnedBinds, OwnedKernel, OwnedModule, OwnedSet};
 use super::resource::ResourceKey;
 use super::shadow::{ShadowCopies, ShadowSource, ShadowTarget};
@@ -181,7 +185,7 @@ impl ScratchSpares {
     }
 
     /// Keep `buffer` for a later merge, the smallest kept going past [`KEPT_SCRATCHES`].
-    fn give(&self, buffer: Buffer) {
+    pub(super) fn give(&self, buffer: Buffer) {
         let mut buffers = lock(&self.0);
         buffers.push(buffer);
         let gone = match buffers.len() > KEPT_SCRATCHES {
@@ -199,13 +203,21 @@ impl ScratchSpares {
 /// The buffers a merge's scratch lies in, or its kept image, held until its command buffers
 /// completed.
 enum Held {
-    /// One buffer, back to its shadow's spares as the merge goes.
-    Spare(Buffer, ScratchSpares),
+    /// One buffer, lent to its command buffer's later merges once its encoder ends, and back to
+    /// its shadow's spares as the last merge that used it goes (`merge_scratch.rs`).
+    Spare(Arc<Scratch>),
     /// A buffer per part, where the device's buffers take no single one.
     Apart(Vec<Buffer>),
     /// The kept image of a merge that keeps the texels in one, its queue's (`KeptImages`); no
     /// scratch.
     Image(KeptImage),
+}
+
+/// An encoder's hold on what a merge it planned took: its queue's kept image, or its command
+/// buffer's scratch, which no other merge takes until the encoder ends (`EncoderCore`'s leases).
+pub(super) struct MergeLease {
+    _image: Option<KeptLease>,
+    _scratch: Option<ScratchLease>,
 }
 
 /// Where the keep holds the shadow's texels before the commands (the module docs).
@@ -287,7 +299,7 @@ pub(super) struct ShadowMerge {
     /// copy.
     keep_dispatch: Option<CopyBack>,
     /// The buffers the parts lie in, or the kept image, held until the command buffer completes.
-    held: Held,
+    _held: Held,
     kernel: OwnedKernel,
     /// Whether it is made for a command whose merge stores whole blocks (`MergeFor::blocks`: one
     /// that replaces every texel, or a render pass that stores the tiles of its area): its kernel
@@ -309,13 +321,14 @@ impl ShadowMerge {
     /// to whole words of the buffer, where given and the merge goes in place over one region's
     /// texels (the module docs), else of every texel. A kept image is one of `images`, its
     /// queue's, held by the lease returned, which the encoder keeps to its end, else one made
-    /// and kept there. Refused as `new_buffer` refuses the scratch.
+    /// and kept there; a scratch one `pool`, its command buffer's, lends, else one made, held by
+    /// the lease too. Refused as `new_buffer` refuses the scratch.
     pub(super) fn new(
         device: &Device,
         copies: &ShadowCopies,
         (two_ways, blocks, area): (bool, bool, Option<[u32; 4]>),
-        images: &KeptImages,
-    ) -> Result<(ShadowMerge, Option<KeptLease>), Error> {
+        (images, pool): (&KeptImages, &Arc<MergeScratch>),
+    ) -> Result<(ShadowMerge, Option<MergeLease>), Error> {
         let (
             ShadowSource::Bytes {
                 buffer, key, bytes, ..
@@ -408,14 +421,20 @@ impl ShadowMerge {
                     followed,
                 }) => {
                     counts.shadow_merge_kept_in_image(false, followed);
-                    lease = Some(taken);
+                    lease = Some(MergeLease {
+                        _image: Some(taken),
+                        _scratch: None,
+                    });
                     image
                 }
                 None => {
                     // Made with no lock held, then kept.
                     let image = device.new_kept_image(texel, extent)?;
                     counts.shadow_merge_kept_in_image(true, false);
-                    lease = Some(images.keep(image.clone()));
+                    lease = Some(MergeLease {
+                        _image: Some(images.keep(image.clone())),
+                        _scratch: None,
+                    });
                     image
                 }
             };
@@ -426,21 +445,42 @@ impl ShadowMerge {
             // (the texture's bytes whole, which the kernel reads alone), so their scratch needs
             // no zero: one of the shadow's spares, else a new one unzeroed. Every other merge's
             // scratch is new and zero.
+            // Lent by the command buffer first, then the shadow's spares; a new one sized as its
+            // pool grows them, at most a merge of every texel's (`merge_scratch.rs`).
             let written = cut.is_some() || (in_place && copies.copies_out_whole(rounded));
             let spares = copies.merge_scratch.clone();
-            let one = match (written, written.then(|| spares.take(length)).flatten()) {
-                (true, Some(spare)) => {
+            let whole = roles * rounded.next_multiple_of(PART_ALIGNMENT);
+            let lent = written
+                .then(|| pool.take(ScratchKind::Shadow, length))
+                .flatten();
+            let one = match (lent, written.then(|| spares.take(length)).flatten()) {
+                (Some(lent), _) => {
                     counts.shadow_merge_scratch_reused();
-                    spare
+                    lent
                 }
-                (true, None) => device.unzeroed_buffer(length, HazardTrackingMode::Default)?,
-                (false, _) => {
+                (None, Some(spare)) => {
+                    counts.shadow_merge_scratch_reused();
+                    Scratch::new(spare, ScratchKind::Shadow, Some(spares))
+                }
+                (None, None) if written => {
+                    let length = pool.grown(ScratchKind::Shadow, length, whole);
+                    let made = device.unzeroed_buffer(length, HazardTrackingMode::Default)?;
+                    Scratch::new(made, ScratchKind::Shadow, Some(spares))
+                }
+                (None, None) => {
                     counts.shadow_merge_scratch_zeroed();
-                    device.own_buffer(length, options)?
+                    let made = device.own_buffer(length, options)?;
+                    Scratch::new(made, ScratchKind::Shadow, Some(spares))
                 }
             };
-            let placed: Vec<Part> = (0..roles).map(|role| place(&one, role * part)).collect();
-            (Held::Spare(one, spares), placed)
+            let placed: Vec<Part> = (0..roles)
+                .map(|role| place(one.buffer(), role * part))
+                .collect();
+            lease = Some(MergeLease {
+                _image: None,
+                _scratch: Some(ScratchLease::new(Arc::clone(&one), Arc::clone(pool))),
+            });
+            (Held::Spare(one), placed)
         } else {
             let held = (0..roles)
                 .map(|_| device.own_buffer(part, options))
@@ -497,7 +537,7 @@ impl ShadowMerge {
             Ok::<_, Error>((identity.key, identity.tracked, UseRange::Bytes(range)))
         };
         let kept = match &held {
-            Held::Spare(one, _) => kept_part(Some(one))?,
+            Held::Spare(one) => kept_part(Some(one.buffer()))?,
             Held::Apart(held) => kept_part(held.first())?,
             Held::Image(image) => {
                 let identity = image.identity();
@@ -698,7 +738,7 @@ impl ShadowMerge {
             current,
             kept,
             keep_dispatch,
-            held,
+            _held: held,
             kernel,
             blocks,
             binds,
@@ -1050,17 +1090,6 @@ impl ShadowMerge {
                     }],
                 );
             }
-        }
-    }
-}
-
-impl Drop for ShadowMerge {
-    /// Its scratch goes back to its shadow's spares: the merge goes once the command buffers that
-    /// recorded it completed, which retain it.
-    fn drop(&mut self) {
-        match &self.held {
-            Held::Spare(buffer, spares) => spares.give(buffer.clone()),
-            Held::Image(_) | Held::Apart(_) => {}
         }
     }
 }

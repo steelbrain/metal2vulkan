@@ -4696,7 +4696,7 @@ impl RenderLowering {
                 (loaded(index, c) && stored(c)).then_some((index, c, own))
             })
             .map(|(index, c, own)| {
-                LinearMerge::new(&device, &c.target, &own.own, area_of(c, own))
+                LinearMerge::new(core.command_buffer(), &c.target, &own.own, area_of(c, own))
                     .map(|merge| (index, Arc::new(merge)))
             })
             .collect::<Result<_, Error>>()?;

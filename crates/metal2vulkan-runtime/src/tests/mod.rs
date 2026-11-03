@@ -189,6 +189,8 @@ mod memory;
 mod memory_frees;
 mod memory_reads;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
+mod merge_scratch;
+#[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod mesh_reflection_derived;
 mod metal_release;
 mod mipmap_plan;

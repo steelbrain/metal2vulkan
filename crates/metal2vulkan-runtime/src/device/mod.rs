@@ -450,6 +450,12 @@ pub(super) struct DeviceShared {
     /// device memory: for the tests of `copied.rs` (`Device::fail_next_host_imports`).
     #[cfg(test)]
     pub(crate) failing_host_imports: std::sync::atomic::AtomicU64,
+    /// Every linear image of a render target renders as a color attachment only under
+    /// `VK_NV_linear_color_attachment`'s rule, whatever the device's facts: for the tests of
+    /// `merge_scratch.rs` on a device that renders one beside any other
+    /// (`linear_attachment::bound`).
+    #[cfg(test)]
+    pub(crate) linear_rule_forced: AtomicBool,
     /// The logs of its shadows over host pages a consumer logs the writes to
     /// (`dirty_pages.rs`).
     pub(super) dirty: super::dirty_pages::DirtyShadows,
@@ -1977,6 +1983,8 @@ impl Device {
             copied: Default::default(),
             #[cfg(test)]
             failing_host_imports: Default::default(),
+            #[cfg(test)]
+            linear_rule_forced: Default::default(),
             dirty: Default::default(),
             fresh: Default::default(),
             owners: Default::default(),

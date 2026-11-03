@@ -87,6 +87,7 @@ use super::heap::Heap;
 use super::heap_sets::HeapUse;
 use super::kept_commands::KeptContext;
 use super::live_buffers::LiveTable;
+use super::merge_scratch::MergeScratch;
 use super::pipeline::budget::Urgency;
 use super::pipeline::kept::StepNumbers;
 use super::predication::{Event, Predication};
@@ -252,6 +253,9 @@ pub(super) struct CommandBufferShared {
     /// last color fill's packed texel over the ones before, from zeros. Apart from the state,
     /// as `own_textures`.
     fill_slot: Mutex<[u8; 16]>,
+    /// The scratch its ended encoders' merges are done with, lent to its later encoders' merges
+    /// (`merge_scratch.rs`). Apart from the state, as `own_textures`.
+    merge_scratch: Arc<MergeScratch>,
     /// Rebinds since its commit, of buffers its replayable encoders named, whose encoders are
     /// not yet encoded again (`reencode.rs`): its first submission waits until none is. Raised
     /// under the device's lock of its buffers over host pages (`Rebinds::replace`), which its
@@ -2011,6 +2015,7 @@ impl CommandBuffer {
             making_deadline: OnceLock::new(),
             own_textures: Mutex::new(Vec::new()),
             fill_slot: Mutex::new([0; 16]),
+            merge_scratch: Arc::default(),
             reencode: AtomicU64::new(0),
             reencoding: Mutex::new(()),
             stepping: AtomicU64::new(NOT_STEPPING),
@@ -2045,6 +2050,11 @@ impl CommandBuffer {
     /// `own_textures` says.
     pub(super) fn hold_own_texture(&self, texture: Texture) {
         lock(&self.0.own_textures).push(texture);
+    }
+
+    /// The pool of the scratch its merges are done with (`merge_scratch.rs`).
+    pub(super) fn merge_scratch(&self) -> &Arc<MergeScratch> {
+        &self.0.merge_scratch
     }
 
     /// `commandQueue`.

@@ -55,10 +55,9 @@ use super::retained::Retained;
 use super::row_copies::RowCopies;
 use super::shadow::{CopyCause, GatedCopyIn, ShadowCopy, ShadowSync, ShadowUse, Step, Within};
 use super::shadow_copy_in::CopyIn;
-use super::shadow_merge::ShadowMerge;
+use super::shadow_merge::{MergeLease, ShadowMerge};
 use super::sparse::encoder::SparseUpdate;
 use super::texture::decoded_twin::TwinWrite;
-use super::texture::kept_image::KeptLease;
 use super::tracker::{Barrier, EncoderUses, Reach, Summary, Use};
 use super::unique_identifier::ScheduledWork;
 use super::used_resources::EncoderKind;
@@ -313,9 +312,10 @@ pub(super) struct EncoderCore {
     /// Its first copies in of shadowed textures, each copy's texture and texels: `end` notes them
     /// in the command buffer (`WorkCounts::shadow_texels_first_copied_in_again`).
     first_copies: Vec<(ResourceKey, u64)>,
-    /// Its holds on the kept images its merges took from its queue (`texture/kept_image.rs`):
-    /// no keep of another encoder takes one before this one ends, its merges done.
-    kept_leases: Vec<KeptLease>,
+    /// Its holds on the kept images its merges took from its queue (`texture/kept_image.rs`),
+    /// and on the scratch they took from its command buffer (`merge_scratch.rs`): no keep of
+    /// another encoder takes one before this one ends, its merges done.
+    kept_leases: Vec<MergeLease>,
     /// The heaps its commands used through what the encoder made resident; `end` hands them,
     /// and those of `keys`, to the command buffer, whose commit marks them used.
     heaps: Vec<Heap>,
@@ -1458,13 +1458,14 @@ impl EncoderCore {
         // The kept images its merges take are held to the encoder's end, those of a refused
         // command let go of here.
         let images = self.open.command_buffer.command_queue().kept_images();
+        let pool = self.open.command_buffer.merge_scratch();
         let held = self.kept_leases.len();
         let leases = &mut self.kept_leases;
         let planned = self
             .shadows
             .before(shadows, uses, |copies, made_for, area| {
                 let merging = (made_for.two_ways, made_for.blocks, area);
-                let (merge, lease) = ShadowMerge::new(&device, copies, merging, images)?;
+                let (merge, lease) = ShadowMerge::new(&device, copies, merging, (images, pool))?;
                 leases.extend(lease);
                 Ok(Arc::new(merge))
             });

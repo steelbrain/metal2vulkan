@@ -197,6 +197,10 @@ pub(super) fn bound(device: &Device, target: &Target) -> Result<bool, Error> {
     if !target.texture.linear_image()? {
         return Ok(false);
     }
+    #[cfg(test)]
+    if (device.shared().linear_rule_forced).load(std::sync::atomic::Ordering::Relaxed) {
+        return Ok(true);
+    }
     let profile = device.compile_device().profile();
     let facts = device.shared().textures.facts(profile);
     Ok(facts.linear_attachment_rule(target.format))

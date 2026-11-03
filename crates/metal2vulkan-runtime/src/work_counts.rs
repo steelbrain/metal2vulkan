@@ -274,6 +274,8 @@ pub(crate) struct Counters {
     graphics_pipelines_looked_up: AtomicU64,
     linear_passes_in_place: AtomicU64,
     linear_passes_through_copies: AtomicU64,
+    linear_merge_scratches_made: AtomicU64,
+    linear_merge_scratches_reused: AtomicU64,
     kept_bytes_passes: AtomicU64,
     color_group_passes: AtomicU64,
     color_group_twins: AtomicU64,
@@ -1945,6 +1947,16 @@ impl Counters {
         let counter = match through_copies {
             false => &self.linear_passes_in_place,
             true => &self.linear_passes_through_copies,
+        };
+        counter.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// A linear attachment's merge made its scratch (`made`), or took one its command buffer's
+    /// earlier merges were done with (`linear_merge.rs`, `merge_scratch.rs`).
+    pub(crate) fn linear_merge_scratch(&self, made: bool) {
+        let counter = match made {
+            true => &self.linear_merge_scratches_made,
+            false => &self.linear_merge_scratches_reused,
         };
         counter.fetch_add(1, Ordering::Relaxed);
     }
@@ -4570,6 +4582,13 @@ pub struct WorkCounts {
     /// Those that rendered one through the image its texture keeps: copied in and its changed
     /// words merged back, or cleared there and copied back.
     pub linear_passes_through_copies: u64,
+    /// Scratch buffers the merges of colors over a buffer's bytes rendered through an image of
+    /// the runtime's made (`linear_merge.rs`): a merge makes one only where its command buffer
+    /// lends none its earlier passes' merges were done with that holds its box
+    /// (`merge_scratch.rs`), so a command buffer of many passes over one attachment makes a few.
+    pub linear_merge_scratches_made: u64,
+    /// Those merges that took a scratch an earlier pass of their command buffer was done with.
+    pub linear_merge_scratches_reused: u64,
     /// Passes that rendered a color attachment over a buffer's bytes, which they do not store
     /// (`DontCare`, `MultisampleResolve`), through the image its texture keeps, so that the buffer
     /// keeps its bytes (`kept_bytes.rs`).
@@ -5948,6 +5967,12 @@ impl Device {
             linear_passes_in_place: counters.linear_passes_in_place.load(Ordering::Relaxed),
             linear_passes_through_copies: counters
                 .linear_passes_through_copies
+                .load(Ordering::Relaxed),
+            linear_merge_scratches_made: counters
+                .linear_merge_scratches_made
+                .load(Ordering::Relaxed),
+            linear_merge_scratches_reused: counters
+                .linear_merge_scratches_reused
                 .load(Ordering::Relaxed),
             kept_bytes_passes: counters.kept_bytes_passes.load(Ordering::Relaxed),
             color_group_passes: counters.color_group_passes.load(Ordering::Relaxed),

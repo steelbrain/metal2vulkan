@@ -149,6 +149,7 @@ mod loader_word;
 mod managed;
 mod memory;
 mod memory_log;
+mod merge_scratch;
 mod metal_release;
 mod mipmap;
 mod mipmap_filter;
