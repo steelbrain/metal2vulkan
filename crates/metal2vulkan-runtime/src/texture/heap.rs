@@ -1250,8 +1250,6 @@ pub(crate) struct HeapTextureShape {
     /// More than one sample: no copy of rows shadows its image, which lies in memory of its own
     /// instead, as one the heap's memory cannot hold.
     pub(crate) multisample: bool,
-    /// A shadow of the heap's bytes fits the image's planes ([`shadowable`]).
-    pub(crate) shadowable: bool,
 }
 
 /// How a heap texture is held to Metal's answer ([`held_to_metal`]).
@@ -1272,15 +1270,19 @@ pub(crate) enum HeldToMetal {
 
 /// How a heap texture of `shape` whose images take `images` of the heap is held to Metal's answer
 /// `metal`, which a program sizes a heap and places its resources by (`Device::heap_plan`).
+/// `shadowable` answers whether a shadow of the heap's bytes fits the image's planes
+/// ([`shadowable`]); it is asked only of a single-sample texture held by no image, as laying out
+/// the planes to answer it is work a texture held by its image never needs.
 pub(crate) fn held_to_metal(
     images: SizeAndAlign,
     metal: SizeAndAlign,
     shape: HeapTextureShape,
+    shadowable: impl FnOnce() -> bool,
 ) -> HeldToMetal {
     if shape.apart || (!shape.four_two_two && images_fit(images, metal)) {
         return HeldToMetal::Images;
     }
-    match shape.multisample || shape.shadowable {
+    match shape.multisample || shadowable() {
         true => HeldToMetal::Shadow,
         false => HeldToMetal::Nothing,
     }
@@ -1818,9 +1820,9 @@ impl Device {
                 ),
                 four_two_two: chroma_pairs::is_four_two_two(layout.pixel_format),
                 multisample: layout.samples > 1,
-                shadowable: shadowable(&image.plan, metal.size),
             };
-            match held_to_metal(images, metal, shape) {
+            let plan = &image.plan;
+            match held_to_metal(images, metal, shape, || shadowable(plan, metal.size)) {
                 HeldToMetal::Images => size_and_align = metal,
                 HeldToMetal::Shadow => {
                     // A multisample image, which no copy of rows shadows, lies in memory of its

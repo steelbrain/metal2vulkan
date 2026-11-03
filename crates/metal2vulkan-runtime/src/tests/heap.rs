@@ -537,60 +537,84 @@ fn a_heap_texture_is_held_to_metal_s_answer_by_its_image_or_by_a_shadow() {
     use crate::texture::heap::{held_to_metal, HeapTextureShape, HeldToMetal};
     use crate::SizeAndAlign;
     let answer = |size, align| SizeAndAlign { size, align };
-    // A plain single-sample texture whose image binds in the heap's memory, and a shadow of its
-    // bytes fits its planes.
+    // A plain single-sample texture whose image binds in the heap's memory.
     let plain = HeapTextureShape {
         apart: false,
         four_two_two: false,
         multisample: false,
-        shadowable: true,
+    };
+    // Whether a shadow of its bytes fits its planes, counting each time it is asked.
+    let asked = std::cell::Cell::new(0);
+    let fits = |answer: bool| {
+        let asked = &asked;
+        move || {
+            asked.set(asked.get() + 1);
+            answer
+        }
     };
     let metal = answer(16384, 128);
-    // Inside Metal's answer, in both fields and exactly: the image.
+    // Inside Metal's answer, in both fields and exactly: the image, the shadow never asked of.
     for images in [answer(16384, 128), answer(1024, 64), answer(128, 128)] {
-        assert_eq!(held_to_metal(images, metal, plain), HeldToMetal::Images);
+        assert_eq!(
+            held_to_metal(images, metal, plain, fits(true)),
+            HeldToMetal::Images
+        );
     }
-    // Past it in either field: a shadow, which answers Metal's all the same. The NVIDIA shapes
-    // the first replay found: a coarser alignment (1024 where Metal answers 128), and more bytes
-    // (160768 where Metal answers 32768 for a 5000-texel `Type1D`).
+    assert_eq!(asked.get(), 0);
+    // Past it in either field: a shadow where one fits, which answers Metal's all the same. The
+    // NVIDIA shapes the first replay found: a coarser alignment (1024 where Metal answers 128),
+    // and more bytes (160768 where Metal answers 32768 for a 5000-texel `Type1D`).
     for images in [answer(16384, 1024), answer(22784, 128), answer(160768, 128)] {
-        assert_eq!(held_to_metal(images, metal, plain), HeldToMetal::Shadow);
+        assert_eq!(
+            held_to_metal(images, metal, plain, fits(true)),
+            HeldToMetal::Shadow
+        );
     }
+    assert_eq!(asked.get(), 3);
     // No shadow fits its planes: neither, so the answer runs past Metal's, announced.
-    let unshadowable = HeapTextureShape {
-        shadowable: false,
-        ..plain
-    };
     let past = answer(16384, 1024);
     assert_eq!(
-        held_to_metal(past, metal, unshadowable),
+        held_to_metal(past, metal, plain, fits(false)),
         HeldToMetal::Nothing
     );
     // A multisample texture is held by a shadow either way: its image lies in memory of its own.
+    let multisample = HeapTextureShape {
+        multisample: true,
+        ..plain
+    };
     for shadowable in [false, true] {
-        let shape = HeapTextureShape {
-            multisample: true,
-            shadowable,
-            ..plain
-        };
-        assert_eq!(held_to_metal(past, metal, shape), HeldToMetal::Shadow);
-        assert_eq!(held_to_metal(metal, metal, shape), HeldToMetal::Images);
+        assert_eq!(
+            held_to_metal(past, metal, multisample, fits(shadowable)),
+            HeldToMetal::Shadow
+        );
+        assert_eq!(
+            held_to_metal(metal, metal, multisample, fits(shadowable)),
+            HeldToMetal::Images
+        );
     }
     // An image in memory of its own takes none of the heap's bytes: held whatever it needs.
     let apart = HeapTextureShape {
         apart: true,
         ..plain
     };
+    asked.set(0);
     for images in [answer(160768, 65536), metal] {
-        assert_eq!(held_to_metal(images, metal, apart), HeldToMetal::Images);
+        assert_eq!(
+            held_to_metal(images, metal, apart, fits(false)),
+            HeldToMetal::Images
+        );
     }
+    assert_eq!(asked.get(), 0);
     // A 4:2:2 texture is a shadow of the heap's bytes even where its image would fit: Metal lays
     // its rows out linearly there, which its image does not.
     let chroma = HeapTextureShape {
         four_two_two: true,
         ..plain
     };
-    assert_eq!(held_to_metal(metal, metal, chroma), HeldToMetal::Shadow);
+    assert_eq!(
+        held_to_metal(metal, metal, chroma, fits(true)),
+        HeldToMetal::Shadow
+    );
     assert_eq!(
         held_to_metal(
             metal,
@@ -598,7 +622,8 @@ fn a_heap_texture_is_held_to_metal_s_answer_by_its_image_or_by_a_shadow() {
             HeapTextureShape {
                 apart: true,
                 ..chroma
-            }
+            },
+            fits(true)
         ),
         HeldToMetal::Images
     );

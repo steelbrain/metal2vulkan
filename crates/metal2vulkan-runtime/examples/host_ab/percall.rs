@@ -425,7 +425,7 @@ const HELD: [(&str, &str, f64); 46] = [
     ("heap_texture_256", "rt_vk_images_made_at_call", 1.0),
     ("heap_texture_256", "rt_vk_image_bindings_at_call", 1.0),
     ("heap_texture_256", "rt_vk_memory_allocations_at_call", 0.0),
-    ("heap_texture_256", "allocs", 20.25),
+    ("heap_texture_256", "allocs", 17.25),
     // A Shared texture likewise, and it starts its image on the host once.
     ("texture_256_shared", "rt_vk_images_made_at_call", 1.0),
     ("texture_256_shared", "rt_vk_image_bindings_at_call", 1.0),
