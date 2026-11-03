@@ -513,7 +513,7 @@ fn normalized_and_cubic_stages_record_no_note_their_states_cannot_run() {
     let stages: [(&str, &str, Option<u32>, &[PrecisionNote]); 14] = [
         ("sampling", "sample_level", None, &[]),
         ("sampling", "sample_base", None, &[]),
-        ("sampling", "sample_grad", None, &[N::NativeHalfConversion]),
+        ("sampling", "sample_grad", None, &[]),
         (
             "sampling",
             "sample_fragment",

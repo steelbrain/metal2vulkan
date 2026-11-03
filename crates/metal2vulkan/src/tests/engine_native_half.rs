@@ -178,9 +178,12 @@ fn half_rounding_is_the_devices_on_every_profile() {
 }
 
 /// On lavapipe and MoltenVK (`shaderFloat16`, no `DenormPreserve` for 16 bits) each kernel rounds
-/// its `half` through the conversion, records `NativeHalfConversion` and requires no measured
-/// fact; on a profile without `shaderFloat16` it quantizes and records `NativeHalfQuantize`; RADV
-/// takes the controlled conversion, with no fact and no note. Each passes L3. On the interpreter,
+/// its `half` through the conversion: lavapipe records `NativeHalfConversion` and requires no
+/// measured fact, and MoltenVK on the M3 Max's identity, whose conversion of a `float` the function
+/// holds is measured to be Metal's (`DriverDeviation::MetalHalfConversion`), records nothing and
+/// requires `VkProperty::MetalHalfConversion`; on a profile without `shaderFloat16` it quantizes
+/// and records `NativeHalfQuantize`; RADV takes the controlled conversion, with no fact and no
+/// note. Each passes L3. On the interpreter,
 /// whose conversion and quantize round to nearest even, the native modules answer Metal's
 /// `half(float)`, but for the quantize's zero below the smallest normal half.
 #[test]
@@ -192,13 +195,14 @@ fn native_half_rounding_records_its_kind_and_requires_no_fact() {
         PrecisionNote::NativeHalfConversion,
         PrecisionNote::NativeHalfQuantize,
     ];
-    let cases: [(&str, Option<PrecisionNote>); 4] = [
-        ("lavapipe", Some(natives[0])),
-        ("swiftshader", Some(natives[1])),
-        ("moltenvk-m3", Some(natives[0])),
-        ("amd-780m-radv", None),
+    // Each profile, its note, and whether it requires the measured conversion.
+    let cases: [(&str, Option<PrecisionNote>, bool); 4] = [
+        ("lavapipe", Some(natives[0]), false),
+        ("swiftshader", Some(natives[1]), false),
+        ("moltenvk-m3", None, true),
+        ("amd-780m-radv", None, false),
     ];
-    for (stem, note) in cases {
+    for (stem, note, measured) in cases {
         let p = profile(stem, DevicePolicy::default()).expect("profile");
         for (name, _) in &KERNELS {
             let what = format!("{name} on {stem}");
@@ -206,6 +210,13 @@ fn native_half_rounding_records_its_kind_and_requires_no_fact() {
             link_and_validate(&a, &p).unwrap_or_else(|e| panic!("{what}: L3: {e}"));
             let noted: Vec<_> = natives.iter().filter(|n| a.precision.contains(n)).collect();
             assert_eq!(noted, note.iter().collect::<Vec<_>>(), "{what}");
+            assert_eq!(
+                a.requirements
+                    .properties
+                    .contains(&VkProperty::MetalHalfConversion),
+                measured,
+                "{what}"
+            );
         }
     }
     // Metal's `half(float)` on the interpreter's nearest-even conversion and quantize: a tie to

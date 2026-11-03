@@ -1727,7 +1727,11 @@ declare void @air.write_texture_2d.{elem}(ptr addrspace(1), <2 x i32>, {ty}, i32
 /// A `half` (or `float`) texel written through an argument buffer's texture is the device's write
 /// on every committed profile: the module declares the one formatless float storage class, and
 /// records `PrecisionNote::DeviceNanEncoding`, since the heap may hold a half-float, 32-bit or
-/// packed small float texture, whose stored NaN is the device's.
+/// packed small float texture, whose stored NaN is the device's; but for a `float` texel on a
+/// profile whose stores of a `float` NaN into the half-float and the packed small float formats
+/// are measured to be Metal's (`DriverDeviation::MetalHalfStorageNans` and
+/// `DriverDeviation::MetalSmallFloatNans`: MoltenVK on the M3 Max's identity), which then
+/// requires `VkProperty::MetalSmallFloatNans`.
 #[test]
 fn a_heap_texel_write_is_the_devices_write() {
     for float in [false, true] {
@@ -1751,10 +1755,22 @@ fn a_heap_texel_write_is_the_devices_write() {
             assert_eq!(classes.len(), 1, "{what}: {classes:?}");
             assert_eq!(classes[0].access, ImageAccess::Storage, "{what}");
             assert_eq!(classes[0].sampled_type, SampledType::Float, "{what}");
-            assert!(
+            let takes = |d| p.takes_driver_deviation(d);
+            let small = takes(crate::error::DriverDeviation::MetalSmallFloatNans);
+            let metal_s =
+                float && small && takes(crate::error::DriverDeviation::MetalHalfStorageNans);
+            assert_eq!(
                 a.precision.contains(&PrecisionNote::DeviceNanEncoding),
+                !metal_s,
                 "{what}: {:?}",
                 a.precision
+            );
+            assert_eq!(
+                a.requirements
+                    .properties
+                    .contains(&crate::device::requirements::VkProperty::MetalSmallFloatNans),
+                float && small,
+                "{what}"
             );
             compiled += 1;
         }
