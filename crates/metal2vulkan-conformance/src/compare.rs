@@ -581,7 +581,10 @@ impl Walk<'_> {
                     else {
                         continue;
                     };
-                    if self.allowed(path, &expected, &actual) {
+                    // An allowance of the site covers the element, and so does one of the element
+                    // itself, `<site>/<offset>` (`Allowance::covers`).
+                    let element = format!("{path}/{at}");
+                    if self.allowed_at(path, Some(&element), &expected, &actual) {
                         continue;
                     }
                     count += 1;
@@ -905,11 +908,27 @@ impl Walk<'_> {
     /// where none does, and then by the first of them, so the report names a justification the
     /// case actually claimed.
     fn allowed(&mut self, path: &str, metal: &Value, ours: &Value) -> bool {
+        self.allowed_at(path, None, metal, ours)
+    }
+
+    /// [`allowed`](Self::allowed) of an element of the byte region at `path`, which an allowance
+    /// covers at the site or at `element`, the element's own path (`Allowance::covers`). What it
+    /// records is the site's.
+    fn allowed_at(
+        &mut self,
+        path: &str,
+        element: Option<&str>,
+        metal: &Value,
+        ours: &Value,
+    ) -> bool {
         let mut covering = self
             .allowances
             .iter()
             .enumerate()
-            .filter(|(_, allowance)| allowance.covers(path) && allowance.within(metal, ours))
+            .filter(|(_, allowance)| {
+                (allowance.covers(path) || element.is_some_and(|at| allowance.covers(at)))
+                    && allowance.within(metal, ours)
+            })
             .peekable();
         if covering.peek().is_none() {
             return false;

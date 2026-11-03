@@ -115,7 +115,7 @@ const RESOLVED_OUT: ResourceSlot = ResourceSlot {
 fn kernel(form: ExtendedRange, samples: u32) -> TypedModule {
     let mut b = ModuleBuilder::new();
     let t = Types::new(&mut b).expect("types");
-    let words = super::super::visibility_resolve::words_buffer;
+    let words = super::super::visibility_combine::words_buffer;
     let input = words(&mut b, SAMPLES_IN, t.u32_).expect("in");
     let output = words(&mut b, RESOLVED_OUT, t.u32_).expect("out");
     let uvec3 = b

@@ -2187,7 +2187,20 @@ degradations! {
         /// command; the payload names the draw and its colors.
         VisibilityCountPerColor = "visibility-count-per-color", Precision,
             "the result is Metal's count multiplied by the colors the draw writes; a `Boolean` \
-             result is Metal's";
+             result keeps its contract";
+        /// A pass writes a `Boolean` visibility result (`visibility.rs`): where a sample passed,
+        /// its word is the device's occlusion query result without
+        /// `VK_QUERY_CONTROL_PRECISE_BIT`, which Vulkan states only as nonzero ("When any samples
+        /// are passed, boolean queries will return a non-zero result value, otherwise a result
+        /// value of zero is returned", `occlusionQueryPrecise`), ORed over the pass's render pass
+        /// instances; where none passed, 0. That is Metal's `Boolean` contract, and Metal's own
+        /// nonzero value is not one value either: an Apple M3 Max (macOS 27.0.1) writes 1, Metal
+        /// on the AMD Radeon Pro 5300M and the Intel UHD Graphics 630 (macOS 26.7.1) the samples
+        /// that passed. The device's value is the only form; no dispatch rewrites it. Announced
+        /// where the pass's results record; the payload names the pass's first `Boolean` offset.
+        DeviceBooleanVisibility = "device-boolean-visibility", Precision,
+            "a `Boolean` visibility result where a sample passed is the device's nonzero value, \
+             which can be other than the 1 an Apple M3 Max writes; where none passed it is 0";
         /// A device whose float functions are not Metal's own (not MoltenVK,
         /// `DriverDeviation::MetalFloatFunctions`): Metal flushes a `float` product, fused
         /// multiply-add or `ldexp` whose exact value lies below `2^-126` to the zero of its sign,

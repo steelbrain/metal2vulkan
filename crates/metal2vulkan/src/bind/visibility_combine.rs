@@ -5,10 +5,10 @@
 //! queries: the first, copied to the result's offset as every query is, and its continuations,
 //! one per later instance, each copied to a word of a scratch buffer of the consumer's
 //! (`vkCmdCopyQueryPoolResults`). One dispatch of [`visibility_combine_module`] then combines each
-//! result's continuation words into its word. A `Boolean` result ORs them, before its
-//! [`VisibilityResolve`] makes it Metal's 1 or 0: an imprecise query's count is any nonzero value
-//! when a sample passed, and a sum of such counts could wrap to zero. A `Counting` result, of
-//! precise queries, sums them: the samples that passed in every instance.
+//! result's continuation words into its word. A `Boolean` result ORs them: an imprecise query's
+//! count is any nonzero value when a sample passed, and a sum of such counts could wrap to zero, so
+//! the OR is zero exactly where no instance passed a sample. A `Counting` result, of precise
+//! queries, sums them: the samples that passed in every instance.
 //!
 //! **The module** (one per device). One `GLCompute` entry `main` with local size
 //! ([`VisibilityCombineModule::LOCAL_SIZE`], 1, 1), no push constants, and three storage buffers in
@@ -30,12 +30,11 @@
 //!
 //! **Synchronization** (consumer): the result and continuation copies' `TRANSFER_WRITE` →
 //! `SHADER_STORAGE_READ` and `SHADER_STORAGE_WRITE` in `COMPUTE_SHADER` before the combine, and
-//! the upload's host write before the submission; then the combine's writes →
-//! `SHADER_STORAGE_READ` and `SHADER_STORAGE_WRITE` before the resolve.
+//! the upload's host write before the submission; the combine's writes are then ordered before the
+//! buffer's later uses as any compute write is.
 
 use std::sync::Arc;
 
-use super::visibility_resolve::{u32_value, windows, words_buffer, VisibilityResolve};
 use crate::bind::instantiate::BufferRange;
 use crate::budget::{Budget, Meter};
 use crate::device::requirements::Requirements;
@@ -45,8 +44,14 @@ use crate::pipeline::sym::{ResourceKind, ResourceSlot, Stage, Symbol};
 use crate::spirv::builder::constructs::{ArmEnd, ArmFn, LoopFn, LoopSpec};
 use crate::spirv::builder::{FunctionBuilder, ModuleBuilder};
 use crate::spirv::error::BResult;
-use crate::spirv::ids::Value;
-use crate::spirv::ir::{BinOp, ExecMode, ExecModel, IoDir, MemAccess, Type, TypedModule};
+use crate::spirv::ids::{GlobalId, TypeId, Value};
+use crate::spirv::ir::{
+    natural_layout, BinOp, ExecMode, ExecModel, IoDir, LayoutRule, MemAccess, StorageClass, Type,
+    TypedModule,
+};
+
+/// Bytes of one result in the visibility buffer, and of one continuation word.
+const RESULT_BYTES: u64 = 8;
 
 /// One dispatch of [`visibility_combine_module`]: it combines, in place, the continuation words
 /// of the results whose words lie in `dest_range` of the visibility buffer.
@@ -103,10 +108,13 @@ impl VisibilityCombine {
     /// The dispatches that combine `results` (distinct offsets, any order), each binding the
     /// visibility buffer at an offset aligned to `alignment` (`minStorageBufferOffsetAlignment`)
     /// over at most `max_range` bytes (`maxStorageBufferRange`) and dispatching at most
-    /// `max_groups` workgroups (`maxComputeWorkGroupCount[0]`), as [`VisibilityResolve::plan`]
-    /// does. No dispatch when `results` is empty. `None` where [`VisibilityResolve::plan`] is,
-    /// when two results share an offset, or when a result's continuation words run past
-    /// `max_range` bytes of sources, which the consumer binds from their first word.
+    /// `max_groups` workgroups (`maxComputeWorkGroupCount[0]`). Results too far apart for one
+    /// binding, or too many for one dispatch, take more dispatches. No dispatch when `results` is
+    /// empty. `None` when an offset is not a multiple of 8 (Metal requires it of a visibility
+    /// offset), its word overflows, or one word does not fit `max_range` past its aligned offset,
+    /// or `max_groups` is 0; when two results share an offset; or when a result's continuation
+    /// words run past `max_range` bytes of sources, which the consumer binds from their first
+    /// word.
     pub fn plan(
         results: &[ContinuedResult],
         alignment: u64,
@@ -118,7 +126,7 @@ impl VisibilityCombine {
         if sorted.windows(2).any(|w| w[0].offset == w[1].offset) {
             return None;
         }
-        let source_words = u64::from(max_range) / VisibilityResolve::RESULT_BYTES;
+        let source_words = u64::from(max_range) / RESULT_BYTES;
         if sorted
             .iter()
             .any(|r| u64::from(r.first) + u64::from(r.count) > source_words)
@@ -152,6 +160,71 @@ impl VisibilityCombine {
     pub fn table_bytes(&self) -> Vec<u8> {
         self.table.iter().flat_map(|t| t.to_le_bytes()).collect()
     }
+}
+
+/// The windows of the visibility buffer that bind `items`, each at Metal's offset of its result
+/// (ascending, each once): each window binds from an offset aligned down to `alignment` (at
+/// least 8) over at most `max_range` bytes, and takes at most `max_items` items, each with the
+/// index of its 64-bit word inside the window. A dispatch per window. `None` when an offset is not
+/// a multiple of 8, its word overflows, or one word does not fit `max_range` past its aligned
+/// offset, or `max_items` is 0 (with an item).
+fn windows<T>(
+    items: impl IntoIterator<Item = (u64, T)>,
+    alignment: u64,
+    max_range: u32,
+    max_items: u64,
+) -> Option<Vec<(BufferRange, Vec<(u32, T)>)>> {
+    let a = alignment.max(RESULT_BYTES);
+    let mut out: Vec<(BufferRange, Vec<(u32, T)>)> = Vec::new();
+    for (offset, item) in items {
+        if !offset.is_multiple_of(RESULT_BYTES) {
+            return None;
+        }
+        let end = offset.checked_add(RESULT_BYTES)?;
+        let joins = out.last().is_some_and(|(range, taken)| {
+            end - range.offset <= u64::from(max_range) && (taken.len() as u64) < max_items
+        });
+        if !joins {
+            let start = offset - offset % a;
+            if end - start > u64::from(max_range) || max_items == 0 {
+                return None;
+            }
+            let range = BufferRange {
+                offset: start,
+                range: 0,
+            };
+            out.push((range, Vec::new()));
+        }
+        let (range, taken) = out.last_mut()?;
+        // Inside `max_range` (a `u32`) of the range's start: the index fits.
+        let index = u32::try_from((offset - range.offset) / RESULT_BYTES).ok()?;
+        taken.push((index, item));
+        range.range = end - range.offset;
+    }
+    Some(out)
+}
+
+/// A `Block { u32 words[]; }` storage buffer bound at `sym`.
+pub(super) fn words_buffer(
+    b: &mut ModuleBuilder,
+    sym: ResourceSlot,
+    u32_: TypeId,
+) -> BResult<GlobalId> {
+    let rta = b.ty(Type::RuntimeArray {
+        elem: u32_,
+        stride: Some(4),
+    })?;
+    let layout = natural_layout(b.types(), LayoutRule::Std430, true, &[rta])?;
+    let block = b.ty(Type::Struct {
+        members: [rta].into(),
+        layout: Some(layout),
+    })?;
+    b.resource(sym, StorageClass::StorageBuffer, block)
+}
+
+fn u32_value(f: &mut FunctionBuilder<'_>, v: u32) -> BResult<Value> {
+    let c = f.u32_const(v)?;
+    f.module().const_value(c)
 }
 
 /// The crate-owned continuation combine module of one device, validated like any output.

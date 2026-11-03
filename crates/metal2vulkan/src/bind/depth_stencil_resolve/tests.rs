@@ -125,7 +125,7 @@ fn pick_module(pick: DepthPick, samples: u32) -> TypedModule {
     let mut b = ModuleBuilder::new();
     let u32_ = super::super::depth_stencil_copy::u32_ty(&mut b).expect("u32");
     let f32_ = b.ty(Type::Float { width: 32 }).expect("f32");
-    let words = super::super::visibility_resolve::words_buffer;
+    let words = super::super::visibility_combine::words_buffer;
     let input = words(&mut b, DEPTHS_IN, u32_).expect("in");
     let output = words(&mut b, PICKED_OUT, u32_).expect("out");
     let uvec3 = b.ty(Type::Vector { elem: u32_, len: 3 }).expect("uvec3");

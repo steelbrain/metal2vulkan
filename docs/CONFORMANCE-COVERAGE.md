@@ -38,8 +38,8 @@ Its limits, measured rather than asserted:
 | of the reachable, exercised by the suite's Metal leg | 793 |
 | of the reachable, not exercised | 163 |
 | share of the reachable exercised | 83% |
-| of those exercised, no case reaching it loosens anything | 594 |
-| of those exercised, a case reaching it loosens some site | 199 |
+| of those exercised, no case reaching it loosens anything | 578 |
+| of those exercised, a case reaching it loosens some site | 215 |
 | case modules | 152 |
 | committed recordings | 1123 |
 | distinct SDK items the Metal leg reaches, of any status | 800 |
@@ -532,10 +532,10 @@ An implemented container no case's Metal leg touches. These are the families of 
 | cases whose Metal answer is `metal_run` | 1039 |
 | cases whose Metal answer is `carried` | 80 |
 | cases whose Metal answer is `never_returned` | 4 |
-| modules that loosen a measured value | 8 |
-| tolerances in all | 8 |
+| modules that loosen a measured value | 9 |
+| tolerances in all | 9 |
 | modules declaring a notice (loosening no value) | 120 |
-| loosenings used | `Unchecked`, `Absolute` |
+| loosenings used | `Unchecked`, `Absolute`, `Nonzero` |
 | justifications named | `Degradation`, `AcceptedDifference` |
 | modules forbidding a re-record | 8 |
 | `Side` methods (the suite's whole device vocabulary) | 126 |
@@ -699,7 +699,7 @@ Each case module: the cases it holds, the `Side` methods it calls, and how many 
 | `two_plane_heap_blits` | 1 | 1 | every field | 51 |
 | `two_plane_samples` | 16 | 16 | every field | 50 |
 | `vertex_formats` | 4 | 4 | every field | 108 |
-| `visibility` | 10 | 10 | every field | 135 |
+| `visibility` | 10 | 10 | 1 tolerance(s): `Degradation` | 135 |
 | `visible_tables` | 18 | 18 | every field | 55 |
 | `wide_int_attributes` | 2 | 2 | every field | 108 |
 | `wide_points` | 1 | 1 | every field | 123 |

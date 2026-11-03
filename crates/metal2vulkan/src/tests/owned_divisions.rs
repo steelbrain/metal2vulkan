@@ -75,7 +75,6 @@ fn modules() -> Vec<Build> {
         tiled_texels_module,
         two_plane_texels_module,
         visibility_combine_module,
-        visibility_resolve_module,
         ycbcr_refresh_module,
         ycbcr_write_module,
     );

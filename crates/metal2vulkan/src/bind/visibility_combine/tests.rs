@@ -225,6 +225,16 @@ fn the_plan_refuses_what_it_cannot_bind() {
         None,
         "no groups"
     );
+    assert_eq!(
+        VisibilityCombine::plan(&[at(u64::MAX - 7, 0, 1, false)], 8, 64, 1),
+        None,
+        "an overflow"
+    );
+    assert_eq!(
+        VisibilityCombine::plan(&[at(56, 0, 1, false)], 64, 32, 1),
+        None,
+        "a word past the range from its aligned offset"
+    );
 }
 
 #[test]

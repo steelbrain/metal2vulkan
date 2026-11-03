@@ -260,6 +260,18 @@ fn each(color: [u8; 4]) -> Vec<u8> {
     color.repeat(16)
 }
 
+/// The result `left` holds as `mode`'s contract reads it (`visibility::by_contract`): a `Boolean`
+/// word nonzero where a sample passed, the device's own value, against Metal's 1.
+fn by_contract(left: &Left, mode: VisibilityResultMode) -> Option<u64> {
+    let booleans: &[usize] = match mode {
+        VisibilityResultMode::Boolean => &[0],
+        _ => &[],
+    };
+    let unwritten = u64::from_le_bytes([0xab; 8]);
+    left.visibility
+        .map(|word| super::visibility::by_contract(vec![word], booleans, unwritten)[0])
+}
+
 /// Whether the device refused `Counting` results for want of precise occlusion queries
 /// (`visibility.rs`' lane), printed.
 fn counting_refused(left: &Result<Left, Error>, device: &str) -> bool {
@@ -345,7 +357,7 @@ fn a_never_depth_test_without_an_attachment_counts_no_sample() {
         if counting_refused(&left, &device) {
             continue;
         }
-        assert_eq!(left.unwrap().visibility, Some(result), "{name}");
+        assert_eq!(by_contract(&left.unwrap(), mode), Some(result), "{name}");
     }
     // One offset over drawn and undrawn samples: the `Never` draw's query pauses around it.
     for (mode, result) in [(boolean, 1), (counting, 32)] {
@@ -360,7 +372,11 @@ fn a_never_depth_test_without_an_attachment_counts_no_sample() {
             continue;
         }
         let left = left.unwrap();
-        assert_eq!(left.visibility, Some(result), "{mode:?} around never");
+        assert_eq!(
+            by_contract(&left, mode),
+            Some(result),
+            "{mode:?} around never"
+        );
         assert_eq!(left.fragments, 48, "{mode:?} around never");
         assert_eq!(left.color, each(RED), "{mode:?} around never");
     }
@@ -597,7 +613,7 @@ fn executed_never_draws_count_no_sample() {
             continue;
         }
         let left = left.unwrap();
-        assert_eq!(left.visibility, Some(result), "{name} on {device}");
+        assert_eq!(by_contract(&left, mode), Some(result), "{name} on {device}");
         assert_eq!(left.fragments, fragments, "{name} on {device}");
         assert_eq!(left.color, each(color), "{name} on {device}");
     }

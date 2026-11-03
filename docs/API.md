@@ -2912,7 +2912,18 @@ bound.
 - `metal2vulkan-degrade-visibility-count-per-color` (precision). `VisibilityCountPerColor`: A
   draw counted by a `Counting` visibility result whose fragment function writes more than one color
   attachment, on ANV (`RuntimeDriverDefect::OcclusionCountPerColorOutput`). Cost: the result is
-  Metal's count multiplied by the colors the draw writes; a `Boolean` result is Metal's.
+  Metal's count multiplied by the colors the draw writes; a `Boolean` result keeps its contract.
+- `metal2vulkan-degrade-device-boolean-visibility` (precision). `DeviceBooleanVisibility`: A pass
+  writes a `Boolean` visibility result. Where a sample passed, its word is the device's occlusion
+  query result without `VK_QUERY_CONTROL_PRECISE_BIT`, which Vulkan states only as nonzero ("When
+  any samples are passed, boolean queries will return a non-zero result value, otherwise a result
+  value of zero is returned"), ORed over the pass's render pass instances; where none passed, 0.
+  That is Metal's `Boolean` contract, and Metal's own nonzero value is not one value either: an
+  Apple M3 Max (macOS 27.0.1) writes 1, Metal on the AMD Radeon Pro 5300M and the Intel UHD
+  Graphics 630 (macOS 26.7.1) the samples that passed. No dispatch rewrites the device's value.
+  Announced where the pass's results record. Cost: a `Boolean` visibility result where a sample
+  passed is the device's nonzero value, which can be other than the 1 an Apple M3 Max writes;
+  where none passed it is 0.
 - `metal2vulkan-degrade-float-tininess-after-rounding` (precision). `FloatTininessAfterRounding`: A
   device whose float functions are not Metal's own (not MoltenVK): Metal flushes a `float` product,
   fused multiply-add or `ldexp` whose exact value lies below `2^-126` to the zero of its sign,

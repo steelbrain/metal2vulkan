@@ -5,7 +5,8 @@
 //! Metal's API validation), drawn with the owned fixture `rt6_render_state` into a 4² target: the
 //! fullscreen triangle covers every pixel, and the same draw from vertex 3 covers none. Each
 //! visibility buffer starts as 0xaa bytes, and its words after the command buffer are compared with
-//! the ones Metal wrote: `Boolean` writes 1 or 0 at each offset the encoder set, `Counting` the
+//! the ones Metal wrote: `Boolean` writes 1 or 0 at each offset the encoder set (the runtime the
+//! device's nonzero value for 1, compared by [`by_contract`]), `Counting` the
 //! samples that passed (16 for the fullscreen triangle, 48 for three instances of it, 64 at 4x), an
 //! offset set with no draw after it gets 0, an offset never set keeps its bytes, a later pass
 //! rewrites only its own offsets, and an offset taken again in its mode, which Metal's validation
@@ -17,7 +18,7 @@
 use std::collections::BTreeSet;
 
 use super::degrade_notices::{
-    assert_made_once, assert_once, made_render_kinds, shared_in_system_memory,
+    assert_made_once, assert_once, made_once, made_render_kinds, shared_in_system_memory,
 };
 use super::read_buffer;
 use super::render_state::{quiet, texture, validated, Pipe, Probe, PASS, WHITE};
@@ -79,6 +80,25 @@ fn set(encoder: &mut RenderCommandEncoder, mode: VisibilityResultMode, offset: u
     encoder.set_visibility_result_mode(mode, offset).unwrap();
 }
 
+/// `words` as their modes' contracts read them, to compare with the words an Apple M3 Max wrote:
+/// each word at an index of `booleans`, a `Boolean` result, 1 where it is nonzero (the device's own
+/// value where a sample passed, `Degradation::DeviceBooleanVisibility`) and not `unwritten`, the
+/// buffer's starting word, so a result never written still differs; every other word as it is.
+pub(super) fn by_contract(mut words: Vec<u64>, booleans: &[usize], unwritten: u64) -> Vec<u64> {
+    for &index in booleans {
+        let word = &mut words[index];
+        if *word != 0 && *word != unwritten {
+            *word = 1;
+        }
+    }
+    words
+}
+
+/// [`by_contract`] of a buffer that started as [`UNWRITTEN`].
+fn read(buffer: &Buffer, booleans: &[usize]) -> Vec<u64> {
+    by_contract(words(buffer), booleans, UNWRITTEN)
+}
+
 /// The words Metal wrote in each pass (the module docs).
 #[test]
 fn boolean_results_store_metals_words() {
@@ -102,7 +122,7 @@ fn boolean_results_store_metals_words() {
         })
         .unwrap();
     let u = UNWRITTEN;
-    assert_eq!(words(&vis), [1, u, u, 0, u, 0, u, 1]);
+    assert_eq!(read(&vis, &[0, 3, 5, 7]), [1, u, u, 0, u, 0, u, 1]);
     // A second pass over the buffer rewrites only its own offset.
     probe
         .try_run_with(PASS, Some(&vis), |p, e, h| {
@@ -110,7 +130,7 @@ fn boolean_results_store_metals_words() {
             draw(p, e, h, WHITE, 0.5, true);
         })
         .unwrap();
-    assert_eq!(words(&vis), [1, 1, u, 0, u, 0, u, 1]);
+    assert_eq!(read(&vis, &[0, 1, 3, 5, 7]), [1, 1, u, 0, u, 0, u, 1]);
 
     // Probe 5's vis_revisit_boolean_then_none and vis_revisit_none_then_boolean: offset 0 taken
     // again after offset 8 writes 1 where either of its draws passed a sample.
@@ -129,7 +149,7 @@ fn boolean_results_store_metals_words() {
                 draw(p, e, h, WHITE, 0.5, again);
             })
             .unwrap();
-        assert_eq!(words(&vis), metal, "{name}");
+        assert_eq!(read(&vis, &[0, 1]), metal, "{name}");
     }
 
     // Probe 1's visibility_occluded: a draw behind the cleared depth (0.5 against 0.25 under
@@ -146,7 +166,7 @@ fn boolean_results_store_metals_words() {
             draw(p, e, h, WHITE.depth(depth), 0.125, true);
         })
         .unwrap();
-    assert_eq!(words(&vis), [1, 0]);
+    assert_eq!(read(&vis, &[0, 1]), [1, 0]);
 
     // Probe 5's vis_indirect_no_instances, as Boolean: an indirect draw of no instances.
     let vis = visibility_buffer(&probe, 1);
@@ -162,7 +182,95 @@ fn boolean_results_store_metals_words() {
             h.push(depth);
         })
         .unwrap();
-    assert_eq!(words(&vis), [0]);
+    assert_eq!(read(&vis, &[0]), [0]);
+    quiet(probe, &messages);
+}
+
+/// The kind a pass writing a `Boolean` result takes ([`boolean_results_announce_the_device_s_value`]).
+pub(super) const BOOLEANS: [Degradation; 1] = [Degradation::DeviceBooleanVisibility];
+
+/// A pass writing a `Boolean` result announces [`BOOLEANS`] once on a device, however many passes
+/// write one, naming the pass's first `Boolean` offset; a pass of `Counting` results alone does not.
+/// Beside it the device announces what the steps force: the white pipeline's making's kinds and
+/// the visibility buffer's system memory.
+#[test]
+fn boolean_results_announce_the_device_s_value() {
+    use VisibilityResultMode::{Boolean, Counting};
+    let (messages, _cache, probe) = validated();
+    let precise = probe
+        .device
+        .properties()
+        .description
+        .has(metal2vulkan::device::VkFeature::OcclusionQueryPrecise);
+    let vis = visibility_buffer(&probe, 2);
+    if precise {
+        probe
+            .try_run_with(PASS, Some(&vis), |p, e, h| {
+                set(e, Counting, 0);
+                draw(p, e, h, WHITE, 0.5, true);
+            })
+            .unwrap();
+        assert!(
+            !messages.take_notices().iter().any(|m| m
+                .degradation
+                .as_ref()
+                .is_some_and(|n| n.degradation == BOOLEANS[0])),
+            "a pass of Counting results alone"
+        );
+    }
+    for offset in [8, 0] {
+        probe
+            .try_run_with(PASS, Some(&vis), |p, e, h| {
+                set(e, Boolean, offset);
+                draw(p, e, h, WHITE, 0.5, true);
+            })
+            .unwrap();
+    }
+    let mut first = probe.made(WHITE);
+    if shared_in_system_memory(&probe.device) {
+        first.insert(Degradation::SharedInSystemMemory);
+    }
+    let notices = made_once(&messages, &BOOLEANS, &first);
+    let notice = notices
+        .iter()
+        .find_map(|m| {
+            m.degradation
+                .as_ref()
+                .filter(|n| n.degradation == BOOLEANS[0])
+        })
+        .unwrap();
+    assert_eq!(notice.object, "the Boolean visibility result at offset 8");
+    quiet(probe, &messages);
+}
+
+/// A pass's `Boolean` results are its queries' own words: one `vkCmdCopyQueryPoolResults` of
+/// both offsets' queries and no dispatch after it, the word of the draw that passed a sample
+/// nonzero and the other's 0.
+#[test]
+fn boolean_results_are_copied_with_no_dispatch() {
+    use VisibilityResultMode::Boolean;
+    let (messages, _cache, probe) = validated();
+    let vis = visibility_buffer(&probe, 2);
+    let before = probe.device.work_counts().commands_recorded;
+    probe
+        .try_run_with(PASS, Some(&vis), |p, e, h| {
+            set(e, Boolean, 0);
+            draw(p, e, h, WHITE, 0.5, true);
+            set(e, Boolean, 8);
+            draw(p, e, h, WHITE, 0.5, false);
+        })
+        .unwrap();
+    let after = probe.device.work_counts().commands_recorded;
+    assert_eq!(
+        (
+            after.cmd_copy_query_pool_results - before.cmd_copy_query_pool_results,
+            after.cmd_dispatch - before.cmd_dispatch,
+        ),
+        (1, 0),
+        "query result copies and dispatches"
+    );
+    let words = words(&vis);
+    assert!(words[0] != 0 && words[1] == 0, "{words:?}");
     quiet(probe, &messages);
 }
 
@@ -220,7 +328,7 @@ fn counting_results_store_metals_counts() {
         return;
     }
     let u = UNWRITTEN;
-    assert_eq!(words(&vis), [16, 0, 32, 48, 0, 1, u, u], "on {device}");
+    assert_eq!(read(&vis, &[5]), [16, 0, 32, 48, 0, 1, u, u], "on {device}");
 
     // Probe 1's visibility_occluded, counted: a draw behind the cleared depth passes no sample.
     let vis = visibility_buffer(&probe, 2);
@@ -344,7 +452,7 @@ fn command_buffers_released_at_completion_leave_nothing_read_later() {
             })
             .unwrap();
         let expected = if first { [1, 0] } else { [0, 1] };
-        assert_eq!(words(&vis), expected, "round {round}");
+        assert_eq!(read(&vis, &[0, 1]), expected, "round {round}");
     }
     quiet(probe, &messages);
 }
@@ -388,8 +496,8 @@ fn results_are_ordered_with_the_command_buffers_later_commands() {
         .unwrap();
     assert_eq!(command_buffer.error(), None);
     drop(held);
-    assert_eq!(words(&vis), [1, 1]);
-    assert_eq!(words(&copy), [1, 1]);
+    assert_eq!(read(&vis, &[0, 1]), [1, 1]);
+    assert_eq!(read(&copy, &[0, 1]), [1, 1]);
     quiet(probe, &messages);
 }
 
@@ -455,7 +563,7 @@ fn visibility_modes_are_refused_as_metal_refuses_them() {
         })
         .unwrap();
     let u = UNWRITTEN;
-    assert_eq!(words(&vis), [1, u, 1, u, u, u, u, 0]);
+    assert_eq!(read(&vis, &[0, 2, 7]), [1, u, 1, u, u, u, u, 0]);
     quiet(probe, &messages);
 }
 
@@ -545,7 +653,7 @@ fn a_pass_that_executes_commands_keeps_its_visibility_results() {
             draw(p, e, h, WHITE, 0.5, false);
         })
         .unwrap();
-    assert_eq!(words(&vis), [1, 0, UNWRITTEN]);
+    assert_eq!(read(&vis, &[0, 1]), [1, 0, UNWRITTEN]);
     assert_eq!(
         stored.color, alone.color,
         "the command draws after the white"
@@ -619,7 +727,7 @@ fn executions_count_in_the_mode_set_at_them() {
             e.execute_commands_in_buffer(&icb, 0..1).unwrap();
         })
         .unwrap();
-    assert_eq!(words(&vis), [1], "bool_icb on {device}");
+    assert_eq!(read(&vis, &[0]), [1], "bool_icb on {device}");
     // bool_none: `Boolean`, then `Disabled`, then the command.
     let vis = visibility_buffer(&probe, 1);
     probe
@@ -630,7 +738,7 @@ fn executions_count_in_the_mode_set_at_them() {
             e.execute_commands_in_buffer(&icb, 0..1).unwrap();
         })
         .unwrap();
-    assert_eq!(words(&vis), [0], "bool_none on {device}");
+    assert_eq!(read(&vis, &[0]), [0], "bool_none on {device}");
     // The counted cases, where the device counts: whether it did.
     let counted = |cases: &[CountedCase<'_>]| {
         for (name, length, encode, want) in cases {
@@ -726,6 +834,7 @@ fn executions_count_in_the_mode_set_at_them() {
     if ran {
         let mut kinds: Vec<Degradation> = execution_kinds(&probe, true).into_iter().collect();
         kinds.extend(REPEATED_STARTS);
+        kinds.extend(BOOLEANS);
         assert_once(&notices, &kinds);
         let notice = notices
             .iter()

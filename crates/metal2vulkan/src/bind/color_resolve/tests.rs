@@ -243,7 +243,7 @@ fn arithmetic_module(
         .then(|| SrgbTables::declare(&mut b, t, format, source))
         .transpose()
         .expect("tables");
-    let words = super::super::visibility_resolve::words_buffer;
+    let words = super::super::visibility_combine::words_buffer;
     let input = words(&mut b, SAMPLES_IN, t.u32_).expect("in");
     let output = words(&mut b, RESOLVED_OUT, t.u32_).expect("out");
     let uvec3 = b
@@ -830,7 +830,7 @@ fn word_kernel(
     let srgb = ColorResolveFormat::of(Format::R8G8B8A8_SRGB).expect("closed");
     let tables =
         SrgbTables::declare(&mut b, t, srgb, ResolveSource::InputAttachment).expect("tables");
-    let buffer = super::super::visibility_resolve::words_buffer;
+    let buffer = super::super::visibility_combine::words_buffer;
     let input = buffer(&mut b, SAMPLES_IN, t.u32_).expect("in");
     let output = buffer(&mut b, RESOLVED_OUT, t.u32_).expect("out");
     let uvec3 = b

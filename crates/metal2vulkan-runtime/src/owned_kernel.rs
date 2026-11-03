@@ -45,11 +45,8 @@ use std::collections::HashMap;
 /// A crate-owned module the runtime dispatches.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum OwnedModule {
-    /// `bind::visibility_resolve_module`: a pass's `Boolean` visibility results, made Metal's 1
-    /// or 0 in place.
-    VisibilityResolve,
-    /// `bind::visibility_combine_module`: a split pass's continuation queries, ORed into their
-    /// results.
+    /// `bind::visibility_combine_module`: a split pass's continuation queries, summed or ORed
+    /// into their results.
     VisibilityCombine,
     /// `bind::index_bounds_plan_module`: an indexed indirect draw's index bounds plan
     /// (`index_bounds.rs`).
@@ -240,11 +237,6 @@ impl OwnedModule {
     /// [`images`](Self::images)), and its push bytes.
     fn build(self, device: &Device) -> Result<(Vec<u32>, u32, u32), Error> {
         match self {
-            OwnedModule::VisibilityResolve => {
-                let module = metal2vulkan::bind::visibility_resolve_module(device.compile_device())
-                    .map_err(Error::Compile)?;
-                Ok((module.spirv.to_vec(), 2, 0))
-            }
             OwnedModule::VisibilityCombine => {
                 let module = metal2vulkan::bind::visibility_combine_module(device.compile_device())
                     .map_err(Error::Compile)?;
@@ -537,7 +529,6 @@ impl OwnedKernel {
 /// Every kernel one device has made.
 #[derive(Default)]
 pub(super) struct OwnedKernels {
-    visibility_resolve: Option<OwnedKernel>,
     visibility_combine: Option<OwnedKernel>,
     index_bounds_plan: Option<OwnedKernel>,
     index_bounds_fill: Option<OwnedKernel>,
@@ -591,7 +582,6 @@ impl OwnedKernels {
     /// Destroy every kernel; the device is idle, and is destroyed next.
     pub(super) fn destroy(&self, raw: &ash::Device) {
         for kernel in [
-            self.visibility_resolve,
             self.visibility_combine,
             self.index_bounds_plan,
             self.index_bounds_fill,
@@ -751,7 +741,6 @@ impl OwnedKernels {
     /// per key).
     fn slot(&mut self, which: OwnedModule) -> Option<&mut Option<OwnedKernel>> {
         Some(match which {
-            OwnedModule::VisibilityResolve => &mut self.visibility_resolve,
             OwnedModule::VisibilityCombine => &mut self.visibility_combine,
             OwnedModule::IndexBoundsPlan => &mut self.index_bounds_plan,
             OwnedModule::IndexBoundsFill => &mut self.index_bounds_fill,

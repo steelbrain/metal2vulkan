@@ -634,9 +634,6 @@ surface! {
         struct ContinuedResult N;
         struct VisibilityCombine N;
         struct VisibilityCombineModule N;
-        fn visibility_resolve_module;
-        struct VisibilityResolve N;
-        struct VisibilityResolveModule N;
         fn shadow_copy_back_module;
         struct ShadowCopyBackModule N;
         enum ShadowTexelView E;

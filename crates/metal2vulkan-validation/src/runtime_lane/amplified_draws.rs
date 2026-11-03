@@ -320,6 +320,14 @@ impl Lane {
                 Degradation::SharedInSystemMemory,
                 shared_in_system_memory(&self.device),
             ),
+            (
+                Degradation::DeviceBooleanVisibility,
+                matches!(
+                    case.visibility,
+                    Visibility::Before(VisibilityResultMode::Boolean)
+                        | Visibility::After(VisibilityResultMode::Boolean)
+                ),
+            ),
         ]);
         kinds.extend(self.made(case));
         kinds
@@ -570,12 +578,18 @@ impl Lane {
         drop(executed);
         let visibility = match case.visibility {
             Visibility::Off => None,
-            Visibility::Before(_) => Some(0),
-            Visibility::After(_) => Some(8),
+            Visibility::Before(mode) => Some((0, mode)),
+            Visibility::After(mode) => Some((8, mode)),
         }
-        .map(|offset| {
+        .map(|(offset, mode)| {
             let bytes = read_buffer(&results, offset, 8).unwrap();
-            u64::from_le_bytes(bytes.try_into().unwrap())
+            let word = u64::from_le_bytes(bytes.try_into().unwrap());
+            // A `Boolean` word by its contract: the device's nonzero value where a sample passed.
+            let booleans: &[usize] = match mode {
+                VisibilityResultMode::Boolean => &[0],
+                _ => &[],
+            };
+            super::visibility::by_contract(vec![word], booleans, 0xdead)[0]
         });
         drop(layers);
         Ok(Stored {
@@ -1197,7 +1211,8 @@ fn what_multiview_does_not_express_draws_one_amplification_at_a_time() {
 /// A visibility result over amplified draws counts the samples of every amplification, as one query
 /// over draws of one amplification each does (a Metal probe on the M3 Max and an M4: 16 for one
 /// amplification of the 16-pixel target, 32 for two into two layers or into one, and with a depth
-/// test; 1 for `Boolean`). A mode set after a draw amplified as views leaves its texels as Metal's.
+/// test; 1 for `Boolean`, the device's nonzero value read by its contract). A mode set after a draw
+/// amplified as views leaves its texels as Metal's.
 #[test]
 fn a_visibility_result_counts_every_amplification() {
     use VisibilityResultMode::{Boolean, Counting};

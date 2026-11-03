@@ -365,11 +365,6 @@ assoc-const	metal2vulkan::bind::VisibilityCombineModule::LOCAL_SIZE	pub const LO
 assoc-const	metal2vulkan::bind::VisibilityCombineModule::SET	pub const SET: u32
 assoc-const	metal2vulkan::bind::VisibilityCombineModule::SOURCES_BINDING	pub const SOURCES_BINDING: u32
 assoc-const	metal2vulkan::bind::VisibilityCombineModule::TABLE_BINDING	pub const TABLE_BINDING: u32
-assoc-const	metal2vulkan::bind::VisibilityResolve::RESULT_BYTES	pub const RESULT_BYTES: u64
-assoc-const	metal2vulkan::bind::VisibilityResolveModule::DEST_BINDING	pub const DEST_BINDING: u32
-assoc-const	metal2vulkan::bind::VisibilityResolveModule::LOCAL_SIZE	pub const LOCAL_SIZE: u32
-assoc-const	metal2vulkan::bind::VisibilityResolveModule::SET	pub const SET: u32
-assoc-const	metal2vulkan::bind::VisibilityResolveModule::TARGETS_BINDING	pub const TARGETS_BINDING: u32
 assoc-const	metal2vulkan::bind::YCbCrConvertModule::BYTES_BINDING	pub const BYTES_BINDING: u32
 assoc-const	metal2vulkan::bind::YCbCrConvertModule::IMAGE_BINDING	pub const IMAGE_BINDING: u32
 assoc-const	metal2vulkan::bind::YCbCrConvertModule::LOCAL_SIZE	pub const LOCAL_SIZE: u32
@@ -836,11 +831,6 @@ assoc-const-value	metal2vulkan::bind::VisibilityCombineModule::LOCAL_SIZE	64
 assoc-const-value	metal2vulkan::bind::VisibilityCombineModule::SET	0
 assoc-const-value	metal2vulkan::bind::VisibilityCombineModule::SOURCES_BINDING	2
 assoc-const-value	metal2vulkan::bind::VisibilityCombineModule::TABLE_BINDING	0
-assoc-const-value	metal2vulkan::bind::VisibilityResolve::RESULT_BYTES	8
-assoc-const-value	metal2vulkan::bind::VisibilityResolveModule::DEST_BINDING	1
-assoc-const-value	metal2vulkan::bind::VisibilityResolveModule::LOCAL_SIZE	64
-assoc-const-value	metal2vulkan::bind::VisibilityResolveModule::SET	0
-assoc-const-value	metal2vulkan::bind::VisibilityResolveModule::TARGETS_BINDING	0
 assoc-const-value	metal2vulkan::bind::YCbCrConvertModule::BYTES_BINDING	2
 assoc-const-value	metal2vulkan::bind::YCbCrConvertModule::IMAGE_BINDING	0
 assoc-const-value	metal2vulkan::bind::YCbCrConvertModule::LOCAL_SIZE	8
@@ -3630,11 +3620,6 @@ field	metal2vulkan::bind::VisibilityCombine.group_count	pub group_count: u32
 field	metal2vulkan::bind::VisibilityCombine.table	pub table: Vec<u32>
 field	metal2vulkan::bind::VisibilityCombineModule.requirements	pub requirements: Requirements
 field	metal2vulkan::bind::VisibilityCombineModule.spirv	pub spirv: Arc<[u32]>
-field	metal2vulkan::bind::VisibilityResolve.dest_range	pub dest_range: BufferRange
-field	metal2vulkan::bind::VisibilityResolve.group_count	pub group_count: u32
-field	metal2vulkan::bind::VisibilityResolve.targets	pub targets: Vec<u32>
-field	metal2vulkan::bind::VisibilityResolveModule.requirements	pub requirements: Requirements
-field	metal2vulkan::bind::VisibilityResolveModule.spirv	pub spirv: Arc<[u32]>
 field	metal2vulkan::bind::YCbCrCodes.bits	pub bits: u32
 field	metal2vulkan::bind::YCbCrCodes.bytes	pub bytes: u32
 field	metal2vulkan::bind::YCbCrCodes.output	pub output: YCbCrOutput
@@ -4708,7 +4693,6 @@ fn	metal2vulkan::bind::tessellation_scan_module	pub fn tessellation_scan_module(
 fn	metal2vulkan::bind::tiled_texels_module	pub fn tiled_texels_module(device: &Device) -> Result<TiledTexelsModule, Error>
 fn	metal2vulkan::bind::two_plane_texels_module	pub fn two_plane_texels_module(device: &Device) -> Result<TwoPlaneTexelsModule, Error>
 fn	metal2vulkan::bind::visibility_combine_module	pub fn visibility_combine_module(device: &Device) -> Result<VisibilityCombineModule, Error>
-fn	metal2vulkan::bind::visibility_resolve_module	pub fn visibility_resolve_module(device: &Device) -> Result<VisibilityResolveModule, Error>
 fn	metal2vulkan::bind::ycbcr_convert_floats_module	pub fn ycbcr_convert_floats_module(device: &Device, conversion: YCbCrConversion) -> Result<YCbCrConvertModule, Error>
 fn	metal2vulkan::bind::ycbcr_convert_module	pub fn ycbcr_convert_module(device: &Device, conversion: YCbCrConversion) -> Result<YCbCrConvertModule, Error>
 fn	metal2vulkan::bind::ycbcr_read	pub fn ycbcr_read(codes: YCbCrCodes, (range, matrix): (YCbCrRange, YCbCrMatrix), [y, cb, cr]: [u16; 3]) -> [u16; 3]
@@ -5040,6 +5024,7 @@ macro-member	metal2vulkan-runtime::Degradation::DetachedStorageKeepsWrites	Detac
 macro-member	metal2vulkan-runtime::Degradation::DeviceAlphaCoverage	DeviceAlphaCoverage = "device-alpha-coverage";
 macro-member	metal2vulkan-runtime::Degradation::DeviceAnisotropicFilter	DeviceAnisotropicFilter = "device-anisotropic-filter";
 macro-member	metal2vulkan-runtime::Degradation::DeviceArithmetic	DeviceArithmetic = "device-arithmetic";
+macro-member	metal2vulkan-runtime::Degradation::DeviceBooleanVisibility	DeviceBooleanVisibility = "device-boolean-visibility", Precision,
 macro-member	metal2vulkan-runtime::Degradation::DeviceColorConversion	DeviceColorConversion = "device-color-conversion";
 macro-member	metal2vulkan-runtime::Degradation::DeviceDenormals	DeviceDenormals = "device-denormals";
 macro-member	metal2vulkan-runtime::Degradation::DeviceFilteredMipmaps	DeviceFilteredMipmaps = "device-filtered-mipmaps", Precision,
@@ -8745,8 +8730,6 @@ method	metal2vulkan::bind::VertexAmplification::new	pub fn new(count: u32, view_
 method	metal2vulkan::bind::ViewMapping::new	pub fn new(viewport_array_index_offset: u32, render_target_array_index_offset: u32) -> Self
 method	metal2vulkan::bind::VisibilityCombine::plan	pub fn plan(results: &[ContinuedResult], alignment: u64, max_range: u32, max_groups: u32) -> Option<Vec<VisibilityCombine>>
 method	metal2vulkan::bind::VisibilityCombine::table_bytes	pub fn table_bytes(&self) -> Vec<u8>
-method	metal2vulkan::bind::VisibilityResolve::plan	pub fn plan(offsets: &[u64], alignment: u64, max_range: u32, max_groups: u32) -> Option<Vec<VisibilityResolve>>
-method	metal2vulkan::bind::VisibilityResolve::target_bytes	pub fn target_bytes(&self) -> Vec<u8>
 method	metal2vulkan::bind::YCbCrCodes::of	pub fn of(format: crate::metal::format::YCbCrFormat) -> Option<YCbCrCodes>
 method	metal2vulkan::bind::YCbCrCodes::units	pub fn units(&self, n: u64) -> u64
 method	metal2vulkan::bind::YCbCrConversion::of	pub fn of(codes: YCbCrCodes, (range, matrix): (YCbCrRange, YCbCrMatrix)) -> YCbCrConversion
@@ -9699,8 +9682,6 @@ struct	metal2vulkan::bind::ViewMapping	#[cfg_attr(feature = "serde", derive(serd
 struct	metal2vulkan::bind::ViewSetup	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)] #[non_exhaustive] pub struct ViewSetup
 struct	metal2vulkan::bind::VisibilityCombine	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub struct VisibilityCombine
 struct	metal2vulkan::bind::VisibilityCombineModule	#[derive(Clone, Debug, PartialEq, Eq)] #[non_exhaustive] pub struct VisibilityCombineModule
-struct	metal2vulkan::bind::VisibilityResolve	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub struct VisibilityResolve
-struct	metal2vulkan::bind::VisibilityResolveModule	#[derive(Clone, Debug, PartialEq, Eq)] #[non_exhaustive] pub struct VisibilityResolveModule
 struct	metal2vulkan::bind::YCbCrCodes	#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub struct YCbCrCodes
 struct	metal2vulkan::bind::YCbCrConversion	#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub struct YCbCrConversion
 struct	metal2vulkan::bind::YCbCrConvertModule	#[derive(Clone, Debug, PartialEq, Eq)] #[non_exhaustive] pub struct YCbCrConvertModule

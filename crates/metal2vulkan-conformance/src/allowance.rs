@@ -206,6 +206,11 @@ pub enum Loosening {
     Absolute(f64),
     /// The value may be any of these.
     AnyOf(Vec<Value>),
+    /// An integer zero exactly where the recorded one is: any nonzero value stands for any other.
+    /// For a value whose contract states only whether it is zero, such as a `Boolean` visibility
+    /// result, which is the device's own nonzero value where Metal's M3 Max writes 1
+    /// (`device-boolean-visibility`).
+    Nonzero,
     /// The value is not compared. The justification still has to hold, and the report says the
     /// field went unchecked.
     Unchecked,
@@ -233,6 +238,11 @@ impl Allowance {
     }
 
     /// Whether the allowance covers the site at `path` (node names from the root, `/`-separated).
+    ///
+    /// An element of a byte region is addressed as its site's path and its byte offset in the
+    /// region, `<site>/<offset>` in decimal (`case/pass-0/words/24`, the eight bytes from offset 24
+    /// of a `U64` region): an allowance there covers that element alone, where one at the site
+    /// covers every element.
     pub fn covers(&self, path: &str) -> bool {
         match self.path.strip_suffix("/*") {
             Some(prefix) => path == prefix || path.starts_with(&format!("{prefix}/")),
@@ -245,6 +255,14 @@ impl Allowance {
         match &self.loosening {
             Loosening::Unchecked => true,
             Loosening::AnyOf(values) => values.contains(actual),
+            Loosening::Nonzero => {
+                let zero = |value: &Value| match *value {
+                    Value::Uint(word) => Some(word == 0),
+                    Value::Int(word) => Some(word == 0),
+                    _ => None,
+                };
+                matches!((zero(expected), zero(actual)), (Some(a), Some(b)) if a == b)
+            }
             Loosening::Ulps(ulps) => within_ulps(expected, actual, *ulps),
             Loosening::Absolute(bound) => within_absolute(expected, actual, *bound),
         }

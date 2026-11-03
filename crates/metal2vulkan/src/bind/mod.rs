@@ -54,11 +54,11 @@
 //! one index buffer; indirect draws over one arguments buffer, [`IndirectGatherDraw`]) can take
 //! one [`IndexGather`] dispatch of [`index_gather_module`] for all of them instead (an indirect
 //! run's after one [`index_gather_plan_module`] dispatch, [`IndexGatherPlanModule`]), and one
-//! indexed draw each. A pass's `Boolean` visibility results are query
-//! counts copied to their offsets and made Metal's 1 or 0 in place by a [`VisibilityResolve`]
-//! dispatch of [`visibility_resolve_module`]; where a split pass continues a result's query in a
-//! later render pass instance, a [`VisibilityCombine`] dispatch of [`visibility_combine_module`]
-//! first ORs the continuations' counts into it. A pass whose fetching draws read a multisampled
+//! indexed draw each. A pass's visibility results are its queries' results copied to their
+//! offsets, a `Boolean` one the device's own nonzero value where a sample passed; where a split
+//! pass continues a result's query in a later render pass instance, a [`VisibilityCombine`]
+//! dispatch of [`visibility_combine_module`] sums the continuations' counts into a `Counting`
+//! result and ORs them into a `Boolean` one. A pass whose fetching draws read a multisampled
 //! attachment's sample planes (`StorageAttachmentView::SamplePlanes`) splits the attachment into
 //! them with [`planes_split_module`] and merges them back with [`planes_merge_modules`], through
 //! the [`PlanesCopy`] view of its texel size. A multisampled depth or stencil aspect moves
@@ -174,7 +174,6 @@ pub(crate) mod tile_map;
 pub(crate) mod tiled_texels;
 pub(crate) mod two_plane_texels;
 pub(crate) mod visibility_combine;
-pub(crate) mod visibility_resolve;
 pub(crate) mod ycbcr_convert;
 pub(crate) mod ycbcr_in_place;
 pub(crate) mod ycbcr_refresh;
@@ -329,9 +328,6 @@ pub use tiled_texels::{tiled_texels_module, TiledLevelMove, TiledTexelsModule};
 pub use two_plane_texels::{two_plane_texels_module, PlaneLayout, TwoPlaneTexelsModule};
 pub use visibility_combine::{
     visibility_combine_module, ContinuedResult, VisibilityCombine, VisibilityCombineModule,
-};
-pub use visibility_resolve::{
-    visibility_resolve_module, VisibilityResolve, VisibilityResolveModule,
 };
 pub use ycbcr_convert::{
     ycbcr_convert_floats_module, ycbcr_convert_module, ycbcr_read, ycbcr_texel, YCbCrCodes,

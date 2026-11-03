@@ -1543,6 +1543,41 @@ fn an_accepted_difference_in_the_document_justifies_a_loosened_field() {
     );
 }
 
+/// A `Nonzero` allowance at one element of a byte region (`<site>/<offset>`) takes any nonzero
+/// value for the recorded nonzero one there, and nothing else: a zero there, or a moved element
+/// beside it, still diverges.
+#[test]
+fn a_nonzero_allowance_at_an_element_loosens_that_element_alone() {
+    let kind = Degradation::DeviceBooleanVisibility;
+    let case = WordsCase {
+        allowances: vec![
+            crate::replay::notice_allowance(kind.code()),
+            Allowance::new(
+                "case/output/4",
+                Loosening::Nonzero,
+                Justification::notice(kind),
+            ),
+        ],
+        ..WordsCase::new("words", 2)
+    };
+    let recording = recording_of(&case, case.transcript(words(&[1, 1]), "Completed", &[]), 3);
+    let verdict = |answer: &[u32]| {
+        let mut side = StubSide::new(words(answer)).announcing(&[kind]);
+        replay_against(&case, &mut side, &recording)
+            .unwrap()
+            .verdict
+    };
+    let loosened = verdict(&[1, 16]);
+    assert!(matches!(loosened, Verdict::Announced { .. }), "{loosened}");
+    for (answer, why) in [
+        ([1, 0], "a zero for a nonzero"),
+        ([16, 1], "the element beside it"),
+    ] {
+        let held = verdict(&answer);
+        assert!(matches!(held, Verdict::Divergent { .. }), "{why}: {held}");
+    }
+}
+
 #[test]
 fn the_accepted_differences_are_read_from_the_document() {
     let entries = accepted_differences();

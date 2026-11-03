@@ -1106,11 +1106,23 @@ fn visibility_results_span_split_passes() {
         want.extend(&pattern[24..]);
         eprintln!("refused: Counting across a split on {device}: no occlusionQueryPrecise");
     }
-    assert_eq!(
-        read_buffer(&results, 0, 32).unwrap(),
-        want,
-        "the results on {device}"
-    );
+    // The three `Boolean` words by their contract (`visibility::by_contract`): nonzero where a
+    // sample passed, the device's own value.
+    let read = read_buffer(&results, 0, 32).unwrap();
+    let words: Vec<u64> = read
+        .as_chunks::<8>()
+        .0
+        .iter()
+        .map(|w| u64::from_le_bytes(*w))
+        .collect();
+    let unwritten = u64::from_le_bytes(pattern[..8].try_into().unwrap());
+    let mut read: Vec<u8> =
+        super::visibility::by_contract(words[..3].to_vec(), &[0, 1, 2], unwritten)
+            .iter()
+            .flat_map(|w| w.to_le_bytes())
+            .collect();
+    read.extend(words[3].to_le_bytes());
+    assert_eq!(read, want, "the results on {device}");
     let ran = Ok(lane.read(&target, (0, 0), 4, BlitOption::None));
     let texel = if precise { 0.5f32 } else { 0.25 };
     expect(

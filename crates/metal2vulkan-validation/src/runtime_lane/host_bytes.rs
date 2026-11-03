@@ -496,8 +496,8 @@ fn draws_read_indices_and_arguments_where_their_bytes_lie() {
 
 /// Visibility results in buffers 4 bytes past a page (Vulkan copies results only to multiples of
 /// 8, so they land in an upload region and are copied on) and 8 past it (in place): probe 1's
-/// `Boolean` words, 1 for a covering draw, 0 for one covering nothing, and an offset never set
-/// keeps its bytes.
+/// `Boolean` words, 1 for a covering draw (the device's nonzero value, read by its contract), 0 for
+/// one covering nothing, and an offset never set keeps its bytes.
 #[test]
 fn visibility_results_land_where_their_bytes_lie() {
     use VisibilityResultMode::Boolean;
@@ -526,6 +526,7 @@ fn visibility_results_land_where_their_bytes_lie() {
             .map(|c| u64::from_le_bytes(*c))
             .collect();
         let u = 0xaaaa_aaaa_aaaa_aaaa;
+        let words = super::visibility::by_contract(words, &[1, 3], u);
         assert_eq!(words, [u, 1, u, 0], "results {at} bytes past a page");
         vis.check_around("the visibility buffer");
     }
@@ -537,8 +538,9 @@ fn visibility_results_land_where_their_bytes_lie() {
 /// texture buffers 2 past one (staged on every venue), two indexed draws over indices 2 past one
 /// (copied before the pass), and two passes' visibility results 4 past one (landed in an upload
 /// region). The notices fail nothing; `degrade_notices` checks each one's form. Beside them the
-/// device announces what the steps force: the white pipeline's making's kinds and the cases'
-/// `Shared` buffers' system memory.
+/// device announces what the steps force: the white pipeline's making's kinds, the cases'
+/// `Shared` buffers' system memory, and the passes' `Boolean` results
+/// (`visibility::BOOLEANS`).
 #[test]
 fn host_byte_degradations_are_announced_once_per_device_and_kind() {
     use VisibilityResultMode::Boolean;
@@ -586,6 +588,7 @@ fn host_byte_degradations_are_announced_once_per_device_and_kind() {
         shared_in_system_memory(device),
     )]);
     first.extend(probe.made(WHITE));
+    first.extend(super::visibility::BOOLEANS);
     assert_made_once(&messages, &HOST_BYTES, &first);
     quiet(probe, &messages);
 }

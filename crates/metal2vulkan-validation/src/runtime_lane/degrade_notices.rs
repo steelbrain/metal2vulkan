@@ -43,7 +43,8 @@
 //! states whose stages an archive holds from two adds in `binary_archives` ([`ARCHIVES`]),
 //! texture views of another component layout shadowed in `view_reinterpretation`
 //! ([`VIEW_SHADOWS`]), executions of an indirect command buffer from one command
-//! with two lengths in `visibility` ([`REPEATED_STARTS`]), resources made with Metal's private
+//! with two lengths in `visibility` ([`REPEATED_STARTS`]), passes writing a `Boolean` visibility
+//! result there ([`BOOLEANS`]), resources made with Metal's private
 //! option bit here ([`PRIVATE_OPTION`]), indexed indirect draws of bytes a draw wrote with no
 //! barrier in `indirect_draws` ([`UNORDERED_DRAWS`]), pipeline states whose functions read an
 //! argument their function constants removed in `absent_reads` ([`ABSENT_READS`]), a slot's
@@ -215,7 +216,7 @@ use super::two_plane_copies::TWO_PLANE_COPIES;
 use super::unorm_depth_bias::{UNORM_DEPTH_BIAS, UNORM_DEPTH_ROUNDING};
 use super::view_reinterpretation::VIEW_SHADOWS;
 use super::viewport_ranges::{NAN_DEPTH, UNCLAMPED_BIAS, VERTEX_CLAMPS};
-use super::visibility::REPEATED_STARTS;
+use super::visibility::{BOOLEANS, REPEATED_STARTS};
 use super::wide_points::POINT_GUARD_BAND;
 use super::word_samples_msaa::WORD_RESOLVE;
 use super::ycbcr_passes::YCBCR_PASSES;
@@ -504,6 +505,7 @@ fn every_kind_has_a_site_a_lane_test_takes() {
         &ARCHIVES,
         &VIEW_SHADOWS,
         &REPEATED_STARTS,
+        &BOOLEANS,
         &PRIVATE_OPTION,
         &IN_PLACE_VERTEX_READS,
         &FRAGMENTS_BEFORE_GEOMETRY,

@@ -83,7 +83,7 @@ use std::sync::Arc;
 use super::{
     at, count_loop, count_words, k32, k64, load32, load64, no_binding, store32, wide, Types,
 };
-use crate::bind::visibility_resolve::words_buffer;
+use crate::bind::visibility_combine::words_buffer;
 use crate::budget::{Budget, Meter};
 use crate::device::profile::BufferAccess;
 use crate::device::requirements::Requirements;

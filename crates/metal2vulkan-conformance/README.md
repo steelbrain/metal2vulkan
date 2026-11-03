@@ -45,6 +45,12 @@ venue whose device answers so, that says what differs, whose answer it is, and w
 recorded bound covers it. A tolerance justified by a note is for a note whose documentation gives a
 bound validation may hold, and is never wider than that bound.
 
+A tolerance may name one element of a byte region rather than the whole site: the element's path is
+the site's and its byte offset in the region, `case/pass-0/words/24`. The visibility family loosens
+each `Boolean` result's word that way, and only by `Loosening::Nonzero` (zero exactly where Metal's
+word is zero), the bound `device-boolean-visibility` documents; every other word of the buffer
+still compares exactly.
+
 A site where plain Metal answered a call and we returned a typed error is a **refusal**, and no
 allowance can make it anything else: it counts in its own verdict and is never compliant.
 
