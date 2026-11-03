@@ -39,7 +39,8 @@ impl Named {
         writes: CommandWrites::ANY,
     };
 
-    fn union(self, other: Named) -> Named {
+    /// What either may do.
+    pub(crate) fn union(self, other: Named) -> Named {
         Named {
             encodes: self.encodes || other.encodes,
             writes: self.writes.union(other.writes),

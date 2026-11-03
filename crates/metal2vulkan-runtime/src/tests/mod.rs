@@ -166,6 +166,8 @@ mod in_place_check;
 mod inbox;
 mod indirect_command_buffer;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
+mod indirect_command_buffer_device;
+#[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod inline_continues;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod inline_splits;

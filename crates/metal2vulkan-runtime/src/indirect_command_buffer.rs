@@ -615,10 +615,16 @@ impl Device {
             }
             _ => None,
         };
+        let mapped = storage
+            .contents()
+            .ok_or_else(|| internal("an indirect command buffer's records are not mapped"))?
+            .as_ptr()
+            .expose_provenance();
         let options =
             ResourceOptions::new(modes.storage, modes.cache, storage.hazard_tracking_mode());
         let icb = IndirectCommandBuffer(Arc::new(IcbShared {
             storage,
+            mapped,
             id,
             identifier,
             descriptor: *descriptor,
@@ -661,12 +667,19 @@ enum CommandState {
 
 /// What the CPU left beside a buffer's records: the pipeline state it set on each command it
 /// set one on (`CommandState`), by index, none for the rest, so a buffer of commands never
-/// encoded holds nothing for them; and the kept recordings of its chunks (`kept_commands.rs`),
-/// which each write of a command forgets.
+/// encoded holds nothing for them; the kept recordings of its chunks (`kept_commands.rs`),
+/// which each write of a command forgets; and what the CPU's edits added to what the records may
+/// hold (`added`).
 #[derive(Default)]
 struct CommandStates {
+    /// Only an edit sets a state here, adding it to `added` (`IndirectCommandBuffer::edit`); a
+    /// reset keeps or drops the one it finds.
     states: BTreeMap<u32, CommandState>,
     kept: KeptChunks,
+    /// What the CPU's edits added to what the records may hold, together, as
+    /// `WrittenCommands::add_record` took it: part of what the records may hold, which only grows,
+    /// so an edit that would add nothing more adds nothing (`IndirectCommandBuffer::add_written`).
+    added: (CommandWrites, Named),
 }
 
 impl CommandStates {
@@ -1019,6 +1032,9 @@ pub struct IndirectCommandBuffer(Arc<IcbShared>);
 struct IcbShared {
     /// The header and the records.
     storage: Buffer,
+    /// The address of `storage`'s contents, exposed ([`bytes`](IndirectCommandBuffer::bytes)): a
+    /// buffer of the runtime's own memory keeps its mapping for its life.
+    mapped: usize,
     /// Its ID, held while the buffer lives.
     id: RecordsHold,
     /// Its `uniqueIdentifier` (`unique_identifier.rs`), held while the buffer lives.
@@ -1447,13 +1463,9 @@ impl std::hash::Hash for IndirectCommandBuffer {
 }
 
 impl IndirectCommandBuffer {
-    /// The records' bytes: the header, then each command's record.
-    fn bytes(&self) -> Result<*mut u8, Error> {
-        self.0
-            .storage
-            .contents()
-            .map(|contents| contents.as_ptr())
-            .ok_or_else(|| internal("an indirect command buffer's records are not mapped"))
+    /// The records' bytes: the header, then each command's record, mapped for the buffer's life.
+    fn bytes(&self) -> *mut u8 {
+        std::ptr::with_exposed_provenance_mut(self.0.mapped)
     }
 
     /// Write the header and reset every command.
@@ -1462,29 +1474,29 @@ impl IndirectCommandBuffer {
         let length = storage_length(self.0.size) as usize;
         // SAFETY: the storage is host-visible and mapped for its life, `length` bytes from its
         // start; nothing else reaches it before the buffer is returned.
-        let bytes = unsafe { std::slice::from_raw_parts_mut(self.bytes()?, length) };
+        let bytes = unsafe { std::slice::from_raw_parts_mut(self.bytes(), length) };
         CommandBuffer::initialize(bytes, self.0.size, &self.0.records, self.0.inheritance)
             .map_err(|_| internal("an indirect command buffer's header was refused"))
     }
 
     /// The bytes of command `index`'s record (below the size), as they are now.
-    fn record_now(&self, index: u32) -> Result<[u8; COMMAND_BYTES], Error> {
+    fn record_now(&self, index: u32) -> [u8; COMMAND_BYTES] {
         let mut bytes = [0; COMMAND_BYTES];
         // SAFETY: the record of a command below the size lies inside the mapped storage. A GPU
         // write to it meanwhile is the program's race, as on Metal.
         unsafe {
             std::ptr::copy_nonoverlapping(
-                self.bytes()?.add(record_offset(index)),
+                self.bytes().add(record_offset(index)),
                 bytes.as_mut_ptr(),
                 COMMAND_BYTES,
             );
         }
-        Ok(bytes)
+        bytes
     }
 
     /// The record of command `index` (below the size).
     fn record(&self, index: u32) -> Result<CommandRecord, Error> {
-        CommandRecord::decode(&self.record_now(index)?).map_err(|_| undecodable())
+        CommandRecord::decode(&self.record_now(index)).map_err(|_| undecodable())
     }
 
     /// `read` of command `index`'s record (below the size) as it is now, field by field
@@ -1496,7 +1508,7 @@ impl IndirectCommandBuffer {
         read: impl FnOnce(&RecordView<'_>) -> T,
     ) -> Result<T, Error> {
         self.device().shared().counts.indirect_records_read(1);
-        let bytes = self.record_now(index)?;
+        let bytes = self.record_now(index);
         let view = RecordView::new(&bytes).map_err(|_| undecodable())?;
         Ok(read(&view))
     }
@@ -1517,7 +1529,7 @@ impl IndirectCommandBuffer {
         unsafe {
             std::ptr::copy_nonoverlapping(
                 bytes.as_ptr(),
-                self.bytes()?.add(record_offset(index)),
+                self.bytes().add(record_offset(index)),
                 COMMAND_BYTES,
             );
         }
@@ -1732,37 +1744,102 @@ impl IndirectCommandBuffer {
     }
 
     /// Write `field` into command `index`'s record (below the size), and where the field names a
-    /// pipeline state, `set` as the state the CPU set on it: the field's words alone, as Metal's
-    /// setter writes its field, the rest of the record as the GPU and the CPU left it
-    /// (`CommandRecord::write_field`); then what the record holds joins what its records may.
+    /// pipeline state, `set` as the state the CPU set on it: the field's words alone, in place, as
+    /// Metal's setter writes its field, the rest of the record as the GPU and the CPU left it
+    /// (`CommandRecord::write_field`); then what the record holds joins what its records may
+    /// (`grown_writes`, `add_written`). All of it under one hold of `pipelines`.
     fn edit(&self, index: u32, field: RecordField, set: Option<CommandState>) -> Result<(), Error> {
         let mut commands = lock(&self.0.pipelines);
-        let mut bytes = self.record_now(index)?;
-        let written =
-            CommandRecord::write_field(&mut bytes, field).map_err(|error| match error {
-                RecordError::Length { .. }
-                | RecordError::Action { .. }
-                | RecordError::Barrier { .. }
-                | RecordError::PipelineState => undecodable(),
-                _ => internal("an indirect command's record does not take a setter's field"),
-            })?;
-        // SAFETY: as `record_now`'s; `written` lies inside the record, and writes are one at a
-        // time (`pipelines`).
-        unsafe {
-            std::ptr::copy_nonoverlapping(
-                bytes[written.clone()].as_ptr(),
-                self.bytes()?.add(record_offset(index) + written.start),
-                written.len(),
-            );
-        }
+        // SAFETY: the record of a command below the size lies inside the mapped storage, and the
+        // CPU's writes of the records are one at a time (`pipelines`, held while the slice lives).
+        // A GPU write to it meanwhile is the program's race, as on Metal.
+        let bytes = unsafe {
+            std::slice::from_raw_parts_mut(self.bytes().add(record_offset(index)), COMMAND_BYTES)
+        };
+        CommandRecord::write_field(bytes, field).map_err(|error| match error {
+            RecordError::Length { .. }
+            | RecordError::Action { .. }
+            | RecordError::Barrier { .. }
+            | RecordError::PipelineState => undecodable(),
+            _ => internal("an indirect command's record does not take a setter's field"),
+        })?;
         self.wrote(&mut commands, index..index + 1);
+        let named = set.as_ref().map(CommandState::named);
+        // Read before the state is set, so a state set is always added: only a GPU write since
+        // the field's, the program's race, leaves a record that does not decode here.
+        let grown = self.grown_writes(&commands, bytes, field, named)?;
         if let Some(set) = set {
             commands.set(index, Some(set));
         }
-        let named = commands.states.get(&index).map(CommandState::named);
-        let writes = RecordView::new(&bytes).map_err(|_| undecodable())?.writes();
-        self.0.written.add_record(writes, named);
+        if let Some(writes) = grown {
+            self.add_written(&mut commands, index, writes, named);
+        }
         Ok(())
+    }
+
+    /// What `record`, command `index`'s after an edit of `field`, holds (`RecordView::writes`: its
+    /// action and barrier), where it or `named`, the state the edit set, would add to what the
+    /// CPU's edits added (`CommandStates::added`); none where the edit adds nothing, under
+    /// `commands`, the caller's hold of `pipelines`. The edits added every action and barrier the
+    /// CPU left in a record, so only the GPU leaves others: an edit of another field, on a buffer
+    /// the GPU may not have written ([`gpu_written`](Self::gpu_written), set before any GPU work
+    /// that may write the records is committed), leaves the record holding what they added, which
+    /// is then not read.
+    fn grown_writes(
+        &self,
+        commands: &CommandStates,
+        record: &[u8],
+        field: RecordField,
+        named: Option<Named>,
+    ) -> Result<Option<CommandWrites>, Error> {
+        let (added, added_named) = commands.added;
+        let writes = || {
+            RecordView::new(record)
+                .map(|view| view.writes())
+                .map_err(|_| undecodable())
+        };
+        let read =
+            matches!(field, RecordField::Action(_) | RecordField::Barrier(_)) || self.gpu_written();
+        let held = match read {
+            true => Some(writes()?),
+            false => None,
+        };
+        let grows = held.is_some_and(|held| added.union(held) != added)
+            || named.is_some_and(|named| {
+                !added.may(CommandWrites::PIPELINE) || added_named.union(named) != added_named
+            });
+        match (grows, held) {
+            (false, _) => Ok(None),
+            (true, Some(held)) => Ok(Some(held)),
+            (true, None) => writes().map(Some),
+        }
+    }
+
+    /// Add `writes`, what command `index`'s record holds after an edit (`grown_writes`), and the
+    /// state it names, to what the records may hold (`WrittenCommands::add_record`) and to what
+    /// the CPU's edits added (`CommandStates::added`), under `commands`, the caller's hold of
+    /// `pipelines`. `set` is the state's, where the edit set one; else the command names the state
+    /// an edit set before, if any. An add the edits made already would change nothing: the
+    /// summary holds it, and so does every buffer a blit copied the records into, which holds
+    /// what the summary held when it was copied and gains what it gains since.
+    fn add_written(
+        &self,
+        commands: &mut CommandStates,
+        index: u32,
+        writes: CommandWrites,
+        set: Option<Named>,
+    ) {
+        let named = set.or_else(|| commands.states.get(&index).map(CommandState::named));
+        self.0.written.add_record(writes, named);
+        let pipeline = CommandWrites {
+            operations: named.map_or(0, |_| CommandWrites::PIPELINE),
+            primitive_types: 0,
+        };
+        let (added, added_named) = commands.added;
+        commands.added = (
+            added.union(writes).union(pipeline),
+            added_named.union(named.unwrap_or_default()),
+        );
     }
 
     /// Reset command `index` (below the size) by `reset`, which changes its whole record and the
@@ -2783,7 +2860,7 @@ impl IndirectCommandBuffer {
         // completed (the caller's contract).
         unsafe {
             std::ptr::copy_nonoverlapping(
-                self.bytes()?,
+                self.bytes(),
                 header.as_mut_ptr(),
                 COMMAND_BUFFER_HEADER_BYTES,
             );
@@ -2814,7 +2891,7 @@ impl IndirectCommandBuffer {
             // SAFETY: as `record`'s.
             unsafe {
                 std::ptr::copy_nonoverlapping(
-                    self.bytes()?.add(record_offset(index)),
+                    self.bytes().add(record_offset(index)),
                     bytes.as_mut_ptr(),
                     COMMAND_BYTES,
                 );
