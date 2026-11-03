@@ -44,7 +44,8 @@ pub enum Const {
     Expr(ConstExpr),
     /// An inline assembly expression (`asm`), typed `ptr`: only ever the callee of a call, at the
     /// call's function type. The IR keeps its strings and flags as written and gives it no
-    /// meaning; canonicalization refuses a call to it that an entry reaches.
+    /// meaning. Decode drops a call of the empty `asm sideeffect "", ""` (`bitcode::function`);
+    /// canonicalization refuses a call of any other that an entry reaches.
     InlineAsm(Box<InlineAsm>),
 }
 

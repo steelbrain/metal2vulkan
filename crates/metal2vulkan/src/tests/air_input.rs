@@ -201,12 +201,13 @@ type Shape = BTreeMap<String, (usize, BTreeMap<String, usize>)>;
 const TERMINATORS: [&str; 4] = ["ret", "br", "switch", "unreachable"];
 
 /// Callees whose calls decode drops, as `llvm-dis` spells them.
-const DROPPED: [&str; 5] = [
+const DROPPED: [&str; 6] = [
     "@llvm.lifetime.start.",
     "@llvm.lifetime.end.",
     "@llvm.assume(",
     "@llvm.experimental.noalias.scope.decl(",
     "@llvm.agx3.yield(",
+    "void asm sideeffect \"\", \"\"()",
 ];
 
 /// The name of the function a `define`/`declare` line names (`@name(` or `@"name"(`).

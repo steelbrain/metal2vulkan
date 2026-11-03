@@ -8,24 +8,38 @@ target triple = "air64_v28-apple-macosx26.0.0"
 define void @asm_in_loop(i32 addrspace(1)* nocapture noundef writeonly "air-buffer-no-alias" %0, i32 addrspace(2)* nocapture noundef readonly align 4 dereferenceable(4) "air-buffer-no-alias" %1, i32 noundef %2) local_unnamed_addr #0 {
   %4 = load i32, i32 addrspace(2)* %1, align 4, !tbaa !25, !alias.scope !29, !noalias !32
   %5 = icmp eq i32 %4, 0
-  br i1 %5, label %6, label %10
+  br i1 %5, label %9, label %6
 
-6:                                                ; preds = %10, %3
-  %7 = phi i32 [ 0, %3 ], [ %14, %10 ]
-  %8 = zext i32 %2 to i64
-  %9 = getelementptr inbounds i32, i32 addrspace(1)* %0, i64 %8
-  store i32 %7, i32 addrspace(1)* %9, align 4, !tbaa !25, !alias.scope !32, !noalias !29
+6:                                                ; preds = %3
+  %7 = shl i32 %2, 3
+  %8 = add i32 %7, 8
+  br label %17
+
+9:                                                ; preds = %17, %3
+  %10 = phi i32 [ 0, %3 ], [ %21, %17 ]
+  %11 = shl i32 %2, 1
+  %12 = zext i32 %11 to i64
+  %13 = getelementptr inbounds i32, i32 addrspace(1)* %0, i64 %12
+  store i32 %10, i32 addrspace(1)* %13, align 4, !tbaa !25, !alias.scope !32, !noalias !29
+  %14 = or i32 %11, 1
+  %15 = zext i32 %14 to i64
+  %16 = getelementptr inbounds i32, i32 addrspace(1)* %0, i64 %15
+  store i32 %4, i32 addrspace(1)* %16, align 4, !tbaa !25, !alias.scope !32, !noalias !29
   ret void
 
-10:                                               ; preds = %3, %10
-  %11 = phi i32 [ %15, %10 ], [ 0, %3 ]
-  %12 = phi i32 [ %14, %10 ], [ 0, %3 ]
+17:                                               ; preds = %6, %17
+  %18 = phi i32 [ 0, %6 ], [ %22, %17 ]
+  %19 = phi i32 [ 0, %6 ], [ %21, %17 ]
   tail call void asm sideeffect "", ""() #3, !srcloc !34
-  %13 = xor i32 %11, %2
-  %14 = add i32 %12, %13
-  %15 = add nuw i32 %11, 1
-  %16 = icmp eq i32 %15, %4
-  br i1 %16, label %6, label %10, !llvm.loop !35
+  %20 = xor i32 %18, %2
+  %21 = add i32 %19, %20
+  %22 = add nuw i32 %18, 1
+  %23 = add i32 %8, %18
+  %24 = zext i32 %23 to i64
+  %25 = getelementptr inbounds i32, i32 addrspace(1)* %0, i64 %24
+  store i32 %21, i32 addrspace(1)* %25, align 4, !tbaa !25, !alias.scope !32, !noalias !29
+  %26 = icmp eq i32 %22, %4
+  br i1 %26, label %9, label %17, !llvm.loop !35
 }
 
 ; Function Attrs: convergent mustprogress nounwind
@@ -115,13 +129,13 @@ attributes #4 = { convergent nobuiltin "no-builtins" }
 !31 = distinct !{!31, !"air-alias-scopes(asm_in_loop)"}
 !32 = !{!33}
 !33 = distinct !{!33, !31, !"air-alias-scope-arg(0)"}
-!34 = !{i64 978}
+!34 = !{i64 1219}
 !35 = distinct !{!35, !36}
 !36 = !{!"llvm.loop.mustprogress"}
 !37 = !{!38}
 !38 = distinct !{!38, !39, !"air-alias-scope-arg(0)"}
 !39 = distinct !{!39, !"air-alias-scopes(asm_in_helper)"}
-!40 = !{i64 1110}
+!40 = !{i64 1429}
 !41 = !{!42}
 !42 = distinct !{!42, !43, !"air-alias-scope-arg(1)"}
 !43 = distinct !{!43, !"air-alias-scopes(asm_free)"}

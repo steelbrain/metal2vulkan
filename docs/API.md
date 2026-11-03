@@ -3929,6 +3929,17 @@ each item named states the rule in full.
   and its read is undefined: a kernel storing `x * scale + 1` of such a function stored nothing on
   an M3 Max under macOS 27.0.1.
 
+**Inline assembly**
+
+- **An empty `asm volatile("")` is no compiler barrier.** It is the one inline assembly MSL
+  accepts (a template, an operand or a clobber is an "illegal asm statement"), and it assembles to
+  no instruction: the translator drops its call, `asm sideeffect "", ""` of type `void ()`, with
+  no notice. In Metal it acts on the compiler alone: no memory access moves across it, and a loop
+  that holds it is kept. Only a racy spin loop over plain (non-atomic) memory can tell the
+  difference, and MSL's memory model leaves that loop undefined; a loop with a visible effect runs
+  every iteration either way. Any other inline assembly, which only hand-written AIR can hold, is
+  refused where an entry reaches it (`Feature::InlineAsm`).
+
 **Kernels**
 
 - **An imageblock's length rounds its cell as an M4 does**

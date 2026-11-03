@@ -1124,8 +1124,9 @@ pub enum Feature {
     Recursion,
     /// Indirect calls, function pointers, visible/intersection function tables (one variant).
     DynamicCall,
-    /// A call to inline assembly (`asm`) that an entry reaches: the IR gives no assembly a
-    /// meaning. The refusal names the expression (`asm sideeffect "", ""`).
+    /// A call to inline assembly (`asm`) that an entry reaches, other than the empty
+    /// `asm sideeffect "", ""` decode drops: the IR gives no assembly a meaning. The refusal names
+    /// the expression (`asm "nop", ""`).
     InlineAsm,
     /// Linkage signatures / stitching / dynamic libraries.
     Linking,

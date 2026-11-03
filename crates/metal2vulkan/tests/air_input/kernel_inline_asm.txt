@@ -7,28 +7,40 @@ source_filename = "-"
 %t9 = type [2 x i32]
 %t13 = type void ()
 c6 = %t9 [27, 2]
-c18 = ptr addrspace(0) asm sideeffect "", ""
+c19 = ptr addrspace(0) asm sideeffect "", ""
 
 define %t5 @f0 "asm_in_loop" convergent "approx-func-fp-math"="true" "frame-pointer"="all" "min-legal-vector-width"="0" "no-builtins"="" "no-infs-fp-math"="true" "no-nans-fp-math"="true" "no-signed-zeros-fp-math"="true" "no-trapping-math"="true" "stack-protector-buffer-size"="8" "unsafe-fp-math"="true" %a0( Mod nocapture "air-buffer-no-alias"="" ) %a1( align 4 dereferenceable(4) Ref nocapture "air-buffer-no-alias"="" ) {
 bb0:
   %i0 = load i32, %a1, align 4
   %i1 = icmp eq %i0, i32 0
-  br %i1, bb1, bb2
+  br %i1, bb2, bb1
 bb1:
-  %i3 = phi i32 [i32 0, bb0], [%i12, bb2]
-  %i4 = zext %a2 to i64
-  %i5 = getelementptr inbounds i32, %a0, %i4
-  store %i3, %i5, align 4
-  ret void
+  %i3 = shl i32 %a2, i32 3
+  %i4 = add i32 %i3, i32 8
+  br bb3
 bb2:
-  %i8 = phi i32 [%i13, bb2], [i32 0, bb0]
-  %i9 = phi i32 [%i12, bb2], [i32 0, bb0]
-  tail call void %t13 ptr addrspace(0) c18() convergent
-  %i11 = xor i32 %i8, %a2
-  %i12 = add i32 %i9, %i11
-  %i13 = add nuw i32 %i8, i32 1
-  %i14 = icmp eq %i13, %i0
-  br %i14, bb1, bb2, !llvm.loop LoopHints { unroll: Default, must_progress: true }
+  %i6 = phi i32 [i32 0, bb0], [%i19, bb3]
+  %i7 = shl i32 %a2, i32 1
+  %i8 = zext %i7 to i64
+  %i9 = getelementptr inbounds i32, %a0, %i8
+  store %i6, %i9, align 4
+  %i11 = or i32 %i7, i32 1
+  %i12 = zext %i11 to i64
+  %i13 = getelementptr inbounds i32, %a0, %i12
+  store %i0, %i13, align 4
+  ret void
+bb3:
+  %i16 = phi i32 [i32 0, bb1], [%i20, bb3]
+  %i17 = phi i32 [i32 0, bb1], [%i19, bb3]
+  %i18 = xor i32 %i16, %a2
+  %i19 = add i32 %i17, %i18
+  %i20 = add nuw i32 %i16, i32 1
+  %i21 = add i32 %i4, %i16
+  %i22 = zext %i21 to i64
+  %i23 = getelementptr inbounds i32, %a0, %i22
+  store %i19, %i23, align 4
+  %i25 = icmp eq %i20, %i0
+  br %i25, bb2, bb3, !llvm.loop LoopHints { unroll: Default, must_progress: true }
 }
 
 define %t6 @f1 "asm_in_helper" convergent "approx-func-fp-math"="true" "frame-pointer"="all" "min-legal-vector-width"="0" "no-builtins"="" "no-infs-fp-math"="true" "no-nans-fp-math"="true" "no-signed-zeros-fp-math"="true" "no-trapping-math"="true" "stack-protector-buffer-size"="8" "unsafe-fp-math"="true" %a0( Mod nocapture "air-buffer-no-alias"="" ) {
@@ -42,10 +54,9 @@ bb0:
 
 define internal %t7 @f2 "_ZL10asm_helperj" fastcc convergent "approx-func-fp-math"="true" "frame-pointer"="all" "min-legal-vector-width"="0" "no-builtins"="" "no-infs-fp-math"="true" "no-nans-fp-math"="true" "no-signed-zeros-fp-math"="true" "no-trapping-math"="true" "stack-protector-buffer-size"="8" "unsafe-fp-math"="true" {
 bb0:
-  tail call void %t13 ptr addrspace(0) c18() convergent
-  %i1 = mul i32 %a0, i32 3
-  %i2 = add i32 %i1, i32 1
-  ret %i2
+  %i0 = mul i32 %a0, i32 3
+  %i1 = add i32 %i0, i32 1
+  ret %i1
 }
 
 define %t5 @f3 "asm_free" memory(Mod, NoModRef, NoModRef) "approx-func-fp-math"="true" "frame-pointer"="all" "min-legal-vector-width"="0" "no-builtins"="" "no-infs-fp-math"="true" "no-nans-fp-math"="true" "no-signed-zeros-fp-math"="true" "no-trapping-math"="true" "stack-protector-buffer-size"="8" "unsafe-fp-math"="true" %a0( Mod nocapture "air-buffer-no-alias"="" ) %a1( align 4 dereferenceable(4) Ref nocapture "air-buffer-no-alias"="" ) {

@@ -42,7 +42,10 @@
 //! body calls it, so the report says which spelling of the operation was read and where. Calls to the markers `llvm.lifetime.*`, `llvm.assume`, and
 //! `llvm.experimental.noalias.scope.decl` are dropped: their operands are read and checked (the
 //! last one's `metadata` operand must name metadata), they take a record number, which
-//! attachments refer to, but no instruction. Metadata operands of any other call are refused.
+//! attachments refer to, but no instruction. So is a call of the one inline assembly MSL accepts,
+//! `asm sideeffect "", ""` of type `void ()`, which assembles to nothing (`executes_nothing`); a
+//! call of any other inline assembly stays an indirect call through its constant. Metadata
+//! operands of any other call are refused.
 //!
 //! # Metadata
 //!
@@ -1372,7 +1375,8 @@ impl FnDecoder {
         };
         let (callee, _) = self.pair(s, cx, r, m)?;
         let target = self.callee(cx, callee, fn_ty);
-        let dropped = matches!(target, Target::Intrinsic(_, DeclClass::Drop(_)));
+        let dropped = matches!(target, Target::Intrinsic(_, DeclClass::Drop(_)))
+            || executes_nothing(cx.consts, callee, (ret, &params, vararg), cx.types);
         let mut args = Vec::new();
         m.reserve(&mut args, params.len())?;
         for &p in params.iter() {
@@ -1614,6 +1618,30 @@ enum Target {
     Callee(Callee),
     /// A call to a classified `air.*`/`llvm.*` declaration.
     Intrinsic(FuncId, DeclClass),
+}
+
+/// Whether a call of `callee` with signature `(ret, params, vararg)` is the one inline assembly MSL
+/// accepts, `call void asm sideeffect "", ""()`: an empty template with an empty constraint string,
+/// so no operand, result or clobber, and no flag but `sideeffect`. It assembles to no instruction
+/// and names nothing it reads or writes. Its `sideeffect` only keeps an optimizer from removing it
+/// or moving memory accesses across it (a shader generator writes it into loop bodies so that a
+/// loop is kept): no value a race-free program computes depends on it. Decode drops the call, as it
+/// drops the markers; any other inline assembly is kept, and refused where an entry reaches it.
+fn executes_nothing(
+    consts: &ConstTable,
+    callee: Value,
+    (ret, params, vararg): (TypeId, &[TypeId], bool),
+    types: &TypeTable,
+) -> bool {
+    let empty = consts.inline_asm(callee).is_some_and(|a| {
+        a.template.is_empty()
+            && a.constraints.is_empty()
+            && a.side_effects
+            && !a.align_stack
+            && !a.intel_dialect
+            && !a.can_throw
+    });
+    empty && params.is_empty() && !vararg && matches!(types.get(ret), Some(Type::Void))
 }
 
 /// The value numbered `id` and its type: a module value below `module_count`, else a local one.
