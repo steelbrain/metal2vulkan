@@ -1852,7 +1852,7 @@ impl CommandBuffer {
                 behind_hang: None,
                 shadow_attachments: Vec::new(),
                 shadows_copied_in: Vec::new(),
-                shadow_carry: Some(ShadowCarry::default()),
+                shadow_carry: Some(ShadowCarry::on(queue.id())),
                 descriptors: DescriptorArena::default(),
                 status_words: None,
                 mesh_grid_past: false,

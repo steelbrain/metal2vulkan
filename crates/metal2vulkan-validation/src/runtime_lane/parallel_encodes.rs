@@ -19,9 +19,22 @@
 //!   read by a kernel, in each of eight command buffers on four threads. Every copy and read
 //!   holds its own command buffer's words. A command buffer's later encoder takes the image its
 //!   earlier one left holding the truth, unless another encoder that used it ended in between,
-//!   which encoding on several threads makes likely: then it copies the truth in again. The
-//!   copies in are printed beside the serial run's, as `PARALLEL-SHADOW` lines.
+//!   which encoding on several threads makes likely: only another queue's encoder counts, since
+//!   a queue's command buffers run whole in commit order (`shadow::Touched`), so the copies and
+//!   the carries on four threads are the serial run's (printed as `PARALLEL-SHADOW` lines).
+//! - **Guest pages** (`runtime::dirty_pages`): the same texture's shape over a no-copy buffer of
+//!   pages whose memory carries a log of the writes to them ([`GuestLog`],
+//!   `HostMemory::with_dirty_pages`), the CPU writing them at each run's start and telling the
+//!   log. Eight command buffers of one queue write the texture through a kernel and copy the
+//!   pages out, read it, fill a row of its bytes by a blit then read it, and read it in two
+//!   encoders, the second carried, so its shadow's gated copies in count on the holds the commits
+//!   before them left, which a write of the pages lets go of (`DirtyShadows::committed`). Encoded serially, and on 2, 3 and 4 threads
+//!   out of commit order, committed in order: every read and copy holds the bytes of the CPU
+//!   model, the pages end holding them, every byte the GPU wrote is one the runtime reported to
+//!   the log, the reports and the gated copies in are the serial run's, and the bytes the gated
+//!   copies moved are printed (`PARALLEL-GUEST` lines).
 
+use super::host_memory::Mapping;
 use super::{
     buffer_with, layer_reported_nothing_at_all, read_buffer, validated_device_with, Messages,
     ScratchCache, WAIT,
@@ -32,10 +45,12 @@ use metal2vulkan::metal::{PixelFormat, TextureType, TextureUsage};
 use metal2vulkan_devtools::{engine_dir, llvm_assemble};
 use metal2vulkan_runtime::{
     Buffer, CommandBuffer, CommandBufferStatus, CommandQueue, ComputePipelineState, Degradation,
-    Device, LoadAction, PipelineOptions, RenderPassDescriptor, ResourceOptions, Size, StoreAction,
-    Texture, TextureDescriptor, WorkCounts,
+    Device, DirtyPages, DirtyStamp, HostMemory, LoadAction, PipelineOptions, RenderPassDescriptor,
+    ResourceOptions, Size, StoreAction, Texture, TextureDescriptor, WorkCounts,
 };
-use std::sync::{Barrier, Condvar, Mutex};
+use std::num::NonZeroU64;
+use std::ops::Range;
+use std::sync::{Arc, Barrier, Condvar, Mutex};
 use std::time::{Duration, Instant};
 
 /// Wait for `command_buffer`, which must complete without an error.
@@ -269,9 +284,55 @@ fn shadow_counts(counts: &WorkCounts) -> [u64; 3] {
     ]
 }
 
+/// What encodes a command buffer, given its index and a pause to take between its encoders.
+type Encode<'a> = dyn Fn(usize, &CommandBuffer, &mut dyn FnMut()) + Sync + 'a;
+
+/// Encode `command_buffers` (made in commit order) by `encode`, given each one's index: on this
+/// thread in turn, or on `threads` threads from a barrier where `schedule` is some, each taking
+/// every `threads`-th command buffer, the latest first, with pauses seeded by it (a yield, a spin
+/// or a sleep of up to 60 µs, or none) before each and between its encoders.
+fn encoded(command_buffers: &[CommandBuffer], schedule: Option<(usize, u64)>, encode: &Encode<'_>) {
+    let Some((threads, seed)) = schedule else {
+        for (index, cb) in command_buffers.iter().enumerate() {
+            encode(index, cb, &mut || {});
+        }
+        return;
+    };
+    let start = Barrier::new(threads);
+    let mut rng = Rng(seed);
+    let seeds: Vec<u64> = (0..threads).map(|_| rng.next()).collect();
+    std::thread::scope(|scope| {
+        for (me, &seed) in seeds.iter().enumerate() {
+            let start = &start;
+            scope.spawn(move || {
+                let mut rng = Rng(seed);
+                let mut pause = || match rng.next() % 4 {
+                    0 => {}
+                    1 => std::thread::yield_now(),
+                    2 => {
+                        let until = Instant::now() + Duration::from_micros(rng.next() % 30);
+                        while Instant::now() < until {
+                            std::hint::spin_loop();
+                        }
+                    }
+                    _ => std::thread::sleep(Duration::from_micros(rng.next() % 60)),
+                };
+                start.wait();
+                let mine = (0..command_buffers.len())
+                    .rev()
+                    .filter(|i| i % threads == me);
+                for index in mine {
+                    pause();
+                    encode(index, &command_buffers[index], &mut pause);
+                }
+            });
+        }
+    });
+}
+
 /// A run of the shadow test on `device` (the module docs), its command buffers encoded on this
-/// thread in turn, or on [`SHADOW_THREADS`] threads from a barrier, with seeded pauses, where
-/// `seed` is some; each command buffer's copy and read compared with its words. Its counts.
+/// thread in turn, or on [`SHADOW_THREADS`] threads ([`encoded`]) where `seed` is some; each
+/// command buffer's copy and read compared with its words. Its counts.
 fn shadow_run(
     device: &Device,
     queue: &CommandQueue,
@@ -305,45 +366,11 @@ fn shadow_run(
     let command_buffers: Vec<CommandBuffer> = (0..SHADOW_COMMAND_BUFFERS)
         .map(|_| queue.command_buffer().unwrap())
         .collect();
-    match seed {
-        None => {
-            for (index, cb) in command_buffers.iter().enumerate() {
-                encode(index, cb, &mut || {});
-            }
-        }
-        Some(_) => {
-            let start = Barrier::new(SHADOW_THREADS);
-            let seeds: Vec<u64> = (0..SHADOW_THREADS).map(|_| rng.next()).collect();
-            std::thread::scope(|scope| {
-                for (me, &seed) in seeds.iter().enumerate() {
-                    let (start, encode, command_buffers) = (&start, &encode, &command_buffers);
-                    scope.spawn(move || {
-                        let mut rng = Rng(seed);
-                        let mut pause = || match rng.next() % 4 {
-                            0 => {}
-                            1 => std::thread::yield_now(),
-                            2 => {
-                                let until = Instant::now() + Duration::from_micros(rng.next() % 30);
-                                while Instant::now() < until {
-                                    std::hint::spin_loop();
-                                }
-                            }
-                            _ => std::thread::sleep(Duration::from_micros(rng.next() % 60)),
-                        };
-                        start.wait();
-                        // Each thread takes every fourth command buffer, the latest first.
-                        let mine = (0..SHADOW_COMMAND_BUFFERS)
-                            .rev()
-                            .filter(|i| i % SHADOW_THREADS == me);
-                        for index in mine {
-                            pause();
-                            encode(index, &command_buffers[index], &mut pause);
-                        }
-                    });
-                }
-            });
-        }
-    }
+    encoded(
+        &command_buffers,
+        seed.map(|seed| (SHADOW_THREADS, rng.next() ^ seed)),
+        &encode,
+    );
     for cb in &command_buffers {
         cb.commit().unwrap();
     }
@@ -428,7 +455,324 @@ fn a_shadowed_texture_keeps_each_command_buffer_s_bytes() {
         .map(|notice| notice.degradation.code().to_owned())
         .collect();
     println!("PARALLEL-SHADOW on {name}: notices {notices:?}");
+    // One queue's command buffers run in commit order, so another one's encoder ending between
+    // two of a command buffer's encoders leaves its carry standing (`shadow::Touched`).
+    assert_eq!(
+        sum(&parallel),
+        sum(&serial),
+        "the copies and the carries on {SHADOW_THREADS} threads"
+    );
     drop((texture, truth, queue, kernels));
     drop(device);
     layer_reported_nothing_at_all(&messages);
+}
+
+/// The guest pages test's log of the writes to its pages, as a consumer keeps one: each write
+/// stamped with the publication it falls in and named with its writer (0 the CPU's and every
+/// write reported through `wrote`), and the runtime's reports of its own writes kept apart, the
+/// marks the consumer reads.
+#[derive(Default)]
+struct GuestLog(Mutex<GuestLogState>);
+
+#[derive(Default)]
+struct GuestLogState {
+    /// The publication writes fall in now.
+    now: u64,
+    /// Each write's bytes, stamp and writer.
+    writes: Vec<(Range<u64>, u64, u64)>,
+    /// The runtime's reports since the last [`GuestLog::marks`]: the bytes, and whether a copy
+    /// named them its own (`wrote_as`).
+    marks: Vec<(Range<u64>, bool)>,
+}
+
+impl GuestLog {
+    fn state(&self) -> std::sync::MutexGuard<'_, GuestLogState> {
+        self.0.lock().unwrap()
+    }
+
+    /// Note the CPU's write of the bytes `range`.
+    fn told(&self, range: Range<u64>) {
+        let mut state = self.state();
+        let now = state.now;
+        state.writes.push((range, now, 0));
+    }
+
+    /// The runtime's reports since the last call, each once, in order of their bytes.
+    fn marks(&self) -> Vec<(Range<u64>, bool)> {
+        let mut marks = std::mem::take(&mut self.state().marks);
+        marks.sort_by_key(|(range, own)| (range.start, range.end, *own));
+        marks.dedup();
+        marks
+    }
+
+    fn changed_by(&self, since: DirtyStamp, but: u64, out: &mut Vec<Range<u64>>) {
+        let state = self.state();
+        let later = (state.writes.iter())
+            .filter(|(_, stamp, writer)| *stamp > since.0 && (but == 0 || *writer != but));
+        out.extend(later.map(|(range, _, _)| range.clone()));
+    }
+
+    fn reported(&self, range: Range<u64>, writer: u64) {
+        let mut state = self.state();
+        let now = state.now;
+        state.writes.push((range.clone(), now, writer));
+        state.marks.push((range, writer != 0));
+    }
+}
+
+impl DirtyPages for GuestLog {
+    type Watch = ();
+
+    fn watch(&self, _: Range<u64>) {}
+
+    fn request(&self) -> DirtyStamp {
+        let mut state = self.state();
+        let stamp = state.now;
+        state.now += 1;
+        DirtyStamp(stamp)
+    }
+
+    fn wait(&self, _: DirtyStamp) -> bool {
+        true
+    }
+
+    fn changed(&self, since: DirtyStamp, out: &mut Vec<Range<u64>>) {
+        self.changed_by(since, 0, out);
+    }
+
+    fn wrote(&self, range: Range<u64>) {
+        self.reported(range, 0);
+    }
+
+    fn wrote_as(&self, range: Range<u64>, writer: NonZeroU64) {
+        self.reported(range, writer.get());
+    }
+
+    fn changed_except(&self, since: DirtyStamp, writer: NonZeroU64, out: &mut Vec<Range<u64>>) {
+        self.changed_by(since, writer.get(), out);
+    }
+}
+
+/// The guest pages test's command buffers and runs each way.
+const GUEST_COMMAND_BUFFERS: usize = 8;
+const GUEST_RUNS: u64 = 12;
+
+/// What a run of the guest pages test saw: the runtime's reports, the gated copies in counted
+/// (gated, whole, skipped, bytes whole, bytes copied).
+struct GuestRun {
+    marks: Vec<(Range<u64>, bool)>,
+    gated: [u64; 5],
+}
+
+fn gated(counts: &WorkCounts) -> [u64; 5] {
+    [
+        counts.dirty_copies_in_gated,
+        counts.dirty_copies_in_whole,
+        counts.dirty_copies_in_skipped,
+        counts.dirty_copy_in_bytes_whole,
+        counts.dirty_copy_in_bytes_copied,
+    ]
+}
+
+/// The texels of `bytes` laid out as the texture's buffer holds them, as words in a row.
+fn texels_of(bytes: &[u8]) -> Vec<u8> {
+    (0..SIDE as usize)
+        .flat_map(|row| {
+            let at = row * ROW as usize;
+            bytes[at..at + TEXEL_ROW as usize].iter().copied()
+        })
+        .collect()
+}
+
+/// A run of the guest pages test (the module docs) on `device`, its command buffers encoded as
+/// `schedule` says ([`encoded`]); every read and copy compared with the CPU model's, and the
+/// pages after it, and every byte the GPU wrote found among the runtime's reports.
+fn guest_run(
+    device: &Device,
+    queue: &CommandQueue,
+    (mapping, log, pages, texture): (&Mapping, &GuestLog, &Buffer, &Texture),
+    kernels: &TexelKernels,
+    (run, schedule): (u64, Option<(usize, u64)>),
+) -> GuestRun {
+    let mut rng = Rng(0x6E57 + run);
+    // The CPU writes the texture's bytes, as a guest does, and tells the log.
+    let initial = rng.bytes(BYTES);
+    mapping.write(0, &initial);
+    log.told(0..BYTES);
+    let words: Vec<Vec<u8>> = (0..GUEST_COMMAND_BUFFERS)
+        .map(|_| rng.bytes(4 * WORDS))
+        .collect();
+    let filled: Vec<(u64, u8)> = (0..GUEST_COMMAND_BUFFERS)
+        .map(|_| (rng.next() % SIDE, rng.next() as u8))
+        .collect();
+    let words_in: Vec<Buffer> = (words.iter())
+        .map(|words| buffer_with(device, words).unwrap())
+        .collect();
+    let reads: Vec<Buffer> = (0..GUEST_COMMAND_BUFFERS)
+        .map(|_| buffer_with(device, &vec![0xee; (4 * WORDS) as usize]).unwrap())
+        .collect();
+    let copies: Vec<Buffer> = (0..GUEST_COMMAND_BUFFERS)
+        .map(|_| buffer_with(device, &vec![0xee; BYTES as usize]).unwrap())
+        .collect();
+    let row_of = |row: u64| row * ROW..row * ROW + TEXEL_ROW;
+    let encode = |index: usize, cb: &CommandBuffer, pause: &mut dyn FnMut()| match index % 4 {
+        // Write every texel through the texture, then copy the pages out.
+        0 => {
+            texel_dispatch(cb, &kernels.write, texture, &words_in[index]);
+            pause();
+            let mut blit = cb.blit_command_encoder().unwrap();
+            blit.copy_from_buffer_to_buffer(pages, 0, &copies[index], 0, BYTES)
+                .unwrap();
+            blit.end_encoding().unwrap();
+        }
+        // Fill a row of the texture's bytes in the pages, then read it.
+        2 => {
+            let (row, value) = filled[index];
+            let mut blit = cb.blit_command_encoder().unwrap();
+            blit.fill_buffer(pages, row_of(row), value).unwrap();
+            blit.end_encoding().unwrap();
+            pause();
+            texel_dispatch(cb, &kernels.read, texture, &reads[index]);
+        }
+        // Read it, in one encoder or in two: the second takes the image the first left
+        // (`shadow::ShadowCarry`), and the command buffer's end leaves it holding every texel.
+        _ => {
+            texel_dispatch(cb, &kernels.read, texture, &reads[index]);
+            if index % 4 == 3 {
+                pause();
+                texel_dispatch(cb, &kernels.read, texture, &reads[index]);
+            }
+        }
+    };
+    let before = gated(&device.work_counts());
+    let command_buffers: Vec<CommandBuffer> = (0..GUEST_COMMAND_BUFFERS)
+        .map(|_| queue.command_buffer().unwrap())
+        .collect();
+    encoded(&command_buffers, schedule, &encode);
+    for cb in &command_buffers {
+        cb.commit().unwrap();
+    }
+    for cb in &command_buffers {
+        completed(cb);
+    }
+    let after = gated(&device.work_counts());
+    // The CPU model, in commit order; and the bytes each command buffer's GPU wrote.
+    let mut model = initial;
+    let mut written: Vec<Range<u64>> = Vec::new();
+    for index in 0..GUEST_COMMAND_BUFFERS {
+        let what = format!("run {run} cb{index} under {schedule:?}");
+        match index % 4 {
+            0 => {
+                for row in 0..SIDE {
+                    let (at, from) = (row_of(row).start as usize, (row * TEXEL_ROW) as usize);
+                    model[at..at + TEXEL_ROW as usize]
+                        .copy_from_slice(&words[index][from..from + TEXEL_ROW as usize]);
+                    written.push(row_of(row));
+                }
+                let copied = read_buffer(&copies[index], 0, BYTES).unwrap();
+                assert_eq!(copied, model, "{what}: the pages copied out");
+                continue;
+            }
+            2 => {
+                let (row, value) = filled[index];
+                let bytes = row_of(row);
+                model[bytes.start as usize..bytes.end as usize].fill(value);
+                written.push(bytes);
+            }
+            _ => {}
+        }
+        let read = read_buffer(&reads[index], 0, 4 * WORDS).unwrap();
+        assert_eq!(read, texels_of(&model), "{what}: the texture read");
+    }
+    assert_eq!(
+        mapping.read(0..BYTES as usize),
+        model,
+        "run {run} under {schedule:?}: the pages"
+    );
+    let marks = log.marks();
+    for byte in written.iter().flat_map(Clone::clone) {
+        assert!(
+            (marks.iter()).any(|(mark, _)| mark.contains(&byte)),
+            "run {run} under {schedule:?}: GPU-written byte {byte} among the reports {marks:?}"
+        );
+    }
+    GuestRun {
+        marks,
+        gated: std::array::from_fn(|i| after[i] - before[i]),
+    }
+}
+
+/// One queue's command buffers that write and read a shadowed texture over logged guest pages,
+/// encoded on 2 to 4 threads out of commit order, hold the bytes, report the writes and gate the
+/// copies in as serially encoded ones do (the module docs).
+#[test]
+fn guest_pages_follow_the_commit_order_however_the_command_buffers_were_encoded() {
+    let cache = ScratchCache::new().unwrap();
+    let mut name = String::new();
+    let mut runs = |parallel: bool| -> Vec<GuestRun> {
+        let messages = Messages::default();
+        let device = validated_device_with(TEST_DEVICE, &messages, cache.path(), |_| {}).unwrap();
+        name = device.name().to_owned();
+        let queue = device.new_command_queue().unwrap();
+        let kernels = texel_kernels(&device);
+        let mapping = Mapping::anonymous(super::host_memory::GUEST_PAGE);
+        let log = Arc::new(GuestLog::default());
+        // SAFETY: the mapping outlives the buffer, dropped first, and stays writable.
+        let memory =
+            unsafe { HostMemory::new(mapping.pointer()) }.with_dirty_pages(Arc::clone(&log));
+        // SAFETY: as above.
+        let pages = unsafe {
+            device.new_buffer_with_bytes_no_copy(
+                memory,
+                super::host_memory::GUEST_PAGE as u64,
+                ResourceOptions::default(),
+                None,
+            )
+        }
+        .unwrap();
+        let shadows = device.work_counts().shadowed_textures;
+        let mut descriptor =
+            TextureDescriptor::texture_2d(PixelFormat::RGBA8Unorm, SIDE, SIDE, false);
+        descriptor.usage = TextureUsage::SHADER_READ | TextureUsage::SHADER_WRITE;
+        let texture = pages.new_texture(&descriptor, 0, ROW).unwrap();
+        assert!(
+            device.work_counts().shadowed_textures > shadows,
+            "a texture whose rows have bytes between them is a shadow"
+        );
+        let guest = (&mapping, &*log, &pages, &texture);
+        let runs: Vec<GuestRun> = (0..GUEST_RUNS)
+            .map(|run| {
+                let schedule = parallel.then(|| (2 + (run % 3) as usize, 0x6E57_0000 + run));
+                guest_run(&device, &queue, guest, &kernels, (run, schedule))
+            })
+            .collect();
+        drop((texture, pages, queue, kernels));
+        drop(device);
+        drop(mapping);
+        layer_reported_nothing_at_all(&messages);
+        runs
+    };
+    let serial = runs(false);
+    let parallel = runs(true);
+    let sum = |runs: &[GuestRun]| {
+        (runs.iter()).fold([0; 5], |sum, run| {
+            std::array::from_fn(|i| sum[i] + run.gated[i])
+        })
+    };
+    println!(
+        "PARALLEL-GUEST on {name}: over {GUEST_RUNS} runs of {GUEST_COMMAND_BUFFERS} command \
+         buffers, gated copies in (gated, whole, skipped, bytes whole, bytes copied) serially \
+         {:?}, on 2 to 4 threads {:?}; reports a run {:?}",
+        sum(&serial),
+        sum(&parallel),
+        serial.last().map(|run| run.marks.len())
+    );
+    assert!(sum(&serial)[0] > 0, "the copies in were gated");
+    for (run, (serial, parallel)) in serial.iter().zip(&parallel).enumerate() {
+        assert_eq!(parallel.marks, serial.marks, "run {run}'s reports");
+        assert_eq!(
+            parallel.gated[0], serial.gated[0],
+            "run {run}'s gated copies in"
+        );
+    }
 }

@@ -3433,7 +3433,7 @@ impl Device {
                 drops_writes: false,
                 backing: Backing::of(bytes, false),
                 merge_scratch: ScratchSpares::default(),
-                touched: AtomicU64::new(0),
+                touched: Default::default(),
                 stood: AtomicU64::new(0),
             };
             Owner::HeapShadow(Box::new(HeapShadow {
@@ -3533,7 +3533,7 @@ impl Device {
                 drops_writes: false,
                 backing: Backing::of(bytes, false),
                 merge_scratch: ScratchSpares::default(),
-                touched: AtomicU64::new(0),
+                touched: Default::default(),
                 stood: AtomicU64::new(0),
             };
             Owner::HeapShadow(Box::new(HeapShadow {
@@ -3610,7 +3610,7 @@ impl Device {
                 drops_writes: false,
                 backing: Backing::of(bytes, false),
                 merge_scratch: ScratchSpares::default(),
-                touched: AtomicU64::new(0),
+                touched: Default::default(),
                 stood: AtomicU64::new(0),
             };
             Owner::HeapShadow(Box::new(HeapShadow {

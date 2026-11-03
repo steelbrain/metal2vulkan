@@ -484,7 +484,7 @@ impl Device {
                     drops_writes: false,
                     backing: Backing::Image,
                     merge_scratch: ScratchSpares::default(),
-                    touched: AtomicU64::new(0),
+                    touched: Default::default(),
                     stood: AtomicU64::new(0),
                 };
                 Owner::ViewShadow(Box::new(ViewShadow {

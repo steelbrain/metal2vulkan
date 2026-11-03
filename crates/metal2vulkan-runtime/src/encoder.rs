@@ -52,7 +52,9 @@ use super::residency::{Residency, Used};
 use super::resource::ResourceKey;
 use super::retained::Retained;
 use super::row_copies::RowCopies;
-use super::shadow::{CopyCause, GatedCopyIn, ShadowCopy, ShadowSync, ShadowUse, Step, Within};
+use super::shadow::{
+    CopyCause, GatedCopyIn, ShadowCarry, ShadowCopy, ShadowSync, ShadowUse, Step, Within,
+};
 use super::shadow_copy_in::CopyIn;
 use super::shadow_merge::ShadowMerge;
 use super::sparse::encoder::SparseUpdate;
@@ -562,7 +564,9 @@ impl EncoderCore {
             uses: EncoderUses::new(ordered),
             retained: Retained::default(),
             executions: Vec::new(),
-            shadows: ShadowSync::default(),
+            // Of its command buffer's queue: its end counts against other queues' carries alone
+            // (`shadow::Touched`).
+            shadows: ShadowSync::carrying(ShadowCarry::on(command_buffer.command_queue().id())),
             keys: BTreeSet::new(),
             touched: Vec::new(),
             resident_unheld: Vec::new(),
