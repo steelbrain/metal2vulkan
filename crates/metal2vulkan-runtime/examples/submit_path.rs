@@ -2,22 +2,31 @@
 //! shape of a consumer that records a command buffer, adds handlers, commits and never waits.
 //!
 //! ```sh
-//! cargo run --release -p metal2vulkan-runtime --example submit_path [-- latency|cpu|empty|all]
+//! cargo run --release -p metal2vulkan-runtime --example submit_path [-- latency|cpu|empty|idle|all [--seen] [--bare]]
 //! ```
 //!
 //! - **latency**: one thread commits a tiny blit command buffer (a fill of 16 bytes) with a
 //!   scheduled handler and a completed handler, or a completion-seen handler instead of the
 //!   completed one (`seen`), and does not wait for it: it blocks on a condition variable the
-//!   handler signals as it starts. Timed: `commit` to the handler's start, at idle gaps of 0,
-//!   100 us, 300 us and 2 ms between command buffers.
+//!   handler signals as it starts. Timed: `commit` to the handler's start, and the command
+//!   buffer's `GPUEndTime` to the handler's start (both on the runtime's host clock,
+//!   `host_time`), at idle gaps of 0, 100 us, 300 us and 2 ms between command buffers. With
+//!   `--bare`, also with no scheduled handler: a lone fill and its one callback.
 //! - **cpu**: the same command buffers committed as fast as the queue's slots allow, never waited
 //!   for: command buffers a second, and the CPU per command buffer of the runtime's threads (by
 //!   thread on Linux, from `/proc/self/task/*/schedstat`; elsewhere the process's CPU less the
 //!   committing thread's).
 //! - **empty**: a command buffer with nothing encoded, committed and waited for, back to back and
 //!   at a 300 us gap; and committed as fast as the slots allow, never waited for.
+//! - **idle**: after one fill committed and waited for, wakes a second over [`IDLE_SECONDS`] with
+//!   nothing committed: on Linux the voluntary context switches by thread group, from
+//!   `/proc/self/task/*/status`; everywhere the scheduler's sleeps and the sleeps that ended at
+//!   its slice, from the device's work counts (macOS's per-process switch counts read back
+//!   inconsistently, so none is printed there).
 
-use metal2vulkan_runtime::{Buffer, CommandBuffer, CommandQueue, Device, ResourceOptions};
+use metal2vulkan_runtime::{
+    host_time, Buffer, CommandBuffer, CommandQueue, Device, ResourceOptions,
+};
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant};
 
@@ -26,6 +35,9 @@ const ROUNDS: usize = 2000;
 
 /// How long a full-rate row runs.
 const RATE_SECONDS: f64 = 3.0;
+
+/// How long the idle row watches the process.
+const IDLE_SECONDS: f64 = 3.0;
 
 /// The idle gaps of the latency rows.
 const GAPS_US: [u64; 4] = [0, 100, 300, 2000];
@@ -48,21 +60,22 @@ impl Callback {
     }
 }
 
-/// A one-shot signal from a handler to the committing thread: the instant the handler started.
+/// A one-shot signal from a handler to the committing thread: the instant the handler started,
+/// and the seconds from its command buffer's `GPUEndTime` to then on the host clock.
 #[derive(Default)]
 struct Signal {
-    at: Mutex<Option<Instant>>,
+    at: Mutex<Option<(Instant, f64)>>,
     changed: Condvar,
 }
 
 impl Signal {
-    fn set(&self) {
+    fn set(&self, after_gpu_end: f64) {
         let now = Instant::now();
-        *self.at.lock().unwrap() = Some(now);
+        *self.at.lock().unwrap() = Some((now, after_gpu_end));
         self.changed.notify_one();
     }
 
-    fn take(&self) -> Instant {
+    fn take(&self) -> (Instant, f64) {
         let mut at = self.at.lock().unwrap();
         loop {
             if let Some(at) = at.take() {
@@ -73,22 +86,28 @@ impl Signal {
     }
 }
 
-/// A tiny blit command buffer: a fill of 16 bytes of `target`, with a scheduled handler and the
-/// handler `callback` names, which runs `then`.
+/// A tiny blit command buffer: a fill of 16 bytes of `target`, with a scheduled handler where
+/// `scheduled`, and the handler `callback` names, which runs `then` with the seconds from the
+/// command buffer's `GPUEndTime` to its start.
 fn tiny(
     queue: &CommandQueue,
     target: &Buffer,
-    callback: Callback,
-    then: impl FnOnce() + Send + 'static,
+    (callback, scheduled): (Callback, bool),
+    then: impl FnOnce(f64) + Send + 'static,
 ) -> CommandBuffer {
     let command_buffer = queue.command_buffer().unwrap();
     let mut blit = command_buffer.blit_command_encoder().unwrap();
     blit.fill_buffer(target, 0..16, 0xa5).unwrap();
     blit.end_encoding().unwrap();
-    command_buffer
-        .add_scheduled_handler(Box::new(|_: &CommandBuffer| {}))
-        .unwrap();
-    let handler = Box::new(move |_: &CommandBuffer| then());
+    if scheduled {
+        command_buffer
+            .add_scheduled_handler(Box::new(|_: &CommandBuffer| {}))
+            .unwrap();
+    }
+    let handler = Box::new(move |buffer: &CommandBuffer| {
+        let now = host_time();
+        then(now - buffer.gpu_end_time().unwrap_or(now))
+    });
     match callback {
         Callback::Completed => command_buffer.add_completed_handler(handler).unwrap(),
         Callback::Seen => command_buffer.add_completion_seen_handler(handler).unwrap(),
@@ -110,31 +129,108 @@ fn percentiles(samples: &mut [f64]) -> (f64, f64, f64) {
     (at(0.5), at(0.9), at(0.99))
 }
 
-fn latency(device: &Device, callback: Callback) {
+fn latency(device: &Device, callback: Callback, scheduled: bool) {
     let queue = device.new_command_queue().unwrap();
     let target = device.new_buffer(16, ResourceOptions::shared()).unwrap();
+    let name = match scheduled {
+        true => callback.name().to_owned(),
+        false => format!("{} bare", callback.name()),
+    };
     for gap in GAPS_US {
         let signal = Arc::new(Signal::default());
-        let mut samples = Vec::with_capacity(ROUNDS);
+        let (mut samples, mut after_end) = (Vec::with_capacity(ROUNDS), Vec::new());
         for round in 0..ROUNDS + 50 {
             idle(gap);
             let signalled = Arc::clone(&signal);
-            let command_buffer = tiny(&queue, &target, callback, move || signalled.set());
+            let command_buffer = tiny(&queue, &target, (callback, scheduled), move |after| {
+                signalled.set(after)
+            });
             let committed = Instant::now();
             command_buffer.commit().unwrap();
             drop(command_buffer);
-            let started = signal.take();
+            let (started, after) = signal.take();
             if round >= 50 {
                 samples.push(started.duration_since(committed).as_secs_f64() * 1e6);
+                after_end.push(after * 1e6);
             }
         }
         let (p50, p90, p99) = percentiles(&mut samples);
+        let (e50, e90, e99) = percentiles(&mut after_end);
         println!(
-            "latency {:<9} gap {:>4} us: commit to handler p50 {p50:7.1} p90 {p90:7.1} p99 {p99:7.1} us",
-            callback.name(),
-            gap
+            "latency {name:<14} gap {gap:>4} us: commit to handler p50 {p50:7.1} p90 {p90:7.1} \
+             p99 {p99:7.1} us; GPU end to handler p50 {e50:7.1} p90 {e90:7.1} p99 {e99:7.1} us"
         );
     }
+}
+
+/// The group a thread named `comm` is counted in.
+fn group_of(comm: &str) -> &'static str {
+    match comm {
+        c if c.starts_with("metal2vulkan-sc") => "scheduler",
+        c if c.starts_with("metal2vulkan-qu") => "queue-waiters",
+        c if c.starts_with("metal2vulkan-ha") => "handlers",
+        c if c.starts_with("metal2vulkan") => "other-m2v",
+        "submit_path" => "committer+main",
+        _ => "driver/other",
+    }
+}
+
+/// Voluntary context switches by thread group, each of the process's threads by its name's
+/// prefix: Linux only, none elsewhere.
+fn switches_by_group() -> Vec<(String, u64)> {
+    let mut groups: Vec<(String, u64)> = Vec::new();
+    if let Ok(tasks) = std::fs::read_dir("/proc/self/task") {
+        for task in tasks.flatten() {
+            let path = task.path();
+            let comm = std::fs::read_to_string(path.join("comm")).unwrap_or_default();
+            let status = std::fs::read_to_string(path.join("status")).unwrap_or_default();
+            let switches: u64 = status
+                .lines()
+                .find_map(|line| line.strip_prefix("voluntary_ctxt_switches:"))
+                .and_then(|n| n.trim().parse().ok())
+                .unwrap_or(0);
+            let group = group_of(comm.trim()).to_owned();
+            match groups.iter_mut().find(|(n, _)| *n == group) {
+                Some((_, total)) => *total += switches,
+                None => groups.push((group, switches)),
+            }
+        }
+    }
+    groups
+}
+
+fn idle_wakes(device: &Device) {
+    let queue = device.new_command_queue().unwrap();
+    let target = device.new_buffer(16, ResourceOptions::shared()).unwrap();
+    let signal = Arc::new(Signal::default());
+    let signalled = Arc::clone(&signal);
+    let command_buffer = tiny(&queue, &target, (Callback::Completed, true), move |after| {
+        signalled.set(after)
+    });
+    command_buffer.commit().unwrap();
+    signal.take();
+    command_buffer.wait_until_completed().unwrap();
+    std::thread::sleep(Duration::from_millis(300));
+    let (before, counts) = (switches_by_group(), device.work_counts());
+    std::thread::sleep(Duration::from_secs_f64(IDLE_SECONDS));
+    let (after, later) = (switches_by_group(), device.work_counts());
+    if !after.is_empty() {
+        let mut line = "idle wakes a second:".to_owned();
+        for (name, count) in &after {
+            let earlier = before
+                .iter()
+                .find(|(n, _)| n == name)
+                .map_or(0, |(_, n)| *n);
+            let per = count.saturating_sub(earlier) as f64 / IDLE_SECONDS;
+            line.push_str(&format!(" {name} {per:.1}"));
+        }
+        println!("{line} (voluntary context switches, the main thread's one sleep among them)");
+    }
+    println!(
+        "idle scheduler a second: {:.1} sleeps, {:.1} ended at the slice",
+        (later.scheduler_sleeps - counts.scheduler_sleeps) as f64 / IDLE_SECONDS,
+        (later.scheduler_sleep_slices - counts.scheduler_sleep_slices) as f64 / IDLE_SECONDS,
+    );
 }
 
 /// Nanoseconds of CPU by thread group: on Linux each of the process's threads by its name's
@@ -155,16 +251,7 @@ fn cpu_by_group() -> Vec<(String, u64)> {
                 .next()
                 .and_then(|n| n.parse().ok())
                 .unwrap_or(0);
-            let comm = comm.trim();
-            let group = match comm {
-                c if c.starts_with("metal2vulkan-sc") => "scheduler",
-                c if c.starts_with("metal2vulkan-qu") => "queue-waiters",
-                c if c.starts_with("metal2vulkan-ha") => "handlers",
-                c if c.starts_with("metal2vulkan") => "other-m2v",
-                "submit_path" => "committer+main",
-                _ => "driver/other",
-            };
-            add(group.to_owned(), nanos);
+            add(group_of(comm.trim()).to_owned(), nanos);
         }
         return groups;
     }
@@ -209,14 +296,18 @@ fn cpu(device: &Device, callback: Callback) {
     let target = device.new_buffer(16, ResourceOptions::shared()).unwrap();
     // Warm.
     for _ in 0..200 {
-        tiny(&queue, &target, callback, || {}).commit().unwrap();
+        tiny(&queue, &target, (callback, true), |_| {})
+            .commit()
+            .unwrap();
     }
     std::thread::sleep(Duration::from_millis(200));
     let before = cpu_by_group();
     let start = Instant::now();
     let mut count = 0;
     while start.elapsed().as_secs_f64() < RATE_SECONDS {
-        tiny(&queue, &target, callback, || {}).commit().unwrap();
+        tiny(&queue, &target, (callback, true), |_| {})
+            .commit()
+            .unwrap();
         count += 1;
     }
     let elapsed = start.elapsed().as_secs_f64();
@@ -283,13 +374,19 @@ fn main() {
     println!("device: {}", device.name());
     let what = std::env::args().nth(1).unwrap_or_else(|| "all".to_owned());
     let seen = std::env::args().any(|arg| arg == "--seen");
+    let bare = std::env::args().any(|arg| arg == "--bare");
     let callbacks: &[Callback] = match seen {
         true => &[Callback::Completed, Callback::Seen],
         false => &[Callback::Completed],
     };
     if what == "latency" || what == "all" {
         for &callback in callbacks {
-            latency(&device, callback);
+            latency(&device, callback, true);
+        }
+        if bare {
+            for &callback in callbacks {
+                latency(&device, callback, false);
+            }
         }
     }
     if what == "cpu" || what == "all" {
@@ -299,5 +396,8 @@ fn main() {
     }
     if what == "empty" || what == "all" {
         empty(&device);
+    }
+    if what == "idle" || what == "all" {
+        idle_wakes(&device);
     }
 }
