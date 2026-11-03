@@ -443,8 +443,14 @@ pages then takes a kernel mapping per page) can give the device the guest's RAM 
   does not cover the window in whole pages of one RAM the device uses is refused (`Invalid`,
   `Problem::HostRam`).
 - One run inside one chunk: the device imports the RAM by host pointer in chunks of 64 MiB, never
-  across a range's end, each the first time an object over it is made, on that thread, once
-  (`WorkCounts::host_ram_chunks_imported`, `host_ram_chunk_bytes`, `host_ram_chunks_live`). The
+  across a range's end, each once (`WorkCounts::host_ram_chunks_imported`, `host_ram_chunk_bytes`,
+  `host_ram_chunks_live`). From `use_host_ram` on, a thread of the device's imports them one after
+  another, ahead of the objects over them (`host_ram_chunks_imported_ahead`): an object over a
+  chunk it has not reached imports that chunk as it is made, on its own thread, one over the chunk
+  it is importing waits for that import, and once it is done no making waits for one. So the whole
+  RAM is faulted in and pinned from soon after `use_host_ram`, where a chunk's pages were faulted
+  in only when an object over it was first made (on an RTX 5080 laptop with no other load: 7.5 ms
+  a chunk of fresh `memfd` RAM under `MADV_HUGEPAGE`, 2 s for 16 GiB). The
   object's `VkBuffer` is made as an import of its own pages would make it and bound in the chunk
   at its run (`chunk_bound_buffers_made`): no import of its own, no gate asked, its `contents`
   still the pointer, and its size reaching no page past its own, so neither its Metal range, a
