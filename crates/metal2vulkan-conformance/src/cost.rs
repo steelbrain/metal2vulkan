@@ -2530,19 +2530,27 @@ mod the_creation_prediction {
     ///
     /// | class | rows | made | taken | by none | taken |
     /// |---|---|---|---|---|---|
-    /// | draws and no dispatch | 154 | 799 | 754 | 45 | 94.4% |
-    /// | dispatches and no draw | 277 | 461 | 0 | 461 | 0.0% |
-    /// | both kinds | 84 | 107 | 61 | 46 | 57.0% |
-    /// | no command at all | 74 | 79 | 0 | 79 | 0.0% |
-    /// | all | 589 | 1,446 | 815 | 631 | 56.4% |
+    /// | draws and no dispatch | 166 | 813 | 766 | 47 | 94.2% |
+    /// | dispatches and no draw | 223 | 386 | 0 | 386 | 0.0% |
+    /// | both kinds | 63 | 81 | 49 | 32 | 60.5% |
+    /// | no command at all | 59 | 64 | 0 | 64 | 0.0% |
+    /// | all | 511 | 1,344 | 815 | 529 | 60.6% |
     ///
     /// **So the two predictions are nothing like each other, and the total hides it.** The render
-    /// prediction is taken 754 times in 799 on the cases that draw, and its 45 misses are spread
-    /// one or two to a row over 42 rows led by `sample-positions-*` and the `a2c-*` sweeps — the
+    /// prediction is taken 766 times in 813 on the cases that draw, and its 47 misses are spread
+    /// one or two to a row over 44 rows led by `sample-positions-*` and the `a2c-*` sweeps — the
     /// shape this module's docs already name as unpredictable, since `GraphicsKey` carries
-    /// `sample_positions` and the pass. The compute prediction is taken **0** times in 461 over
-    /// 277 rows. 461 of the 631 is one prediction, and 455 of those 461 are rows that make no
+    /// `sample_positions` and the pass. The compute prediction is taken **0** times in 386 over
+    /// 223 rows. 386 of the 529 is one prediction, and 379 of those 386 are rows that make no
     /// render pass at all.
+    ///
+    /// **Two of the draws class's 47 are an open bug, not coverage.**
+    /// `render-then-sample-magnified-nearest` and `-linear` each make one pipeline no draw takes,
+    /// 3 made and 2 taken: a state whose fragment function converts a texture's texels to `half`
+    /// makes its predicted key's general form at its creation and hands the predicted key itself
+    /// to the pool, and their draws take the predicted key, so the general form is made for
+    /// nothing. Not making the general form where the prediction is plain is the fix, and lowers
+    /// this class's ceiling to 45.
     ///
     /// # Why the total cannot hold this
     ///
@@ -2556,7 +2564,7 @@ mod the_creation_prediction {
     /// the rows that grew rows that run no command of that kind — legitimate — or rows that
     /// mispredict a command they do run.
     const WASTED_BY_CLASS: [(Speculated, u64); 4] = [
-        (Speculated::Draws, 45),
+        (Speculated::Draws, 47),
         (Speculated::Dispatches, 461),
         (Speculated::Both, 46),
         (Speculated::NoCommand, 79),

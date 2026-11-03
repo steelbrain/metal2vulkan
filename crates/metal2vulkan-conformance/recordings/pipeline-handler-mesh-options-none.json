@@ -437,8 +437,6 @@
         "linked_use_questions_asked": 4,
         "pipeline_layouts_made": 1,
         "pooled_memory_blocks_made": 3,
-        "scheduler_sleep_slices": 1,
-        "scheduler_sleeps": 1,
         "shader_modules_made": 4,
         "stage_entries_shared": 4,
         "stage_entries_specialized": 2,

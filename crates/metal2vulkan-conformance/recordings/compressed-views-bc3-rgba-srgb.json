@@ -994,10 +994,12 @@
         "commands_recorded.cmd_pipeline_barrier": 89,
         "commands_recorded.end_command_buffer": 40,
         "commits_handed_off": 30,
+        "commits_taken_in": 30,
         "completed_waits": 33,
         "completed_where_seen": 30,
         "completion_arms": 30,
         "completion_arms_after_a_wake": 30,
+        "completion_waiter_parks": 30,
         "device_memory_allocated": 268435456,
         "encoder_command_buffers_begun": 30,
         "fence_waits": 30,
@@ -1034,6 +1036,7 @@
         "gate_waits_slept": 24
       },
       "composed": {
+        "batches_submitted_by_waiters": 29,
         "device_memory_allocated": 201326592,
         "pooled_memory_blocks_made": 3,
         "queues_sharing_a_vk_queue": 0

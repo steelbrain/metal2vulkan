@@ -266,8 +266,6 @@
       "bounds": {
         "functions_shared": 2,
         "functions_translated": 1,
-        "scheduler_sleep_slices": 1,
-        "scheduler_sleeps": 1,
         "stage_entries_specialized": 1
       },
       "composed": {

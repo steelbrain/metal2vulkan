@@ -1192,10 +1192,12 @@
         "commands_recorded.cmd_set_viewport": 9,
         "commands_recorded.end_command_buffer": 28,
         "commits_handed_off": 1,
+        "commits_taken_in": 1,
         "completed_waits": 4,
         "completed_where_seen": 1,
         "completion_arms": 1,
         "completion_arms_after_a_wake": 1,
+        "completion_waiter_parks": 1,
         "creation_pipelines_drawn": 2,
         "creation_pipelines_made": 2,
         "creation_render_pipelines_drawn": 2,
@@ -1214,6 +1216,7 @@
         "gate_waits": 1,
         "gate_waits_slept": 1,
         "graphics_pipelines_looked_up": 9,
+        "heap_tables_worked_out": 18,
         "host_texel_copies": 9,
         "images_started_on_the_host": 9,
         "inline_passes": 9,
@@ -1254,6 +1257,9 @@
         "variant_pipelines_made": 2,
         "wakes_completion_waiters": 1,
         "wakes_spared": 7
+      },
+      "moving": {
+        "batches_submitted_by_waiters": 0
       },
       "composed": {
         "argument_samplers_taken": 2,

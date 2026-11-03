@@ -532,8 +532,6 @@
         "pooled_memory_blocks_made": 3,
         "render_passes_made": 2,
         "sampler_sets_made": 1,
-        "scheduler_sleep_slices": 1,
-        "scheduler_sleeps": 1,
         "shader_modules_made": 4,
         "shader_modules_shared": 2,
         "stage_entries_shared": 10,

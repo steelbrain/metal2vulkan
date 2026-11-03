@@ -266,8 +266,6 @@
       "bounds": {
         "descriptor_keys_built": 2,
         "linked_use_questions_asked": 3,
-        "scheduler_sleep_slices": 1,
-        "scheduler_sleeps": 1,
         "stage_entries_shared": 2,
         "stage_entries_specialized": 2
       },

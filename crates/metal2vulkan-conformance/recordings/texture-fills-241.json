@@ -127,7 +127,6 @@
       "contrasted": "8 run(s) of each case on its own on Apple M3 Max, nothing before it on the device, the largest each count reached",
       "degraded": [
         "metal2vulkan-degrade-carried-decoded-twin",
-        "metal2vulkan-degrade-decoded-texel-precision",
         "metal2vulkan-degrade-unpacked-fill-color"
       ],
       "bounds": {
@@ -155,10 +154,12 @@
         "commands_recorded.cmd_pipeline_barrier": 440,
         "commands_recorded.end_command_buffer": 44,
         "commits_handed_off": 22,
+        "commits_taken_in": 22,
         "completed_waits": 25,
         "completed_where_seen": 22,
         "completion_arms": 22,
         "completion_arms_after_a_wake": 22,
+        "completion_waiter_parks": 22,
         "device_memory_allocated": 201326592,
         "encoder_command_buffers_begun": 22,
         "fence_waits": 22,
@@ -166,6 +167,7 @@
         "gate_waits": 22,
         "gate_waits_slept": 22,
         "new_buffer_bytes_cleared": 4288,
+        "object_churn.buffers_evicted": 8,
         "object_churn.buffers_parked": 154,
         "object_churn.buffers_recycled": 154,
         "object_churn.images_evicted": 2,
@@ -174,6 +176,7 @@
         "object_churn.images_recycled": 42,
         "object_churn.making_sites_dropped": 66,
         "object_churn.textures_image": 22,
+        "object_churn.vk_buffers_destroyed": 8,
         "object_churn.vk_image_bindings": 24,
         "object_churn.vk_image_views_made": 22,
         "object_churn.vk_images_destroyed": 24,
@@ -192,6 +195,7 @@
         "slot_returns": 22,
         "spare_command_pools_taken": 22,
         "submit_infos": 22,
+        "submit_stalls_on_work": 2,
         "trail_waits": 22,
         "wakes_completion_waiters": 22,
         "wakes_spared": 154

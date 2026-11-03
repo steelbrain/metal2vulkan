@@ -266,8 +266,6 @@
         "device_memory_allocated": 201326592,
         "pooled_memory_blocks_made": 3,
         "queues_sharing_a_vk_queue": 8,
-        "scheduler_sleep_slices": 16,
-        "scheduler_sleeps": 16,
         "slot_waits": 5
       },
       "composed": {

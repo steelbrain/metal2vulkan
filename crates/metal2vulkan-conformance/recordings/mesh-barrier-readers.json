@@ -1347,10 +1347,12 @@
         "commands_recorded.cmd_set_viewport": 12,
         "commands_recorded.end_command_buffer": 64,
         "commits_handed_off": 6,
+        "commits_taken_in": 6,
         "completed_waits": 9,
         "completed_where_seen": 6,
         "completion_arms": 6,
         "completion_arms_after_a_wake": 6,
+        "completion_waiter_parks": 6,
         "device_memory_allocated": 1342177280,
         "draw_shapes_made": 10,
         "draw_states_recorded": 204,
@@ -1364,7 +1366,9 @@
         "gpu_pool_blocks_made": 1,
         "gpu_pool_blocks_released": 1,
         "graphics_pipelines_looked_up": 12,
-        "heads_held_for_host_steps": 2,
+        "heads_held_for_host_steps": 3,
+        "heap_tables_worked_out": 24,
+        "host_steps_recorded": 1,
         "host_texel_copies": 6,
         "images_started_on_the_host": 6,
         "indirect_draws_recorded": 4,
@@ -1404,9 +1408,9 @@
         "scheduled_where_submitted": 6,
         "scheduler_passes": 9,
         "scheduler_passes_by_waiters": 6,
-        "scheduler_sleeps": 9,
+        "scheduler_sleeps": 8,
         "scheduler_wakes_commit": 6,
-        "scheduler_wakes_host": 6,
+        "scheduler_wakes_host": 3,
         "shader_modules_made": 10,
         "shader_modules_shared": 29,
         "slot_returns": 6,
@@ -1419,10 +1423,11 @@
         "variant_pipelines_made": 27,
         "wakes_completion_waiters": 6,
         "wakes_handler_threads": 1,
-        "wakes_spared": 45
+        "wakes_spared": 49
       },
       "moving": {
-        "gate_waits_slept": 4
+        "gate_waits_slept": 4,
+        "host_steps_recorded": 0
       },
       "composed": {
         "addressable_buffers_made": 2,

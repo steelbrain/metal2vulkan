@@ -127,7 +127,6 @@
       "contrasted": "8 run(s) of each case on its own on Apple M3 Max, nothing before it on the device, the largest each count reached",
       "degraded": [
         "metal2vulkan-degrade-carried-decoded-twin",
-        "metal2vulkan-degrade-decoded-texel-precision",
         "metal2vulkan-degrade-unpacked-fill-color"
       ],
       "bounds": {
@@ -155,12 +154,15 @@
         "commands_recorded.cmd_pipeline_barrier": 440,
         "commands_recorded.end_command_buffer": 44,
         "commits_handed_off": 22,
+        "commits_taken_in": 22,
         "completed_waits": 25,
         "completed_where_seen": 22,
         "completion_arms": 22,
         "completion_arms_after_a_wake": 22,
+        "completion_waiter_parks": 22,
         "device_memory_allocated": 201326592,
         "encoder_command_buffers_begun": 22,
+        "encoder_primaries_begun_ahead": 2,
         "fence_waits": 22,
         "finales_folded": 22,
         "gate_waits": 22,
@@ -186,6 +188,7 @@
         "owned_kernel_spirv_bytes": 1968,
         "owned_kernels_made": 1,
         "pooled_memory_blocks_made": 3,
+        "primaries_begun_ahead": 1,
         "queue_submissions": 22,
         "queues_sharing_a_vk_queue": 1,
         "scheduled_where_submitted": 22,
