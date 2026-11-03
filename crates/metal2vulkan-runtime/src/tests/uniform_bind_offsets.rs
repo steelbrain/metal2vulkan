@@ -38,7 +38,7 @@ const FLOATS: usize = 256;
 /// Where a draw reads its constants: the fragment's at byte `.0`, the vertex's at byte `.1`, of
 /// the constants buffer, or both as inline bytes from those offsets of it.
 #[derive(Clone, Copy, Debug)]
-enum Bound {
+pub(super) enum Bound {
     Buffer(u64, u64),
     Bytes(u64, u64),
 }
@@ -127,7 +127,7 @@ fn pass(device: &Device) -> (RenderPassDescriptor, Texture) {
 
 /// `device`'s work counts once its pipeline pool holds no piece (`WorkCounts::pipeline_pool_busy`):
 /// a draw that took its key's residual form does not wait for its own key's making.
-fn idle(device: &Device) -> crate::WorkCounts {
+pub(super) fn idle(device: &Device) -> crate::WorkCounts {
     let until = std::time::Instant::now() + WAIT;
     loop {
         let counts = device.work_counts();
@@ -144,7 +144,12 @@ fn idle(device: &Device) -> crate::WorkCounts {
 }
 
 /// Draw each of `cases` into a target of its own in one command buffer, and check every pixel.
-fn draw(device: &Device, queue: &CommandQueue, state: &RenderPipelineState, cases: &[Bound]) {
+pub(super) fn draw(
+    device: &Device,
+    queue: &CommandQueue,
+    state: &RenderPipelineState,
+    cases: &[Bound],
+) {
     let data = constants();
     let constants = device
         .new_buffer_with_bytes(&data, ResourceOptions::shared())

@@ -2948,17 +2948,18 @@ impl RenderVariant {
         Ok((made, true))
     }
 
-    /// The libraries of `key`'s parts (`libraries.rs`), claimed on this thread: the device's
-    /// where this is a program's call. `None` where the device makes its pipelines whole, where
+    /// The libraries of `key`'s parts and the pipeline linked from them (`libraries.rs`), claimed
+    /// on this thread: the device's where this is a program's call. `None` where the device makes its pipelines whole, where
     /// `key`'s pipeline is made whole, or where its state cannot be described (its making then
     /// says why).
     pub(crate) fn claim_libraries(&self, key: &GraphicsKey) -> Option<Linked> {
         let shared = self.objects.device.shared();
         let libraries = shared.libraries.as_ref()?;
         let content = self.objects.graphics_content(&self.pipeline, key).ok()?;
-        content
-            .links()
-            .then(|| libraries.claim(shared, &content.names(&self.objects, &self.pipeline, key)))
+        content.links().then(|| {
+            let names = content.names(&self.objects, &self.pipeline, key);
+            libraries.claim(shared, &names, self.objects.shared_layout())
+        })
     }
 
     /// The `VkPipeline`s of `keys`, each against its pass (a pass of the key's `pass`), begun at

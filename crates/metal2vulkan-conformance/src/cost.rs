@@ -478,6 +478,10 @@ const RACY: [(&str, &str); 37] = [
     // own work, and `_reused` by counts of what a case's own encoder settled once.
     ("pipeline_layouts_shared", FOUND),
     ("shader_modules_shared", FOUND),
+    // A linked pipeline taken from another variant of the same link: in company, a case's first
+    // creation of a link finds it linked by a case before it, which moves this up and its partner
+    // `pipelines_linked`, which stays gated, down.
+    ("linked_pipelines_shared", FOUND),
     // An ask for a stage's function answered by the device's memo, a binary archive or the shader
     // cache on disk. The memo and the cache are the device's and the run's, so whether this case's
     // *first* ask for a function finds it already translated depends on whether a case before it
@@ -760,7 +764,7 @@ impl Region {
 
 /// The name prefixes that put a count in [`Region::Translation`]: making a module, a layout or a
 /// pipeline.
-const TRANSLATION: [&str; 19] = [
+const TRANSLATION: [&str; 20] = [
     // The AIR decode and specialization a pipeline creation does for its stages, and the question
     // it asks about a linked function's uses. Translation work by definition -- an entry's
     // specialization depends on the functions and the constants, never on the pipeline state -- so
@@ -796,6 +800,7 @@ const TRANSLATION: [&str; 19] = [
     "pipeline_libraries_",
     "fragment_shader_libraries_",
     "pipelines_linked",
+    "linked_pipelines_shared",
     "dispatch_pipelines_pooled",
     "tile_pipelines_pooled",
     "variants_taken_back",

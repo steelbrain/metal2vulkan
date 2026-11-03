@@ -2762,6 +2762,7 @@ field	metal2vulkan-runtime::WorkCounts.kept_bytes_passes	pub kept_bytes_passes: 
 field	metal2vulkan-runtime::WorkCounts.line_band_draws	pub line_band_draws: u64
 field	metal2vulkan-runtime::WorkCounts.linear_passes_in_place	pub linear_passes_in_place: u64
 field	metal2vulkan-runtime::WorkCounts.linear_passes_through_copies	pub linear_passes_through_copies: u64
+field	metal2vulkan-runtime::WorkCounts.linked_pipelines_shared	pub linked_pipelines_shared: u64
 field	metal2vulkan-runtime::WorkCounts.linked_use_questions_asked	pub linked_use_questions_asked: u64
 field	metal2vulkan-runtime::WorkCounts.live_tables_uploaded	pub live_tables_uploaded: u64
 field	metal2vulkan-runtime::WorkCounts.long_queue_settles	pub long_queue_settles: u64

@@ -814,12 +814,10 @@ impl Drop for DeviceShared {
         lock(&self.render_passes).destroy(self.vk());
         // What released variants left (`pipeline/kept.rs`).
         lock(&self.kept).destroy(self);
-        // The graphics pipeline libraries, after every pipeline they linked: each linked
+        // The linked pipelines, then the graphics pipeline libraries they linked: each variant's
         // pipeline holds the device, and the kept ones went above.
         if let Some(libraries) = &self.libraries {
-            for gone in libraries.drain() {
-                gone.destroy(&*self);
-            }
+            libraries.drain(&*self);
         }
         // The shader modules, every one the map holds, destroyed here while the device lives: no
         // variant is left but one dropping this device right now (whose share then calls

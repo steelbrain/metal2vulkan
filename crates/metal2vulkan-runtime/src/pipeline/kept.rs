@@ -179,8 +179,20 @@ pub(crate) struct KeptPipeline {
     pub(crate) place: Place,
     pub(crate) raw: vk::Pipeline,
     pub(crate) unannounced: bool,
-    /// The libraries it was linked from, kept with it (`libraries.rs`).
+    /// The device's linked pipeline it is, with its libraries, kept with it (`libraries.rs`).
     pub(crate) linked: Option<super::libraries::Linked>,
+}
+
+impl KeptPipeline {
+    /// Destroy it where it is the variant's own, a pipeline made whole: a linked one is the
+    /// device's, which other variants may share, destroyed by its map once nothing holds it
+    /// (`libraries.rs`), and dropping this lets go of its share.
+    fn destroy(&self, shared: &DeviceShared) {
+        if self.linked.is_none() {
+            // SAFETY: released by its last holder, so no pending command uses it.
+            unsafe { release::object(shared.vk(), self.raw) };
+        }
+    }
 }
 
 /// What a variant made again takes back: its instance, objects and pipelines.
@@ -201,8 +213,7 @@ impl Entry {
     /// Destroy its pipelines; dropping it lets go of its objects' shares.
     fn destroy(&self, shared: &DeviceShared) {
         for pipeline in &self.pipelines {
-            // SAFETY: released by its last holder, so no pending command uses it.
-            unsafe { release::object(shared.vk(), pipeline.raw) };
+            pipeline.destroy(shared);
         }
     }
 }
@@ -223,8 +234,7 @@ impl Arrival {
     /// Destroy its pipeline; dropping it lets go of its objects' shares.
     fn destroy(&self, shared: &DeviceShared) {
         if let Arrival::Pipeline(_, pipeline) = self {
-            // SAFETY: released by its last holder.
-            unsafe { release::object(shared.vk(), pipeline.raw) };
+            pipeline.destroy(shared);
         }
     }
 }
@@ -295,10 +305,7 @@ impl Entries {
                 Some(entry) if !entry.pipelines.iter().any(|p| p.place == pipeline.place) => {
                     entry.pipelines.push(pipeline);
                 }
-                _ => {
-                    // SAFETY: released by its last holder.
-                    unsafe { release::object(shared.vk(), pipeline.raw) };
-                }
+                _ => pipeline.destroy(shared),
             },
         }
     }

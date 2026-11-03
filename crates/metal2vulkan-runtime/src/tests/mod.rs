@@ -179,6 +179,8 @@ mod layer_claim;
 mod left;
 mod linear_attachment;
 mod linear_plan;
+#[cfg(any(m2v_gpu, m2v_cpu_icd))]
+mod linked_pipelines_shared;
 mod making;
 mod managed;
 mod memo;

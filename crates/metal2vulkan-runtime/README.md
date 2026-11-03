@@ -122,6 +122,15 @@ Metal's default encoder state. A draw whose key differs makes its own `VkPipelin
 Tessellated and mesh states, separate depth and stencil formats and fragment functions that write
 depth make nothing at creation.
 
+Where the device links its render pipelines from graphics pipeline libraries
+(`VK_EXT_graphics_pipeline_library` with fast linking; MoltenVK makes them whole),
+a linked `VkPipeline` is the device's, found by exactly what its linking takes: its four
+libraries and its pipeline layout. Render states whose whole key is equal share it even where
+each is a compiled pipeline of its own, whose stages come out as the same words (descriptors that
+differ only in the call stack depth of a function that recurses through no visible function, for
+one): the first links it, and each later one takes it with no driver call
+(`WorkCounts::linked_pipelines_shared`).
+
 ## Examples
 
 Each example runs on the system default device and uses only public API. Without an argument it

@@ -1201,9 +1201,10 @@ impl VariantObjects {
             content.with_infos(self, render_pass.raw, |infos| match libraries {
                 Some(libraries) => {
                     let names = content.names(self, pipeline, key);
-                    let linked = claimed.unwrap_or_else(|| libraries.claim(shared, &names));
+                    let linked = claimed
+                        .unwrap_or_else(|| libraries.claim(shared, &names, self.shared_layout()));
                     self.linked(infos, &names, linked)
-                        .map(|(raw, linked)| (raw, Some(linked)))
+                        .map(|(raw, linked, made)| (raw, Some(linked), made))
                 }
                 None => {
                     let info = infos.whole();
@@ -1245,22 +1246,29 @@ impl VariantObjects {
                                 .copied()
                                 .ok_or_else(|| internal("the driver made no pipeline"))
                         })
-                        .map(|raw| (raw, None))
+                        .map(|raw| (raw, None, true))
                 }
             })
         });
         shared.counts.driver_diagnostics_withheld(withheld);
-        let (raw, linked) = created?;
+        let (raw, linked, made_here) = created?;
         let created_in = started.elapsed();
         let kept_at = split.then(std::time::Instant::now);
-        if content.blend_flags.contains(
-            vk::PipelineColorBlendStateCreateFlags::RASTERIZATION_ORDER_ATTACHMENT_ACCESS_EXT,
-        ) {
-            shared.name_pipeline(raw, RASTER_ORDER_PIPELINE);
-        }
         drop(leader);
         drop(turn);
-        shared.counts.variant_pipeline_made();
+        // A linked pipeline another variant of the same link made is that variant's making: named
+        // and counted there, and taken here with no driver call.
+        match made_here {
+            true => {
+                if content.blend_flags.contains(
+                    vk::PipelineColorBlendStateCreateFlags::RASTERIZATION_ORDER_ATTACHMENT_ACCESS_EXT,
+                ) {
+                    shared.name_pipeline(raw, RASTER_ORDER_PIPELINE);
+                }
+                shared.counts.variant_pipeline_made();
+            }
+            false => shared.counts.linked_pipeline_shared(),
+        }
         if driver_reports {
             shared
                 .shader_cache
@@ -1289,21 +1297,45 @@ impl VariantObjects {
         Ok(made)
     }
 
-    /// The pipeline of `infos` linked, without link-time optimization, from `linked`, the
-    /// libraries of its parts named `names`: each made here where no caller made it or is
-    /// making it, through the device's shader cache under its name, else waited for.
+    /// The pipeline of `infos` linked, without link-time optimization, from `linked`'s libraries,
+    /// those of its parts named `names`, with whether it was linked here: the device's linked
+    /// pipeline of that link (`libraries.rs`), linked here where no caller linked it or is
+    /// linking it, else the one another variant of the same link linked, waited for. Linking it
+    /// makes each library where no caller made it or is making it, through the device's shader
+    /// cache under its name, else waits for it.
     fn linked(
         &self,
         infos: &Infos<'_>,
         names: &[Hash256; 4],
         linked: Linked,
-    ) -> Result<(vk::Pipeline, Linked), Error> {
+    ) -> Result<(vk::Pipeline, Linked, bool), Error> {
+        let split = creation_log::splitting();
+        let asked = split.then(std::time::Instant::now);
+        let mut made = false;
+        let raw = linked.pipeline().made(|| {
+            made = true;
+            self.link(infos, names, &linked)
+        })?;
+        if let (false, Some(at)) = (made, asked) {
+            creation_log::note(|| "link (another caller's)".to_owned(), at.elapsed());
+        }
+        Ok((raw, linked, made))
+    }
+
+    /// Link the pipeline of `infos` from `linked`'s libraries, named `names`, as
+    /// [`linked`](Self::linked) says.
+    fn link(
+        &self,
+        infos: &Infos<'_>,
+        names: &[Hash256; 4],
+        linked: &Linked,
+    ) -> Result<vk::Pipeline, Error> {
         let shared = self.device.shared();
         let split = creation_log::splitting();
         let mut raws = [vk::Pipeline::null(); 4];
         for ((part, library), (raw, name)) in Part::ALL
             .into_iter()
-            .zip(&linked.0)
+            .zip(linked.parts())
             .zip(raws.iter_mut().zip(names))
         {
             // The creation log's split: how long the part took, and whether this making made it.
@@ -1348,13 +1380,14 @@ impl VariantObjects {
             }
         }
         let mut libraries = vk::PipelineLibraryCreateInfoKHR::default().libraries(&raws);
+        // The link's layout, which its key names: the variant's own (`infos.layout`).
         let info = vk::GraphicsPipelineCreateInfo::default()
-            .layout(infos.layout)
+            .layout(linked.layout())
             .push_next(&mut libraries);
         let linking = split.then(std::time::Instant::now);
-        // SAFETY: every pointer in `info` outlives the call, and each library it links is made
-        // and held by `linked` for as long as the pipeline lives. A driver's making, which the exit
-        // waits for longer on a pool's thread.
+        // SAFETY: every pointer in `info` outlives the call, and each library it links and the
+        // layout it is linked with are made and held by `linked`'s link for as long as the
+        // pipeline lives. A driver's making, which the exit waits for longer on a pool's thread.
         let created = crate::exit_guard::driver_making(|| unsafe {
             shared
                 .vk()
@@ -1365,11 +1398,10 @@ impl VariantObjects {
         }
         let created = created.map_err(|(_, error)| vulkan(error))?;
         shared.counts.pipeline_linked();
-        let raw = created
+        created
             .first()
             .copied()
-            .ok_or_else(|| internal("the driver linked no pipeline"))?;
-        Ok((raw, linked))
+            .ok_or_else(|| internal("the driver linked no pipeline"))
     }
 }
 

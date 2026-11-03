@@ -530,8 +530,9 @@ pub(crate) struct RawPipeline {
     /// Made at its state's creation, its specialized notices not announced yet: the first draw
     /// that takes it announces them, with what it binds (`RenderVariant::first_use`).
     pub(super) unannounced: AtomicBool,
-    /// The libraries it was linked from, held while it lives (`libraries.rs`); `None` for a
-    /// pipeline made whole.
+    /// The device's linked pipeline it is, with the libraries it was linked from, held while it
+    /// lives (`libraries.rs`): `raw` is that pipeline's, which only the device's map destroys.
+    /// `None` for a pipeline made whole, which is this variant's own.
     pub(super) linked: Option<Linked>,
 }
 
@@ -552,8 +553,12 @@ impl Drop for RawPipeline {
             lock(&shared.kept).pipeline_released(instance, kept);
             return;
         }
-        // SAFETY: as for `VariantObjects`.
-        unsafe { release::object(self.device.shared().vk(), self.raw) };
+        // A linked pipeline is the device's, which other variants may share: its map destroys
+        // it once nothing holds it (`libraries.rs`), and this lets go of its share.
+        if self.linked.is_none() {
+            // SAFETY: as for `VariantObjects`.
+            unsafe { release::object(self.device.shared().vk(), self.raw) };
+        }
     }
 }
 
@@ -861,6 +866,12 @@ impl VariantObjects {
     /// definition shares (`shared_layouts.rs`).
     pub(crate) fn layout(&self) -> vk::PipelineLayout {
         self.layout.layout()
+    }
+
+    /// Its share of the device's layout, which a linked pipeline made with it holds
+    /// (`libraries.rs`).
+    pub(crate) fn shared_layout(&self) -> &Arc<SharedLayout> {
+        &self.layout
     }
 
     /// How many sets the layout has.

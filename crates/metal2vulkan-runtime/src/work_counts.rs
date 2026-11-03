@@ -449,6 +449,7 @@ pub(crate) struct Counters {
     pipeline_libraries_made: AtomicU64,
     fragment_shader_libraries_made: AtomicU64,
     pipelines_linked: AtomicU64,
+    linked_pipelines_shared: AtomicU64,
     dispatch_pipelines_pooled: AtomicU64,
     tile_pipelines_pooled: AtomicU64,
     upload_chunks_in_device_memory: AtomicU64,
@@ -1066,6 +1067,12 @@ impl Counters {
     /// A render variant's `VkPipeline` was linked from libraries (`pipeline/graphics.rs`).
     pub(crate) fn pipeline_linked(&self) {
         self.pipelines_linked.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// A render variant took the device's linked pipeline of its link, which another variant
+    /// linked (`pipeline/libraries.rs`).
+    pub(crate) fn linked_pipeline_shared(&self) {
+        self.linked_pipelines_shared.fetch_add(1, Ordering::Relaxed);
     }
 
     /// A variant made again took back a released one's objects (`pipeline/kept.rs`).
@@ -3315,7 +3322,9 @@ pub struct WorkCounts {
     /// pushed with it (`render/bound.rs`).
     pub pipeline_layouts_shared: u64,
     /// `VkPipeline`s pipeline states' variants made (compute regions and their emulated mesh
-    /// stages, indirect-bindable replays, and draws): none for one a released variant kept.
+    /// stages, indirect-bindable replays, and draws): none for one a released variant kept, nor
+    /// for a linked pipeline another variant of the same link linked
+    /// ([`linked_pipelines_shared`](Self::linked_pipelines_shared)).
     pub variant_pipelines_made: u64,
     /// Nanoseconds the runtime's `vkCreateGraphicsPipelines` calls spent inside the driver, from
     /// the entry to its return (`device/compiles.rs`, the one door every graphics pipeline the
@@ -5310,6 +5319,14 @@ pub struct WorkCounts {
     /// Render variants' `VkPipeline`s linked from libraries (each counted in
     /// `variant_pipelines_made` too).
     pub pipelines_linked: u64,
+    /// Render variants' `VkPipeline`s that took the device's linked pipeline of their exact link
+    /// (the same four libraries and pipeline layout), linked before by another variant: no driver
+    /// call, and counted in neither `pipelines_linked` nor `variant_pipelines_made`
+    /// (`pipeline/libraries.rs`). Render states whose whole key is equal but which are variants
+    /// of their own share one: compiled pipelines of their own whose stages come out as the same
+    /// words, such as descriptors that differ only in the call stack depth of a function that
+    /// recurses through no visible function.
+    pub linked_pipelines_shared: u64,
     /// Compute encoders' dispatches that handed the making of a region's `VkPipeline` to the
     /// device's pool and went on, rather than make it at the dispatch: each counted once per
     /// region it handed.
@@ -6159,6 +6176,7 @@ impl Device {
                 .fragment_shader_libraries_made
                 .load(Ordering::Relaxed),
             pipelines_linked: counters.pipelines_linked.load(Ordering::Relaxed),
+            linked_pipelines_shared: counters.linked_pipelines_shared.load(Ordering::Relaxed),
             dispatch_pipelines_pooled: counters.dispatch_pipelines_pooled.load(Ordering::Relaxed),
             tile_pipelines_pooled: counters.tile_pipelines_pooled.load(Ordering::Relaxed),
             upload_chunks_in_device_memory: (counters.upload_chunks_in_device_memory)
