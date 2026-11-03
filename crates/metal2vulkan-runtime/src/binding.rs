@@ -2277,7 +2277,11 @@ pub(super) fn command_uses_into(
     resident.clear();
     sources.clear();
     // One use at most a resource use of the plan's or the command's: room for them all at once.
-    uses.reserve(plan.uses.len() + command.uses.len());
+    let resources = plan.uses.len() + command.uses.len();
+    if u32::try_from(resources).is_err() {
+        return Err(internal("a command of 2^32 uses"));
+    }
+    uses.reserve(resources);
     // The keys of the buffers made resident the command reaches through the resident set, by
     // address; every other use names its resource (a descriptor, a root table's static, a view).
     // Those it names are gathered once it reaches one so: until then each use names its key.
@@ -2292,7 +2296,8 @@ pub(super) fn command_uses_into(
         if !resource.access.read && !resource.access.write {
             continue;
         }
-        let source = u32::try_from(source).map_err(|_| internal("a command of 2^32 uses"))?;
+        // Fewer than 2^32 (above).
+        let source = source as u32;
         let stages: vk::PipelineStageFlags2 = resource.stages.into();
         if stages.is_empty() {
             return Err(internal("a command's resource use in no stage"));
@@ -2382,7 +2387,12 @@ pub(super) fn command_uses_into(
                 .control_point_indices
                 .ok_or_else(|| internal("a control-point index use of a draw without a buffer"))?,
         };
-        let used = bytes_use(resource, buffer, offset)?;
+        let (read, write) = buffer_access(resource.class)?;
+        let accesses = (
+            access(read, resource.access.read),
+            access(write, resource.access.write),
+        );
+        let used = bytes_use(resource, buffer, offset, accesses);
         match resource.resource {
             UseTarget::Used(_) => {
                 // The first reached: every use before it named its key.
@@ -2400,19 +2410,16 @@ pub(super) fn command_uses_into(
     Ok(())
 }
 
-/// The use `resource` makes of `buffer`'s bytes bound at `offset`: its range from the offset (the
-/// buffer's rest where it states none; an index buffer's up to its last whole index), as the
-/// buffer tracks it (`Buffer::tracked`).
+/// The use `resource` makes of `buffer`'s bytes bound at `offset`, reading and writing as
+/// `(read, write)`: its range from the offset (the buffer's rest where it states none; an index
+/// buffer's up to its last whole index), as the buffer tracks it (`Buffer::tracked`).
+#[inline]
 fn bytes_use(
     resource: &ResourceUse,
     buffer: &Buffer,
     offset: u64,
-) -> Result<Use<ResourceKey>, Error> {
-    let stages: vk::PipelineStageFlags2 = resource.stages.into();
-    let access = |flags: vk::AccessFlags2, used: bool| match used {
-        true => Access::new(stages, flags),
-        false => Access::NONE,
-    };
+    (read, write): (Access, Access),
+) -> Use<ResourceKey> {
     let range = match resource.range {
         Some(range) => {
             let start = offset.saturating_add(range.offset);
@@ -2427,15 +2434,14 @@ fn bytes_use(
         }
         _ => range,
     };
-    let (read, write) = buffer_access(resource.class)?;
     let (identity, range) = buffer.tracked(range);
-    Ok(Use {
+    Use {
         key: identity.key,
         tracked: identity.tracked,
         range: UseRange::Bytes(range),
-        read: access(read, resource.access.read),
-        write: access(write, resource.access.write),
-    })
+        read,
+        write,
+    }
 }
 
 /// Patch in `into`, as [`command_uses_into`] made it of `plan`'s and `command`'s uses, the uses
@@ -2469,7 +2475,8 @@ pub(super) fn patch_buffer_uses(
         let Some((buffer, offset)) = slot_buffer(tables, slot) else {
             return Ok(false);
         };
-        let now = bytes_use(resource, buffer, *offset)?;
+        // Its reads and writes are its resource use's, as the use made of it holds them.
+        let now = bytes_use(resource, buffer, *offset, (used.read, used.write));
         if now.key != used.key {
             return Ok(false);
         }
