@@ -71,6 +71,27 @@ struct Pending<Q> {
     behind_merge: bool,
 }
 
+/// One kept GPU signal, by index, until its command buffer's transition to `Completed` ran up to
+/// its handlers, or, for one in a batch that ends no command buffer, until its batch's completion
+/// turn ran (`command_buffer/completion.rs`): a batch that waits for a value it reaches finishes
+/// after that batch, and its command buffer completes after that command buffer
+/// ([`EventTimeline::signallers`]). One of the caller's submissions is kept as released, as no
+/// completion turn sees it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct Unfinished<Q, S> {
+    index: u64,
+    value: u64,
+    /// The batch: its `VkQueue` and its value on that queue's timeline; `None` for the caller's.
+    batch: Option<(Q, u64)>,
+    /// Its command buffer, where the batch ends it.
+    signaller: Option<S>,
+    /// Its batch's completion turn ran.
+    finished: bool,
+    /// Its command buffer's transition to `Completed` ran up to its completed handlers, or its
+    /// batch's turn ran where it ends no command buffer.
+    released: bool,
+}
+
 /// How a batch waits for a Metal value.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum WaitFor {
@@ -93,7 +114,7 @@ pub(super) enum Signal {
 
 /// One event's map from its semaphore's signal indices to Metal's values.
 #[derive(Debug)]
-pub(super) struct EventTimeline<Q> {
+pub(super) struct EventTimeline<Q, S = ()> {
     /// The highest index the semaphore was seen to reach.
     reached: u64,
     /// The Metal value of that index (0 before any).
@@ -108,12 +129,17 @@ pub(super) struct EventTimeline<Q> {
     /// The highest index a host wait returned for, of the caller's signals the device's watcher
     /// waited for (the module docs): every pending signal up to it landed.
     landed: u64,
+    /// The kept signals from the first not released, in index order (and so in value order),
+    /// whatever the semaphore was seen to reach.
+    unfinished: VecDeque<Unfinished<Q, S>>,
+    /// The highest value of a kept signal let go of from `unfinished`, released.
+    released_value: u64,
 }
 
-impl<Q> EventTimeline<Q> {
+impl<Q, S> EventTimeline<Q, S> {
     /// An event's timeline; `settable` for a shared event (`MTLSharedEvent`), whose value the host
     /// may set, and `false` for a plain one (`MTLEvent`).
-    pub(super) fn new(settable: bool) -> EventTimeline<Q> {
+    pub(super) fn new(settable: bool) -> EventTimeline<Q, S> {
         EventTimeline {
             reached: 0,
             reached_value: 0,
@@ -121,6 +147,8 @@ impl<Q> EventTimeline<Q> {
             floor: 0,
             settable,
             landed: 0,
+            unfinished: VecDeque::new(),
+            released_value: 0,
         }
     }
 
@@ -131,7 +159,7 @@ impl<Q> EventTimeline<Q> {
     }
 }
 
-impl<Q: Copy + Eq> EventTimeline<Q> {
+impl<Q: Copy + Eq, S: Clone> EventTimeline<Q, S> {
     /// The event's value now: the semaphore's last seen index's value, or the host's floor.
     pub(super) fn value(&self) -> u64 {
         self.reached_value.max(self.floor)
@@ -271,19 +299,99 @@ impl<Q: Copy + Eq> EventTimeline<Q> {
             queue: None,
             behind_merge: false,
         });
+        self.unfinished.push_back(Unfinished {
+            index,
+            value,
+            batch: None,
+            signaller: None,
+            finished: true,
+            released: true,
+        });
+        self.let_go_released();
         Signal::Kept { index, after }
     }
 
     /// The batch of a kept signal (`index` from [`EventTimeline::signal`]) of `value` on `queue`
-    /// was submitted; `behind_merge` where the device kept a copied host buffer then (the module
-    /// docs).
-    pub(super) fn keep(&mut self, index: u64, value: u64, queue: Q, behind_merge: bool) {
+    /// was submitted, at `batch` on that queue's timeline; `signaller` is its command buffer where
+    /// the batch ends it; `behind_merge` where the device kept a copied host buffer then (the
+    /// module docs).
+    pub(super) fn keep(
+        &mut self,
+        index: u64,
+        value: u64,
+        (queue, batch): (Q, u64),
+        signaller: Option<S>,
+        behind_merge: bool,
+    ) {
         self.pending.push_back(Pending {
             index,
             value,
             queue: Some(queue),
             behind_merge,
         });
+        self.unfinished.push_back(Unfinished {
+            index,
+            value,
+            batch: Some((queue, batch)),
+            signaller,
+            finished: false,
+            released: false,
+        });
+    }
+
+    /// The completion turn of the batch whose kept signal is `index` ran: released too where the
+    /// batch ends no command buffer.
+    pub(super) fn finished(&mut self, index: u64) {
+        if let Some(signal) = (self.unfinished.iter_mut()).find(|signal| signal.index == index) {
+            signal.finished = true;
+            signal.released |= signal.signaller.is_none();
+        }
+        self.let_go_released();
+    }
+
+    /// The transition to `Completed` of the command buffer whose last batch's kept signal is
+    /// `index` ran up to its completed handlers.
+    pub(super) fn released(&mut self, index: u64) {
+        if let Some(signal) = (self.unfinished.iter_mut()).find(|signal| signal.index == index) {
+            signal.finished = true;
+            signal.released = true;
+        }
+        self.let_go_released();
+    }
+
+    /// Let go of the released signals at the front of `unfinished`.
+    fn let_go_released(&mut self) {
+        while let Some(front) = self.unfinished.front().filter(|front| front.released) {
+            self.released_value = self.released_value.max(front.value);
+            self.unfinished.pop_front();
+        }
+    }
+
+    /// What a batch that waits for `value` completes after (`command_buffer/completion.rs`), as
+    /// Metal's completion follows the GPU's, from the kept GPU signal that reaches it, the first in
+    /// index order: its batch's `VkQueue` and value on that queue's timeline, where that batch's
+    /// completion turn has not run, which it finishes after; and its command buffer, where the
+    /// batch ends it and that command buffer's transition to `Completed` has not run up to its
+    /// handlers, whose transition its own runs after. Nothing where the host's set reached
+    /// `value`, nor for a signal of the caller's.
+    pub(super) fn signallers(&self, value: u64) -> (Option<(Q, u64)>, Option<S>) {
+        // The signals let go of are the first in index order, so the one that reached a value up
+        // to theirs is one of them.
+        if value <= self.floor || value <= self.released_value {
+            return (None, None);
+        }
+        let Some(signal) = (self.unfinished.iter()).find(|signal| signal.value >= value) else {
+            return (None, None);
+        };
+        let batch = signal.batch.filter(|_| !signal.finished);
+        let signaller = signal.signaller.clone().filter(|_| !signal.released);
+        (batch, signaller)
+    }
+
+    /// The kept signals not all released, from the first that is not.
+    #[cfg(test)]
+    pub(super) fn unfinished(&self) -> usize {
+        self.unfinished.len()
     }
 
     /// The kept signals the semaphore has not been seen to reach.

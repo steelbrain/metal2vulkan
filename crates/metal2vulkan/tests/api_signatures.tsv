@@ -2485,6 +2485,7 @@ field	metal2vulkan-runtime::WorkCounts.batch_hold_nanos	pub batch_hold_nanos: u6
 field	metal2vulkan-runtime::WorkCounts.batch_submit_nanos	pub batch_submit_nanos: u64
 field	metal2vulkan-runtime::WorkCounts.batches_checked_at_commit	pub batches_checked_at_commit: u64
 field	metal2vulkan-runtime::WorkCounts.batches_grouped	pub batches_grouped: u64
+field	metal2vulkan-runtime::WorkCounts.batches_held_for_another_queue	pub batches_held_for_another_queue: u64
 field	metal2vulkan-runtime::WorkCounts.batches_held_past_a_look	pub batches_held_past_a_look: u64
 field	metal2vulkan-runtime::WorkCounts.batches_submitted_at_commit	pub batches_submitted_at_commit: u64
 field	metal2vulkan-runtime::WorkCounts.batches_submitted_by_waiters	pub batches_submitted_by_waiters: u64
@@ -2519,6 +2520,7 @@ field	metal2vulkan-runtime::WorkCounts.command_buffers_begun_internal	pub comman
 field	metal2vulkan-runtime::WorkCounts.command_buffers_begun_kept_barriers	pub command_buffers_begun_kept_barriers: u64
 field	metal2vulkan-runtime::WorkCounts.command_buffers_begun_secondaries	pub command_buffers_begun_secondaries: u64
 field	metal2vulkan-runtime::WorkCounts.command_buffers_begun_segments	pub command_buffers_begun_segments: u64
+field	metal2vulkan-runtime::WorkCounts.command_buffers_completed_after_another_queue	pub command_buffers_completed_after_another_queue: u64
 field	metal2vulkan-runtime::WorkCounts.command_buffers_submitted	pub command_buffers_submitted: u64
 field	metal2vulkan-runtime::WorkCounts.command_buffers_unsubmitted	pub command_buffers_unsubmitted: u64
 field	metal2vulkan-runtime::WorkCounts.command_pools_made	pub command_pools_made: u64

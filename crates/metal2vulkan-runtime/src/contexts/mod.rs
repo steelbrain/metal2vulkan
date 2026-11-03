@@ -12,7 +12,11 @@
 //!   `CommandBufferShared::schedule`); neither runs a handler. (A transition to `Scheduled` waits
 //!   for its command buffer's submission handlers, which the thread that took its last batch for
 //!   its queue runs.) A release the scheduler's thread hands off (`Device::let_go_elsewhere`) runs
-//!   in a context of its own, behind no queue's handlers.
+//!   in a context of its own, behind no queue's handlers. A transition to `Completed` of a command
+//!   buffer that waited on the GPU for another queue's command buffer may be posted behind a gate
+//!   ([`Contexts::gate`], [`Contexts::post_behind`]), its place in its context kept, until that
+//!   command buffer's transition, which leads its own context ([`Contexts::leads`]), reaches its
+//!   handlers (`command_buffer/follow.rs`): a gate holds no thread.
 //! - **Metal's order** (measured on an M4, macOS 27.0.1): while one of a
 //!   queue's handlers blocks, the queue's later transitions wait, even of a command buffer whose
 //!   work already ran; another queue's transitions and handlers go on, on another thread. Metal
@@ -114,6 +118,8 @@ struct Shared<I> {
 
 struct State<I> {
     lines: Lines<I>,
+    /// The token the next gate takes ([`Contexts::gate`]).
+    gates: u64,
     /// The threads that run no item: waiting for one, or starting.
     free: usize,
     /// The threads sleeping on the condition variable, waiting for a line.
@@ -152,6 +158,7 @@ impl<I: Run> Contexts<I> {
         let shared = Arc::new(Shared {
             state: Mutex::new(State {
                 lines: Lines::default(),
+                gates: 0,
                 free: 1,
                 parked: 0,
                 stopping: false,
@@ -208,6 +215,45 @@ impl<I: Run> Contexts<I> {
         state.lines.done(queue);
         self.serve(state);
         Ok(())
+    }
+
+    /// A new gate, closed once by the caller, who opens it ([`Contexts::open`]) once it posted
+    /// the item behind it ([`Contexts::post_behind`]) and closed it for whatever else the item
+    /// waits for ([`Contexts::close`]). Its token.
+    pub(crate) fn gate(&self) -> u64 {
+        let mut state = lock(&self.shared.state);
+        state.gates += 1;
+        let token = state.gates;
+        state.lines.close_new(token);
+        token
+    }
+
+    /// Append `item` to the context of logical queue `queue` behind the gate `token`
+    /// ([`Contexts::gate`]): the item keeps its place in its context, and it and the items after it
+    /// run once the gate is open.
+    pub(crate) fn post_behind(&self, queue: u64, item: I, token: u64) {
+        let mut state = lock(&self.shared.state);
+        state.lines.push_behind(queue, item, token);
+        self.serve(state);
+    }
+
+    /// Close the gate `token` once more, where it is not open yet: whether it was not.
+    pub(crate) fn close(&self, token: u64) -> bool {
+        lock(&self.shared.state).lines.close(token)
+    }
+
+    /// Open one closing of the gate `token` of an item of the context of `queue`; once none is
+    /// left, the item runs there in its turn.
+    pub(crate) fn open(&self, queue: u64, token: u64) {
+        let mut state = lock(&self.shared.state);
+        state.lines.open(queue, token);
+        self.serve(state);
+    }
+
+    /// Whether the item `is` picks out leads the context of `queue`: no item of the context runs
+    /// before it ([`Lines::leads`]; `posted` where the caller knows it was posted there).
+    pub(crate) fn leads(&self, queue: u64, is: impl Fn(&I) -> bool, posted: bool) -> bool {
+        lock(&self.shared.state).lines.leads(queue, is, posted)
     }
 
     /// Run `item` in the context of logical queue `queue` on this thread, where no thread runs

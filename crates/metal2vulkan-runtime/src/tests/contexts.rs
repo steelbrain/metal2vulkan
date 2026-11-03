@@ -102,6 +102,77 @@ fn ready_lines_are_taken_in_the_order_they_became_ready() {
     assert_eq!(taken, [3, 1, 2]);
 }
 
+/// An item behind a gate keeps its place in its line and holds the line's later items until every
+/// closing of the gate is opened, whenever the item was pushed; other lines go on meanwhile, and
+/// no caller takes its line whole.
+#[test]
+fn an_item_behind_a_gate_holds_its_line_until_every_closing_is_opened() {
+    let plain = |_: &&str| true;
+    let mut lines = Lines::default();
+    lines.push(1, "a1");
+    lines.close_new(7);
+    assert!(lines.close(7), "closed again while closed");
+    lines.push_behind(1, "a2", 7);
+    lines.push(1, "a3");
+    lines.push(2, "b1");
+    assert_eq!(lines.take(), Some((1, "a1")));
+    lines.done(1);
+    // a2 leads line 1 behind its gate: only line 2 is ready.
+    assert_eq!(lines.take(), Some((2, "b1")));
+    lines.done(2);
+    assert_eq!(lines.take(), None);
+    assert_eq!(lines.take_plain(1, plain), None);
+    lines.open(1, 7);
+    assert_eq!(lines.take(), None, "one closing is left");
+    lines.open(1, 7);
+    assert!(!lines.close(7), "open");
+    assert_eq!(lines.take(), Some((1, "a2")));
+    lines.done(1);
+    assert_eq!(lines.take(), Some((1, "a3")));
+    lines.done(1);
+    assert!(lines.is_empty());
+    // A gate opened before its item is pushed: the item goes as any.
+    lines.close_new(8);
+    lines.close(8);
+    lines.open(3, 8);
+    lines.push_behind(3, "c1", 8);
+    assert_eq!(lines.take(), None);
+    lines.open(3, 8);
+    assert_eq!(lines.take(), Some((3, "c1")));
+    lines.done(3);
+    lines.close_new(9);
+    lines.open(3, 9);
+    lines.push_behind(3, "c2", 9);
+    assert_eq!(lines.take(), Some((3, "c2")));
+    lines.done(3);
+    assert!(lines.is_empty());
+}
+
+/// An item leads its line where it is the first and no thread runs the line, or where it was
+/// pushed, a thread runs the line and no item left is it (the thread runs it); one not pushed yet
+/// leads no running line.
+#[test]
+fn an_item_leads_its_line_with_nothing_before_it() {
+    let mut lines = Lines::default();
+    let leads =
+        |lines: &Lines<&str>, name: &str, posted| lines.leads(1, |item| *item == name, posted);
+    assert!(!leads(&lines, "a2", true), "no line");
+    lines.push(1, "a1");
+    assert!(leads(&lines, "a1", true));
+    assert_eq!(lines.take(), Some((1, "a1")));
+    // a1 runs: it leads; a2, not pushed yet, does not.
+    assert!(leads(&lines, "a1", true));
+    assert!(!leads(&lines, "a2", false));
+    lines.push(1, "a2");
+    assert!(!leads(&lines, "a2", true), "a2 waits behind a1");
+    lines.done(1);
+    assert!(leads(&lines, "a2", true));
+    assert_eq!(lines.take(), Some((1, "a2")));
+    assert!(leads(&lines, "a2", true));
+    lines.done(1);
+    assert!(lines.is_empty());
+}
+
 /// A plain item.
 struct Job(Box<dyn FnOnce() + Send>);
 

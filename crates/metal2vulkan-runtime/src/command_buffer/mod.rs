@@ -36,6 +36,7 @@ pub(super) mod checks;
 pub(super) mod completion;
 pub(super) mod fences;
 mod first_submission;
+pub(super) mod follow;
 pub(super) mod gate;
 mod group;
 pub(super) mod hang;
@@ -52,6 +53,7 @@ mod submit;
 
 pub(super) use completion::Completion;
 pub(super) use first_submission::{NotedTable, ReplayTable};
+use follow::{Follow, Release};
 /// Whether a driver's facts merge a submission that signals nothing into the next, for the test
 /// that holds every committed profile to the fact
 /// (`tests::batches::only_drivers_measured_to_merge_their_submissions_group_their_batches`).
@@ -770,6 +772,14 @@ pub(super) struct State {
     /// Where its first submission, or a later batch's, found the first use rebound, for the
     /// notice (`rebound_use.rs`).
     rebound_use: Option<ReboundUse>,
+    /// The command buffers of other queues whose last batches' GPU signals met its batches' event
+    /// waits while their transitions to `Completed` had not run up to their completed handlers
+    /// (`follow.rs`): its own runs after theirs where theirs lead their contexts
+    /// ([`CommandBufferShared::finish_here`]).
+    waited: Vec<Arc<Follow>>,
+    /// What its transition to `Completed` lets go as it reaches its completed handlers, its status
+    /// final, where its last batch keeps GPU signals; taken then (`follow.rs`).
+    release: Option<Release>,
     /// The resident root tables of its work on the GPU alone recorded before its first
     /// submission, which that submission points at the set as it lies then
     /// (`first_submission.rs`).
@@ -1995,6 +2005,8 @@ impl CommandBuffer {
                 protection: protection::Protection::default(),
                 failing: Vec::new(),
                 rebound_use: None,
+                waited: Vec::new(),
+                release: None,
                 replay_tables: Vec::new(),
                 reaches_unnamed: false,
                 unrunnable: BTreeSet::new(),
@@ -4606,6 +4618,8 @@ impl CommandBufferShared {
                 fence,
                 signals: Vec::new(),
                 holds: Vec::new(),
+                after: Vec::new(),
+                held: false,
             },
         );
     }
@@ -4693,10 +4707,14 @@ impl CommandBufferShared {
         result: Result<(), CommandBufferError>,
     ) {
         let (contexts, queue) = (buffer.device.shared().contexts.clone(), buffer.queue.id());
+        let own = (lock(&buffer.state).release.as_ref()).map(|release| Arc::clone(&release.follow));
         contexts.post(
             queue,
             Item::Transition(Transition::finished(buffer, result)),
         );
+        if let Some(own) = own {
+            own.posted();
+        }
     }
 
     /// The last batch of the command buffer `buffer` holds finished with `result`, as the queue
@@ -4710,6 +4728,13 @@ impl CommandBufferShared {
     /// as Metal's completion wakes it, with no handler thread woken between. Else it is posted, as
     /// [`post_finished`](Self::post_finished) posts it.
     ///
+    /// Where the transition of a command buffer of another queue whose GPU signal it waited for has
+    /// not run up to its completed handlers and leads its context (no item there runs before it),
+    /// its own is posted behind a gate that transition opens there (`Follow::follow`), its place in
+    /// its own context kept: Metal's completion follows the GPU's (`completion.rs`, "After what it
+    /// waited for"). Behind any other item there, Metal runs the other queue's transitions on, and
+    /// so does this.
+    ///
     /// The waiter takes no handle of the device here, and lets each transition's hold go short of
     /// its command buffer's last reference ([`Transition::run`]): the device's last handle never
     /// goes here, and none is left here once the gate opens.
@@ -4718,6 +4743,34 @@ impl CommandBufferShared {
         result: Result<(), CommandBufferError>,
     ) {
         let (contexts, queue) = (buffer.device.shared().contexts.clone(), buffer.queue.id());
+        let (signallers, own): (Vec<Arc<Follow>>, _) = {
+            let state = lock(&buffer.state);
+            let signallers = (state.waited.iter())
+                .filter(|signaller| signaller.leads(&contexts))
+                .cloned()
+                .collect();
+            let own = (state.release.as_ref()).map(|release| Arc::clone(&release.follow));
+            (signallers, own)
+        };
+        // Its own transition is posted, or runs, below: another queue's command buffer that waited
+        // for its signal may follow it from then on.
+        let posted = || own.iter().for_each(|own| own.posted());
+        if !signallers.is_empty() {
+            // Closed by this thread until the item is posted behind it.
+            let gate = contexts.gate();
+            let mut behind = false;
+            for signaller in &signallers {
+                behind |= signaller.follow(&contexts, (queue, gate));
+            }
+            if behind {
+                (buffer.device.shared().counts).command_buffer_completed_after_another_queue();
+            }
+            let item = Item::Transition(Transition::finished(buffer, result));
+            contexts.post_behind(queue, item, gate);
+            posted();
+            contexts.open(queue, gate);
+            return;
+        }
         let item = Item::Transition(Transition::finished(buffer, result));
         // A thread that may block for a command buffer runs none of the program's code here.
         let may_run: fn(&Item) -> bool = match exit_guard::serving_completion() {
@@ -4736,6 +4789,7 @@ impl CommandBufferShared {
             None => item,
         };
         contexts.post(queue, item);
+        posted();
     }
 
     /// Finish the command buffer with `result` (or the failure of a batch): take the device's
@@ -4936,6 +4990,16 @@ impl CommandBufferShared {
                 exit_guard::program(|| handler(&buffer));
             }
         }
+        // Its status is final and its completion-seen handlers, which never block, ran: the
+        // command buffers of other queues that waited on the GPU for its signals complete from here
+        // on, after it, as its completed handlers start, which may block (`follow.rs`).
+        let release = lock(&self.state).release.take();
+        if let Some(Release { follow, signals }) = release {
+            for (event, index) in signals {
+                event.released(index);
+            }
+            follow.release(&self.device.shared().contexts);
+        }
         // Each handler leaves the queue under the lock and runs without it, in the order added
         // (a handler may query the command buffer).
         {
@@ -5114,6 +5178,20 @@ pub(crate) enum Item {
     /// its own (`Device::let_go_elsewhere`): it holds no command buffer, so nothing waits for it
     /// and it waits for nothing.
     Release(Box<dyn Send>),
+}
+
+impl Item {
+    /// Whether it is the transition to `Completed` or `Error` of the command buffer at the address
+    /// `buffer` (`follow.rs`).
+    fn finishes(&self, buffer: usize) -> bool {
+        match self {
+            Item::Transition(transition) => {
+                let at = Arc::as_ptr(&transition.buffer) as usize;
+                matches!(transition.to, To::Finished(_)) && at == buffer
+            }
+            Item::Release(_) => false,
+        }
+    }
 }
 
 impl Run for Item {

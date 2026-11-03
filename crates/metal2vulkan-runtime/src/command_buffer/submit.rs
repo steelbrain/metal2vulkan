@@ -189,7 +189,8 @@
 //! completed after the fill, its GPU times 65 to 135 us after the fill's `GPUEndTime`. Counted:
 //! `WorkCounts::command_buffers_unsubmitted`.
 
-use super::completion::Submitted;
+use super::completion::{Submitted, Waited};
+use super::follow::{Follow, Release};
 use super::gate::Hold;
 use super::group::{self, After, GroupEnd, InfoParts};
 use super::hang;
@@ -199,6 +200,7 @@ use crate::deferred::Deferred;
 use crate::encoder::RecordedSegment;
 use crate::error::CommandBufferError;
 use crate::error::{internal, Error};
+use crate::event::EventShared;
 use crate::event_timeline::Signal;
 use crate::exit_guard::{self, Call};
 use crate::gpu_time;
@@ -1096,8 +1098,24 @@ impl CommandBufferShared {
         if behind_merge {
             shared.counts.event_signals_behind_merge(kept.len());
         }
+        // A last batch's signals name its command buffer, which another queue's command buffer
+        // that waits for one completes after; its transition to `Completed` lets them go
+        // (`follow.rs`).
+        let follow = (last && !kept.is_empty())
+            .then(|| Arc::new(Follow::new(self.queue.id(), Arc::as_ptr(self) as usize)));
         for (event, signal, value) in &kept {
-            event.keep(*signal, *value, queue, behind_merge);
+            event.keep(
+                *signal,
+                *value,
+                (queue, at.value),
+                follow.clone(),
+                behind_merge,
+            );
+        }
+        if let Some(follow) = follow {
+            let signals = (kept.iter()).map(|(event, signal, _)| (Arc::clone(event), *signal));
+            let signals = signals.collect();
+            state.release = Some(Release { follow, signals });
         }
         // Its commands may reach every texture through its resource ID where one bound a heap
         // set: the stale-reach degrade's trigger decides (`detach.rs`).
@@ -1105,6 +1123,15 @@ impl CommandBufferShared {
         let rebound_use = state.rebound_use.clone();
         // The holds its completion lets go (`State::holds_until`).
         let holds = state.holds_until(index);
+        // What it completes after: the batches of other `VkQueue`s whose GPU signals its event
+        // waits were met by, not finished yet, and the command buffers of other queues they end
+        // (`completion.rs`, "After what it waited for").
+        let after = {
+            let State {
+                batches, waited, ..
+            } = &mut *state;
+            finishes_after(&batches.all()[index].waits, (queue, self), waited)
+        };
         drop(state);
         if rebound {
             device.degrade_encoded_use_rebound(rebound_use);
@@ -1122,6 +1149,8 @@ impl CommandBufferShared {
                     .map(|(event, signal, _)| (event, signal))
                     .collect(),
                 holds,
+                after,
+                held: false,
             },
             handlers,
             forms,
@@ -1199,6 +1228,8 @@ impl CommandBufferShared {
                 fence: None,
                 signals: Vec::new(),
                 holds,
+                after: Vec::new(),
+                held: false,
             },
             handlers,
             forms,
@@ -1540,4 +1571,38 @@ impl Stamps {
             end: self.end.is_some(),
         })
     }
+}
+
+/// The batches of `VkQueue`s other than `queue` that a batch of `buffer` waiting for `waits`
+/// finishes after: for each wait, the batch whose kept GPU signal reaches its value, where that
+/// batch's completion turn has not run; and, added to `waited`, the command buffers of other queues
+/// those batches end, whose transitions to `Completed` have not run up to their completed handlers
+/// (`EventShared::signallers`, `follow.rs`). None, and nothing allocated, for a batch that waits
+/// for no event.
+fn finishes_after(
+    waits: &[(Arc<EventShared>, u64)],
+    (queue, buffer): (usize, &CommandBufferShared),
+    waited: &mut Vec<Arc<Follow>>,
+) -> Vec<Waited> {
+    let mut after: Vec<Waited> = Vec::new();
+    for (event, value) in waits {
+        let (batch, signaller) = event.signallers(*value);
+        if let Some((other, value)) = batch.filter(|(other, _)| *other != queue) {
+            let signaller = Waited {
+                queue: other,
+                value,
+            };
+            if !after.contains(&signaller) {
+                after.push(signaller);
+            }
+        }
+        // Of another queue: one of its own queue's is before it in its context.
+        let other_queue = |signaller: &Arc<Follow>| signaller.queue() != buffer.queue.id();
+        if let Some(signaller) = signaller.filter(other_queue) {
+            if !waited.iter().any(|known| Arc::ptr_eq(known, &signaller)) {
+                waited.push(signaller);
+            }
+        }
+    }
+    after
 }

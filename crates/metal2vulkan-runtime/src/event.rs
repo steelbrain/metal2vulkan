@@ -49,6 +49,7 @@
 //!   come and go with the work. A notification for a value already reached comes due at once
 //!   (measured on Metal).
 
+use super::command_buffer::follow::Follow;
 use super::device::{lock, Device};
 use super::error::{vulkan, Error, RuntimeGap};
 use super::event_timeline::{EventTimeline, Signal, WaitFor};
@@ -132,7 +133,8 @@ pub(super) struct EventShared {
 
 struct EventState {
     /// The signal indices' Metal values, by `VkQueue` index.
-    timeline: EventTimeline<usize>,
+    /// Its kept signals' command buffers are named by their follows (`command_buffer/follow.rs`).
+    timeline: EventTimeline<usize, Arc<Follow>>,
     /// The listeners' notifications not yet due, in the order they were asked for.
     notifications: Vec<Notification>,
     /// The host waits asleep on `changed`: a rise notifies it only where one is.
@@ -229,11 +231,37 @@ impl EventShared {
         lock(&self.state).timeline.signal(value, queue)
     }
 
-    /// The batch of a kept signal was submitted.
-    pub(super) fn keep(&self, index: u64, value: u64, queue: usize, behind_merge: bool) {
-        lock(&self.state)
-            .timeline
-            .keep(index, value, queue, behind_merge);
+    /// The batch of a kept signal was submitted: on `VkQueue` `queue` at `batch` on its timeline;
+    /// `signaller` is its command buffer where the batch ends it.
+    pub(super) fn keep(
+        &self,
+        index: u64,
+        value: u64,
+        batch: (usize, u64),
+        signaller: Option<Arc<Follow>>,
+        behind_merge: bool,
+    ) {
+        (lock(&self.state).timeline).keep(index, value, batch, signaller, behind_merge);
+    }
+
+    /// What a batch that waits for `value` completes after: the batch whose kept GPU signal
+    /// reaches it while that one's completion turn has not run, and that batch's command buffer
+    /// while its transition to `Completed` has not run up to its completed handlers
+    /// (`EventTimeline::signallers`).
+    pub(super) fn signallers(&self, value: u64) -> (Option<(usize, u64)>, Option<Arc<Follow>>) {
+        lock(&self.state).timeline.signallers(value)
+    }
+
+    /// The batch whose kept signal is `index` finished with a failed wait's drain, its signal not
+    /// seen (`command_buffer/completion.rs`): no batch finishes after it.
+    pub(super) fn drained(&self, index: u64) {
+        lock(&self.state).timeline.finished(index);
+    }
+
+    /// The transition to `Completed` of the command buffer whose last batch's kept signal is
+    /// `index` ran up to its completed handlers: no command buffer completes after it any more.
+    pub(super) fn released(&self, index: u64) {
+        lock(&self.state).timeline.released(index);
     }
 
     /// The semaphore reached `index`: wake the host's waits and post the notifications that came
@@ -241,6 +269,8 @@ impl EventShared {
     pub(super) fn reached(self: &Arc<Self>, index: u64) {
         let due = {
             let mut state = lock(&self.state);
+            // Called by the completion turn of the batch that signals it alone.
+            state.timeline.finished(index);
             if !state.timeline.observe(index) {
                 return;
             }

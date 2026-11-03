@@ -56,6 +56,8 @@ pub(crate) struct Counters {
     trail_waits: AtomicU64,
     trail_waits_blocked: AtomicU64,
     completed_where_seen: AtomicU64,
+    batches_held_for_another_queue: AtomicU64,
+    command_buffers_completed_after_another_queue: AtomicU64,
     completion_seen_handlers_run: AtomicU64,
     completion_seen_handlers_where_seen: AtomicU64,
     command_buffers_unsubmitted: AtomicU64,
@@ -866,6 +868,19 @@ impl Counters {
     /// it complete (`CommandBufferShared::finish_here`).
     pub(crate) fn completed_where_seen(&self) {
         self.completed_where_seen.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// A completion take left a batch seen complete for a batch of another `VkQueue` it waited
+    /// for, not taken yet (`command_buffer/completion.rs`, "After what it waited for").
+    pub(crate) fn batch_held_for_another_queue(&self) {
+        (self.batches_held_for_another_queue).fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// A command buffer's transition to `Completed` was posted behind a gate the transition of
+    /// another queue's command buffer it waited for opens as it reaches its completed handlers
+    /// (`CommandBufferShared::finish_here`).
+    pub(crate) fn command_buffer_completed_after_another_queue(&self) {
+        (self.command_buffers_completed_after_another_queue).fetch_add(1, Ordering::Relaxed);
     }
 
     /// A command buffer's completion-seen handler ran, on the thread that saw it complete where
@@ -3293,6 +3308,17 @@ pub struct WorkCounts {
     /// the program's code or runs on a handler thread then, while the runtime held none of the
     /// program's objects a release drops or runs (`command_buffer/completion.rs`).
     pub completed_where_seen: u64,
+    /// Batches seen complete that a completion take left, with their queue's later batches, until
+    /// a batch of another `VkQueue` they waited for through an event (whose GPU signal met their
+    /// wait) was taken: each counted once (`command_buffer/completion.rs`, "After what it waited
+    /// for"). Metal's completion follows the GPU's, so a command buffer completes after the one it
+    /// waited for.
+    pub batches_held_for_another_queue: u64,
+    /// Command buffers whose transition to `Completed` waited, its place in its queue's context
+    /// kept, for the transition of another queue's command buffer whose GPU signal it waited for
+    /// to reach its handlers, where that transition led its own context
+    /// (`CommandBufferShared::finish_here`): Metal's completion follows the GPU's.
+    pub command_buffers_completed_after_another_queue: u64,
     /// Completion-seen handlers run (`CommandBuffer::add_completion_seen_handler`), each as its
     /// command buffer's transition to `Completed` or `Error` ran, its status final.
     pub completion_seen_handlers_run: u64,
@@ -5591,6 +5617,11 @@ impl Device {
             trail_waits: counters.trail_waits.load(Ordering::Relaxed),
             trail_waits_blocked: counters.trail_waits_blocked.load(Ordering::Relaxed),
             completed_where_seen: counters.completed_where_seen.load(Ordering::Relaxed),
+            batches_held_for_another_queue: (counters.batches_held_for_another_queue)
+                .load(Ordering::Relaxed),
+            command_buffers_completed_after_another_queue: (counters
+                .command_buffers_completed_after_another_queue)
+                .load(Ordering::Relaxed),
             completion_seen_handlers_run: (counters.completion_seen_handlers_run)
                 .load(Ordering::Relaxed),
             completion_seen_handlers_where_seen: (counters.completion_seen_handlers_where_seen)

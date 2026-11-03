@@ -82,6 +82,21 @@
 //!   every light queue's burst of the queue storm (`runtime_lane::queue_storms`) into its tail.
 //!   While its waiter makes a turn, a queue's next batch waits for that turn to end before its wait
 //!   begins; its fence and value stay signaled meanwhile.
+//! - **After what it waited for.** Metal's completion follows the GPU's: a command buffer whose
+//!   work waited, through an event, for another queue's GPU signal completes after the command
+//!   buffer that signalled, its status, completion-seen handlers and completed handlers too. Here
+//!   each `VkQueue`'s waiter sees its own batches, and the waiter of a batch that waited may see it
+//!   before the signaller's waiter sees the signaller (a read of the event's counter let the
+//!   waiting batch go before the signaller's turn, and its waiter woke first); a turn takes the
+//!   queues in index order; and two queues' transitions run on two of the handler threads. So a
+//!   batch records, as it is submitted, the batches of other `VkQueue`s whose kept signals its
+//!   event waits were met by and whose completion turns had not run then
+//!   (`EventTimeline::signallers`, [`Submitted::after`]), and a take leaves it, with its queue's
+//!   later batches, until those are taken, by the same take or a later one ([`reached`]): no waiter
+//!   makes a turn for it meanwhile ([`front_due`]). Its command buffer's transition to `Completed`
+//!   then waits for the signallers' transitions to reach their completed handlers, where those lead
+//!   their contexts (`follow.rs`). A batch that waits for no other queue's costs an empty list, and
+//!   a take looks at the queues again only while a reached batch waits for another queue's.
 //! - **No GPU work: finished where it is taken** ([`Completion::watch_unsubmitted`]). A command
 //!   buffer that needs no GPU work is taken with no submission (`submit.rs`) and watched at its
 //!   `VkQueue`'s last submitted value, behind its queue's earlier batches: it finishes in the turn
@@ -237,6 +252,9 @@ struct Pending {
     queues: Vec<VecDeque<Submitted>>,
     /// Per `VkQueue`: the largest value its waiter saw its timeline reach.
     reached: Vec<u64>,
+    /// Per `VkQueue`: the value of the last batch a turn (or a drain) took from it; every batch
+    /// up to it is taken.
+    taken: Vec<u64>,
     /// Per `VkQueue`: its waiter is in a wait.
     waiting: Vec<bool>,
     /// A waiter's failed wait or read, which every pending batch finishes with.
@@ -272,6 +290,29 @@ pub(crate) struct Submitted {
     /// buffer's completion is processed, before its completed handlers run
     /// (`State::keep_holds`, `CommandBufferShared::complete`).
     pub(crate) holds: Vec<SubmittedHolds>,
+    /// The batches of other `VkQueue`s it finishes after: those whose GPU signals its event waits
+    /// were met by, not finished as it was submitted (the module docs, "After what it waited
+    /// for"). Empty for most.
+    pub(crate) after: Vec<Waited>,
+    /// A take left it for one of those ([`reached`]): counted once.
+    pub(crate) held: bool,
+}
+
+/// A batch of another `VkQueue` that a batch waited for and finishes after
+/// ([`Submitted::after`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct Waited {
+    /// Its `VkQueue`.
+    pub(crate) queue: usize,
+    /// Its value on that queue's timeline.
+    pub(crate) value: u64,
+}
+
+impl Waited {
+    /// Whether a turn took it: every batch of its queue up to it is taken.
+    fn taken(&self, taken: &[u64]) -> bool {
+        taken[self.queue] >= self.value
+    }
 }
 
 impl Completion {
@@ -282,6 +323,7 @@ impl Completion {
             pending: Mutex::new(Pending {
                 queues: (0..queues).map(|_| VecDeque::new()).collect(),
                 reached: vec![0; queues],
+                taken: vec![0; queues],
                 waiting: vec![false; queues],
                 failed: None,
                 holding: false,
@@ -354,7 +396,7 @@ impl Completion {
                 && !pending.holding
                 && !pending.exiting
                 && pending.failed.is_none()
-                && front_reached(&pending, queue);
+                && front_due(&pending, queue);
             if owed {
                 self.watch.owed.store(true, Ordering::SeqCst);
                 drop(pending);
@@ -379,7 +421,7 @@ impl Completion {
         }
         {
             let mut pending = lock(&watch.pending);
-            let reached = (0..pending.queues.len()).any(|queue| front_reached(&pending, queue));
+            let reached = (0..pending.queues.len()).any(|queue| front_due(&pending, queue));
             if pending.turning || pending.exiting || !reached {
                 return;
             }
@@ -520,7 +562,7 @@ fn turns(watch: &Watch, lists: &mut FenceLists) -> bool {
                 // queue still holds a batch to arm for, or they stop: one whose queue it emptied
                 // has nothing to do, and the next batch watched wakes it.
                 for (queue, _) in &finished {
-                    if lists.woken.last() != Some(queue) {
+                    if !lists.woken.contains(queue) {
                         lists.woken.push(*queue);
                     }
                 }
@@ -679,8 +721,13 @@ fn fail(watch: &Watch, ending: Vec<Hold<CommandBufferShared>>, error: CommandBuf
             last,
             fence,
             holds,
+            signals,
             ..
         } = batch;
+        // No batch finishes after it any more (`EventShared::signaller`).
+        for (event, index) in &signals {
+            event.drained(*index);
+        }
         if let Some(fence) = fence {
             let_go(buffer.device(), queue, fence);
         }
@@ -804,21 +851,50 @@ fn settle(device: &Device, lists: &mut FenceLists) -> Settled {
 }
 
 /// Each queue's batches whose values its waiter saw its timeline reach, taken from `pending`, in
-/// each queue's order.
+/// each queue's order, each after the batches of other queues it finishes after
+/// ([`Submitted::after`]): one waits, with its queue's later batches, until those are taken, by
+/// this take or a later one (the module docs, "After what it waited for"). It looks at the queues
+/// again only while a reached batch waits for another queue's and the last look took one, so a
+/// take whose reached batches wait for no other queue's makes one look.
 fn reached(pending: &mut Pending) -> Vec<(usize, Submitted)> {
     let Pending {
-        queues, reached, ..
+        queues,
+        reached,
+        taken,
+        ..
     } = pending;
     let mut finished = Vec::new();
-    for (queue, batches) in queues.iter_mut().enumerate() {
-        while batches
-            .front()
-            .is_some_and(|batch| batch.value <= reached[queue])
-        {
-            finished.extend(batches.pop_front().map(|batch| (queue, batch)));
+    loop {
+        let mut took = false;
+        for (queue, batches) in queues.iter_mut().enumerate() {
+            while let Some(batch) = batches.front() {
+                let after = |waited: &Waited| waited.taken(taken);
+                if batch.value > reached[queue] || !batch.after.iter().all(after) {
+                    break;
+                }
+                taken[queue] = taken[queue].max(batch.value);
+                finished.extend(batches.pop_front().map(|batch| (queue, batch)));
+                took = true;
+            }
+        }
+        // The reached batches left for other queues' batches they waited for, each counted once.
+        let mut waiting = false;
+        for (queue, batches) in queues.iter_mut().enumerate() {
+            let Some(batch) = batches.front_mut() else {
+                continue;
+            };
+            if batch.value <= reached[queue] && !batch.after.is_empty() {
+                waiting = true;
+                if !batch.held {
+                    batch.held = true;
+                    (batch.buffer.device().shared().counts).batch_held_for_another_queue();
+                }
+            }
+        }
+        if !took || !waiting {
+            return finished;
         }
     }
-    finished
 }
 
 /// Every pending batch, taken once no waiter is in a wait: a waiter may wait for a pending
@@ -834,8 +910,13 @@ fn take_pending(watch: &Watch) -> Vec<(usize, Submitted)> {
             .0;
         pending.draining -= 1;
     }
-    let taken = pending
-        .queues
+    let Pending { queues, taken, .. } = &mut *pending;
+    for (queue, batches) in queues.iter().enumerate() {
+        if let Some(last) = batches.back() {
+            taken[queue] = taken[queue].max(last.value);
+        }
+    }
+    let taken = queues
         .iter_mut()
         .enumerate()
         .flat_map(|(queue, batches)| batches.drain(..).map(move |batch| (queue, batch)))
@@ -954,17 +1035,20 @@ fn wait_for_queue(watch: &Watch, queue: usize) {
 }
 
 /// Whether a turn has work that `queue`'s waiter sees: a waiter's failure, or its queue's first
-/// pending batch reached.
+/// pending batch due.
 fn due(pending: &Pending, queue: usize) -> bool {
-    pending.failed.is_some() || front_reached(pending, queue)
+    pending.failed.is_some() || front_due(pending, queue)
 }
 
-/// Whether `queue`'s first pending batch is reached: its value is at most the one its waiter saw
-/// its timeline reach.
-fn front_reached(pending: &Pending, queue: usize) -> bool {
-    pending.queues[queue]
-        .front()
-        .is_some_and(|batch| batch.value <= pending.reached[queue])
+/// Whether `queue`'s first pending batch may be taken: its value is at most the one its waiter saw
+/// its timeline reach, and every batch of another queue it finishes after is taken
+/// ([`Submitted::after`]). One reached that waits for another queue's is not due: the take of that
+/// one takes it too, and its waiter sleeps meanwhile ([`wait`]).
+fn front_due(pending: &Pending, queue: usize) -> bool {
+    pending.queues[queue].front().is_some_and(|batch| {
+        batch.value <= pending.reached[queue]
+            && (batch.after.iter()).all(|waited| waited.taken(&pending.taken))
+    })
 }
 
 /// Wait up to one slice for `front`, the first pending batch of `device`'s `VkQueue` `queue`: for
