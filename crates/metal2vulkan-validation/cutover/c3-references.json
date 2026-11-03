@@ -6,8 +6,8 @@
       "gpu_cores": 40,
       "os": "27.0.1",
       "os_build": "26A434",
-      "xcode_build": "27A266a",
-      "metal_toolchain": "Apple metal version 32023.921 (metalfe-32023.921.6)"
+      "xcode_build": "27B52",
+      "metal_toolchain": "Apple metal version 32023.922 (metalfe-32023.922.4)"
     }
   }
 }
