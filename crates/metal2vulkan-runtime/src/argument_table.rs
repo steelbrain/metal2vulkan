@@ -185,7 +185,7 @@ impl Clone for ArgumentTable {
             memoryless: self.memoryless.clone(),
             samplers: self.samplers.clone(),
             bytes: self.bytes.clone(),
-            retained: self.retained.clone(),
+            retained: self.retained.unheld(),
             stamp: Stamp::fresh(),
             changes: Changes::default(),
         }
@@ -272,9 +272,14 @@ impl Changes {
 #[derive(Default)]
 struct Retained(Mutex<RetainedBy>);
 
-impl Clone for Retained {
-    fn clone(&self) -> Retained {
-        Retained(Mutex::new(lock(&self.0).clone()))
+impl Retained {
+    /// A copy whose core is to look at every object at its next retain
+    /// ([`RetainedBy::unheld`]): a table's copy, which may be changed in place without its calls
+    /// (`render/pass_start_reads.rs`).
+    fn unheld(&self) -> Retained {
+        let mut copy = lock(&self.0).clone();
+        copy.unheld = true;
+        Retained(Mutex::new(copy))
     }
 }
 
@@ -283,7 +288,50 @@ struct RetainedBy {
     core: Option<u64>,
     /// The table's stamp then: while it holds, the table binds those objects still.
     stamp: Option<Stamp>,
+    /// Whether a call since bound an object that core did not hold then
+    /// ([`ArgumentTable::note_bound`]): until one does, the core holds every object the table
+    /// binds, so a retain looks at none ([`retain_into`]).
+    unheld: bool,
+    /// The objects the core holds of those the table bound since that retain, its own then
+    /// among them, each by the address of its [`HeldBy`] (builds with debug assertions:
+    /// [`check_held`](Self::check_held)). Its storage is kept from retain to retain, so a draw
+    /// allocates as many times with debug assertions as without.
+    #[cfg(debug_assertions)]
+    held: Vec<usize>,
 }
+
+#[cfg(debug_assertions)]
+impl RetainedBy {
+    /// Note the objects `objects` binds now, as the table was just retained: the core holds them
+    /// all.
+    fn note_retained(&mut self, objects: Objects<'_>) {
+        self.held.clear();
+        let (buffers, textures, samplers) = objects;
+        let bound = bound_in(buffers, textures, samplers);
+        (self.held).extend(bound.map(|object| std::ptr::from_ref(object.held_by()).addr()));
+    }
+
+    /// That every object `objects` binds is one the core holds ([`retain_into`]'s premise where
+    /// it looks at none): bound at its last retain, or bound since while the core held it.
+    fn check_held(&self, objects: Objects<'_>) {
+        let (buffers, textures, samplers) = objects;
+        for object in bound_in(buffers, textures, samplers) {
+            let address = std::ptr::from_ref(object.held_by()).addr();
+            assert!(
+                self.held.contains(&address),
+                "an argument table binds an object its core neither retained at its last retain \
+                 nor held as a call bound it, and no call since noted it unheld"
+            );
+        }
+    }
+}
+
+/// What an argument table binds: its buffers, textures and sampler states, by index.
+type Objects<'a> = (
+    &'a BTreeMap<u32, (Buffer, u64)>,
+    &'a BTreeMap<u32, Texture>,
+    &'a BTreeMap<u32, (SamplerState, Option<[f32; 2]>)>,
+);
 
 /// An object an argument table binds, which a command that uses the table holds.
 #[derive(Clone, Copy)]
@@ -524,6 +572,30 @@ impl ArgumentTable {
         self.changes.note((before, self.stamp), class, indices);
     }
 
+    /// A call through `core` binds `object`: where `core` does not hold it (from a retain of its
+    /// own, `retained::HeldBy`), or is not the core the table was last retained into, the next
+    /// retain looks at every object ([`retain_into`]); else `core` holds it until its command
+    /// buffer completes, and keeps its key.
+    fn note_bound(&mut self, core: &EncoderCore, object: Bound<'_>) {
+        let id = core.id();
+        let retained = self
+            .retained
+            .0
+            .get_mut()
+            .unwrap_or_else(PoisonError::into_inner);
+        if retained.core != Some(id) || !object.held_by().is(id) {
+            retained.unheld = true;
+            return;
+        }
+        #[cfg(debug_assertions)]
+        {
+            let address = std::ptr::from_ref(object.held_by()).addr();
+            if !retained.held.contains(&address) {
+                retained.held.push(address);
+            }
+        }
+    }
+
     /// Refuse `buffer` at `offset` in `call` of an encoder of `core`: a buffer of another device,
     /// and, in a render stage's table, an offset past its length (a compute table holds it).
     fn check_buffer(
@@ -567,6 +639,7 @@ impl ArgumentTable {
         let stride = attribute_stride(stride);
         if let Some(buffer) = buffer {
             self.check_buffer(core, call, buffer, offset)?;
+            self.note_bound(core, Bound::Buffer(buffer));
         }
         let replaced = set_handle(&mut self.buffers, index, buffer, offset);
         set_entry(&mut self.attribute_strides, index, stride);
@@ -619,6 +692,9 @@ impl ArgumentTable {
         for (((buffer, &offset), stride), index) in
             buffers.iter().zip(offsets).zip(strides).zip(first..)
         {
+            if let Some(buffer) = buffer {
+                self.note_bound(core, Bound::Buffer(buffer));
+            }
             let replaced = set_handle(&mut self.buffers, index, *buffer, offset);
             set_entry(&mut self.attribute_strides, index, stride);
             self.function_tables.remove(&index);
@@ -836,6 +912,9 @@ impl ArgumentTable {
                 Some(texture) if texture.is_memoryless() => self.memoryless.insert(index),
                 _ => self.memoryless.remove(&index),
             };
+            if let Some(texture) = texture {
+                self.note_bound(core, Bound::Texture(texture));
+            }
             if let Some(replaced) = set_bare_handle(&mut self.textures, index, *texture) {
                 let_go(core, Bound::Texture(&replaced));
             }
@@ -893,6 +972,9 @@ impl ArgumentTable {
         }
         for (i, (sampler, index)) in samplers.iter().zip(first..).enumerate() {
             let clamp = clamps.map(|(min, max)| [min[i], max[i]]);
+            if let Some(sampler) = sampler {
+                self.note_bound(core, Bound::Sampler(sampler));
+            }
             if let Some(replaced) = set_handle(&mut self.samplers, index, *sampler, clamp) {
                 let_go(core, Bound::Sampler(&replaced));
             }
@@ -917,6 +999,9 @@ impl ArgumentTable {
             core.check_device(call, table.device())?;
         }
         for (table, index) in tables.iter().zip(first..) {
+            if let Some(table) = table {
+                self.note_bound(core, Bound::Buffer(table.words()));
+            }
             let replaced = set_entry(
                 &mut self.buffers,
                 index,
@@ -1433,7 +1518,8 @@ impl ArgumentTable {
     /// Hold everything bound until `core`'s command buffer completes: a command uses it, and
     /// the command buffer lists it among its used resources (`used_resources.rs`). Once while it
     /// binds the same objects: where `core` retained the table before under its stamp now,
-    /// nothing is retained again. Else each object `core` holds from an earlier retain
+    /// nothing is retained again, nor where `core` retained it last and each object a call bound
+    /// since was one `core` held as it was bound. Else each object `core` holds from an earlier retain
     /// (`retained::HeldBy`) is held and its key kept already, each a function of its object;
     /// `core` keeps the others' keys and takes them, each by another reference to it
     /// (`retained.rs`): its last first, so they go in the table's order, as one hold of them all
@@ -1498,23 +1584,32 @@ fn let_go(core: &mut EncoderCore, object: Bound<'_>) {
 }
 
 /// [`ArgumentTable::retain`] of a table that binds `objects` (its buffers, textures and sampler
-/// states) under `stamp`, whose record of its last retain is `retained`.
+/// states) under `stamp`, whose record of its last retain is `retained`. Where `core` retained the
+/// table last and no call since bound an object `core` did not hold as it bound it
+/// (`RetainedBy::unheld`), `core` holds every object the table binds, and keeps its key: nothing
+/// is looked at. Else every object bound is.
 fn retain_into(
-    objects: (
-        &BTreeMap<u32, (Buffer, u64)>,
-        &BTreeMap<u32, Texture>,
-        &BTreeMap<u32, (SamplerState, Option<[f32; 2]>)>,
-    ),
+    objects: Objects<'_>,
     stamp: Stamp,
     retained: &mut RetainedBy,
     core: &mut EncoderCore,
 ) {
     let (buffers, textures, samplers) = objects;
-    // No call changed what it binds since: the same objects, by the stamp.
-    if retained.core == Some(core.id()) && retained.stamp == Some(stamp) {
-        return;
-    }
     let id = core.id();
+    if retained.core == Some(id) {
+        // No call changed what it binds since: the same objects, by the stamp.
+        if retained.stamp == Some(stamp) {
+            return;
+        }
+        // Calls changed it, binding only objects `core` held.
+        if !retained.unheld {
+            #[cfg(debug_assertions)]
+            retained.check_held(objects);
+            retained.stamp = Some(stamp);
+            core.device().shared().counts.argument_table_held_at_bind();
+            return;
+        }
+    }
     let bound = || bound_in(buffers, textures, samplers);
     let fresh = |object: &Bound<'_>| !object.held_by().is(id);
     core.touch_keys(bound().filter(fresh).filter_map(Bound::key));
@@ -1526,6 +1621,9 @@ fn retain_into(
     }
     retained.core = Some(id);
     retained.stamp = Some(stamp);
+    retained.unheld = false;
+    #[cfg(debug_assertions)]
+    retained.note_retained(objects);
     if taken > 0 {
         core.device().shared().counts.argument_table_retained(taken);
     }

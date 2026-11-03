@@ -2474,6 +2474,7 @@ field	metal2vulkan-runtime::WorkCounts.ahead_render_passes_made	pub ahead_render
 field	metal2vulkan-runtime::WorkCounts.arena_pools_made	pub arena_pools_made: u64
 field	metal2vulkan-runtime::WorkCounts.argument_objects_retained	pub argument_objects_retained: u64
 field	metal2vulkan-runtime::WorkCounts.argument_samplers_taken	pub argument_samplers_taken: u64
+field	metal2vulkan-runtime::WorkCounts.argument_tables_held_at_bind	pub argument_tables_held_at_bind: u64
 field	metal2vulkan-runtime::WorkCounts.argument_tables_retained	pub argument_tables_retained: u64
 field	metal2vulkan-runtime::WorkCounts.attachment_clears_recorded	pub attachment_clears_recorded: u64
 field	metal2vulkan-runtime::WorkCounts.attachment_read_splits	pub attachment_read_splits: u64

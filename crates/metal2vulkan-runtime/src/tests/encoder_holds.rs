@@ -67,6 +67,11 @@ enum Leg {
     /// A draw whose vertex function reads its positions and colors from it, bound
     /// (`set_vertex_buffer`).
     VertexBuffers,
+    /// The same, bound after a draw of the encoder that read them from another buffer bound at
+    /// those indices: the second draw's retain of the vertex table takes the no-copy buffer, which
+    /// the encoder did not hold as it was bound, where a retain of the table after calls that
+    /// bound only objects the encoder held looks at none (`argument_table::retain_into`).
+    VertexBuffersRebound,
     /// A draw whose fragment function reads its color from it, bound (`set_fragment_buffer`).
     FragmentBuffer,
     /// An indexed draw whose indices it holds.
@@ -264,9 +269,11 @@ fn encode(
     no_copy: &Buffer,
 ) -> Option<Encoded> {
     match leg {
-        Leg::VertexBuffers | Leg::FragmentBuffer | Leg::IndexBuffer | Leg::IndirectDraw => {
-            Some(draw(leg, device, command_buffer, host, no_copy))
-        }
+        Leg::VertexBuffers
+        | Leg::VertexBuffersRebound
+        | Leg::FragmentBuffer
+        | Leg::IndexBuffer
+        | Leg::IndirectDraw => Some(draw(leg, device, command_buffer, host, no_copy)),
         Leg::Attachment => attachment(device, command_buffer, host, no_copy),
         Leg::KernelReads | Leg::KernelWrites | Leg::IndirectDispatch => {
             Some(dispatch(leg, device, command_buffer, host, no_copy))
@@ -291,7 +298,7 @@ fn draw(
     no_copy: &Buffer,
 ) -> Encoded {
     let state = match leg {
-        Leg::VertexBuffers => render_state(
+        Leg::VertexBuffers | Leg::VertexBuffersRebound => render_state(
             device,
             "examples/runtime_examples.ll",
             "colored_vertex",
@@ -313,11 +320,34 @@ fn draw(
     encoder.set_render_pipeline_state(&state).unwrap();
     let corners = bytes_of(&[-1.0f32, -1.0, 1.0, 1.0], f32::to_le_bytes);
     let color = bytes_of(&COLOR, f32::to_le_bytes);
+    let mut watched = Vec::new();
+    let mut released: Vec<Box<dyn Any>> = Vec::new();
+    let mut counts_before_draw = None;
     match leg {
-        Leg::VertexBuffers => {
+        Leg::VertexBuffers | Leg::VertexBuffersRebound => {
             // A triangle over the target: its positions, then each vertex's color.
-            host.set(0, &bits(&[-1.0, -1.0, 3.0, -1.0, -1.0, 3.0]));
+            let triangle = bits(&[-1.0, -1.0, 3.0, -1.0, -1.0, 3.0]);
+            host.set(0, &triangle);
             host.set(COLORS_AT as usize / 4, &bits(&COLOR.repeat(3)));
+            if leg == Leg::VertexBuffersRebound {
+                // The same triangle from another buffer first, then the no-copy buffer's at the
+                // same indices, then again: the second draw's retain takes the no-copy buffer,
+                // and the third's looks at nothing, the encoder holding it as it was bound.
+                let mut words = vec![0; (COLORS_AT / 4) as usize];
+                words[..triangle.len()].copy_from_slice(&triangle);
+                words.extend(bits(&COLOR.repeat(3)));
+                let other = shared_words(device, &words);
+                encoder.set_vertex_buffer(Some(&other), 0, 0).unwrap();
+                encoder
+                    .set_vertex_buffer(Some(&other), COLORS_AT, 1)
+                    .unwrap();
+                encoder
+                    .draw_primitives(PrimitiveType::Triangle, 0, 3, 1, 0)
+                    .unwrap();
+                watched.push(watch("the first draw's buffer", other.held()));
+                released.push(Box::new(other));
+            }
+            let before = device.work_counts();
             encoder.set_vertex_buffer(Some(no_copy), 0, 0).unwrap();
             encoder
                 .set_vertex_buffer(Some(no_copy), COLORS_AT, 1)
@@ -325,6 +355,13 @@ fn draw(
             encoder
                 .draw_primitives(PrimitiveType::Triangle, 0, 3, 1, 0)
                 .unwrap();
+            if leg == Leg::VertexBuffersRebound {
+                encoder.set_vertex_buffer(Some(no_copy), 0, 0).unwrap();
+                encoder
+                    .draw_primitives(PrimitiveType::Triangle, 0, 3, 1, 0)
+                    .unwrap();
+            }
+            counts_before_draw = Some(before);
         }
         Leg::FragmentBuffer => {
             host.set(0, &bits(&COLOR));
@@ -362,6 +399,23 @@ fn draw(
         }
     }
     encoder.end_encoding().unwrap();
+    // The draw's retains took the no-copy buffer, once for its two slots, and nothing else (the
+    // fragment table binds nothing); the draw after it, which bound it again, looked at nothing.
+    if let Some(before) = counts_before_draw {
+        let after = device.work_counts();
+        let grew = |count: fn(&crate::WorkCounts) -> u64| count(&after) - count(&before);
+        let held = grew(|c| c.argument_tables_held_at_bind);
+        assert_eq!(
+            held,
+            u64::from(leg == Leg::VertexBuffersRebound),
+            "{leg:?}: retains of tables whose objects the encoder held at bind"
+        );
+        let retained = (
+            grew(|c| c.argument_tables_retained),
+            grew(|c| c.argument_objects_retained),
+        );
+        assert_eq!(retained, (1, 1), "{leg:?}: tables and objects retained");
+    }
     let mut blit = command_buffer.blit_command_encoder().unwrap();
     blit.copy_from_texture_to_buffer(
         &target,
@@ -377,12 +431,14 @@ fn draw(
     )
     .unwrap();
     blit.end_encoding().unwrap();
+    watched.extend([
+        watch("the target", target.held()),
+        watch_render_state(&state),
+    ]);
+    released.extend([Box::new(target) as Box<dyn Any>, Box::new(state)]);
     Encoded {
-        watched: vec![
-            watch("the target", target.held()),
-            watch_render_state(&state),
-        ],
-        released: vec![Box::new(target), Box::new(state)],
+        watched,
+        released,
         check: Box::new(move |_| {
             assert!(
                 words_of(&back).iter().all(|&word| word == PACKED),
@@ -880,6 +936,11 @@ fn run(leg: Leg) {
 #[test]
 fn a_no_copy_buffer_a_committed_draw_reads_as_vertex_buffers_keeps_its_import_until_completion() {
     run(Leg::VertexBuffers);
+}
+
+#[test]
+fn a_no_copy_buffer_a_committed_draw_binds_over_another_keeps_its_import_until_completion() {
+    run(Leg::VertexBuffersRebound);
 }
 
 #[test]

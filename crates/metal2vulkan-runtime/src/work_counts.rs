@@ -493,6 +493,7 @@ struct DrawCounters {
     draws_as_before: AtomicU64,
     draws_rebound: AtomicU64,
     resident_uses_made: AtomicU64,
+    argument_tables_held_at_bind: AtomicU64,
 }
 
 /// How a render pass took a shadowed texture as a color attachment
@@ -1987,6 +1988,15 @@ impl Counters {
     /// (`VariantObjects::announce_bound`).
     pub(crate) fn bound_notices_made(&self) {
         self.bound_notices_made.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// A command's retain of an argument table changed since its last retain into the same
+    /// encoder looked at nothing: each object its calls bound since, the encoder held as it was
+    /// bound (`argument_table::retain_into`).
+    pub(crate) fn argument_table_held_at_bind(&self) {
+        self.draws
+            .mine()
+            .add(|counts| &counts.argument_tables_held_at_bind, 1);
     }
 
     /// A command retained what an argument table binds (`ArgumentTable::retain`), taking hold of
@@ -4716,6 +4726,12 @@ pub struct WorkCounts {
     pub argument_tables_retained: u64,
     /// Objects those retains took hold of: none that the encoder holds already.
     pub argument_objects_retained: u64,
+    /// A command's retains of an argument table that calls changed since the encoder last
+    /// retained it, which looked at none of its objects: each object those calls bound, the
+    /// encoder held already as it was bound, from an earlier retain of one of its tables
+    /// (`retained::HeldBy`). A retain of a table a call bound another object into since, or of a
+    /// table's copy, or of one another encoder retained last, looks at every object it binds.
+    pub argument_tables_held_at_bind: u64,
     /// Draws that looked their `VkPipeline` up in their variant's memo by key: none for a draw
     /// whose key is one of those its pipeline state's last draws found made, while that entry
     /// stays.
@@ -6145,6 +6161,7 @@ impl Device {
             bound_notices_made: counters.bound_notices_made.load(Ordering::Relaxed),
             argument_tables_retained: counters.argument_tables_retained.load(Ordering::Relaxed),
             argument_objects_retained: counters.argument_objects_retained.load(Ordering::Relaxed),
+            argument_tables_held_at_bind: draws(|counts| &counts.argument_tables_held_at_bind),
             graphics_pipelines_looked_up: counters
                 .graphics_pipelines_looked_up
                 .load(Ordering::Relaxed),
