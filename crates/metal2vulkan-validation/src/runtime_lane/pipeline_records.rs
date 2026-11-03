@@ -585,32 +585,32 @@ fn changed(before: &BTreeMap<PathBuf, Vec<u8>>, now: &BTreeMap<PathBuf, Vec<u8>>
 }
 
 /// Of `statistics` since `since`, the makings that loaded a record: each the driver reports
-/// found there read no data back (as many as its hits), and each other one wrote it again exactly
-/// where the driver's data was no longer the record's, so `changed` records are written, and
-/// every other one read its data unchanged.
+/// found there read no data back (as many as its hits), and each other one either read its data
+/// unchanged or wrote the record again, where the driver's data was no longer the record's. The
+/// records written again, which the caller holds to the files changed once the device is gone
+/// (the module docs).
 fn assert_loaded(
     which: &str,
     (since, statistics): (&ShaderCacheStatistics, &ShaderCacheStatistics),
     loads: u64,
-    changed: u64,
-) {
+) -> u64 {
     let saves = statistics.driver_saves - since.driver_saves;
     let unchanged = statistics.driver_data_unchanged - since.driver_data_unchanged;
     let found = statistics.driver_data_found - since.driver_data_found;
     assert_eq!(
         (
             statistics.driver_loads - since.driver_loads,
-            saves,
-            unchanged + found
+            saves + unchanged + found
         ),
-        (loads, changed, loads - changed),
-        "{which}: the makings from records, written again exactly where a record changed"
+        (loads, loads),
+        "{which}: the makings from records, each found, unchanged or written again"
     );
     assert_eq!(
         found,
         statistics.driver_pipeline_hits - since.driver_pipeline_hits,
         "{which}: every making the driver reports found in its record read no data back"
     );
+    saves
 }
 
 #[test]
@@ -618,34 +618,29 @@ fn a_later_device_makes_every_pipeline_an_earlier_one_made_from_its_records() {
     let cache = ScratchCache::new().unwrap();
     let messages = Messages::default();
     let format = PixelFormat::RGBA8Unorm;
-    // The first device: an empty directory.
-    let (driver, targets, written, makings) = {
+    // The first device: an empty directory. What each phase made is read from the counters, and
+    // the records once the device is gone (the module docs).
+    let (driver, targets, makings) = {
         let _driver_cache = DriverCache::fresh();
         let device = validated_device_with(TEST_DEVICE, &messages, cache.path(), |_| {}).unwrap();
         let driver = DriverData::of(&device);
         let library = library(&device);
-        let before = records(cache.path());
         let state = state(&device, &library, format);
         let makings = Makings::of(&device);
         let created = device.shader_cache_statistics();
         report("first device, created", &created);
         let keeps = driver.whole();
         assert_eq!(kept(&created), keeps, "the driver's data: {driver:?}");
-        let made: Vec<_> = records(cache.path())
-            .into_keys()
-            .filter(|path| !before.contains_key(path))
-            .collect();
         if keeps {
             assert_eq!(created.driver_loads, 0, "a load from an empty directory");
             assert_eq!(
-                made.len() as u64,
-                makings.creation,
-                "the creation's makings' records ({makings:?})"
+                created.driver_saves, makings.creation,
+                "the creation's makings wrote their records ({makings:?})"
             );
             // The driver's own cache is fresh: its miss.
             assert_reported("first device, created", &created, (0, makings.creation));
         } else {
-            assert!(made.is_empty(), "a record of a driver that keeps nothing");
+            assert_eq!(created.driver_saves, 0, "a driver that keeps nothing wrote");
         }
         let triangles = draw(&device, &state, (format, PrimitiveType::Triangle));
         // Points: another key of the same stages, made for the draw.
@@ -656,35 +651,40 @@ fn a_later_device_makes_every_pipeline_an_earlier_one_made_from_its_records() {
         );
         let drawn = device.shader_cache_statistics();
         report("first device, drawn", &drawn);
-        let written: Vec<_> = records(cache.path())
-            .into_iter()
-            .filter(|(path, _)| !before.contains_key(path))
-            .collect();
         if keeps {
             assert_eq!(
                 drawn.driver_saves - created.driver_saves,
                 makings.points,
                 "the points' making wrote its record"
             );
-            assert_eq!(
-                written.len() as u64,
-                makings.creation + makings.points,
-                "one record per making"
-            );
-            let bytes: Vec<&[u8]> = written.iter().map(|(_, bytes)| &bytes[..]).collect();
-            driver.assert_records(&bytes);
             assert_reported(
                 "first device, drawn",
                 &drawn,
                 (0, makings.creation + makings.points),
             );
         } else {
-            assert!(written.is_empty());
+            assert_eq!(drawn.driver_saves, 0, "a driver that keeps nothing wrote");
         }
-        (driver, (triangles, points), written, makings)
+        (driver, (triangles, points), makings)
     };
+    // Read once the device is gone, as every file claim below.
+    let written = records(cache.path());
+    if driver.whole() {
+        assert_eq!(
+            written.len() as u64,
+            makings.creation + makings.points,
+            "one record per making"
+        );
+        let bytes: Vec<&[u8]> = written.values().map(|bytes| &bytes[..]).collect();
+        driver.assert_records(&bytes);
+    } else {
+        assert!(
+            written.is_empty(),
+            "a record of a driver that keeps nothing"
+        );
+    }
     // The second device: the first one's directory, the driver's own cache fresh again.
-    {
+    let saves = {
         let _driver_cache = DriverCache::fresh();
         let device = validated_device_with(TEST_DEVICE, &messages, cache.path(), |_| {}).unwrap();
         let library = library(&device);
@@ -692,7 +692,6 @@ fn a_later_device_makes_every_pipeline_an_earlier_one_made_from_its_records() {
         let state = state(&device, &library, format);
         let created = device.shader_cache_statistics();
         report("second device, created", &created);
-        let at_creation = records(cache.path());
         assert_eq!(
             draw(&device, &state, (format, PrimitiveType::Triangle)),
             targets.0
@@ -703,20 +702,15 @@ fn a_later_device_makes_every_pipeline_an_earlier_one_made_from_its_records() {
         );
         let drawn = device.shader_cache_statistics();
         report("second device, drawn", &drawn);
-        let now = records(cache.path());
-        let written: BTreeMap<PathBuf, Vec<u8>> = written.into_iter().collect();
         if driver.whole() {
-            assert_loaded(
+            let saves = assert_loaded(
                 "second device, created: the triangles' makings from their records",
                 (&none, &created),
                 makings.creation,
-                changed(&written, &at_creation),
-            );
-            assert_loaded(
+            ) + assert_loaded(
                 "second device, drawn: the points' making from its record",
                 (&created, &drawn),
                 makings.points,
-                changed(&at_creation, &now),
             );
             // Hits where the driver's data holds its pipelines, misses where it holds none; its
             // own cache is fresh, so a hit is the record's.
@@ -730,17 +724,28 @@ fn a_later_device_makes_every_pipeline_an_earlier_one_made_from_its_records() {
                 &drawn,
                 driver.reported_of_records(makings.creation + makings.points),
             );
-            assert_eq!(
-                now.len() as u64,
-                makings.creation + makings.points,
-                "no record but the makings'"
-            );
-            let bytes: Vec<&[u8]> = now.values().map(|bytes| &bytes[..]).collect();
-            driver.assert_records(&bytes);
+            saves
         } else {
             assert_eq!((drawn.driver_loads, drawn.driver_saves), (0, 0));
-            assert!(now.is_empty(), "a record of a driver that keeps nothing");
+            0
         }
+    };
+    let now = records(cache.path());
+    if driver.whole() {
+        assert_eq!(
+            changed(&written, &now),
+            saves,
+            "the second device wrote a record again exactly where it saved one"
+        );
+        assert_eq!(
+            now.len() as u64,
+            makings.creation + makings.points,
+            "no record but the makings'"
+        );
+        let bytes: Vec<&[u8]> = now.values().map(|bytes| &bytes[..]).collect();
+        driver.assert_records(&bytes);
+    } else {
+        assert!(now.is_empty(), "a record of a driver that keeps nothing");
     }
     layer_reported_nothing_at_all(&messages);
 }
@@ -918,11 +923,14 @@ fn a_record_holding_another_pipeline_s_data_is_written_again() {
         .iter()
         .filter(|rewritten| *rewritten != foreign)
         .count() as u64;
-    assert_loaded(
-        "the compute pipeline's data in its place",
-        (&none, &made),
-        makings.creation,
+    assert_eq!(
+        assert_loaded(
+            "the compute pipeline's data in its place",
+            (&none, &made),
+            makings.creation,
+        ),
         changed,
+        "the compute pipeline's data in its place: written again exactly where a record changed"
     );
     assert_eq!(
         changed,
@@ -963,11 +971,14 @@ fn a_record_holding_another_pipeline_s_data_is_written_again() {
         .zip(&rewritten)
         .filter(|(now, rewritten)| now != rewritten)
         .count() as u64;
-    assert_loaded(
-        "written again, a later device",
-        (&none, &made),
-        makings.creation,
+    assert_eq!(
+        assert_loaded(
+            "written again, a later device",
+            (&none, &made),
+            makings.creation,
+        ),
         changed,
+        "written again, a later device: exactly where a record changed"
     );
     let bytes: Vec<&[u8]> = now.iter().map(|bytes| &bytes[..]).collect();
     driver.assert_records(&bytes);
@@ -1028,22 +1039,20 @@ fn two_processes_making_one_pipeline_leave_one_whole_record() {
             &made,
             driver.reported_of_records(makings.creation),
         );
-        let now = records(cache.path());
-        assert_loaded(
-            "after two makers: the records loaded whole",
-            (&none, &made),
-            makings.creation,
-            changed(&written, &now),
-        );
-        let bytes: Vec<&[u8]> = now.values().map(|bytes| &bytes[..]).collect();
-        driver.assert_records(&bytes);
     } else {
         assert!(
             written.is_empty(),
             "a record of a driver that keeps nothing"
         );
     }
-    let before_draw = records(cache.path());
+    let saves = match driver.whole() {
+        true => assert_loaded(
+            "after two makers: the records loaded whole",
+            (&none, &made),
+            makings.creation,
+        ),
+        false => 0,
+    };
     draw(&device, &state, (format, PrimitiveType::Triangle));
     let drawn = device.shader_cache_statistics();
     drop(state);
@@ -1052,9 +1061,21 @@ fn two_processes_making_one_pipeline_leave_one_whole_record() {
     assert_eq!(
         (drawn.driver_loads, drawn.driver_saves),
         (made.driver_loads, made.driver_saves),
-        "the draw took the creation's pipeline"
+        "the draw took the creation's pipeline, and wrote nothing"
     );
-    assert_eq!(records(cache.path()), before_draw, "the draw wrote nothing");
+    // Read once the device is gone (the module docs).
+    let now = records(cache.path());
+    assert_eq!(
+        changed(&written, &now),
+        saves,
+        "after two makers: written again exactly where a record changed"
+    );
+    if driver.whole() {
+        let bytes: Vec<&[u8]> = now.values().map(|bytes| &bytes[..]).collect();
+        driver.assert_records(&bytes);
+    } else {
+        assert!(now.is_empty(), "a record of a driver that keeps nothing");
+    }
     layer_reported_nothing_at_all(&messages);
 }
 
