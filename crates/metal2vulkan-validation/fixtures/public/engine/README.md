@@ -7,9 +7,10 @@ Owned MSL, with generated companions (`.ll`, `.air.ll`,
 and a line per fixture compiled after the macOS host's Xcode update (Metal 32023.921, SDK 27.0:
 the 45 fixtures `bcx_*`, `dsm_*`, `fca_*`, `fmx_*`, `icb_render_replay_*`, `icb_replay_*`,
 `ob1_*`, `ob2_*`, `ob3_*`, `rt_instance_count`, `sps2_residency_probes`, `sxc_taps_before_step`,
-`trh_*`, and `vv1_sixteen_byte_units`). On that host `--check` therefore checks only those
-fixtures and lists the other 120 as not checked; re-keying the 120 is a separate, deliberate
-regeneration that has not been done.
+`trh_*`, and `vv1_sixteen_byte_units`), and a line per fixture compiled after the next (Metal
+32023.922, SDK 27.2: the six `fold_*` fixtures). On a host `--check` therefore checks only the
+fixtures its toolchain compiled and lists the others as not checked; re-keying them is a
+separate, deliberate regeneration that has not been done.
 
 The fixture inventory, `crates/metal2vulkan/tests/public_fixture_expectations_engine.tsv`, covers this directory
 and the top-level `.ll` files of `crates/metal2vulkan-validation/fixtures/public/`. The corpus index enumerates this
@@ -22,7 +23,10 @@ one module: a module that declares several entries is a row per entry, each keye
 Every entry is loop-free except `discard_loop` (its trip count is buffer 0's, lowered as an MSL 2.3
 discard's loop is), `rog_loop` (lowered as it is, with no execution
 bound), `nested_loop_constant_weight_walk` (two
-loops with constant trip counts), `spin_on_an_unraised_word` (its trip count is buffer 2's, ended
+loops with constant trip counts), `cfg_frag` of `fold_config_struct` and `fold_config_direct` and
+`uber_frag` of `fold_loop_extract` and `fold_loop_extract_baked` (the texture functions' tap loops
+and the opcode loops, of constant trip counts), `fold_config` (two loops of constant trip counts),
+`spin_on_an_unraised_word` (its trip count is buffer 2's, ended
 early by a nonzero buffer 0), and `fpc_loop` (four iterations; `fpc_recurse` recurses to the
 depth buffer 2 holds, bounded by its stack); an authored case that executes a loop declares it
 `authored_bounded`. The `a1_*` fixtures (one case each) carry authored cases.
@@ -271,6 +275,12 @@ depth buffer 2 holds, bounded by its stack); an authored case that executes a lo
 | `seq_programs` | `seq_copy`, `seq_mix`, `seq_rect`, `seq_color`, `seq_texel_read`, `seq_texel_write` | the functions of the parity harness's seeded differential sequences (`parity::sequences`): a word copied, a word mixed in place with another, and an instanced draw of whole-pixel rectangles from a buffer in colours from another, over an 8x8 target; texels of an 8-bit unorm texture read into words and written from them, a grid thread a texel | the bytes of every resource a sequence ends with, compared with Metal's records and the sequences' CPU model (no authored case) |
 | `zws_compositor` | `zws_box`, `zws_over`, `zws_plain` | a compositor's rounded, half-transparent boxes over a surface's prior contents: `zws_box` places a box given in pixels, `zws_over` blends `color + dst * keep` by programmable blending, `zws_plain` returns the color for the fixed-function blend; both discard outside the box's rounded corners (half-integers squared, exact) | `runtime_lane::window_surfaces`: a 1920x1080 `BGRA8Unorm` texture over a buffer holds the scene's exact bytes after each command buffer (every blend lands on an integer: even codes halved plus a multiple of 16) |
 | `px_edges` | `pe_nearest_*`, `pe_linear_*`, `pe_gather_*`, `pe_slot_sample`, `pe_slot_sample_offset`, `pe_slot_gather`, `pe_argument_sample`, `pe_argument_sample_offset`, `pe_argument_gather`, `pe_linear_zero_1d`, `pe_nearest_white_array`, `pe_linear_zero_array` | pixel-coordinate samples and gathers of a `texture2d<float>` (a 1D texture and a 2D array's layer 1 apart) at the coordinate each thread is given: constexpr `coord::pixel` samplers of each filter, clamping to the edge, to zero and to each border colour, without an offset, with a constant one and with a dynamic one; the runtime sampler at slot 0; an argument buffer's sampler beside its texture | the lane `runtime_lane::pixel_edges` holds every nearest access to Metal's texel at texel edges and centres of sizes that are not powers of two, and the constexpr samples' and gathers' results to Metal's on a device that samples through Metal's own sampler |
+| `fold_config_struct` | `cfg_vert`, `cfg_frag` | a fragment uber shader whose ten function constants (two layers' present flags, texture-function selectors and `uchar4` colour opcodes; a fetch flag, blend and destination selectors, a layer count) fill a program-scope `constant` struct through its static initializer, read from the struct; one read takes an index known only at run time | specialized (`tests::engine_specialized_folds`), the fragment stage is within an eighth of `fold_config_direct`'s words, with the same precision notes: SCCP reads the struct's integer fields as their constants |
+| `fold_config_direct` | `cfg_vert`, `cfg_frag` | `fold_config_struct` reading its configuration from the function constants directly (`DIRECT`) | the size `fold_config_struct` folds to |
+| `fold_loop_extract` | `uber_vert`, `uber_frag` | a fragment uber shader with feature booleans, `uint` selectors and a `uint4` of colour opcodes that a 4x4 loop of constant trip counts feeds to a 16-case switch, indexing the `uint4` by the outer counter | specialized (`tests::engine_specialized_folds`), the fragment stage is within an eighth of `fold_loop_extract_baked`'s words, with the same precision notes: the loops are unrolled and each copy's switch folds |
+| `fold_loop_extract_baked` | `uber_vert`, `uber_frag` | `fold_loop_extract` with one specialization's constants written in (`BAKED`) | the size `fold_loop_extract` specializes to |
+| `fold_static_init_widen` | `k` | a program-scope `uint4` built from a `uchar4` function constant (`air.convert.u.v4i32.u.v4i8` in the static initializer) and a `uint` from a `uchar` one; thread i writes `kWide + kSelWide + i` | specialized, it compiles, and another constant value is other words (`tests::engine_specialized_folds`) |
+| `fold_config_kernel` | `fold_config` | a kernel in `fold_config_struct`'s shape: the configuration struct (two layers' present flags, selectors and `uchar4` opcodes widened to `uint4`, a layer count) filled by the static initializer, or with `kGeneric` read from buffer 1 instead; two layers of a five-way selector and four opcodes of a 16-case integer switch (one arm a `float` multiply and add, exact for every input), in loops of constant trip count; one read at a run-time index | Metal's words for each of six cases, four specializations and two of the generic path |
 
 The `a3_*` fixtures, the tessellation probes (`k7_*`, sixteen cases), the imageblock fixtures (`k10ex_*`, ten cases), the
 pipeline-state fixtures (`k14_*`, one case each), the strategy-coverage
@@ -292,8 +302,9 @@ runtime-sampler fixture (`msf_runtime_samplers`, twenty-eight cases on its `msf_
 kernels), the device-float probes (`dfl_*`, one case each), the
 `rvc_*` fixtures (one case each), and the global built-in
 fixtures (`gsm_global_builtins*`, five cases; `gsm_global_builtins_fragment_quad`
-has none, Metal refusing it) carry authored cases as well.
+has none, Metal refusing it), and `fold_config_kernel` (six cases) carry authored cases as well.
 All of them are loop-free except `a3_multi_level_break_tail`, whose two loops are bounded by the
 trip counts its case supplies, the `tns_*` probes, whose loops the cooperative tensors' capacities
-and the cases' extents bound (`authored_bounded`), and `rvc_load_before_store_loop`, whose one
-loop runs the trip count its case supplies (`authored_bounded`).
+and the cases' extents bound (`authored_bounded`), `rvc_load_before_store_loop`, whose one
+loop runs the trip count its case supplies (`authored_bounded`), and `fold_config_kernel`, whose two
+loops have constant trip counts (`authored_bounded`).
