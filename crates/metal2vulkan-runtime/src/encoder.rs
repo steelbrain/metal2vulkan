@@ -36,7 +36,7 @@ use super::deferred::{Deferred, StepInputs};
 use super::dirty_pages::CopyInGate;
 use super::error::{internal, invalid, vulkan, CommandBufferError, Error, Problem};
 use super::execution::Execution;
-use super::fresh_unwritten::FreshRead;
+use super::fresh_unwritten::{FreshRead, FreshUnwritten};
 use super::heap::Heap;
 use super::index_bounds::{BoundsRunRequest, BoundsSlot};
 use super::index_rewrite::{
@@ -58,7 +58,7 @@ use super::shadow_merge::ShadowMerge;
 use super::sparse::encoder::SparseUpdate;
 use super::texture::decoded_twin::TwinWrite;
 use super::texture::kept_image::KeptLease;
-use super::tracker::{Barrier, EncoderUses, Reach, Summary, Use, UseRange};
+use super::tracker::{Barrier, EncoderUses, Reach, Summary, Use};
 use super::unique_identifier::ScheduledWork;
 use super::used_resources::EncoderKind;
 use super::Device;
@@ -1018,8 +1018,9 @@ impl EncoderCore {
     /// touches (`tracker::Reach::Named`): a blit encoder's command, a shadow's copy. In an
     /// ordered encoder it orders after the earlier such commands per key and range alone, and
     /// after every untracked access of the others. It reads the boxes `reads` of textures'
-    /// images (a blit's sources): a read of a new texture's unwritten pattern there is announced
-    /// only where a box reaches an unwritten texel (`fresh_unwritten.rs`); its other reads as
+    /// images (a blit's sources): a read of a new texture's unwritten pattern there is announced,
+    /// at the commit, only where a box reaches an unwritten texel (`fresh_unwritten.rs`); its
+    /// other reads as
     /// `command`'s.
     pub(super) fn command_named(
         &mut self,
@@ -1106,7 +1107,7 @@ impl EncoderCore {
             return None;
         }
         // A command reading a new texture's levels that read zero where Metal reads its pattern,
-        // before a clear covered them, announces it (`fresh_unwritten.rs`).
+        // before a clear covered them, announces it at its commit (`fresh_unwritten.rs`).
         self.observe_fresh(uses, reads);
         // Hazard tracking takes the uses with their buffers' host memory's; the keys kept and
         // held are the uses' own.
@@ -1125,42 +1126,10 @@ impl EncoderCore {
         Some(barrier)
     }
 
-    /// Announce `fresh-pattern-zeroed` for each texture `uses` read in a level and layer still
-    /// unwritten since it was made (`fresh_unwritten.rs`): a blit's, a shader's or an input
-    /// attachment's read. An attachment's own reads are its pass's load, which the pass decides
-    /// as it begins (`FreshUnwritten::begin_pass`). A use of a texture `reads` names boxes of is
-    /// read in those boxes alone.
+    /// Log for the commit each texture `uses` read in a level and layer, where a new texture's
+    /// unwritten pattern may lie (`FreshUnwritten::observe_reads`).
     fn observe_fresh(&self, uses: &[Use<ResourceKey>], reads: &[FreshRead]) {
-        let device = self.device();
-        let fresh = &device.shared().fresh;
-        if !fresh.any() {
-            return;
-        }
-        let attachment = vk::AccessFlags2::COLOR_ATTACHMENT_READ
-            | vk::AccessFlags2::DEPTH_STENCIL_ATTACHMENT_READ;
-        let reading = |used: &&Use<ResourceKey>| !(used.read.access & !attachment).is_empty();
-        for used in uses.iter().filter(reading) {
-            if let UseRange::Image {
-                aspects,
-                levels,
-                layers,
-            } = &used.range
-            {
-                let mut boxes = reads.iter().filter(|read| read.key == used.key).peekable();
-                let notice = match boxes.peek().is_some() {
-                    true => boxes.find_map(|read| {
-                        fresh.observed_within(read.key, read.aspects, &read.texels)
-                    }),
-                    false => {
-                        let (levels, layers) = (levels.clone(), layers.clone());
-                        fresh.observed(used.key, *aspects, levels, layers)
-                    }
-                };
-                if let Some(notice) = notice {
-                    device.degrade_fresh_pattern(notice);
-                }
-            }
-        }
+        FreshUnwritten::observe_reads(self.command_buffer(), uses, reads);
     }
 
     /// `uses` with a use of the host memory's key beside each use of a no-copy buffer that

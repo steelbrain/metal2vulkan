@@ -800,7 +800,9 @@ degradations! {
         /// a clear leaves to the device), or an image holding other bytes than Metal's texel. The
         /// texture reads zero there. Announced where a command first reads a texel of that content
         /// no clear, resolve or blit covered (a pass that loads it, a blit or a shader that reads
-        /// it), not as the texture is made (`fresh_unwritten.rs`).
+        /// it), in the order the command buffers are committed, whatever order or thread they were
+        /// encoded in: at the commit of the command buffer that holds the read, not as the
+        /// texture is made (`fresh_unwritten.rs`).
         FreshPatternZeroed = "fresh-pattern-zeroed", Precision,
             "the new texture reads zero where Metal reads its fixed pattern until a write";
         /// An indexed draw from an index offset at or past its index buffer's length draws index
@@ -2004,9 +2006,10 @@ degradations! {
         /// depth writes stores each texel no fragment wrote without its sign (probe `depthstore`).
         /// Vulkan's compares the stored value as it is, and its pass keeps it. Announced at a write
         /// that may give a render target's depth such a value (a `replace_region` whose bytes hold
-        /// one, a blit into its depth, a pass's written NaN clear), or at the pass that loads a new
-        /// texture's pattern (a NaN with the sign set) before a write covered it
-        /// (`fresh_unwritten.rs`), on a device that keeps such a value there
+        /// one, a blit into its depth, a pass's written NaN clear), or at the commit of the command
+        /// buffer of a pass that loads a new texture's pattern (a NaN with the sign set) before a
+        /// write covered it in commit order (`fresh_unwritten.rs`), on a device that keeps such a
+        /// value there
         /// (`VK_EXT_depth_range_unrestricted` enabled, or
         /// `DriverFact::DepthImageKeepsValuesOutsideUnitRange`; elsewhere `restricted-depth-upload`
         /// is announced). A device whose depth test compares magnitudes as Metal's

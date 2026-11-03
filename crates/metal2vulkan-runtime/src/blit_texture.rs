@@ -1118,7 +1118,7 @@ impl BlitCommandEncoder {
         texture: &Texture,
         written: Vec<(vk::ImageAspectFlags, Written)>,
     ) -> Result<(), Error> {
-        FreshUnwritten::wrote(self.core().device(), texture, &written)?;
+        FreshUnwritten::wrote(self.core().command_buffer(), texture, &written)?;
         let written = || written.into_iter().map(|(_, texels)| texels).collect();
         match Scrub::of(texture, written) {
             Some(scrub) => self.core().defer(Deferred::SparseScrub(Arc::new(scrub))),

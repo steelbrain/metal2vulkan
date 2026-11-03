@@ -1,20 +1,20 @@
 //! New textures that read zero where Metal reads its fixed pattern, announced where a command
-//! first observes that content.
+//! that runs first observes that content.
 //!
 //! Where the device cannot write a new compressed `Private` texture's pattern exactly
 //! (`Device::fresh_patterned`), the texture reads zero in those levels instead. The difference is
 //! only seen if something reads those levels before a write covers them. Nearly every
 //! multisampled depth target is cleared before anything reads it. So the texture announces
-//! `fresh-pattern-zeroed` only at the first command that reads one of those subresources while it
-//! is still unwritten, not when it is made.
+//! `fresh-pattern-zeroed` only at the first command, in the order the commands run, that reads one
+//! of those subresources while it is still unwritten, not when it is made.
 //!
 //! - **Unwritten.** Each pattern level of each image layer starts unwritten, in each aspect the
 //!   image holds. The tracker keeps, per level, layer and aspect, the boxes of texels no write has
 //!   covered yet, so writes of parts that together cover the level write it as one whole write
 //!   does. What counts as a write of a box:
 //!   - a render pass's clear of an attachment, over the pass's render area in the attachment's
-//!     layers (a 3D attachment's depth planes), in each aspect it clears, as its encoder ends
-//!     ([`FreshUnwritten::cleared`]; as its encoder ends, not as it is made). Where the pass
+//!     layers (a 3D attachment's depth planes), in each aspect it clears, logged as its encoder
+//!     ends ([`FreshUnwritten::cleared`]; as its encoder ends, not as it is made). Where the pass
 //!     renders the attachment through another image (a stand-in copied to and from it, separate
 //!     depth and stencil textures' scratch), the clear reaches the texture only by the copy back,
 //!     so it counts only where the pass stores that aspect: a `DontCare` store leaves the texture's
@@ -32,17 +32,27 @@
 //!   or trims to one, so what stays unwritten still holds every texel no write covered (a read may
 //!   then be announced that an unbounded record would not, never the reverse).
 //! - **Observed.** A pass that loads an unwritten subresource (`Load`, of any aspect) observes it
-//!   as its encoder is made, where its render area reaches an unwritten texel of that aspect; a
-//!   command whose uses read one otherwise observes it as it is encoded (`EncoderCore`'s
-//!   `command_reaching` and `note_reaching`) where an unwritten texel lies in the levels, layers
-//!   and aspects it reads: a blit from it, a shader that samples, reads or fetches it, an input
-//!   attachment. An attachment's own reads (blending, the depth and stencil tests) are its
-//!   load's, which its pass decided. The device announces the kind there, inside the program's
-//!   call, naming the texture and the reason, and stops tracking the texture.
-//! - **Order.** The state follows the order commands are encoded in, which is the order they run
-//!   in except across command buffers committed out of encoding order.
-//! - **Cheap.** With no such texture live, a command checks one flag. A texture's entry goes when
-//!   every subresource is written, when it is announced, or when the texture is released.
+//!   (logged as its encoder is made, [`FreshUnwritten::begin_pass`]) where its render area reaches
+//!   an unwritten texel of that aspect; a command whose uses read one otherwise observes it (logged
+//!   as it is encoded, `EncoderCore`'s `command_reaching` and `note_reaching`) where an unwritten
+//!   texel lies in the levels, layers and aspects it reads: a blit from it, a shader that samples,
+//!   reads or fetches it, an input attachment. An attachment's own reads (blending, the depth and
+//!   stencil tests) are its load's, which its pass decided. The device announces the kind at the
+//!   commit of the command buffer whose command observed it, inside that program call, naming the
+//!   texture and the reason, and stops tracking the texture.
+//! - **Order: the commit order.** Metal runs a queue's command buffers in commit order, whatever
+//!   order they were encoded in, on however many threads. So a command buffer logs its commands'
+//!   writes and reads of noted textures in the order they were encoded ([`FreshLog`]), and its
+//!   commit takes the log ([`FreshUnwritten::commit`], before the scheduler sees it): the record
+//!   follows the commits, one command buffer's reads and writes at a time. A pass that loads a
+//!   texture after a pass of a command buffer committed before it cleared it observes nothing,
+//!   though it was encoded first, and one that loads it before a clear committed after it
+//!   announces it, whichever was encoded first. A command buffer dropped uncommitted takes
+//!   nothing, nor does a refused commit's, which runs nothing; the log of one committed as failed
+//!   is taken whole, as its encoders were encoded.
+//! - **Cheap.** With no such texture live, a command checks one flag and logs nothing, and a commit
+//!   checks it once. A texture's entry goes when every subresource is written, when it is
+//!   announced, or when the texture is released.
 //!
 //! A new multisampled float texture whose pattern holds a NaN is noted alike where the device
 //! writes the pattern by a copy that converts the NaNs (`nan_clear::converting_copy`): its samples
@@ -54,10 +64,11 @@
 //! depth test compares the stored value's magnitude, which lies above every depth, and a pass with
 //! depth writes stores it without its sign (our probe `fd32`, the M3 Max under macOS 27.0.1). A
 //! command's read observes nothing of it. A pass that loads its depth where its attachment's level
-//! reaches an unwritten texel ([`FreshUnwritten::loads_signed_depth`]) announces it as a write that
-//! may store such a value does (`signed-depth-test`, where the device's test is not Metal's), and
-//! the texture is no longer noted.
+//! reaches an unwritten texel ([`FreshUnwritten::loads_signed_depth`], weighed at its commit as any
+//! read) announces it as a write that may store such a value does (`signed-depth-test`, where the
+//! device's test is not Metal's), and the texture is no longer noted.
 
+use super::command_buffer::CommandBuffer;
 use super::device::lock;
 use super::error::Error;
 use super::key_hash::KeyMap;
@@ -68,9 +79,9 @@ use super::resource::ResourceKey;
 use super::sparse::emulated::Written;
 use super::texture::Texture;
 use super::texture_descriptor::TextureLayout;
-use super::tracker::{Access, UseRange};
+use super::tracker::{Access, Use, UseRange};
 use super::Device;
-use ash::vk::ImageAspectFlags;
+use ash::vk::{self, ImageAspectFlags};
 use metal2vulkan::vk::{Format, ImageType};
 use std::ops::Range;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -80,9 +91,58 @@ use std::sync::Mutex;
 /// observed or written whole yet (the module docs).
 #[derive(Default)]
 pub(super) struct FreshUnwritten {
-    /// Whether any texture is noted: without one, a command checks nothing.
+    /// Whether any texture is noted: without one, a command logs nothing and a commit takes
+    /// nothing.
     any: AtomicBool,
     textures: Mutex<KeyMap<ResourceKey, Unwritten>>,
+    /// Held while a commit takes its command buffer's log ([`FreshUnwritten::commit`]), so each
+    /// command buffer's reads and writes apply together, in the order of the commits.
+    commits: Mutex<()>,
+}
+
+/// A command buffer's reads and writes of noted textures, in the order its commands were
+/// encoded, which its commit takes ([`FreshUnwritten::commit`], the module docs' **Order**):
+/// logged only while a texture is noted. A leaf lock, apart from the command buffer's state.
+#[derive(Default)]
+pub(crate) struct FreshLog {
+    events: Mutex<Vec<FreshEvent>>,
+}
+
+/// One entry of a [`FreshLog`].
+enum FreshEvent {
+    /// `aspects` of `texels` of the texture `key` written ([`FreshUnwritten::written`]).
+    Written {
+        key: ResourceKey,
+        aspects: ImageAspectFlags,
+        texels: Written,
+    },
+    /// A read of `aspects` of `texels` ([`FreshUnwritten::observed_within`]).
+    Read {
+        key: ResourceKey,
+        aspects: ImageAspectFlags,
+        texels: Written,
+    },
+    /// A read of `aspects` of `levels` and `layers`, any texel ([`FreshUnwritten::observed`]).
+    ReadRange {
+        key: ResourceKey,
+        aspects: ImageAspectFlags,
+        levels: Range<u32>,
+        layers: Range<u32>,
+    },
+    /// A pass's load of the depth of `texels` of `texture`, whose image's key is `key`
+    /// ([`FreshUnwritten::loaded_signed_depth`]).
+    LoadsDepth {
+        key: ResourceKey,
+        texels: Written,
+        texture: Texture,
+    },
+}
+
+impl FreshLog {
+    /// Log `events`, in order.
+    fn push(&self, events: impl IntoIterator<Item = FreshEvent>) {
+        lock(&self.events).extend(events);
+    }
 }
 
 /// A noted texture: which texels of each aspect of its pattern levels' layers no write has
@@ -406,83 +466,198 @@ impl FreshUnwritten {
         Some(notice)
     }
 
-    /// A render pass of `layout` begins (the module docs): each attachment's texture, a noted
-    /// one, is read over the render area in its layers in each aspect it loads (`Load`),
-    /// announced where that reaches an unwritten texel. The texture is the attachment's own
-    /// where the pass renders it through another image: a stand-in's own texture, and separate
-    /// depth and stencil textures, each in its aspect. Its clears are counted as it ends
-    /// ([`cleared`](Self::cleared)).
-    pub(super) fn begin_pass(device: &Device, layout: &PassLayout) -> Result<(), Error> {
+    /// The command buffer whose log is `log` commits (`command_buffer/mod.rs`'s `commit_now`,
+    /// before its queue's scheduler sees it, in the order its queue runs it): where `runs` (all
+    /// but a refused commit, whose commands run nothing), its reads and writes of noted textures
+    /// apply to the record in the order they were encoded, as one, and each read that reached an
+    /// unwritten texel is announced once the record's locks are free, in the committing call (the
+    /// module docs' **Order**). One atomic read where no texture is noted; the log goes with the
+    /// command buffer.
+    pub(crate) fn commit(device: &Device, log: &FreshLog, runs: bool) {
         let fresh = &device.shared().fresh;
         if !fresh.any() {
-            return Ok(());
+            return;
         }
-        for (target, aspects) in pass_targets(layout, |aspect| aspect.load == LoadAction::Load) {
-            let texels = pass_texels(target, layout.extent)?;
-            let Some(key) = image_key(&target.texture, &texels)? else {
+        let events = lock(&log.events).split_off(0);
+        if !runs || events.is_empty() {
+            return;
+        }
+        let mut zeroed = Vec::new();
+        let mut signed = Vec::new();
+        {
+            let _turn = lock(&fresh.commits);
+            for event in &events {
+                match event {
+                    FreshEvent::Written {
+                        key,
+                        aspects,
+                        texels,
+                    } => fresh.written(*key, *aspects, texels),
+                    FreshEvent::Read {
+                        key,
+                        aspects,
+                        texels,
+                    } => zeroed.extend(fresh.observed_within(*key, *aspects, texels)),
+                    FreshEvent::ReadRange {
+                        key,
+                        aspects,
+                        levels,
+                        layers,
+                    } => {
+                        let (levels, layers) = (levels.clone(), layers.clone());
+                        zeroed.extend(fresh.observed(*key, *aspects, levels, layers));
+                    }
+                    FreshEvent::LoadsDepth {
+                        key,
+                        texels,
+                        texture,
+                    } => {
+                        if fresh.loaded_signed_depth(*key, texels) {
+                            signed.push(texture);
+                        }
+                    }
+                }
+            }
+        }
+        for notice in zeroed {
+            device.degrade_fresh_pattern(notice);
+        }
+        for texture in signed {
+            texture.degrade_signed_depth("new_texture");
+        }
+    }
+
+    /// A command of `maker`'s reads each texture `uses` read in a level and layer (a blit's, a
+    /// shader's or an input attachment's read), logged for the commit: in the boxes `reads` names
+    /// of it where it names any, else any texel of those levels and layers. An attachment's own
+    /// reads are its pass's load, which the pass decides as it begins
+    /// ([`begin_pass`](Self::begin_pass)).
+    pub(super) fn observe_reads(
+        maker: &CommandBuffer,
+        uses: &[Use<ResourceKey>],
+        reads: &[FreshRead],
+    ) {
+        if !maker.device().shared().fresh.any() {
+            return;
+        }
+        let attachment = vk::AccessFlags2::COLOR_ATTACHMENT_READ
+            | vk::AccessFlags2::DEPTH_STENCIL_ATTACHMENT_READ;
+        let reading = |used: &&Use<ResourceKey>| !(used.read.access & !attachment).is_empty();
+        let mut events = Vec::new();
+        for used in uses.iter().filter(reading) {
+            let UseRange::Image {
+                aspects,
+                levels,
+                layers,
+            } = &used.range
+            else {
                 continue;
             };
-            if let Some(notice) = fresh.observed_within(key, aspects, &texels) {
-                device.degrade_fresh_pattern(notice);
+            let mut boxes = reads.iter().filter(|read| read.key == used.key).peekable();
+            match boxes.peek().is_some() {
+                true => events.extend(boxes.map(|read| FreshEvent::Read {
+                    key: read.key,
+                    aspects: read.aspects,
+                    texels: read.texels.clone(),
+                })),
+                false => events.push(FreshEvent::ReadRange {
+                    key: used.key,
+                    aspects: *aspects,
+                    levels: levels.clone(),
+                    layers: layers.clone(),
+                }),
             }
+        }
+        maker.fresh_log().push(events);
+    }
+
+    /// A render pass of `layout` begins in `maker` (the module docs): each attachment's texture,
+    /// a noted one, is read over the render area in its layers in each aspect it loads (`Load`),
+    /// logged for the commit. The texture is the attachment's own where the pass renders it
+    /// through another image: a stand-in's own texture, and separate depth and stencil textures,
+    /// each in its aspect. Its clears are logged as it ends ([`cleared`](Self::cleared)).
+    pub(super) fn begin_pass(maker: &CommandBuffer, layout: &PassLayout) -> Result<(), Error> {
+        if !maker.device().shared().fresh.any() {
+            return Ok(());
+        }
+        let mut events = Vec::new();
+        for (target, aspects) in pass_targets(layout, |aspect| aspect.load == LoadAction::Load) {
+            let texels = pass_texels(target, layout.extent)?;
+            if let Some(key) = image_key(&target.texture, &texels)? {
+                events.push(FreshEvent::Read {
+                    key,
+                    aspects,
+                    texels,
+                });
+            }
+        }
+        maker.fresh_log().push(events);
+        Ok(())
+    }
+
+    /// A render pass of `maker`'s being planned loads the depth of `target`, its depth
+    /// attachment (the module docs), logged for the commit: where the attachment's texture is a
+    /// [`FreshKind::SignedDepth`] one with an unwritten texel in the attachment's level and
+    /// layers then, the commit announces `signed-depth-test` for it, and it is no longer noted.
+    /// The whole level is weighed, as the render area is not decided yet.
+    pub(super) fn loads_signed_depth(maker: &CommandBuffer, target: &Target) -> Result<(), Error> {
+        if !maker.device().shared().fresh.any() {
+            return Ok(());
+        }
+        let texels = pass_texels(target, [u32::MAX; 2])?;
+        if let Some(key) = image_key(&target.texture, &texels)? {
+            maker.fresh_log().push([FreshEvent::LoadsDepth {
+                key,
+                texels,
+                texture: target.texture.clone(),
+            }]);
         }
         Ok(())
     }
 
-    /// A render pass being planned loads the depth of `target`, its depth attachment (the module
-    /// docs): whether the attachment's texture is a [`FreshKind::SignedDepth`] one with an
-    /// unwritten texel in the attachment's level and layers, after which it is no longer noted.
-    /// The whole level is weighed, as the render area is not decided yet.
-    pub(super) fn loads_signed_depth(device: &Device, target: &Target) -> Result<bool, Error> {
-        let fresh = &device.shared().fresh;
-        if !fresh.any() {
-            return Ok(false);
-        }
-        let texels = pass_texels(target, [u32::MAX; 2])?;
-        Ok(match image_key(&target.texture, &texels)? {
-            Some(key) => fresh.loaded_signed_depth(key, &texels),
-            None => false,
-        })
-    }
-
-    /// A render pass of `layout` ends (its layout as the pass decided it, before its `DontCare`
-    /// loads take clears, `clear_reach.rs`): each attachment's texture is written over the
-    /// render area in its layers in each aspect the pass clears, where the clear reaches it: an
-    /// attachment the pass renders itself, or one it renders through another image (a stand-in
-    /// copied to and from it, separate depth and stencil textures' scratch) where the pass
-    /// stores that aspect, whose copy back writes it. Where such a pass does not store it
-    /// (`DontCare`), or renders through a backing nothing copies back, the texture keeps its
-    /// texels, as Metal keeps them, and stays unwritten.
-    pub(super) fn cleared(device: &Device, layout: &PassLayout) -> Result<(), Error> {
-        let fresh = &device.shared().fresh;
-        if !fresh.any() {
+    /// A render pass of `maker`'s, of `layout`, ends (its layout as the pass decided it, before
+    /// its `DontCare` loads take clears, `clear_reach.rs`): each attachment's texture is written
+    /// over the render area in its layers in each aspect the pass clears, where the clear
+    /// reaches it, logged for the commit: an attachment the pass renders itself, or one it
+    /// renders through another image (a stand-in copied to and from it, separate depth and
+    /// stencil textures' scratch) where the pass stores that aspect, whose copy back writes it.
+    /// Where such a pass does not store it (`DontCare`), or renders through a backing nothing
+    /// copies back, the texture keeps its texels, as Metal keeps them, and stays unwritten.
+    pub(super) fn cleared(maker: &CommandBuffer, layout: &PassLayout) -> Result<(), Error> {
+        if !maker.device().shared().fresh.any() {
             return Ok(());
         }
         let clears = |aspect: &Aspect| aspect.load == LoadAction::Clear && aspect.reaches;
+        let mut events = Vec::new();
         for (target, aspects) in pass_targets(layout, clears) {
             let texels = pass_texels(target, layout.extent)?;
             if let Some(key) = image_key(&target.texture, &texels)? {
-                fresh.written(key, aspects, &texels);
+                events.push(FreshEvent::Written {
+                    key,
+                    aspects,
+                    texels,
+                });
             }
         }
+        maker.fresh_log().push(events);
         Ok(())
     }
 
-    /// A render pass ended whose resolves are `resolved` (each resolve attachment, with the
-    /// aspects of the resolve texture it writes), over its render area `extent` from the origin:
-    /// each writes those aspects of the resolve texture's level and layers over the render area
-    /// (the attachment's and the texture it is copied into), and the whole level where Metal
-    /// writes the clear color past the attachment (`Resolve::clear`), as Metal's resolve stores
-    /// them.
+    /// A render pass of `maker`'s ended whose resolves are `resolved` (each resolve attachment,
+    /// with the aspects of the resolve texture it writes), over its render area `extent` from the
+    /// origin, logged for the commit: each writes those aspects of the resolve texture's level and
+    /// layers over the render area (the attachment's and the texture it is copied into), and the
+    /// whole level where Metal writes the clear color past the attachment (`Resolve::clear`), as
+    /// Metal's resolve stores them.
     pub(super) fn resolved(
-        device: &Device,
+        maker: &CommandBuffer,
         resolved: &[(&Resolve, metal2vulkan::vk::ImageAspectFlags)],
         extent: [u32; 2],
     ) -> Result<(), Error> {
-        let fresh = &device.shared().fresh;
-        if !fresh.any() {
+        if !maker.device().shared().fresh.any() {
             return Ok(());
         }
+        let mut events = Vec::new();
         for (resolve, aspects) in resolved {
             let copied = resolve
                 .copy_to
@@ -495,29 +670,40 @@ impl FreshUnwritten {
                     texels.size[1] = u32::MAX;
                 }
                 if let Some(key) = image_key(&target.texture, &texels)? {
-                    fresh.written(key, (*aspects).into(), &texels);
+                    events.push(FreshEvent::Written {
+                        key,
+                        aspects: (*aspects).into(),
+                        texels,
+                    });
                 }
             }
         }
+        maker.fresh_log().push(events);
         Ok(())
     }
 
-    /// A blit wrote `written` of `texture`: each the aspects it wrote and a box (in the image's
-    /// levels and layers), every sample of a multisampled texture alike (the module docs).
+    /// A blit of `maker`'s wrote `written` of `texture`: each the aspects it wrote and a box (in
+    /// the image's levels and layers), every sample of a multisampled texture alike (the module
+    /// docs), logged for the commit.
     pub(super) fn wrote(
-        device: &Device,
+        maker: &CommandBuffer,
         texture: &Texture,
         written: &[(ImageAspectFlags, Written)],
     ) -> Result<(), Error> {
-        let fresh = &device.shared().fresh;
-        if !fresh.any() {
+        if !maker.device().shared().fresh.any() {
             return Ok(());
         }
+        let mut events = Vec::new();
         for (aspects, texels) in written {
             if let Some(key) = image_key(texture, texels)? {
-                fresh.written(key, *aspects, texels);
+                events.push(FreshEvent::Written {
+                    key,
+                    aspects: *aspects,
+                    texels: texels.clone(),
+                });
             }
         }
+        maker.fresh_log().push(events);
         Ok(())
     }
 

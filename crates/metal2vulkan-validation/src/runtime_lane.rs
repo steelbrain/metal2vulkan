@@ -631,6 +631,8 @@ mod pack_conversions;
 #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
 mod padded_loads;
 #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+mod parallel_encodes;
+#[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
 mod pass_start_reads;
 #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
 mod patch_culls;

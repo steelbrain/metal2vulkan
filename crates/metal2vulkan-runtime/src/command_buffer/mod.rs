@@ -79,6 +79,7 @@ use super::error::{
 use super::event::{EventRef, EventShared, SharedEvent};
 use super::execution::Execution;
 use super::exit_guard::{self, Call};
+use super::fresh_unwritten::{FreshLog, FreshUnwritten};
 use super::function_table::TableSnapshot;
 use super::gpu_pools::{IndexPool, PoolKind, PoolLease};
 use super::gpu_time::{self, KernelTimes, Life, Placement, Stamped, Times};
@@ -285,6 +286,9 @@ pub(super) struct CommandBufferShared {
     /// Whether a batch of it is held in the scheduler's group, and whether a thread waits for its
     /// completion: a group kept past a pass goes at once once one does (`group.rs`).
     group_hold: AtomicU8,
+    /// Its commands' reads and writes of new textures' unwritten patterns, in encode order, which
+    /// its commit takes (`fresh_unwritten.rs`). Apart from the state: its encoders log into it.
+    fresh: FreshLog,
 }
 
 /// The word [`CommandBufferShared::status`] holds for `status`: its raw value.
@@ -1909,6 +1913,7 @@ impl CommandBuffer {
             status: AtomicU8::new(status_word(CommandBufferStatus::NotEnqueued)),
             error: OnceLock::new(),
             group_hold: AtomicU8::new(0),
+            fresh: FreshLog::default(),
         }))
     }
 
@@ -1937,6 +1942,12 @@ impl CommandBuffer {
     /// `commandQueue`.
     pub fn command_queue(&self) -> &CommandQueue {
         &self.0.queue
+    }
+
+    /// The log its commit takes of its commands' reads and writes of new textures' unwritten
+    /// patterns (`fresh_unwritten.rs`).
+    pub(crate) fn fresh_log(&self) -> &FreshLog {
+        &self.0.fresh
     }
 
     /// The state, locked.
@@ -3019,6 +3030,9 @@ impl CommandBuffer {
         // Its host steps' instances take their numbers from here, in the program's call, before
         // the scheduler can run one.
         let _ = self.0.step_numbers.set(StepNumbers::reserve());
+        // Its reads and writes of new textures' patterns, in commit order: announced in the
+        // committing call, before the scheduler sees it (`fresh_unwritten.rs`).
+        FreshUnwritten::commit(device, &self.0.fresh, run != CommitRun::Refused);
         // The scheduler's lock is taken before a command buffer's, never under it.
         device
             .shared()

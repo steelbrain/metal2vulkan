@@ -1859,8 +1859,10 @@ bound.
   texture Metal keeps losslessly compressed reads a fixed pattern in Metal, which the device cannot
   write exactly into its image: a NaN depth where a copy into a depth image may store it clamped or
   the image is multisampled, a NaN texel of a multisampled image (whose bits a clear leaves to the
-  device), or an image holding other bytes than Metal's texel. Cost: the new texture reads zero
-  where Metal reads its fixed pattern until a write.
+  device), or an image holding other bytes than Metal's texel. Announced at the commit of the
+  command buffer whose command first reads a texel of that content no clear, resolve or blit
+  covered, in commit order, whatever order or thread the command buffers were encoded in. Cost:
+  the new texture reads zero where Metal reads its fixed pattern until a write.
 - `metal2vulkan-degrade-zeroed-index-fetch` (precision). `ZeroedIndexFetch`: An indexed draw from an
   index offset at or past its index buffer's length draws index 0 plus the base vertex at each
   position, a direct draw from a zero-padded copy and an indirect one through the index bounds pass,
@@ -2743,8 +2745,9 @@ bound.
   a pass with depth writes that may store such a value with its sign, where Metal's test compares
   the stored value's magnitude (a NaN above +inf) and its pass with depth writes stores every texel
   no fragment wrote without its sign. Announced at a write that may give a render target's depth
-  such a value, or at the pass that loads a new texture's pattern (a NaN with the sign set) before a
-  write covered it, on a device that keeps such a value in a depth image:
+  such a value, or at the commit of a pass that loads a new texture's pattern (a NaN with the sign
+  set) before a write covered it in commit order, on a device that keeps such a value in a depth
+  image:
   `VK_EXT_depth_range_unrestricted` enabled, or `DriverFact::DepthImageKeepsValuesOutsideUnitRange`
   (elsewhere `restricted-depth-upload` is announced). MoltenVK's test is Metal's own
   (`DriverFact::DepthTestComparesMagnitudes`): there it is announced at a pass that loads and stores

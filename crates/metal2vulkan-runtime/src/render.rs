@@ -1872,7 +1872,7 @@ impl CommandBuffer {
         core.hold_bytes(render_target::attachment_bytes(whole));
         // The pass's loads read a new texture's unwritten texels (`fresh_unwritten.rs`): the
         // descriptor's loads, before a pass of several groups loads a `DontCare` depth or stencil.
-        FreshUnwritten::begin_pass(device, whole)?;
+        FreshUnwritten::begin_pass(core.command_buffer(), whole)?;
         render_pass::degrade_depth_clear(device, whole);
         if groups > 1 {
             color_groups::settle_depth_stencil(&mut layout);
@@ -4356,7 +4356,7 @@ impl RenderLowering {
         // The pass's clears write a new texture's unwritten texels where they reach it: through
         // another image only where the pass stores the aspect, whose copy back writes it
         // (`fresh_unwritten.rs`). Before its `DontCare` loads take clears below.
-        FreshUnwritten::cleared(&device, &layout)?;
+        FreshUnwritten::cleared(core.command_buffer(), &layout)?;
         let count = instances.len();
         // The tiles the pass's draws reach, as far as the host decides them, before the
         // `DontCare` loads below become `Clear` loads (`clear_reach.rs`): where they reach the
@@ -5597,7 +5597,7 @@ impl RenderLowering {
         }
         // The resolve textures' texels the pass's resolves wrote are no longer a new texture's
         // unwritten pattern (`fresh_unwritten.rs`).
-        FreshUnwritten::resolved(&device, &resolved, layout.extent)?;
+        FreshUnwritten::resolved(core.command_buffer(), &resolved, layout.extent)?;
         // The pass's one instance, where nothing recorded restarts a driver's Metal pass.
         let whole = (shapes.len() == 1 && unbroken).then(|| WholePass {
             shape: &shapes[0],

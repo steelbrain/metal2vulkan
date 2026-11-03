@@ -2145,12 +2145,10 @@ fn depth_stencil(
         false => d.load_action,
     };
     // A new texture's depth pattern, a NaN with the sign set, that the pass loads before a write
-    // covered it: Metal's test compares its magnitude, the device's the value as it is
-    // (`fresh_unwritten.rs`).
+    // covered it: Metal's test compares its magnitude, the device's the value as it is. Logged
+    // for the commit, which weighs it in commit order and announces it (`fresh_unwritten.rs`).
     if let Some(target) = depth.as_ref().filter(|_| d.load_action == LoadAction::Load) {
-        if FreshUnwritten::loads_signed_depth(device, target)? {
-            target.texture.degrade_signed_depth("new_texture");
-        }
+        FreshUnwritten::loads_signed_depth(maker, target)?;
     }
     let clear_depth = match nan {
         Some(NanDepth::Cleared(value)) => value,
