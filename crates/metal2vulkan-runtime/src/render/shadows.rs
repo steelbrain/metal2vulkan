@@ -209,26 +209,17 @@ fn insert(ranges: &mut Vec<Range<u64>>, mut range: Range<u64>) {
     }
 }
 
-/// What an instance's draws gathered ([`InstanceShadows::gathered`]): its shadows' count, its
-/// buffers' ranges, its images' and the last draw's uses.
-#[cfg(debug_assertions)]
-#[derive(PartialEq)]
-pub(super) struct HeldGathered(
-    usize,
-    Vec<((ResourceKey, bool), Vec<Range<u64>>)>,
-    Vec<((ResourceKey, bool), UseRange)>,
-    Vec<Use<ResourceKey>>,
-);
-
 impl InstanceShadows {
-    /// What its draws gathered (builds with debug assertions: `render/draw_again.rs`'s check).
+    /// What its draws gathered: its shadows' count, its buffers' ranges, its images' and the last
+    /// draw's uses (builds with debug assertions: `render/draw_again.rs`'s check, which digests
+    /// it).
     #[cfg(debug_assertions)]
-    pub(super) fn gathered(&self) -> HeldGathered {
-        HeldGathered(
+    pub(super) fn gathered(&self) -> impl std::fmt::Debug + '_ {
+        (
             self.shadows.len(),
-            self.bytes[..self.held].to_vec(),
-            self.images.clone(),
-            self.last.clone(),
+            &self.bytes[..self.held],
+            &self.images,
+            &self.last,
         )
     }
 

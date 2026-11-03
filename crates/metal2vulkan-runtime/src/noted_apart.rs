@@ -66,6 +66,34 @@ pub(super) struct NotedInto {
     pub(super) aliases: u64,
 }
 
+/// Every field, its stages by their raw value (ash's flags print nothing).
+impl std::fmt::Debug for NotedApart {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let NotedApart {
+            core,
+            stages,
+            uses,
+            resident,
+            parts,
+            held,
+            rebinds,
+            aliases,
+            fresh,
+        } = self;
+        (f.debug_struct("NotedApart"))
+            .field("core", core)
+            .field("stages", &stages.as_raw())
+            .field("uses", uses)
+            .field("resident", resident)
+            .field("parts", parts)
+            .field("held", held)
+            .field("rebinds", rebinds)
+            .field("aliases", aliases)
+            .field("fresh", fresh)
+            .finish()
+    }
+}
+
 impl NotedApart {
     /// Whether a command of `stages` with `uses`, of which it reaches the keys `resident`
     /// through the resident set alone, noted into `into`, is the last one noted (the module

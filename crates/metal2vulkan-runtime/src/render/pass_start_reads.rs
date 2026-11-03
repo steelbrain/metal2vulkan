@@ -161,12 +161,6 @@ pub(super) struct PassStartReads {
     copies: Vec<PassStartCopy>,
 }
 
-/// What a pass's reads note ([`PassStartReads::held`]): its lists' keys and ranges, and its
-/// copies' count.
-#[cfg(debug_assertions)]
-#[derive(PartialEq)]
-pub(super) struct HeldReads([Vec<(ResourceKey, Vec<Range<u64>>)>; 3], usize);
-
 /// The tables a draw's stages before its fragments read in place of the encoder's: each with the
 /// copies of bytes the pass's fragment stages wrote, `None` where the stage reads the encoder's.
 #[derive(Default)]
@@ -216,15 +210,13 @@ impl PassStartReads {
         }
     }
 
-    /// What it notes, without its copies' buffers (builds with debug assertions:
-    /// `render/draw_again.rs`'s check).
+    /// What it notes, without its copies' buffers: its lists' keys and ranges, and its copies'
+    /// count (builds with debug assertions: `render/draw_again.rs`'s check, which digests it).
     #[cfg(debug_assertions)]
-    pub(super) fn held(&self) -> HeldReads {
-        let held = |written: &Written| written.lists[..written.held].to_vec();
-        HeldReads(
-            [&self.fragment, &self.fragment_reads, &self.other].map(held),
-            self.copies.len(),
-        )
+    pub(super) fn held(&self) -> impl std::fmt::Debug + '_ {
+        let lists = [&self.fragment, &self.fragment_reads, &self.other];
+        let held = lists.map(|written| &written.lists[..written.held]);
+        (held, self.copies.len())
     }
 
     /// The entries its lists and copies hold room for.

@@ -168,14 +168,15 @@ impl Changed {
 
 impl RenderLowering {
     /// The kept draw again after calls that bound other buffers, offsets, textures or samplers in
-    /// its tables, whose stamps are now `stamps` (the module docs): recorded, refused, or [`Again::No`] where it
-    /// takes every step.
+    /// its tables, whose stamps are now `stamps` (the module docs): recorded, refused, or
+    /// [`Again::No`] where it takes every step (its check left in `checked` where it is checked).
     pub(super) fn draw_rebound(
         &mut self,
         call: &'static str,
         (assembly, draw): (Assembly, &DrawCall),
         buffers: &DrawBuffers<'_>,
         stamps: [Stamp; 4],
+        checked: &mut Option<super::Checked>,
     ) -> Again {
         // A notice met at each occurrence forgets the draw once recorded, as its every step does.
         let watch = crate::degradation::EachWatch::start();
@@ -193,11 +194,14 @@ impl RenderLowering {
             let hits = self.again.hits;
             self.again.hits += 1;
             if hits.is_multiple_of(2) {
-                let rebound = super::Rebound::of(live);
+                let rebound = super::Expected::Rebound(super::Rebound::of(live));
                 drop(held);
-                return Again::Check(Box::new(super::Checked::of(self, Some(rebound))));
+                *checked = Some(super::Checked::of(self, rebound));
+                return Again::Check;
             }
         }
+        #[cfg(not(debug_assertions))]
+        let _: &mut Option<super::Checked> = checked;
         // The attachments' reads: its last check, refused here, as it may have announced.
         let attached =
             (self.core.device()).degrade_attachment_reads(call, &self.layout, &live.uses);

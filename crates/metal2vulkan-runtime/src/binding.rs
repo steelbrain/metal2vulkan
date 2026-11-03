@@ -610,6 +610,26 @@ pub(super) enum Info {
     Texel(vk::BufferView),
 }
 
+/// What a write holds, as [`SetWrite::same`] compares it: its handles, offset, range and layout,
+/// the layout by its raw value (ash's info structures print nothing).
+impl std::fmt::Debug for Info {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Info::Buffer(info) => (f.debug_tuple("Buffer"))
+                .field(&info.buffer)
+                .field(&info.offset)
+                .field(&info.range)
+                .finish(),
+            Info::Image(info) => (f.debug_tuple("Image"))
+                .field(&info.sampler)
+                .field(&info.image_view)
+                .field(&info.image_layout.as_raw())
+                .finish(),
+            Info::Texel(view) => f.debug_tuple("Texel").field(view).finish(),
+        }
+    }
+}
+
 /// One push-constant write: stages, offset, bytes.
 pub(super) type PushWrite = (vk::ShaderStageFlags, u32, Vec<u8>);
 

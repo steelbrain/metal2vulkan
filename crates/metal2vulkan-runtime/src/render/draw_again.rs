@@ -180,10 +180,10 @@ pub(super) struct Under {
 pub(super) enum Again {
     /// It is, and was recorded.
     Drawn,
-    /// It is, and takes every step instead, which [`Checked`] checks (builds with debug
-    /// assertions).
+    /// It is, and takes every step instead, which the [`Checked`] it left checks (builds with
+    /// debug assertions).
     #[cfg(debug_assertions)]
-    Check(Box<Checked>),
+    Check,
     /// It is not.
     No,
     /// It was rebound, and refused as every step of it would refuse it.
@@ -231,14 +231,15 @@ impl RenderLowering {
     }
 
     /// Whether the draw of `call` assembling `assembly`, `draw` with `buffers`, is the kept draw
-    /// again (the module docs): then, but where it is checked, it is recorded. Call it once the
-    /// draw made the heaps' new textures resident.
+    /// again (the module docs): then, but where it is checked (its check left in `checked`), it
+    /// is recorded. Call it once the draw made the heaps' new textures resident.
     pub(super) fn draw_again(
         &mut self,
         call: &'static str,
         assembly: Assembly,
         draw: &DrawCall,
         buffers: &DrawBuffers<'_>,
+        checked: &mut Option<Checked>,
     ) -> Again {
         let Some(kept) = self.again.kept.as_ref() else {
             return Again::No;
@@ -260,7 +261,7 @@ impl RenderLowering {
         let stamps = self.table_stamps();
         if kept.stamps != stamps {
             return match kept.rebinds {
-                true => self.draw_rebound(call, (assembly, draw), buffers, stamps),
+                true => self.draw_rebound(call, (assembly, draw), buffers, stamps, checked),
                 false => Again::No,
             };
         }
@@ -269,7 +270,9 @@ impl RenderLowering {
             let hits = self.again.hits;
             self.again.hits += 1;
             if hits.is_multiple_of(2) {
-                return Again::Check(Box::new(Checked::of(self, None)));
+                let held = Held::of(self);
+                *checked = Some(Checked::of(self, Expected::Plain(held)));
+                return Again::Check;
             }
         }
         let counts = &self.core.device().shared().counts;
@@ -314,7 +317,7 @@ impl RenderLowering {
         &mut self,
         watch: &EachWatch,
         (reads, rasterizes, depth_writes): (RenderStages, bool, bool),
-        checked: Option<Box<Checked>>,
+        checked: Option<Checked>,
     ) {
         if let Some(kept) = self.again.kept.as_mut() {
             kept.reads = reads;
@@ -326,76 +329,109 @@ impl RenderLowering {
             checked.check(self, watch.met());
         }
         #[cfg(not(debug_assertions))]
-        let _: Option<Box<Checked>> = checked;
+        let _: Option<Checked> = checked;
         if watch.met() {
             self.forget_again();
         }
     }
 }
 
-/// What a draw again that takes every step checks of it (the module docs): the kept draw, what
-/// the encoder held before the draw, and the messages delivered on its thread by then.
+/// What a draw again that takes every step checks of it (the module docs): the kept draw, the
+/// messages delivered on its thread by then, and what its every step must leave or work out.
 #[cfg(debug_assertions)]
 pub(super) struct Checked {
     kept: Kept,
     hits: u64,
-    held: Held,
     announced: u64,
-    /// What it worked out of its rebound slots, where it is a draw rebound (`rebound.rs`).
-    rebound: Option<Rebound>,
+    expected: Expected,
 }
 
-/// What a draw rebound worked out (`rebound.rs`), which its every step must work out alike.
+/// What every step of a draw again must leave, or of a draw rebound work out.
 #[cfg(debug_assertions)]
-pub(super) struct Rebound {
-    commands: metal2vulkan::bind::DrawCommands,
-    writes: Vec<(u32, crate::binding::SetWrite)>,
-    offsets: Vec<u32>,
-    pushes: Vec<crate::binding::PushWrite>,
-    vertex_buffers: Vec<(u32, vk::Buffer, u64, u64)>,
-    uses: Vec<Use<ResourceKey>>,
-    resident: std::collections::BTreeSet<ResourceKey>,
+pub(super) enum Expected {
+    /// What the encoder held before the draw again, which it must hold after it.
+    Plain(Held),
+    /// What the draw rebound worked out of its rebound slots (`rebound.rs`).
+    Rebound(Rebound),
 }
+
+/// The digest of `part`'s `Debug` form, streamed into a hasher: what a check compares of a part
+/// of the encoder's state, which it neither copies nor allocates for (builds with debug
+/// assertions; the frame's allocations are counted in them too).
+#[cfg(debug_assertions)]
+fn digest(part: impl std::fmt::Debug) -> u64 {
+    use std::fmt::Write as _;
+    use std::hash::Hasher as _;
+    /// A `fmt::Write` into a hasher.
+    struct Hashing(std::hash::DefaultHasher);
+    impl std::fmt::Write for Hashing {
+        fn write_str(&mut self, text: &str) -> std::fmt::Result {
+            self.0.write(text.as_bytes());
+            Ok(())
+        }
+    }
+    let mut hashing = Hashing(std::hash::DefaultHasher::new());
+    write!(hashing, "{part:?}").unwrap_or_else(|_| unreachable!("a part's Debug form failed"));
+    hashing.0.finish()
+}
+
+/// What a draw rebound worked out (`rebound.rs`), which its every step must work out alike: its
+/// commands, set-0 writes, dynamic offsets, push bytes, vertex buffers, uses and resident keys,
+/// by digest ([`digest`]).
+#[cfg(debug_assertions)]
+pub(super) struct Rebound([u64; 7]);
 
 #[cfg(debug_assertions)]
 impl Rebound {
-    /// What `live` and `binds` hold of a draw rebound.
+    /// The parts' names, in their order.
+    const PARTS: [&str; 7] = [
+        "commands",
+        "set-0 writes",
+        "dynamic offsets",
+        "push bytes",
+        "vertex buffers",
+        "uses",
+        "resident keys",
+    ];
+
+    /// What `live` holds of a draw rebound.
     pub(super) fn of(live: &crate::live_bind::LiveBind) -> Rebound {
-        Rebound {
-            commands: live.commands.clone(),
-            writes: Self::writes(live.kept.writes()),
-            offsets: live.offsets.clone(),
-            pushes: live.pushes.clone(),
-            vertex_buffers: live.vertex_buffers.clone(),
-            uses: live.uses.to_vec(),
-            resident: live.uses.resident().clone(),
+        /// Set writes, each without its keeper (`binding::SetWrite::same`'s parts), and push
+        /// writes, their types and stages by their raw values (ash's print nothing).
+        struct Writes<'a>(&'a [crate::binding::Write]);
+        struct Pushes<'a>(&'a [crate::binding::PushWrite]);
+        impl std::fmt::Debug for Writes<'_> {
+            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                let each = (self.0.iter()).map(|write| {
+                    let ty = write.ty.as_raw();
+                    (write.set, write.binding, write.element, ty, write.info)
+                });
+                f.debug_list().entries(each).finish()
+            }
         }
+        impl std::fmt::Debug for Pushes<'_> {
+            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                let each = (self.0.iter()).map(|(stages, at, bytes)| (stages.as_raw(), at, bytes));
+                f.debug_list().entries(each).finish()
+            }
+        }
+        Rebound([
+            digest(&live.commands),
+            digest(Writes(live.kept.writes())),
+            digest(&live.offsets),
+            digest(Pushes(&live.pushes)),
+            digest(&live.vertex_buffers),
+            digest(&*live.uses),
+            digest(live.uses.resident()),
+        ])
     }
 
-    fn writes(writes: &[crate::binding::Write]) -> Vec<(u32, crate::binding::SetWrite)> {
-        (writes.iter())
-            .map(|write| (write.set, crate::binding::SetWrite::of(write)))
-            .collect()
-    }
-
-    /// Assert that every step of the draw worked out what it did, in `live` and `binds`.
+    /// Assert that every step of the draw worked out what it did, in `live`.
     fn assert_as(&self, live: &crate::live_bind::LiveBind) {
-        let writes = Self::writes(live.kept.writes());
-        let same_writes = writes.len() == self.writes.len()
-            && (writes.iter().zip(&self.writes))
-                .all(|((set, write), (kept_set, kept))| set == kept_set && write.same(kept));
-        let parts = [
-            ("commands", live.commands == self.commands),
-            ("set-0 writes", same_writes),
-            ("dynamic offsets", live.offsets == self.offsets),
-            ("push bytes", live.pushes == self.pushes),
-            ("vertex buffers", live.vertex_buffers == self.vertex_buffers),
-            ("uses", *live.uses == self.uses[..]),
-            ("resident keys", *live.uses.resident() == self.resident),
-        ];
-        for (part, same) in parts {
+        let now = Rebound::of(live);
+        for (part, (now, then)) in Self::PARTS.iter().zip(now.0.iter().zip(&self.0)) {
             assert!(
-                same,
+                now == then,
                 "a draw rebound worked out other {part} than its every step"
             );
         }
@@ -406,35 +442,46 @@ impl Rebound {
 #[cfg(not(debug_assertions))]
 pub(super) enum Checked {}
 
-/// What a draw again leaves as it was (the module docs).
+/// What a draw again leaves as it was (the module docs): its drawn areas, coverage, pass's reads,
+/// gathered and noted uses and the pass's inputs read and extended colors written by digest
+/// ([`digest`]), and its instance's shape and holds.
 #[cfg(debug_assertions)]
-struct Held {
-    drawn: crate::clear_reach::DrawnArea,
-    instance_drawn: crate::clear_reach::DrawnArea,
-    coverage: crate::linear_attachment::Coverage,
-    pass_start: super::pass_start_reads::HeldReads,
-    gathered: super::shadows::HeldGathered,
-    noted: crate::noted_apart::NotedApart,
+pub(super) struct Held {
+    parts: [u64; 7],
     instance: (bool, bool, bool, usize, usize, super::InterlockedStorage),
     holds: (usize, usize),
-    pass: (
-        std::collections::BTreeSet<u32>,
-        std::collections::BTreeSet<u32>,
-        bool,
-    ),
 }
 
 #[cfg(debug_assertions)]
 impl Held {
+    /// The digested parts' names, in their order.
+    const PARTS: [&str; 7] = [
+        "drawn area",
+        "instance's drawn area",
+        "coverage",
+        "pass's reads",
+        "gathered uses",
+        "noted uses",
+        "pass",
+    ];
+
     fn of(encoder: &RenderLowering) -> Held {
         let current = &encoder.current;
+        let pass = (
+            &encoder.inputs_read,
+            &encoder.extended_written,
+            encoder.reaches_unnamed,
+        );
         Held {
-            drawn: encoder.drawn.clone(),
-            instance_drawn: current.drawn.clone(),
-            coverage: encoder.coverage.clone(),
-            pass_start: encoder.pass_start.held(),
-            gathered: current.shadows.gathered(),
-            noted: super::lock(&encoder.live).noted.clone(),
+            parts: [
+                digest(&encoder.drawn),
+                digest(&current.drawn),
+                digest(&encoder.coverage),
+                digest(encoder.pass_start.held()),
+                digest(current.shadows.gathered()),
+                digest(&super::lock(&encoder.live).noted),
+                digest(pass),
+            ],
             instance: (
                 current.tile_memory,
                 current.barriers,
@@ -444,11 +491,6 @@ impl Held {
                 current.interlocked_writes,
             ),
             holds: encoder.core.retained_holds(),
-            pass: (
-                encoder.inputs_read.clone(),
-                encoder.extended_written.clone(),
-                encoder.reaches_unnamed,
-            ),
         }
     }
 
@@ -456,22 +498,13 @@ impl Held {
     /// holds: one more index buffer's where it reads one (`index`), and one more execution
     /// record where the device keeps them (`executed`).
     fn assert_as(&self, before: &Held, (index, executed): (bool, bool)) {
-        let parts = [
-            ("drawn area", self.drawn == before.drawn),
-            (
-                "instance's drawn area",
-                self.instance_drawn == before.instance_drawn,
-            ),
-            ("coverage", self.coverage == before.coverage),
-            ("pass's reads", self.pass_start == before.pass_start),
-            ("gathered uses", self.gathered == before.gathered),
-            ("noted uses", self.noted == before.noted),
-            ("instance", self.instance == before.instance),
-            ("pass", self.pass == before.pass),
-        ];
-        for (part, same) in parts {
-            assert!(same, "a draw again changed its encoder's {part}");
+        for (part, (now, then)) in Self::PARTS.iter().zip(self.parts.iter().zip(&before.parts)) {
+            assert!(now == then, "a draw again changed its encoder's {part}");
         }
+        assert!(
+            self.instance == before.instance,
+            "a draw again changed its encoder's instance"
+        );
         let holds = (
             before.holds.0 + usize::from(index),
             before.holds.1 + usize::from(executed),
@@ -485,16 +518,16 @@ impl Held {
 
 #[cfg(debug_assertions)]
 impl Checked {
-    /// The check of the draw again about to take every step, `rebound` where it is rebound.
-    pub(super) fn of(encoder: &mut RenderLowering, rebound: Option<Rebound>) -> Checked {
+    /// The check of the draw again about to take every step, which must leave or work out
+    /// `expected`.
+    pub(super) fn of(encoder: &mut RenderLowering, expected: Expected) -> Checked {
         let kept = encoder.again.kept.take();
         let kept = kept.unwrap_or_else(|| unreachable!("a draw again without its kept draw"));
         Checked {
             kept,
             hits: encoder.again.hits,
-            held: Held::of(encoder),
             announced: crate::degradation::announced_here(),
-            rebound,
+            expected,
         }
     }
 
@@ -504,32 +537,33 @@ impl Checked {
         let Checked {
             kept,
             hits,
-            held,
             announced,
-            rebound,
+            expected,
         } = self;
-        if let Some(rebound) = &rebound {
+        let rebound = matches!(expected, Expected::Rebound(_));
+        match &expected {
             // Its uses differ from the kept draw's: what noting them adds is every step's own.
-            rebound.assert_as(&crate::device::lock(&encoder.live));
-        } else {
-            assert_eq!(
-                crate::degradation::announced_here(),
-                announced,
-                "a draw again announced a notice"
-            );
-            assert!(!met, "a draw again met a notice met at each occurrence");
-            let executed = kept.execution.is_some();
-            Held::of(encoder).assert_as(&held, (kept.index.is_some(), executed));
+            Expected::Rebound(rebound) => rebound.assert_as(&crate::device::lock(&encoder.live)),
+            Expected::Plain(held) => {
+                assert_eq!(
+                    crate::degradation::announced_here(),
+                    announced,
+                    "a draw again announced a notice"
+                );
+                assert!(!met, "a draw again met a notice met at each occurrence");
+                let executed = kept.execution.is_some();
+                Held::of(encoder).assert_as(held, (kept.index.is_some(), executed));
+            }
         }
         let again = encoder.again.kept.as_mut();
         let again = again.unwrap_or_else(|| panic!("a draw again kept no draw"));
         let (draw_alone, stamps, under) = (again.draw_alone, again.stamps, again.under);
         assert!(
-            draw_alone || rebound.is_some(),
+            draw_alone || rebound,
             "a draw again recorded a state command"
         );
         assert!(
-            again.rebinds || rebound.is_none(),
+            again.rebinds || !rebound,
             "a draw rebound whose every step keeps nothing to rebind"
         );
         // A draw rebound reads its tables under their stamps now, its uses noted into the state

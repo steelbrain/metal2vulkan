@@ -7164,16 +7164,17 @@ impl RenderLowering {
         self.sync_heaps();
         // The encoder's kept draw again, which no call came between: its Vulkan draw alone
         // (`render/draw_again.rs`). Any other draw forgets it, and keeps itself where it can.
-        let checked = match self.draw_again(call, assembly, &draw, &buffers) {
+        let mut checked = None;
+        match self.draw_again(call, assembly, &draw, &buffers, &mut checked) {
             draw_again::Again::Drawn => return Ok(()),
             #[cfg(debug_assertions)]
-            draw_again::Again::Check(checked) => Some(checked),
-            draw_again::Again::No => None,
+            draw_again::Again::Check => {}
+            draw_again::Again::No => {}
             draw_again::Again::Refused(refused) => {
                 self.forget_again();
                 return Err(refused);
             }
-        };
+        }
         self.forget_again();
         let watch = EachWatch::start();
         // And whether it rasterizes, without which its primitives reach no tile (`no_raster_t11`).
