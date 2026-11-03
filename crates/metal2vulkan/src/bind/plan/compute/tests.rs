@@ -33,7 +33,8 @@ fn specialization_data_packs_each_value_at_its_size_in_id_order() {
 }
 
 /// A key's lists are made at once at the size every constant of the layout takes, not grown a
-/// push at a time: where each constant has a value, each list's capacity is its length.
+/// push at a time: where each constant has a value, each list's capacity is its length. A key of
+/// no value makes no list at all.
 #[test]
 fn specialization_lists_are_made_whole_at_once() {
     let c = |id, key, size| SpecConstant {
@@ -54,4 +55,6 @@ fn specialization_lists_are_made_whole_at_once() {
     assert_eq!((key.entries.len(), key.data.len()), (5, 17));
     assert_eq!(key.entries.capacity(), key.entries.len());
     assert_eq!(key.data.capacity(), key.data.len());
+    let none = spec_key(&layout, |_| None);
+    assert_eq!((none.entries.capacity(), none.data.capacity()), (0, 0));
 }

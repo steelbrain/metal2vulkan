@@ -347,18 +347,22 @@ impl ComputePipeline {
 /// The specialization data of the constants in `layout` that `value` gives a value, in `SpecId`
 /// order: each value's low `size` bytes, little-endian, without the bits no stage reads
 /// (`SpecConstant::unread_bits`), so values that differ only there give one key, one `VkPipeline`,
-/// and one specialization the driver sees. Its two lists are made at their whole size at once.
+/// and one specialization the driver sees. Its two lists are made at once, at the first constant
+/// given a value, at the size it and every later constant take; a key of no value makes none.
 pub(crate) fn spec_key(
     layout: &[SpecConstant],
     value: impl Fn(SpecKey) -> Option<u64>,
 ) -> SpecializationKey {
     let mut key = SpecializationKey::new();
-    // Room for every constant of the layout at once, rather than growing a push at a time: a
-    // dispatch's regions each make one.
-    key.entries.reserve_exact(layout.len());
-    (key.data).reserve_exact(layout.iter().map(|c| c.size.min(8) as usize).sum());
-    for c in layout {
+    for (at, c) in layout.iter().enumerate() {
         let Some(v) = value(c.key) else { continue };
+        // Room for the rest of the layout at once, rather than growing a push at a time: a
+        // dispatch's regions each make one.
+        if key.entries.is_empty() {
+            let rest = &layout[at..];
+            key.entries.reserve_exact(rest.len());
+            (key.data).reserve_exact(rest.iter().map(|c| c.size.min(8) as usize).sum());
+        }
         let v = v & !c.unread_bits;
         let size = c.size.min(8);
         key.entries.push(vk::SpecializationMapEntry {
