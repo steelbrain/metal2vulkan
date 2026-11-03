@@ -639,6 +639,33 @@ impl ExtendedRange {
         }))
     }
 
+    /// The `float` value Metal reads from the code `code` (below 1024) of a color channel, or of
+    /// alpha where `alpha`, of a `BGR10_XR`, `BGRA10_XR` or two-plane format or an `_sRGB` twin
+    /// (an Apple M3 Max and an M4): `(code - 384) / 510` correctly rounded, an `_sRGB` color
+    /// channel's step of Metal's table over 8192, the two-plane formats' alpha byte over 255
+    /// correctly rounded. `None` for the padded and bfloat forms and a larger code. A shader's read
+    /// of such a texel is the device's conversion, not this value
+    /// ([`PrecisionNote::DevicePackConversion`](crate::pipeline::PrecisionNote::DevicePackConversion)
+    /// bounds it against this one).
+    pub fn read_value(self, code: u32, alpha: bool) -> Option<f32> {
+        (!self.padded() && !self.bfloat() && code < 1024).then(|| self.code_value(code, alpha))
+    }
+
+    /// The code Metal's kernel write stores for the `float` value `v` of a color channel, or of
+    /// alpha where `alpha`, of an extended-range or padded form (an Apple M3 Max and an M4): a
+    /// NaN as 0; a color channel's `384 ± RoundHalfEven(min(|v|, 1.5) · 510)` of the exact
+    /// product, clamped to `[0, 1023]`, an `_sRGB` twin's by Metal's own encode table; alpha's
+    /// clamped to `[0, 1]`, `384 + RoundHalfEven(a · 510)`, the two-plane formats' byte
+    /// `RoundHalfEven(a · 255)`; a padded form's the exact product of the value clamped to
+    /// `[0, 1]` with 1023 rounded to nearest even, an `_sRGB` twin's by Metal's tables,
+    /// `RGB10A2Unorm_sRGB`'s alpha the product with 3. `None` for the bfloat forms. A shader's
+    /// write of such a texel is the device's conversion, not this code
+    /// ([`PrecisionNote::DevicePackConversion`](crate::pipeline::PrecisionNote::DevicePackConversion)
+    /// bounds it against this one).
+    pub fn write_code(self, v: f32, alpha: bool) -> Option<u32> {
+        (!self.bfloat()).then(|| self.code(v, alpha))
+    }
+
     /// The value Metal reads from the code `code` of a color channel, or of alpha where `alpha`,
     /// of a `BGR10_XR`, `BGRA10_XR` or two-plane format or an `_sRGB` twin: `(code - 384) / 510`
     /// correctly rounded, an `_sRGB` color channel's table step, the two-plane formats' alpha byte

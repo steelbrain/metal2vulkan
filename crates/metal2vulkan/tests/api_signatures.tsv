@@ -9003,7 +9003,9 @@ method	metal2vulkan::metal::format::ExtendedRange::padded	pub fn padded(self) ->
 method	metal2vulkan::metal::format::ExtendedRange::padded_srgb	pub fn padded_srgb(self) -> bool
 method	metal2vulkan::metal::format::ExtendedRange::raw_components	pub fn raw_components(self) -> u32
 method	metal2vulkan::metal::format::ExtendedRange::raw_format	pub fn raw_format(self) -> vk::Format
+method	metal2vulkan::metal::format::ExtendedRange::read_value	pub fn read_value(self, code: u32, alpha: bool) -> Option<f32>
 method	metal2vulkan::metal::format::ExtendedRange::srgb	pub fn srgb(self) -> bool
+method	metal2vulkan::metal::format::ExtendedRange::write_code	pub fn write_code(self, v: f32, alpha: bool) -> Option<u32>
 method	metal2vulkan::metal::format::FormatMapping::direct	pub fn direct(format: vk::Format, aspects: vk::ImageAspectFlags) -> FormatMapping
 method	metal2vulkan::metal::format::WordAttachment::fields	pub fn fields(self) -> [Option<WordField>; 4]
 method	metal2vulkan::metal::format::WordAttachment::layout	pub fn layout(pf: PixelFormat) -> Option<WordAttachment>
