@@ -5,12 +5,43 @@
 use super::SLOTS;
 use crate::generated_commands::GeneratedCommandsInfo;
 use ash::vk;
+use std::cell::Cell;
 use std::ffi::{c_void, CStr};
-use std::sync::atomic::{AtomicPtr, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicPtr, AtomicU64, AtomicUsize, Ordering};
 
-/// Each slot's commands recorded so far, one count per command at its index.
-static COUNTS: [[AtomicU64; Command::COUNT]; SLOTS] =
-    [const { [const { AtomicU64::new(0) }; Command::COUNT] }; SLOTS];
+/// The shards of each slot's counts (`recorder`): a thread counts into its own ([`shard`]), so
+/// threads that record at once write cache lines apart, and a slot's count of a command is the
+/// sum of its shards'. More threads than shards share them, round the shards in turn.
+pub(crate) const SHARDS: usize = 16;
+
+/// One shard of a slot's counts, one per command at its index, on cache lines of its own (128
+/// bytes, the line of Apple's and the pair of lines x86's prefetchers fetch together).
+#[repr(align(128))]
+struct Shard([AtomicU64; Command::COUNT]);
+
+/// Each slot's commands recorded so far, by shard.
+static COUNTS: [[Shard; SHARDS]; SLOTS] =
+    [const { [const { Shard([const { AtomicU64::new(0) }; Command::COUNT]) }; SHARDS] }; SLOTS];
+
+/// How many threads took a shard: the next takes the shard of this count.
+static SHARDS_TAKEN: AtomicUsize = AtomicUsize::new(0);
+
+thread_local! {
+    /// The shard this thread counts into, taken at its first count; `usize::MAX` before.
+    static SHARD: Cell<usize> = const { Cell::new(usize::MAX) };
+}
+
+/// The shard the calling thread counts into: its own, taken once.
+pub(crate) fn shard() -> usize {
+    let taken = SHARD.try_with(|shard| {
+        if shard.get() == usize::MAX {
+            shard.set(SHARDS_TAKEN.fetch_add(1, Ordering::Relaxed) % SHARDS);
+        }
+        shard.get()
+    });
+    // A thread past its thread-locals' end (its last destructors' commands) counts into shard 0.
+    taken.unwrap_or(0)
+}
 
 /// Slot `index`'s counts.
 pub(super) fn counts(index: usize) -> CommandsRecorded {
@@ -19,8 +50,10 @@ pub(super) fn counts(index: usize) -> CommandsRecorded {
 
 /// Zero slot `index`'s counts, as a device takes it.
 pub(super) fn clear_counts(index: usize) {
-    for count in &COUNTS[index] {
-        count.store(0, Ordering::Relaxed);
+    for shard in &COUNTS[index] {
+        for count in &shard.0 {
+            count.store(0, Ordering::Relaxed);
+        }
     }
 }
 
@@ -91,12 +124,16 @@ macro_rules! commands {
         }
 
         impl CommandsRecorded {
-            /// The counts `counts` holds, one per command at its index.
-            fn read(counts: &[AtomicU64; Command::COUNT]) -> CommandsRecorded {
+            /// The counts `shards` hold, one per command at its index in each: their sums.
+            fn read(shards: &[Shard; SHARDS]) -> CommandsRecorded {
+                let sum = |command: Command| {
+                    let counts = shards.iter().map(|shard| &shard.0[command as usize]);
+                    counts.map(|count| count.load(Ordering::Relaxed)).sum()
+                };
                 CommandsRecorded {
-                    $($f0: counts[Command::$v0 as usize].load(Ordering::Relaxed),)*
-                    $($f3: counts[Command::$v3 as usize].load(Ordering::Relaxed),)*
-                    $($fe: counts[Command::$ve as usize].load(Ordering::Relaxed),)*
+                    $($f0: sum(Command::$v0),)*
+                    $($f3: sum(Command::$v3),)*
+                    $($fe: sum(Command::$ve),)*
                 }
             }
         }
@@ -167,7 +204,7 @@ macro_rules! commands {
                 command_buffer: vk::CommandBuffer,
                 $($a: $t,)*
             ) $(-> $r)? {
-                COUNTS[S][Command::$v as usize].fetch_add(1, Ordering::Relaxed);
+                COUNTS[S][shard()].0[Command::$v as usize].fetch_add(1, Ordering::Relaxed);
                 let real = REAL.$f[S].load(Ordering::Acquire);
                 if real.is_null() {
                     missing($n);
