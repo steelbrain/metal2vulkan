@@ -1540,11 +1540,13 @@ impl ComputeCommandEncoder {
         if !reads {
             return;
         }
-        // A texture the kernel's handles reach whose blocks a carrier holds reads as the neutral.
+        // A texture the kernel's handles reach whose blocks a carrier holds reads as the neutral:
+        // among those made resident, as the encoder keeps the first (`compute/live.rs`).
         let bound = self.table.textures.values();
+        let resident = (self.live.unreadable).of(self.core.device(), &self.residency);
         degrade_unreadable(
             self.core.device(),
-            self.residency.textures().chain(bound),
+            resident.into_iter().chain(bound),
             "a dispatch",
         );
     }
@@ -2247,16 +2249,21 @@ fn record(
             flat = flat_call;
         }
     }
-    let live = live.as_deref();
-    let kept = live.and_then(|live| live.memo.entry());
+    let (kept, kept_state, resident_shadows) = match live {
+        Some(live) => {
+            let (state, memo, shadows) = live.parts();
+            (memo.entry(), Some(state), Some(shadows))
+        }
+        None => (None, None, None),
+    };
     let settled = match (kept, &settled_here) {
         (Some(kept), _) => &kept.settled,
         (None, Some(settled)) => settled,
         (None, None) => return Err(internal("a dispatch settled nowhere")),
     };
-    let state = match (&state_here, live) {
+    let state = match (&state_here, kept_state) {
         (Some(state), _) => state,
-        (None, Some(live)) => &live.state,
+        (None, Some(state)) => state,
         (None, None) => return Err(internal("a dispatch's bind state nowhere")),
     };
     let SettledDispatch {
@@ -2561,12 +2568,12 @@ fn record(
             Vec::new(),
         ),
     };
-    let textures = tables
-        .table
-        .textures
-        .values()
-        .chain(tables.residency.textures());
-    let shadows = shadow::shadow_uses(textures, &uses);
+    // The resident textures' shadows as the encoder keeps them (`compute/live.rs`).
+    let textures = tables.table.textures.values();
+    let shadows = match resident_shadows {
+        Some(kept) => shadow::shadow_uses_of(textures, kept.of(&device, tables.residency), &uses),
+        None => shadow::shadow_uses(textures.chain(tables.residency.textures()), &uses),
+    };
     let copies = core.plan_shadows(&shadows, &uses)?;
     let heap_set = match heap {
         Some(_) => Some(heap_sets::bind(

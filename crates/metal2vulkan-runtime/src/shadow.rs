@@ -208,6 +208,7 @@ use super::buffer::{Buffer, CallerMemory, WeakBuffer};
 use super::device::lock;
 use super::dirty_pages::{CopyInGate, ShadowLog};
 use super::error::{Error, RuntimeGap};
+use super::residency::Residency;
 use super::resource::ResourceKey;
 use super::rotated::{RotatedCopies, Turn};
 use super::row_copies::RowCopies;
@@ -2210,14 +2211,66 @@ pub(super) fn shadow_uses<'a>(
     textures: impl Iterator<Item = &'a Texture>,
     uses: &[Use<ResourceKey>],
 ) -> Vec<ShadowUse> {
-    // A texture's own shadow, and the one a binding beyond its usage made
-    // (`texture/usage_shadow.rs`).
+    shadow_uses_of(textures, &[], uses)
+}
+
+/// [`shadow_uses`] of `bound`, then of the textures whose copies `resident` lists (a
+/// [`ResidentShadows`]'), in that order.
+pub(super) fn shadow_uses_of<'a>(
+    bound: impl Iterator<Item = &'a Texture>,
+    resident: &[Arc<ShadowCopies>],
+    uses: &[Use<ResourceKey>],
+) -> Vec<ShadowUse> {
     let mut copies = Vec::new();
-    for texture in textures {
-        copies.extend(texture.shadow().cloned());
-        copies.extend(texture.usage_shadow_copies());
+    for texture in bound {
+        texture_copies(texture, &mut copies);
     }
-    copies_used(copies.iter(), uses)
+    copies_used(copies.iter().chain(resident), uses)
+}
+
+/// A texture's own shadow's copies, and those of the one a binding beyond its usage made
+/// (`texture/usage_shadow.rs`), added to `copies`.
+fn texture_copies(texture: &Texture, copies: &mut Vec<Arc<ShadowCopies>>) {
+    copies.extend(texture.shadow().cloned());
+    copies.extend(texture.usage_shadow_copies());
+}
+
+/// The shadows' copies of the textures a residency made resident ([`texture_copies`] of each, in
+/// its textures' order), kept by an encoder between its commands and listed again only where the
+/// residency's generation (`Residency::generation`), or the count of usage shadows its device
+/// made (`DeviceShared::usage_shadows_made`), moved since: a texture's own shadow is made with
+/// it, and a usage shadow is the one a texture makes later. A command's look at them
+/// ([`shadow_uses_of`]) then costs their count, not the resident textures'.
+#[derive(Default)]
+pub(super) struct ResidentShadows {
+    listed_at: Option<(u64, u64)>,
+    copies: Vec<Arc<ShadowCopies>>,
+}
+
+impl ResidentShadows {
+    /// The copies of what `residency`, of `device`, made resident, listed again where they may
+    /// have changed.
+    pub(super) fn of(&mut self, device: &Device, residency: &Residency) -> &[Arc<ShadowCopies>] {
+        // Read before the textures: a shadow made meanwhile is counted once it can be read, so
+        // the next look lists it.
+        let made = (device.shared().usage_shadows_made).load(Ordering::Acquire);
+        let at = (residency.generation(), made);
+        if self.listed_at != Some(at) {
+            self.copies.clear();
+            for texture in residency.textures() {
+                texture_copies(texture, &mut self.copies);
+            }
+            self.listed_at = Some(at);
+            device.shared().counts.resident_textures_looked_at();
+        }
+        &self.copies
+    }
+
+    /// Hold none: an ended encoder's, kept for the next (`compute/live.rs`).
+    pub(super) fn let_go(&mut self) {
+        self.listed_at = None;
+        self.copies.clear();
+    }
 }
 
 /// The shadowed textures of `shadows` a command with `uses` uses, each once, writing through it

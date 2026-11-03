@@ -66,6 +66,7 @@ use super::copy_plan::{block_extent, ImageRegion};
 use super::degradation::Degradation;
 use super::device::Device;
 use super::image_plan::{block_family, sample_count, ImageFacts, ImagePlan};
+use super::residency::Residency;
 use super::texture::Texture;
 use super::texture_descriptor::{effective_usage, TextureLayout};
 use metal2vulkan::bind::PvrtcDecode;
@@ -275,6 +276,38 @@ pub(super) fn held_for_copies(texture: &Texture) -> Option<Format> {
         || super::etc::decode_of(plan).is_some()
         || super::chroma_pairs::holds_pairs(plan);
     (carried && !texture.has_decoded_twin()).then_some(plan.format)
+}
+
+/// The first texture a residency made resident whose bytes a carrier holds for copies alone
+/// ([`held_for_copies`]), kept by an encoder between its commands and found again only where the
+/// residency's generation moved since (`Residency::generation`): whether a carrier holds a
+/// texture's bytes, and whether it has a decoded twin, are fixed at its making.
+#[derive(Default)]
+pub(super) struct ResidentUnreadable {
+    found_at: Option<u64>,
+    texture: Option<Texture>,
+}
+
+impl ResidentUnreadable {
+    /// That texture among those `residency`, of `device`, made resident, found again where it may
+    /// have changed.
+    pub(super) fn of(&mut self, device: &Device, residency: &Residency) -> Option<&Texture> {
+        let generation = residency.generation();
+        if self.found_at != Some(generation) {
+            self.texture = (residency.textures())
+                .find(|texture| held_for_copies(texture).is_some())
+                .cloned();
+            self.found_at = Some(generation);
+            device.shared().counts.resident_textures_looked_at();
+        }
+        self.texture.as_ref()
+    }
+
+    /// Hold none: an ended encoder's, kept for the next (`compute/live.rs`).
+    pub(super) fn let_go(&mut self) {
+        self.found_at = None;
+        self.texture = None;
+    }
 }
 
 /// Announce once ([`Degradation::UnreadableHandleTexture`]) that `command` (named), encoded, whose

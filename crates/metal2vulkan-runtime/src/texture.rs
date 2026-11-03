@@ -409,8 +409,11 @@ pub(super) struct TextureShared {
     /// own also for a view.
     held_by: HeldBy,
     /// The image a slot binding takes where the texture's image and usage both lack the usage
-    /// the binding needs (`texture/usage_shadow.rs`), made at the first such binding.
-    usage_shadow: Mutex<Option<Arc<usage_shadow::UsageShadow>>>,
+    /// the binding needs (`texture/usage_shadow.rs`), made at the first such binding: read
+    /// without a lock, made under `usage_shadow_making`.
+    usage_shadow: OnceLock<Arc<usage_shadow::UsageShadow>>,
+    /// Held while the usage shadow is made, so one binding makes it.
+    usage_shadow_making: Mutex<()>,
     /// The storage images a draw that reads the texture where its pass renders it takes the
     /// texture's texels into before it reads them (`texture/attached_reads.rs`), one a form, each
     /// made at the first such draw: on the texture a view was made from, never a view's own.
@@ -4084,7 +4087,8 @@ impl Texture {
             label: Mutex::new(None),
             object_id: ObjectId::new(),
             held_by: HeldBy::default(),
-            usage_shadow: Mutex::new(None),
+            usage_shadow: OnceLock::new(),
+            usage_shadow_making: Mutex::new(()),
             snapshot: Mutex::new(Vec::new()),
             kept_backings: Mutex::new(Vec::new()),
             render_shadow: Mutex::new(None),

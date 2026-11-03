@@ -36,7 +36,12 @@
 //!   what its last dispatch settled goes first ([`LiveDispatch::let_go`]): it holds the pipeline
 //!   state, sampler states and pipelines, where the state holds values alone (its bindings, its used
 //!   resources and argument samplers as a bind state lists them, its table's pipeline state held
-//!   weakly), so a kept one holds nothing alive.
+//!   weakly), so a kept one holds nothing alive. The lists of its resident textures' shadows and
+//!   carriers go too ([`ResidentShadows`], [`ResidentUnreadable`]).
+//! - **Resident textures looked at once a change.** A dispatch's look at the shadows of the
+//!   textures the encoder made resident (`shadow::shadow_uses_of`), and a reading of texture
+//!   handles' look for one a carrier holds (`pvrtc::degrade_unreadable`), read the lists kept here,
+//!   made again only where they may have changed.
 
 use metal2vulkan::bind::{BindShape, BindState, HeapPlacement, ImageblockSize};
 use metal2vulkan::pipeline::Stage;
@@ -50,7 +55,9 @@ use crate::function_table::VisibleFunctionTable;
 use crate::heap_sets;
 use crate::live_bind::Reshape;
 use crate::pipeline::{ComputePipelineState, WeakComputePipelineState};
+use crate::pvrtc::ResidentUnreadable;
 use crate::sampler::SamplerState;
+use crate::shadow::ResidentShadows;
 use crate::work_counts::Counters;
 
 /// The most bind states a device keeps for its compute encoders to start from: one per encoder
@@ -76,6 +83,10 @@ pub(in crate::compute) struct LiveDispatch {
     /// next dispatch of the same inputs (`DispatchMemo`): of this state, so a dispatch that takes
     /// it binds this state.
     pub(in crate::compute) memo: DispatchMemo,
+    /// The shadows' copies of the textures the encoder made resident.
+    pub(in crate::compute) shadows: ResidentShadows,
+    /// The first texture the encoder made resident whose bytes a carrier holds for copies alone.
+    pub(in crate::compute) unreadable: ResidentUnreadable,
 }
 
 /// What a kept state's kernel table was read from at the dispatch that read it last
@@ -291,6 +302,13 @@ impl LiveDispatch {
     pub(in crate::compute) fn let_go(&mut self) {
         self.memo = DispatchMemo::default();
     }
+
+    /// Its state and memo, read, beside the shadows of its resident textures, kept.
+    pub(in crate::compute) fn parts(
+        &mut self,
+    ) -> (&BindState, &DispatchMemo, &mut ResidentShadows) {
+        (&self.state, &self.memo, &mut self.shadows)
+    }
 }
 
 /// A device's bind states that ended compute encoders left, which the compute encoders it opens
@@ -307,10 +325,12 @@ impl SpareLiveDispatches {
     }
 
     /// Keep `live`, an ended compute encoder's state, for the next encoder to start from, its
-    /// memo let go ([`LiveDispatch::let_go`]), where fewer than [`SPARE_LIVE_DISPATCHES`] are
-    /// kept; else it goes.
+    /// memo let go ([`LiveDispatch::let_go`]) and its resident textures' lists emptied, where fewer
+    /// than [`SPARE_LIVE_DISPATCHES`] are kept; else it goes.
     pub(in crate::compute) fn give(&self, mut live: LiveDispatch) {
         live.let_go();
+        live.shadows.let_go();
+        live.unreadable.let_go();
         let mut spare = lock(&self.0);
         if spare.len() < SPARE_LIVE_DISPATCHES {
             spare.push(live);

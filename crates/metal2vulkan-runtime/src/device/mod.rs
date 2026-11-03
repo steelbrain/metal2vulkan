@@ -494,6 +494,9 @@ pub(super) struct DeviceShared {
     /// The bind states its ended compute encoders left, which the next ones start from
     /// (`compute/live.rs`).
     pub(super) live_dispatches: crate::compute::SpareLiveDispatches,
+    /// The usage shadows its textures made (`texture/usage_shadow.rs`): a kept list of resident
+    /// textures' shadows is listed again where it moved (`shadow::ResidentShadows`).
+    pub(super) usage_shadows_made: std::sync::atomic::AtomicU64,
     /// The bind memos its ended render encoders left, which the next ones take (`binding.rs`).
     pub(super) bind_memos: crate::binding::SpareBindMemos,
     /// The rooms its ended render encoders' draws gathered into, which the next ones take
@@ -1966,6 +1969,7 @@ impl Device {
             spares: Spares::default(),
             live_binds: Default::default(),
             live_dispatches: Default::default(),
+            usage_shadows_made: Default::default(),
             bind_memos: Default::default(),
             draw_rooms: Default::default(),
             kept_rooms: Default::default(),

@@ -234,6 +234,7 @@ pub(crate) struct Counters {
     dispatch_shapes_made: AtomicU64,
     dispatch_shapes_found: AtomicU64,
     dispatch_used_resources_listed: AtomicU64,
+    resident_textures_looked_at: AtomicU64,
     argument_samplers_taken: AtomicU64,
     bind_views_worked_out: AtomicU64,
     stage_tables_read: AtomicU64,
@@ -1682,6 +1683,13 @@ impl Counters {
     /// resources (`LiveDispatch::refresh`).
     pub(crate) fn dispatch_used_resources_listed(&self) {
         self.dispatch_used_resources_listed
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// A compute encoder looked at the textures it made resident for their shadows or for one a
+    /// carrier holds (`shadow::ResidentShadows`, `pvrtc::ResidentUnreadable`).
+    pub(crate) fn resident_textures_looked_at(&self) {
+        self.resident_textures_looked_at
             .fetch_add(1, Ordering::Relaxed);
     }
 
@@ -4217,6 +4225,13 @@ pub struct WorkCounts {
     /// encoder's residency kept its generation since its kept bind state listed them
     /// (`compute/live.rs`), however many resources it made resident.
     pub dispatch_used_resources_listed: u64,
+    /// Looks of a compute encoder's dispatches at every texture the encoder made resident: for
+    /// their shadows' copies (`shadow::ResidentShadows`), one at the encoder's first dispatch after
+    /// each change of what it made resident or after its device made a usage shadow; and for one
+    /// whose bytes a carrier holds (`pvrtc::ResidentUnreadable`), one at its first dispatch reading
+    /// texture handles after each change of what it made resident. None for a dispatch after which
+    /// neither changed, however many textures it made resident.
+    pub resident_textures_looked_at: u64,
     /// Draws (and commands of other encoders that settle as draws do) that took the device's
     /// live sampler states to list as their argument samplers: none for a draw whose kept bind
     /// state lists them at the count of their slots' changes that still holds, whose variant has
@@ -5608,6 +5623,8 @@ impl Device {
             dispatch_shapes_made: counters.dispatch_shapes_made.load(Ordering::Relaxed),
             dispatch_shapes_found: counters.dispatch_shapes_found.load(Ordering::Relaxed),
             dispatch_used_resources_listed: (counters.dispatch_used_resources_listed)
+                .load(Ordering::Relaxed),
+            resident_textures_looked_at: (counters.resident_textures_looked_at)
                 .load(Ordering::Relaxed),
             argument_samplers_taken: counters.argument_samplers_taken.load(Ordering::Relaxed),
             bind_views_worked_out: counters.bind_views_worked_out.load(Ordering::Relaxed),

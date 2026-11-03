@@ -15,10 +15,10 @@ use super::executions::on_device_with;
 use super::indirect_host_steps::state;
 use super::{buffer_with, read_buffer, WAIT};
 use metal2vulkan::bind::{SamplerDescriptor, UsedClass, UsedShape};
-use metal2vulkan::metal::{IndirectCommandType, ResourceUsage};
+use metal2vulkan::metal::{IndirectCommandType, PixelFormat, ResourceUsage};
 use metal2vulkan_runtime::{
     CommandBufferStatus, IdPlacement, IndirectCommandBufferDescriptor, ResourceOptions,
-    ResourceRef, Size, WorkCounts,
+    ResourceRef, Size, TextureDescriptor, WorkCounts,
 };
 use std::collections::BTreeMap;
 
@@ -534,14 +534,20 @@ fn dispatches_take_what_their_state_planned_for_the_same_shape() {
 /// The buffers [`dispatches_list_what_their_encoder_made_resident_once_a_change`] makes resident.
 const RESIDENT: usize = 64;
 
+/// The textures it makes resident.
+const RESIDENT_TEXTURES: usize = 16;
+
 /// A compute encoder's dispatches bring the bind state its last dispatch bound in place: where only
-/// a buffer's offset moved between them, after the encoder made [`RESIDENT`] buffers resident, the
-/// first lists them as its bind state's used resources and finds or makes its shape, and none after
-/// it does either (`WorkCounts::dispatch_used_resources_listed`, `dispatch_shapes_made` and
+/// a buffer's offset moved between them, after the encoder made [`RESIDENT`] buffers and
+/// [`RESIDENT_TEXTURES`] textures resident, the first lists them as its bind state's used resources
+/// and finds or makes its shape, and none after it does either
+/// (`WorkCounts::dispatch_used_resources_listed`, `dispatch_shapes_made` and
 /// `dispatch_shapes_found`), each taking what its pipeline state planned for that shape
 /// (`dispatches_planned_as_before`); a buffer made resident lists them again at the next dispatch,
-/// which finds or makes its shape again, and the dispatch after it neither. Every dispatch writes
-/// its words. Both ways ([`on_device_both_ways`]).
+/// which finds or makes its shape again, and the dispatch after it neither. The textures' shadows
+/// are looked for as their list is made (`resident_textures_looked_at`): at the first dispatch and
+/// at the one after the buffer, none between. Every dispatch writes its words. Both ways
+/// ([`on_device_both_ways`]).
 #[test]
 fn dispatches_list_what_their_encoder_made_resident_once_a_change() {
     const MOVES: u64 = 6;
@@ -554,18 +560,21 @@ fn dispatches_list_what_their_encoder_made_resident_once_a_change() {
         let resident: Vec<_> = (0..=RESIDENT)
             .map(|_| buffer_with(device, &[0; 64]).unwrap())
             .collect();
+        let descriptor = TextureDescriptor::texture_2d(PixelFormat::RGBA8Unorm, 4, 4, false);
+        let textures: Vec<_> = (0..RESIDENT_TEXTURES)
+            .map(|_| device.new_texture(&descriptor).unwrap())
+            .collect();
         let queue = device.new_command_queue().unwrap();
         let command_buffer = queue.command_buffer().unwrap();
         let mut encoder = command_buffer.compute_command_encoder().unwrap();
         encoder.set_compute_pipeline_state(&kernel).unwrap();
         encoder.set_buffer(Some(&input), 0, 0).unwrap();
-        let first: Vec<_> = resident[..RESIDENT]
-            .iter()
-            .map(ResourceRef::Buffer)
+        let first: Vec<_> = (resident[..RESIDENT].iter().map(ResourceRef::Buffer))
+            .chain(textures.iter().map(ResourceRef::Texture))
             .collect();
         encoder.use_resources(&first, ResourceUsage::READ).unwrap();
         // Per dispatch: what it changed, and whether it listed the resources, found or made its
-        // shape, and took what its state planned.
+        // shape, took what its state planned, and looked at the resident textures.
         let mut seen = Vec::new();
         for at in 0..MOVES + 2 {
             let change = match at {
@@ -587,7 +596,8 @@ fn dispatches_list_what_their_encoder_made_resident_once_a_change() {
             let shaped = grew(&before, &after, |c| c.dispatch_shapes_made)
                 + grew(&before, &after, |c| c.dispatch_shapes_found);
             let planned = grew(&before, &after, |c| c.dispatches_planned_as_before);
-            seen.push((change, listed, shaped, planned));
+            let looked = grew(&before, &after, |c| c.resident_textures_looked_at);
+            seen.push((change, listed, shaped, planned, looked));
         }
         encoder.end_encoding().unwrap();
         command_buffer.commit().unwrap();
@@ -597,9 +607,9 @@ fn dispatches_list_what_their_encoder_made_resident_once_a_change() {
         // pipeline state's (none of the first shape planned yet; the second's neither).
         let want: Vec<_> = (0..MOVES + 2)
             .map(|at| match at {
-                0 => ("the first", 1, 1, 0),
-                MOVES => ("a buffer made resident", 1, 1, 0),
-                _ => ("out's offset", 0, 0, 1),
+                0 => ("the first", 1, 1, 0, 1),
+                MOVES => ("a buffer made resident", 1, 1, 0, 1),
+                _ => ("out's offset", 0, 0, 1, 0),
             })
             .collect();
         assert_eq!(seen, want);

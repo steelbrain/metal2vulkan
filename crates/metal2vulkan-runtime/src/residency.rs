@@ -528,14 +528,15 @@ impl Residency {
     /// stages (a compute encoder names none).
     pub(super) fn shadows(&self, render: bool) -> Residency {
         let mut shadows = Residency::default();
-        let shadowed = (self.used.iter())
-            .filter(|(used, ..)| matches!(used, Used::Texture(t) if t.shadow().is_some()));
-        for (used, usage, stages) in shadowed {
+        // Its textures alone, in the order they were made resident.
+        let shadowed =
+            (self.resident_textures()).filter(|(texture, ..)| texture.shadow().is_some());
+        for (texture, usage, stages) in shadowed {
             let stages = match render {
-                true => *stages,
+                true => stages,
                 false => RenderStages::empty(),
             };
-            shadows.join(used.clone(), *usage, stages);
+            shadows.join(Used::Texture(texture.clone()), usage, stages);
         }
         shadows
     }

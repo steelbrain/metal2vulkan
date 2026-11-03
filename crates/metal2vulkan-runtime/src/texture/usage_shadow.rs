@@ -192,15 +192,18 @@ impl Texture {
 
     /// The copies of the texture's shadow, where a binding made it.
     pub(crate) fn usage_shadow_copies(&self) -> Option<Arc<ShadowCopies>> {
-        lock(&self.0.usage_shadow)
-            .as_ref()
-            .map(|shadow| Arc::clone(&shadow.copies))
+        (self.0.usage_shadow.get()).map(|shadow| Arc::clone(&shadow.copies))
     }
 
-    /// The texture's shadow, made at its first need (the module docs).
+    /// The texture's shadow, made at its first need (the module docs), one binding at a time; a
+    /// shadow made counts among its device's (`DeviceShared::usage_shadows_made`), which a kept
+    /// list of resident textures' shadows is listed again at (`shadow::ResidentShadows`).
     fn usage_shadow(&self, call: &'static str) -> Result<Arc<UsageShadow>, Error> {
-        let mut held = lock(&self.0.usage_shadow);
-        if let Some(shadow) = held.as_ref() {
+        if let Some(shadow) = self.0.usage_shadow.get() {
+            return Ok(Arc::clone(shadow));
+        }
+        let _making = lock(&self.0.usage_shadow_making);
+        if let Some(shadow) = self.0.usage_shadow.get() {
             return Ok(Arc::clone(shadow));
         }
         // A converted texture's image has both shader usages: the slot holds its write shadow.
@@ -217,7 +220,11 @@ impl Texture {
             false => self.new_usage_shadow(call)?,
         };
         let shadow = Arc::new(shadow);
-        *held = Some(Arc::clone(&shadow));
+        if self.0.usage_shadow.set(Arc::clone(&shadow)).is_err() {
+            return Err(internal("a usage shadow made twice"));
+        }
+        // Counted once it can be read, so a list made after the count reads it.
+        (self.device().shared().usage_shadows_made).fetch_add(1, Ordering::Release);
         Ok(shadow)
     }
 
