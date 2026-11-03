@@ -1907,6 +1907,16 @@ engine/rdw_tile_kept.air.ll	rdw_tile_kept_fill_dump	ok	ok	ok	ok	ok	ok	ok	ok	ok	o
 engine/rdw_tile_kept.ll	rdw_tile_kept_fill	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
 engine/rdw_tile_kept.ll	rdw_tile_kept_dump	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
 engine/rdw_tile_kept.ll	rdw_tile_kept_fill_dump	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
+engine/resident_draws.air.ll	rd_touch	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
+engine/resident_draws.air.ll	rd_slot_vertex	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
+engine/resident_draws.air.ll	rd_entry_vertex	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	Unsupported{DereferenceLoadedPointer; AnyOf[[Feature(BufferDeviceAddress), Feature(ShaderInt64)]]}	ok	ok	ok	ok	Unsupported{DereferenceLoadedPointer; AnyOf[[Feature(ShaderInt64)]]}	Unsupported{DereferenceLoadedPointer; AnyOf[[Feature(ShaderInt64)]]}	Unsupported{DereferenceLoadedPointer; AnyOf[[Feature(BufferDeviceAddress), Feature(ShaderInt64)]]}
+engine/resident_draws.air.ll	rd_color_fragment	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
+engine/resident_draws.air.ll	rd_entry_fragment	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	Unsupported{ArgumentBufferTextures; AnyOf[[Feature(RuntimeDescriptorArray), Feature(DescriptorBindingPartiallyBound), Feature(ShaderSampledImageArrayNonUniformIndexing), Feature(DescriptorBindingSampledImageUpdateAfterBind)]]}
+engine/resident_draws.ll	rd_touch	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
+engine/resident_draws.ll	rd_slot_vertex	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
+engine/resident_draws.ll	rd_entry_vertex	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	Unsupported{DereferenceLoadedPointer; AnyOf[[Feature(BufferDeviceAddress), Feature(ShaderInt64)]]}	ok	ok	ok	ok	Unsupported{DereferenceLoadedPointer; AnyOf[[Feature(ShaderInt64)]]}	Unsupported{DereferenceLoadedPointer; AnyOf[[Feature(ShaderInt64)]]}	Unsupported{DereferenceLoadedPointer; AnyOf[[Feature(BufferDeviceAddress), Feature(ShaderInt64)]]}
+engine/resident_draws.ll	rd_color_fragment	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
+engine/resident_draws.ll	rd_entry_fragment	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	Unsupported{ArgumentBufferTextures; AnyOf[[Feature(RuntimeDescriptorArray), Feature(DescriptorBindingPartiallyBound), Feature(ShaderSampledImageArrayNonUniformIndexing), Feature(DescriptorBindingSampledImageUpdateAfterBind)]]}
 engine/rfb_viewports.air.ll	rfb_full	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
 engine/rfb_viewports.air.ll	rfb_span	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
 engine/rfb_viewports.air.ll	rfb_position	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
