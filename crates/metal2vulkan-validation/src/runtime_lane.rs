@@ -523,6 +523,8 @@ mod host_copied_textures;
 #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
 mod host_memory;
 #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+mod host_replay_frames;
+#[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
 mod in_place_textures;
 #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
 mod index_fetches;
