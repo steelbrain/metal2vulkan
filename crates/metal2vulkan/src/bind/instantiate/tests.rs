@@ -187,6 +187,133 @@ fn ranges_above_the_descriptor_limit_are_refused() {
     );
 }
 
+/// A planned buffer slot of `window`, read through `view`, under a view base alignment of
+/// `alignment` and a range limit of `max_range`.
+fn planned(window: Window, view: DescriptorView, alignment: u64, max_range: u64) -> PlannedBuffer {
+    use crate::pipeline::sym::{SlotClass, Stage};
+    PlannedBuffer {
+        slot: SlotRef {
+            stage: Stage::Vertex,
+            class: SlotClass::Buffer,
+            index: 0,
+        },
+        window,
+        form: BufferForm::Descriptor(view),
+        access: crate::pipeline::interface::AccessSet::READ_WRITE,
+        binding: Some((0, 0)),
+        alignment,
+        max_range,
+        bound: BoundKind::Buffer {
+            device_address: false,
+            length_class: crate::bind::state::length_class(1 << 12),
+        },
+        disjoint: false,
+    }
+}
+
+/// A storage view of a whole buffer binds its space from 0 to the padded end at every bind offset
+/// before the end, its residual the bind offset, so a draw that moves only the offset binds the
+/// same descriptor; every byte from the bind offset to the end is at `residual + m`, inside the
+/// range, as `descriptor_range` places it.
+#[test]
+fn a_storage_view_of_a_whole_buffer_binds_its_space_from_its_start() {
+    const LENGTH: u64 = 4096;
+    for alignment in [16, 64, 256] {
+        let pb = planned(Window::Whole, DescriptorView::Storage, alignment, MAX);
+        for bind_offset in (0..LENGTH).step_by(4).chain([1, 15, LENGTH - 1]) {
+            let what = format!("{alignment} {bind_offset}");
+            let (range, residual) =
+                planned_range(&pb, bind_offset, LENGTH).unwrap_or_else(|e| panic!("{what}: {e:?}"));
+            let whole = BufferRange {
+                offset: 0,
+                range: LENGTH,
+            };
+            assert_eq!((range, u64::from(residual)), (whole, bind_offset), "{what}");
+            // The byte `descriptor_range`'s range holds at `residual + m` for the Metal offset
+            // `m` is the same byte of the space here.
+            let (from_bind, at) =
+                descriptor_range(bind_offset, LENGTH, Window::Whole, alignment, MAX).unwrap();
+            for m in [0, (LENGTH - bind_offset) / 2, LENGTH - bind_offset - 1] {
+                let byte = range.offset + u64::from(residual) + m;
+                assert!(
+                    byte < range.offset + range.range,
+                    "{what} {m}: inside the range"
+                );
+                assert_eq!(byte, from_bind.offset + u64::from(at) + m, "{what} {m}");
+            }
+        }
+    }
+    // A buffer of 2^32 bytes, bound at its last word: the residual still fits.
+    let pb = planned(Window::Whole, DescriptorView::Storage, 16, MAX);
+    let last = (1 << 32) - 4;
+    let (range, residual) = planned_range(&pb, last, 1 << 32).unwrap();
+    assert_eq!(
+        (range.offset, range.range, residual),
+        (0, 1 << 32, u32::MAX - 3)
+    );
+}
+
+/// Every other slot takes `descriptor_range`'s range: a range from 0 past the view's limit or
+/// past `2^32`, a bind offset at or past the padded end, a uniform view, a bounded window. A limit
+/// the range from the bind offset meets binds; one it does not is refused as before.
+#[test]
+fn other_slots_bind_the_range_from_their_bind_offset() {
+    let same = |pb: &PlannedBuffer, bind_offset: u64, length: u64| {
+        assert_eq!(
+            planned_range(pb, bind_offset, length),
+            descriptor_range(bind_offset, length, pb.window, pb.alignment, pb.max_range),
+            "{:?} {:?} {bind_offset} {length}",
+            pb.window,
+            pb.form
+        );
+    };
+    let storage = |max_range| planned(Window::Whole, DescriptorView::Storage, 64, max_range);
+    // Past the view's limit: the tail from the bind offset fits; the whole buffer from 0 is
+    // refused as before, at the range from the bind offset.
+    let limited = storage(1 << 16);
+    let length = 1 << 20;
+    same(&limited, length - 4096, length);
+    assert!(planned_range(&limited, length - 4096, length).is_ok());
+    same(&limited, 64, length);
+    assert_eq!(
+        planned_range(&limited, 64, length),
+        Err(RangeError::TooLarge {
+            needed: length - 64
+        })
+    );
+    // At the limit exactly, from 0.
+    let (range, _) = planned_range(&storage(length), 64, length).unwrap();
+    assert_eq!(range.offset, 0);
+    // Past 2^32 bytes: a residual and an offset of 32 bits could not state the bind offset.
+    for length in [(1 << 32) + 16, 1 << 33] {
+        for bind_offset in [0, 64, 1 << 31, (1 << 32) - 64, 1 << 32] {
+            same(&storage(MAX), bind_offset, length);
+        }
+    }
+    // At or past the padded end, where the range is widened down into the allocation.
+    for bind_offset in [4096, 4100, 8192, MAX] {
+        same(&storage(MAX), bind_offset, 4096);
+        same(&storage(MAX), bind_offset, 4090);
+    }
+    // A uniform view, whose `RangeAtBindOffset` reads a range from the bind offset; a bounded
+    // window of a storage view.
+    for bind_offset in (0..4096).step_by(4) {
+        for view in [DescriptorView::UniformWords, DescriptorView::UniformVec4] {
+            same(&planned(Window::Whole, view, 256, MAX), bind_offset, 4096);
+        }
+        for window in [
+            Window::Bounded { start: 0, len: 64 },
+            Window::Bounded { start: -8, len: 40 },
+        ] {
+            same(
+                &planned(window, DescriptorView::Storage, 64, MAX),
+                bind_offset,
+                4096,
+            );
+        }
+    }
+}
+
 fn entry(host: u64, guest: u64, size: u64) -> RootEntry {
     RootEntry {
         host,

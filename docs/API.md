@@ -1053,6 +1053,15 @@ let draw = DrawCall::Primitives {
 let commands = plan.instantiate_draw(&state, &draw)?;
 ```
 
+A buffer slot read through a storage view of its whole window (a `device` pointer the function
+indexes) takes the descriptor range from the start of the bound buffer's space to its end padded
+to 16 bytes, whatever its bind offset, which its `SlotBindOffset` push field holds: draws and
+dispatches that bind one buffer at other offsets write the same descriptors, and only push data
+differs. Where that range would pass the view's `maxStorageBufferRange` or 4 GiB, or the offset
+lies at or past the padded end, the range starts at the bind offset aligned down to the
+descriptor base alignment, as every other descriptor-form slot's does. An access that reaches
+back before the bind offset, inside the buffer, reads the buffer's bytes there, as Metal's does.
+
 `instantiate_draw_into` writes the same commands over a `DrawCommands` you keep, in the storage
 its vectors already hold: keep one from draw to draw (`DrawCommands::default()` to start) and the
 draws allocate none of it again once it holds as much.

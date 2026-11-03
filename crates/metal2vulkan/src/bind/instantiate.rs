@@ -12,7 +12,7 @@ use crate::error::{BindError, Feature, Unsupported};
 use crate::memory::roots::{
     BIND_OFFSET, ENTRY_BYTES, GUEST, HOST, RESIDENT_COUNT, RESIDENT_FIRST, SINK_ROOT, SIZE,
 };
-use crate::pipeline::interface::{BufferForm, PushLoc, Window};
+use crate::pipeline::interface::{BufferForm, DescriptorView, PushLoc, Window};
 use crate::pipeline::sym::{PushField, SlotRef};
 use crate::vk;
 
@@ -492,6 +492,38 @@ pub(crate) fn descriptor_range(
     ))
 }
 
+/// The descriptor range and the `SlotBindOffset` residual of planned buffer slot `pb` bound at
+/// `bind_offset` of an allocation of `length` bytes: a storage view of a `Whole` window takes its
+/// range from the start of the bound buffer's space (offset 0) to the padded end, its residual the
+/// bind offset, so every bind offset of one buffer binds one descriptor and a draw or dispatch that
+/// moves only the offset keeps its set 0 (a dynamic one's offset moves with the space alone).
+/// Its function reads byte `residual + m` of the range for the Metal offset `m`, the byte it read
+/// of the range from the bind offset; the bytes before the bind offset, which the window does not
+/// state, are reachable as Metal's own memory is. Every other slot, and one whose range from 0
+/// would exceed the view's `max_range` or reach past `2^32` (a `u32` residual and offset), or whose
+/// bind offset lies at or past the padded end, takes [`descriptor_range`]'s range.
+pub(crate) fn planned_range(
+    pb: &PlannedBuffer,
+    bind_offset: u64,
+    length: u64,
+) -> Result<(BufferRange, u32), RangeError> {
+    let end = padded(length);
+    let from_start = pb.window == Window::Whole
+        && pb.form == BufferForm::Descriptor(DescriptorView::Storage)
+        && bind_offset < end
+        && end <= pb.max_range
+        && end <= 1 << 32;
+    if !from_start {
+        return descriptor_range(bind_offset, length, pb.window, pb.alignment, pb.max_range);
+    }
+    // `bind_offset < end <= 2^32`: the residual is the bind offset.
+    let range = BufferRange {
+        offset: 0,
+        range: end,
+    };
+    Ok((range, bind_offset as u32))
+}
+
 /// The bound buffer at `slot` of `state`, checked against the plan's shape.
 pub(crate) fn bound_buffer(
     state: &BindState,
@@ -637,17 +669,16 @@ pub(crate) fn bind_buffers(
         match (pb.form, pb.binding) {
             (BufferForm::Descriptor(_), Some((set, binding))) => {
                 let (range, residual) =
-                    descriptor_range(bind_offset, length, pb.window, pb.alignment, pb.max_range)
-                        .map_err(|e| match e {
-                            RangeError::TooLarge { needed } => BindError::DescriptorRangeExceeded {
-                                slot: pb.slot,
-                                needed,
-                                limit: pb.max_range,
-                            },
-                            RangeError::Empty => BindError::Unsupported(
-                                Unsupported::not_representable(Feature::BufferRange),
-                            ),
-                        })?;
+                    planned_range(pb, bind_offset, length).map_err(|e| match e {
+                        RangeError::TooLarge { needed } => BindError::DescriptorRangeExceeded {
+                            slot: pb.slot,
+                            needed,
+                            limit: pb.max_range,
+                        },
+                        RangeError::Empty => BindError::Unsupported(
+                            Unsupported::not_representable(Feature::BufferRange),
+                        ),
+                    })?;
                 descriptor_ranges.push(DescriptorRange {
                     set,
                     binding,

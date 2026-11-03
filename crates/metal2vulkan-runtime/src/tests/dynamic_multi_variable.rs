@@ -16,10 +16,9 @@
 //!   offsets move: where its three-variable binding is dynamic, the dynamic offset reaches every
 //!   variable at it;
 //! - and the sets its dispatches take are the ones the variant's own choice calls for
-//!   (`ComputePipelineState::set_zero_choice`): where it pushes set 0 every dispatch pushes; where
-//!   each dispatch binds its buffers at the offsets its predecessor did, every dispatch after the
-//!   first binds its predecessor's set; and where the offsets move, none does, dynamic or not
-//!   ([`Ran::holds_the_choice`]);
+//!   (`ComputePipelineState::set_zero_choice`): where it pushes set 0 every dispatch pushes; else
+//!   every dispatch after the first binds its predecessor's set, its offsets moved or not, dynamic
+//!   or not ([`Ran::holds_the_choice`]);
 //! - and a self-check the driver refuses reaches the device's sink as at most one informational
 //!   line, never as the driver's errors of the runtime's own question.
 //!
@@ -390,14 +389,12 @@ impl Ran {
     /// binding the device would have taken.
     ///
     /// - Where its dispatches push set 0, all of them push and none allocates.
-    /// - Else, where every dispatch binds its buffers at its predecessor's offsets, it binds the
-    ///   set its predecessor wrote, whatever its bindings' forms: the writes are the same.
-    /// - Else, the offsets moving, each dispatch allocates and writes its own, whatever its
-    ///   bindings' forms: `record_stride_not_a_multiple_of_four` reads both its buffers by thread,
-    ///   so each descriptor's range runs from its offset to the buffer's end
-    ///   (`bind::instantiate::descriptor_range`'s whole window), and a moved offset changes a
-    ///   static binding's offset and a dynamic one's range alike (`binding::LastSetZero` compares
-    ///   the writes by value).
+    /// - Else every dispatch binds the set its predecessor wrote, whatever its bindings' forms,
+    ///   its offsets moved or not: the writes are the same (`binding::LastSetZero` compares them
+    ///   by value). `record_stride_not_a_multiple_of_four` reads both its buffers by thread
+    ///   through storage views of their whole windows, so each descriptor's range runs from the
+    ///   buffer's space start to its end at every bind offset, the offset in the slot's residual
+    ///   push field (`metal2vulkan`'s `bind::instantiate::planned_range`).
     ///
     /// And the device's answer bounds the choice in the one direction it implies: a device that
     /// does not take a binding of several variables dynamically has none of them dynamic.
@@ -441,10 +438,7 @@ impl Ran {
             "{what}: its variant pushes no set 0, yet {} of {dispatches} dispatches pushed one",
             self.pushed
         );
-        let want = match self.moved {
-            false => dispatches as u64 - 1,
-            true => 0,
-        };
+        let want = dispatches as u64 - 1;
         assert_eq!(
             (self.reused, self.found),
             (want, 0),

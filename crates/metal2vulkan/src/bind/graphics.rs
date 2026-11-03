@@ -4756,19 +4756,17 @@ fn rebind_slots(
         if !changed(pb.slot) {
             continue;
         }
-        let (range, residual) =
-            descriptor_range(bind_offset, length, pb.window, pb.alignment, pb.max_range).map_err(
-                |e| match e {
-                    RangeError::TooLarge { needed } => BindError::DescriptorRangeExceeded {
-                        slot: pb.slot,
-                        needed,
-                        limit: pb.max_range,
-                    },
-                    RangeError::Empty => {
-                        BindError::Unsupported(Unsupported::not_representable(Feature::BufferRange))
-                    }
+        let (range, residual) = crate::bind::instantiate::planned_range(pb, bind_offset, length)
+            .map_err(|e| match e {
+                RangeError::TooLarge { needed } => BindError::DescriptorRangeExceeded {
+                    slot: pb.slot,
+                    needed,
+                    limit: pb.max_range,
                 },
-            )?;
+                RangeError::Empty => {
+                    BindError::Unsupported(Unsupported::not_representable(Feature::BufferRange))
+                }
+            })?;
         let Some(written) = out
             .descriptor_ranges
             .get_mut(place)
