@@ -92,7 +92,7 @@ thread_local! {
 /// `(at, 0)` for one made in the program's call, `at` drawn then; `(at, n)` for the `n`th one
 /// the host steps of a command buffer made (from 1), `at` drawn at its commit. So an instance a
 /// host step makes falls where its command buffer's commit fell among the program's calls, and
-/// after the step's earlier ones, however the scheduler's thread is timed against the program's.
+/// after the step's earlier ones, however the steps' thread is timed against the program's.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) struct Number {
     at: u64,
@@ -116,8 +116,8 @@ impl Number {
 }
 
 /// The numbers a command buffer's host steps give the instances they make: drawn at its commit,
-/// in the program's call, and counted across its steps, which its scheduler's thread runs one
-/// after another in the batches' order.
+/// in the program's call, and counted across its steps, which the steps' thread
+/// (`scheduler/steps.rs`) runs one after another in the batches' order.
 pub(crate) struct StepNumbers {
     at: u64,
     made: AtomicU32,

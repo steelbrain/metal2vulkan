@@ -125,6 +125,11 @@ pub(super) struct Segment {
     /// rebind before the command buffer's first submission records it again
     /// (`command_buffer/reencode.rs`).
     pub(super) gpu_alone: bool,
+    /// Where `commit` left it to a host step for what the GPU may write, what the step's
+    /// recording may use that Metal orders (`Execute::bound`, `DeferredPass::bound`): its place
+    /// in the scheduler's order across queues until the step records it. `None` where `commit`
+    /// could not bound it, which orders it before every later batch that makes a tracked use.
+    pub(super) bound: Option<Summary<ResourceKey>>,
 }
 
 impl Segment {
@@ -2038,6 +2043,7 @@ impl EncoderCore {
             stepped: false,
             pipelines: false,
             gpu_alone: false,
+            bound: None,
         });
         Ok(())
     }

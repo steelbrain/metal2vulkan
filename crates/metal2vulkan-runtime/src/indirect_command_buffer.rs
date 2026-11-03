@@ -100,7 +100,7 @@ use metal2vulkan::metal::{
     Winding,
 };
 use metal2vulkan::pipeline::CommandWrites;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::num::NonZeroU64;
 use std::ops::Range;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -716,6 +716,16 @@ impl CommandState {
         match self {
             CommandState::Render(named, _, stamp, _) => Some((named.upgrade(), *stamp)),
             CommandState::Compute(..) => None,
+        }
+    }
+
+    /// The ID the state had when the CPU set it, and the serial of its hold of it: equal for two
+    /// commands the CPU set one state's hold on.
+    fn stamp(&self) -> (u64, u64) {
+        match self {
+            CommandState::Compute(_, _, stamp, _) | CommandState::Render(_, _, stamp, _) => {
+                (stamp.id, stamp.serial)
+            }
         }
     }
 
@@ -2671,7 +2681,7 @@ impl IndirectCommandBuffer {
     /// `render/executions.rs`): while it answers `false`, an execution runs the records as they
     /// stand at its command buffer's `commit`, as [`commands`](Self::commands) reads them then;
     /// once it answers `true`, an execution committed since runs them as they stand once the
-    /// work before it completed, read in its host step on the scheduler's thread, and so does an
+    /// work before it completed, read in its host step on a thread of the runtime's, and so does an
     /// execution committed before whose batch was not yet submitted. What `commands` reads
     /// before then may not be what runs.
     pub fn gpu_written(&self) -> bool {
@@ -2986,6 +2996,25 @@ impl IndirectCommandBuffer {
         self.written_states(start, records, states, &RENDER)
     }
 
+    /// The live render states the CPU set on commands `range` (inside the size), each once, in
+    /// the order their first commands come: those an execution's settle at commit makes ahead for
+    /// its host step (`DeferredPass::settle`), which meets any other state a record names as it
+    /// is then.
+    pub(super) fn set_render_states(&self, range: Range<u32>) -> Vec<RenderPipelineState> {
+        let mut stamps = BTreeSet::new();
+        let sets: Vec<CommandState> = lock(&self.0.pipelines)
+            .states
+            .range(range)
+            .map(|(_, set)| set)
+            .filter(|set| stamps.insert(set.stamp()))
+            .cloned()
+            .collect();
+        // Upgraded with no lock of the buffer held: a state dropped here releases its ID.
+        sets.iter()
+            .filter_map(|set| set.render().and_then(|(state, _)| state))
+            .collect()
+    }
+
     /// Whether the CPU set a state on a command of `range` that the program released since:
     /// the command runs the state's program where its record names the ID the state had
     /// (`name_state`), which an execution the GPU alone runs, by the states alive at its commit
@@ -3126,7 +3155,7 @@ impl IndirectCommandBuffer {
 
     /// Announce `Degradation::ReleasedCommandState` for an execution of commands of which
     /// `released` run otherwise than Metal's may, from the call that records the execution:
-    /// `commit`, or the host step, on the scheduler's thread, for one it records.
+    /// `commit`, or the host step, on the steps' thread (`scheduler/steps.rs`), for one it records.
     pub(super) fn degrade_released(&self, released: &Released) {
         let Some(&(index, named, unmatched)) = released.0.first() else {
             return;

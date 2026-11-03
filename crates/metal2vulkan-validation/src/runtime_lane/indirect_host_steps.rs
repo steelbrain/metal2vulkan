@@ -374,10 +374,10 @@ fn addressed(execution: &Execution) -> bool {
 }
 
 /// A device that asks for the host replay at every occurrence ([`HOST_STEPS`] in
-/// `DeviceOptions::announce_each`) announces it at each execution, the host step's on the
-/// scheduler's thread inside the step, before the batch is submitted: the debug assertion that
+/// `DeviceOptions::announce_each`) announces it at each execution, the host step's on the steps'
+/// thread inside the step, before the batch is submitted: the debug assertion that
 /// every-occurrence kinds are announced only in the program's call or a host step lets it pass
-/// (tripped, it would end the scheduler's thread and the command buffer would never complete).
+/// (tripped, it would end the steps' thread and the command buffer would never complete).
 #[test]
 fn a_host_step_announces_an_every_occurrence_kind_inside_the_step() {
     let each = |options: &mut DeviceOptions| options.announce_each = HOST_STEPS.into();

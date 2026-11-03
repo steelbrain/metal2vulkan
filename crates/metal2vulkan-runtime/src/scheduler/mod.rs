@@ -10,11 +10,11 @@
 //!   ([`State::mark`]). Where it is making a pass, the thread looks at the inbox again once its
 //!   pass ends. The
 //!   order sees every commit in commit order, and every batch is planned as it is submitted. This
-//!   thread stops looking at the inbox again at a pass that leaves it a check or a host step, and
-//!   before each one it runs passes again for as long as the inbox holds commits, and looks at it
-//!   before it sleeps ([`left`]): a commit waits for the pass under way, the submission handlers
-//!   that pass leaves, and the pass that takes it in, never for a check or a step. A commit
-//!   wakes this thread alone.
+//!   thread stops looking at the inbox again at a pass that leaves it a check or a host step to
+//!   hand over, and before each one it runs passes again for as long as the inbox holds commits,
+//!   and looks at it before it sleeps ([`left`]): a commit waits for the pass under way, the
+//!   submission handlers that pass leaves, and the pass that takes it in, never for a check or a
+//!   step. A commit wakes this thread alone.
 //!
 //! - **A committing thread may submit for itself** ([`Scheduler::submit_at_commit`],
 //!   `CommandBuffer::commit_and_submit`, a runtime extension). Its commit is posted with no wake,
@@ -79,10 +79,13 @@
 //! - **Host steps**. A batch that executes commands the GPU may write
 //!   (`CommandBufferShared::needs_host_step`) is held, once otherwise ready, until every
 //!   `VkQueue` completed what was submitted to it by then (its gate, a snapshot of the queues'
-//!   values): only then are the records the work before it wrote known. The thread then records
-//!   the batch's segments (`CommandBufferShared::host_step`) without its lock, each step a
-//!   section of the exit guard, and submits the batch in its order. Meanwhile it submits other
-//!   ready batches; the completion turns wake it as batches complete while a gate is pending. A
+//!   values): only then are the records the work before it wrote known. The thread then hands
+//!   the batch's step to the steps' thread ([`steps`]), which records its segments
+//!   (`CommandBufferShared::host_step`), each step a section of the exit guard, and wakes this
+//!   one, which submits the batch in its order. Meanwhile it submits other ready batches, those
+//!   of other queues whose footprint shares nothing with the held batch's
+//!   (`CommandBufferShared::footprint`: a step's, what `commit` bounded its uses by); the
+//!   completion turns wake it as batches complete while a gate is pending. A
 //!   batch whose step is a predicated loop's check alone waits for its own `VkQueue`'s work
 //!   alone; while the check's thread runs the loop's laying again, the batch waits as for a
 //!   making, which the thread's end wakes the thread for (`command_buffer/rerun.rs`).
@@ -170,6 +173,7 @@ pub(super) mod binary;
 pub(super) mod inbox;
 pub(super) mod left;
 pub(super) mod order;
+mod steps;
 
 use super::command_buffer::gate::Hold;
 use super::command_buffer::kept_barriers::KeptBarriers;
@@ -413,6 +417,8 @@ struct SchedulerShared {
     stalls: OnceLock<IdleStalls>,
     /// The passes' turns to run their submission handlers (the module docs).
     turns: Turns,
+    /// The host steps handed to the steps' thread (`steps.rs`).
+    steps: steps::Steps,
 }
 
 /// The passes' turns to run the submission handlers they took (the module docs): a pass that took
@@ -750,6 +756,7 @@ impl Scheduler {
             spare_logs: SpareLogs::default(),
             stalls: OnceLock::new(),
             turns: Turns::default(),
+            steps: steps::Steps::default(),
         });
         let thread = {
             let shared = Arc::clone(&shared);
@@ -924,7 +931,7 @@ impl Scheduler {
                         return (submitted, checked, left_over);
                     };
                     // None once the process is exiting, as the thread then runs nothing more.
-                    if !run_work(Kind::Check, check) {
+                    if !run_work(&self.shared, Kind::Check, check) {
                         return (submitted, checked, left_over);
                     }
                     checked += 1;
@@ -1108,6 +1115,7 @@ impl Scheduler {
             state.mark(self.shared.nudge.get());
         }
         self.shared.wake.notify_all();
+        self.shared.steps.stop();
         let mut thread = lock(&self.thread);
         let own = thread
             .as_ref()
@@ -1122,7 +1130,7 @@ impl Scheduler {
 
 /// The thread's loop. It ends when the device stops it, or once the process is exiting
 /// ([`exit_guard`]): what is held then stays held, as Metal's pending work stays pending.
-fn run(shared: &SchedulerShared) {
+fn run(shared: &Arc<SchedulerShared>) {
     exit_guard::serves_completion();
     // What its rounds let go of and the work they leave it, emptied after each waking and kept
     // with their room.
@@ -1216,7 +1224,7 @@ fn run(shared: &SchedulerShared) {
             &shared.inbox,
             &mut left,
             |left| round(shared, left, &mut passed),
-            run_work,
+            |kind, work| run_work(shared, kind, work),
         ) {
             None => return,
             Some(false) => {}
@@ -1288,23 +1296,18 @@ fn wait_for_gpu<'a>(
 }
 
 /// Run one piece of work the thread's passes left it, or a committing thread's pass took for it
-/// ([`claim_check`]), without the lock (a check runs the program's code; a step records, and may
-/// make what a dispatch makes), a section of the exit guard; false, with nothing run, once the
-/// process is exiting.
-fn run_work(kind: Kind, work: Work) -> bool {
+/// ([`claim_check`]), without the lock, a section of the exit guard: a check, which runs the
+/// program's code; or hand a step, which records and may make what a dispatch makes, to the steps'
+/// thread (`steps.rs`). False, with nothing run, once the process is exiting.
+fn run_work(shared: &Arc<SchedulerShared>, kind: Kind, work: Work) -> bool {
+    if kind == Kind::Step {
+        return steps::post(shared, work);
+    }
     let Some(busy) = exit_guard::enter() else {
         return false;
     };
     let (buffer, index) = &work;
-    match kind {
-        Kind::Step => {
-            buffer.host_step(*index);
-            for &call in exit_guard::HOST_STEP {
-                exit_guard::called(call);
-            }
-        }
-        Kind::Check => buffer.run_checks(*index),
-    }
+    buffer.run_checks(*index);
     drop(busy);
     // Out of the section: it may be the command buffer's last reference.
     drop(work);
@@ -2237,6 +2240,7 @@ fn gate_heads(state: &mut State, behind: &[u64], left: &mut Left<Work>, awaits: 
             || !binary.ready(&held.binary_needs)
             || event_waits(held).is_none()
             || !held.buffer.needs_host_step(held.index)
+            || held.buffer.stepping(held.index)
             || left.holds(Kind::Step, |(buffer, index)| {
                 buffer.same(&held.buffer) && *index == held.index
             })

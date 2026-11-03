@@ -288,7 +288,7 @@ fn unsized_points_are_announced_at_the_draw_the_commit_and_the_host_step() {
         let at = format!("an execution: {class:?} {count}, GPU-written {gpu_written}, on {name}");
         assert_eq!(icb.gpu_written(), gpu_written, "{at}");
         if gpu_written {
-            // The host step runs on the scheduler's thread once the work before it completed,
+            // The host step runs on the steps' thread once the work before it completed,
             // which may be before `commit` returns: after the commit either way.
             notices = [notices[0], 0, notices[1] + notices[2]];
         }

@@ -16,6 +16,8 @@
 //!   encoder of the command buffer used misses, counted in the execution report;
 //! - commands a kernel writes (`icb_render_replay_encode_draw_only`) are drawn by a host step,
 //!   announced once;
+//! - a record the GPU wrote naming a state the CPU set on none of the executed commands draws it,
+//!   its `VkPipeline` made by the host step and counted;
 //! - what Metal's validation stops, and a buffer of compute commands, is refused at the call;
 //! - indexed commands draw their indices as the encoder's indexed draws do, and patch commands (the
 //!   owned `rt6_patch_index` fixture) with their own factor buffer and their pipeline's control
@@ -44,6 +46,7 @@ use super::render_state::texture;
 use super::renders::public_render;
 use super::resource_ids::{distinct_sampler_states, UNLISTED};
 use super::{buffer_with, pipelines_settled, read_buffer, WAIT};
+use crate::air_library::AirLibrary;
 use crate::candidate::engine::graphics::Assembly;
 use crate::candidate::engine::resources::pixel_format;
 use crate::candidate::runtime_case::render_pipeline_descriptor;
@@ -55,7 +58,10 @@ use metal2vulkan::metal::{
     IndexType, IndirectCommandType, PixelFormat, PrimitiveType, RenderStages, ResourceUsage,
     TessellationControlPointIndexType, TessellationFactorStepFunction,
 };
-use metal2vulkan::pipeline::{ColorAttachmentDescriptor, RuntimeFact};
+use metal2vulkan::pipeline::{
+    ColorAttachmentDescriptor, RenderPipelineDescriptor, RuntimeFact, StageSource,
+};
+use metal2vulkan_devtools::{engine_dir, llvm_assemble_text};
 use metal2vulkan_runtime::{
     Attachment, Buffer, CommandBuffer, CommandBufferError, CommandBufferStatus, Degradation,
     Device, DrawPrimitiveType, DrawProblem, Error, EventRef, ExecutedPipeline, Execution, Heap,
@@ -1010,6 +1016,84 @@ fn a_host_step_draws_on_what_its_commit_compiled() {
         );
         assert_eq!(large(&command_buffer), vec![true; commands as usize]);
         assert_made_once(messages, &HOST_STEPS, &forced_with(device, &[]));
+    });
+}
+
+/// A state of [`render_template_state`]'s function under another name, made with
+/// `supportIndirectCommandBuffers`: it draws as the template's, from a variant of its own, so no
+/// `VkPipeline` of the template's serves its draws.
+fn renamed_template_state(device: &Device) -> RenderPipelineState {
+    const NAME: &str = "icb_render_replay_template";
+    let text = std::fs::read_to_string(engine_dir().join(format!("{NAME}.ll"))).unwrap();
+    let renamed = format!("{NAME}_renamed");
+    let bitcode = llvm_assemble_text(&text.replace(NAME, &renamed)).unwrap();
+    let library = device.new_library_with_air(&bitcode).unwrap();
+    let function = library.new_function_with_name(&renamed).unwrap();
+    let mut descriptor =
+        RenderPipelineDescriptor::new(StageSource::Function(function.function_descriptor()));
+    descriptor.rasterization_enabled = false;
+    descriptor.support_indirect_command_buffers = true;
+    device
+        .new_render_pipeline_state(&descriptor, &PipelineOptions::default())
+        .unwrap()
+}
+
+/// A record the GPU wrote naming a state the CPU set on none of the executed commands: the commit
+/// settles the states the CPU set (command 0's), and the host step makes the other state's
+/// `VkPipeline` itself, on the steps' thread, counted in `WorkCounts::host_step_pipelines_made`
+/// with the step in `host_steps_recorded` and `host_step_nanos`. A blit of an earlier command
+/// buffer copies another buffer's command, of its own state over window 1, into command 1. Both
+/// draw as Metal's, and the host step is announced once.
+#[test]
+fn a_host_step_makes_the_pipeline_of_a_state_only_a_gpu_written_record_names() {
+    on_device(|device, messages| {
+        let setup = Setup::new(device);
+        let other = renamed_template_state(device);
+        let queue = device.new_command_queue().unwrap();
+        let source = icb(device, &descriptor(), 1);
+        let copied = setup.command(&source, 0, 1);
+        copied.set_render_pipeline_state(&other).unwrap();
+        copied
+            .draw_primitives(PrimitiveType::Point, 0, 4, 1, 0)
+            .unwrap();
+        let target = icb(device, &descriptor(), 2);
+        setup
+            .command(&target, 0, 0)
+            .draw_primitives(PrimitiveType::Point, 0, 4, 1, 0)
+            .unwrap();
+        let copying = queue.command_buffer().unwrap();
+        let mut blit = copying.blit_command_encoder().unwrap();
+        blit.copy_indirect_command_buffer(&source, 0..1, &target, 1)
+            .unwrap();
+        blit.end_encoding().unwrap();
+        complete(&copying);
+        pipelines_settled(device);
+        let before = device.work_counts();
+        let command_buffer = queue.command_buffer().unwrap();
+        let mut encoder = command_buffer.render_command_encoder(&pass()).unwrap();
+        setup.resident(&mut encoder);
+        encoder.execute_commands_in_buffer(&target, 0..2).unwrap();
+        encoder.end_encoding().unwrap();
+        complete(&command_buffer);
+        let after = device.work_counts();
+        let drawn = |window| Drawn {
+            window,
+            start: 0,
+            count: 4,
+            instances: 1,
+            base: 0,
+        };
+        assert_eq!(setup.output(), expected(&[drawn(0), drawn(1)]));
+        assert_eq!(after.host_steps_recorded - before.host_steps_recorded, 1);
+        assert!(after.host_step_nanos > before.host_step_nanos);
+        assert!(
+            after.host_step_pipelines_made > before.host_step_pipelines_made,
+            "the step made the other state's pipeline: {} then {}",
+            before.host_step_pipelines_made,
+            after.host_step_pipelines_made
+        );
+        assert_made_once(messages, &HOST_STEPS, &forced_with(device, &[]));
+        drop(other);
     });
 }
 
@@ -2669,7 +2753,7 @@ fn a_host_step_s_variant_of_a_state_made_after_the_commit_shares_the_state_s_sam
 /// samples a texture through a sampler state its argument buffer holds (the committed public case
 /// `render_arguments::SAMPLED`), binds the device's neutrals its plan names (its set 1's heap
 /// array's neutral element and its argument samplers' neutrals), which the state's creation made
-/// on the program's thread: the step, on the scheduler's thread inside the exit guard's section,
+/// on the program's thread: the step, on the steps' thread inside the exit guard's section,
 /// makes no image, memory or submission of its own. The buffer's records are the GPU's to write (an earlier blit copied one),
 /// so its execution is a host step's; the command buffer waits for an event, and once the commit
 /// returned the test makes the state, encodes command 0 with it and the argument buffer on the

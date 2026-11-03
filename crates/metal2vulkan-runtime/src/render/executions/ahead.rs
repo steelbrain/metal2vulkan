@@ -1,6 +1,7 @@
 //! What a host step's recording of a [`DeferredPass`] needs that the commit makes ahead of it.
 //!
-//! A host step records the pass on the scheduler's thread, a serial point of the command buffers'
+//! A host step records the pass on the steps' thread (`scheduler/steps.rs`), a serial point of the
+//! command buffers'
 //! stream: the work before its batch completed and the batch waits for the step. So the commit of
 //! a pass its host step records makes, on the committing thread, what the step may need that the
 //! pass alone decides, whatever its commands turn out to be, and the step makes only what the

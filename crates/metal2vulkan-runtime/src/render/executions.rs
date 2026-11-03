@@ -27,14 +27,15 @@
 //!   execution of the pass runs on the GPU alone (`executions/gpu.rs`, which states which do and
 //!   when the decision is taken again), and otherwise the scheduler's host step records it once
 //!   the work before it completed, which the device announces once
-//!   (`Degradation::HostReplayedIndirectCommands`). The step draws in the large-buffer form,
-//!   whose variant no command's buffer lengths change (`BufferForms::Large`), and the commit
-//!   settles what it will draw (the step compiled each draw's variant and `VkPipeline` as it met
-//!   them, after the commit returned): for each state a record may name (the inherited one, else
-//!   every live state made with `supportIndirectCommandBuffers`), the variant and the `VkPipeline`
-//!   of a draw of each primitive type of its topology class, indexed or not, in the execution's
-//!   instance under the encoder's state at the call ([`DeferredPass::settle`]). The variant is the
-//!   one the state's creation compiled in the large-buffer form, which the commit looks up (the
+//!   (`Degradation::HostReplayedIndirectCommands`). The step draws in the large-buffer form, whose
+//!   variant no command's buffer lengths change (`BufferForms::Large`), and the commit settles what
+//!   it will draw (the step compiled each draw's variant and `VkPipeline` as it met them, after the
+//!   commit returned): for each state the records name as the CPU wrote them (the inherited one,
+//!   else each live state the CPU set on a command the execution may run, not the program's other
+//!   states made with `supportIndirectCommandBuffers`), the variant and the `VkPipeline` of a draw
+//!   of each primitive type of its topology class, indexed or not, in the execution's instance
+//!   under the encoder's state at the call ([`DeferredPass::settle`]). The variant is the one the
+//!   state's creation compiled in the large-buffer form, which the commit looks up (the
 //!   coordinator's ruling of 2026-10-07: where Metal compiles); the commit makes the `VkPipeline`s,
 //!   which the pass's instance and the encoder's state key. The step still makes what that leaves:
 //!   a tessellation or mesh pipeline's draws; the `VkPipeline` of a draw that fetches attachments,
@@ -42,12 +43,12 @@
 //!   or binds per-bind strides that are not dynamic state; a draw in a run of another shape; a
 //!   command whose buffers ask another variant all the same (the commit compiles that variant where
 //!   the encoder's state asks it, an inherited buffer slot bound with bytes among it); and a state
-//!   made after the commit. The commit makes the neutrals of the plans it settles, a state made
-//!   with `supportIndirectCommandBuffers` made, at its creation, those its variants' plans may bind
-//!   with nothing bound (`GraphicsState::make_neutrals`), and the commit makes the runs' passes
-//!   and memoryless backings ahead (`ahead.rs`), so the step, a serial point of the command
-//!   buffers' stream, seldom makes one; what nothing made before it, the step makes itself
-//!   (`neutral.rs`, `creation.rs`).
+//!   made after the commit or named by a record the GPU wrote. The commit makes the neutrals of the
+//!   plans it settles, a state made with `supportIndirectCommandBuffers` made, at its creation,
+//!   those its variants' plans may bind with nothing bound (`GraphicsState::make_neutrals`), and
+//!   the commit makes the runs' passes and memoryless backings ahead (`ahead.rs`), so the step, a
+//!   serial point of the command buffers' stream, seldom makes one; what nothing made before it,
+//!   the step makes itself (`neutral.rs`, `creation.rs`).
 //! - **Each command** draws as the encoder's `draw_primitives`, `draw_indexed_primitives` or
 //!   `draw_patches` would, through the same steps (`RenderCommandEncoder::draw`; part 5c for the
 //!   indexed and patch draws), into the instance the execution was encoded in, with the
@@ -2493,24 +2494,38 @@ impl RenderExecution {
     }
 
     /// Settle at commit, through an encoder of `core` that records nothing, what the host step's
-    /// draws of the commands compile ([`RenderCommandEncoder::settle_draws`]) for each state a
-    /// record may name, into `made`: the encoder's where the buffer inherits it, else each of
-    /// `states`, those made with `supportIndirectCommandBuffers` alive at the commit; over the
-    /// pass's `storage`, with `residency`, the command buffer's. Nothing where the buffer holds
-    /// no draw of primitives. Returns the core.
+    /// draws of the commands compile ([`RenderCommandEncoder::settle_draws`]) for each state the
+    /// records name as the CPU wrote them, into `made`: the encoder's where the buffer inherits
+    /// it, else each live state the CPU set on a command the execution may run
+    /// (`IndirectCommandBuffer::set_render_states`: of its range, or of the buffer for a range
+    /// read from a buffer); over the pass's `storage`, with `residency`, the command buffer's.
+    /// A state a record the GPU wrote names, the step meets as it is then. Nothing where the
+    /// buffer holds no draw of primitives. Returns the core.
     fn settle(
         &self,
         core: EncoderCore,
         (storage, residency): (PassStorage, &Residency),
-        states: &[RenderPipelineState],
         made: &mut Vec<SettledDraw>,
     ) -> EncoderCore {
         let draws = IndirectCommandType::DRAW.union(IndirectCommandType::DRAW_INDEXED);
+        if !self.icb.descriptor().command_types.intersects(draws) {
+            return core;
+        }
+        let set;
         let named = match &self.pipeline {
             Some(pipeline) => std::slice::from_ref(pipeline),
-            None => states,
+            None => {
+                let commands = match &self.range {
+                    ExecutionRange::Fixed(range) => range.clone(),
+                    ExecutionRange::Indirect(_) => {
+                        0..u32::try_from(self.icb.size()).unwrap_or(u32::MAX)
+                    }
+                };
+                set = self.icb.set_render_states(commands);
+                &set[..]
+            }
         };
-        if !self.icb.descriptor().command_types.intersects(draws) || named.is_empty() {
+        if named.is_empty() {
             return core;
         }
         let snapshot = &self.snapshot;
@@ -2855,6 +2870,42 @@ impl DeferredPass {
             aliased.as_deref().unwrap_or(&self.uses),
             None,
         );
+        Some(uses.finish())
+    }
+
+    /// What its host step's recording may use that Metal orders, where the GPU may write what
+    /// its executions read, for the scheduler's order across queues
+    /// (`CommandBufferShared::footprint`), with `residency`, its command buffer's: its attachments'
+    /// and steps' uses, as [`known_summary`](Self::known_summary) states them; every resource
+    /// made resident, with its usage (`Residency::bound_uses`); and what the step reads on the
+    /// host of each execution (`ExecutionRange::host_reads`). `None` where its commands may reach
+    /// more that Metal orders: an execution's inherited buffers, the pass's tile threadgroup
+    /// memory, a visibility result's query, or a shadowed texture's copies.
+    pub(crate) fn bound(
+        &self,
+        device: &Device,
+        residency: &Residency,
+    ) -> Option<Summary<ResourceKey>> {
+        let reaches_more = |execution: &RenderExecution| {
+            execution.icb.descriptor().inherit_buffers
+                || execution.reaches_tile_memory()
+                || execution.lent.is_some()
+        };
+        if !self.shadows.is_empty() || self.executions.iter().any(reaches_more) {
+            return None;
+        }
+        let aliased = device.shared().aliases.augment(&self.uses);
+        let mut uses = EncoderUses::new(false);
+        uses.record(
+            render_target::ATTACHMENT_STAGES,
+            aliased.as_deref().unwrap_or(&self.uses),
+            None,
+        );
+        let mut reached = residency.bound_uses();
+        for execution in &self.executions {
+            reached.extend(execution.range.host_reads(&execution.icb));
+        }
+        uses.record(vk::PipelineStageFlags2::ALL_COMMANDS, &reached, None);
         Some(uses.finish())
     }
 
@@ -3390,15 +3441,15 @@ impl DeferredPass {
 
     /// Settle at commit what the host step that records the pass would compile
     /// ([`RenderExecution::settle`]): for each execution, the variants and `VkPipeline`s of the
-    /// draws of each state its records may name, the encoder's where its buffer inherits it,
-    /// else those made with `supportIndirectCommandBuffers` alive now. Each such state's creation
-    /// compiled its variant in the large-buffer form, which the commit looks up, and the commit
-    /// begins the `VkPipeline`s: under `PipelineWaitPolicy::Bounded` (the default) each making is
-    /// handed to the device's pool (`RenderVariant::settle_graphics_pipeline`), kept here for the
-    /// host step to wait for until its command buffer's bound at most, so the commit compiles none
-    /// on the program's thread; under `Exact` made now. It compiles a variant only where the
-    /// encoder's state asks for another, and the step only where a command's own buffers or
-    /// strides ask for another, or the draw records into a run of another shape. Returns what it
+    /// draws of each state its records name as the CPU wrote them, the encoder's where its buffer
+    /// inherits it, else the live states the CPU set on the commands it may run. Each such state's
+    /// creation compiled its variant in the large-buffer form, which the commit looks up, and the
+    /// commit begins the `VkPipeline`s: under `PipelineWaitPolicy::Bounded` (the default) each
+    /// making is handed to the device's pool (`RenderVariant::settle_graphics_pipeline`), kept here
+    /// for the host step to wait for until its command buffer's bound at most, so the commit
+    /// compiles none on the program's thread; under `Exact` made now. It compiles a variant only
+    /// where the encoder's state asks for another, and the step only where a command's own buffers
+    /// or strides ask for another, or the draw records into a run of another shape. Returns what it
     /// made, which the command buffer holds until it completes; what it cannot settle, the step
     /// meets as it is then.
     pub(crate) fn settle(&self, command_buffer: &CommandBuffer) -> Vec<SettledDraw> {
@@ -3413,13 +3464,9 @@ impl DeferredPass {
         let Ok(mut core) = EncoderCore::segment(command_buffer, false) else {
             return made;
         };
-        let states = match self.executions.iter().any(|e| e.pipeline.is_none()) {
-            true => RenderPipelineState::indirect_states(command_buffer.device()),
-            false => Vec::new(),
-        };
         for execution in &self.executions {
             let inputs = (self.storage.clone(), &residency);
-            core = execution.settle(core, inputs, &states, &mut made);
+            core = execution.settle(core, inputs, &mut made);
         }
         // The makings handed to the pool, which the host step waits for.
         lock(&self.settled).extend(made.iter().filter_map(|(_, drawn)| match drawn {

@@ -136,6 +136,9 @@ use std::sync::atomic::{AtomicBool, AtomicU64, AtomicU8, Ordering};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, OnceLock};
 use std::time::{Duration, Instant};
 
+/// No batch's host step is handed to the steps' thread (`CommandBufferShared::stepping`).
+const NOT_STEPPING: u64 = u64::MAX;
+
 /// A scheduled or completed handler (`MTLCommandBufferHandler`): called once with the command buffer, on one of the
 /// device's handler threads, in its queue's order. A panic inside it is caught. A submission
 /// handler ([`CommandBuffer::add_submission_handler`]) is one too, called on the thread that
@@ -258,6 +261,11 @@ pub(super) struct CommandBufferShared {
     /// step records: the recordings after its commit into its pool take turns, as Vulkan
     /// synchronizes a pool's command buffers' recording externally.
     reencoding: Mutex<()>,
+    /// The batch whose host step the scheduler handed to its steps' thread and which has not
+    /// ended (`scheduler/steps.rs`), [`NOT_STEPPING`] for none: the batch waits for it, and no
+    /// pass hands it over again. A command buffer steps one batch at a time: only its line's
+    /// head steps.
+    stepping: AtomicU64,
     /// What its commands did that the device's logs of host pages hear of at its commit
     /// (`dirty_pages.rs`), and its copied host buffers' merges back (`copied.rs`): collected
     /// only while the device copied a shadow over logged pages in, imports logged pages in place,
@@ -1006,7 +1014,7 @@ impl State {
     }
 
     /// Hold `table`, the live buffers' table a host step resolves against, each once: so the
-    /// step's own hold, let go of on the scheduler's thread, is never the last of a released
+    /// step's own hold, let go of on the steps' thread, is never the last of a released
     /// buffer's pages, whose release runs the program's code (`exit_guard::program_release`).
     /// From the first submission on the commands the step records may reach the table's
     /// buffers, so the command buffer holds it until it completes, as it holds its first
@@ -1672,8 +1680,10 @@ impl State {
                 inputs,
                 retained,
                 pipelines,
+                bound,
             } = prepared;
             segment.gpu_alone = for_good && recorded.is_some();
+            segment.bound = bound;
             segment.recorded = recorded;
             segment.stepped |= for_good;
             segment.pipelines |= pipelines;
@@ -2003,6 +2013,7 @@ impl CommandBuffer {
             fill_slot: Mutex::new([0; 16]),
             reencode: AtomicU64::new(0),
             reencoding: Mutex::new(()),
+            stepping: AtomicU64::new(NOT_STEPPING),
             dirty: Mutex::new(DirtyCommit::default()),
             unnoted: AtomicBool::new(false),
             raws_ended: AtomicU64::new(0),
@@ -3789,6 +3800,9 @@ impl CommandBufferShared {
     /// write, not recorded since, or an indirect sparse update of it reads regions the GPU may
     /// write, not read since.
     pub(crate) fn needs_host_step(&self, index: usize) -> bool {
+        if self.stepping(index) {
+            return true;
+        }
         let state = lock(&self.state);
         // After a failed step the batch goes to its submission, which fails.
         if state.step_failure.is_some() {
@@ -3804,6 +3818,22 @@ impl CommandBufferShared {
                 .iter()
                 .flat_map(|encoder| &encoder.sparse)
                 .any(SparseUpdate::needs_step)
+    }
+
+    /// The scheduler handed batch `index`'s host step to its steps' thread (`scheduler/steps.rs`):
+    /// the batch waits for it until [`end_step`](Self::end_step).
+    pub(crate) fn begin_step(&self, index: usize) {
+        self.stepping.store(index as u64, Ordering::Release);
+    }
+
+    /// The steps' thread ended the host step it was handed ([`begin_step`](Self::begin_step)).
+    pub(crate) fn end_step(&self) {
+        self.stepping.store(NOT_STEPPING, Ordering::Release);
+    }
+
+    /// Whether the steps' thread holds batch `index`'s host step, handed to it and not ended.
+    pub(crate) fn stepping(&self, index: usize) -> bool {
+        self.stepping.load(Ordering::Acquire) == index as u64
     }
 
     /// What the host step of batch `index` waits for ([`needs_host_step`](Self::needs_host_step)):
@@ -3864,8 +3894,11 @@ impl CommandBufferShared {
     /// its encoders' summaries and its segments' recordings, and for a segment its host step
     /// records for the pipelines it waits for alone, what its work uses, known at encode time
     /// (`Segment::known_summary`): Metal makes the pipeline at `newRenderPipelineState`, so only a
-    /// batch that shares a resource with it waits for it. `None` while some of it is not known: a
-    /// segment its host step records (or records again) for what the GPU may write, one its
+    /// batch that shares a resource with it waits for it; and for a segment its host step records
+    /// for what the GPU may write, what `commit` bounded its uses by (`Segment::bound`: what Metal
+    /// orders its commands' reach by, the resources made resident and the records), so a later
+    /// batch of another queue that shares nothing with it is not held behind its gate and step.
+    /// `None` while some of it is not known: such a segment `commit` could not bound, one its
     /// submission records (a scrub), or a resource state encoder's update, whose uses its
     /// submission adds. A loop's check adds what its laying's parts use, which it may run again.
     pub(crate) fn footprint(&self, index: usize) -> Option<Footprint<ResourceKey>> {
@@ -3895,6 +3928,9 @@ impl CommandBufferShared {
                     {
                         summaries.push(&recording.summary)
                     }
+                    // One its host step records for what the GPU may write: what `commit` bounded
+                    // its recording's uses by, where it could (`Segment::bound`).
+                    _ if segment.steps_after_the_gpu() => summaries.push(segment.bound.as_ref()?),
                     _ => known.push(segment.known_summary(&self.device)?),
                 }
             }
@@ -3902,7 +3938,8 @@ impl CommandBufferShared {
         Some(Footprint::of(summaries.into_iter().chain(&known)))
     }
 
-    /// The host step of batch `index` (`deferred.rs`): on the scheduler's thread, without its lock,
+    /// The host step of batch `index` (`deferred.rs`): on the steps' thread (`scheduler/steps.rs`),
+    /// without the scheduler's lock,
     /// inside a section of the exit guard, once every batch submitted before it completed. Each
     /// segment of the batch that needs it is recorded from what its work reads as it stands now and
     /// what `commit` left for the step (`Deferred::step`); the recording `commit` made of one, if

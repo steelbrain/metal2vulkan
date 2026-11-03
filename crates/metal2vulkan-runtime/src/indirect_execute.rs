@@ -99,10 +99,12 @@ use super::indirect_command_buffer::{
 };
 use super::pipeline::{BufferForms, ComputePipelineState, IndirectStates, Variant};
 use super::predication::HostGate;
-use super::residency::Residency;
-use super::tracker::Barrier;
+use super::residency::{whole_use, Residency};
+use super::resource::ResourceKey;
+use super::tracker::{Access, Barrier, EncoderUses, Summary, Use};
 use super::upload::Upload;
 use super::Device;
+use ash::vk;
 use metal2vulkan::bind::indirect_commands::{Action, BufferBinding, BufferStage, CommandRecord};
 use metal2vulkan::bind::{Dispatch, ImageblockSize, ReplayFaults, StageInRegion};
 use metal2vulkan::error::{BindError, Feature, Unsupported};
@@ -194,6 +196,22 @@ pub(super) enum ExecutionRange {
 }
 
 impl ExecutionRange {
+    /// What a host step of an execution of `icb`'s commands over this range reads on the host of
+    /// what the GPU may write, for the scheduler's order across queues
+    /// (`CommandBufferShared::footprint`): the records' buffer, and the copy a range read from a
+    /// buffer is read from, each read in every stage.
+    pub(super) fn host_reads(&self, icb: &IndirectCommandBuffer) -> Vec<Use<ResourceKey>> {
+        let read = Access::new(
+            vk::PipelineStageFlags2::ALL_COMMANDS,
+            vk::AccessFlags2::MEMORY_READ,
+        );
+        let mut reads = vec![whole_use(icb.storage(), read, Access::NONE)];
+        if let ExecutionRange::Indirect(copy) = self {
+            reads.push(whole_use(copy, read, Access::NONE));
+        }
+        reads
+    }
+
     /// Whether the range is read from a buffer, which the GPU may write
     /// ([`ExecutionRange::Indirect`]): a host step records its execution, whoever wrote the
     /// records.
@@ -456,6 +474,26 @@ impl Execute {
             variants.extend(prepare_variants(device, &tables).into_iter().flatten());
         }
         Settled { states, variants }
+    }
+
+    /// What its host step's recording may use that Metal orders, for the scheduler's order across
+    /// queues (`CommandBufferShared::footprint`), with `residency`, its command buffer's: every
+    /// resource made resident, with its usage (`Residency::bound_uses`), and what the step reads
+    /// on the host ([`ExecutionRange::host_reads`]). `None` where its commands may reach more
+    /// that Metal orders: the encoder's buffers, where the buffer inherits them; and inside a
+    /// block of command predication, whose counter the step reads.
+    pub(super) fn bound(&self, residency: &Residency) -> Option<Summary<ResourceKey>> {
+        if self.icb.descriptor().inherit_buffers
+            || self.gate.is_some()
+            || self.preprocess_gate.is_some()
+        {
+            return None;
+        }
+        let mut uses = residency.bound_uses();
+        uses.extend(self.range.host_reads(&self.icb));
+        let mut bound = EncoderUses::new(false);
+        bound.record(vk::PipelineStageFlags2::ALL_COMMANDS, &uses, None);
+        Some(bound.finish())
     }
 
     /// Whether it reads its range from a buffer, which the GPU may write

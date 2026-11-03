@@ -95,6 +95,9 @@ pub(super) struct Prepared {
     /// `commit` left its recording to a host step for the pipelines it records, being made (or
     /// failed) then (`render/pending.rs`).
     pub(super) pipelines: bool,
+    /// Where its host step records it for what the GPU may write, what the step's recording may
+    /// use that Metal orders (`Segment::bound`).
+    pub(super) bound: Option<Summary<ResourceKey>>,
 }
 
 impl Deferred {
@@ -190,6 +193,7 @@ impl Deferred {
                         inputs,
                         retained,
                         pipelines: false,
+                        bound: None,
                     });
                 }
                 let residency = command_buffer.residency()?.kernel();
@@ -201,6 +205,7 @@ impl Deferred {
                     inputs: StepInputs::Settled(states),
                     retained: Some(Box::new(variants)),
                     pipelines: false,
+                    bound: execute.bound(&residency),
                 })
             }
             Deferred::Execute(execute) => {
@@ -214,6 +219,7 @@ impl Deferred {
                     inputs: StepInputs::Unforeseen(unforeseen),
                     retained: None,
                     pipelines: false,
+                    bound: None,
                 })
             }
             Deferred::Dispatch(dispatch) if step => Ok(Prepared {
@@ -224,6 +230,7 @@ impl Deferred {
                     dispatch.settle(device, &command_buffer.residency()?.kernel()),
                 )),
                 pipelines: false,
+                bound: None,
             }),
             Deferred::Dispatch(_) => Err(internal(
                 "an indirect dispatch recorded before the work it waits for completed",
@@ -234,6 +241,7 @@ impl Deferred {
                 inputs: StepInputs::None,
                 retained: None,
                 pipelines: false,
+                bound: None,
             }),
             // Recorded now for good where every execution whose records the GPU may write runs
             // on the GPU alone (`render/executions/gpu.rs`). Otherwise its step's draws compile
@@ -249,6 +257,7 @@ impl Deferred {
                         inputs,
                         retained: None,
                         pipelines: false,
+                        bound: None,
                     });
                 }
                 pass.make_ahead(command_buffer);
@@ -258,6 +267,7 @@ impl Deferred {
                     inputs: StepInputs::RenderPass,
                     retained: Some(Box::new(pass.settle(command_buffer))),
                     pipelines: pass.making() || pass.failed(),
+                    bound: pass.bound(device, &command_buffer.residency()?),
                 })
             }
             // A pass of draws whose pipelines are being made, or one of which failed, is
@@ -275,6 +285,7 @@ impl Deferred {
                         inputs: StepInputs::RenderPass,
                         retained: None,
                         pipelines: true,
+                        bound: None,
                     });
                 }
                 Ok(Prepared {
@@ -283,6 +294,7 @@ impl Deferred {
                     inputs: StepInputs::RenderPass,
                     retained: None,
                     pipelines: false,
+                    bound: None,
                 })
             }
             // Its host step reads the unit's halt word once the laying completed.
@@ -292,6 +304,7 @@ impl Deferred {
                 inputs: StepInputs::Loop,
                 retained: None,
                 pipelines: false,
+                bound: None,
             }),
             // Recorded now where its pipelines are made; else by a host step once they are,
             // which makes again one whose making failed.
@@ -306,6 +319,7 @@ impl Deferred {
                     inputs: StepInputs::Dispatch,
                     retained: None,
                     pipelines: later,
+                    bound: None,
                 })
             }
         }
@@ -349,7 +363,8 @@ impl Deferred {
         }
     }
 
-    /// Its host step, on the scheduler's thread with no lock of `command_buffer` held: its
+    /// Its host step, on the steps' thread (`scheduler/steps.rs`) with no lock of `command_buffer`
+    /// held: its
     /// recording from what it reads now and `inputs`. An execution's records name their states
     /// among those `commit` settled, or for one `commit` recorded from the CPU's records, those
     /// `use_resource` settled since. An indirect dispatch's arguments state its size. A render

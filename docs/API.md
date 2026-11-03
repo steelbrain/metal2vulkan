@@ -1780,14 +1780,17 @@ bound.
   states past twelve pass 512, and where its commands times its states pass 32,768. Every other
   execution runs on the GPU alone and announces nothing. Cost: one GPU-to-CPU round trip per
   execution: its command buffer's work before it, and every batch submitted before that on any
-  queue, completes before the CPU records its commands from their records and submits the rest; the
-  device's scheduler submits nothing else while it records them, and the first command of a
-  threadgroup size or threadgroup lengths its pipeline state has not dispatched makes that
-  VkPipeline then. The commands run in the large-buffer form (their range-limited buffer slots at
-  device addresses, with in-shader bounds checks), whose variants the commit compiles for every
-  pipeline state a record may name (or, for an execution committed before the buffer was made
-  resident for writing, the use_resource call that made it so); without device addresses, a
-  command's first buffer shape compiles its variant then.
+  queue, completes before the CPU records its commands from their records, on a thread of the
+  runtime's, and submits the rest; meanwhile the device's other batches go, but for a later one
+  that shares a resource the execution may reach (one made resident, the records), and the first
+  command of a threadgroup size or threadgroup lengths its pipeline state has not dispatched makes
+  that VkPipeline then, as does a render command's draw of a state the CPU set on none of the
+  commands. The commands run in the large-buffer form (their range-limited buffer slots at device
+  addresses, with in-shader bounds checks), whose variants the commit compiles for every pipeline
+  state a record may name (for a render execution, every state the CPU set on its commands; or,
+  for an execution committed before the buffer was made resident for writing, the use_resource
+  call that made it so); without device addresses, a command's first buffer shape compiles its
+  variant then.
 - `metal2vulkan-degrade-uncalibrated-gpu-times` (precision). `UncalibratedGpuTimes`: A command
   buffer's GPU times on a device that calibrates its timestamps against no host clock the runtime
   reads (no `VK_KHR_calibrated_timestamps` or `VK_EXT_calibrated_timestamps` with the device's time

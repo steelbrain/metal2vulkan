@@ -89,6 +89,8 @@ use super::key_hash::KeyMap;
 use super::live_buffers::LiveTable;
 use super::resource::{ResourceKey, ResourceRef};
 use super::texture::Texture;
+use super::tracker::{Access, Use, UseRange};
+use ash::vk;
 use metal2vulkan::bind::{ResidentRange, ResourceClass, UsedResource};
 use metal2vulkan::metal::{RenderStages, ResourceUsage};
 use metal2vulkan::pipeline::{BindingSource, PipelineLayout, Stage, SyntheticBinding};
@@ -148,6 +150,18 @@ pub(super) struct Residency {
     /// The module docs' generation: 0 while it holds nothing it was given, else one no other
     /// residency of the process had, drawn at its last change.
     generation: u64,
+}
+
+/// `read` and `write` of all of `buffer`'s bytes.
+pub(super) fn whole_use(buffer: &Buffer, read: Access, write: Access) -> Use<ResourceKey> {
+    let (identity, range) = buffer.tracked(0..buffer.length());
+    Use {
+        key: identity.key,
+        tracked: identity.tracked,
+        range: UseRange::Bytes(range),
+        read,
+        write,
+    }
 }
 
 /// A heap an encoder used (`Residency::heaps`).
@@ -404,6 +418,35 @@ impl Residency {
     /// The resources made resident.
     pub(super) fn resources(&self) -> impl Iterator<Item = &Used> {
         self.used.iter().map(|(used, ..)| used)
+    }
+
+    /// What a recording that may reach every resource it holds may use of them, for the
+    /// scheduler's order across queues (`CommandBufferShared::footprint`): each buffer, heap's
+    /// buffer and indirect command buffer's records over all their bytes, and each texture over
+    /// its whole image, read where its usage reads or samples and written where it writes, in
+    /// every stage. Metal orders a command's reach of a resource by the usage it was made
+    /// resident with; what the commands reach unnamed (`live_buffers.rs`) it does not order.
+    pub(super) fn bound_uses(&self) -> Vec<Use<ResourceKey>> {
+        let stages = vk::PipelineStageFlags2::ALL_COMMANDS;
+        (self.used.iter())
+            .map(|(used, usage, _)| {
+                let reads = usage.intersects(ResourceUsage::READ.union(ResourceUsage::SAMPLE));
+                let read = match reads {
+                    true => Access::new(stages, vk::AccessFlags2::MEMORY_READ),
+                    false => Access::NONE,
+                };
+                let write = match usage.contains(ResourceUsage::WRITE) {
+                    true => Access::new(stages, vk::AccessFlags2::MEMORY_WRITE),
+                    false => Access::NONE,
+                };
+                let bytes = match used {
+                    Used::Texture(texture) => return texture.bound_use(read, write),
+                    Used::Buffer(buffer) | Used::Heap { bytes: buffer, .. } => buffer,
+                    Used::IndirectCommandBuffer(icb) => icb.storage(),
+                };
+                whole_use(bytes, read, write)
+            })
+            .collect()
     }
 
     /// The heaps used (`use_heap`), a sparse heap among them.

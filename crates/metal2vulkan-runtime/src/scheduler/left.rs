@@ -1,10 +1,11 @@
 //! What the scheduler's passes leave its thread to do without the lock (a batch's submission
-//! checks, a batch's host step), and the thread's way through it once woken ([`work_through`]).
+//! checks; a batch's host step, which it hands to the steps' thread, `steps.rs`), and the thread's
+//! way through it once woken ([`work_through`]).
 //!
 //! - **Commits first.** Before each piece of work, the thread makes rounds for as long as the
 //!   inbox holds commits ([`Inbox::holds_commits`]): a commit left to the thread while a round's
 //!   pass held the lock (`inbox.rs`) is taken in by the next round, never after a piece of work,
-//!   which runs the program's code (a check) or records (a step). Those rounds end at the first
+//!   which runs the program's code (a check) or hands a step over. Those rounds end at the first
 //!   that leaves the inbox without one; while commits keep coming during each of the thread's
 //!   passes, its work waits for them.
 //! - **In the order found.** The work runs in the order the thread's rounds found it, a round's
@@ -19,7 +20,7 @@ use std::collections::VecDeque;
 pub(crate) enum Kind {
     /// A batch's submission checks (`command_buffer/checks.rs`).
     Check,
-    /// A batch's host step.
+    /// A batch's host step, handed to the steps' thread (`steps.rs`).
     Step,
 }
 

@@ -5,7 +5,8 @@
 //!
 //! Each is made where it is first needed: on the program's thread, in a section of the device's
 //! lowering thread, which lowers render encoders' calls (`render/lowering_worker.rs`), or in a host
-//! step (`exit_guard::host_step`) on the scheduler's thread, an object no earlier settle made (a
+//! step (`exit_guard::host_step`) on the steps' thread (`scheduler/steps.rs`), an object no earlier
+//! settle made (a
 //! state made after its command buffer's commit, whose run needs an attachment's stand-in, a
 //! shadow, or a pass and framebuffer of its own shape). So the four, and an image's memory
 //! requirements and binding, are in the guard's table (`exit_guard::Call`) and among the calls a

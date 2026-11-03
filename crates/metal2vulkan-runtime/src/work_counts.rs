@@ -92,6 +92,9 @@ pub(crate) struct Counters {
     draws_dropped_still_making: AtomicU64,
     dispatches_dropped_still_making: AtomicU64,
     host_step_sampler_sets_made: AtomicU64,
+    host_steps_recorded: AtomicU64,
+    host_step_nanos: AtomicU64,
+    host_step_pipelines_made: AtomicU64,
     creation_pipelines_made: AtomicU64,
     creations_left_making: AtomicU64,
     creation_pipelines_drawn: AtomicU64,
@@ -950,9 +953,13 @@ impl Counters {
     }
 
     /// A draw handed the making of its `VkPipeline` to the device's pool and went on
-    /// (`render/pending.rs`).
+    /// (`render/pending.rs`): one a host step began among them (`host_step_pipelines_made`).
     pub(crate) fn pipeline_pooled(&self) {
         self.pipelines_pooled.fetch_add(1, Ordering::Relaxed);
+        if crate::exit_guard::in_host_step() {
+            self.host_step_pipelines_made
+                .fetch_add(1, Ordering::Relaxed);
+        }
     }
 
     /// A draw or dispatch whose key's `VkPipeline` was not made took its general form's
@@ -1031,6 +1038,10 @@ impl Counters {
     /// `pipeline/graphics.rs`).
     pub(crate) fn variant_pipeline_made(&self) {
         self.variant_pipelines_made.fetch_add(1, Ordering::Relaxed);
+        if crate::exit_guard::in_host_step() {
+            self.host_step_pipelines_made
+                .fetch_add(1, Ordering::Relaxed);
+        }
     }
 
     /// A variant's making waited for its twin's in the air before its own (`pipeline/flight.rs`).
@@ -1174,6 +1185,15 @@ impl Counters {
     pub(crate) fn host_step_sampler_set_made(&self) {
         self.host_step_sampler_sets_made
             .fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// The steps' thread recorded a batch's host step, which took `took` (`scheduler/steps.rs`).
+    pub(crate) fn host_step_recorded(&self, took: std::time::Duration) {
+        self.host_steps_recorded.fetch_add(1, Ordering::Relaxed);
+        self.host_step_nanos.fetch_add(
+            u64::try_from(took.as_nanos()).unwrap_or(u64::MAX),
+            Ordering::Relaxed,
+        );
     }
 
     /// A state's creation made a `VkPipeline` of `predicted` (`pipeline/predicted.rs`,
@@ -3484,6 +3504,21 @@ pub struct WorkCounts {
     /// for the encoder's sRGB or YCbCr textures, that bakes samplers no variant of the program's
     /// made).
     pub host_step_sampler_sets_made: u64,
+    /// Batches' host steps the steps' thread recorded (`scheduler/steps.rs`): each batch whose
+    /// segments a host step records, once, apart from the scheduler's thread, which submits other
+    /// queues' batches meanwhile.
+    pub host_steps_recorded: u64,
+    /// Nanoseconds the steps' thread spent recording those host steps
+    /// ([`host_steps_recorded`](Self::host_steps_recorded)): the records read, the commands
+    /// recorded, and what a step made, the `VkPipeline`s no settle made before it among them
+    /// ([`host_step_pipelines_made`](Self::host_step_pipelines_made)).
+    pub host_step_nanos: u64,
+    /// `VkPipeline`s of states' variants a host step began making itself, made on its thread or
+    /// handed to the device's pool and waited for: a draw of a state no settle at commit made
+    /// ahead (a state a record the GPU wrote names, or one made after the commit), or a
+    /// dispatch's region no earlier dispatch made. Their making's time is part of
+    /// [`host_step_nanos`](Self::host_step_nanos).
+    pub host_step_pipelines_made: u64,
     /// `VkPipeline`s states' creations made: each render state's predicted key
     /// (`pipeline/predicted.rs`), and each compute state's predicted region
     /// (`pipeline/dispatch_making.rs`).
@@ -3950,8 +3985,8 @@ pub struct WorkCounts {
     /// (`texture/twin_decode.rs`); every head while an untracked texture's is left.
     pub heads_held_for_decodes: u64,
     /// Heads found held because their host step has not been recorded: it waits for a pipeline it
-    /// records, or at its gate (`heads_waiting_at_their_gate`), or it is queued for the
-    /// scheduler's thread, which runs one at a time between its looks.
+    /// records, or at its gate (`heads_waiting_at_their_gate`), or it is queued for the steps'
+    /// thread or being recorded there (`scheduler/steps.rs`), which records one at a time.
     pub heads_held_for_host_steps: u64,
     /// Heads found held because their command buffer's submission checks have not run
     /// (`command_buffer/checks.rs`): the checks wait for an event value to be reached
@@ -3967,7 +4002,9 @@ pub struct WorkCounts {
     /// its submission checks) must not let a later commit's conflicting batch go first. This is
     /// the one hold that crosses logical queues and `VkQueue`s, and a batch whose uses are not
     /// all known yet (work a host step or its submission records, `tracker::ordered`'s `None`)
-    /// conflicts with every batch that makes a tracked use or names a fence.
+    /// conflicts with every batch that makes a tracked use or names a fence, but for a host
+    /// step's execution whose uses `commit` bounded (`Segment::bound`: the resources made
+    /// resident and the records), which conflicts with what shares those.
     pub heads_held_for_earlier_commits: u64,
     /// Times a look left a head that needs a host step waiting at its gate: the step reads what
     /// the GPU may write, so it waits until every `VkQueue` completed what was submitted to it
@@ -5568,6 +5605,9 @@ impl Device {
             host_step_sampler_sets_made: counters
                 .host_step_sampler_sets_made
                 .load(Ordering::Relaxed),
+            host_steps_recorded: counters.host_steps_recorded.load(Ordering::Relaxed),
+            host_step_nanos: counters.host_step_nanos.load(Ordering::Relaxed),
+            host_step_pipelines_made: counters.host_step_pipelines_made.load(Ordering::Relaxed),
             creation_pipelines_made: counters.creation_pipelines_made.load(Ordering::Relaxed),
             creations_left_making: counters.creations_left_making.load(Ordering::Relaxed),
             creation_pipelines_drawn: counters.creation_pipelines_drawn.load(Ordering::Relaxed),
