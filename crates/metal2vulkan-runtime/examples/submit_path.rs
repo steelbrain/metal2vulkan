@@ -188,7 +188,7 @@ fn group_of(comm: &str) -> &'static str {
         c if c.starts_with("metal2vulkan-qu") => "queue-waiters",
         c if c.starts_with("metal2vulkan-ha") => "handlers",
         c if c.starts_with("metal2vulkan") => "other-m2v",
-        "submit_path" => "committer+main",
+        c if c.starts_with("submit_path") => "committer+main",
         _ => "driver/other",
     }
 }
@@ -293,6 +293,17 @@ fn cpu_by_group() -> Vec<(String, u64)> {
     add("committer".to_owned(), own);
     add("all-but-committer".to_owned(), process.saturating_sub(own));
     groups
+}
+
+/// This thread's CPU so far, in nanoseconds.
+fn thread_cpu_nanos() -> u64 {
+    // SAFETY: a plain call with an out-parameter of the right type.
+    let spec = unsafe {
+        let mut spec: libc::timespec = std::mem::zeroed();
+        libc::clock_gettime(libc::CLOCK_THREAD_CPUTIME_ID, &mut spec);
+        spec
+    };
+    spec.tv_sec as u64 * 1_000_000_000 + spec.tv_nsec as u64
 }
 
 /// The CPU each group spent between `before` and `after`, per command buffer, in microseconds.
@@ -400,29 +411,33 @@ fn threads(device: &Device, threads: usize) {
     std::thread::sleep(Duration::from_millis(200));
     let before = cpu_by_group();
     let start = Instant::now();
-    let count: usize = std::thread::scope(|scope| {
+    // Each committing thread's own CPU, read before it ends (its schedstat goes with it).
+    let (count, committers): (usize, u64) = std::thread::scope(|scope| {
         let running: Vec<_> = (queues.iter())
             .map(|(queue, target)| {
                 scope.spawn(move || {
-                    let mut count = 0;
+                    let (mut count, began) = (0, thread_cpu_nanos());
                     while start.elapsed().as_secs_f64() < RATE_SECONDS {
                         commit(&tiny(queue, target, (Callback::Completed, true), |_| {}));
                         count += 1;
                     }
-                    count
+                    (count, thread_cpu_nanos() - began)
                 })
             })
             .collect();
-        running
-            .into_iter()
+        (running.into_iter())
             .map(|thread| thread.join().unwrap())
-            .sum()
+            .fold((0, 0), |(count, nanos), (more, spent)| {
+                (count + more, nanos + spent)
+            })
     });
     let elapsed = start.elapsed().as_secs_f64();
     let after = cpu_by_group();
     println!(
-        "threads {threads}: {:.0} command buffers a second ({count} in {elapsed:.2} s)",
-        count as f64 / elapsed
+        "threads {threads}: {:.0} command buffers a second ({count} in {elapsed:.2} s), \
+         committing threads {:.2} us of CPU per command buffer",
+        count as f64 / elapsed,
+        committers as f64 / 1e3 / count as f64
     );
     print_cpu(&format!("threads {threads}"), &before, &after, count);
     for (queue, _) in &queues {
