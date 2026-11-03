@@ -1,4 +1,4 @@
-//! Canonicalization: entry selection, linking, function-constant baking, SCCP, inlining.
+//! Canonicalization: entry selection, linking, function-constant baking, SCCP, inlining, unrolling.
 //!
 //! [`specialize_linked`] turns a decoded module, its ABI, a [`SpecRequest`], and the pipeline's
 //! linked functions into one [`Entry`] ([`specialize`] links none): a
@@ -31,7 +31,9 @@
 //! 7. **SCCP** over the inlined entry, including `air.is_function_constant_defined`, loads of
 //!    bound constants, and loads of the integer fields of a constant-space global whose value is
 //!    its initializer (`const_loads`); unreachable blocks are deleted. A value use of an unsupplied
-//!    constant that survives is `Error::NeedsInput(FunctionConstant)`.
+//!    constant that survives is `Error::NeedsInput(FunctionConstant)`. **Unrolling**: a loop whose
+//!    trip count SCCP made constant, and whose counter decides a branch of its body, is unrolled
+//!    within fixed ceilings, and SCCP runs again over the copies (`unroll`).
 //! 8. **Post-check**: no unknown intrinsic, indirect call, or call to an undefined non-intrinsic
 //!    function survives, and no reachable branch tests `undef`. A table call's refused candidate,
 //!    a table call no linked function answers, and a function pointer used as a value are refused
@@ -108,6 +110,7 @@ mod static_init;
 mod table_copy;
 #[cfg(test)]
 mod tests;
+mod unroll;
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
@@ -577,19 +580,7 @@ pub fn specialize_dynamic(
     let body = async_copy::expand(body, &mut parts, ep, m)?;
 
     // SCCP. The body it read is freed as soon as it has run.
-    let solved = {
-        let mut cx = sccp::Context {
-            folder: fold::Folder {
-                types: &parts.types,
-                consts: &mut parts.consts,
-                held: 0,
-            },
-            globals: &parts.globals,
-            fcs: &fcs,
-            name: name.clone(),
-        };
-        sccp::run(&body, &mut cx, m)?
-    };
+    let solved = solve(&body, &mut parts, &fcs, &name, m)?;
     body.release(m);
     let sccp::Rebuilt {
         body,
@@ -599,26 +590,27 @@ pub fn specialize_dynamic(
     // sampler` that SCCP's folded select picked is its sampler state. SCCP runs again over a body
     // that changed, to fold what those constants decide.
     let (body, folded) = const_loads::fold(body, &mut parts, m)?;
-    let body = if folded {
-        let solved = {
-            let mut cx = sccp::Context {
-                folder: fold::Folder {
-                    types: &parts.types,
-                    consts: &mut parts.consts,
-                    held: 0,
-                },
-                globals: &parts.globals,
-                fcs: &fcs,
-                name: name.clone(),
-            };
-            sccp::run(&body, &mut cx, m)?
-        };
+    let mut body = if folded {
+        let solved = solve(&body, &mut parts, &fcs, &name, m)?;
         body.release(m);
         undefined_reads.extend(solved.reads);
         solved.body
     } else {
         body
     };
+    // Loops whose trip count the constants decided, unrolled where their counters decide a branch
+    // of their body; SCCP after each round folds what the copies decide.
+    let mut grown = 0;
+    for _ in 0..unroll::ROUNDS {
+        let Some(unrolled) = unroll::round(&body, &mut parts, &mut grown, m)? else {
+            break;
+        };
+        body.release(m);
+        let solved = solve(&unrolled, &mut parts, &fcs, &name, m)?;
+        unrolled.release(m);
+        undefined_reads.extend(solved.reads);
+        body = solved.body;
+    }
     matmul2d::refuse_left(&body, &parts, &ep.stage, &name, m)?;
     post_check(&body, &parts, &stubs, &name, &control_points(ep), m)?;
     // A branch's short arms that Metal's backend speculates, where a group operation in them
@@ -770,6 +762,27 @@ pub fn specialize_dynamic(
         unmeasured_speculation,
         module,
     })
+}
+
+/// SCCP over `body`, with the module's constants and the function constants `fcs`.
+fn solve(
+    body: &Body,
+    parts: &mut ModuleParts,
+    fcs: &HashMap<GlobalId, sccp::FcState>,
+    name: &DiagName,
+    m: &mut Meter,
+) -> Result<sccp::Rebuilt, Error> {
+    let mut cx = sccp::Context {
+        folder: fold::Folder {
+            types: &parts.types,
+            consts: &mut parts.consts,
+            held: 0,
+        },
+        globals: &parts.globals,
+        fcs,
+        name: name.clone(),
+    };
+    sccp::run(body, &mut cx, m)
 }
 
 /// The entry's visible-function-table parameters.

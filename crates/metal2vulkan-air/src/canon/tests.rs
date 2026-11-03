@@ -27,6 +27,7 @@ mod private_memory;
 mod table_copies;
 mod texture_writes;
 mod unobserved;
+mod unrolling;
 
 fn meter() -> Meter {
     Meter::new(&Budget::default())
