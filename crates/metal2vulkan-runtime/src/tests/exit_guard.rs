@@ -1649,7 +1649,7 @@ fn the_device_s_functions_are_reached_through_checked_accessors() {
 /// tuple field, a type argument or a by-value parameter) fails
 /// `only_the_listed_modules_keep_the_device_s_functions`; so does a listed module that keeps none
 /// any more.
-const KEEPERS: [(&str, &str); 23] = [
+const KEEPERS: [(&str, &str); 24] = [
     (
         "binding.rs",
         "the push command (vkCmdPushDescriptorSet), a call's parameter (`push_set`) and the \
@@ -1730,6 +1730,11 @@ const KEEPERS: [(&str, &str); 23] = [
     (
         "render.rs",
         "a draw's recording (vkCmd*), held by what holds its command buffer",
+    ),
+    (
+        "render/draw_again/rebound.rs",
+        "a kept draw's recording (vkCmd*), held by its encoder's bind state (a spare one by the \
+         device's) and recorded again only by the encoder that kept it",
     ),
     (
         "render/inline_splits.rs",
