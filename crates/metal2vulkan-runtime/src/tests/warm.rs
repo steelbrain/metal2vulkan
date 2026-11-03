@@ -485,8 +485,10 @@ fn a_warm_pass_takes_nothing_the_program_sees() {
 }
 
 /// A pass stops before its next record once the driver data its makings added reaches its byte
-/// budget: none is made under a budget of 0 bytes, and only the first under a budget of 1 byte
-/// where that record's makings added any.
+/// budget: none is made under a budget of 0 bytes, and only the first under a budget of 1 byte.
+/// The 1-byte pass runs over a directory of its own, which holds none of the records' driver
+/// data, so the first record's makings write their records' data (`driver_saves`) and add what
+/// they wrote: a pass that wrote data and counted none fails here, on every device.
 #[test]
 fn a_byte_budget_stops_the_pass() {
     let recording = Scratch::new("warm-budget-recording");
@@ -504,13 +506,58 @@ fn a_byte_budget_stops_the_pass() {
     let device_one = device(&one.0, None, None);
     device_one.warm(records, 1);
     let s = warmed(&device_one, STATES);
-    match s.pipeline_bytes {
-        0 => println!("the driver added no pipeline cache data: the 1-byte leg is not judged"),
-        _ => assert_eq!(
+    let saves = device_one.shader_cache_statistics().driver_saves;
+    println!(
+        "the 1-byte pass over a fresh directory: {} driver bytes added, {saves} records' data \
+         written",
+        s.pipeline_bytes
+    );
+    assert!(
+        saves > 0 && s.pipeline_bytes > 0,
+        "a pass over a directory that holds none of its records' data writes and counts what its \
+         makings added: {saves} records' data written, {s:?}"
+    );
+    assert_eq!(
+        (s.records_warmed, s.records_not_run),
+        (1, STATES - 1),
+        "the pass goes on past a spent budget: {s:?}"
+    );
+}
+
+/// A pass over the directory whose creations made its records adds the driver data no making
+/// adds: each making finds its pipeline in the cache its record's data loads, or reads back the
+/// data it was loaded with, and writes nothing. The bytes it counts are exactly those its
+/// makings' writes added (none where it wrote none), so a budget of 1 byte stops it only where it
+/// wrote: a program's own records, handed back over its own directory, warm whole.
+#[test]
+fn a_pass_over_its_records_own_directory_counts_only_what_it_writes() {
+    let scratch = Scratch::new("warm-own-directory");
+    let records = recorded(&scratch.0);
+    let device = device(&scratch.0, None, None);
+    let before = device.shader_cache_statistics();
+    device.warm(records, 1);
+    let s = warmed(&device, STATES);
+    let after = device.shader_cache_statistics();
+    let saves = after.driver_saves - before.driver_saves;
+    println!(
+        "the pass over its records' own directory: {} driver bytes added, {saves} records' data \
+         written, {} found and {} unchanged",
+        s.pipeline_bytes,
+        after.driver_data_found - before.driver_data_found,
+        after.driver_data_unchanged - before.driver_data_unchanged,
+    );
+    assert_eq!(
+        s.pipeline_bytes > 0,
+        saves > 0,
+        "the pass counts driver bytes exactly where its makings wrote data: {saves} records' data \
+         written, {s:?}"
+    );
+    if saves == 0 {
+        assert_eq!(
             (s.records_warmed, s.records_not_run),
-            (1, STATES - 1),
-            "the pass goes on past a spent budget: {s:?}"
-        ),
+            (STATES, 0),
+            "a pass that added nothing spent none of its budget: {s:?}"
+        );
     }
 }
 

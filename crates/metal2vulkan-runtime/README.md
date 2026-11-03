@@ -427,7 +427,9 @@ Calls Metal does not have, for a consumer that emulates a Metal device:
   record's creation makes, in order: its translations into the shader cache and its predicted
   `VkPipeline`s' data into the driver's records, so the program's later creation of the same
   descriptor finds them. It stops once the driver's pipeline cache data its makings added reaches
-  `byte_budget` bytes. It takes no identifier, resource ID or sampler number, makes no neutral,
+  `byte_budget` bytes; data a making finds in the directory already adds nothing, so over the
+  directory whose creations made the records the budget binds only where a making writes new
+  data. It takes no identifier, resource ID or sampler number, makes no neutral,
   announces no degradation and keeps nothing for the program's kept variants, and it reads no
   translation of another translator and no creation record of another `RUNTIME_VERSION` (a record
   holds a descriptor, never a translation), so no answer the program gets changes. Nothing fails:

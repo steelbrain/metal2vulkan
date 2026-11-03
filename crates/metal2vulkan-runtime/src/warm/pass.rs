@@ -210,7 +210,9 @@ impl Device {
     /// over the same shader cache directory), in the order given, until the driver's pipeline
     /// cache data the pass added reaches `byte_budget` bytes: their translations into the shader
     /// cache and their predicted `VkPipeline`s' data into the driver's records, so the program's
-    /// creations of the same descriptors find them. Returns at once.
+    /// creations of the same descriptors find them. Returns at once. Data a making finds in the
+    /// directory adds nothing ([`WarmStatistics::pipeline_bytes`]): over the directory whose
+    /// creations made the records, the budget binds only where a making writes new data.
     ///
     /// - It makes no object the program sees and changes no answer: no state, identifier,
     ///   resource ID, sampler number, notice or memory the program's calls decide; a state the

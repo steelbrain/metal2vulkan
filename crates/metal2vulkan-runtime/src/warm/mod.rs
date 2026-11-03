@@ -59,7 +59,12 @@ pub struct WarmStatistics {
     /// or no thread could be started.
     pub records_not_run: u64,
     /// The driver's pipeline cache data the warm passes' makings added, in bytes: what
-    /// [`Device::warm`]'s `byte_budget` bounds.
+    /// [`Device::warm`]'s `byte_budget` bounds. A making adds what it writes to its record past
+    /// the data the record's cache was loaded with or last wrote, so a making whose data the
+    /// directory holds already adds nothing: a pass over records an earlier process made over the
+    /// same directory, whose creations wrote their data, adds nothing for them, and its budget
+    /// binds only where a making writes data the directory did not hold
+    /// (`shader_cache/driver.rs`).
     pub pipeline_bytes: u64,
 }
 

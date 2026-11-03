@@ -122,7 +122,9 @@ second process does not translate it again. It cannot be turned off.
   (`to_bytes`), and at its next boot hand them to `Device::warm(records, byte_budget)` on a device
   over the same directory: one background thread makes their translations and predicted
   `VkPipeline`s before the guest asks, below every other making, until the driver data it added
-  reaches the budget, and the guest sees nothing of it. What it makes is what the guest's own
+  reaches the budget, and the guest sees nothing of it. Data a making finds in the directory adds
+  nothing: where the boot before wrote every record's data, the pass adds 0 bytes and the budget
+  does not bind. What it makes is what the guest's own
   creation of each descriptor makes on this build: a record holds a descriptor, never a
   translation, so records kept across an update are warmed by the new translator, and the pass
   reads no translation of another translator and no creation record of another
