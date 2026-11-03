@@ -109,6 +109,9 @@ const HEAVY_OUT_BYTES: usize = HEAVY_GROUPS * HEAVY_THREADS * 16;
 pub struct Scene<G: Gpu> {
     /// `quad_vertex` + `textured_fragment` into `BGRA8Unorm`, without and with blending.
     pub textured: [G::RenderPipeline; 2],
+    /// `quad_vertex` + `icb_draw_fragment` (a fill of its own color, no texture) into
+    /// `BGRA8Unorm`, blending.
+    pub solid: G::RenderPipeline,
     /// `quad_vertex` + `heavy_fragment` into `RGBA16Float`.
     pub heavy_fragment: G::RenderPipeline,
     pub heavy_kernel: G::ComputePipeline,
@@ -199,6 +202,13 @@ impl<G: Gpu> Scene<G> {
                 true,
             ),
         ];
+        let solid = g.render_pipeline(
+            library,
+            "quad_vertex",
+            "icb_draw_fragment",
+            Format::Bgra8,
+            true,
+        );
         let heavy_fragment = g.render_pipeline(
             library,
             "quad_vertex",
@@ -228,6 +238,7 @@ impl<G: Gpu> Scene<G> {
             .collect();
         Scene {
             textured,
+            solid,
             heavy_fragment,
             heavy_kernel,
             features,
@@ -270,10 +281,19 @@ enum Churn {
     /// As `Pipeline`, in render passes of [`PASS_DRAWS`] draws each (the pass loads the target,
     /// the first clears it): a window server's few draws a pass, each binding its own.
     Passes,
+    /// As `Bind`, in render passes of [`COMPOSITOR_DRAWS`] draws each, every [`COMPOSITOR_RUN`]
+    /// draws drawn by the next of three pipeline states (the two textured states and the solid
+    /// one): a window server's frame of a few hundred draws a pass, each binding its own buffer
+    /// and texture, its few pipeline states the same every frame.
+    Compositor,
 }
 
 /// The draws of each pass of [`Churn::Passes`].
 const PASS_DRAWS: usize = 3;
+
+/// The draws of each pass of [`Churn::Compositor`], and of each run of one pipeline state there.
+const COMPOSITOR_DRAWS: usize = 300;
+const COMPOSITOR_RUN: usize = 10;
 
 impl Churn {
     fn name(self) -> &'static str {
@@ -283,6 +303,16 @@ impl Churn {
             Churn::Bind => "bind",
             Churn::Pipeline => "pipeline",
             Churn::Passes => "passes",
+            Churn::Compositor => "compositor",
+        }
+    }
+
+    /// The draws of each of its render passes, where it draws in several.
+    fn pass_draws(self) -> Option<usize> {
+        match self {
+            Churn::Passes => Some(PASS_DRAWS),
+            Churn::Compositor => Some(COMPOSITOR_DRAWS),
+            _ => None,
         }
     }
 }
@@ -301,10 +331,17 @@ fn encode_draws<G: Gpu>(
     g.set_vertex_buffer(&mut encoder, &s.rects[0], 0, 0);
     g.set_fragment_texture(&mut encoder, &s.textures[0], 0);
     for draw in 0..draws {
-        if matches!(churn, Churn::Passes) && draw > 0 && draw % PASS_DRAWS == 0 {
+        let new_pass = churn
+            .pass_draws()
+            .is_some_and(|per| draw > 0 && draw % per == 0);
+        if new_pass {
             g.end_render(encoder);
             encoder = g.render_encoder(command_buffer, &s.target, false);
             g.set_fragment_sampler(&mut encoder, &s.sampler, 0);
+        }
+        if matches!(churn, Churn::Compositor) && (new_pass || draw % COMPOSITOR_RUN == 0) {
+            let states = [&s.textured[0], &s.textured[1], &s.solid];
+            g.set_render_pipeline(&mut encoder, states[(draw / COMPOSITOR_RUN) % states.len()]);
         }
         if matches!(churn, Churn::Offset) {
             g.set_vertex_buffer_offset(&mut encoder, (draw % RECTS) * RECT_STRIDE, 0);
@@ -517,6 +554,7 @@ pub fn encode<G: Gpu>(
         Churn::Bind,
         Churn::Pipeline,
         Churn::Passes,
+        Churn::Compositor,
     ] {
         if !runs(format!("draw_{}", churn.name())) {
             continue;

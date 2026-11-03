@@ -19,8 +19,10 @@
 //!   512x512 `BGRA8Unorm` target, `static` (nothing set between draws), `offset` (each draw the
 //!   vertex buffer's offset alone, `setVertexBufferOffset:atIndex:`), `bind` (each draw another
 //!   vertex buffer and offset, and another fragment texture), `pipeline` (as `bind`, and the
-//!   pipeline state switched between two) and `passes` (as `pipeline`, in render passes of three
-//!   draws, as a window server draws), and a compute encoder of as many single-threadgroup
+//!   pipeline state switched between two), `passes` (as `pipeline`, in render passes of three
+//!   draws, as a window server draws) and `compositor` (as `bind`, in render passes of 300 draws,
+//!   each run of 10 draws by the next of three pipeline states, as a window server's frame
+//!   draws), and a compute encoder of as many single-threadgroup
 //!   dispatches, `static`, `offsets` (both buffers' offsets each dispatch) and `churn` (the
 //!   pipeline state and both buffers' offsets each dispatch). Per draw and dispatch: the encoding thread's wall time from the command buffer's
 //!   creation through `endEncoding`, and the whole process's CPU time until the wait returned.
@@ -207,11 +209,12 @@
 //! shader caches; a directory under the OS's temporary directory by default, removed at the end),
 //! `--metallib PATH` (skip the compile; not with `pipeline`), `--cache DIR` (the runtime's shader
 //! cache, with `--side`), `--variants a,b,...` (the encode workload's variants alone:
-//! `draw_static`, `draw_offset`, `draw_bind`, `draw_pipeline`, `draw_passes`, `dispatch_static`,
-//! `dispatch_offsets`, `dispatch_churn`, `dispatch_resident_0`, `_1`, `_256`, `_4096`,
-//! `_same_4096`, `dispatch_resident_moving_0`, `_16`, `_256`, `_4096`,
-//! `dispatch_resident_textures_256`, `_4096`, `dispatch_handles`; for a profile of one; and the memory workload's parts alone: `create`,
-//! `no_copy`, `held_1m`, `held_64m`, `texture`), `--announce-each a,b,...` (the runtime's device
+//! `draw_static`, `draw_offset`, `draw_bind`, `draw_pipeline`, `draw_passes`, `draw_compositor`,
+//! `dispatch_static`, `dispatch_offsets`, `dispatch_churn`, `dispatch_resident_0`, `_1`, `_256`,
+//! `_4096`, `_same_4096`, `dispatch_resident_moving_0`, `_16`, `_256`, `_4096`,
+//! `dispatch_resident_textures_256`, `_4096`, `dispatch_handles`; for a profile of one; and the
+//! memory workload's parts alone: `create`, `no_copy`, `held_1m`, `held_64m`, `texture`),
+//! `--announce-each a,b,...` (the runtime's device
 //! announces these degradation kinds, by code with or without its `metal2vulkan-degrade-` prefix,
 //! or `all` of them, at every occurrence, `DeviceOptions::announce_each`, as a consumer that hears
 //! some kinds at each call opens it), `--sink-least verbose|info|warning|error` (the runtime's
