@@ -108,6 +108,9 @@ pub(super) struct FreshUnwritten {
 #[derive(Default)]
 pub(crate) struct FreshLog {
     events: Mutex<Vec<FreshEvent>>,
+    /// Whether an event was logged: a commit of a command buffer that logged none takes not even
+    /// the lock, whose first take allocates where the platform's mutex is made lazily (macOS).
+    logged: AtomicBool,
 }
 
 /// One entry of a [`FreshLog`].
@@ -162,6 +165,7 @@ impl FreshLog {
         let last = (events.iter().rev().take(REPEATS)).find(|logged| logged.key() == event.key());
         if last != Some(&event) {
             events.push(event);
+            self.logged.store(true, Ordering::Release);
         }
     }
 }
@@ -570,11 +574,11 @@ impl FreshUnwritten {
     /// but a refused commit, whose commands run nothing), its reads and writes of noted textures
     /// apply to the record in the order they were encoded, as one, and each read that reached an
     /// unwritten texel is announced once the record's locks are free, in the committing call (the
-    /// module docs' **Order**). One atomic read where no texture is noted; the log goes with the
-    /// command buffer.
+    /// module docs' **Order**). One atomic read where no texture is noted, two where the command
+    /// buffer logged nothing; the log goes with the command buffer.
     pub(crate) fn commit(device: &Device, log: &FreshLog, runs: bool) {
         let fresh = &device.shared().fresh;
-        if !fresh.any() {
+        if !fresh.any() || !log.logged.load(Ordering::Acquire) {
             return;
         }
         // Committed, the command buffer encodes nothing more: its log goes to the record whole.
