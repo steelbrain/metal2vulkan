@@ -814,7 +814,7 @@ pub enum Feature {
 
 /// A constants-block record that LLVM defines (`LLVMBitCodes.h`'s `ConstantsCodes`, and
 /// `CAST_PTRTOADDR` among its cast opcodes) and that the typed model has no form for
-/// ([`Feature::Constant`]), by LLVM's name. LLVM's code follows each name. A later LLVM's new
+/// (`Feature::Constant`), by LLVM's name. LLVM's code follows each name. A later LLVM's new
 /// record is a new variant.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[non_exhaustive]
