@@ -37,9 +37,13 @@
 //! - **The command buffer's** (the coordinator's ruling of 2026-10-07). Metal's residency belongs
 //!   to the command buffer: on an M3 Max, an indirect command buffer's compute command executed by
 //!   one compute encoder wrote a buffer that only a later encoder's `useResource:` named, and one a
-//!   later blit filled. So each encoder, as it ends, joins what it made resident into its command
-//!   buffer's residency ([`Residency::join_encoder`]), and the commit makes resident the textures
-//!   made since in the heaps it holds (`sync_heaps`). The work recorded at the commit or by a host
+//!   later blit filled. So what each encoder made resident joins its command buffer's residency
+//!   ([`Residency::join_encoder`]): its heaps as it ends, and its resources where the command
+//!   buffer's own work first reads that residency after it ended (`State::joined_residency` in
+//!   `command_buffer/mod.rs`), each ended encoder's in the order they ended, so the residency
+//!   holds what it would had each joined as it ended, in the same order, and a command buffer whose
+//!   work never reads it joins none (`WorkCounts::resident_resources_joined`). The commit makes
+//!   resident the textures made since in the heaps it holds (`sync_heaps`). The work recorded at the commit or by a host
 //!   step (an indirect command buffer's executions, compute and render, and an indirect dispatch
 //!   the host reads) resolves and binds against that residency, every encoder's, made resident
 //!   before the call or after it. A compute encoder's resources reach every render stage there, as
@@ -125,6 +129,14 @@ pub(super) struct Residency {
     /// The tokens of the textures among `used`: a command's look at the textures made resident
     /// costs their count, not every resource's.
     textures: Vec<u32>,
+    /// The tokens of the shadowed textures (`shadow.rs`) among the first `textures_looked_at` of
+    /// `textures`, in the order they were made resident: what a command buffer's next encoder
+    /// starts with ([`shadows`](Self::shadows)) costs their count. Found where that is first
+    /// asked ([`find_shadowed`](Self::find_shadowed)), so making a texture resident reads
+    /// nothing of it, and each texture is looked at once.
+    shadowed: Vec<u32>,
+    /// How many of `textures` [`find_shadowed`](Self::find_shadowed) has looked at.
+    textures_looked_at: usize,
     /// The heaps the encoder used, each with the render stages it used it in and the number of
     /// the first of its textures not made resident yet (`Heap::textures_from`).
     heaps: Vec<HeapUse>,
@@ -278,6 +290,14 @@ impl Residency {
     /// resident resources. Those it first uses here (held as [`use_resource`](Self::use_resource)
     /// holds what it makes resident). A heap that made no texture since costs one lock.
     pub(super) fn sync_heaps(&mut self) -> Vec<Used> {
+        let made = self.heap_textures();
+        self.join_heap_textures(made)
+    }
+
+    /// The textures made in the heaps it used since it last looked, each with the render stages
+    /// it used its heap in: what [`sync_heaps`](Self::sync_heaps) makes resident. A heap that
+    /// made no texture since costs one lock.
+    pub(super) fn heap_textures(&mut self) -> Vec<(Texture, RenderStages)> {
         let mut made = Vec::new();
         for used in &mut self.heaps {
             if used.heap.textures_made() == used.next {
@@ -289,6 +309,12 @@ impl Residency {
             // The number it looks from on: what a later look reads.
             self.generation = next_generation();
         }
+        made
+    }
+
+    /// Make resident for reading `made`, the textures [`heap_textures`](Self::heap_textures)
+    /// found: those it first uses here.
+    pub(super) fn join_heap_textures(&mut self, made: Vec<(Texture, RenderStages)>) -> Vec<Used> {
         made.into_iter()
             .filter_map(|(texture, stages)| {
                 self.join(Used::Texture(texture), ResourceUsage::READ, stages)
@@ -302,15 +328,25 @@ impl Residency {
     /// none; a heap keeps the least number of a texture not made resident yet, so the commit's
     /// [`sync_heaps`](Self::sync_heaps) makes resident every texture made in it since.
     pub(super) fn join_encoder(&mut self, ended: &Residency, compute: bool) {
-        let reach = |stages: RenderStages| match compute {
-            true => every_render_stage(),
-            false => stages,
-        };
+        self.join_encoder_resources(ended, compute);
+        self.join_encoder_heaps(ended, compute);
+    }
+
+    /// The resources of [`join_encoder`](Self::join_encoder): each with its usage, in the render
+    /// stages it named, or every render stage for a compute encoder's. How many `ended` holds.
+    pub(super) fn join_encoder_resources(&mut self, ended: &Residency, compute: bool) -> usize {
         for (used, usage, stages) in &ended.used {
-            self.join(used.clone(), *usage, reach(*stages));
+            self.join(used.clone(), *usage, reached(*stages, compute));
         }
+        ended.used.len()
+    }
+
+    /// The heaps of [`join_encoder`](Self::join_encoder): each in the render stages it named, or
+    /// every render stage for a compute encoder's, keeping the least number of a texture not made
+    /// resident yet.
+    pub(super) fn join_encoder_heaps(&mut self, ended: &Residency, compute: bool) {
         for heap in &ended.heaps {
-            let stages = reach(heap.stages);
+            let stages = reached(heap.stages, compute);
             match self.heap_use(&heap.heap) {
                 Some(had) => {
                     had.stages = had.stages.union(stages);
@@ -395,7 +431,7 @@ impl Residency {
             return None;
         }
         let token = u32::try_from(self.used.len()).expect("fewer than 2^32 resources resident");
-        match used {
+        match &used {
             Used::IndirectCommandBuffer(_) => self.indirect.push(token),
             Used::Texture(_) => self.textures.push(token),
             Used::Buffer(_) | Used::Heap { .. } => {}
@@ -526,19 +562,43 @@ impl Residency {
     /// command buffer's residency (the module docs): the shadowed textures (`shadow.rs`) its
     /// ended encoders made resident, each with its usage and, for a render encoder, its render
     /// stages (a compute encoder names none).
-    pub(super) fn shadows(&self, render: bool) -> Residency {
+    pub(super) fn shadows(&mut self, render: bool) -> Residency {
         let mut shadows = Residency::default();
-        // Its textures alone, in the order they were made resident.
-        let shadowed =
-            (self.resident_textures()).filter(|(texture, ..)| texture.shadow().is_some());
-        for (texture, usage, stages) in shadowed {
+        self.shadows_onto(&mut shadows, render, false);
+        shadows
+    }
+
+    /// Look for the shadowed textures (`shadowed`) among those made resident since it last
+    /// looked, in the order they were made resident.
+    fn find_shadowed(&mut self) {
+        for &token in &self.textures[self.textures_looked_at..] {
+            if let Some((Used::Texture(texture), ..)) = self.used.get(token as usize) {
+                if texture.shadow().is_some() {
+                    self.shadowed.push(token);
+                }
+            }
+        }
+        self.textures_looked_at = self.textures.len();
+    }
+
+    /// Join onto `shadows`, what a command buffer's next compute or render (`render`) encoder
+    /// starts with ([`shadows`](Self::shadows)), the shadowed textures this residency holds, in the
+    /// order they were made resident: this an ended encoder's not joined into its command
+    /// buffer's yet, a compute encoder's (`compute`) reaching every render stage, as it would
+    /// there.
+    pub(super) fn shadows_onto(&mut self, shadows: &mut Residency, render: bool, compute: bool) {
+        self.find_shadowed();
+        for &token in &self.shadowed {
+            let Some((Used::Texture(texture), usage, stages)) = self.used.get(token as usize)
+            else {
+                continue;
+            };
             let stages = match render {
-                true => stages,
+                true => reached(*stages, compute),
                 false => RenderStages::empty(),
             };
-            shadows.join(Used::Texture(texture.clone()), usage, stages);
+            shadows.join(Used::Texture(texture.clone()), *usage, stages);
         }
-        shadows
     }
 
     /// The textures made resident, each with its usage and render stages.
@@ -590,6 +650,15 @@ impl Residency {
 }
 
 // Two are equal where they are one resource: a heap by the heap alone.
+/// The render stages a resource made resident in `stages` reaches in its command buffer's
+/// residency: every one for a compute encoder's (`compute`), which names none.
+fn reached(stages: RenderStages, compute: bool) -> RenderStages {
+    match compute {
+        true => every_render_stage(),
+        false => stages,
+    }
+}
+
 impl PartialEq for Used {
     fn eq(&self, other: &Used) -> bool {
         match (self, other) {

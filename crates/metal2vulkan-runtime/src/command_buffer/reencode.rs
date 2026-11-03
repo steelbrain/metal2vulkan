@@ -175,6 +175,11 @@ impl CommandBufferShared {
             // What a refused splice held goes after the lock.
             let spliced_now = {
                 let mut state = lock(&self.state);
+                // Its residency joins what the first encoding made resident before the encoding
+                // again takes that one's place (`State::joined_residency`).
+                if residency.is_some() {
+                    state.joined_residency(counts);
+                }
                 let spliced = state.splice_replay(at, replayed, residency);
                 if let (Ok(()), Some(predication)) = (&spliced, predication) {
                     state.predication.take_checks(predication);

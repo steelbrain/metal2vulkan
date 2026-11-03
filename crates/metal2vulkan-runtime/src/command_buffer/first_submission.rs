@@ -72,7 +72,6 @@ use super::{write_fields, CommandBufferShared, Resident, State};
 use crate::error::{internal, CommandBufferError, Error};
 use crate::live_buffers::LiveTable;
 use crate::rebind::{SubmittedHolds, Submitting};
-use crate::residency::Residency;
 use crate::upload::Upload;
 use crate::used_resources::UsedResources;
 use crate::values::CommandBufferStatus;
@@ -228,7 +227,7 @@ impl State {
             }) if table.generation() != now => {}
             _ => return Ok(()),
         }
-        let fresh = self.fresh_ranges();
+        let fresh = self.fresh_ranges(device);
         self.remake_resident(device, &fresh)
     }
 
@@ -242,7 +241,7 @@ impl State {
     fn point_replay_tables(&mut self, device: &Device, moved: bool) -> Result<(), Error> {
         let live = device.shared().live_buffers.table(device)?;
         if moved {
-            let ranges = live.ranges().chain(self.fresh_ranges());
+            let ranges = live.ranges().chain(self.fresh_ranges(device));
             let (bytes, count) = ResidentSet::replay_bytes(ranges);
             let len = bytes.len() as u64;
             let upload =
@@ -265,10 +264,9 @@ impl State {
     }
 
     /// The ranges of what its encoders made resident, as it lies now.
-    fn fresh_ranges(&self) -> Vec<ResidentRange> {
-        self.residency
-            .as_ref()
-            .map(Residency::resident_ranges)
+    fn fresh_ranges(&mut self, device: &Device) -> Vec<ResidentRange> {
+        (self.joined_residency(&device.shared().counts))
+            .map(|residency| residency.resident_ranges())
             .unwrap_or_default()
     }
 

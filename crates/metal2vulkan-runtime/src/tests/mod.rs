@@ -168,6 +168,8 @@ mod inline_continues;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod inline_splits;
 mod interop;
+#[cfg(any(m2v_gpu, m2v_cpu_icd))]
+mod joined_residency;
 mod keeper;
 mod kept_barriers;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]

@@ -108,6 +108,7 @@ use super::unique_identifier::ScheduledWork;
 use super::upload::{Upload, Uploads};
 use super::used_resources::{names_any, EncoderKind, EncoderRecord, Reached, ReadRecord};
 use super::values::CommandBufferStatus;
+use super::work_counts::Counters;
 use super::{Buffer, CommandQueue, Device};
 use crate::release;
 use ash::vk;
@@ -703,8 +704,12 @@ pub(super) struct State {
     pub(super) holds: Vec<Holds>,
     /// What its ended encoders made resident, every encoder's joined (`residency.rs`): the
     /// residency the work its commit and host steps record resolves and binds against. Released
-    /// with what it retained, as it completes.
+    /// with what it retained, as it completes. Its heaps are joined as each encoder ends, and the
+    /// resources of the encoders from `joined` on where its work first reads it
+    /// ([`joined_residency`](Self::joined_residency)).
     residency: Option<Residency>,
+    /// The ended encoders whose resources `residency` holds joined: those before this place.
+    joined: usize,
     /// Its ended encoders, in the order they ended, each with what its commands use
     /// (`used_resources.rs`): the keys its commands' uses and bindings named, its placed
     /// segments' among them, and what it made resident. Their uses are let go as it completes.
@@ -816,8 +821,10 @@ impl State {
     /// An encoder of `kind` ended, its commands' uses and bindings having named `keys`, having
     /// made `residency` resident (a compute or render encoder's): it joins the ended encoders,
     /// with the event waits and signals encoded before it, and what it made resident joins the
-    /// command buffer's residency (`Residency::join_encoder`). Its place among the ended
-    /// encoders, which each of its recordings' parts carries.
+    /// command buffer's residency (`Residency::join_encoder`): its heaps now, its resources where
+    /// the command buffer's work first reads that residency
+    /// ([`joined_residency`](Self::joined_residency)). Its place among the ended encoders, which
+    /// each of its recordings' parts carries.
     pub(super) fn encoder_ended(
         &mut self,
         kind: EncoderKind,
@@ -828,7 +835,7 @@ impl State {
         if let Some(ended) = &residency {
             self.residency
                 .get_or_insert_with(Residency::default)
-                .join_encoder(ended, kind == EncoderKind::Compute);
+                .join_encoder_heaps(ended, kind == EncoderKind::Compute);
         }
         let (event_waits_before, event_signals_before) = self.batches.events();
         self.ended.push(EncoderRecord {
@@ -1003,6 +1010,60 @@ impl State {
         }
     }
 
+    /// Its residency, with the resources of its ended encoders not joined into it yet joined, in
+    /// the order they ended, each counted (`WorkCounts::resident_resources_joined`): what its
+    /// work reads. Joined at the first read after they ended, it holds what it would hold had
+    /// each joined as it ended, in the same order: the textures made in its heaps since join
+    /// after them ([`sync_heaps`](Self::sync_heaps)), and an encoder encoded again joins first
+    /// (`reencode.rs`).
+    pub(super) fn joined_residency(&mut self, counts: &Counters) -> Option<&mut Residency> {
+        let residency = self.residency.as_mut()?;
+        for record in &self.ended[self.joined..] {
+            if let Some(ended) = &record.residency {
+                let compute = record.kind == EncoderKind::Compute;
+                let joined = residency.join_encoder_resources(ended, compute);
+                if joined > 0 {
+                    counts.resident_resources_joined(joined as u64);
+                }
+            }
+        }
+        self.joined = self.ended.len();
+        Some(residency)
+    }
+
+    /// Make resident the textures made in its heaps since (`Residency::sync_heaps`): its ended
+    /// encoders' resources joined first where it finds any
+    /// ([`joined_residency`](Self::joined_residency)), so they lie where they would have.
+    fn sync_heaps(&mut self, counts: &Counters) {
+        let Some(residency) = &mut self.residency else {
+            return;
+        };
+        let made = residency.heap_textures();
+        if made.is_empty() {
+            return;
+        }
+        if let Some(residency) = self.joined_residency(counts) {
+            drop(residency.join_heap_textures(made));
+        }
+    }
+
+    /// What its next compute or render (`render`) encoder starts with (`Residency::shadows`):
+    /// the shadowed textures its ended encoders made resident, those its residency joined and
+    /// those it has yet to, in the order they were made resident.
+    fn inherited(&mut self, render: bool) -> Residency {
+        let Some(residency) = &mut self.residency else {
+            return Residency::default();
+        };
+        let mut shadows = residency.shadows(render);
+        for record in &mut self.ended[self.joined..] {
+            if let Some(ended) = &mut record.residency {
+                let compute = record.kind == EncoderKind::Compute;
+                ended.shadows_onto(&mut shadows, render, compute);
+            }
+        }
+        shadows
+    }
+
     /// Let go of what its ended encoders' commands use, as it completes: their keys, and what
     /// they made resident, for the caller to release without this lock.
     fn let_go_of_uses(&mut self) -> Vec<Residency> {
@@ -1087,7 +1148,7 @@ impl State {
         let live = device.shared().live_buffers.table(device)?;
         let set = live.set();
         let mut beyond: Vec<ResidentRange> = self.root_ranges.iter().copied().collect();
-        if let Some(residency) = &self.residency {
+        if let Some(residency) = self.joined_residency(&device.shared().counts) {
             beyond.extend(residency.resident_ranges());
         }
         beyond.retain(|range| !set.holds(range));
@@ -1873,6 +1934,7 @@ impl CommandBuffer {
                 used_heaps: Vec::new(),
                 holds: Vec::new(),
                 residency: None,
+                joined: 0,
                 ended: Vec::new(),
                 root_tables: Vec::new(),
                 root_ranges: HashSet::new(),
@@ -2097,17 +2159,15 @@ impl CommandBuffer {
     /// the heaps they used made since included.
     pub(super) fn inherited_residency(&self, render: bool) -> Residency {
         let mut state = self.state();
-        let Some(residency) = &mut state.residency else {
-            return Residency::default();
-        };
-        residency.sync_heaps();
-        residency.shadows(render)
+        state.sync_heaps(&self.0.device.shared().counts);
+        state.inherited(render)
     }
 
     /// What its ended encoders made resident, every encoder's joined (`residency.rs`): what the
     /// work its commit and host steps record resolves and binds against.
     pub(super) fn residency(&self) -> Result<Residency, Error> {
-        let residency = self.state().residency.clone().unwrap_or_default();
+        let counts = &self.0.device.shared().counts;
+        let residency = (self.state().joined_residency(counts).cloned()).unwrap_or_default();
         // With the device's live buffers, which an address in no resource made resident
         // resolves against (`live_buffers.rs`): a host step's, the command buffer holds until it
         // completes.
@@ -2814,9 +2874,7 @@ impl CommandBuffer {
             state.committing = true;
             // Its heaps reach every texture they hold now, for the work recorded below and by its
             // host steps.
-            if let Some(residency) = &mut state.residency {
-                residency.sync_heaps();
-            }
+            state.sync_heaps(&self.0.device.shared().counts);
             let (segments, places): (Vec<(Deferred, bool)>, Vec<usize>) = state
                 .recorded
                 .iter()

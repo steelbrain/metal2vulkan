@@ -245,6 +245,7 @@ pub(crate) struct Counters {
     dispatch_shapes_found: AtomicU64,
     dispatch_used_resources_listed: AtomicU64,
     resident_textures_looked_at: AtomicU64,
+    resident_resources_joined: AtomicU64,
     heap_tables_worked_out: AtomicU64,
     argument_samplers_taken: AtomicU64,
     bind_views_worked_out: AtomicU64,
@@ -1750,6 +1751,13 @@ impl Counters {
     pub(crate) fn resident_textures_looked_at(&self) {
         self.resident_textures_looked_at
             .fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// `count` resources an ended encoder made resident were joined into its command buffer's
+    /// residency (`command_buffer::State::joined_residency`).
+    pub(crate) fn resident_resources_joined(&self, count: u64) {
+        self.resident_resources_joined
+            .fetch_add(count, Ordering::Relaxed);
     }
 
     /// A command's pipeline layout was read for the device's texture and sampler tables it binds
@@ -4334,6 +4342,13 @@ pub struct WorkCounts {
     /// texture handles after each change of what it made resident. None for a dispatch after which
     /// neither changed, however many textures it made resident.
     pub resident_textures_looked_at: u64,
+    /// Resources an ended compute or render encoder made resident, joined into its command
+    /// buffer's residency: at the first read of that residency after the encoder ended (the work
+    /// its commit or a host step records against every encoder's resources, its resident set, a
+    /// texture made in a heap it used since, an encoder encoded again), each of the encoder's
+    /// resources once. None for a command buffer whose work never reads it, however many
+    /// resources its encoders made resident.
+    pub resident_resources_joined: u64,
     /// Reads of a pipeline layout for the device's texture and sampler tables its commands bind
     /// (`heap_sets.rs`): one per variant for compute dispatches, at its first (`HeapTables`); one
     /// per table looked for at each draw and tile dispatch (`heap_sets::texture_table`,
@@ -5749,6 +5764,7 @@ impl Device {
                 .load(Ordering::Relaxed),
             resident_textures_looked_at: (counters.resident_textures_looked_at)
                 .load(Ordering::Relaxed),
+            resident_resources_joined: (counters.resident_resources_joined).load(Ordering::Relaxed),
             heap_tables_worked_out: counters.heap_tables_worked_out.load(Ordering::Relaxed),
             argument_samplers_taken: counters.argument_samplers_taken.load(Ordering::Relaxed),
             bind_views_worked_out: counters.bind_views_worked_out.load(Ordering::Relaxed),
