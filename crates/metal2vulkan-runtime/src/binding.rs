@@ -2258,9 +2258,14 @@ pub(super) fn command_uses_into(
     (index, indirect): (Option<(&Buffer, u64)>, Option<(&Buffer, u64)>),
     into: &mut CommandUses,
 ) -> Result<(), Error> {
-    let CommandUses { uses, resident } = into;
+    let CommandUses {
+        uses,
+        resident,
+        sources,
+    } = into;
     uses.clear();
     resident.clear();
+    sources.clear();
     // One use at most a resource use of the plan's or the command's: room for them all at once.
     uses.reserve(plan.uses.len() + command.uses.len());
     // The keys of the buffers made resident the command reaches through the resident set, by
@@ -2273,10 +2278,11 @@ pub(super) fn command_uses_into(
             named.insert(key);
         }
     };
-    for resource in plan.uses.iter().chain(command.uses) {
+    for (source, resource) in plan.uses.iter().chain(command.uses).enumerate() {
         if !resource.access.read && !resource.access.write {
             continue;
         }
+        let source = u32::try_from(source).map_err(|_| internal("a command of 2^32 uses"))?;
         let stages: vk::PipelineStageFlags2 = resource.stages.into();
         if stages.is_empty() {
             return Err(internal("a command's resource use in no stage"));
@@ -2308,6 +2314,7 @@ pub(super) fn command_uses_into(
                         let used = texture.planes_use(access(read, resource.access.read))?;
                         name(&mut named, &reached, used.key);
                         uses.push(used);
+                        sources.push(source);
                         continue;
                     }
                     if let Some(texture) = slot_texture(tables, slot) {
@@ -2326,6 +2333,7 @@ pub(super) fn command_uses_into(
                         )?;
                         name(&mut named, &reached, used.key);
                         uses.push(used);
+                        sources.push(source);
                     }
                     continue;
                 }
@@ -2349,6 +2357,7 @@ pub(super) fn command_uses_into(
                     );
                     name(&mut named, &reached, used.key);
                     uses.push(used);
+                    sources.push(source);
                     continue;
                 }
                 None => return Err(internal("a use of a resource the encoder did not use")),
@@ -2363,42 +2372,100 @@ pub(super) fn command_uses_into(
                 .control_point_indices
                 .ok_or_else(|| internal("a control-point index use of a draw without a buffer"))?,
         };
-        let range = match resource.range {
-            Some(range) => {
-                let start = offset.saturating_add(range.offset);
-                start..start.saturating_add(range.len)
-            }
-            None => offset..buffer.length().max(offset),
-        };
-        let range = match resource.resource {
-            UseTarget::IndexBuffer => {
-                let end = IndexBufferRef::new(0, buffer.length()).fetch_end(range.start);
-                range.start..range.end.min(end).max(range.start)
-            }
-            _ => range,
-        };
-        let (read, write) = buffer_access(resource.class)?;
-        let (identity, range) = buffer.tracked(range);
+        let used = bytes_use(resource, buffer, offset)?;
         match resource.resource {
             UseTarget::Used(_) => {
                 // The first reached: every use before it named its key.
                 if reached.is_empty() {
                     named.extend(uses.iter().map(|used: &Use<ResourceKey>| used.key));
                 }
-                reached.insert(identity.key);
+                reached.insert(used.key);
             }
-            _ => name(&mut named, &reached, identity.key),
+            _ => name(&mut named, &reached, used.key),
         }
-        uses.push(Use {
-            key: identity.key,
-            tracked: identity.tracked,
-            range: UseRange::Bytes(range),
-            read: access(read, resource.access.read),
-            write: access(write, resource.access.write),
-        });
+        uses.push(used);
+        sources.push(source);
     }
     resident.extend(reached.difference(&named).copied());
     Ok(())
+}
+
+/// The use `resource` makes of `buffer`'s bytes bound at `offset`: its range from the offset (the
+/// buffer's rest where it states none; an index buffer's up to its last whole index), as the
+/// buffer tracks it (`Buffer::tracked`).
+fn bytes_use(
+    resource: &ResourceUse,
+    buffer: &Buffer,
+    offset: u64,
+) -> Result<Use<ResourceKey>, Error> {
+    let stages: vk::PipelineStageFlags2 = resource.stages.into();
+    let access = |flags: vk::AccessFlags2, used: bool| match used {
+        true => Access::new(stages, flags),
+        false => Access::NONE,
+    };
+    let range = match resource.range {
+        Some(range) => {
+            let start = offset.saturating_add(range.offset);
+            start..start.saturating_add(range.len)
+        }
+        None => offset..buffer.length().max(offset),
+    };
+    let range = match resource.resource {
+        UseTarget::IndexBuffer => {
+            let end = IndexBufferRef::new(0, buffer.length()).fetch_end(range.start);
+            range.start..range.end.min(end).max(range.start)
+        }
+        _ => range,
+    };
+    let (read, write) = buffer_access(resource.class)?;
+    let (identity, range) = buffer.tracked(range);
+    Ok(Use {
+        key: identity.key,
+        tracked: identity.tracked,
+        range: UseRange::Bytes(range),
+        read: access(read, resource.access.read),
+        write: access(write, resource.access.write),
+    })
+}
+
+/// Patch in `into`, as [`command_uses_into`] made it of `plan`'s and `command`'s uses, the uses
+/// of the buffer slots `changed`, as `tables` now bind them: whether it did, which it does where
+/// each such slot binds the buffer it bound (its offset may have moved) and `into` holds the uses
+/// that function made alone. Its uses are then those `command_uses_into` makes: every other use
+/// is of a slot, buffer or texture no call changed, and the keys, so the resident ones, are the
+/// same (`render/draw_again/rebound.rs`).
+pub(super) fn patch_buffer_uses(
+    (plan, command, tables): (&BindingPlan, &Command<'_>, &Tables<'_>),
+    changed: &[SlotRef],
+    into: &mut CommandUses,
+) -> Result<bool, Error> {
+    let CommandUses { uses, sources, .. } = into;
+    if sources.len() != uses.len() {
+        return Ok(false);
+    }
+    for (used, &source) in uses.iter_mut().zip(sources.iter()) {
+        let source = source as usize;
+        let resource = match source.checked_sub(plan.uses.len()) {
+            None => plan.uses.get(source),
+            Some(at) => command.uses.get(at),
+        };
+        let resource = resource.ok_or_else(|| internal("a use of a resource use since gone"))?;
+        let UseTarget::Slot(slot) = resource.resource else {
+            continue;
+        };
+        if slot.class != SlotClass::Buffer || !changed.contains(&slot) {
+            continue;
+        }
+        let Some((buffer, offset)) = slot_buffer(tables, slot) else {
+            return Ok(false);
+        };
+        let now = bytes_use(resource, buffer, *offset)?;
+        if now.key != used.key {
+            return Ok(false);
+        }
+        *used = now;
+    }
+    Ok(true)
 }
 
 /// A dispatch's or draw's uses (`command_uses`), for the tracker, and the keys among them that
@@ -2409,6 +2476,9 @@ pub(super) fn command_uses_into(
 pub(super) struct CommandUses {
     uses: Vec<Use<ResourceKey>>,
     resident: BTreeSet<ResourceKey>,
+    /// Of each use [`command_uses_into`] made, in order, the index among its plan's and command's
+    /// resource uses of the one it was made of: what [`patch_buffer_uses`] patches by.
+    sources: Vec<u32>,
 }
 
 impl CommandUses {

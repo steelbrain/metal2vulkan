@@ -408,8 +408,13 @@ impl RenderLowering {
         };
         let index = buffers.index.as_ref().map(DrawSource::metal);
         let uses = (&**plan, &command, &tables);
+        // Its uses: where only buffer slots changed, the kept draw's with those slots' patched in
+        // place, else made again whole.
+        let patched =
+            !images && binding::patch_buffer_uses(uses, slots, &mut live.uses) == Ok(true);
         let rebound = rebound.is_ok_and(|done| done)
-            && binding::command_uses_into(call, uses, (index, None), &mut live.uses).is_ok()
+            && (patched
+                || binding::command_uses_into(call, uses, (index, None), &mut live.uses).is_ok())
             && binding::push_writes_into(&commands.push_constants, &[], &mut live.pushes).is_ok();
         if !rebound {
             return false;
