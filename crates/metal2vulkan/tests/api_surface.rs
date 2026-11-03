@@ -204,6 +204,7 @@ surface! {
         enum LinkProblem N;
         enum Limit N;
         enum BudgetExceeded N;
+        enum ConstantRecord N;
         struct InternalError N;
         enum InternalKind N;
         enum BindError N;

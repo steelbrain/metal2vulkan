@@ -62,6 +62,8 @@ pub use crate::air::error::{
 // The vocabulary the front end and the translator share: the caps, the deadline, internal
 // invariants, and why a linked function cannot resolve a reference.
 pub use crate::air::error::{BudgetExceeded, InternalError, InternalKind, Limit, LinkProblem};
+// The constants-block records a refusal names (`Feature::Constant`).
+pub use crate::air::error::ConstantRecord;
 use crate::air::error::{MissingInput, RequestError};
 use crate::device::requirements::{
     ApiVersion, FormatUsage, VkExtension, VkFeature, VkLimit, VkProperty,
@@ -254,7 +256,7 @@ impl From<crate::air::error::Feature> for Feature {
             Air::DynamicCall => Feature::DynamicCall,
             Air::InlineAsm => Feature::InlineAsm,
             Air::Linking => Feature::Linking,
-            Air::Constant { code } => Feature::Constant { code },
+            Air::Constant { record } => Feature::Constant { record },
             Air::Attribute { kind } => Feature::Attribute { kind },
             Air::BitcodeRecord { block, code } => Feature::BitcodeRecord { block, code },
             Air::SyncScope => Feature::SyncScope,
@@ -1307,10 +1309,11 @@ pub enum Feature {
     // ---- Device ----
     /// The device's Vulkan version is below the 1.2 floor.
     VulkanVersion,
-    /// A bitcode constant record outside the typed model (block address, inline asm, `select`
-    /// and other constant expressions the IR has no form for).
+    /// A constants-block record LLVM defines that the typed model has no form for (a block
+    /// address, a `select` and the other constant expressions of [`ConstantRecord`]), by LLVM's
+    /// name for it.
     Constant {
-        code: u32,
+        record: ConstantRecord,
     },
     /// An LLVM attribute kind that changes the calling ABI and that AIR does not use
     /// (`inalloca`, `preallocated`, `byref`, `nest`, the `swift*` kinds).

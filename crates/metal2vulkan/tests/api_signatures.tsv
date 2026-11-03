@@ -1122,6 +1122,7 @@ enum	metal2vulkan-air::error::BitcodeError	#[derive(Clone, Debug, PartialEq, Eq)
 enum	metal2vulkan-air::error::BitstreamError	#[derive(Clone, Debug, PartialEq, Eq)] #[non_exhaustive] pub enum BitstreamError
 enum	metal2vulkan-air::error::BudgetExceeded	#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum BudgetExceeded
 enum	metal2vulkan-air::error::CanonError	#[derive(Clone, Debug, PartialEq, Eq)] #[non_exhaustive] pub enum CanonError
+enum	metal2vulkan-air::error::ConstantRecord	#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] #[non_exhaustive] pub enum ConstantRecord
 enum	metal2vulkan-air::error::ContainerError	#[derive(Clone, Debug, PartialEq, Eq)] #[non_exhaustive] pub enum ContainerError
 enum	metal2vulkan-air::error::Error	#[derive(Clone, Debug, PartialEq, Eq)] pub enum Error
 enum	metal2vulkan-air::error::ErrorClass	#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum ErrorClass
@@ -1431,6 +1432,7 @@ enum	metal2vulkan::error::BitstreamError	#[derive(Clone, Debug, PartialEq, Eq)] 
 enum	metal2vulkan::error::BudgetExceeded	#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum BudgetExceeded
 enum	metal2vulkan::error::CanonError	#[derive(Clone, Debug, PartialEq, Eq)] #[non_exhaustive] pub enum CanonError
 enum	metal2vulkan::error::Capability	#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] #[non_exhaustive] pub enum Capability
+enum	metal2vulkan::error::ConstantRecord	#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] #[non_exhaustive] pub enum ConstantRecord
 enum	metal2vulkan::error::ContainerError	#[derive(Clone, Debug, PartialEq, Eq)] #[non_exhaustive] pub enum ContainerError
 enum	metal2vulkan::error::DescriptorError	#[derive(Clone, Debug, PartialEq, Eq)] #[non_exhaustive] pub enum DescriptorError
 enum	metal2vulkan::error::DriverDeviation	#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] #[non_exhaustive] pub enum DriverDeviation
@@ -10327,6 +10329,19 @@ variant	metal2vulkan-air::error::BudgetExceeded::Time	Time
 variant	metal2vulkan-air::error::CanonError::CallTypeMismatch	CallTypeMismatch
 variant	metal2vulkan-air::error::CanonError::StaticInitNotEvaluable	StaticInitNotEvaluable
 variant	metal2vulkan-air::error::CanonError::UndefCondition	UndefCondition
+variant	metal2vulkan-air::error::ConstantRecord::BlockAddress	BlockAddress
+variant	metal2vulkan-air::error::ConstantRecord::Byte	Byte
+variant	metal2vulkan-air::error::ConstantRecord::Compare	Compare
+variant	metal2vulkan-air::error::ConstantRecord::DsoLocalEquivalent	DsoLocalEquivalent
+variant	metal2vulkan-air::error::ConstantRecord::ExtractElement	ExtractElement
+variant	metal2vulkan-air::error::ConstantRecord::GepWithInrange	GepWithInrange
+variant	metal2vulkan-air::error::ConstantRecord::InsertElement	InsertElement
+variant	metal2vulkan-air::error::ConstantRecord::NoCfi	NoCfi
+variant	metal2vulkan-air::error::ConstantRecord::PtrAuth	PtrAuth
+variant	metal2vulkan-air::error::ConstantRecord::PtrToAddr	PtrToAddr
+variant	metal2vulkan-air::error::ConstantRecord::Select	Select
+variant	metal2vulkan-air::error::ConstantRecord::ShuffleVector	ShuffleVector
+variant	metal2vulkan-air::error::ConstantRecord::UnaryOp	UnaryOp
 variant	metal2vulkan-air::error::ContainerError::BadMagic	BadMagic
 variant	metal2vulkan-air::error::ContainerError::BadOffset	BadOffset
 variant	metal2vulkan-air::error::ContainerError::BadTag	BadTag
@@ -10352,7 +10367,7 @@ variant	metal2vulkan-air::error::Feature::AddressSpace	AddressSpace(u32)
 variant	metal2vulkan-air::error::Feature::Attribute	Attribute { kind: u32 }
 variant	metal2vulkan-air::error::Feature::BitcodeRecord	BitcodeRecord { block: u32, code: u32 }
 variant	metal2vulkan-air::error::Feature::CallingConvention	CallingConvention(u32)
-variant	metal2vulkan-air::error::Feature::Constant	Constant { code: u32 }
+variant	metal2vulkan-air::error::Feature::Constant	Constant { record: ConstantRecord }
 variant	metal2vulkan-air::error::Feature::DirectCall	DirectCall
 variant	metal2vulkan-air::error::Feature::DynamicCall	DynamicCall
 variant	metal2vulkan-air::error::Feature::FunctionConstantArgument	FunctionConstantArgument
@@ -13121,6 +13136,19 @@ variant	metal2vulkan::error::Capability::Feature	Feature(VkFeature)
 variant	metal2vulkan::error::Capability::Format	Format { format: vk::Format, usage: FormatUsage }
 variant	metal2vulkan::error::Capability::Limit	Limit { limit: VkLimit, required: u64, available: u64 }
 variant	metal2vulkan::error::Capability::Property	Property(VkProperty)
+variant	metal2vulkan::error::ConstantRecord::BlockAddress	BlockAddress
+variant	metal2vulkan::error::ConstantRecord::Byte	Byte
+variant	metal2vulkan::error::ConstantRecord::Compare	Compare
+variant	metal2vulkan::error::ConstantRecord::DsoLocalEquivalent	DsoLocalEquivalent
+variant	metal2vulkan::error::ConstantRecord::ExtractElement	ExtractElement
+variant	metal2vulkan::error::ConstantRecord::GepWithInrange	GepWithInrange
+variant	metal2vulkan::error::ConstantRecord::InsertElement	InsertElement
+variant	metal2vulkan::error::ConstantRecord::NoCfi	NoCfi
+variant	metal2vulkan::error::ConstantRecord::PtrAuth	PtrAuth
+variant	metal2vulkan::error::ConstantRecord::PtrToAddr	PtrToAddr
+variant	metal2vulkan::error::ConstantRecord::Select	Select
+variant	metal2vulkan::error::ConstantRecord::ShuffleVector	ShuffleVector
+variant	metal2vulkan::error::ConstantRecord::UnaryOp	UnaryOp
 variant	metal2vulkan::error::ContainerError::BadMagic	BadMagic
 variant	metal2vulkan::error::ContainerError::BadOffset	BadOffset
 variant	metal2vulkan::error::ContainerError::BadTag	BadTag
@@ -13229,7 +13257,7 @@ variant	metal2vulkan::error::Feature::ClipDistance	ClipDistance
 variant	metal2vulkan::error::Feature::CoherentMemory	CoherentMemory
 variant	metal2vulkan::error::Feature::ComputeDerivatives	ComputeDerivatives
 variant	metal2vulkan::error::Feature::ComputeDerivativesWithSimd	ComputeDerivativesWithSimd
-variant	metal2vulkan::error::Feature::Constant	Constant { code: u32 }
+variant	metal2vulkan::error::Feature::Constant	Constant { record: ConstantRecord }
 variant	metal2vulkan::error::Feature::ConstantAlphaBlendFactor	ConstantAlphaBlendFactor
 variant	metal2vulkan::error::Feature::ConstantGlobalEscaping	ConstantGlobalEscaping
 variant	metal2vulkan::error::Feature::CountingVisibility	CountingVisibility

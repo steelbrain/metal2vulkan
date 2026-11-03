@@ -1020,12 +1020,55 @@ fn constant_errors_are_typed() {
         bitcode_kind(&e),
         Some(BitcodeError::MalformedRecord { .. })
     ));
-    // Block addresses, `select` expressions, and LLVM 23's byte constants are valid LLVM outside
-    // the typed model.
-    for code in [21u32, 13, 35, 36] {
+    // Every constant record LLVM defines outside the typed model is refused by its name: the
+    // constant expressions the IR has no form for, block addresses, signed pointers, and LLVM 23's
+    // byte constants.
+    use crate::error::ConstantRecord as R;
+    for (code, record) in [
+        (13u32, R::Select),
+        (14, R::ExtractElement),
+        (15, R::InsertElement),
+        (16, R::ShuffleVector),
+        (17, R::Compare),
+        (19, R::ShuffleVector),
+        (21, R::BlockAddress),
+        (25, R::UnaryOp),
+        (27, R::DsoLocalEquivalent),
+        (29, R::NoCfi),
+        (31, R::GepWithInrange),
+        (33, R::PtrAuth),
+        (34, R::PtrAuth),
+        (35, R::Byte),
+        (36, R::Byte),
+    ] {
         let e = constants(&[(1, vec![0]), (u64::from(code), vec![0, 0, 0])]).unwrap_err();
-        assert_eq!(unsupported_feature(&e), Some(&Feature::Constant { code }));
+        assert_eq!(
+            unsupported_feature(&e),
+            Some(&Feature::Constant { record }),
+            "{code}"
+        );
     }
+    // A `ptrtoaddr` cast expression (CE_CAST with cast opcode 13) too; an opcode past it is no
+    // LLVM cast.
+    let e = constants(&[(1, vec![0]), (11, vec![13, 0, 0])]).unwrap_err();
+    assert_eq!(
+        unsupported_feature(&e),
+        Some(&Feature::Constant {
+            record: R::PtrToAddr
+        })
+    );
+    let e = constants(&[(1, vec![0]), (11, vec![14, 0, 0])]).unwrap_err();
+    assert!(matches!(
+        bitcode_kind(&e),
+        Some(BitcodeError::MalformedRecord { .. })
+    ));
+    // A WIDE_INTEGER of an integer type of at most 64 bits, which LLVM never writes (the type
+    // table refuses the wider ones).
+    let e = constants(&[(1, vec![0]), (5, vec![2, 0])]).unwrap_err();
+    assert!(matches!(
+        bitcode_kind(&e),
+        Some(BitcodeError::MalformedRecord { .. })
+    ));
     let e = constants(&[(1, vec![0]), (60, vec![])]).unwrap_err();
     assert_eq!(
         bitcode_kind(&e),

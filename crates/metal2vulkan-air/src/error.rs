@@ -752,11 +752,12 @@ pub enum Feature {
     InlineAsm,
     /// Linkage signatures / stitching / dynamic libraries.
     Linking,
-    /// A bitcode constant record outside the typed model (block address, inline asm, `select`
-    /// and other constant expressions the IR has no form for).
+    /// A constants-block record LLVM defines that the typed model has no form for (a block
+    /// address, a `select` and the other constant expressions of [`ConstantRecord`]), by LLVM's
+    /// name for it.
     Constant {
-        /// The constants block's record code.
-        code: u32,
+        /// The record.
+        record: ConstantRecord,
     },
     /// An LLVM attribute kind that changes the calling ABI and that AIR does not use
     /// (`inalloca`, `preallocated`, `byref`, `nest`, the `swift*` kinds).
@@ -809,6 +810,44 @@ pub enum Feature {
     /// [[buffer(n)]];` in Apple's `!air.global_bindings` list, valid AIR this version does not
     /// implement yet.
     ProgramScopeBinding,
+}
+
+/// A constants-block record that LLVM defines (`LLVMBitCodes.h`'s `ConstantsCodes`, and
+/// `CAST_PTRTOADDR` among its cast opcodes) and that the typed model has no form for
+/// ([`Feature::Constant`]), by LLVM's name. LLVM's code follows each name. A later LLVM's new
+/// record is a new variant.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[non_exhaustive]
+pub enum ConstantRecord {
+    /// A `select` constant expression (`CST_CODE_CE_SELECT`, 13).
+    Select,
+    /// An `extractelement` constant expression (`CST_CODE_CE_EXTRACTELT`, 14).
+    ExtractElement,
+    /// An `insertelement` constant expression (`CST_CODE_CE_INSERTELT`, 15).
+    InsertElement,
+    /// A `shufflevector` constant expression (`CST_CODE_CE_SHUFFLEVEC`, 16, and
+    /// `CST_CODE_CE_SHUFVEC_EX`, 19, whose result length differs from its operands').
+    ShuffleVector,
+    /// An `icmp` or `fcmp` constant expression (`CST_CODE_CE_CMP`, 17).
+    Compare,
+    /// A `blockaddress` (`CST_CODE_BLOCKADDRESS`, 21).
+    BlockAddress,
+    /// A unary constant expression, `fneg` (`CST_CODE_CE_UNOP`, 25).
+    UnaryOp,
+    /// A `dso_local_equivalent` (`CST_CODE_DSO_LOCAL_EQUIVALENT`, 27).
+    DsoLocalEquivalent,
+    /// A `no_cfi` function reference (`CST_CODE_NO_CFI_VALUE`, 29).
+    NoCfi,
+    /// A `getelementptr` constant expression with an `inrange` range (`CST_CODE_CE_GEP_WITH_INRANGE`,
+    /// 31).
+    GepWithInrange,
+    /// A signed pointer, `ptrauth` (`CST_CODE_PTRAUTH`, 33, and `CST_CODE_PTRAUTH2`, 34).
+    PtrAuth,
+    /// A constant of LLVM's byte type (`CST_CODE_BYTE`, 35, and `CST_CODE_WIDE_BYTE`, 36), which
+    /// the type table refuses too.
+    Byte,
+    /// A `ptrtoaddr` cast constant expression (`CST_CODE_CE_CAST` with `CAST_PTRTOADDR`, 13).
+    PtrToAddr,
 }
 
 /// An input the request did not supply.

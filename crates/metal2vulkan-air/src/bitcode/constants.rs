@@ -16,7 +16,7 @@ use super::stream::{signed_vbr, Stream};
 use super::types::{grow, BitcodeTypes};
 use crate::budget::Meter;
 use crate::error::{BitcodeError, InputError, InputErrorKind, Location};
-use crate::error::{Error, Feature};
+use crate::error::{ConstantRecord, Error, Feature};
 use crate::ir::{
     BinOp, CastOp, Const, ConstExpr, ConstId, ConstTable, Constant, InlineAsm, IntFlags, Type,
     TypeId, TypeTable,
@@ -153,6 +153,9 @@ fn record(
             let v = signed_vbr(s.op(B, code, 0)?) as u64;
             splat(consts, types, ty, Const::Int(v & mask(u32::from(bits))), m)
         }
+        // LLVM writes an integer of more than 64 bits as WIDE_INTEGER and every other as INTEGER;
+        // the type table refuses the wider types (`Feature::Type`), so a WIDE_INTEGER here is of a
+        // type of at most 64 bits, which LLVM never writes.
         CST_WIDE_INTEGER => Err(bad()),
         CST_FLOAT => {
             let width = types.float_bits(ty).ok_or_else(bad)?;
@@ -207,7 +210,11 @@ fn record(
                 11 => CastOp::Bitcast,
                 12 => CastOp::AddrSpaceCast,
                 // CAST_PTRTOADDR: an LLVM cast the IR has no form for.
-                13 => return Err(s.unsupported(Feature::Constant { code })),
+                13 => {
+                    return Err(s.unsupported(Feature::Constant {
+                        record: ConstantRecord::PtrToAddr,
+                    }))
+                }
                 _ => return Err(bad()),
             };
             Ok(Raw::Cast {
@@ -268,8 +275,10 @@ fn record(
         CST_INLINEASM_OLD | CST_INLINEASM_OLD2 | CST_INLINEASM_OLD3 | CST_INLINEASM => {
             inline_asm(s, bc_types, types, code, (bc, ty), m)
         }
-        c if CST_UNSUPPORTED.contains(&c) => Err(s.unsupported(Feature::Constant { code })),
-        _ => Err(s.err(BitcodeError::UnknownRecord { block: B, code })),
+        c => match cst_unsupported(c) {
+            Some(record) => Err(s.unsupported(Feature::Constant { record })),
+            None => Err(s.err(BitcodeError::UnknownRecord { block: B, code })),
+        },
     }
 }
 

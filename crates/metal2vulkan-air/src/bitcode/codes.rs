@@ -5,6 +5,8 @@
 //! known LLVM construct the typed model does not cover (`Unsupported`) or not LLVM at all
 //! (`UnknownRecord`); the per-block decoders decide which.
 
+use crate::error::ConstantRecord;
+
 // ---- Block ids (`enum BlockIDs`, FIRST_APPLICATION_BLOCKID = 8) ----
 pub(crate) const MODULE_BLOCK: u32 = 8;
 pub(crate) const PARAMATTR_BLOCK: u32 = 9;
@@ -100,12 +102,28 @@ pub(crate) const CST_INLINEASM_OLD3: u32 = 28;
 /// `INLINEASM`: `[fnty, sideeffect|alignstack|asmdialect|unwind, asmstr, conststr]` (LLVM 13+).
 pub(crate) const CST_INLINEASM: u32 = 30;
 pub(crate) const CST_CE_GEP: u32 = 32;
-/// Constant codes LLVM defines that the typed model refuses: CE_SELECT, CE_EXTRACTELT,
-/// CE_INSERTELT, CE_SHUFFLEVEC, CE_CMP, CE_SHUFVEC_EX, BLOCKADDRESS, CE_UNOP,
-/// DSO_LOCAL_EQUIVALENT, NO_CFI_VALUE, CE_GEP_WITH_INRANGE, PTRAUTH, PTRAUTH2, BYTE and WIDE_BYTE
-/// (LLVM 23: constants of the refused byte type).
-pub(crate) const CST_UNSUPPORTED: &[u32] =
-    &[13, 14, 15, 16, 17, 19, 21, 25, 27, 29, 31, 33, 34, 35, 36];
+/// The constant code LLVM defines that the typed model refuses, by its name ([`ConstantRecord`]):
+/// CE_SELECT, CE_EXTRACTELT, CE_INSERTELT, CE_SHUFFLEVEC and CE_SHUFVEC_EX, CE_CMP,
+/// BLOCKADDRESS, CE_UNOP, DSO_LOCAL_EQUIVALENT, NO_CFI_VALUE, CE_GEP_WITH_INRANGE, PTRAUTH and
+/// PTRAUTH2, and BYTE and WIDE_BYTE (LLVM 23: constants of the refused byte type).
+pub(crate) fn cst_unsupported(code: u32) -> Option<ConstantRecord> {
+    use ConstantRecord as R;
+    Some(match code {
+        13 => R::Select,
+        14 => R::ExtractElement,
+        15 => R::InsertElement,
+        16 | 19 => R::ShuffleVector,
+        17 => R::Compare,
+        21 => R::BlockAddress,
+        25 => R::UnaryOp,
+        27 => R::DsoLocalEquivalent,
+        29 => R::NoCfi,
+        31 => R::GepWithInrange,
+        33 | 34 => R::PtrAuth,
+        35 | 36 => R::Byte,
+        _ => return None,
+    })
+}
 
 // ---- METADATA ----
 pub(crate) const METADATA_VALUE: u32 = 2;
