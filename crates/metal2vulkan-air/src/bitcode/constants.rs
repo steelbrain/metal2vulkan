@@ -18,8 +18,8 @@ use crate::budget::Meter;
 use crate::error::{BitcodeError, InputError, InputErrorKind, Location};
 use crate::error::{Error, Feature};
 use crate::ir::{
-    BinOp, CastOp, Const, ConstExpr, ConstId, ConstTable, Constant, IntFlags, Type, TypeId,
-    TypeTable,
+    BinOp, CastOp, Const, ConstExpr, ConstId, ConstTable, Constant, InlineAsm, IntFlags, Type,
+    TypeId, TypeTable,
 };
 
 /// One decoded constant: its id and the bitcode type index it was declared with.
@@ -106,7 +106,7 @@ pub(crate) fn decode(
             return Ok(());
         }
         let (bc, ty) = cur.ok_or_else(|| s.malformed(B, code))?;
-        let entry = record(s, cx.consts, bc_types, types, code, ty, m)?;
+        let entry = record(s, cx.consts, bc_types, types, code, (bc, ty), m)?;
         grow(m, &mut raw)?;
         raw.push((entry, bc));
         Ok(())
@@ -124,14 +124,14 @@ pub(crate) fn decode(
     Ok(out)
 }
 
-/// Decode one constant record of type `ty` (not `SETTYPE`).
+/// Decode one constant record of type `ty` (bitcode type index `bc`; not `SETTYPE`).
 fn record(
     s: &Stream<'_>,
     consts: &mut ConstTable,
     bc_types: &BitcodeTypes,
     types: &TypeTable,
     code: u32,
-    ty: TypeId,
+    (bc, ty): (u32, TypeId),
     m: &mut Meter,
 ) -> Result<Raw, Error> {
     const B: u32 = CONSTANTS_BLOCK;
@@ -265,9 +265,94 @@ fn record(
                 ops: vals.into_boxed_slice(),
             })
         }
+        CST_INLINEASM_OLD | CST_INLINEASM_OLD2 | CST_INLINEASM_OLD3 | CST_INLINEASM => {
+            inline_asm(s, bc_types, types, code, (bc, ty), m)
+        }
         c if CST_UNSUPPORTED.contains(&c) => Err(s.unsupported(Feature::Constant { code })),
         _ => Err(s.err(BitcodeError::UnknownRecord { block: B, code })),
     }
+}
+
+/// An inline assembly record of type `ty` (bitcode index `bc`), in any of LLVM's four
+/// spellings: `[fnty?, flags, asmlen, asm..., conslen, cons...]`, one byte per operand. `INLINEASM`
+/// names its function type; the older three take it from the pointee of their typed pointer.
+/// The flags are `sideeffect` (bit 0), `alignstack` (1), `inteldialect` (2, from `INLINEASM_OLD2`)
+/// and `unwind` (3, from `INLINEASM_OLD3`); a bit the spelling does not define is malformed, as is
+/// a type other than a pointer, a function type that is none, or a byte operand above 255.
+fn inline_asm(
+    s: &Stream<'_>,
+    bc_types: &BitcodeTypes,
+    types: &TypeTable,
+    code: u32,
+    (bc, ty): (u32, TypeId),
+    m: &mut Meter,
+) -> Result<Raw, Error> {
+    let bad = || s.malformed(CONSTANTS_BLOCK, code);
+    let ops = s.ops();
+    let (fn_bc, rest) = match code {
+        CST_INLINEASM => {
+            let (&f, rest) = ops.split_first().ok_or_else(bad)?;
+            (f, rest)
+        }
+        _ => (
+            u64::from(bc_types.pointee(u64::from(bc)).ok_or_else(bad)?),
+            ops,
+        ),
+    };
+    let is_fn = bc_types
+        .ty(fn_bc)
+        .is_some_and(|f| matches!(types.get(f), Some(Type::Function { .. })));
+    if !is_fn || !matches!(types.get(ty), Some(Type::Ptr { .. })) {
+        return Err(bad());
+    }
+    let (&flags, rest) = rest.split_first().ok_or_else(bad)?;
+    let defined: u64 = match code {
+        CST_INLINEASM_OLD => 0b11,
+        CST_INLINEASM_OLD2 => 0b111,
+        _ => 0b1111,
+    };
+    if flags & !defined != 0 {
+        return Err(bad());
+    }
+    let (template, rest) = asm_bytes(rest, &bad, m)?;
+    let (constraints, rest) = asm_bytes(rest, &bad, m)?;
+    if !rest.is_empty() {
+        return Err(bad());
+    }
+    let asm = InlineAsm {
+        template,
+        constraints,
+        side_effects: flags & 1 != 0,
+        align_stack: flags & 2 != 0,
+        intel_dialect: flags & 4 != 0,
+        can_throw: flags & 8 != 0,
+    };
+    m.charge(std::mem::size_of::<InlineAsm>())?;
+    Ok(Raw::Ready(Constant {
+        ty,
+        value: Const::InlineAsm(Box::new(asm)),
+    }))
+}
+
+/// A length-prefixed string of one byte per operand at the front of `ops`, and the operands after
+/// it; `bad()` when the length runs past the record or a byte is above 255.
+fn asm_bytes<'o>(
+    ops: &'o [u64],
+    bad: &dyn Fn() -> Error,
+    m: &mut Meter,
+) -> Result<(Box<[u8]>, &'o [u64]), Error> {
+    let (&len, rest) = ops.split_first().ok_or_else(bad)?;
+    let len = usize::try_from(len)
+        .ok()
+        .filter(|&n| n <= rest.len())
+        .ok_or_else(bad)?;
+    let (text, rest) = rest.split_at(len);
+    let mut out = Vec::new();
+    m.reserve(&mut out, len)?;
+    for &b in text {
+        out.push(u8::try_from(b).map_err(|_| bad())?);
+    }
+    Ok((out.into_boxed_slice(), rest))
 }
 
 /// The scalar constant `value` of type `ty`, or, for a vector `ty`, the aggregate holding

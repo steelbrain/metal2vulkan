@@ -252,6 +252,7 @@ impl From<crate::air::error::Feature> for Feature {
             Air::StaticInitializer => Feature::StaticInitializer,
             Air::Recursion => Feature::Recursion,
             Air::DynamicCall => Feature::DynamicCall,
+            Air::InlineAsm => Feature::InlineAsm,
             Air::Linking => Feature::Linking,
             Air::Constant { code } => Feature::Constant { code },
             Air::Attribute { kind } => Feature::Attribute { kind },
@@ -1123,6 +1124,9 @@ pub enum Feature {
     Recursion,
     /// Indirect calls, function pointers, visible/intersection function tables (one variant).
     DynamicCall,
+    /// A call to inline assembly (`asm`) that an entry reaches: the IR gives no assembly a
+    /// meaning. The refusal names the expression (`asm sideeffect "", ""`).
+    InlineAsm,
     /// Linkage signatures / stitching / dynamic libraries.
     Linking,
 

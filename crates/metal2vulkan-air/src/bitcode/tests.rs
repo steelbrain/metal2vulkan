@@ -1036,6 +1036,131 @@ fn constant_errors_are_typed() {
     );
 }
 
+/// `records` in a module-level constants block over [`good_types`] and three more: 6 `void ()`,
+/// 7 `void ()*` (a typed pointer in address space 0), 8 `ptr` (opaque, address space 0).
+fn asm_constants(records: &[(u64, Vec<u64>)]) -> Result<ModuleTables, Error> {
+    let mut types = good_types();
+    types[0] = (1, vec![9]);
+    types.extend([(21, vec![0, 3]), (8, vec![6, 0]), (25, vec![0])]);
+    decode(&stream(2, 0, b"", |w| {
+        block(w, codes::TYPE_BLOCK, &types);
+        block(w, codes::CONSTANTS_BLOCK, records);
+    }))
+}
+
+/// `[len, bytes...]`: an inline assembly string's operands.
+fn asm_text(s: &str) -> Vec<u64> {
+    [vec![s.len() as u64], chars(s)].concat()
+}
+
+/// Every spelling of LLVM's inline assembly record decodes to its text and flags: `INLINEASM`
+/// (code 30, naming its function type), and the typed-pointer `INLINEASM_OLD3` (28),
+/// `INLINEASM_OLD2` (23) and `INLINEASM_OLD` (18), typed by their pointer's pointee. The constant
+/// is a `ptr` in address space 0, and the module verifies.
+#[test]
+fn inline_asm_records_decode_in_every_spelling() {
+    let empty = [asm_text(""), asm_text("")].concat();
+    let text = [asm_text("nop \"x\""), asm_text("~{memory}")].concat();
+    let t = asm_constants(&[
+        (1, vec![8]),
+        // asm sideeffect "", "" of type void (): what an MSL `asm volatile("")` compiles to.
+        (30, [vec![6, 1], empty.clone()].concat()),
+        // Every flag.
+        (30, [vec![6, 0b1111], text.clone()].concat()),
+        (1, vec![7]),
+        (28, [vec![0b1010], text.clone()].concat()),
+        (23, [vec![0b100], empty.clone()].concat()),
+        (18, [vec![0b11], text.clone()].concat()),
+    ])
+    .unwrap();
+    let asm = |i: u64| match &t.parts.consts.get(t.value(i).unwrap()).unwrap().value {
+        Const::InlineAsm(a) => (**a).clone(),
+        other => panic!("value {i}: {other:?}"),
+    };
+    let flags =
+        |a: &crate::ir::InlineAsm| [a.side_effects, a.align_stack, a.intel_dialect, a.can_throw];
+    assert_eq!(asm(0).spelling(), r#"asm sideeffect "", """#);
+    assert_eq!(flags(&asm(0)), [true, false, false, false]);
+    assert_eq!(&*asm(1).template, b"nop \"x\"");
+    assert_eq!(&*asm(1).constraints, b"~{memory}");
+    assert_eq!(
+        asm(1).spelling(),
+        r#"asm sideeffect alignstack inteldialect unwind "nop \22x\22", "~{memory}""#
+    );
+    assert_eq!(flags(&asm(2)), [false, true, false, true]);
+    assert_eq!(flags(&asm(3)), [false, false, true, false]);
+    assert_eq!(&*asm(3).template, b"");
+    assert_eq!(flags(&asm(4)), [true, true, false, false]);
+    assert_eq!(&*asm(4).constraints, b"~{memory}");
+    let ptr0 = |i: u64| t.parts.consts.ty(t.value(i).unwrap()).unwrap();
+    assert_eq!(ptr0(0), ptr0(2), "both pointer spellings erase to one ptr");
+    verify_module_level(&t).unwrap();
+}
+
+/// An inline assembly record that does not fit its spelling is malformed: a flag bit the spelling
+/// does not define, a function type that is none, a string running past the record, a byte above
+/// 255, an operand after the constraints, an old spelling over an opaque pointer (no pointee to
+/// type it), and a type other than a pointer. Inline assembly as another constant's operand fails
+/// verification: LLVM has no such constant.
+#[test]
+fn malformed_inline_asm_records_are_typed() {
+    let empty = [asm_text(""), asm_text("")].concat();
+    for records in [
+        vec![
+            (1, vec![8]),
+            (30, [vec![6, 1 << 4], empty.clone()].concat()),
+        ],
+        vec![(1, vec![7]), (28, [vec![1 << 4], empty.clone()].concat())],
+        vec![(1, vec![7]), (23, [vec![1 << 3], empty.clone()].concat())],
+        vec![(1, vec![7]), (18, [vec![1 << 2], empty.clone()].concat())],
+        vec![(1, vec![8]), (30, [vec![0, 1], empty.clone()].concat())],
+        vec![(1, vec![8]), (30, vec![6, 1, 3, 1, 2])],
+        vec![(1, vec![8]), (30, vec![6, 1, 1, 256, 0])],
+        vec![
+            (1, vec![8]),
+            (30, [vec![6, 1], empty.clone(), vec![0]].concat()),
+        ],
+        vec![(1, vec![8]), (30, vec![6, 1, 0])],
+        vec![(1, vec![8]), (28, [vec![1], empty.clone()].concat())],
+        vec![(1, vec![0]), (30, [vec![6, 1], empty.clone()].concat())],
+    ] {
+        let e = asm_constants(&records).unwrap_err();
+        assert!(
+            matches!(bitcode_kind(&e), Some(BitcodeError::MalformedRecord { .. })),
+            "{records:?}: {e:?}"
+        );
+    }
+    // A struct `{ ptr }` (type 9) holding an inline assembly expression.
+    let mut types = good_types();
+    types[0] = (1, vec![10]);
+    types.extend([
+        (21, vec![0, 3]),
+        (8, vec![6, 0]),
+        (25, vec![0]),
+        (18, vec![0, 8]),
+    ]);
+    let t = decode(&stream(2, 0, b"", |w| {
+        block(w, codes::TYPE_BLOCK, &types);
+        block(
+            w,
+            codes::CONSTANTS_BLOCK,
+            &[
+                (1, vec![8]),
+                (30, [vec![6, 1], empty.clone()].concat()),
+                (1, vec![9]),
+                (7, vec![0]),
+            ],
+        );
+    }))
+    .unwrap();
+    let e = verify_module_level(&t).unwrap_err();
+    assert!(
+        matches!(&e, Error::InvalidInput(i)
+            if i.kind == InputErrorKind::Verify(crate::error::VerifyError::MalformedConstant)),
+        "{e:?}"
+    );
+}
+
 #[test]
 fn metadata_and_string_table_errors_are_typed() {
     // A node referring past the metadata.

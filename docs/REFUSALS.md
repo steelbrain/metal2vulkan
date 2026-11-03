@@ -27,7 +27,7 @@ Columns:
 
 | Kind | Variants | With a site | Reach system | Reach app | Reach rare | Reach none | Unassessed |
 |---|---|---|---|---|---|---|---|
-| Translator and front-end refusals | 127 | 127 | 6 | 32 | 71 | 18 | 0 |
+| Translator and front-end refusals | 128 | 128 | 6 | 33 | 71 | 18 | 0 |
 | Runtime gaps | 73 | 73 | 1 | 8 | 46 | 18 | 0 |
 | Apple-only calls | 4 | 4 | 0 | 0 | 0 | 4 | 0 |
 | Binder refusals at a device limit | 9 | 9 | 0 | 1 | 7 | 1 | 0 |
@@ -41,7 +41,7 @@ Columns:
 
 | Kind | `metal-measured` | `metal-documented` | `metal-takes` | `device` | `ours` | `unknown` | `delegated` | `-` |
 |---|---|---|---|---|---|---|---|---|
-| Translator and front-end refusals | 0 | 0 | 0 | 48 | 56 | 0 | 0 | 23 |
+| Translator and front-end refusals | 0 | 0 | 0 | 48 | 57 | 0 | 0 | 23 |
 | Runtime gaps | 0 | 0 | 0 | 0 | 73 | 0 | 0 | 0 |
 | Apple-only calls | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 4 |
 | Binder refusals at a device limit | 0 | 0 | 0 | 9 | 0 | 0 | 0 | 0 |
@@ -67,6 +67,7 @@ Columns:
 | `StaticInitializer` | A static initializer that cannot be evaluated | every device (not implemented) | `ours` | 1: `crates/metal2vulkan-air/src/error.rs (from)` | `none`: LLVM initializers AIR does not emit |
 | `Recursion` | Recursion (one variant) | every device (not implemented) | `ours` | 4: `crates/metal2vulkan-air/src/canon/mod.rs (recursion, 2 sites)`, `crates/metal2vulkan-air/src/canon/recursion.rs (dynamic_alloca)` (+1) | `rare`: recursion through visible functions |
 | `DynamicCall` | Indirect calls, function pointers, visible/intersection function tables (one variant) | every device (no Vulkan mechanism); every device (not implemented) | `ours` | 9: `crates/metal2vulkan-air/src/canon/devirt.rs (record)`, `crates/metal2vulkan-air/src/canon/devirt.rs (site)` (+5) | `rare`: function pointers and function tables |
+| `InlineAsm` | A call to inline assembly (`asm`) that an entry reaches | every device (not implemented) | `ours` | 1: `crates/metal2vulkan-air/src/canon/mod.rs (post_check)` | `app`: the one inline assembly MSL accepts, an empty asm("") statement, which shader generators write into loop bodies |
 | `Linking` | Linkage signatures / stitching / dynamic libraries | every device (not implemented) | `ours` | 3: `crates/metal2vulkan-air/src/canon/link.rs (not_implemented)`, `crates/metal2vulkan-air/src/canon/mod.rs (post_check)` (+1) | `rare`: dynamic libraries and linked functions |
 | `SimdWidth` | Simdgroup width 32 is not achievable for this usage, stage, and device | devices without VkProperty::MetalFragmentSimdgroups; devices without a capability the site computes (`width_needs(stage, st)`) | `device` | 2: `crates/metal2vulkan/src/device/subgroup.rs (subgroup_tier)`, `crates/metal2vulkan/src/lower/simd/mod.rs (finish)` | `app`: simdgroup functions on a device whose subgroups cannot run 32 wide for the use |
 | `LocalSize` | A local size beyond a device limit on this axis (`None` | every device (no Vulkan mechanism) | `device` | 1: `crates/metal2vulkan/src/bind/dispatch.rs (regions)` | `app`: a threadgroup size past a smaller device's limit |
@@ -577,6 +578,7 @@ Each refusal's sites, with the function that builds it.
 - `feature::StaticInitializer`: `crates/metal2vulkan-air/src/error.rs (from)`
 - `feature::Recursion`: `crates/metal2vulkan-air/src/canon/mod.rs (recursion, 2 sites)`; `crates/metal2vulkan-air/src/canon/recursion.rs (dynamic_alloca)`; `crates/metal2vulkan-air/src/canon/static_init.rs (run)`
 - `feature::DynamicCall`: `crates/metal2vulkan-air/src/canon/devirt.rs (record)`; `crates/metal2vulkan-air/src/canon/devirt.rs (site)`; `crates/metal2vulkan-air/src/canon/devirt.rs (unfolded_decl)`; `crates/metal2vulkan-air/src/canon/mod.rs (post_check)`; `crates/metal2vulkan-air/src/canon/prune.rs (prune_in)`; `crates/metal2vulkan/src/bind/heap.rs (directory_bytes, 3 sites)`; `crates/metal2vulkan/src/lower/select.rs (route_air)`
+- `feature::InlineAsm`: `crates/metal2vulkan-air/src/canon/mod.rs (post_check)`
 - `feature::Linking`: `crates/metal2vulkan-air/src/canon/link.rs (not_implemented)`; `crates/metal2vulkan-air/src/canon/mod.rs (post_check)`; `crates/metal2vulkan-air/src/canon/mod.rs (specialize_dynamic)`
 - `feature::SimdWidth`: `crates/metal2vulkan/src/device/subgroup.rs (subgroup_tier)`; `crates/metal2vulkan/src/lower/simd/mod.rs (finish)`
 - `feature::LocalSize`: `crates/metal2vulkan/src/bind/dispatch.rs (regions)`

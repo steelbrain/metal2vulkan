@@ -488,6 +488,8 @@ impl Printer<'_, '_> {
             },
             Const::Undef => "undef".into(),
             Const::Poison => "poison".into(),
+            // A call's callee: `asm <flags> "template", "constraints"`.
+            Const::InlineAsm(a) => a.spelling(),
             Const::GlobalAddr(g) => {
                 let g = self.m.global(*g).ok_or_else(|| bad("global"))?;
                 format!("@{}", self.sym(g.name)?)

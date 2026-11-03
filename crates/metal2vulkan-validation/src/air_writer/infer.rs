@@ -262,9 +262,12 @@ impl Infer<'_, '_> {
             return Ok(leaf(node));
         }
         Ok(match &k.value {
-            Const::Int(_) | Const::Float(_) | Const::Null | Const::Undef | Const::Poison => {
-                leaf(node)
-            }
+            Const::Int(_)
+            | Const::Float(_)
+            | Const::Null
+            | Const::Undef
+            | Const::Poison
+            | Const::InlineAsm(_) => leaf(node),
             Const::Aggregate(elems) => {
                 let mut kids = Vec::with_capacity(elems.len());
                 for (i, &e) in elems.iter().enumerate() {

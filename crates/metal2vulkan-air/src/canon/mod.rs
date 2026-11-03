@@ -1358,7 +1358,11 @@ fn post_check(
                                 _ => undefined(f)?,
                             }
                         }
-                        None => Unsupported::not_implemented(Feature::DynamicCall),
+                        None => match parts.consts.inline_asm(callee) {
+                            Some(asm) => Unsupported::not_implemented(Feature::InlineAsm)
+                                .naming(DiagName::new(asm.spelling())),
+                            None => Unsupported::not_implemented(Feature::DynamicCall),
+                        },
                     }
                 }
                 Callee::Direct(f) => match parts.funcs.get(f) {

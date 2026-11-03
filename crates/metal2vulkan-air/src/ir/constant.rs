@@ -6,7 +6,7 @@
 //! [`Const::GlobalAddr`] / [`Const::FuncAddr`], so every non-local operand is one `ConstId`.
 
 use super::id::{Arena, ConstId, FuncId, GlobalId, TypeId};
-use super::inst::{BinOp, CastOp, IntFlags};
+use super::inst::{BinOp, CastOp, IntFlags, Value};
 use super::intern::FxHashMap;
 use crate::budget::Meter;
 use crate::error::Error;
@@ -42,6 +42,63 @@ pub enum Const {
     FuncAddr(FuncId),
     /// A constant expression.
     Expr(ConstExpr),
+    /// An inline assembly expression (`asm`), typed `ptr`: only ever the callee of a call, at the
+    /// call's function type. The IR keeps its strings and flags as written and gives it no
+    /// meaning; canonicalization refuses a call to it that an entry reaches.
+    InlineAsm(Box<InlineAsm>),
+}
+
+/// The text and flags of an inline assembly expression ([`Const::InlineAsm`]), as LLVM's
+/// `CST_CODE_INLINEASM` records spell them.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct InlineAsm {
+    /// The assembly template.
+    pub template: Box<[u8]>,
+    /// The constraint string: the operands, results and clobbers.
+    pub constraints: Box<[u8]>,
+    /// `sideeffect`: the expression has effects its constraints do not list.
+    pub side_effects: bool,
+    /// `alignstack`: the stack is aligned for it.
+    pub align_stack: bool,
+    /// `inteldialect`: the template is in Intel syntax rather than AT&T.
+    pub intel_dialect: bool,
+    /// `unwind`: it may throw.
+    pub can_throw: bool,
+}
+
+impl InlineAsm {
+    /// The bytes it holds outside its box.
+    pub(crate) fn heap_bytes(&self) -> usize {
+        self.template.len().saturating_add(self.constraints.len())
+    }
+
+    /// Its LLVM spelling: `asm`, the flags, then the quoted template and constraints, with LLVM's
+    /// `\XX` escapes (`asm sideeffect "", ""`).
+    pub fn spelling(&self) -> String {
+        let mut out = String::from("asm");
+        for (on, word) in [
+            (self.side_effects, " sideeffect"),
+            (self.align_stack, " alignstack"),
+            (self.intel_dialect, " inteldialect"),
+            (self.can_throw, " unwind"),
+        ] {
+            if on {
+                out.push_str(word);
+            }
+        }
+        for (i, text) in [&self.template, &self.constraints].into_iter().enumerate() {
+            out.push_str(if i == 0 { " \"" } else { ", \"" });
+            for &b in text.iter() {
+                if (b.is_ascii_graphic() || b == b' ') && b != b'"' && b != b'\\' {
+                    out.push(char::from(b));
+                } else {
+                    out.push_str(&format!("\\{b:02X}"));
+                }
+            }
+            out.push('"');
+        }
+        out
+    }
 }
 
 impl Const {
@@ -56,7 +113,17 @@ impl Const {
             | Const::Undef
             | Const::Poison
             | Const::GlobalAddr(_)
-            | Const::FuncAddr(_) => &[],
+            | Const::FuncAddr(_)
+            | Const::InlineAsm(_) => &[],
+        }
+    }
+
+    /// The bytes it holds outside its slot: its children's ids, or an inline assembly
+    /// expression's box and strings.
+    pub(crate) fn heap_bytes(&self) -> usize {
+        match self {
+            Const::InlineAsm(a) => std::mem::size_of::<InlineAsm>().saturating_add(a.heap_bytes()),
+            other => std::mem::size_of::<ConstId>().saturating_mul(other.children().len()),
         }
     }
 }
@@ -133,8 +200,7 @@ impl ConstTable {
             return Err(malformed_constant());
         }
         // Stored twice: once in the arena, once as the lookup key.
-        let payload = std::mem::size_of::<ConstId>().saturating_mul(c.value.children().len());
-        meter.charge(payload.saturating_mul(2))?;
+        meter.charge(c.value.heap_bytes().saturating_mul(2))?;
         meter.charge(std::mem::size_of::<Constant>())?;
         let id = self.consts.push(c.clone(), meter)?;
         self.index.insert(c, id);
@@ -150,6 +216,17 @@ impl ConstTable {
     /// The constant at `id`.
     pub fn get(&self, id: ConstId) -> Option<&Constant> {
         self.consts.get(id)
+    }
+
+    /// The inline assembly expression `v` is, if it is one.
+    pub(crate) fn inline_asm(&self, v: Value) -> Option<&InlineAsm> {
+        match v {
+            Value::Const(c) => match &self.get(c)?.value {
+                Const::InlineAsm(asm) => Some(asm),
+                _ => None,
+            },
+            Value::Arg(_) | Value::Inst(_) => None,
+        }
     }
 
     /// The type of the constant at `id`.

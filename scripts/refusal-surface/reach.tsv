@@ -14,6 +14,7 @@ feature	AgxUnmodeled	rare	Apple's own libraries' AGX intrinsics
 feature	StaticInitializer	none	LLVM initializers AIR does not emit
 feature	Recursion	rare	recursion through visible functions
 feature	DynamicCall	rare	function pointers and function tables
+feature	InlineAsm	app	the one inline assembly MSL accepts, an empty asm("") statement, which shader generators write into loop bodies
 feature	Linking	rare	dynamic libraries and linked functions
 feature	SimdWidth	app	simdgroup functions on a device whose subgroups cannot run 32 wide for the use
 feature	LocalSize	app	a threadgroup size past a smaller device's limit

@@ -321,7 +321,10 @@ impl<'a> Verifier<'a> {
             && self.types().is_sized(g.value_ty)
             && self.section_ok(g.section)
             && match g.init {
-                Some(c) => self.p.consts.ty(c) == Some(g.value_ty),
+                Some(c) => {
+                    self.p.consts.ty(c) == Some(g.value_ty)
+                        && self.p.consts.inline_asm(Value::Const(c)).is_none()
+                }
                 None => declaration_linkage,
             }
     }
@@ -330,6 +333,15 @@ impl<'a> Verifier<'a> {
         let Some(ty) = self.ty(c.ty) else {
             return false;
         };
+        // Inline assembly is no LLVM constant: it is never another constant's operand.
+        let asm_child = c
+            .value
+            .children()
+            .iter()
+            .any(|&k| self.p.consts.inline_asm(Value::Const(k)).is_some());
+        if asm_child {
+            return false;
+        }
         let child_ty = |id: ConstId| self.p.consts.ty(id);
         match &c.value {
             Const::Int(bits) => match ty {
@@ -365,6 +377,10 @@ impl<'a> Verifier<'a> {
                         .space(self.p.data_layout.program_space)
                         .is_some_and(|space| *ty == Type::Ptr { space })
             }
+            // LLVM types an inline assembly expression `ptr` in address space 0.
+            Const::InlineAsm(_) => self
+                .space(0)
+                .is_some_and(|space| *ty == Type::Ptr { space }),
             Const::Expr(ConstExpr::Cast { op, ops: [v] }) => {
                 child_ty(*v).is_some_and(|src| self.cast_ok(*op, src, c.ty))
             }
@@ -576,7 +592,14 @@ impl<'a> Verifier<'a> {
     /// Every operand exists and is a non-void value.
     fn operands(&self, cx: &FnCtx<'a>, inst: &Inst) -> Result<(), Error> {
         let mut ok = true;
+        // Inline assembly is only ever a call's callee (LLVM: "Cannot take the address of an
+        // inline asm!").
+        let mut asm_uses = 0usize;
+        let asm_callee = matches!(&inst.kind, InstKind::Call(call)
+            if matches!(call.callee, Callee::Indirect { callee, .. }
+                if self.p.consts.inline_asm(callee).is_some()));
         inst.kind.for_each_value(|v| {
+            asm_uses += usize::from(self.p.consts.inline_asm(v).is_some());
             ok &= match v {
                 Value::Arg(a) => a.index() < cx.params.len(),
                 Value::Const(c) => self.p.consts.contains(c),
@@ -587,7 +610,7 @@ impl<'a> Verifier<'a> {
                     .is_some_and(|def| !self.is_void(def.ty)),
             };
         });
-        if !ok {
+        if !ok || asm_uses > usize::from(asm_callee) {
             return Err(cx.err(VerifyError::BadValueRef));
         }
         if let InstKind::Call(call) = &inst.kind {

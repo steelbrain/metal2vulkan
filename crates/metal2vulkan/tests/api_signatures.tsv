@@ -1921,6 +1921,12 @@ field	metal2vulkan-air::ir::Global.space	pub space: AddrSpace
 field	metal2vulkan-air::ir::Global.unnamed_addr	pub unnamed_addr: UnnamedAddr
 field	metal2vulkan-air::ir::Global.value_ty	pub value_ty: TypeId
 field	metal2vulkan-air::ir::Global.visibility	pub visibility: Visibility
+field	metal2vulkan-air::ir::InlineAsm.align_stack	pub align_stack: bool
+field	metal2vulkan-air::ir::InlineAsm.can_throw	pub can_throw: bool
+field	metal2vulkan-air::ir::InlineAsm.constraints	pub constraints: Box<[u8]>
+field	metal2vulkan-air::ir::InlineAsm.intel_dialect	pub intel_dialect: bool
+field	metal2vulkan-air::ir::InlineAsm.side_effects	pub side_effects: bool
+field	metal2vulkan-air::ir::InlineAsm.template	pub template: Box<[u8]>
 field	metal2vulkan-air::ir::Inst.kind	pub kind: InstKind
 field	metal2vulkan-air::ir::Inst.ty	pub ty: TypeId
 field	metal2vulkan-air::ir::LoopHints.must_progress	pub must_progress: bool
@@ -7419,6 +7425,7 @@ method	metal2vulkan-air::ir::DataLayout::pointer	pub fn pointer(&self, space: u3
 method	metal2vulkan-air::ir::FastMath::is_empty	pub const fn is_empty(self) -> bool
 method	metal2vulkan-air::ir::FloatPredicate::mnemonic	pub fn mnemonic(self) -> &'static str
 method	metal2vulkan-air::ir::FnAttrs::heap_bytes	pub fn heap_bytes(&self) -> usize
+method	metal2vulkan-air::ir::InlineAsm::spelling	pub fn spelling(&self) -> String
 method	metal2vulkan-air::ir::InstKind::for_each_value	pub fn for_each_value(&self, mut f: impl FnMut(Value))
 method	metal2vulkan-air::ir::InstKind::for_each_value_mut	pub fn for_each_value_mut(&mut self, mut f: impl FnMut(&mut Value))
 method	metal2vulkan-air::ir::InstKind::heap_bytes	pub fn heap_bytes(&self) -> usize
@@ -9340,6 +9347,7 @@ struct	metal2vulkan-air::ir::DataLayout	#[derive(Clone, Debug, PartialEq, Eq, Ha
 struct	metal2vulkan-air::ir::FnAttrs	#[derive(Clone, Debug, Default, PartialEq, Eq, Hash)] pub struct FnAttrs
 struct	metal2vulkan-air::ir::Function	#[derive(Clone, Debug, PartialEq, Eq, Hash)] pub struct Function
 struct	metal2vulkan-air::ir::Global	#[derive(Clone, Debug, PartialEq, Eq, Hash)] pub struct Global
+struct	metal2vulkan-air::ir::InlineAsm	#[derive(Clone, Debug, PartialEq, Eq, Hash)] pub struct InlineAsm
 struct	metal2vulkan-air::ir::Inst	#[derive(Clone, Debug, PartialEq, Eq, Hash)] pub struct Inst
 struct	metal2vulkan-air::ir::LoopHints	#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)] pub struct LoopHints
 struct	metal2vulkan-air::ir::MemoryEffects	#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] pub struct MemoryEffects
@@ -10342,6 +10350,7 @@ variant	metal2vulkan-air::error::Feature::DynamicCall	DynamicCall
 variant	metal2vulkan-air::error::Feature::FunctionConstantArgument	FunctionConstantArgument
 variant	metal2vulkan-air::error::Feature::GpuEncodedIndirectCommands	GpuEncodedIndirectCommands
 variant	metal2vulkan-air::error::Feature::Imageblocks	Imageblocks
+variant	metal2vulkan-air::error::Feature::InlineAsm	InlineAsm
 variant	metal2vulkan-air::error::Feature::Instruction	Instruction { code: u32 }
 variant	metal2vulkan-air::error::Feature::IntersectionFunctionTable	IntersectionFunctionTable
 variant	metal2vulkan-air::error::Feature::LibraryKind	LibraryKind(u8)
@@ -10957,6 +10966,7 @@ variant	metal2vulkan-air::ir::Const::Expr	Expr(ConstExpr)
 variant	metal2vulkan-air::ir::Const::Float	Float(u64)
 variant	metal2vulkan-air::ir::Const::FuncAddr	FuncAddr(FuncId)
 variant	metal2vulkan-air::ir::Const::GlobalAddr	GlobalAddr(GlobalId)
+variant	metal2vulkan-air::ir::Const::InlineAsm	InlineAsm(Box<InlineAsm>)
 variant	metal2vulkan-air::ir::Const::Int	Int(u64)
 variant	metal2vulkan-air::ir::Const::Null	Null
 variant	metal2vulkan-air::ir::Const::Poison	Poison
@@ -13241,6 +13251,7 @@ variant	metal2vulkan::error::Feature::Imageblocks	Imageblocks
 variant	metal2vulkan::error::Feature::ImplicitLodOutsideFragment	ImplicitLodOutsideFragment
 variant	metal2vulkan::error::Feature::IndependentBlending	IndependentBlending
 variant	metal2vulkan::error::Feature::IndirectRenderState	IndirectRenderState
+variant	metal2vulkan::error::Feature::InlineAsm	InlineAsm
 variant	metal2vulkan::error::Feature::Instruction	Instruction { code: u32 }
 variant	metal2vulkan::error::Feature::Int64Arithmetic	Int64Arithmetic
 variant	metal2vulkan::error::Feature::Int64Atomics	Int64Atomics

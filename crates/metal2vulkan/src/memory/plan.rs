@@ -1163,9 +1163,10 @@ impl Planner<'_> {
                                     .collect::<Option<_>>()
                                     .ok_or_else(|| invariant("a constant's part out of range"))?
                             }
-                            Const::GlobalAddr(_) | Const::FuncAddr(_) | Const::Expr(_) => {
-                                return Err(escaping())
-                            }
+                            Const::GlobalAddr(_)
+                            | Const::FuncAddr(_)
+                            | Const::Expr(_)
+                            | Const::InlineAsm(_) => return Err(escaping()),
                         };
                         grow(&mut stack, parts.len().saturating_add(1), m)?;
                         stack.push(Step::Exit((c, ty), parts.clone()));
@@ -1310,9 +1311,10 @@ impl Planner<'_> {
                     }
                     m.release(placed_bytes);
                 }
-                Const::GlobalAddr(_) | Const::FuncAddr(_) | Const::Expr(_) => {
-                    return Err(escaping())
-                }
+                Const::GlobalAddr(_)
+                | Const::FuncAddr(_)
+                | Const::Expr(_)
+                | Const::InlineAsm(_) => return Err(escaping()),
             }
         }
         Ok(())

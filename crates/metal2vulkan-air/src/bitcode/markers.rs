@@ -476,7 +476,8 @@ impl Plan {
             | Const::Null
             | Const::Undef
             | Const::Poison
-            | Const::GlobalAddr(_) => c.value.clone(),
+            | Const::GlobalAddr(_)
+            | Const::InlineAsm(_) => c.value.clone(),
         };
         Ok(Constant {
             ty: self.ty(c.ty)?,

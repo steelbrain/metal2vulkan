@@ -24,7 +24,7 @@ pub mod value;
 pub mod verify;
 
 pub use attrs::{CallAttrs, FnAttrs, MemoryEffects, ModRef, ParamAttrs};
-pub use constant::{Const, ConstExpr, ConstTable, Constant};
+pub use constant::{Const, ConstExpr, ConstTable, Constant, InlineAsm};
 pub use id::{Arena, ArgIdx, BlockId, ConstId, FuncId, GlobalId, Idx, InstId, MdId, Sym, TypeId};
 #[cfg(test)]
 pub use inst::Opcode;
