@@ -1756,6 +1756,7 @@ impl DispatchTables<'_> {
         state.stage_in_region = self.stage_in_region;
         state.used_resources = self.residency.used_resources();
         state.used_in_token_order = true;
+        state.resident_apart = true;
         state.argument_samplers = heap_sets::listed(argument_samplers);
         state.function_tables = function_tables
             .iter()

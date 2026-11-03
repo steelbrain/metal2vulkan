@@ -1005,8 +1005,11 @@ the binder synthesizes, or a neutral resource where nothing compatible is bound)
 buffers, and the `ResourceUse`s that drive staging, writeback and barriers. List in the state
 every live sampler state and visible-function table the command can reach through argument buffers
 (`argument_samplers`, function tables), and the resources it uses (`used_resources`). A consumer
-that lists those in token order says so (`used_in_token_order`): a command's instantiation then
-finds its heap members by search, not by reading every resource the state lists.
+that lists those in token order says so (`used_in_token_order`), and one that points every root
+table at a resident set it uploads apart, holding them and the ranges it lists
+(`resident_ranges`), says that (`resident_apart`, with `ResidentSet` and
+`RootTable::resident_fields`): a command's instantiation then costs its own bindings and heap
+members, not every resource the state lists.
 
 A plan whose `variant` is not empty asks for another variant of the pipeline (a storage texture's
 format, a buffer range past the descriptor limit, a vertex buffer that fixed-function input cannot

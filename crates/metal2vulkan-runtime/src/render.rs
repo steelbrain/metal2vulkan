@@ -6003,8 +6003,10 @@ impl RenderLowering {
         if !kept {
             reshape.field(&mut state.used_resources, self.residency.used_resources());
         }
-        // Listed by token (`Residency::used_resources`).
+        // Listed by token (`Residency::used_resources`); the commit points every root table at
+        // the command buffer's resident set, which holds them (`State::root_table`).
         state.used_in_token_order = true;
+        state.resident_apart = true;
         live.read_from.made_resident(generation);
         // Listed again only where the device's sampler states changed since: not where the
         // listing kept is of every live state at the count of their slots' changes that still

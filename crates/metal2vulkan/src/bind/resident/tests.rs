@@ -443,3 +443,99 @@ fn replay_bytes_are_the_binders_set_then_its_extents() {
         bytes[set.bytes().len()..]
     );
 }
+
+/// Under `BindState::resident_apart` a root table's own resident set is the bound buffers' alone,
+/// and without it the whole set; and a resident set made of a table's ranges and of the used
+/// resources' and listed ranges (as a consumer that points its tables at one makes it) is the same
+/// either way, resolving every address alike, over pseudo-random states whose bound buffers, used buffers and heaps and listed
+/// ranges nest, overlap, touch and repeat.
+#[test]
+fn a_state_resident_apart_keeps_the_used_resources_out_of_its_tables() {
+    use crate::bind::state::{StageTable, UsedResource};
+    use crate::bind::{ResidentRange, ResidentSet};
+    use crate::pipeline::sym::Stage;
+    let mut rng = Rng(0x5eed_0fa9_a7c3);
+    for _ in 0..300 {
+        let delta = 0x10_0000;
+        let mut state = BindState::default();
+        let (mut vertex, mut fragment) = (StageTable::default(), StageTable::default());
+        for (i, e) in one_mapping(&mut rng, delta).into_iter().enumerate() {
+            let length = e.size.saturating_sub(rng.below(16));
+            match rng.below(4) {
+                0 | 1 => {
+                    let table = match rng.below(2) {
+                        0 => &mut vertex,
+                        _ => &mut fragment,
+                    };
+                    let buffer = BoundBuffer::Buffer {
+                        length,
+                        offset: 0,
+                        gpu_address: e.guest,
+                        device_address: Some(e.host),
+                        attribute_stride: None,
+                    };
+                    table.buffers.insert(i as u32, buffer);
+                }
+                2 => {
+                    let class = match rng.below(2) {
+                        0 => ResourceClass::Buffer,
+                        _ => ResourceClass::Heap,
+                    };
+                    let mut used = UsedResource::new(class, i as u32);
+                    used.gpu_address = Some(e.guest);
+                    used.device_address = Some(e.host);
+                    used.length = length;
+                    state.used_resources.push(used);
+                }
+                _ => {
+                    let range = ResidentRange::new(e.host, e.guest, length);
+                    state.resident_ranges.push(range);
+                }
+            }
+        }
+        state.stages.insert(Stage::Vertex, vertex);
+        state.stages.insert(Stage::Fragment, fragment);
+        let mut apart = state.clone();
+        apart.resident_apart = true;
+        assert_eq!(table_entries(&state), resident_entries(&state));
+        let bound_only = BindState {
+            used_resources: Vec::new(),
+            resident_ranges: Vec::new(),
+            ..state.clone()
+        };
+        assert_eq!(table_entries(&apart), resident_entries(&bound_only));
+        let ranges = |entries: Vec<RootEntry>| {
+            let table = stage_root_table(&[], 2, &entries);
+            let used = state.used_resources.iter().filter_map(|u| {
+                Some(ResidentRange::new(
+                    u.device_address?,
+                    u.gpu_address?,
+                    u.length,
+                ))
+            });
+            let listed = state.resident_ranges.iter().copied();
+            ResidentSet::new(
+                table
+                    .resident_ranges()
+                    .into_iter()
+                    .chain(used)
+                    .chain(listed),
+            )
+        };
+        let (pointed, whole) = (ranges(table_entries(&apart)), ranges(table_entries(&state)));
+        let entries = |set: ResidentSet| -> Vec<RootEntry> {
+            let word =
+                |e: &[u8], k: usize| u64::from_le_bytes(e[8 * k..8 * k + 8].try_into().unwrap());
+            (set.bytes().chunks(32))
+                .map(|e| entry(word(e, 0), word(e, 1), word(e, 2)))
+                .collect()
+        };
+        let (pointed, whole) = (&entries(pointed)[..], &entries(whole)[..]);
+        for byte in 0x1_0000..0x1_0000 + 16 * (256 + 40) {
+            let resolved =
+                |set: &[RootEntry]| covers(set, byte).map(|e| e.host.wrapping_add(byte - e.guest));
+            assert_eq!(resolved(pointed), resolved(whole), "{byte:#x}");
+        }
+        assert_eq!(apart.shape(), state.shape());
+    }
+}

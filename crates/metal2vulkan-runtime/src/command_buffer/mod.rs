@@ -1127,6 +1127,8 @@ impl State {
         ranges: Vec<ResidentRange>,
     ) -> Result<(), Error> {
         self.reaches_unnamed = true;
+        let counts = &device.shared().counts;
+        counts.root_table_ranges_noted(ranges.len() as u64);
         if self.status == CommandBufferStatus::NotEnqueued {
             self.root_ranges.extend(ranges);
             self.root_tables.push(noted);

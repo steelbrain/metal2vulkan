@@ -70,7 +70,22 @@ pub(crate) fn resident_set(mut all: Vec<RootEntry>) -> Vec<RootEntry> {
 /// The coalesced resident set of `state`: every bound buffer with a device address (every stage)
 /// and every `Buffer`/`Heap` used resource with both addresses, at their padded sizes.
 pub(crate) fn resident_entries(state: &BindState) -> Vec<RootEntry> {
-    let all = resident_allocations(state)
+    coalesced(resident_allocations(state))
+}
+
+/// The coalesced resident set a root table of `state` holds: [`resident_entries`], or, where the
+/// consumer points its root tables at a set holding the used resources and the listed ranges
+/// (`BindState::resident_apart`), the bound buffers' alone.
+pub(crate) fn table_entries(state: &BindState) -> Vec<RootEntry> {
+    match state.resident_apart {
+        true => coalesced(bound_allocations(state)),
+        false => resident_entries(state),
+    }
+}
+
+/// The resident set of `allocations`, each `(host, guest, length)`, at their padded sizes.
+fn coalesced(allocations: impl Iterator<Item = (u64, u64, u64)>) -> Vec<RootEntry> {
+    let all = allocations
         .map(|(host, guest, length)| RootEntry {
             host,
             guest,
@@ -85,17 +100,6 @@ pub(crate) fn resident_entries(state: &BindState) -> Vec<RootEntry> {
 /// its own length (before the padding): the bound buffers, the used buffers and heaps, and the
 /// ranges listed apart (`BindState::resident_ranges`).
 fn resident_allocations(state: &BindState) -> impl Iterator<Item = (u64, u64, u64)> + '_ {
-    let bound = state.stages.values().flat_map(|stage_table| {
-        stage_table.buffers.values().filter_map(|b| match *b {
-            BoundBuffer::Buffer {
-                length,
-                gpu_address,
-                device_address: Some(host),
-                ..
-            } => Some((host, gpu_address, length)),
-            _ => None,
-        })
-    });
     let used = state.used_resources.iter().filter_map(|u| {
         match (u.class, u.gpu_address, u.device_address) {
             (ResourceClass::Buffer | ResourceClass::Heap, Some(guest), Some(host)) => {
@@ -108,7 +112,23 @@ fn resident_allocations(state: &BindState) -> impl Iterator<Item = (u64, u64, u6
         .resident_ranges
         .iter()
         .map(|range| (range.host, range.guest, range.length));
-    bound.chain(used).chain(listed)
+    bound_allocations(state).chain(used).chain(listed)
+}
+
+/// The bound buffers of `state` with a device address (every stage), as `(host, guest, length)`
+/// at their own lengths.
+fn bound_allocations(state: &BindState) -> impl Iterator<Item = (u64, u64, u64)> + '_ {
+    state.stages.values().flat_map(|stage_table| {
+        stage_table.buffers.values().filter_map(|b| match *b {
+            BoundBuffer::Buffer {
+                length,
+                gpu_address,
+                device_address: Some(host),
+                ..
+            } => Some((host, gpu_address, length)),
+            _ => None,
+        })
+    })
 }
 
 /// The unpadded extent of each entry of `resident` (`state`'s resident set,

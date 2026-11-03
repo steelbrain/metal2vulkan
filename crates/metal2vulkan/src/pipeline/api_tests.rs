@@ -972,6 +972,7 @@ mod bind_serde_round_trips {
                 resource_id: None,
             }],
             used_in_token_order: true,
+            resident_apart: true,
             vertex_amplification: VertexAmplification::new(2, vec![ViewMapping::new(0, 3)]),
             imageblock_size: ImageblockSize::new(16, 8),
             render_target_array_length: 6,

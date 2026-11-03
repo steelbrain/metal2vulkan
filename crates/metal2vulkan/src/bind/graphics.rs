@@ -318,7 +318,7 @@ use crate::bind::plan::{
     ShadowTemplate, StageTemplate, StrideRules, UseTarget, VertexBufferBind, ViewSetup,
     WriteSource,
 };
-use crate::bind::resident::{resident_entries, stage_root_table};
+use crate::bind::resident::{stage_root_table, table_entries};
 use crate::bind::state::{
     offset_alignment, BindShape, BindState, BoundBuffer, BufferShape, FragmentTests,
     VertexAmplification,
@@ -4284,7 +4284,7 @@ fn instantiate(
         multiview_instances(t.multiview_instance_limit, draw)?;
     }
     let resident = if t.stages.iter().any(|s| s.root_first.is_some()) {
-        Some(resident_entries(state))
+        Some(table_entries(state))
     } else {
         None
     };

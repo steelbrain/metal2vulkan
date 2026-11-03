@@ -234,6 +234,19 @@ pub struct BindState {
     /// resident sets of the root tables depend on them, so they are not part of the shape.
     #[cfg_attr(feature = "serde", serde(default))]
     pub resident_ranges: Vec<ResidentRange>,
+    /// The consumer points every root table of the command at a resident set it uploads apart
+    /// (a [`ResidentSet`](crate::bind::ResidentSet), written over the table's own fields with
+    /// [`RootTable::resident_fields`](crate::bind::RootTable::resident_fields)) that holds every
+    /// allocation of `used_resources` (each `Buffer` and `Heap` entry with both addresses) and of
+    /// `resident_ranges`, at their padded lengths, as a root table's own set would, and every
+    /// range the table lists ([`RootTable::resident_ranges`](crate::bind::RootTable::resident_ranges)).
+    /// A root table's own resident set then holds the command's bound buffers alone, and lists
+    /// only those: a command's instantiation costs its bindings, not every resource made
+    /// resident. A table never pointed so resolves only its bound buffers. Only the root tables
+    /// depend on it, so it is not part of the shape; `false` (the default): each root table holds
+    /// the whole set.
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub resident_apart: bool,
     /// The color attachments the draw's render pass instance leaves out of its subpass, read and
     /// written as storage images in the pixel interlock by its other draws, that the draw's
     /// render pipeline does not itself read or write so: a fragment function that writes one of

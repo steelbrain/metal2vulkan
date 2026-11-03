@@ -2853,6 +2853,7 @@ field	metal2vulkan-runtime::WorkCounts.resident_resources_joined	pub resident_re
 field	metal2vulkan-runtime::WorkCounts.resident_textures_looked_at	pub resident_textures_looked_at: u64
 field	metal2vulkan-runtime::WorkCounts.residual_form_draws	pub residual_form_draws: u64
 field	metal2vulkan-runtime::WorkCounts.residual_form_makings	pub residual_form_makings: u64
+field	metal2vulkan-runtime::WorkCounts.root_table_ranges_noted	pub root_table_ranges_noted: u64
 field	metal2vulkan-runtime::WorkCounts.row_copies	pub row_copies: u64
 field	metal2vulkan-runtime::WorkCounts.row_copies_dispatched	pub row_copies_dispatched: u64
 field	metal2vulkan-runtime::WorkCounts.row_copy_regions	pub row_copy_regions: u64
@@ -3105,6 +3106,7 @@ field	metal2vulkan::bind::BindState.private_list	pub private_list: bool
 field	metal2vulkan::bind::BindState.quad_primitive_ids	pub quad_primitive_ids: bool
 field	metal2vulkan::bind::BindState.render_area	pub render_area: [u32; 2]
 field	metal2vulkan::bind::BindState.render_target_array_length	pub render_target_array_length: u32
+field	metal2vulkan::bind::BindState.resident_apart	pub resident_apart: bool
 field	metal2vulkan::bind::BindState.resident_ranges	pub resident_ranges: Vec<ResidentRange>
 field	metal2vulkan::bind::BindState.rotated_weights	pub rotated_weights: bool
 field	metal2vulkan::bind::BindState.snapshot_textures	pub snapshot_textures: BTreeSet<u32>

@@ -858,6 +858,7 @@ impl RenderLowering {
             bind.render_target_array_length = self.render_target_array_length;
             bind.used_resources = used_resources.clone();
             bind.used_in_token_order = true;
+            bind.resident_apart = true;
             bind.argument_samplers = heap_sets::listed(argument_samplers);
             bind.function_tables = function_tables
                 .iter()

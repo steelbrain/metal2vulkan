@@ -69,7 +69,7 @@ use crate::bind::plan::{
     AccessClass, BindingPlan, ByteRange, ComputeTemplate, LocalRules, ResourceUse, UseTarget,
 };
 use crate::bind::replay::ReplayRefusal;
-use crate::bind::resident::{resident_entries, stage_root_table};
+use crate::bind::resident::{stage_root_table, table_entries};
 use crate::bind::state::{BindState, BoundBuffer, StageInRegion};
 use crate::cache::{SpecializationKey, VariantKey};
 use crate::device::requirements::VkLimit;
@@ -900,7 +900,7 @@ fn instantiate(
                 .iter()
                 .map(|(slot, e)| (slot.index, *e))
                 .collect();
-            Some(stage_root_table(&statics, first, &resident_entries(state)))
+            Some(stage_root_table(&statics, first, &table_entries(state)))
         }
         None => None,
     };
