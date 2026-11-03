@@ -2720,14 +2720,15 @@ impl Counters {
             .fetch_add(dispatches as u64, Ordering::Relaxed);
     }
 
-    /// A merge of a shadowed texture took its scratch from its shadow's spares (`shadow_merge.rs`,
-    /// `ScratchSpares`).
+    /// A merge of a shadowed texture took its scratch from its command buffer's pool or its
+    /// shadow's spares (`merge_scratch.rs`, `shadow_merge.rs`'s `ScratchSpares`).
     pub(crate) fn shadow_merge_scratch_reused(&self) {
         self.shadow_merge_scratches_reused
             .fetch_add(1, Ordering::Relaxed);
     }
 
-    /// A merge of a shadowed texture made its scratch zero (`shadow_merge.rs`): one not cut.
+    /// A merge of a shadowed texture's scratch holds zero before each keep (`shadow_merge.rs`):
+    /// one not cut.
     pub(crate) fn shadow_merge_scratch_zeroed(&self) {
         self.shadow_merge_scratches_zeroed
             .fetch_add(1, Ordering::Relaxed);
@@ -5314,12 +5315,14 @@ pub struct WorkCounts {
     /// (**Stored attachments**). Of the blocks they examine, each holding a changed word is stored
     /// whole and each other is neither read nor written; which ones changed only the GPU knows.
     pub shadow_merge_dispatches_in_blocks: u64,
-    /// The merges of shadowed textures whose scratch was a buffer their shadow kept from an
-    /// earlier merge whose command buffers completed (`shadow_merge.rs`): no buffer made.
+    /// The merges of shadowed textures whose scratch was a buffer an earlier encoder of their
+    /// command buffer was done with, or one their shadow kept from an earlier merge whose
+    /// command buffers completed (`shadow_merge.rs`, `merge_scratch.rs`): no buffer made.
     pub shadow_merge_scratches_reused: u64,
-    /// The merges of shadowed textures whose scratch was made zero, as their kernel reads bytes
-    /// no copy writes (those between the texture's rows): a merge not cut to rows of whole words,
-    /// through a copy or of rows that start or end inside a word. A cut merge's copies write
+    /// The merges of shadowed textures whose scratch holds zero before each keep, as their kernel
+    /// reads bytes no copy writes (those between the texture's rows): a merge not cut to rows of
+    /// whole words, through a copy or of rows that start or end inside a word, its scratch filled
+    /// with zero (or made so, past the device's largest buffer). A cut merge's copies write
     /// every byte its kernel reads, as a heap's tiled texture's merge in place copies the
     /// texture's bytes whole, so neither scratch is zeroed.
     pub shadow_merge_scratches_zeroed: u64,

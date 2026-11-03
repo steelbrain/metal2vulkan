@@ -457,3 +457,92 @@ fn many_passes_over_host_pages_take_one_scratch() {
     one_scratch(Over::HostPages, (300, 1200));
 }
 
+/// The encoders of [`two_ways_merges_take_few_scratches`]'s command buffer.
+const TWO_WAYS: usize = 64;
+
+/// One command buffer of [`TWO_WAYS`] compute encoders, each dispatching `tob_two_ways` once over
+/// a shadowed texture over a `Private` buffer whose rows hold bytes between them (200 texels in
+/// rows of 1024 bytes, a shadow copied back) and that buffer: it writes texel (0, 0) through the
+/// texture and 4 bytes of the buffer, texel `1 + i` of the first row, another way. Each encoder
+/// merges the texture's write through a copy (`shadow_merge.rs`, **Two ways**), whose kernel
+/// reads bytes no copy writes (those between the rows), so its scratch is filled with zero before
+/// its keep: every merge after the first takes a scratch an earlier encoder was done with, and
+/// encoding them grows the device's memory by less than an eighth of what one a merge would take.
+/// The bytes hold both writes of each encoder, and every other byte its first.
+#[test]
+fn two_ways_merges_take_few_scratches() {
+    let (width, row) = (200, 1024);
+    let cache = Scratch::new("merge-scratch-two-ways");
+    let host = Host::new(row * H);
+    let device = device(&cache.0);
+    let queue = device.new_command_queue().unwrap();
+    let library = library(&device, "engine/tob_renders.ll");
+    let function = library.new_function_with_name("tob_two_ways").unwrap();
+    let kernel = device
+        .new_compute_pipeline_state_with_function(&function, &PipelineOptions::default())
+        .unwrap();
+    let Some((buffer, _)) = target(&queue, Over::Private, (width, row), &host) else {
+        return;
+    };
+    let mut descriptor = TextureDescriptor::texture_2d(PixelFormat::RGBA8Unorm, width, H, false);
+    descriptor.usage = TextureUsage::SHADER_WRITE | TextureUsage::SHADER_READ;
+    descriptor.resource_options = buffer.resource_options();
+    let texture = buffer.new_texture(&descriptor, 0, row).unwrap();
+    assert!(texture.shadow().is_some(), "the texture is a shadow");
+    let before = device.work_counts();
+    let command_buffer = queue.command_buffer().unwrap();
+    for i in 0..TWO_WAYS {
+        let mut encoder = command_buffer.compute_command_encoder().unwrap();
+        encoder.set_compute_pipeline_state(&kernel).unwrap();
+        encoder.set_texture(Some(&texture), 0).unwrap();
+        encoder.set_buffer(Some(&buffer), 0, 0).unwrap();
+        let off = (TEXEL * (1 + i as u64)) as u32;
+        encoder.set_bytes(&off.to_le_bytes(), 1).unwrap();
+        (encoder.dispatch_threads(Size::new(1, 1, 1), Size::new(1, 1, 1))).unwrap();
+        encoder.end_encoding().unwrap();
+    }
+    let encoded = device.work_counts();
+    command_buffer.commit().unwrap();
+    command_buffer.wait_until_completed_for(WAIT).unwrap();
+    assert_eq!(command_buffer.error(), None);
+    let after = device.work_counts();
+    let delta = |of: fn(&WorkCounts) -> u64| of(&after) - of(&before);
+    let zeroed = delta(|c| c.shadow_merge_scratches_zeroed);
+    let reused = delta(|c| c.shadow_merge_scratches_reused);
+    let grown = encoded.device_memory_allocated - before.device_memory_allocated;
+    // A merge through a copy of every texel's bytes: its kept, changed and current parts.
+    let scratch = 3 * row * H;
+    println!(
+        "MERGE-SCRATCH two ways: {zeroed} merges' scratch zeroed, {reused} reused; device memory \
+         grew {grown} bytes while encoding ({} merges' scratch)",
+        grown / scratch
+    );
+    assert!(
+        zeroed >= TWO_WAYS as u64,
+        "every encoder's merge through a copy needs zero"
+    );
+    assert!(
+        reused >= TWO_WAYS as u64 - 1,
+        "every merge after the first takes a scratch: {reused}"
+    );
+    assert!(
+        grown < scratch * TWO_WAYS as u64 / 8,
+        "encoding the merges grew the device's memory by {grown} bytes, {} merges' scratch",
+        grown / scratch
+    );
+    let mut want = first_bytes(width, row);
+    want[..4].copy_from_slice(&[0xff, 0, 0, 0xff]);
+    for i in 0..TWO_WAYS {
+        let at = (TEXEL * (1 + i as u64)) as usize;
+        want[at..at + 4].copy_from_slice(&[0x5a, 0x5b, 0x5c, 0x5d]);
+    }
+    let got = bytes(&queue, Over::Private, &buffer, row * H);
+    let differ: Vec<usize> = (0..got.len()).filter(|&i| got[i] != want[i]).collect();
+    assert!(
+        differ.is_empty(),
+        "{} bytes differ, the first at {:?}",
+        differ.len(),
+        differ.first()
+    );
+    drop((texture, buffer));
+}

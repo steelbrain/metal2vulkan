@@ -1607,6 +1607,7 @@ impl ShadowCopy {
             if let Some(to) = merge.copied_kept_part() {
                 // SAFETY: the caller's contract.
                 return unsafe {
+                    merge.record_zero(device, command_buffer);
                     (self.copies).record_kept_from_staging(device, command_buffer, to)
                 };
             }

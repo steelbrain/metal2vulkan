@@ -38,12 +38,13 @@
 //!      first to the last command of two encoders that took one scratch never interleave in
 //!      submission order.
 //!   3. Each span writes every byte of the scratch it reads before reading it (the copies into
-//!      its parts, and the fill with zero of a linear merge whose rows start or end inside a
-//!      word), and each ends with a barrier from every command to every command
-//!      (`Barrier::everything`: all commands' memory writes, to all commands' reads and writes),
-//!      after its last dispatch. Outside a render pass a pipeline barrier's first
-//!      synchronization scope holds every command before it in submission order on its queue,
-//!      in earlier command buffers too, and its second every command after it: so the later
+//!      its parts, the fill with zero of a linear merge whose rows start or end inside a word,
+//!      and that of a shadow merge's parts whose kernel reads bytes no copy writes), and each
+//!      ends with a barrier from every command to every command (`Barrier::everything`: all
+//!      commands' memory writes, to all commands' reads and writes), after its last dispatch.
+//!      Outside a render pass a pipeline barrier's first synchronization scope holds every
+//!      command before it in submission order on its queue, in earlier command buffers too, and
+//!      its second every command after it: so the later
 //!      span's first write follows the earlier span's reads (an execution dependency) and its
 //!      writes (made available and visible). A shadow's scratch is a tracked buffer besides,
 //!      whose uses the tracker orders as any buffer's.
