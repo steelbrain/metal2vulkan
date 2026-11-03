@@ -2854,6 +2854,7 @@ field	metal2vulkan-runtime::WorkCounts.requirement_limits_asked	pub requirement_
 field	metal2vulkan-runtime::WorkCounts.resident_address_indexes_made	pub resident_address_indexes_made: u64
 field	metal2vulkan-runtime::WorkCounts.resident_resources_joined	pub resident_resources_joined: u64
 field	metal2vulkan-runtime::WorkCounts.resident_textures_looked_at	pub resident_textures_looked_at: u64
+field	metal2vulkan-runtime::WorkCounts.resident_uses_made	pub resident_uses_made: u64
 field	metal2vulkan-runtime::WorkCounts.residual_form_draws	pub residual_form_draws: u64
 field	metal2vulkan-runtime::WorkCounts.residual_form_makings	pub residual_form_makings: u64
 field	metal2vulkan-runtime::WorkCounts.root_table_ranges_noted	pub root_table_ranges_noted: u64

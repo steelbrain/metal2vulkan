@@ -2246,7 +2246,8 @@ fn root_table(device: &Device, state: &mut State, table: &RootTable) -> Result<u
 /// to where Metal's fetch stops reading it at most, `IndexBufferRef::fetch_end`: positions past
 /// there read a zero-padded copy), in the stages the plan names and with the access types of its
 /// class. The command's own uploads and the device's neutrals are fresh or never read back, so
-/// nothing orders against them; a sampler is no resource.
+/// nothing orders against them; a sampler is no resource. The uses of what the encoder made
+/// resident (`UseTarget::Used`) come first.
 pub(super) fn command_uses(
     call: &'static str,
     plan: &BindingPlan,
@@ -2256,158 +2257,299 @@ pub(super) fn command_uses(
     indirect: Option<(&Buffer, u64)>,
 ) -> Result<CommandUses, Error> {
     let mut uses = CommandUses::default();
-    command_uses_into(call, (plan, command, tables), (index, indirect), &mut uses)?;
+    uses_into(
+        call,
+        (plan, None, command, tables),
+        (index, indirect),
+        &mut uses,
+    )?;
     Ok(uses)
 }
 
-/// [`command_uses`] in `into`, emptied first: over the last draw's storage, where the caller keeps
-/// it (`LiveBind::uses`).
+/// [`command_uses`] in `into`, over the last command's storage, where the caller keeps it
+/// (`LiveBind::uses`): its uses of what the encoder made resident, and the keys they reach, kept
+/// from the last command where that command's plan was `plan` and its residency of the
+/// generation `tables`' is. They are a function of those alone: each use's resource is the
+/// residency's under its token, whose contents a generation names (`residency.rs`), its access
+/// and stages the plan's, and its key and range the resource's own, which no call changes (a
+/// resource's identity and length, a texture's levels and slices; `WorkCounts::resident_uses_made`
+/// counts those made). Builds with debug assertions check those kept against the uses
+/// [`command_uses`] makes whole.
 pub(super) fn command_uses_into(
     call: &'static str,
-    (plan, command, tables): (&BindingPlan, &Command<'_>, &Tables<'_>),
+    (plan, command, tables): (&Arc<BindingPlan>, &Command<'_>, &Tables<'_>),
     (index, indirect): (Option<(&Buffer, u64)>, Option<(&Buffer, u64)>),
     into: &mut CommandUses,
 ) -> Result<(), Error> {
-    let CommandUses {
-        uses,
-        resident,
-        sources,
-    } = into;
-    uses.clear();
-    resident.clear();
-    sources.clear();
-    // One use at most a resource use of the plan's or the command's: room for them all at once.
+    let kept = (&**plan, Some(plan), command, tables);
+    let keeps = uses_into(call, kept, (index, indirect), into)?;
+    if cfg!(debug_assertions) && keeps {
+        let whole = command_uses(call, plan, command, tables, index, indirect)?;
+        let same = (into.uses == whole.uses && into.sources == whole.sources)
+            && (into.used == whole.used && into.resident == whole.resident);
+        assert!(
+            same,
+            "a command kept uses of what the encoder made resident not its own"
+        );
+        KEPT_RESIDENT_CHECKS.with(|checks| checks.set(checks.get() + 1));
+    }
+    Ok(())
+}
+
+thread_local! {
+    /// The commands whose uses of what the encoder made resident this thread kept (none, where
+    /// their plan lists none) and checked against those made whole ([`command_uses_into`]), in builds with debug assertions.
+    static KEPT_RESIDENT_CHECKS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+/// How many commands' kept uses of what the encoder made resident this thread checked so far
+/// ([`command_uses_into`]).
+#[cfg(all(test, debug_assertions, any(m2v_gpu, m2v_cpu_icd)))]
+pub(crate) fn kept_resident_checks() -> u64 {
+    KEPT_RESIDENT_CHECKS.with(std::cell::Cell::get)
+}
+
+/// What the uses of what an encoder made resident at the start of a [`CommandUses`] were made
+/// for (`command_uses_into`): the plan (held weakly, so its allocation names no other plan while
+/// this lives) and the residency's generation.
+#[derive(Clone)]
+struct ResidentOf {
+    plan: Weak<BindingPlan>,
+    generation: Option<u64>,
+}
+
+impl ResidentOf {
+    /// Whether it was made for `plan` under `generation`: the plan compared by address, which
+    /// takes no count of its references.
+    fn holds(&self, plan: &Arc<BindingPlan>, generation: Option<u64>) -> bool {
+        self.plan.as_ptr() == Arc::as_ptr(plan) && self.generation == generation
+    }
+}
+
+/// [`command_uses`]' work in `into`: `kept` the plan's `Arc`, where `into` keeps the uses of
+/// what the encoder made resident from one command to the next (`command_uses_into`). Whether it
+/// kept them.
+fn uses_into(
+    call: &'static str,
+    (plan, kept, command, tables): (
+        &BindingPlan,
+        Option<&Arc<BindingPlan>>,
+        &Command<'_>,
+        &Tables<'_>,
+    ),
+    (index, indirect): (Option<(&Buffer, u64)>, Option<(&Buffer, u64)>),
+    into: &mut CommandUses,
+) -> Result<bool, Error> {
+    // One use at most a resource use of the plan's or the command's.
     let resources = plan.uses.len() + command.uses.len();
     if u32::try_from(resources).is_err() {
         return Err(internal("a command of 2^32 uses"));
     }
-    uses.reserve(resources);
-    // The keys of the buffers made resident the command reaches through the resident set, by
-    // address; every other use names its resource (a descriptor, a root table's static, a view).
-    // Those it names are gathered once it reaches one so: until then each use names its key.
-    let mut reached = BTreeSet::new();
-    let mut named = BTreeSet::new();
-    let name = |named: &mut BTreeSet<ResourceKey>, reached: &BTreeSet<ResourceKey>, key| {
-        if !reached.is_empty() {
-            named.insert(key);
+    let generation = tables.residency.map(Residency::generation);
+    let holds = |of: &ResidentOf| kept.is_some_and(|plan| of.holds(plan, generation));
+    into.made = 0;
+    let keeps = into.of.as_ref().is_some_and(holds);
+    match keeps {
+        true => {
+            into.uses.truncate(into.used);
+            into.sources.truncate(into.used);
         }
-    };
-    for (source, resource) in plan.uses.iter().chain(command.uses).enumerate() {
+        false => {
+            into.of = None;
+            resident_uses_into(plan, tables, into)?;
+            into.of = kept.map(|plan| ResidentOf {
+                plan: Arc::downgrade(plan),
+                generation,
+            });
+        }
+    }
+    let CommandUses {
+        uses,
+        sources,
+        others,
+        reaching,
+        named_now,
+        ..
+    } = into;
+    uses.reserve(others.len() + command.uses.len());
+    // Every use but those names its resource (a descriptor, a root table's static, a view):
+    // the keys of `reaching` named are gathered.
+    named_now.clear();
+    let plan_others = others.iter().map(|&at| (at, &plan.uses[at as usize]));
+    let commands = (command.uses.iter().enumerate())
+        .map(|(at, resource)| ((plan.uses.len() + at) as u32, resource));
+    for (source, resource) in plan_others.chain(commands) {
+        let Some(used) = other_use(call, resource, (index, indirect), tables)? else {
+            continue;
+        };
+        if !reaching.is_empty() && reaching.contains(&used.key) {
+            named_now.push(used.key);
+        }
+        uses.push(used);
+        sources.push(source);
+    }
+    named_now.sort_unstable();
+    named_now.dedup();
+    into.settle_resident(!keeps);
+    Ok(keeps)
+}
+
+/// Make the uses of what the encoder made resident `plan` lists, as `tables` hold it, first in
+/// `into`'s, emptied: their count, `made`, and of the buffers among them (reached by address)
+/// the keys no texture use of them names, `reaching`; and the positions of the plan's other
+/// uses, `others`.
+fn resident_uses_into(
+    plan: &BindingPlan,
+    tables: &Tables<'_>,
+    into: &mut CommandUses,
+) -> Result<(), Error> {
+    let CommandUses {
+        uses,
+        sources,
+        used,
+        made,
+        others,
+        reaching,
+        ..
+    } = into;
+    uses.clear();
+    sources.clear();
+    others.clear();
+    reaching.clear();
+    *used = 0;
+    let mut named = BTreeSet::new();
+    for (at, resource) in plan.uses.iter().enumerate() {
+        let UseTarget::Used(token) = resource.resource else {
+            others.push(at as u32);
+            continue;
+        };
         if !resource.access.read && !resource.access.write {
             continue;
         }
-        // Fewer than 2^32 (above).
-        let source = source as u32;
         let stages: vk::PipelineStageFlags2 = resource.stages.into();
         if stages.is_empty() {
             return Err(internal("a command's resource use in no stage"));
         }
-        let access = |flags: vk::AccessFlags2, used: bool| {
-            if used {
-                Access::new(stages, flags)
-            } else {
-                Access::NONE
-            }
+        let access = |flags: vk::AccessFlags2, used: bool| match used {
+            true => Access::new(stages, flags),
+            false => Access::NONE,
         };
-        let (buffer, offset) = match resource.resource {
-            UseTarget::Slot(slot) => match slot.class {
-                SlotClass::Buffer => match slot_buffer(tables, slot) {
-                    Some((buffer, offset)) => (buffer, *offset),
-                    // An unbound slot reads a neutral, fresh for the command.
-                    None => continue,
-                },
-                SlotClass::Texture => {
-                    // An unbound slot takes a neutral image; a texture whose image and usage
-                    // lack the binding's usage, its shadow (`texture/usage_shadow.rs`), as does
-                    // a draw's sampled one its instance renders (`texture/attached_reads.rs`).
-                    // A two-plane YCbCr texture's planes read in place: their bytes, not the
-                    // image, which converts for no such read (`texture/ycbcr_image.rs`).
-                    if let (Some(texture), AccessClass::YCbCrPlanes) =
-                        (slot_texture(tables, slot), resource.class)
-                    {
-                        let read = vk::AccessFlags2::SHADER_SAMPLED_READ;
-                        let used = texture.planes_use(access(read, resource.access.read))?;
-                        name(&mut named, &reached, used.key);
-                        uses.push(used);
-                        sources.push(source);
-                        continue;
-                    }
-                    if let Some(texture) = slot_texture(tables, slot) {
-                        let (read, write) = image_access(resource.class)?;
-                        let storage = resource.class == AccessClass::StorageImage;
-                        let attached =
-                            tables.attached(texture, storage) && !tables.snapshot_slot(slot);
-                        let used = texture.slot_use(
-                            call,
-                            storage,
-                            attached,
-                            (
-                                access(read, resource.access.read),
-                                access(write, resource.access.write),
-                            ),
-                        )?;
-                        name(&mut named, &reached, used.key);
-                        uses.push(used);
-                        sources.push(source);
-                    }
-                    continue;
-                }
-                SlotClass::Sampler => continue,
-            },
-            UseTarget::IndexBuffer => {
-                index.ok_or_else(|| internal("an index buffer use of a draw without one"))?
+        let buffer = match tables.used(token) {
+            Some(Used::Buffer(buffer)) => buffer,
+            Some(Used::Heap { bytes, .. }) => bytes,
+            Some(Used::IndirectCommandBuffer(icb)) => icb.storage(),
+            Some(Used::Texture(texture)) => {
+                let (read, write) = image_access(resource.class)?;
+                let used = texture.bound_use(
+                    access(read, resource.access.read),
+                    access(write, resource.access.write),
+                );
+                named.insert(used.key);
+                uses.push(used);
+                sources.push(at as u32);
+                continue;
             }
-            UseTarget::Indirect => indirect
-                .ok_or_else(|| internal("an indirect use of a command without arguments"))?,
-            UseTarget::TileMap(slot) => (slot_tile_map(tables, slot)?, 0),
-            UseTarget::Used(token) => match tables.used(token) {
-                Some(Used::Buffer(buffer)) => (buffer, 0),
-                Some(Used::Heap { bytes, .. }) => (bytes, 0),
-                Some(Used::IndirectCommandBuffer(icb)) => (icb.storage(), 0),
-                Some(Used::Texture(texture)) => {
-                    let (read, write) = image_access(resource.class)?;
-                    let used = texture.bound_use(
-                        access(read, resource.access.read),
-                        access(write, resource.access.write),
-                    );
-                    name(&mut named, &reached, used.key);
-                    uses.push(used);
-                    sources.push(source);
-                    continue;
-                }
-                None => return Err(internal("a use of a resource the encoder did not use")),
-            },
-            UseTarget::TessellationFactors => tables
-                .factors
-                .ok_or_else(|| internal("a tessellation factor use without a factor buffer"))?,
-            UseTarget::PatchIndices => tables
-                .patch_indices
-                .ok_or_else(|| internal("a patch index use of a draw without a buffer"))?,
-            UseTarget::ControlPointIndices => tables
-                .control_point_indices
-                .ok_or_else(|| internal("a control-point index use of a draw without a buffer"))?,
+            None => return Err(internal("a use of a resource the encoder did not use")),
         };
         let (read, write) = buffer_access(resource.class)?;
         let accesses = (
             access(read, resource.access.read),
             access(write, resource.access.write),
         );
-        let used = bytes_use(resource, buffer, offset, accesses);
-        match resource.resource {
-            UseTarget::Used(_) => {
-                // The first reached: every use before it named its key.
-                if reached.is_empty() {
-                    named.extend(uses.iter().map(|used: &Use<ResourceKey>| used.key));
-                }
-                reached.insert(used.key);
-            }
-            _ => name(&mut named, &reached, used.key),
-        }
+        let used = bytes_use(resource, buffer, 0, accesses);
+        reaching.insert(used.key);
         uses.push(used);
-        sources.push(source);
+        sources.push(at as u32);
     }
-    resident.extend(reached.difference(&named).copied());
+    reaching.retain(|key| !named.contains(key));
+    *used = uses.len();
+    *made += uses.len();
     Ok(())
+}
+
+/// The use `resource`, a use of the plan's or the command's other than of a resource made
+/// resident, makes as `tables` bind it, a draw's index buffer `index` and argument buffer
+/// `indirect` (each with its offset): `None` for an unbound slot (a neutral, fresh for the
+/// command), a sampler, or a use that neither reads nor writes.
+fn other_use(
+    call: &'static str,
+    resource: &ResourceUse,
+    (index, indirect): (Option<(&Buffer, u64)>, Option<(&Buffer, u64)>),
+    tables: &Tables<'_>,
+) -> Result<Option<Use<ResourceKey>>, Error> {
+    if !resource.access.read && !resource.access.write {
+        return Ok(None);
+    }
+    let stages: vk::PipelineStageFlags2 = resource.stages.into();
+    if stages.is_empty() {
+        return Err(internal("a command's resource use in no stage"));
+    }
+    let access = |flags: vk::AccessFlags2, used: bool| match used {
+        true => Access::new(stages, flags),
+        false => Access::NONE,
+    };
+    let (buffer, offset) = match resource.resource {
+        UseTarget::Slot(slot) => match slot.class {
+            SlotClass::Buffer => match slot_buffer(tables, slot) {
+                Some((buffer, offset)) => (buffer, *offset),
+                // An unbound slot reads a neutral, fresh for the command.
+                None => return Ok(None),
+            },
+            SlotClass::Texture => {
+                // An unbound slot takes a neutral image; a texture whose image and usage lack
+                // the binding's usage, its shadow (`texture/usage_shadow.rs`), as does a draw's
+                // sampled one its instance renders (`texture/attached_reads.rs`). A two-plane
+                // YCbCr texture's planes read in place: their bytes, not the image, which
+                // converts for no such read (`texture/ycbcr_image.rs`).
+                let Some(texture) = slot_texture(tables, slot) else {
+                    return Ok(None);
+                };
+                if resource.class == AccessClass::YCbCrPlanes {
+                    let read = vk::AccessFlags2::SHADER_SAMPLED_READ;
+                    return texture
+                        .planes_use(access(read, resource.access.read))
+                        .map(Some);
+                }
+                let (read, write) = image_access(resource.class)?;
+                let storage = resource.class == AccessClass::StorageImage;
+                let attached = tables.attached(texture, storage) && !tables.snapshot_slot(slot);
+                let accesses = (
+                    access(read, resource.access.read),
+                    access(write, resource.access.write),
+                );
+                return texture
+                    .slot_use(call, storage, attached, accesses)
+                    .map(Some);
+            }
+            SlotClass::Sampler => return Ok(None),
+        },
+        UseTarget::IndexBuffer => {
+            index.ok_or_else(|| internal("an index buffer use of a draw without one"))?
+        }
+        UseTarget::Indirect => {
+            indirect.ok_or_else(|| internal("an indirect use of a command without arguments"))?
+        }
+        UseTarget::TileMap(slot) => (slot_tile_map(tables, slot)?, 0),
+        // Only a plan lists one (`resident_uses_into`).
+        UseTarget::Used(_) => {
+            return Err(internal("a command's own use of a resource made resident"))
+        }
+        UseTarget::TessellationFactors => tables
+            .factors
+            .ok_or_else(|| internal("a tessellation factor use without a factor buffer"))?,
+        UseTarget::PatchIndices => tables
+            .patch_indices
+            .ok_or_else(|| internal("a patch index use of a draw without a buffer"))?,
+        UseTarget::ControlPointIndices => tables
+            .control_point_indices
+            .ok_or_else(|| internal("a control-point index use of a draw without a buffer"))?,
+    };
+    let (read, write) = buffer_access(resource.class)?;
+    let accesses = (
+        access(read, resource.access.read),
+        access(write, resource.access.write),
+    );
+    Ok(Some(bytes_use(resource, buffer, offset, accesses)))
 }
 
 /// The use `resource` makes of `buffer`'s bytes bound at `offset`, reading and writing as
@@ -2455,11 +2597,17 @@ pub(super) fn patch_buffer_uses(
     changed: &[SlotRef],
     into: &mut CommandUses,
 ) -> Result<bool, Error> {
-    let CommandUses { uses, sources, .. } = into;
+    let CommandUses {
+        uses,
+        sources,
+        used: resident,
+        ..
+    } = into;
     if sources.len() != uses.len() {
         return Ok(false);
     }
-    for (used, &source) in uses.iter_mut().zip(sources.iter()) {
+    // The uses of what the encoder made resident, first, are of no slot.
+    for (used, &source) in (uses.iter_mut().zip(sources.iter())).skip(*resident) {
         let source = source as usize;
         let resource = match source.checked_sub(plan.uses.len()) {
             None => plan.uses.get(source),
@@ -2488,7 +2636,9 @@ pub(super) fn patch_buffer_uses(
 /// A dispatch's or draw's uses (`command_uses`), for the tracker, and the keys among them that
 /// the command reaches through its root tables' resident set alone: buffers and heaps an encoder
 /// made resident, which no use of the command names. The encoder's core takes both
-/// (`EncoderCore::command_reaching`, `note_reaching`); a use added later names its key.
+/// (`EncoderCore::command_reaching`, `note_reaching`); a use added later names its key. The uses
+/// of what the encoder made resident come first, kept from one draw to the next while their
+/// inputs are the same (`command_uses_into`).
 #[derive(Clone, Default)]
 pub(super) struct CommandUses {
     uses: Vec<Use<ResourceKey>>,
@@ -2496,13 +2646,52 @@ pub(super) struct CommandUses {
     /// Of each use [`command_uses_into`] made, in order, the index among its plan's and command's
     /// resource uses of the one it was made of: what [`patch_buffer_uses`] patches by.
     sources: Vec<u32>,
+    /// How many of `uses` and `sources`, first, are of what the encoder made resident, made for
+    /// `of` (`command_uses_into`); and how many of those the last call made (0 where it kept
+    /// them: `WorkCounts::resident_uses_made`).
+    used: usize,
+    made: usize,
+    of: Option<ResidentOf>,
+    /// The positions among the plan's uses of those of anything but what the encoder made
+    /// resident, ascending.
+    others: Vec<u32>,
+    /// The keys of the buffers among those uses (reached by address) that none of them names:
+    /// `resident` is these but those the command's other uses name, `named`, as the last call
+    /// left them (sorted, each once), `named_now` this call's.
+    reaching: BTreeSet<ResourceKey>,
+    named: Vec<ResourceKey>,
+    named_now: Vec<ResourceKey>,
+    /// Whether `resident` is other than `reaching` less `named`: a use added since the last call
+    /// ([`push`](Self::push)) took a key out of it.
+    taken: bool,
 }
 
 impl CommandUses {
     /// Add `used`, which names its key.
     pub(super) fn push(&mut self, used: Use<ResourceKey>) {
-        self.resident.remove(&used.key);
+        self.taken |= self.resident.remove(&used.key);
         self.uses.push(used);
+    }
+
+    /// How many uses of resources the encoder made resident the last call made: 0 where it kept
+    /// the last command's (`command_uses_into`).
+    pub(super) fn made(&self) -> usize {
+        self.made
+    }
+
+    /// Set `resident` to `reaching` less `named_now`, which becomes `named`: worked out again
+    /// only where one of those changed (`made_again`: the uses of what the encoder made resident
+    /// were), or a use added since took a key out of it.
+    fn settle_resident(&mut self, made_again: bool) {
+        if !made_again && !self.taken && self.named == self.named_now {
+            return;
+        }
+        self.resident.clone_from(&self.reaching);
+        for key in &self.named_now {
+            self.resident.remove(key);
+        }
+        self.named.clone_from(&self.named_now);
+        self.taken = false;
     }
 
     /// Add each of `uses`, which name their keys.

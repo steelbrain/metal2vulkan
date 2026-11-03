@@ -8755,7 +8755,8 @@ impl RenderLowering {
                 .map(tessellation_scan::TessellationWork::regions),
         };
         let (index, indirect) = (buffers.index.as_ref(), buffers.indirect.as_ref());
-        // Over the last draw's uses, in their storage (`LiveBind::uses`).
+        // Over the last draw's uses, in their storage (`LiveBind::uses`), those of what the
+        // encoder made resident kept where they are the last draw's.
         binding::command_uses_into(
             call,
             (&plan, &command, &tables),
@@ -8765,6 +8766,10 @@ impl RenderLowering {
             ),
             &mut live.uses,
         )?;
+        let resident_made = live.uses.made() as u64;
+        if resident_made > 0 {
+            device.shared().counts.resident_uses_made(resident_made);
+        }
         // How many it holds of its plan's alone: a draw rebound works out those alone.
         let plan_uses = live.uses.len();
         let uses = &mut live.uses;

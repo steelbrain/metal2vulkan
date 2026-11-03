@@ -280,6 +280,8 @@ mod rerun_arenas;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod reserved_queues;
 mod residency;
+#[cfg(all(debug_assertions, any(m2v_gpu, m2v_cpu_icd)))]
+mod resident_uses;
 mod resource;
 mod resource_ids;
 mod retained;

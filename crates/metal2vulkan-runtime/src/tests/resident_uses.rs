@@ -1,0 +1,236 @@
+//! The uses of what a render encoder made resident that its draws' binding plans list, kept from
+//! one draw to the next (`binding::command_uses_into`): a draw whose plan is the last draw's,
+//! under a residency of the last draw's generation, works none of them out
+//! (`WorkCounts::resident_uses_made`), and builds with debug assertions check each draw's kept
+//! uses against those it would make whole (`binding::kept_resident_checks`). The draws read
+//! through a root table and a handle table, so no draw of theirs is kept to draw again or rebind
+//! (`render/draw_again.rs`): each takes every step.
+//! A draw after the encoder made another resource resident, a draw of another plan, and the
+//! first draw of an encoder of the same residency's shape over other resources (the same plan, a
+//! residency of another generation) work them out again.
+//!
+//! Device tests: compiled only under the validation crate's GPU safety cfgs (`m2v_gpu`,
+//! `m2v_cpu_icd`) with debug assertions, on the kind of device the cfg selects. The functions are
+//! the owned fixture `validation/fixtures/public/engine/resident_draws.ll` (`llvm-as`).
+
+use super::blit_holds::{Scratch, WAIT};
+use super::draw_again::{device, Heard};
+use super::encoder_holds::{pass, render_state};
+use crate::binding::kept_resident_checks;
+use crate::{
+    Buffer, CommandBufferStatus, Device, Region, RenderCommandEncoder, RenderPipelineState,
+    ResourceOptions, ResourceRef, SamplerState, SamplerStateOptions, Texture, TextureDescriptor,
+};
+use metal2vulkan::bind::SamplerDescriptor;
+use metal2vulkan::metal::{PixelFormat, PrimitiveType, RenderStages, ResourceUsage, TextureUsage};
+
+/// The fixture.
+const FIXTURE: &str = "engine/resident_draws.ll";
+
+/// The target's width and height.
+const SIDE: u64 = 64;
+
+/// The positions an encoder makes resident, and the draws it draws of each shape.
+const POSITIONS: u64 = 6;
+
+/// The bytes of an argument-table entry: a position's address, a texture's resource ID and a
+/// sampler's.
+const ENTRY: u64 = 24;
+
+/// What the draws read: the functions' states, the texture and sampler the entries name, and the
+/// target.
+struct Scene {
+    device: Device,
+    entry: RenderPipelineState,
+    slot: RenderPipelineState,
+    sampled: Texture,
+    sampler: SamplerState,
+    target: Texture,
+}
+
+impl Scene {
+    fn new(device: &Device) -> Scene {
+        let mut sampled = TextureDescriptor::texture_2d(PixelFormat::RGBA8Unorm, 4, 4, false);
+        sampled.usage = TextureUsage::SHADER_READ;
+        sampled.resource_options = ResourceOptions::shared();
+        let sampled = device.new_texture(&sampled).unwrap();
+        let texels: Vec<u8> = [40u8, 160, 220, 255].repeat(16);
+        (sampled.replace_region(Region::new_2d(0, 0, 4, 4), 0, 0, &texels, 16, 0)).unwrap();
+        let options = SamplerStateOptions {
+            support_argument_buffers: true,
+            ..SamplerStateOptions::default()
+        };
+        let sampler = device
+            .new_sampler_state_with_options(&SamplerDescriptor::new(), options)
+            .unwrap();
+        let mut target = TextureDescriptor::texture_2d(PixelFormat::RGBA8Unorm, SIDE, SIDE, false);
+        target.usage = TextureUsage::RENDER_TARGET;
+        target.resource_options = ResourceOptions::shared();
+        Scene {
+            entry: render_state(device, FIXTURE, "rd_entry_vertex", "rd_entry_fragment"),
+            slot: render_state(device, FIXTURE, "rd_slot_vertex", "rd_color_fragment"),
+            sampled,
+            sampler,
+            target: device.new_texture(&target).unwrap(),
+            device: device.clone(),
+        }
+    }
+
+    /// A buffer of `bytes`.
+    fn buffer(&self, bytes: &[u8]) -> Buffer {
+        (self.device)
+            .new_buffer_with_bytes(bytes, ResourceOptions::shared())
+            .unwrap()
+    }
+
+    /// The target's pixels that the draws covered.
+    fn covered(&self) -> usize {
+        let mut bytes = vec![0u8; (4 * SIDE * SIDE) as usize];
+        let region = Region::new_2d(0, 0, SIDE, SIDE);
+        (self.target.get_bytes(&mut bytes, 4 * SIDE, 0, region, 0, 0)).unwrap();
+        bytes.chunks(4).filter(|pixel| pixel[3] != 0).count()
+    }
+}
+
+/// One encoder's resources: [`POSITIONS`] positions, a buffer each, two argument tables of an
+/// entry for each after one unused (a binding at offset 0 takes a binding form of its own, so a
+/// plan of its own, where the draws' later offsets share one), and a buffer made resident later.
+struct Resources {
+    positions: Vec<Buffer>,
+    tables: [Buffer; 2],
+    later: Buffer,
+}
+
+impl Resources {
+    fn new(scene: &Scene, corner: f32) -> Resources {
+        let positions: Vec<Buffer> = (0..POSITIONS)
+            .map(|at| {
+                let position = [corner + at as f32 / 8.0, corner, 0.0, 1.0];
+                scene.buffer(&position.map(f32::to_le_bytes).concat())
+            })
+            .collect();
+        let entries: Vec<u8> = (positions[..1].iter().chain(&positions))
+            .flat_map(|position| {
+                let ids = (
+                    scene.sampled.gpu_resource_id().0,
+                    scene.sampler.gpu_resource_id().0,
+                );
+                [position.gpu_address().0, ids.0, ids.1]
+            })
+            .flat_map(u64::to_le_bytes)
+            .collect();
+        Resources {
+            tables: [scene.buffer(&entries), scene.buffer(&entries)],
+            later: scene.buffer(&[0; 16]),
+            positions,
+        }
+    }
+
+    /// Make the positions, both tables and the texture resident.
+    fn resident(&self, scene: &Scene, encoder: &mut RenderCommandEncoder) {
+        let positions: Vec<ResourceRef> = self.positions.iter().map(ResourceRef::Buffer).collect();
+        encoder
+            .use_resources(&positions, ResourceUsage::READ, RenderStages::VERTEX)
+            .unwrap();
+        let both = RenderStages::VERTEX | RenderStages::FRAGMENT;
+        for table in &self.tables {
+            (encoder.use_resource(table.as_resource(), ResourceUsage::READ, both)).unwrap();
+        }
+        let sampled = scene.sampled.as_resource();
+        (encoder.use_resource(sampled, ResourceUsage::READ, RenderStages::FRAGMENT)).unwrap();
+    }
+}
+
+/// What a draw changed: the resident uses its draw worked out, and the kept ones checked.
+#[derive(Debug, Default)]
+struct Drawn {
+    made: u64,
+    checked: u64,
+}
+
+/// Draw with `draw`, and what that changed.
+fn drawn(device: &Device, draw: impl FnOnce()) -> Drawn {
+    let before = (device.work_counts(), kept_resident_checks());
+    draw();
+    let after = (device.work_counts(), kept_resident_checks());
+    Drawn {
+        made: after.0.resident_uses_made - before.0.resident_uses_made,
+        checked: after.1 - before.1,
+    }
+}
+
+/// One encoder of `resources`, each draw's [`Drawn`]: [`POSITIONS`] draws of the entry shape,
+/// draw `i` binding table `i % 2`'s entry of position `i` at its vertex and fragment buffer 0, with the
+/// encoder's `later` buffer made resident before draw `later`; then one draw of the slot shape,
+/// which reads no pointer, and one of the entry shape again.
+fn encode(scene: &Scene, resources: &Resources, later: u64) -> Vec<Drawn> {
+    let device = &scene.device;
+    let queue = device.new_command_queue().unwrap();
+    let command_buffer = queue.command_buffer().unwrap();
+    let mut encoder = command_buffer
+        .render_command_encoder(&pass(&scene.target))
+        .unwrap();
+    resources.resident(scene, &mut encoder);
+    encoder.set_render_pipeline_state(&scene.entry).unwrap();
+    let mut each = Vec::new();
+    let entry = |encoder: &mut RenderCommandEncoder, at: u64| {
+        let table = &resources.tables[(at % 2) as usize];
+        let offset = ENTRY * (1 + at % POSITIONS);
+        (encoder.set_vertex_buffer(Some(table), offset, 0)).unwrap();
+        (encoder.set_fragment_buffer(Some(table), offset, 0)).unwrap();
+        drawn(device, || {
+            (encoder.draw_primitives(PrimitiveType::Triangle, 0, 3, 1, 0)).unwrap();
+        })
+    };
+    for at in 0..POSITIONS {
+        if at == later {
+            let later = resources.later.as_resource();
+            (encoder.use_resource(later, ResourceUsage::READ, RenderStages::VERTEX)).unwrap();
+        }
+        each.push(entry(&mut encoder, at));
+    }
+    encoder.set_render_pipeline_state(&scene.slot).unwrap();
+    (encoder.set_vertex_buffer(Some(&resources.positions[0]), 0, 0)).unwrap();
+    each.push(drawn(device, || {
+        (encoder.draw_primitives(PrimitiveType::Triangle, 0, 3, 1, 0)).unwrap();
+    }));
+    encoder.set_render_pipeline_state(&scene.entry).unwrap();
+    each.push(entry(&mut encoder, 1));
+    encoder.end_encoding().unwrap();
+    command_buffer.commit().unwrap();
+    command_buffer.wait_until_completed_for(WAIT).unwrap();
+    assert_eq!(command_buffer.status(), CommandBufferStatus::Completed);
+    each
+}
+
+/// Two encoders, the second over other resources of the same residency's shape: within each,
+/// the draws after the first work out the uses of what it made resident only after it made
+/// another resource resident (the first encoder's fourth) and after a draw of another plan (the
+/// last); every other draw keeps them, and its kept uses are those it would make whole. The
+/// second encoder's first draw, of the plan of the first's last (the second makes every resource
+/// resident before it) under another residency, works them out again.
+#[test]
+fn draws_keep_the_uses_of_what_their_encoder_made_resident_until_it_or_their_plan_changes() {
+    let scratch = Scratch::new("resident-uses");
+    let device = device(&scratch.0, &[], &Heard::default());
+    let scene = Scene::new(&device);
+    for (encoder, corner, later) in [(0, -0.9, 3), (1, 0.1, 0)] {
+        let resources = Resources::new(&scene, corner);
+        let each = encode(&scene, &resources, later);
+        let entry_draws = POSITIONS as usize;
+        let made_again = [0, later as usize, entry_draws + 1];
+        for (at, drawn) in each.iter().enumerate() {
+            let what = format!("encoder {encoder} draw {at}: {drawn:?}");
+            match at {
+                // The slot shape's plan lists none.
+                at if at == entry_draws => assert_eq!(drawn.made, 0, "{what}"),
+                at if made_again.contains(&at) => assert!(drawn.made > 0, "{what}"),
+                _ => {
+                    assert_eq!(drawn.made, 0, "{what}");
+                    assert!(drawn.checked > 0, "{what}");
+                }
+            }
+        }
+        assert!(scene.covered() > 0, "encoder {encoder} drew nothing");
+    }
+}

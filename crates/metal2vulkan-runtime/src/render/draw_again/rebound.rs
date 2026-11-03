@@ -413,17 +413,23 @@ impl RenderLowering {
             )
         };
         let index = buffers.index.as_ref().map(DrawSource::metal);
-        let uses = (&**plan, &command, &tables);
+        let uses = (plan, &command, &tables);
         // Its uses: where only buffer slots changed, the kept draw's with those slots' patched in
-        // place, else made again whole.
-        let patched =
-            !images && binding::patch_buffer_uses(uses, slots, &mut live.uses) == Ok(true);
+        // place, else made again whole, those of what the encoder made resident kept
+        // (`binding::command_uses_into`).
+        let patched = !images
+            && binding::patch_buffer_uses((&**plan, &command, &tables), slots, &mut live.uses)
+                == Ok(true);
         let rebound = rebound.is_ok_and(|done| done)
             && (patched
                 || binding::command_uses_into(call, uses, (index, None), &mut live.uses).is_ok())
             && binding::push_writes_into(&commands.push_constants, &[], &mut live.pushes).is_ok();
         if !rebound {
             return false;
+        }
+        let made = live.uses.made() as u64;
+        if !patched && made > 0 {
+            self.core.device().shared().counts.resident_uses_made(made);
         }
         // Its fixed-function vertex buffers at the changed slots, in the plan's order.
         for (bind, at) in plan.vertex_buffers.iter().zip(&mut live.vertex_buffers) {
