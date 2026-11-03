@@ -1444,16 +1444,12 @@ impl<K: Copy + Ord + Hash> EncoderUses<K> {
                 // By key, each resource's uses in the order they were recorded, as a stable sort
                 // of the uses by key leaves them: a resource's uses are one list, so ordering
                 // the resources orders them, and only their keys, each once, are sorted, each
-                // beside its list where the part holds it.
-                let mut order: Vec<(K, &Few<Use<K>>)> = (part.tracked.iter())
-                    .map(|(&key, few)| (key, few))
-                    .collect();
-                order.sort_unstable_by_key(|&(key, _)| key);
+                // beside its list where the part holds it (`by_key`).
                 // Sized once: a flattened iterator tells no length, which would grow the vector
                 // use by use.
-                let count = order.iter().map(|(_, uses)| uses.len()).sum();
+                let count = part.tracked.values().map(Few::len).sum();
                 let mut uses: Vec<Use<K>> = Vec::with_capacity(count);
-                uses.extend(order.iter().flat_map(|(_, few)| few.iter().cloned()));
+                by_key(&part.tracked, |few| uses.extend(few.iter().cloned()));
                 Summary {
                     uses,
                     stages: part.stages,
@@ -1470,6 +1466,28 @@ impl<K: Copy + Ord + Hash> EncoderUses<K> {
         }
         summaries
     }
+}
+
+/// The most resources of an encoder's part whose keys [`by_key`] orders on the stack: an encoder
+/// that names no more takes no allocation to order them.
+const ORDERED_INLINE: usize = 16;
+
+/// Each of `tracked`'s lists, in the order of their keys. Up to [`ORDERED_INLINE`] keys are
+/// sorted in place on the stack, more in a vector of their own.
+fn by_key<K: Copy + Ord, V, S>(tracked: &HashMap<K, V, S>, mut each: impl FnMut(&V)) {
+    if tracked.len() <= ORDERED_INLINE {
+        let mut inline: [Option<(K, &V)>; ORDERED_INLINE] = [None; ORDERED_INLINE];
+        for (slot, (&key, value)) in inline.iter_mut().zip(tracked) {
+            *slot = Some((key, value));
+        }
+        let order = &mut inline[..tracked.len()];
+        order.sort_unstable_by_key(|entry| entry.map(|(key, _)| key));
+        order.iter().flatten().for_each(|&(_, value)| each(value));
+        return;
+    }
+    let mut order: Vec<(K, &V)> = tracked.iter().map(|(&key, value)| (key, value)).collect();
+    order.sort_unstable_by_key(|&(key, _)| key);
+    order.iter().for_each(|&(_, value)| each(value));
 }
 
 impl<K> fmt::Debug for EncoderUses<K> {

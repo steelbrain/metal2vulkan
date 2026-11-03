@@ -411,12 +411,12 @@ const HELD: [(&str, &str, f64); 46] = [
     ("draw_strip", "rt_sampler_sets_made_at_call", 0.0),
     ("draw_strip", "rt_live_tables_uploaded_at_call", 0.0),
     // Ending the encoding begins its render pass once, at the call, and makes no driver object.
-    // Its 25 allocations are the largest counted quantity on the path.
+    // Its 24 allocations are the largest counted quantity on the path.
     ("end_render", "rt_render_passes_begun_at_call", 1.0),
     ("end_render", "rt_vk_images_made_at_call", 0.0),
-    ("end_render", "allocs", 25.0),
-    ("end_compute", "allocs", 8.0),
-    ("end_blit", "allocs", 8.0),
+    ("end_render", "allocs", 24.0),
+    ("end_compute", "allocs", 7.0),
+    ("end_blit", "allocs", 7.0),
     // A dispatch records one dispatch command, at the call (8.13 allocations measured).
     ("dispatch", "rt_dispatches_at_call", 1.0),
     ("dispatch", "allocs", 8.2),
