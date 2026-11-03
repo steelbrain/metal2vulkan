@@ -593,9 +593,10 @@ fn a_creation_makes_the_default_sampler_s_key() {
 /// pipeline and links it; a second state of the same functions and pass whose attachment blends
 /// with factors one and zero, which store the output as the unblended attachment does (the
 /// fragment rounds it, and link gives such an attachment no Vulkan blend), makes no library and
-/// links its pipeline from the first state's: its fragment function is not compiled again. Both
-/// draw what the fragment computes. A device that makes its pipelines whole makes no library and
-/// links none.
+/// links nothing: its four libraries and its layout are the first state's, so its linked pipeline
+/// is too (`WorkCounts::linked_pipelines_shared`), and its fragment function is not compiled
+/// again. Both draw what the fragment computes. A device that makes its pipelines whole makes no
+/// library and links none.
 #[test]
 fn states_of_one_fragment_and_pass_share_its_fragment_library() {
     on_device(|device, _| {
@@ -621,8 +622,13 @@ fn states_of_one_fragment_and_pass_share_its_fragment_library() {
                 );
                 assert_eq!(
                     again,
-                    (0, 1, 1, 0),
-                    "the second state's pipeline linked from the first state's libraries"
+                    (0, 0, 0, 0),
+                    "the second state's pipeline, the first state's: no library made, nothing linked"
+                );
+                assert_eq!(
+                    device.work_counts().linked_pipelines_shared - created.linked_pipelines_shared,
+                    1,
+                    "the second state took the first state's linked pipeline"
                 );
             }
         }
