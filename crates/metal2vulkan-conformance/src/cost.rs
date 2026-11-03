@@ -457,7 +457,7 @@ const POOLED: &str = "an object made because no spare was free, where a spare co
 /// replays of a larger case set — which reads like a regression and is not one. See [`BORROWED`].
 /// `slot_returns` beside it stays gated: it counts work items, one a command buffer, and has held
 /// still alone and in both case sets.
-const RACY: [(&str, &str); 35] = [
+const RACY: [(&str, &str); 36] = [
     ("fences_made", POOLED),
     // What is alive, parked or waiting at the instant the counts were read.
     ("memory_blocks_live", INSTANTANEOUS),
@@ -498,6 +498,11 @@ const RACY: [(&str, &str); 35] = [
     ("primaries_begun_ahead", AHEAD),
     ("commands_recorded.begin_command_buffer", BEGUN),
     ("completed_where_seen", COMPLEMENT),
+    (
+        "completion_waiter_",
+        "how many times a queue's waiter slept on its condition variable, which is when that \
+         thread ran and not what the case asked for",
+    ),
     (
         "completion_turns_where_taken",
         "which of our own threads finished a command buffer taken with no submission: the one \
@@ -795,7 +800,7 @@ const TRANSLATION: [&str; 19] = [
 
 /// The name prefixes that put a count in [`Region::Submission`]: the commit path, our own other
 /// threads and the GPU.
-const SUBMISSION: [&str; 50] = [
+const SUBMISSION: [&str; 51] = [
     "commands_recorded.",
     "command_buffers_",
     "command_pools_made",
@@ -838,6 +843,7 @@ const SUBMISSION: [&str; 50] = [
     "completed_where_seen",
     "completion_seen_handlers_",
     "completion_turns_where_taken",
+    "completion_waiter_",
     "scheduled_where_submitted",
     "timestamp_slots_",
     "calibration",

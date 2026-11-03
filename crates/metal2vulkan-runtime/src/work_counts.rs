@@ -3859,6 +3859,13 @@ pub struct WorkCounts {
     /// value reached), each a system call: made only where a waiter slept on it
     /// (`command_buffer/completion.rs`).
     pub wakes_completion_waiters: u64,
+    /// Times a queue's waiter slept on its condition variable (`command_buffer/completion.rs`):
+    /// with no batch of its queue pending until it was woken, else until it was woken or a slice
+    /// ran out ([`completion_waiter_parks_timed_out`](Self::completion_waiter_parks_timed_out)).
+    /// An idle device's waiters sleep once and stay asleep.
+    pub completion_waiter_parks: u64,
+    /// Of those, the sleeps that ended at their slice, with a batch of the waiter's queue pending.
+    pub completion_waiter_parks_timed_out: u64,
     /// Notifies of the handler threads' condition variable (a transition or release posted to a
     /// queue's context): made only where a thread slept on it and a context was ready
     /// (`contexts/mod.rs`).
@@ -5140,6 +5147,7 @@ impl Device {
             self.shared().scheduler.sleeps_and_wakings();
         let idle_stalls = self.shared().scheduler.idle_stall_counts();
         let (completion_wakes, completion_spared) = self.shared().completion.wakes();
+        let (completion_parks, completion_parks_timed_out) = self.shared().completion.parks();
         let (handler_wakes, handler_spared) = self.shared().contexts.wakes();
         let command_buffer_wakes = counters.command_buffer_wakes.load(Ordering::Relaxed);
         let command_buffer_spared = counters.command_buffer_wakes_spared.load(Ordering::Relaxed);
@@ -5431,6 +5439,8 @@ impl Device {
                 .batches_submitted_by_waiters
                 .load(Ordering::Relaxed),
             wakes_completion_waiters: completion_wakes,
+            completion_waiter_parks: completion_parks,
+            completion_waiter_parks_timed_out: completion_parks_timed_out,
             wakes_handler_threads: handler_wakes,
             wakes_command_buffer_waiters: command_buffer_wakes,
             wakes_event_waiters: event_wakes,

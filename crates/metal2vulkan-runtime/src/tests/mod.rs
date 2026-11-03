@@ -41,6 +41,8 @@ mod completion;
 mod completion_here;
 mod completion_seen;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
+mod completion_wakes;
+#[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod compute;
 mod contexts;
 mod copied;

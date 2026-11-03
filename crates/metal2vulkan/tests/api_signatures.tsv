@@ -2532,6 +2532,8 @@ field	metal2vulkan-runtime::WorkCounts.completion_reads_ran_ahead	pub completion
 field	metal2vulkan-runtime::WorkCounts.completion_seen_handlers_run	pub completion_seen_handlers_run: u64
 field	metal2vulkan-runtime::WorkCounts.completion_seen_handlers_where_seen	pub completion_seen_handlers_where_seen: u64
 field	metal2vulkan-runtime::WorkCounts.completion_turns_where_taken	pub completion_turns_where_taken: u64
+field	metal2vulkan-runtime::WorkCounts.completion_waiter_parks	pub completion_waiter_parks: u64
+field	metal2vulkan-runtime::WorkCounts.completion_waiter_parks_timed_out	pub completion_waiter_parks_timed_out: u64
 field	metal2vulkan-runtime::WorkCounts.compute_pipeline_create_nanos	pub compute_pipeline_create_nanos: u64
 field	metal2vulkan-runtime::WorkCounts.copied_copy_in_bytes	pub copied_copy_in_bytes: u64
 field	metal2vulkan-runtime::WorkCounts.copied_copy_in_bytes_skipped	pub copied_copy_in_bytes_skipped: u64

@@ -105,11 +105,27 @@
 //!   for in turn, a wait that returns at once ("If the condition is satisfied when
 //!   `vkWaitSemaphores` is called, then `vkWaitSemaphores` returns immediately"), before it is
 //!   published: one call more, and only where the read ran ahead.
-//! - **Waits are bounded.** A waiter waits at most [`WAIT_SLICE`] at a time, so a stop is seen
-//!   promptly and a lost device is reported by the next wait. A wait that ran out its slice
-//!   although its fence or value was signaled when the waiter looked again is a wake it missed (or
-//!   a signal in the slice's last moment), counted (`WorkCounts::missed_completion_wakes`), which
-//!   the completion test holds to none.
+//! - **Waits on the GPU are bounded.** A waiter waits for its fence or value at most
+//!   [`WAIT_SLICE`] at a time, so a lost device is reported by the next wait. A wait that ran out
+//!   its slice although its fence or value was signaled when the waiter looked again is a wake it
+//!   missed (or a signal in the slice's last moment), counted
+//!   (`WorkCounts::missed_completion_wakes`), which the completion test holds to none.
+//! - **An idle waiter sleeps until it is woken** ([`wait`]). Parked with no batch of its queue
+//!   pending, a waiter sleeps on its condition variable with no timeout: every change it waits for
+//!   notifies it where it sleeps (below), so an idle device's waiters do not wake at all. Parked
+//!   with a batch pending (left to a turn under way, held by a drain, or a failure pending), it
+//!   still wakes at least every slice. Counted: `WorkCounts::completion_waiter_parks` and
+//!   `WorkCounts::completion_waiter_parks_timed_out`, which the idle test holds to none. The
+//!   changes a parked waiter waits for, each made under `pending`'s lock and each notifying it
+//!   where `Pending::parked` says it sleeps, or every waiter: a batch watched on its queue
+//!   ([`Completion::watch`], [`Completion::watch_unsubmitted`] where it owes no turn), a turn's
+//!   take of its queue's batches that leaves it one to arm for or finds the waiters stopping
+//!   ([`turns`]), the pending batches given back after a failure ([`take_pending`], every
+//!   waiter), a stop ([`Completion::stop`], every waiter) and an exit (`exit`, and a waiter that
+//!   found the process exiting, every waiter). A failure a waiter's wait saw, and a batch owed to
+//!   the thread that took it, leave the waiters asleep: the turn that finishes them is made by
+//!   that waiter or that thread, or by the turn under way, and ends in a take (or, for a failure,
+//!   [`take_pending`]'s wake of every waiter).
 //! - **Exit.** Each wait is a section of the exit guard ([`exit_guard`]), so an exit waits at most
 //!   one slice for it; once the process is exiting, the waiters end.
 //! - **A drain waits for the waiters.** A failed wait or read finishes every pending batch, which
@@ -187,6 +203,10 @@ struct Watch {
     lists: Mutex<FenceLists>,
     /// The turns made so ([`Completion::turn_owed`], `WorkCounts::completion_turns_where_taken`).
     turns_where_taken: AtomicU64,
+    /// The waiters' sleeps on their condition variables, and those of them that ended at their
+    /// slice ([`wait`], `WorkCounts`).
+    parks: AtomicU64,
+    parks_timed_out: AtomicU64,
 }
 
 impl Watch {
@@ -278,6 +298,8 @@ impl Completion {
             owed: AtomicBool::new(false),
             lists: Mutex::new(FenceLists::default()),
             turns_where_taken: AtomicU64::new(0),
+            parks: AtomicU64::new(0),
+            parks_timed_out: AtomicU64::new(0),
         });
         let completion = Completion {
             watch: Arc::clone(&watch),
@@ -374,6 +396,15 @@ impl Completion {
         self.watch.turns_where_taken.load(Ordering::Relaxed)
     }
 
+    /// The waiters' sleeps on their condition variables, and those that ended at their slice
+    /// ([`wait`]).
+    pub(crate) fn parks(&self) -> (u64, u64) {
+        (
+            self.watch.parks.load(Ordering::Relaxed),
+            self.watch.parks_timed_out.load(Ordering::Relaxed),
+        )
+    }
+
     /// The notifies made to the waiters, and those spared as none slept.
     pub(crate) fn wakes(&self) -> (u64, u64) {
         (
@@ -403,19 +434,54 @@ enum Turn {
     Failed(CommandBufferError),
 }
 
-/// Wait on `queue`'s waiter's condition variable up to one slice, counted as parked meanwhile.
+/// Wait on `queue`'s waiter's condition variable, counted as parked meanwhile: until it is woken
+/// where its queue holds no pending batch, else up to one slice (the module docs).
 fn wait<'a>(
     watch: &'a Watch,
     mut pending: std::sync::MutexGuard<'a, Pending>,
     queue: usize,
 ) -> std::sync::MutexGuard<'a, Pending> {
     pending.parked[queue] = true;
-    let mut pending = watch.wakes[queue]
-        .wait_timeout(pending, WAIT_SLICE)
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
-        .0;
+    watch.parks.fetch_add(1, Ordering::Relaxed);
+    let wake = &watch.wakes[queue];
+    let mut pending = match pending.queues[queue].is_empty() || unbounded_parks() {
+        true => wake
+            .wait(pending)
+            .unwrap_or_else(std::sync::PoisonError::into_inner),
+        false => {
+            let (pending, waited) = wake
+                .wait_timeout(pending, WAIT_SLICE)
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            if waited.timed_out() {
+                watch.parks_timed_out.fetch_add(1, Ordering::Relaxed);
+            }
+            pending
+        }
+    };
     pending.parked[queue] = false;
     pending
+}
+
+/// Whether every waiter's park waits until it is woken, a batch of its queue pending or not:
+/// set by a test, so a change that wakes no parked waiter it should hangs the test instead of
+/// waiting out a slice (`tests::completion_wakes`). Never set outside tests.
+#[cfg(test)]
+static UNBOUNDED_PARKS: AtomicBool = AtomicBool::new(false);
+
+#[cfg(test)]
+fn unbounded_parks() -> bool {
+    UNBOUNDED_PARKS.load(Ordering::SeqCst)
+}
+
+#[cfg(not(test))]
+fn unbounded_parks() -> bool {
+    false
+}
+
+/// Make every waiter's park of this process wait until it is woken (`unbounded_parks`).
+#[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+pub(crate) fn park_unbounded() {
+    UNBOUNDED_PARKS.store(true, Ordering::SeqCst);
 }
 
 /// The process is exiting: every waiter ends.

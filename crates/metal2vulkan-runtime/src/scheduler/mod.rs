@@ -87,8 +87,13 @@
 //!   buffers (`Group::keeps`). The submission checks of up to three batches right behind a line's
 //!   head that goes run with the head's ([`check_heads`]), so a line of checked batches is found
 //!   ready together.
-//! - **Waits are bounded.** The thread wakes on a commit or a host signal, and at least every
-//!   [`WAIT_SLICE`], so a stop is seen promptly.
+//! - **Idle, it sleeps until it is woken.** The thread wakes on a commit, a host signal or a
+//!   stop, each of which marks its state under its lock and notifies it where it sleeps
+//!   ([`Inbox::post`], [`Scheduler::waker`], `Scheduler::stop`). With no batch held in its order
+//!   or its group, no head's bound and no driver's stall to take, nothing else can give it work,
+//!   so it sleeps with no timeout: an idle device's scheduler does not wake at all
+//!   (`WorkCounts::scheduler_sleep_slices`). With a batch held it still wakes at least every
+//!   [`WAIT_SLICE`], beside the completion that lets its batch go.
 //! - **The driver's stalls taken idle** (`device/submit_stalls.rs`). Where the driver stalls in
 //!   one signalling submission of every 1024 to a `VkQueue` (NVIDIA's), and a queue's next stall
 //!   may be due, the thread wakes once it has had nothing to submit for `IDLE_NANOS`, and
@@ -977,6 +982,12 @@ fn run(shared: &SchedulerShared) {
                 }
                 None => (WAIT_SLICE, false),
             };
+            // Nothing held, no bound, no stall to take: only a commit, a host signal or a stop
+            // gives the thread work, and each notifies it (the module docs).
+            let idle = state.order.is_empty()
+                && state.grouped.is_empty()
+                && bound.is_none()
+                && stalls.is_none();
             let slice = bound.map_or(slice, |left| left.min(slice));
             shared.sleeps.fetch_add(1, Ordering::Relaxed);
             if let Some(nudge) = shared.nudge.get().filter(|_| shared.gpu_waits(&mut gpu)) {
@@ -984,6 +995,14 @@ fn run(shared: &SchedulerShared) {
                 continue;
             }
             state.asleep = true;
+            if idle {
+                state = shared
+                    .wake
+                    .wait(state)
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                state.asleep = false;
+                continue;
+            }
             let (woke, waited) = shared
                 .wake
                 .wait_timeout(state, slice)
