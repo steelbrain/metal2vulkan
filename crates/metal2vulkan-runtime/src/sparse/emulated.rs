@@ -408,7 +408,7 @@ impl Device {
 
 /// A box of a texture's image a command writes: a level, its layers, and the texels from `origin`
 /// of `size`.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct Written {
     pub(crate) level: u32,
     pub(crate) layers: Range<u32>,

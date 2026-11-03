@@ -51,7 +51,9 @@
 //!   nothing, nor does a refused commit's, which runs nothing; the log of one committed as failed
 //!   is taken whole, as its encoders were encoded.
 //! - **Cheap.** With no such texture live, a command checks one flag and logs nothing, and a commit
-//!   checks it once. A texture's entry goes when every subresource is written, when it is
+//!   checks it once. With one live, a command logs only what reaches a noted texture, and not a
+//!   repeat of that texture's last entry ([`FreshLog::add`]): a draw that reads none logs nothing
+//!   and allocates nothing. A texture's entry goes when every subresource is written, when it is
 //!   announced, or when the texture is released.
 //!
 //! A new multisampled float texture whose pattern holds a NaN is noted alike where the device
@@ -138,10 +140,107 @@ enum FreshEvent {
     },
 }
 
+/// How far back [`FreshLog::add`] looks for its texture's last entry.
+const REPEATS: usize = 8;
+
 impl FreshLog {
-    /// Log `events`, in order.
-    fn push(&self, events: impl IntoIterator<Item = FreshEvent>) {
-        lock(&self.events).extend(events);
+    /// Log `event` where its texture is noted now and the record weighs it
+    /// ([`FreshEvent::weighed_by`]), unless it repeats its texture's last entry in the log,
+    /// within the last [`REPEATS`]. Either way the commit's answer is the same: a texture not
+    /// noted now never is again, its entry being made with its image and never after, an entry's
+    /// kind never changes, and a repeated read, write or load finds the record as the first one
+    /// left it. So a command that reads a noted texture again and again grows the log once, and
+    /// one that reads none logs nothing and takes no allocation.
+    fn add(&self, fresh: &FreshUnwritten, event: FreshEvent) {
+        let weighed = lock(&fresh.textures)
+            .get(&event.key())
+            .is_some_and(|entry| event.weighed_by(entry));
+        if !weighed {
+            return;
+        }
+        let mut events = lock(&self.events);
+        let last = (events.iter().rev().take(REPEATS)).find(|logged| logged.key() == event.key());
+        if last != Some(&event) {
+            events.push(event);
+        }
+    }
+}
+
+impl FreshEvent {
+    /// The texture's image the entry is of.
+    fn key(&self) -> ResourceKey {
+        match self {
+            FreshEvent::Written { key, .. }
+            | FreshEvent::Read { key, .. }
+            | FreshEvent::ReadRange { key, .. }
+            | FreshEvent::LoadsDepth { key, .. } => *key,
+        }
+    }
+
+    /// Whether the commit's replay of it can change `entry` or announce it: a write any noted
+    /// texture's, a read any but a [`FreshKind::SignedDepth`] one's (which no read observes), a
+    /// pass's load of the depth only such a one's.
+    fn weighed_by(&self, entry: &Unwritten) -> bool {
+        let signed = entry.notice.kind == FreshKind::SignedDepth;
+        match self {
+            FreshEvent::Written { .. } => true,
+            FreshEvent::Read { .. } | FreshEvent::ReadRange { .. } => !signed,
+            FreshEvent::LoadsDepth { .. } => signed,
+        }
+    }
+}
+
+/// Entries of the same kind of the same texels, a load's texture aside (its key names its image).
+impl PartialEq for FreshEvent {
+    fn eq(&self, other: &FreshEvent) -> bool {
+        use FreshEvent::{LoadsDepth, Read, ReadRange, Written};
+        match (self, other) {
+            (
+                Written {
+                    key,
+                    aspects,
+                    texels,
+                },
+                Written {
+                    key: k,
+                    aspects: a,
+                    texels: t,
+                },
+            )
+            | (
+                Read {
+                    key,
+                    aspects,
+                    texels,
+                },
+                Read {
+                    key: k,
+                    aspects: a,
+                    texels: t,
+                },
+            ) => (key, aspects, texels) == (k, a, t),
+            (
+                ReadRange {
+                    key,
+                    aspects,
+                    levels,
+                    layers,
+                },
+                ReadRange {
+                    key: k,
+                    aspects: a,
+                    levels: l,
+                    layers: y,
+                },
+            ) => (key, aspects, levels, layers) == (k, a, l, y),
+            (
+                LoadsDepth { key, texels, .. },
+                LoadsDepth {
+                    key: k, texels: t, ..
+                },
+            ) => (key, texels) == (k, t),
+            _ => false,
+        }
     }
 }
 
@@ -478,7 +577,8 @@ impl FreshUnwritten {
         if !fresh.any() {
             return;
         }
-        let events = lock(&log.events).split_off(0);
+        // Committed, the command buffer encodes nothing more: its log goes to the record whole.
+        let events = std::mem::take(&mut *lock(&log.events));
         if !runs || events.is_empty() {
             return;
         }
@@ -543,7 +643,7 @@ impl FreshUnwritten {
         let attachment = vk::AccessFlags2::COLOR_ATTACHMENT_READ
             | vk::AccessFlags2::DEPTH_STENCIL_ATTACHMENT_READ;
         let reading = |used: &&Use<ResourceKey>| !(used.read.access & !attachment).is_empty();
-        let mut events = Vec::new();
+        let (fresh, log) = (&maker.device().shared().fresh, maker.fresh_log());
         for used in uses.iter().filter(reading) {
             let UseRange::Image {
                 aspects,
@@ -555,20 +655,27 @@ impl FreshUnwritten {
             };
             let mut boxes = reads.iter().filter(|read| read.key == used.key).peekable();
             match boxes.peek().is_some() {
-                true => events.extend(boxes.map(|read| FreshEvent::Read {
-                    key: read.key,
-                    aspects: read.aspects,
-                    texels: read.texels.clone(),
-                })),
-                false => events.push(FreshEvent::ReadRange {
-                    key: used.key,
-                    aspects: *aspects,
-                    levels: levels.clone(),
-                    layers: layers.clone(),
-                }),
+                true => {
+                    for read in boxes {
+                        let event = FreshEvent::Read {
+                            key: read.key,
+                            aspects: read.aspects,
+                            texels: read.texels.clone(),
+                        };
+                        log.add(fresh, event);
+                    }
+                }
+                false => {
+                    let event = FreshEvent::ReadRange {
+                        key: used.key,
+                        aspects: *aspects,
+                        levels: levels.clone(),
+                        layers: layers.clone(),
+                    };
+                    log.add(fresh, event);
+                }
             }
         }
-        maker.fresh_log().push(events);
     }
 
     /// A render pass of `layout` begins in `maker` (the module docs): each attachment's texture,
@@ -577,21 +684,21 @@ impl FreshUnwritten {
     /// through another image: a stand-in's own texture, and separate depth and stencil textures,
     /// each in its aspect. Its clears are logged as it ends ([`cleared`](Self::cleared)).
     pub(super) fn begin_pass(maker: &CommandBuffer, layout: &PassLayout) -> Result<(), Error> {
-        if !maker.device().shared().fresh.any() {
+        let fresh = &maker.device().shared().fresh;
+        if !fresh.any() {
             return Ok(());
         }
-        let mut events = Vec::new();
         for (target, aspects) in pass_targets(layout, |aspect| aspect.load == LoadAction::Load) {
             let texels = pass_texels(target, layout.extent)?;
             if let Some(key) = image_key(&target.texture, &texels)? {
-                events.push(FreshEvent::Read {
+                let event = FreshEvent::Read {
                     key,
                     aspects,
                     texels,
-                });
+                };
+                maker.fresh_log().add(fresh, event);
             }
         }
-        maker.fresh_log().push(events);
         Ok(())
     }
 
@@ -601,16 +708,18 @@ impl FreshUnwritten {
     /// layers then, the commit announces `signed-depth-test` for it, and it is no longer noted.
     /// The whole level is weighed, as the render area is not decided yet.
     pub(super) fn loads_signed_depth(maker: &CommandBuffer, target: &Target) -> Result<(), Error> {
-        if !maker.device().shared().fresh.any() {
+        let fresh = &maker.device().shared().fresh;
+        if !fresh.any() {
             return Ok(());
         }
         let texels = pass_texels(target, [u32::MAX; 2])?;
         if let Some(key) = image_key(&target.texture, &texels)? {
-            maker.fresh_log().push([FreshEvent::LoadsDepth {
+            let event = FreshEvent::LoadsDepth {
                 key,
                 texels,
                 texture: target.texture.clone(),
-            }]);
+            };
+            maker.fresh_log().add(fresh, event);
         }
         Ok(())
     }
@@ -624,22 +733,22 @@ impl FreshUnwritten {
     /// Where such a pass does not store it (`DontCare`), or renders through a backing nothing
     /// copies back, the texture keeps its texels, as Metal keeps them, and stays unwritten.
     pub(super) fn cleared(maker: &CommandBuffer, layout: &PassLayout) -> Result<(), Error> {
-        if !maker.device().shared().fresh.any() {
+        let fresh = &maker.device().shared().fresh;
+        if !fresh.any() {
             return Ok(());
         }
         let clears = |aspect: &Aspect| aspect.load == LoadAction::Clear && aspect.reaches;
-        let mut events = Vec::new();
         for (target, aspects) in pass_targets(layout, clears) {
             let texels = pass_texels(target, layout.extent)?;
             if let Some(key) = image_key(&target.texture, &texels)? {
-                events.push(FreshEvent::Written {
+                let event = FreshEvent::Written {
                     key,
                     aspects,
                     texels,
-                });
+                };
+                maker.fresh_log().add(fresh, event);
             }
         }
-        maker.fresh_log().push(events);
         Ok(())
     }
 
@@ -654,10 +763,10 @@ impl FreshUnwritten {
         resolved: &[(&Resolve, metal2vulkan::vk::ImageAspectFlags)],
         extent: [u32; 2],
     ) -> Result<(), Error> {
-        if !maker.device().shared().fresh.any() {
+        let fresh = &maker.device().shared().fresh;
+        if !fresh.any() {
             return Ok(());
         }
-        let mut events = Vec::new();
         for (resolve, aspects) in resolved {
             let copied = resolve
                 .copy_to
@@ -670,15 +779,15 @@ impl FreshUnwritten {
                     texels.size[1] = u32::MAX;
                 }
                 if let Some(key) = image_key(&target.texture, &texels)? {
-                    events.push(FreshEvent::Written {
+                    let event = FreshEvent::Written {
                         key,
                         aspects: (*aspects).into(),
                         texels,
-                    });
+                    };
+                    maker.fresh_log().add(fresh, event);
                 }
             }
         }
-        maker.fresh_log().push(events);
         Ok(())
     }
 
@@ -690,20 +799,20 @@ impl FreshUnwritten {
         texture: &Texture,
         written: &[(ImageAspectFlags, Written)],
     ) -> Result<(), Error> {
-        if !maker.device().shared().fresh.any() {
+        let fresh = &maker.device().shared().fresh;
+        if !fresh.any() {
             return Ok(());
         }
-        let mut events = Vec::new();
         for (aspects, texels) in written {
             if let Some(key) = image_key(texture, texels)? {
-                events.push(FreshEvent::Written {
+                let event = FreshEvent::Written {
                     key,
                     aspects: *aspects,
                     texels: texels.clone(),
-                });
+                };
+                maker.fresh_log().add(fresh, event);
             }
         }
-        maker.fresh_log().push(events);
         Ok(())
     }
 
