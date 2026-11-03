@@ -587,6 +587,20 @@ impl Primer<'_> {
         }));
     }
 
+    /// Reset `pool` before it is released, as a predicated loop's run again resets its arena's
+    /// pools: held right after the pool, so released before it, and after the command pool
+    /// whose never-submitted command buffer binds the pool's set, which is held later.
+    fn hold_reset(&mut self, pool: vk::DescriptorPool) {
+        self.held.push(Box::new(move |device: &ash::Device| {
+            // SAFETY: the pool is the device's, the device is idle when the priming releases what
+            // it holds, and the command buffer that bound the pool's set is freed before this.
+            let _ = unsafe {
+                device.reset_descriptor_pool(pool, vk::DescriptorPoolResetFlags::empty())
+            };
+            Call::ResetDescriptorPool
+        }));
+    }
+
     /// A batch's sparse binding, where the device binds sparse memory: an empty bind on the first
     /// queue, which the device's idle wait after the priming waits for.
     ///
@@ -1150,17 +1164,7 @@ impl Primer<'_> {
             let pool = device.create_descriptor_pool(&info, None).map_err(vulkan)?;
             self.made(Call::CreateDescriptorPool);
             self.hold(pool);
-            // Reset before it is released, as a predicated loop's run again resets its arena's
-            // pools: released before the pool, after the command pool whose command buffer binds
-            // the pool's set, which is held later.
-            self.held.push(Box::new(move |device: &ash::Device| {
-                // SAFETY: the device is idle when the priming releases what it holds, and the
-                // command buffer that bound the pool's set is freed with its pool before this.
-                let _ = unsafe {
-                    device.reset_descriptor_pool(pool, vk::DescriptorPoolResetFlags::empty())
-                };
-                Call::ResetDescriptorPool
-            }));
+            self.hold_reset(pool);
             // A set of it, written: the runtime releases its pools with their sets.
             let info = vk::DescriptorSetAllocateInfo::default()
                 .descriptor_pool(pool)
