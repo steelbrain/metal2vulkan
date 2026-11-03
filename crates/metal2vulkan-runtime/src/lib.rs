@@ -167,6 +167,8 @@ mod private_properties;
 mod program_objects;
 mod pvrtc;
 mod queue;
+mod queue_share;
+mod queue_switch_check;
 mod range;
 mod rate_map;
 mod rate_mapped_pass;

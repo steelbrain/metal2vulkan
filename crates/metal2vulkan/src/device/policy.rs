@@ -6,14 +6,14 @@ use std::time::Duration;
 
 /// Policy inputs of `Device::new`. Every field but `heap_compression`, `completion`,
 /// `batch_order`, `render_lowering`, `host_page_textures`, `pipeline_waits`,
-/// `pipeline_creation_wait`, `pipeline_commit_wait`, `wide_lines` and `extended_range_blits` can
-/// change emitted code, so the profile carries it (containment as the encoding it selects) and
-/// its fingerprint covers it; those ten are the runtime's alone (a heap's compressed texture's
-/// image, when the host sees a command buffer complete, how a batch begins after the earlier ones
-/// of its queue, where a render encoder's calls are lowered, what holds a sampled texture over
-/// host pages, whether and how long a pipeline the driver is still making is waited for, which
-/// lines draw a wide line, and what a blit through a compressed extended-range texture writes),
-/// and no profile carries them.
+/// `pipeline_creation_wait`, `pipeline_commit_wait`, `wide_lines`, `extended_range_blits` and
+/// `queue_sharing` can change emitted code, so the profile carries it (containment as the encoding
+/// it selects) and its fingerprint covers it; those eleven are the runtime's alone (a heap's
+/// compressed texture's image, when the host sees a command buffer complete, how a batch begins
+/// after the earlier ones of its queue, where a render encoder's calls are lowered, what holds a
+/// sampled texture over host pages, whether and how long a pipeline the driver is still making is
+/// waited for, which lines draw a wide line, what a blit through a compressed extended-range
+/// texture writes, and which `VkQueue` a command queue submits to), and no profile carries them.
 #[non_exhaustive]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
@@ -86,6 +86,12 @@ pub struct DevicePolicy {
     /// losslessly compressed keeps the texels' bytes (the default) or writes Metal's canonical
     /// encoding of them. The runtime's choice alone: no emitted code changes.
     pub extended_range_blits: ExtendedRangeBlitPolicy,
+    /// Whether command queues share `VkQueue`s, each moving to a busy one of its family as it
+    /// makes a command buffer while it holds no other uncompleted one (the default, on a device
+    /// whose own check finds its GPU idle when consecutive work comes from another `VkQueue`), or
+    /// each keeps the `VkQueue` it took at its creation. The runtime's choice alone: no emitted
+    /// code changes.
+    pub queue_sharing: QueueSharingPolicy,
 }
 
 impl DevicePolicy {
@@ -94,8 +100,9 @@ impl DevicePolicy {
     /// in one kernel submission, batches of one queue ordered by their ends where the driver runs
     /// them one after another, and a sampled
     /// texture over host pages in place where the device's check passed, a pipeline still
-    /// being made waited for a bound (4.5 s at a state's creation, and 4.5 s from a commit), and
-    /// a wide line the device's own wherever it draws the width.
+    /// being made waited for a bound (4.5 s at a state's creation, and 4.5 s from a commit), a
+    /// wide line the device's own wherever it draws the width, and command queues sharing
+    /// `VkQueue`s where the device's GPU idles between work of different ones.
     pub const UNTRUSTED: DevicePolicy = DevicePolicy {
         pointer_domain: PointerDomain::ResidentTable,
         handle_domain: HandleDomain::Table,
@@ -112,6 +119,7 @@ impl DevicePolicy {
         pipeline_commit_wait: Duration::from_millis(4500),
         wide_lines: WideLinePolicy::Device,
         extended_range_blits: ExtendedRangeBlitPolicy::Kept,
+        queue_sharing: QueueSharingPolicy::Adaptive,
     };
 
     /// This policy with Metal's answer wherever the choices offer it: a heap's texture whose bytes
@@ -128,7 +136,8 @@ impl DevicePolicy {
     /// for until it is made ([`PipelineWaitPolicy::Exact`]), every wide line Metal's
     /// parallelogram where the device's own line differs ([`WideLinePolicy::Exact`]), and every
     /// blit and fill through a compressed `BGRA10_XR` texture Metal's canonical encoding of its
-    /// texels ([`ExtendedRangeBlitPolicy::Canonical`]). Every other field is kept.
+    /// texels ([`ExtendedRangeBlitPolicy::Canonical`]), and every command queue on the `VkQueue`
+    /// it took at its creation ([`QueueSharingPolicy::PerQueue`]). Every other field is kept.
     pub const fn exact_answers(self) -> DevicePolicy {
         DevicePolicy {
             heap_compression: HeapCompressionPolicy::Uncompressed,
@@ -140,6 +149,7 @@ impl DevicePolicy {
             pipeline_waits: PipelineWaitPolicy::Exact,
             wide_lines: WideLinePolicy::Exact,
             extended_range_blits: ExtendedRangeBlitPolicy::Canonical,
+            queue_sharing: QueueSharingPolicy::PerQueue,
             ..self
         }
     }
@@ -409,4 +419,34 @@ pub enum ExtendedRangeBlitPolicy {
     /// offset or pitch off 4 bytes, a region past `maxStorageBufferRange`), or into a texture over
     /// a buffer whose rows share bytes, keeps the bytes, announced as under `Kept`.
     Canonical,
+}
+
+/// Which `VkQueue` a command queue submits to. A `VkQueue` runs its submissions in order, so two
+/// command queues on one wait for each other's whole command buffers, where Metal's queues wait
+/// for each other only inside one command. NVIDIA's driver (615.71.09 on the RTX 5080 Laptop GPU)
+/// leaves the GPU idle 56 to 62 us whenever consecutive work comes from another `VkQueue`, which
+/// held a device of a `VkQueue` per command queue near 30,000 one-draw command buffers a second,
+/// the GPU idle at the switches 60% of its time. Presenting queues, and queues made with
+/// `new_command_queue_unshared`, keep their `VkQueue` under either value. The runtime's choice
+/// alone: no emitted code changes.
+#[non_exhaustive]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub enum QueueSharingPolicy {
+    /// The default, on a device whose own check, run once per driver and release, finds the GPU
+    /// idle when consecutive work comes from another `VkQueue` of one family; elsewhere, and
+    /// before the check answered, as [`PerQueue`](Self::PerQueue). A command queue that makes a
+    /// command buffer while it holds no other uncompleted one takes the busiest `VkQueue` of its
+    /// family whose oldest batch has run under 0.5 ms, else stays. A queue one of whose batches
+    /// ran as its `VkQueue`'s oldest for over 2 ms is long from then on: at its next such point
+    /// it takes an idle `VkQueue` no long queue holds and stays there, and no queue moves onto a
+    /// long queue's `VkQueue`. So the first long command buffer of a queue that shared holds the
+    /// command buffers the queues sharing with it committed behind it, once per queue that goes
+    /// long. Announced `queue-sharing` at the first move onto a `VkQueue` with another queue's
+    /// work in flight.
+    #[default]
+    Adaptive,
+    /// Each command queue on the `VkQueue` it took at its creation, round robin, for its life:
+    /// command queues share one only past the `VkQueue`s the device lends the round robin.
+    PerQueue,
 }

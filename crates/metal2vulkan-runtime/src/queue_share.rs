@@ -1,0 +1,691 @@
+//! Command queues sharing `VkQueue`s (`QueueSharingPolicy::Adaptive`, the default): which
+//! `VkQueue` a command queue submits to, chosen again each time it makes a command buffer while it
+//! holds no other uncompleted one, on a device whose own check finds the GPU idle when consecutive
+//! work comes from another `VkQueue` (`queue_switch_check.rs`).
+//!
+//! - **Why.** NVIDIA's driver (615.71.09 on the RTX 5080 Laptop GPU, Linux) leaves the GPU idle
+//!   56 to 62 us whenever its next work comes from another `VkQueue` (p50 56.3 us over 10,713 such
+//!   switches), so a device of one `VkQueue` per command queue, round robin (`queue.rs`), ran
+//!   eight threads' one-draw command buffers at 25,800 to 29,500 a second, the GPU idle at the
+//!   switches 60% of its time, where one `VkQueue` for all of them ran 54,700 to 58,700.
+//! - **Where.** A device whose policy is `Adaptive`, once its check found the switch cost above
+//!   [`SWITCH_IDLES`] ([`QueueSwitch::shares`]); before the check answered, and everywhere else,
+//!   each command queue keeps the `VkQueue` it took at its creation, round robin, as under
+//!   `QueueSharingPolicy::PerQueue`. MoltenVK's four families of one queue each, and RADV's and
+//!   lavapipe's single graphics queue, have no two `VkQueue`s of one family, so no queue ever
+//!   moves there and the check makes no measurement.
+//! - **When a queue moves.** Only as it makes a command buffer while it holds no other uncompleted
+//!   one (`CommandQueue::slot`, under its slots' lock, the only command buffer of its queue the new
+//!   one): every earlier command buffer of the queue completed, its completed handlers ran, and
+//!   nothing of it is held in the scheduler, a group, a rerun or a hang hold, so the move breaks no
+//!   order of the queue's own. What a later command buffer reads of an earlier one's writes it
+//!   reads as of another `VkQueue`'s work seen complete (`command_buffer/submit.rs`). A command
+//!   queue reads its `VkQueue` from that make to its command buffer's completion, through every
+//!   step that names it (its pools' family, its submissions, its groups, its failure's value),
+//!   and only one of its family is taken, so its pools' family never changes. Never a queue made
+//!   for presenting, never one made with `Device::new_command_queue_unshared`, and never one that
+//!   lent its `VkQueue` (`CommandQueue::with_vk_queue`, after which it is pinned for good).
+//! - **Which `VkQueue`** ([`Device::pick_vk_queue`]): one pass over the round robin's `VkQueue`s
+//!   of its family, atomics alone, no lock. A `VkQueue` a long queue or an unshared queue holds is
+//!   never taken. Among the busy ones whose oldest batch in flight has run under [`YOUNG_HEAD`],
+//!   the one with the most batches in flight, then the latest submission; else it stays, unless a
+//!   long or unshared queue holds its own `VkQueue`; then the most recently used idle one; else it
+//!   stays.
+//! - **Long queues.** A batch that ran as its `VkQueue`'s oldest in flight for over [`LONG_HEAD`]
+//!   marks its command queue long, from the waiter that saw it complete, under the completion's
+//!   lock, before the turn that finishes it, so before the queue's next command buffer is made
+//!   (`command_buffer/completion.rs`). A long queue moves once more, at its next such make: to an
+//!   idle `VkQueue` of its family that no long or unshared queue holds, the one used least
+//!   recently, else it stays; then never again. So the first long command buffer of a queue that
+//!   shared holds the command buffers the queues sharing its `VkQueue` committed behind it for its
+//!   whole length (29 ms behind 30 ms command buffers on the RTX 5080 Laptop GPU), and those its
+//!   later command buffers while the long queue holds work until its next idle point; a queue
+//!   that held a long queue's `VkQueue` leaves at its own next idle point. A queue gives no sign of
+//!   its first long command buffer before it runs, so no rule of joining avoids that first one.
+//! - **Unshared queues** (`Device::new_command_queue_unshared`): never moved and never joined. One
+//!   takes, where the device shares, a round robin's `VkQueue` that no command queue holds, the one
+//!   used least recently; else one no long or unshared queue holds, the one fewest command queues
+//!   hold; else the round robin's next. A command queue on a `VkQueue` an unshared queue took
+//!   leaves at its next idle point, where another of its family takes it. A queue's claim of a
+//!   `VkQueue` and an unshared queue's are made so that two made at once never both succeed: each
+//!   counts itself there first, then reads the other's count, both sequentially consistent.
+//! - **Counted**: `WorkCounts::queue_moves`, `queue_joins`, `queues_gone_long`,
+//!   `long_queue_settles`, `queue_moves_off_unshared` and `joins_withheld_from_unshared`.
+//!   Announced `queue-sharing` at the device's first join, a move onto a `VkQueue` with another
+//!   queue's work in flight.
+
+use crate::device::{lock, Device, QueueSlot};
+use crate::in_place::DriverIdentity;
+use crate::shader_cache::store::{hex, Lookup};
+use metal2vulkan::device::QueueSharingPolicy;
+use sha2::{Digest, Sha256};
+use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU64, AtomicU8, AtomicUsize, Ordering};
+use std::sync::{Condvar, Mutex};
+use std::time::{Duration, Instant};
+
+/// A batch that ran as its `VkQueue`'s oldest in flight for longer than this, in nanoseconds,
+/// marks its command queue long: 2 ms. Measured against 10 ms on the RTX 5080 Laptop GPU, beside
+/// an application queue of 30 ms command buffers: both mark that queue at its first one, but only
+/// 2 ms also marks a queue of 2 to 10 ms command buffers, which at 10 ms the queues sharing with it
+/// would stall behind again and again (the compositor's p99 4.81 ms against 24.0 ms where the long
+/// queue stays home, 2.15 against 3.48 ms where it moves). The cost: a queue whose short command
+/// buffers the GPU slices behind another `VkQueue`'s work for over 2 ms (measured in 3 of 7 runs,
+/// at 2 to 6 ms) is marked long too, which only stops it sharing.
+pub(crate) const LONG_HEAD: u64 = 2_000_000;
+
+/// A busy `VkQueue` is joined only while its oldest batch in flight has run less than this, in
+/// nanoseconds: 0.5 ms. A queue joining one whose oldest batch has run longer would likely wait
+/// behind a long command buffer.
+const YOUNG_HEAD: u64 = 500_000;
+
+/// The switch cost, in nanoseconds, above which the device's check finds its GPU idle when
+/// consecutive work comes from another `VkQueue`: 20 us. The RTX 5080 Laptop GPU measured 56 to
+/// 62 us.
+pub(crate) const SWITCH_IDLES: i64 = 20_000;
+
+/// One `VkQueue`'s part in the sharing: when its oldest batch in flight became its oldest, its last
+/// submission, and the command queues it holds.
+#[derive(Default)]
+pub(crate) struct SlotShare {
+    /// The device shares `VkQueue`s, so the times below are kept ([`QueueSwitch::shares`]).
+    watched: AtomicBool,
+    /// The host time (`gpu_time::host_nanos`) its oldest batch in flight became its oldest: the
+    /// host saw the batch before it complete, or it was submitted while the host saw every batch
+    /// complete. 0 before the first.
+    head_since: AtomicU64,
+    /// The host time of its last submission; 0 before the first.
+    last_submit: AtomicU64,
+    /// The round robin's command queues it holds.
+    homes: AtomicUsize,
+    /// The long ones among them.
+    long: AtomicUsize,
+    /// The unshared command queues it holds.
+    unshared: AtomicUsize,
+}
+
+impl SlotShare {
+    /// A batch was submitted: `idle` where the host had seen every batch before it complete.
+    pub(crate) fn submitted(&self, idle: bool) {
+        if !self.watched.load(Ordering::Relaxed) {
+            return;
+        }
+        let now = crate::gpu_time::host_nanos();
+        if idle {
+            self.head_since.store(now, Ordering::Relaxed);
+        }
+        self.last_submit.store(now, Ordering::Relaxed);
+    }
+
+    /// The host saw a batch complete: the next becomes the oldest in flight.
+    pub(crate) fn completed(&self) {
+        if self.watched.load(Ordering::Relaxed) {
+            (self.head_since).store(crate::gpu_time::host_nanos(), Ordering::Relaxed);
+        }
+    }
+
+    /// When its oldest batch in flight became its oldest, where known (the device shares).
+    pub(crate) fn head_since(&self) -> Option<u64> {
+        let since = self.head_since.load(Ordering::Relaxed);
+        (self.watched.load(Ordering::Relaxed) && since != 0).then_some(since)
+    }
+
+    /// A round robin's command queue took it.
+    pub(crate) fn took(&self) {
+        self.homes.fetch_add(1, Ordering::SeqCst);
+    }
+
+    /// A round robin's command queue left it, long or not.
+    pub(crate) fn left(&self, long: bool) {
+        self.homes.fetch_sub(1, Ordering::SeqCst);
+        if long {
+            self.long.fetch_sub(1, Ordering::SeqCst);
+        }
+    }
+
+    /// One of the command queues it holds went long.
+    pub(crate) fn went_long(&self) {
+        self.long.fetch_add(1, Ordering::SeqCst);
+    }
+
+    /// An unshared command queue took it.
+    pub(crate) fn unshared_took(&self) {
+        self.unshared.fetch_add(1, Ordering::SeqCst);
+    }
+
+    /// An unshared command queue left it.
+    pub(crate) fn unshared_left(&self) {
+        self.unshared.fetch_sub(1, Ordering::SeqCst);
+    }
+}
+
+/// What a round robin's command queue that holds no uncompleted command buffer does
+/// ([`Device::pick_vk_queue`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Choice {
+    /// It keeps its `VkQueue`.
+    Stay,
+    /// It takes this busy `VkQueue`.
+    Join(usize),
+    /// It takes this idle (or, off an unshared queue's, least busy) `VkQueue`.
+    Leave(usize),
+}
+
+/// What [`choose`] reads of one `VkQueue` of the family.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct Look {
+    /// Its index among the device's `VkQueue`s.
+    pub(crate) index: usize,
+    /// Its batches in flight: timeline values submitted past those the host saw complete.
+    pub(crate) depth: u64,
+    /// How long its oldest batch in flight has been its oldest, where known.
+    pub(crate) head_age: Option<u64>,
+    /// When it was last submitted to (host nanoseconds; 0 before the first).
+    pub(crate) last_submit: u64,
+    /// A long queue holds it.
+    pub(crate) long: bool,
+    /// An unshared queue holds it.
+    pub(crate) unshared: bool,
+}
+
+/// The choice of a round robin's command queue on `current` that holds no uncompleted command
+/// buffer and is not long, among `looks`, every `VkQueue` of its family, `current` among them (the
+/// module docs); with whether a busy, young `VkQueue` was passed over for the unshared queue it
+/// holds alone.
+pub(crate) fn choose(current: usize, looks: &[Look]) -> (Choice, bool) {
+    let mut busy: Option<&Look> = None;
+    let mut idle: Option<&Look> = None;
+    let mut least: Option<&Look> = None;
+    let mut withheld = false;
+    let mut here = None;
+    for look in looks {
+        if look.index == current {
+            here = Some(look);
+        }
+        if look.long {
+            continue;
+        }
+        let young = look.head_age.is_some_and(|age| age < YOUNG_HEAD);
+        if look.unshared {
+            withheld |= look.depth > 0 && young;
+            continue;
+        }
+        if least.is_none_or(|l| (look.depth, look.last_submit) < (l.depth, l.last_submit)) {
+            least = Some(look);
+        }
+        if look.depth == 0 {
+            if idle.is_none_or(|i| look.last_submit > i.last_submit) {
+                idle = Some(look);
+            }
+        } else if young
+            && busy.is_none_or(|b| (look.depth, look.last_submit) > (b.depth, b.last_submit))
+        {
+            busy = Some(look);
+        }
+    }
+    let to = |look: &Look, make: fn(usize) -> Choice| match look.index == current {
+        true => Choice::Stay,
+        false => make(look.index),
+    };
+    let choice = match (busy, here) {
+        (Some(busy), _) => to(busy, Choice::Join),
+        (None, Some(here)) if !here.long && !here.unshared => Choice::Stay,
+        (None, Some(here)) => match (idle, here.unshared) {
+            (Some(idle), _) => to(idle, Choice::Leave),
+            // Off an unshared queue's `VkQueue`, any other no long or unshared queue holds.
+            (None, true) => least.map_or(Choice::Stay, |least| to(least, Choice::Leave)),
+            (None, false) => Choice::Stay,
+        },
+        (None, None) => Choice::Stay,
+    };
+    (choice, withheld)
+}
+
+/// The `VkQueue` a long queue on `current` settles on, among `looks`: an idle one no long or
+/// unshared queue holds, the one used least recently; `None` to stay.
+pub(crate) fn settle(current: usize, looks: &[Look]) -> Option<usize> {
+    looks
+        .iter()
+        .filter(|look| look.depth == 0 && !look.long && !look.unshared && look.index != current)
+        .min_by_key(|look| look.last_submit)
+        .map(|look| look.index)
+}
+
+/// The `VkQueue`s an unshared queue may take, among `looks` with each one's command queues, in the
+/// order it tries them (the module docs): those no command queue holds, least recently used first;
+/// then those no long or unshared queue holds, fewest command queues first. Empty for the round
+/// robin's next.
+pub(crate) fn unshared_order(looks: &[(Look, usize)]) -> Vec<usize> {
+    let mut empty: Vec<&(Look, usize)> = looks
+        .iter()
+        .filter(|(look, homes)| *homes == 0 && !look.unshared)
+        .collect();
+    empty.sort_by_key(|(look, _)| look.last_submit);
+    let mut fewest: Vec<&(Look, usize)> = looks
+        .iter()
+        .filter(|(look, homes)| *homes > 0 && !look.long && !look.unshared)
+        .collect();
+    fewest.sort_by_key(|(look, homes)| (*homes, look.depth, look.last_submit));
+    empty
+        .into_iter()
+        .chain(fewest)
+        .map(|(look, _)| look.index)
+        .collect()
+}
+
+/// What the device's check answered (`queue_switch_check.rs`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Verdict {
+    /// Not known yet.
+    Pending,
+    /// The GPU idles at a switch: the switch cost measured above [`SWITCH_IDLES`].
+    Idles,
+    /// It does not.
+    DoesNotIdle,
+    /// No measurement: the device has no two `VkQueue`s of its primary family in the round
+    /// robin, writes no timestamps there or calibrates none (timestamps of two `VkQueue`s compare
+    /// only on a calibrated device), its policy is `PerQueue`, or a run failed.
+    Unchecked,
+}
+
+impl Verdict {
+    fn byte(self) -> u8 {
+        match self {
+            Verdict::Pending => 0,
+            Verdict::Idles => 1,
+            Verdict::DoesNotIdle => 2,
+            Verdict::Unchecked => 3,
+        }
+    }
+
+    fn of_byte(byte: u8) -> Verdict {
+        match byte {
+            1 => Verdict::Idles,
+            2 => Verdict::DoesNotIdle,
+            3 => Verdict::Unchecked,
+            _ => Verdict::Pending,
+        }
+    }
+}
+
+/// A device's sharing (`DeviceShared::queue_switch`): its policy, its check's verdict and the switch
+/// cost it measured, and whether the check started and settled.
+pub(crate) struct QueueSwitch {
+    /// The device's policy is `Adaptive`.
+    adaptive: bool,
+    verdict: AtomicU8,
+    /// The switch cost measured, in nanoseconds (median gap between batches of two `VkQueue`s less
+    /// that of one); 0 where none was.
+    cost: AtomicI64,
+    started: AtomicBool,
+    settled: Mutex<bool>,
+    wake: Condvar,
+    /// The check's run in this process, in nanoseconds; 0 where none ended.
+    took: AtomicU64,
+}
+
+impl QueueSwitch {
+    /// A device's of `policy`, its verdict pending.
+    pub(crate) fn new(policy: QueueSharingPolicy) -> QueueSwitch {
+        QueueSwitch {
+            adaptive: policy == QueueSharingPolicy::Adaptive,
+            verdict: AtomicU8::new(Verdict::Pending.byte()),
+            cost: AtomicI64::new(0),
+            started: AtomicBool::new(false),
+            settled: Mutex::new(false),
+            wake: Condvar::new(),
+            took: AtomicU64::new(0),
+        }
+    }
+
+    /// Whether the device shares `VkQueue`s now: its policy is `Adaptive` and its check found the
+    /// GPU idling at a switch.
+    pub(crate) fn shares(&self) -> bool {
+        self.adaptive && self.verdict() == Verdict::Idles
+    }
+
+    /// The verdict now.
+    pub(crate) fn verdict(&self) -> Verdict {
+        Verdict::of_byte(self.verdict.load(Ordering::Acquire))
+    }
+
+    /// Note the check started; whether it had not been before.
+    fn start(&self) -> bool {
+        !self.started.swap(true, Ordering::AcqRel)
+    }
+
+    /// Settle the verdict, with the cost measured (or 0) and the check's run where it ran.
+    fn settle(&self, verdict: Verdict, cost: i64, took: Option<Duration>) {
+        self.cost.store(cost, Ordering::Release);
+        if let Some(took) = took {
+            let nanos = u64::try_from(took.as_nanos()).unwrap_or(u64::MAX);
+            self.took.store(nanos.max(1), Ordering::Release);
+        }
+        self.verdict.store(verdict.byte(), Ordering::Release);
+        *lock(&self.settled) = true;
+        self.wake.notify_all();
+    }
+
+    /// Wait until the verdict is known, or `timeout` passed: whether it is.
+    fn wait(&self, timeout: Duration) -> bool {
+        let deadline = Instant::now() + timeout;
+        let mut settled = lock(&self.settled);
+        while !*settled {
+            let left = deadline.saturating_duration_since(Instant::now());
+            if left.is_zero() {
+                return false;
+            }
+            settled = match self.wake.wait_timeout(settled, left) {
+                Ok((settled, _)) => settled,
+                Err(poisoned) => poisoned.into_inner().0,
+            };
+        }
+        true
+    }
+}
+
+/// The version of what the check measures and of how its record is named and framed: a change to
+/// either bumps it, and a record of another version is never read.
+pub(crate) const CHECK_VERSION: u32 = 1;
+
+/// A record's first bytes.
+const MAGIC: [u8; 8] = *b"M2VQSWT\0";
+
+/// The domain tag of a record's name.
+const NAME_TAG: &[u8] = b"metal2vulkan queue-switch check record\0";
+
+/// What the check measures, in a record's name.
+const CHECK_KIND: &[u8] = b"switch idle\0";
+
+/// A record's length: magic, version, runtime, identity, verdict, cost, checksum.
+const RECORD_BYTES: usize = 8 + 4 + 4 + 32 + 1 + 8 + 32;
+
+/// The digest of `identity` that names its record and that the record holds again.
+fn digest(identity: &DriverIdentity) -> [u8; 32] {
+    identity.digest_for(NAME_TAG, CHECK_KIND, CHECK_VERSION)
+}
+
+/// The name of the record of `identity`'s verdict in the shader cache's content directory.
+pub(crate) fn record_name(identity: &DriverIdentity) -> String {
+    hex(&digest(identity))
+}
+
+/// The bytes of a record of `verdict` and `cost` for `identity`:
+///
+/// ```text
+/// magic          8 bytes   "M2VQSWT\0"
+/// version        u32       CHECK_VERSION
+/// runtime        u32       RUNTIME_VERSION
+/// identity       32 bytes  the identity's digest for this check
+/// verdict        1 byte    Idles 1, DoesNotIdle 2
+/// cost           i64       the switch cost measured, in nanoseconds
+/// checksum       32 bytes  SHA-256 of every byte before it
+/// ```
+///
+/// Integers are little-endian.
+pub(crate) fn encode(identity: &DriverIdentity, verdict: Verdict, cost: i64) -> Vec<u8> {
+    let mut bytes = Vec::with_capacity(RECORD_BYTES);
+    bytes.extend_from_slice(&MAGIC);
+    bytes.extend_from_slice(&CHECK_VERSION.to_le_bytes());
+    bytes.extend_from_slice(&metal2vulkan::cache::RUNTIME_VERSION.to_le_bytes());
+    bytes.extend_from_slice(&digest(identity));
+    bytes.push(verdict.byte());
+    bytes.extend_from_slice(&cost.to_le_bytes());
+    let checksum: [u8; 32] = Sha256::digest(&bytes).into();
+    bytes.extend_from_slice(&checksum);
+    bytes
+}
+
+/// The verdict and cost `bytes` record for `identity`: `None` for anything but a whole record of
+/// this version and runtime, for this identity, whose checksum holds and whose verdict is a
+/// measured answer.
+pub(crate) fn decode(identity: &DriverIdentity, bytes: &[u8]) -> Option<(Verdict, i64)> {
+    if bytes.len() != RECORD_BYTES {
+        return None;
+    }
+    let (body, checksum) = bytes.split_at(RECORD_BYTES - 32);
+    let computed: [u8; 32] = Sha256::digest(body).into();
+    if computed[..] != *checksum {
+        return None;
+    }
+    let (magic, rest) = body.split_at(8);
+    let (version, rest) = rest.split_at(4);
+    let (runtime, rest) = rest.split_at(4);
+    let (identity_digest, rest) = rest.split_at(32);
+    let word = |bytes: &[u8]| u32::from_le_bytes(bytes.try_into().unwrap_or([0xff; 4]));
+    if magic != MAGIC
+        || word(version) != CHECK_VERSION
+        || word(runtime) != metal2vulkan::cache::RUNTIME_VERSION
+        || identity_digest != digest(identity)
+    {
+        return None;
+    }
+    let verdict = Verdict::of_byte(rest[0]);
+    let cost = i64::from_le_bytes(rest[1..9].try_into().ok()?);
+    matches!(verdict, Verdict::Idles | Verdict::DoesNotIdle).then_some((verdict, cost))
+}
+
+/// What a `VkQueue`'s waiter reads before its wait for the queue's oldest batch in flight, where
+/// the device shares `VkQueue`s ([`Device::head_watch`]).
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct HeadWatch {
+    /// The value the host saw the queue's timeline reach.
+    completed: u64,
+    /// When the batch became the queue's oldest.
+    since: u64,
+}
+
+impl HeadWatch {
+    /// Whether the batch, seen complete as the wait's value moved to `value`, ran as its queue's
+    /// oldest for over [`LONG_HEAD`]. A value that did not move says nothing of the batch.
+    pub(crate) fn ran_long(&self, value: u64) -> bool {
+        value > self.completed
+            && crate::gpu_time::host_nanos().saturating_sub(self.since) > LONG_HEAD
+    }
+}
+
+impl Device {
+    /// For `VkQueue` `queue`'s waiter, where the device shares `VkQueue`s and the queue is the
+    /// round robin's: what it reads before its wait ([`HeadWatch`]); `None` elsewhere, or where
+    /// the queue's oldest batch became its oldest before the device shared.
+    pub(crate) fn head_watch(&self, queue: usize) -> Option<HeadWatch> {
+        let shared = self.shared();
+        if !self.shares_queues() || queue >= shared.round_robin() {
+            return None;
+        }
+        let slot = &shared.queues[queue];
+        Some(HeadWatch {
+            completed: slot.completed_value(),
+            since: slot.share.head_since()?,
+        })
+    }
+
+    /// Whether the device shares `VkQueue`s now ([`QueueSwitch::shares`]).
+    pub(crate) fn shares_queues(&self) -> bool {
+        self.shared().queue_switch.shares()
+    }
+
+    /// The round robin's `VkQueue`s of the family of `VkQueue` `of`, each looked at now
+    /// ([`Look`]), with how many command queues each holds.
+    fn looks(&self, of: usize) -> impl Iterator<Item = (Look, usize)> + '_ {
+        let shared = self.shared();
+        let family = shared.queues[of].family;
+        let now = crate::gpu_time::host_nanos();
+        let round_robin = &shared.queues[..shared.round_robin()];
+        (round_robin.iter().enumerate())
+            .filter(move |(_, slot)| slot.family == family)
+            .map(move |(index, slot)| look(index, slot, now))
+    }
+
+    /// The choice of a round robin's command queue on `current` that holds no uncompleted command
+    /// buffer and is not long (the module docs): one pass over the `VkQueue`s of its family,
+    /// atomics alone. Counted where a busy, young `VkQueue` was passed over for the unshared queue
+    /// it holds alone (`WorkCounts::joins_withheld_from_unshared`).
+    pub(crate) fn pick_vk_queue(&self, current: usize) -> Choice {
+        let mut looks = [Look {
+            index: 0,
+            depth: 0,
+            head_age: None,
+            last_submit: 0,
+            long: false,
+            unshared: false,
+        }; crate::device::create::ROUND_ROBIN_CEILING as usize];
+        let mut count = 0;
+        for (look, _) in self.looks(current) {
+            if count < looks.len() {
+                looks[count] = look;
+                count += 1;
+            }
+        }
+        let (choice, withheld) = choose(current, &looks[..count]);
+        if withheld {
+            self.shared().counts.join_withheld_from_unshared();
+        }
+        choice
+    }
+
+    /// Whether an unshared queue holds `VkQueue` `index`.
+    pub(crate) fn holds_unshared(&self, index: usize) -> bool {
+        self.shared().queues[index]
+            .share
+            .unshared
+            .load(Ordering::SeqCst)
+            > 0
+    }
+
+    /// Where a long queue on `current` settles ([`settle`]): `None` to stay.
+    pub(crate) fn settle_long_queue(&self, current: usize) -> Option<usize> {
+        let looks: Vec<Look> = self.looks(current).map(|(look, _)| look).collect();
+        settle(current, &looks)
+    }
+
+    /// Move a round robin's command queue (`long` where it is) from `VkQueue` `from` to `to`:
+    /// refused, nothing changed, where an unshared queue took `to` meanwhile (the module docs).
+    pub(crate) fn move_queue(&self, from: usize, to: usize, long: bool) -> bool {
+        let queues = &self.shared().queues;
+        let target = &queues[to].share;
+        target.homes.fetch_add(1, Ordering::SeqCst);
+        if target.unshared.load(Ordering::SeqCst) > 0 {
+            target.homes.fetch_sub(1, Ordering::SeqCst);
+            return false;
+        }
+        if long {
+            target.went_long();
+        }
+        queues[from].share.left(long);
+        true
+    }
+
+    /// The `VkQueue` a new unshared queue takes, counted there (the module docs); `None` for the
+    /// round robin's next, where the device does not share or every `VkQueue` holds an unshared
+    /// queue. The primary family's alone: where the device shares, the round robin's queues are
+    /// of one family that has two or more (`queue_switch_check.rs`).
+    pub(crate) fn place_unshared(&self) -> Option<usize> {
+        if !self.shares_queues() {
+            return None;
+        }
+        let queues = &self.shared().queues;
+        let looks: Vec<(Look, usize)> = self.looks(0).collect();
+        for index in unshared_order(&looks) {
+            let share = &queues[index].share;
+            let empty = looks
+                .iter()
+                .any(|(look, homes)| look.index == index && *homes == 0);
+            if share.unshared.fetch_add(1, Ordering::SeqCst) == 0
+                && (!empty || share.homes.load(Ordering::SeqCst) == 0)
+            {
+                return Some(index);
+            }
+            share.unshared.fetch_sub(1, Ordering::SeqCst);
+        }
+        None
+    }
+
+    /// Start the device's check on a thread of its own (`queue_switch_check.rs`), where its
+    /// verdict is pending and no check started.
+    pub(crate) fn start_queue_switch_check(&self) {
+        let switch = &self.shared().queue_switch;
+        if switch.verdict() != Verdict::Pending || !switch.start() {
+            return;
+        }
+        if !crate::queue_switch_check::start(self) {
+            switch.settle(Verdict::Unchecked, 0, None);
+        }
+    }
+
+    /// As the device is made: its verdict where the check cannot measure (`Unchecked`, below) or
+    /// a record holds it (settled, the round robin's `VkQueue`s then watched where it shares);
+    /// else it waits for the check, which the first command queue of the round robin starts. A
+    /// record that does not decode is no record.
+    pub(crate) fn recall_queue_switch_check(&self) {
+        let shared = self.shared();
+        let switch = &shared.queue_switch;
+        if !switch.adaptive || crate::queue_switch_check::pair(self).is_none() {
+            switch.settle(Verdict::Unchecked, 0, None);
+            return;
+        }
+        let identity = self.driver_identity();
+        let name = record_name(&identity);
+        let looked = (shared.shader_cache.content_store())
+            .load_content(&name, |bytes| decode(&identity, &bytes));
+        if let Lookup::Hit((verdict, cost)) = looked {
+            shared.counts.queue_switch_check_recalled();
+            self.settle_queue_switch(verdict, cost, None);
+        }
+    }
+
+    /// Settle the device's verdict: where it shares now, the round robin's `VkQueue`s keep their
+    /// times from here on ([`SlotShare::watched`]).
+    pub(crate) fn settle_queue_switch(&self, verdict: Verdict, cost: i64, took: Option<Duration>) {
+        let shared = self.shared();
+        if shared.queue_switch.adaptive && verdict == Verdict::Idles {
+            for slot in &shared.queues[..shared.round_robin()] {
+                slot.share.watched.store(true, Ordering::Relaxed);
+            }
+        }
+        shared.queue_switch.settle(verdict, cost, took);
+    }
+
+    /// Start the device's check where its verdict is pending and none started, and wait until the
+    /// verdict is known or `timeout` passed: whether it is. A runtime extension for the lanes and
+    /// benchmarks that hold a device's command queues to the mapping they measure.
+    #[doc(hidden)]
+    pub fn settle_queue_switch_check(&self, timeout: Duration) -> bool {
+        self.start_queue_switch_check();
+        self.shared().queue_switch.wait(timeout)
+    }
+
+    /// The device's check's verdict, the switch cost it measured, how long it ran in this process
+    /// (where it ran), and whether the device shares `VkQueue`s now, in words. A runtime extension
+    /// for the lanes and benchmarks that report it.
+    #[doc(hidden)]
+    pub fn queue_switch_check_report(&self) -> String {
+        let switch = &self.shared().queue_switch;
+        let took = match switch.took.load(Ordering::Acquire) {
+            0 => "not run here".to_owned(),
+            nanos => format!("ran {:.2} ms", nanos as f64 / 1e6),
+        };
+        format!(
+            "verdict {:?}, switch cost {:.1} us, {took}, sharing {}",
+            switch.verdict(),
+            switch.cost.load(Ordering::Acquire) as f64 / 1e3,
+            switch.shares()
+        )
+    }
+}
+
+/// `slot`, at `index` among the device's `VkQueue`s, looked at `now`, with how many command
+/// queues it holds.
+fn look(index: usize, slot: &QueueSlot, now: u64) -> (Look, usize) {
+    let share = &slot.share;
+    let look = Look {
+        index,
+        depth: slot
+            .submitted_value()
+            .saturating_sub(slot.completed_value()),
+        head_age: share.head_since().map(|since| now.saturating_sub(since)),
+        last_submit: share.last_submit.load(Ordering::Relaxed),
+        long: share.long.load(Ordering::SeqCst) > 0,
+        unshared: share.unshared.load(Ordering::SeqCst) > 0,
+    };
+    (look, share.homes.load(Ordering::SeqCst))
+}

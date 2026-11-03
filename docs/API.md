@@ -217,6 +217,26 @@ compile does. `DevicePolicy::default()` is `DevicePolicy::UNTRUSTED`:
   texel is encoded before it is written. A blit out of one into a buffer whose words the device
   cannot bind (an offset or pitch off 4 bytes, past `maxStorageBufferRange`), or into a texture over
   a buffer whose rows share bytes, keeps the bytes under either value, announced.
+- **Command queues share `VkQueue`s where the GPU idles between them**
+  (`QueueSharingPolicy::Adaptive`, the default; the runtime's choice, no pipeline differs). On a
+  device whose own self-check finds its GPU idle when consecutive work comes from another
+  `VkQueue` (the runtime's check, run once per driver, release and runtime on a thread of its own
+  and its verdict kept in the shader cache's directory as the in-place check's is; NVIDIA's driver
+  on the RTX 5080 Laptop GPU idles about 50 us at each such switch), a command queue that makes a
+  command buffer while it holds no other uncompleted one moves onto the busy `VkQueue` of its
+  family whose oldest batch has run under 0.5 ms, so short command buffers of several queues run
+  with no switch between them. A queue whose batch ran over 2 ms as its `VkQueue`'s oldest is
+  long: no queue joins its `VkQueue`, and it moves once more, at its next such make, to an idle
+  `VkQueue` of its own. The first long command buffer of a queue that shared holds the command
+  buffers committed behind it there for its whole length, announced `queue-sharing` at the
+  device's first join (section 9). A queue made with `Device::new_command_queue_unshared` never
+  moves, and no queue joins its `VkQueue`: a compositor's, whose command buffers must not wait
+  behind an application's. Presenting queues, and a queue that lent its `VkQueue`
+  (`CommandQueue::with_vk_queue`), never move. Before the check answers, and on a device whose
+  check finds no idling or that has no two `VkQueue`s of one family (MoltenVK, RADV, lavapipe),
+  each queue keeps the `VkQueue` it took at its creation, round robin.
+  `queue_sharing = QueueSharingPolicy::PerQueue`, which `exact_answers()` selects, keeps each
+  command queue on that `VkQueue` everywhere and runs no check.
 
 Loops run as written: no execution bound is translated in.
 
@@ -2572,6 +2592,21 @@ bound.
   submits to a `VkQueue` other command queues share, so a present that blocks under its lock (FIFO
   on a window the compositor does not show, a wait for the queue's idle at a resize) holds their
   submissions until it returns, where Metal's present holds no other queue.
+- `metal2vulkan-degrade-queue-sharing` (performance). `QueueSharing`: A command queue moved onto
+  a `VkQueue` with another command queue's work in flight, as it made a command buffer while it
+  held no other uncompleted one: `QueueSharingPolicy::Adaptive` (the default), on a device whose
+  own check found its GPU idle when consecutive work comes from another `VkQueue` (NVIDIA's
+  driver on the RTX 5080 Laptop GPU). Announced once per device, on the thread that made that
+  command buffer, in `CommandQueue::command_buffer`. Never on a device that has no two `VkQueue`s
+  of one family (MoltenVK, RADV, lavapipe), nor for a queue made for presenting or with
+  `Device::new_command_queue_unshared`, which never move and which no queue joins. Cost: its
+  command buffers run in one `VkQueue`'s order with those of the command queues that share it,
+  where Metal's queues wait for each other only inside one command: the first command buffer of
+  each such queue that runs as its `VkQueue`'s oldest for over 2 ms holds the command buffers the
+  others committed behind it for its whole length, and its later ones while its queue holds work,
+  until that queue moves at its next idle point; a command buffer's GPU start time includes the
+  other queues' work before it; QueueSharingPolicy::PerQueue keeps each command queue on the
+  `VkQueue` it took at its creation.
 - `metal2vulkan-degrade-heap-texture-larger-than-metal` (precision). `HeapTextureLargerThanMetal`: A
   heap texture sized or made (`heap_texture_size_and_align`, `Heap::new_texture`) whose images on the
   device need more bytes or a coarser alignment than Metal's answer, which the runtime models, and

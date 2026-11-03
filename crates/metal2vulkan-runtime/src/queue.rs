@@ -1,9 +1,12 @@
 //! `CommandQueue` (`MTLCommandQueue`).
 //!
 //! A queue is a logical stream of command buffers, run in commit order. The device's scheduler
-//! submits them to the one `VkQueue` the queue took at creation: the device's `VkQueue`s are shared
-//! round robin among its logical queues, but for the ones it reserved for queues made for
-//! presenting (`Device::new_command_queue_for_presenting`).
+//! submits them to the queue's `VkQueue`: the one it took at creation, the device's `VkQueue`s
+//! shared round robin among its logical queues, but for the ones it reserved for queues made for
+//! presenting (`Device::new_command_queue_for_presenting`). Under `QueueSharingPolicy::Adaptive`
+//! (the default), on a device whose own check finds its GPU idle between consecutive work of two
+//! `VkQueue`s, a queue moves where it holds no uncompleted command buffer but the one it makes
+//! (`queue_share.rs`); under `PerQueue`, and on every other device, it keeps its first.
 //!
 //! **What one queue costs another.** Two logical queues that took one `VkQueue` submit to one
 //! Vulkan queue, which runs its submissions in order, so one's command buffers wait for the
@@ -18,13 +21,23 @@
 //!   1.7 to 3.8 ms at worst and none past 100 ms: nothing at all.
 //!
 //! So a long command buffer of many commands holds a shared `VkQueue` where Metal holds no other
-//! queue. The runtime answers that with queues rather than with scheduling, which one `VkQueue`
-//! cannot give: a created device lends the round robin every queue its families have past the two
-//! it reserves for presenting, up to 16 (`device/create.rs`), so a program that makes no more
-//! command queues than that shares none. Past them, and on a device whose families have one queue
-//! each (MoltenVK's four, RADV's and lavapipe's single graphics queue), queues share and the
-//! waiting stands; each queue that takes a `VkQueue` another took is counted
-//! (`WorkCounts::queues_sharing_a_vk_queue`).
+//! queue. Where queues keep their first `VkQueue`, the runtime answers that with queues rather
+//! than with scheduling, which one `VkQueue` cannot give: a created device lends the round robin
+//! every queue its families have past the two it reserves for presenting, up to 16
+//! (`device/create.rs`), so a program that makes no more command queues than that shares none.
+//! Past them, and on a device whose families have one queue each (MoltenVK's four, RADV's and
+//! lavapipe's single graphics queue), queues share and the waiting stands; each queue that takes a
+//! `VkQueue` another took is counted (`WorkCounts::queues_sharing_a_vk_queue`). Where queues move,
+//! they share by choice, to spare the GPU's idling at each switch, and a queue whose command
+//! buffer ran over 2 ms as its `VkQueue`'s oldest is long: it holds the queues that shared with it
+//! through that command buffer and while it holds work, then moves to a `VkQueue` of its own at
+//! its next idle point, and no queue joins it (`queue-sharing`, `queue_share.rs`).
+//!
+//! **Isolation.** A queue made with `Device::new_command_queue_unshared` never moves, and no queue
+//! joins its `VkQueue`: where the device shares, it takes a `VkQueue` no command queue holds where
+//! one is free, so its command buffers (a compositor's) wait behind no other queue's from the
+//! start, without the one stall a long queue's first long command buffer costs the queues that
+//! shared with it.
 //!
 //! **The caller's own queues.** A caller that submits Vulkan work of its own beside Metal's, and
 //! must not wait behind a command queue's command buffers nor hold one back, asks the device for
@@ -71,9 +84,10 @@ use super::contexts;
 use super::degradation::Degradation;
 use super::device::{lock, Device};
 use super::error::{Error, Invalid, Problem};
+use super::queue_share::Choice;
 use super::texture::copy_images::CopyImages;
 use super::texture::kept_image::KeptImages;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicU8, AtomicUsize, Ordering};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 use std::time::Instant;
 
@@ -93,12 +107,41 @@ impl std::fmt::Debug for CommandQueue {
     }
 }
 
+/// Which constructor made a queue, and so whether it may move between `VkQueue`s
+/// (`queue_share.rs`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Kind {
+    /// `new_command_queue` (or with a count): one of the round robin's, which moves where the
+    /// device shares `VkQueue`s.
+    RoundRobin,
+    /// `new_command_queue_unshared`: never moves, and where the device shares, none moves onto
+    /// its `VkQueue`.
+    Unshared,
+    /// `new_command_queue_for_presenting`: never moves.
+    Presenting,
+}
+
+/// [`QueueShared::sharing`]: one of its command buffers ran long (`queue_share::LONG_HEAD`).
+const LONG: u8 = 1;
+/// [`QueueShared::sharing`]: a long queue that settled, for good.
+const SETTLED: u8 = 2;
+/// [`QueueShared::sharing`]: it lent its `VkQueue` (`CommandQueue::with_vk_queue`), so it keeps
+/// it for good.
+const PINNED: u8 = 4;
+
 struct QueueShared {
     device: Device,
     /// The queue's identity among the device's logical queues.
     id: u64,
-    /// The index of the device's `VkQueue` the queue submits to.
-    vk_queue: usize,
+    /// The index of the device's `VkQueue` the queue submits to. Changed only under its slots'
+    /// lock, as it makes a command buffer while it holds no other uncompleted one, where the
+    /// device shares `VkQueue`s (`queue_share.rs`): from one of its command buffers' making to
+    /// that command buffer's completion, it reads the same.
+    vk_queue: AtomicUsize,
+    /// Which constructor made it.
+    kind: Kind,
+    /// Its part in the sharing: [`LONG`], [`SETTLED`], [`PINNED`].
+    sharing: AtomicU8,
     label: Mutex<Option<String>>,
     /// The slots its uncompleted command buffers hold.
     slots: Arc<Slots>,
@@ -240,7 +283,58 @@ impl Device {
             return Err(Error::DeviceLost);
         }
         let (id, vk_queue) = self.next_queue();
-        Ok(self.command_queue(id, vk_queue, count))
+        Ok(self.command_queue(id, vk_queue, count, Kind::RoundRobin))
+    }
+
+    /// No Metal counterpart: a command queue of at most `count` uncompleted command buffers, as
+    /// [`new_command_queue_with_max_command_buffer_count`](Self::new_command_queue_with_max_command_buffer_count)'s,
+    /// that shares its `VkQueue` with no other command queue, for a queue whose command buffers
+    /// must never wait behind another queue's (a compositor's).
+    ///
+    /// Under [`QueueSharingPolicy::Adaptive`](metal2vulkan::device::QueueSharingPolicy::Adaptive)
+    /// (the default), on a device whose own check found its GPU idle when consecutive work comes
+    /// from another `VkQueue` (where the other command queues move among the `VkQueue`s of their
+    /// family as they make a command buffer while they hold no other uncompleted one, and share
+    /// them), it takes no part in that sharing, in either direction:
+    /// - it keeps the `VkQueue` it takes here for its life;
+    /// - no other command queue moves onto that `VkQueue`;
+    /// - a command queue already on it moves to another `VkQueue` of its family at its next such
+    ///   make, where one is not held by a long or unshared queue.
+    ///
+    /// Where the device shares, it takes a `VkQueue` of the round robin's that no command queue
+    /// holds, the one used least recently; else one that no long or unshared queue holds, the one
+    /// fewest command queues hold; else the round robin's next. One made before the device's check
+    /// answered takes the round robin's next, and the guarantees above hold from the answer on.
+    ///
+    /// Under [`QueueSharingPolicy::PerQueue`](metal2vulkan::device::QueueSharingPolicy::PerQueue),
+    /// and on a device whose check found no such idling (or that has no two `VkQueue`s of one
+    /// family to share: MoltenVK's four families of one queue, RADV's and lavapipe's single
+    /// graphics queue), no command queue moves and this is
+    /// [`new_command_queue_with_max_command_buffer_count`](Self::new_command_queue_with_max_command_buffer_count)
+    /// itself: the round robin's next `VkQueue`, shared past the round robin's `VkQueue`s as every
+    /// command queue's is.
+    ///
+    /// Refused as that call is: a count of 0 (`Invalid`, `MaxCommandBufferCount`), and a lost
+    /// device (`DeviceLost`).
+    pub fn new_command_queue_unshared(&self, count: usize) -> Result<CommandQueue, Error> {
+        if count == 0 {
+            return Err(Error::Invalid(Invalid::new(
+                "new_command_queue_unshared",
+                Problem::MaxCommandBufferCount,
+            )));
+        }
+        if self.is_lost() {
+            return Err(Error::DeviceLost);
+        }
+        let (id, vk_queue) = match self.place_unshared() {
+            Some(vk_queue) => (self.new_queue_id(), vk_queue),
+            None => {
+                let (id, vk_queue) = self.next_queue();
+                self.shared().queues[vk_queue].share.unshared_took();
+                (id, vk_queue)
+            }
+        };
+        Ok(self.command_queue(id, vk_queue, count, Kind::Unshared))
     }
 
     /// No Metal counterpart: a queue for presenting, of at most 64 uncompleted command buffers as
@@ -278,19 +372,35 @@ impl Device {
                 self.next_queue()
             }
         };
-        Ok(self.command_queue(id, vk_queue, DEFAULT_MAX_COMMAND_BUFFER_COUNT))
+        Ok(self.command_queue(
+            id,
+            vk_queue,
+            DEFAULT_MAX_COMMAND_BUFFER_COUNT,
+            Kind::Presenting,
+        ))
     }
 
     /// A queue of identity `id` on the device's `VkQueue` at `vk_queue`, of at most `count`
-    /// uncompleted command buffers.
-    fn command_queue(&self, id: u64, vk_queue: usize, count: usize) -> CommandQueue {
+    /// uncompleted command buffers, made by `kind`'s constructor. One on a round robin's `VkQueue`
+    /// counts itself there (an unshared one counted itself already), and the first starts the
+    /// device's check of its GPU's idling between `VkQueue`s (`queue_share.rs`).
+    fn command_queue(&self, id: u64, vk_queue: usize, count: usize, kind: Kind) -> CommandQueue {
         self.take_device_sampler();
         self.make_texture_pool();
         self.keep_room();
+        let shared = self.shared();
+        if vk_queue < shared.round_robin() {
+            if kind != Kind::Unshared {
+                shared.queues[vk_queue].share.took();
+            }
+            self.start_queue_switch_check();
+        }
         CommandQueue(Arc::new(QueueShared {
             device: self.clone(),
             id,
-            vk_queue,
+            vk_queue: AtomicUsize::new(vk_queue),
+            kind,
+            sharing: AtomicU8::new(0),
             label: Mutex::new(None),
             slots: Slots::new(count, Arc::clone(&self.shared().uncommitted)),
             latest_gpu_end: Mutex::new(0),
@@ -308,6 +418,16 @@ impl Drop for QueueShared {
         // Every command buffer of the queue holds it, so none is left: no lease holds its pools'
         // blocks (`gpu_pools.rs`).
         self.device.forget_queue_pools(self.id);
+        // Its count on its `VkQueue` goes, its long mark with it, so a queue that went long fences
+        // its `VkQueue` no longer once it is gone (`queue_share.rs`).
+        let shared = self.device.shared();
+        let vk_queue = *self.vk_queue.get_mut();
+        let share = &shared.queues[vk_queue].share;
+        match self.kind {
+            Kind::Unshared => share.unshared_left(),
+            _ if vk_queue < shared.round_robin() => share.left(*self.sharing.get_mut() & LONG != 0),
+            _ => {}
+        }
     }
 }
 
@@ -334,23 +454,37 @@ impl CommandQueue {
         if self.0.device.is_lost() {
             return Err(Error::DeviceLost);
         }
-        let slot = self.slot()?;
+        let (slot, joined) = self.slot()?;
         if self.0.device.is_lost() {
             return Err(Error::DeviceLost);
         }
         // Counted with its slot: it waits out a fetched render target's switch to its storage
         // form, if one is under way (`texture/storage_form.rs`).
         self.0.device.storage_form_wait();
-        Ok(CommandBuffer::new(self, slot))
+        let command_buffer = CommandBuffer::new(self, slot);
+        if joined {
+            self.0.device.degrade_once(Degradation::QueueSharing, || {
+                (
+                    "a command queue's command buffer".to_owned(),
+                    "its queue, holding no other uncompleted command buffer, moved onto a \
+                     `VkQueue` with another command queue's work in flight: the device's GPU idles \
+                     when consecutive work comes from another `VkQueue` (QueueSharingPolicy::Adaptive)"
+                        .to_owned(),
+                )
+            });
+        }
+        Ok(command_buffer)
     }
 
     /// A slot for a new command buffer, waiting for one to come back while all are held: counted
-    /// (`WorkCounts::slot_waits`).
-    fn slot(&self) -> Result<Slot, Error> {
+    /// (`WorkCounts::slot_waits`). With it, whether the queue joined a `VkQueue` with another
+    /// queue's work in flight as it took the slot ([`place`](Self::place)).
+    fn slot(&self) -> Result<(Slot, bool), Error> {
         let slots = &self.0.slots;
         let mut held = slots.lock();
         if let Some(slot) = slots.take(&mut held) {
-            return Ok(slot);
+            let joined = self.place(&held);
+            return Ok((slot, joined));
         }
         let waited = Instant::now();
         let context = self.context();
@@ -367,16 +501,94 @@ impl CommandQueue {
         };
         loop {
             if let Some(slot) = slots.take(&mut held) {
+                let joined = self.place(&held);
                 drop(held);
                 let nanos = u64::try_from(waited.elapsed().as_nanos()).unwrap_or(u64::MAX);
                 self.0.device.shared().counts.slot_waited(nanos);
-                return Ok(slot);
+                return Ok((slot, joined));
             }
             held = slots
                 .freed
                 .wait(held)
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
         }
+    }
+
+    /// Where the device shares `VkQueue`s, the queue's `VkQueue` chosen again (`queue_share.rs`)
+    /// as it takes a slot, `held` its slots under their lock: only where the new command buffer is
+    /// its only uncompleted one, and only for a round robin's queue that is not pinned or settled.
+    /// A long queue settles; another takes [`Device::pick_vk_queue`]'s choice. Counted
+    /// (`WorkCounts::queue_moves` and the rest); whether it joined a `VkQueue` with another
+    /// queue's work in flight.
+    fn place(&self, held: &Held) -> bool {
+        let queue = &self.0;
+        if held.all != 1 || queue.kind != Kind::RoundRobin {
+            return false;
+        }
+        let device = &queue.device;
+        if !device.shares_queues() {
+            return false;
+        }
+        let sharing = queue.sharing.load(Ordering::Acquire);
+        if sharing & (SETTLED | PINNED) != 0 {
+            return false;
+        }
+        let current = queue.vk_queue.load(Ordering::Acquire);
+        let counts = &device.shared().counts;
+        if sharing & LONG != 0 {
+            queue.sharing.fetch_or(SETTLED, Ordering::AcqRel);
+            counts.long_queue_settled();
+            if let Some(to) = device.settle_long_queue(current) {
+                if device.move_queue(current, to, true) {
+                    queue.vk_queue.store(to, Ordering::Release);
+                    counts.queue_moved(false, false);
+                }
+            }
+            return false;
+        }
+        let (to, joined) = match device.pick_vk_queue(current) {
+            Choice::Stay => return false,
+            Choice::Join(to) => (to, true),
+            Choice::Leave(to) => (to, false),
+        };
+        let off_unshared = device.holds_unshared(current);
+        if !device.move_queue(current, to, false) {
+            return false;
+        }
+        queue.vk_queue.store(to, Ordering::Release);
+        counts.queue_moved(joined, off_unshared);
+        joined
+    }
+
+    /// One of the queue's command buffers ran as its `VkQueue`'s oldest in flight for over
+    /// `queue_share::LONG_HEAD`: a round robin's queue is long from now on, counted once on its
+    /// `VkQueue` (`WorkCounts::queues_gone_long`). Called by the waiter that saw it complete,
+    /// under the completion's lock, while the command buffer holds its slot, so the queue moves
+    /// meanwhile no more than it holds another `VkQueue` (`command_buffer/completion.rs`).
+    pub(super) fn went_long(&self) {
+        let queue = &self.0;
+        if queue.kind != Kind::RoundRobin
+            || queue.sharing.fetch_or(LONG, Ordering::AcqRel) & LONG != 0
+        {
+            return;
+        }
+        let shared = queue.device.shared();
+        let vk_queue = queue.vk_queue.load(Ordering::Acquire);
+        shared.queues[vk_queue].share.went_long();
+        shared.counts.queue_went_long();
+    }
+
+    /// The index of the device's `VkQueue` the queue submits to, pinned there for good: a lent
+    /// `VkQueue` (`CommandQueue::with_vk_queue`) is the queue's for its life, so the caller's
+    /// submissions there stay in its order.
+    pub(super) fn pinned_vk_queue(&self) -> usize {
+        let queue = &self.0;
+        if queue.kind == Kind::RoundRobin && queue.sharing.load(Ordering::Acquire) & PINNED == 0 {
+            // Under the slots' lock, as every move is: none is under way, and none follows.
+            let _held = queue.slots.lock();
+            queue.sharing.fetch_or(PINNED, Ordering::AcqRel);
+        }
+        queue.vk_queue.load(Ordering::Acquire)
     }
 
     /// `setLabel:`.
@@ -394,9 +606,10 @@ impl CommandQueue {
         self.0.id
     }
 
-    /// The index of the device's `VkQueue` the queue submits to.
+    /// The index of the device's `VkQueue` the queue submits to: the same from one of its command
+    /// buffers' making to that command buffer's completion ([`QueueShared::vk_queue`]).
     pub(super) fn vk_queue(&self) -> usize {
-        self.0.vk_queue
+        self.0.vk_queue.load(Ordering::Acquire)
     }
 
     /// The backings of memoryless attachments the queue keeps for its passes

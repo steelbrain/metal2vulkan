@@ -207,6 +207,9 @@ pub(super) struct DeviceShared {
     /// The presenting queues made so far on the reserved `VkQueue`s: the next one takes the
     /// reserved queue this modulo their number.
     presenting_made: AtomicU64,
+    /// Whether its command queues share `VkQueue`s, and its check's verdict
+    /// (`queue_share.rs`).
+    pub(crate) queue_switch: crate::queue_share::QueueSwitch,
     /// The compile-and-plan device: the description restricted to what is enabled.
     compile: metal2vulkan::device::Device,
     /// What `compile`'s profile takes of viewport depth ranges past `[0, 1]`, which draws read
@@ -681,6 +684,12 @@ impl DeviceShared {
         self.queues[index].flags
     }
 
+    /// How many of its `VkQueue`s, the first, the round robin lends logical queues; the rest are
+    /// reserved for presenting queues.
+    pub(crate) fn round_robin(&self) -> usize {
+        self.round_robin
+    }
+
     /// A Vulkan sampler of `info`, counted against the device's `maxSamplerAllocationCount`
     /// (`SamplerCount`): refused, `Error::SamplerLimit`, where that many are live. Whoever
     /// destroys it gives the count back (`DeviceShared::sampler_destroyed`).
@@ -876,6 +885,8 @@ pub(crate) struct QueueSlot {
     /// not seen complete, two or more submissions here are in flight
     /// ([`pending_beyond_one`](Self::pending_beyond_one)).
     submitted_before: AtomicU64,
+    /// Its part in the command queues' sharing of `VkQueue`s (`queue_share.rs`).
+    pub(crate) share: crate::queue_share::SlotShare,
 }
 
 impl QueueSlot {
@@ -933,7 +944,9 @@ impl QueueSlot {
 
     /// The host saw the timeline reach `value`.
     pub(super) fn completed(&self, value: u64) {
-        self.completed.fetch_max(value, Ordering::AcqRel);
+        if self.completed.fetch_max(value, Ordering::AcqRel) < value {
+            self.share.completed();
+        }
     }
 
     /// The value through which every batch completed, as the host saw.
@@ -948,6 +961,7 @@ impl QueueSlot {
         let before = self.submitted.fetch_max(value, Ordering::AcqRel);
         if before < value {
             self.submitted_before.store(before, Ordering::Release);
+            self.share.submitted(self.completed_value() >= before);
         }
     }
 
@@ -962,7 +976,7 @@ impl QueueSlot {
     }
 
     /// The value of the last batch submitted here; 0 before the first.
-    fn submitted_value(&self) -> u64 {
+    pub(super) fn submitted_value(&self) -> u64 {
         self.submitted.load(Ordering::Acquire)
     }
 }
@@ -1146,6 +1160,12 @@ impl Device {
             self.0.counts.queue_shared_a_vk_queue();
         }
         (id, (made % self.0.round_robin as u64) as usize)
+    }
+
+    /// A new logical queue's identity alone, for one whose `VkQueue` is chosen otherwise
+    /// (`Device::place_unshared`).
+    pub(super) fn new_queue_id(&self) -> u64 {
+        self.0.contexts.fresh()
     }
 
     /// A new presenting queue's identity, and the index of the `VkQueue` it submits to: the
@@ -1406,6 +1426,7 @@ impl Device {
                     completed: AtomicU64::new(0),
                     submitted: AtomicU64::new(0),
                     submitted_before: AtomicU64::new(0),
+                    share: crate::queue_share::SlotShare::default(),
                 }
             })
             .collect();
@@ -1857,6 +1878,7 @@ impl Device {
             queue_families,
             round_robin_made: AtomicU64::new(0),
             presenting_made: AtomicU64::new(0),
+            queue_switch: crate::queue_share::QueueSwitch::new(compile.policy().queue_sharing),
             compile,
             depth_ranges,
             enabled,
@@ -2015,6 +2037,9 @@ impl Device {
         let device = Device(shared);
         // The verdicts of its check of textures over host pages, where a record holds them.
         device.recall_in_place_checks();
+        // Its check's verdict of the GPU idling between `VkQueue`s, where none is to be measured
+        // or a record holds it (`queue_share.rs`).
+        device.recall_queue_switch_check();
         device.degrade_argument_buffers_unread();
         device.degrade_float_tininess();
         Ok(device)

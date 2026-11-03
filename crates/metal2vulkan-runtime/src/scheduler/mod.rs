@@ -56,9 +56,10 @@
 //!   step or its checks keeps its place among the tracked accesses: a later commit's batch on
 //!   another queue that conflicts with it waits behind it, its own host step and checks too
 //!   ([`Order::behind`]).
-//! - **Many logical queues on few `VkQueue`s.** A logical queue keeps one `VkQueue` (round robin
-//!   at creation); each `VkQueue` signals its own timeline semaphore with every batch, which is
-//!   the [`Point`] the tracker and the completion turns know the batch by.
+//! - **Many logical queues on few `VkQueue`s.** A logical queue keeps its `VkQueue` from a
+//!   command buffer's making to its completion, and moves only where it holds no other
+//!   uncompleted one (`queue_share.rs`); each `VkQueue` signals its own timeline semaphore with
+//!   every batch, which is the [`Point`] the tracker and the completion turns know the batch by.
 //! - **Scheduled.** A command buffer is scheduled once its last batch is submitted (its every
 //!   wait was satisfied), or held in a group (below): this thread posts its transition to
 //!   `Scheduled` to its queue's context

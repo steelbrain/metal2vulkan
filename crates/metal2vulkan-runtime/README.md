@@ -202,7 +202,7 @@ the runtime made.
   in `GENERAL`), and waits behind no command queue's command buffers.
   `CommandQueue::with_vk_queue` lends a queue's `VkQueue` under the runtime's lock: the consumer's
   submissions there sit in that command queue's order, and in that of any other command queue
-  sharing the `VkQueue`.
+  sharing the `VkQueue`. From its first call the command queue keeps that `VkQueue` for its life.
 - `Texture::vk_image`, `Buffer::vk_buffer` and `SharedEvent::vk_semaphore` give an object's handle.
   A texture over a buffer's bytes that aliases them gives a linear image (the same one for textures
   of one image over the same bytes of one import of host pages, which share it), which over a
@@ -312,6 +312,17 @@ the runtime made.
 ## Runtime extensions
 
 Calls Metal does not have, for a consumer that emulates a Metal device:
+
+- `Device::new_command_queue_unshared(count)` makes a command queue that shares its `VkQueue` with
+  no other, for one whose command buffers must never wait behind another queue's (a
+  compositor's). Under `QueueSharingPolicy::Adaptive` (the default), where the device's own check
+  finds its GPU idle between consecutive work of two `VkQueue`s (NVIDIA's driver), the other
+  command queues move among the `VkQueue`s of their family at their idle points and share them
+  ([docs/API.md](../../docs/API.md#the-policy)); this one keeps the `VkQueue` it takes for its
+  life, no queue moves onto it, and a queue already there leaves at its next idle point. Under
+  `QueueSharingPolicy::PerQueue`, and on a device that does not share, it is
+  `new_command_queue_with_max_command_buffer_count`. A count of 0 and a lost device are refused
+  as there.
 
 - `CommandBuffer::commit_failed(CommitFailure)` commits a command buffer as failed, running the
   encoders Metal would still run and keeping its signals, as a consumer measured on an M3 Max.

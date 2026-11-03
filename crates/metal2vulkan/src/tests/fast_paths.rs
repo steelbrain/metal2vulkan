@@ -7,8 +7,8 @@
 
 use crate::device::{
     BatchOrderPolicy, CompletionPolicy, DevicePolicy, ExtendedRangeBlitPolicy, HalfChainPolicy,
-    HeapCompressionPolicy, HostPageTexturePolicy, PipelineWaitPolicy, RenderLoweringPolicy,
-    WideLinePolicy,
+    HeapCompressionPolicy, HostPageTexturePolicy, PipelineWaitPolicy, QueueSharingPolicy,
+    RenderLoweringPolicy, WideLinePolicy,
 };
 use crate::pipeline::PrecisionNote;
 use std::collections::BTreeSet;
@@ -62,8 +62,9 @@ fn choices() -> Vec<Choice> {
         // complete, how a batch begins after the earlier ones of its queue, where a render
         // encoder's calls are lowered, what holds a sampled texture over host pages, whether and
         // how long a pipeline being made is waited for (the bounds' values:
-        // `the_ledger_states_the_pipeline_wait_bounds`), which lines draw a wide line, and what a
-        // blit through a compressed extended-range texture writes.
+        // `the_ledger_states_the_pipeline_wait_bounds`), which lines draw a wide line, what a
+        // blit through a compressed extended-range texture writes, and which `VkQueue` a command
+        // queue submits to.
         heap_compression: _,
         completion: _,
         batch_order: _,
@@ -74,6 +75,7 @@ fn choices() -> Vec<Choice> {
         pipeline_commit_wait: _,
         wide_lines: _,
         extended_range_blits: _,
+        queue_sharing: _,
         // The translator's: how a `half` chain rounds without `shaderFloat16`.
         half_chains: _,
     } = p;
@@ -87,6 +89,7 @@ fn choices() -> Vec<Choice> {
         choice!(p.pipeline_waits: PipelineWaitPolicy { Bounded, Exact }),
         choice!(p.wide_lines: WideLinePolicy { Device, Exact }),
         choice!(p.extended_range_blits: ExtendedRangeBlitPolicy { Kept, Canonical }),
+        choice!(p.queue_sharing: QueueSharingPolicy { Adaptive, PerQueue }),
     ]
 }
 
@@ -568,6 +571,38 @@ fn exact_answers_write_metal_s_canonical_extended_range_texels() {
     assert_eq!(
         DevicePolicy::UNTRUSTED.exact_answers().extended_range_blits,
         ExtendedRangeBlitPolicy::Canonical
+    );
+}
+
+/// The runtime's choice of which `VkQueue` a command queue submits to (`queue_sharing`) moves no
+/// committed profile's fingerprint: no profile carries it, so no translation follows it.
+#[test]
+fn the_runtime_s_queue_sharing_choice_keys_no_profile() {
+    use crate::spirv::testing::committed_profiles_with;
+    let adaptive = committed_profiles_with(DevicePolicy::UNTRUSTED).expect("profiles");
+    let per_queue = committed_profiles_with(DevicePolicy {
+        queue_sharing: QueueSharingPolicy::PerQueue,
+        ..DevicePolicy::UNTRUSTED
+    })
+    .expect("profiles");
+    assert_eq!(adaptive.len(), per_queue.len());
+    for ((stem, a), (other, p)) in adaptive.iter().zip(&per_queue) {
+        assert_eq!(stem, other);
+        assert_eq!(a.fingerprint(), p.fingerprint(), "{stem}");
+    }
+}
+
+/// `DevicePolicy::exact_answers()` keeps every command queue on the `VkQueue` it took at its
+/// creation, and the default shares them where the device's GPU idles between `VkQueue`s.
+#[test]
+fn exact_answers_keep_each_command_queue_on_its_vk_queue() {
+    assert_eq!(
+        DevicePolicy::UNTRUSTED.queue_sharing,
+        QueueSharingPolicy::Adaptive
+    );
+    assert_eq!(
+        DevicePolicy::UNTRUSTED.exact_answers().queue_sharing,
+        QueueSharingPolicy::PerQueue
     );
 }
 

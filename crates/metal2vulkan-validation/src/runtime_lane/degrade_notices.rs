@@ -162,7 +162,7 @@ use super::clear_reach::DONT_CARE_LOADS;
 use super::color_groups::PER_COLOR_COUNTS;
 use super::color_reformat::KEPT_COLORS;
 use super::color_writes::COLOR_WRITES;
-use super::command_queues::SHARED_PRESENT_QUEUES;
+use super::command_queues::{QUEUE_SHARING, SHARED_PRESENT_QUEUES};
 use super::compressed_decode::BLOCK_DECODES;
 use super::cross_class_reads::CROSS_CLASS;
 use super::depth_denormals::{DEPTH_DENORMALS, SIGNED_DEPTH_TESTS};
@@ -562,6 +562,7 @@ fn every_kind_has_a_site_a_lane_test_takes() {
         &CPU_DECODES,
         &ASTC_STORAGE,
         &SHARED_PRESENT_QUEUES,
+        &QUEUE_SHARING,
         &PAST_METAL_SIZES,
         &LINEAR_COPIES,
         &CHOSEN_COPIES,

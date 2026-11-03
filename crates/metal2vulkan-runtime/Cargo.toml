@@ -60,6 +60,12 @@ path = "examples/host_ab/main.rs"
 name = "submit_path"
 path = "examples/submit_path.rs"
 
+# Not a consumer's example: command queues sharing `VkQueue`s, each workload under the policy its
+# arguments name (examples/queue_share.rs).
+[[example]]
+name = "queue_share"
+path = "examples/queue_share.rs"
+
 [dependencies]
 # The translator, through its public API only: the compiler checks that the runtime
 # reaches nothing else. `ash` gives `ash_interop`'s conversions and `DeviceDescription::query`.

@@ -1411,6 +1411,7 @@ enum	metal2vulkan::device::HostPageTexturePolicy	#[cfg_attr(feature = "serde", d
 enum	metal2vulkan::device::Independence	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum Independence
 enum	metal2vulkan::device::PipelineWaitPolicy	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum PipelineWaitPolicy
 enum	metal2vulkan::device::PointerDomain	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum PointerDomain
+enum	metal2vulkan::device::QueueSharingPolicy	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum QueueSharingPolicy
 enum	metal2vulkan::device::RenderLoweringPolicy	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum RenderLoweringPolicy
 enum	metal2vulkan::device::ResolveMode	#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] #[non_exhaustive] pub enum ResolveMode
 enum	metal2vulkan::device::Robustness	#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum Robustness
@@ -2753,6 +2754,7 @@ field	metal2vulkan-runtime::WorkCounts.instance_splits_tile_dispatch	pub instanc
 field	metal2vulkan-runtime::WorkCounts.instance_splits_tile_memory	pub instance_splits_tile_memory: u64
 field	metal2vulkan-runtime::WorkCounts.instance_splits_visibility	pub instance_splits_visibility: u64
 field	metal2vulkan-runtime::WorkCounts.internal_submissions	pub internal_submissions: u64
+field	metal2vulkan-runtime::WorkCounts.joins_withheld_from_unshared	pub joins_withheld_from_unshared: u64
 field	metal2vulkan-runtime::WorkCounts.kept_backings_made	pub kept_backings_made: u64
 field	metal2vulkan-runtime::WorkCounts.kept_bytes_passes	pub kept_bytes_passes: u64
 field	metal2vulkan-runtime::WorkCounts.line_band_draws	pub line_band_draws: u64
@@ -2760,6 +2762,7 @@ field	metal2vulkan-runtime::WorkCounts.linear_passes_in_place	pub linear_passes_
 field	metal2vulkan-runtime::WorkCounts.linear_passes_through_copies	pub linear_passes_through_copies: u64
 field	metal2vulkan-runtime::WorkCounts.linked_use_questions_asked	pub linked_use_questions_asked: u64
 field	metal2vulkan-runtime::WorkCounts.live_tables_uploaded	pub live_tables_uploaded: u64
+field	metal2vulkan-runtime::WorkCounts.long_queue_settles	pub long_queue_settles: u64
 field	metal2vulkan-runtime::WorkCounts.memory_blocks_live	pub memory_blocks_live: u64
 field	metal2vulkan-runtime::WorkCounts.memory_frees	pub memory_frees: MemoryFrees
 field	metal2vulkan-runtime::WorkCounts.merged_draw_commands	pub merged_draw_commands: u64
@@ -2807,7 +2810,13 @@ field	metal2vulkan-runtime::WorkCounts.provoking_last_pipeline_draws	pub provoki
 field	metal2vulkan-runtime::WorkCounts.provoking_listed_draws	pub provoking_listed_draws: u64
 field	metal2vulkan-runtime::WorkCounts.query_result_copies_recorded	pub query_result_copies_recorded: u64
 field	metal2vulkan-runtime::WorkCounts.queue_drains	pub queue_drains: u64
+field	metal2vulkan-runtime::WorkCounts.queue_joins	pub queue_joins: u64
+field	metal2vulkan-runtime::WorkCounts.queue_moves	pub queue_moves: u64
+field	metal2vulkan-runtime::WorkCounts.queue_moves_off_unshared	pub queue_moves_off_unshared: u64
 field	metal2vulkan-runtime::WorkCounts.queue_submissions	pub queue_submissions: u64
+field	metal2vulkan-runtime::WorkCounts.queue_switch_checks_recalled	pub queue_switch_checks_recalled: u64
+field	metal2vulkan-runtime::WorkCounts.queue_switch_checks_run	pub queue_switch_checks_run: u64
+field	metal2vulkan-runtime::WorkCounts.queues_gone_long	pub queues_gone_long: u64
 field	metal2vulkan-runtime::WorkCounts.queues_sharing_a_vk_queue	pub queues_sharing_a_vk_queue: u64
 field	metal2vulkan-runtime::WorkCounts.reading_draws_snapshotted	pub reading_draws_snapshotted: u64
 field	metal2vulkan-runtime::WorkCounts.reencodes_refused	pub reencodes_refused: u64
@@ -3753,6 +3762,7 @@ field	metal2vulkan::device::DevicePolicy.pipeline_commit_wait	pub pipeline_commi
 field	metal2vulkan::device::DevicePolicy.pipeline_creation_wait	pub pipeline_creation_wait: Duration
 field	metal2vulkan::device::DevicePolicy.pipeline_waits	pub pipeline_waits: PipelineWaitPolicy
 field	metal2vulkan::device::DevicePolicy.pointer_domain	pub pointer_domain: PointerDomain
+field	metal2vulkan::device::DevicePolicy.queue_sharing	pub queue_sharing: QueueSharingPolicy
 field	metal2vulkan::device::DevicePolicy.render_lowering	pub render_lowering: RenderLoweringPolicy
 field	metal2vulkan::device::DevicePolicy.wide_lines	pub wide_lines: WideLinePolicy
 field	metal2vulkan::device::DriverDiagnostic.id	pub id: i32
@@ -5138,6 +5148,7 @@ macro-member	metal2vulkan-runtime::Degradation::ProvokingVertexLines	ProvokingVe
 macro-member	metal2vulkan-runtime::Degradation::ProvokingVertexUnmatched	ProvokingVertexUnmatched = "provoking-vertex-unmatched", Precision,
 macro-member	metal2vulkan-runtime::Degradation::QuadsCountedBeforeDiscard	QuadsCountedBeforeDiscard = "quads-counted-before-discard";
 macro-member	metal2vulkan-runtime::Degradation::QuadsSplitByClipping	QuadsSplitByClipping = "quads-split-by-clipping";
+macro-member	metal2vulkan-runtime::Degradation::QueueSharing	QueueSharing = "queue-sharing", Performance,
 macro-member	metal2vulkan-runtime::Degradation::RasterizationRateMap	RasterizationRateMap = "rasterization-rate-map";
 macro-member	metal2vulkan-runtime::Degradation::RateMapResetUnencoded	RateMapResetUnencoded = "rate-map-reset-unencoded", Precision,
 macro-member	metal2vulkan-runtime::Degradation::ReadOnlyPagesWritten	ReadOnlyPagesWritten = "read-only-pages-written", Precision,
@@ -7764,6 +7775,7 @@ method	metal2vulkan-runtime::Device::new_buffer_with_descriptor	pub fn new_buffe
 method	metal2vulkan-runtime::Device::new_buffer_with_vk_buffer	pub unsafe fn new_buffer_with_vk_buffer(&self, buffer: vk::Buffer, info: &vk::BufferCreateInfo<'_>, memory: VkBufferMemory, length: u64, options: ResourceOptions) -> Result<Buffer, Error>
 method	metal2vulkan-runtime::Device::new_command_queue	pub fn new_command_queue(&self) -> Result<CommandQueue, Error>
 method	metal2vulkan-runtime::Device::new_command_queue_for_presenting	pub fn new_command_queue_for_presenting(&self) -> Result<CommandQueue, Error>
+method	metal2vulkan-runtime::Device::new_command_queue_unshared	pub fn new_command_queue_unshared(&self, count: usize) -> Result<CommandQueue, Error>
 method	metal2vulkan-runtime::Device::new_command_queue_with_max_command_buffer_count	pub fn new_command_queue_with_max_command_buffer_count(&self, count: usize) -> Result<CommandQueue, Error>
 method	metal2vulkan-runtime::Device::new_compute_pipeline_state	pub fn new_compute_pipeline_state(&self, descriptor: &ComputePipelineDescriptor, options: &PipelineOptions) -> Result<ComputePipelineState, Error>
 method	metal2vulkan-runtime::Device::new_compute_pipeline_state_with_function	pub fn new_compute_pipeline_state_with_function(&self, function: &Function, options: &PipelineOptions) -> Result<ComputePipelineState, Error>
@@ -7804,6 +7816,7 @@ method	metal2vulkan-runtime::Device::pixel_format_capabilities	pub fn pixel_form
 method	metal2vulkan-runtime::Device::pixel_format_info	pub fn pixel_format_info(&self, raw: u64) -> PixelFormatInfo
 method	metal2vulkan-runtime::Device::private_properties	pub fn private_properties(&self) -> PrivateProperties
 method	metal2vulkan-runtime::Device::properties	pub fn properties(&self) -> &DeviceProperties
+method	metal2vulkan-runtime::Device::queue_switch_check_report	pub fn queue_switch_check_report(&self) -> String
 method	metal2vulkan-runtime::Device::raw	pub unsafe fn raw(&self) -> DeviceHandles<'_>
 method	metal2vulkan-runtime::Device::registry_id	pub fn registry_id(&self) -> u64
 method	metal2vulkan-runtime::Device::registry_ids_with	pub fn registry_ids_with(options: &DeviceOptions) -> Result<Vec<u64>, Error>
@@ -7812,6 +7825,7 @@ method	metal2vulkan-runtime::Device::reserve_resource_ids	pub fn reserve_resourc
 method	metal2vulkan-runtime::Device::sampler_id_pool_size	pub fn sampler_id_pool_size(&self) -> u64
 method	metal2vulkan-runtime::Device::sampler_ids_live	pub fn sampler_ids_live(&self) -> u64
 method	metal2vulkan-runtime::Device::settle_in_place_checks	pub fn settle_in_place_checks(&self, timeout: Duration) -> bool
+method	metal2vulkan-runtime::Device::settle_queue_switch_check	pub fn settle_queue_switch_check(&self, timeout: Duration) -> bool
 method	metal2vulkan-runtime::Device::shader_cache_directory	pub fn shader_cache_directory(&self) -> &Path
 method	metal2vulkan-runtime::Device::shader_cache_statistics	pub fn shader_cache_statistics(&self) -> ShaderCacheStatistics
 method	metal2vulkan-runtime::Device::sparse_tile_size	pub fn sparse_tile_size(&self, texture_type: TextureType, pixel_format: PixelFormat, sample_count: u64) -> Size
@@ -12622,6 +12636,8 @@ variant	metal2vulkan::device::Independence::Only32Bit	Only32Bit
 variant	metal2vulkan::device::PipelineWaitPolicy::Bounded	Bounded
 variant	metal2vulkan::device::PipelineWaitPolicy::Exact	Exact
 variant	metal2vulkan::device::PointerDomain::ResidentTable	ResidentTable
+variant	metal2vulkan::device::QueueSharingPolicy::Adaptive	Adaptive
+variant	metal2vulkan::device::QueueSharingPolicy::PerQueue	PerQueue
 variant	metal2vulkan::device::RenderLoweringPolicy::AtCall	AtCall
 variant	metal2vulkan::device::RenderLoweringPolicy::Worker	Worker
 variant	metal2vulkan::device::ResolveMode::Average	Average

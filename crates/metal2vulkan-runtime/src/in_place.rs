@@ -397,10 +397,17 @@ impl DriverIdentity {
     /// The SHA-256 of [`NAME_TAG`], [`CHECK_KIND`], [`CHECK_VERSION`], the runtime's
     /// `RUNTIME_VERSION` and every field: what names a record and what the record holds again.
     pub(crate) fn digest(&self) -> [u8; 32] {
+        self.digest_for(NAME_TAG, CHECK_KIND, CHECK_VERSION)
+    }
+
+    /// The SHA-256 of `tag`, `kind`, `version`, the runtime's `RUNTIME_VERSION` and every field:
+    /// what names the record of the check of `kind` at `version` (another device check's, as
+    /// [`digest`](Self::digest) is this one's), and what that record holds again.
+    pub(crate) fn digest_for(&self, tag: &[u8], kind: &[u8], version: u32) -> [u8; 32] {
         let mut hash = Sha256::new();
-        hash.update(NAME_TAG);
-        hash.update(CHECK_KIND);
-        hash.update(CHECK_VERSION.to_le_bytes());
+        hash.update(tag);
+        hash.update(kind);
+        hash.update(version.to_le_bytes());
         hash.update(metal2vulkan::cache::RUNTIME_VERSION.to_le_bytes());
         hash.update(self.vendor_id.to_le_bytes());
         hash.update(self.device_id.to_le_bytes());

@@ -909,6 +909,9 @@ fn wait_for_queue(watch: &Watch, queue: usize) {
             continue;
         };
         device.shared().counts.completion_armed(slept);
+        // Where the device shares `VkQueue`s, how long the front ran as its queue's oldest is read
+        // once its wait saw it complete (`queue_share.rs`).
+        let head = device.head_watch(queue);
         // The wait is a section of the exit guard; once the process is exiting the waiters end,
         // and what is pending stays pending, as Metal's does.
         let polled = match exit_guard::enter() {
@@ -919,6 +922,7 @@ fn wait_for_queue(watch: &Watch, queue: usize) {
             }
             None => None,
         };
+        let long = head.is_some_and(|head| matches!(&polled, Some(Ok(v)) if head.ran_long(*v)));
         // Let go of the device before the report: until then the front is pending (nothing
         // finishes or takes it while this waits), and holds the device, so this is never its
         // last handle, which goes on the program's or the handlers' threads (`teardown_threads`).
@@ -938,6 +942,13 @@ fn wait_for_queue(watch: &Watch, queue: usize) {
             }
             Err(error) => {
                 pending.failed.get_or_insert(error);
+            }
+        }
+        // A front that ran long marks its command queue long, before any turn finishes it, so
+        // before that queue makes its next command buffer.
+        if long {
+            if let Some(batch) = (pending.queues[queue].iter()).find(|b| b.value >= front.value) {
+                batch.buffer.queue.went_long();
             }
         }
         // This waiter finishes what it saw, where no turn is under way; the one under way takes

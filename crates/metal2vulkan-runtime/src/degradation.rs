@@ -1797,6 +1797,24 @@ degradations! {
              its lock (FIFO on a window the compositor does not show, a wait for the queue's \
              idle at a resize) holds their submissions until it returns, where Metal's present \
              holds no other queue";
+        /// A command queue moved onto a `VkQueue` with another command queue's work in flight
+        /// (`QueueSharingPolicy::Adaptive`, the default, on a device whose own check found its
+        /// GPU idle when consecutive work comes from another `VkQueue`: NVIDIA's driver, 56 to 62
+        /// us a switch on the RTX 5080 Laptop GPU; `queue_share.rs`), as it made a command buffer
+        /// while it held no other uncompleted one. Announced once per device, on the thread that
+        /// made that command buffer, in `CommandQueue::command_buffer`, as the first such move is
+        /// made. Never on a device that has no two `VkQueue`s of one family to share (MoltenVK,
+        /// RADV, lavapipe), nor for a queue made for presenting or with
+        /// `Device::new_command_queue_unshared`, which never move and which no queue joins.
+        QueueSharing = "queue-sharing", Performance,
+            "its command buffers run in one `VkQueue`'s order with those of the command queues \
+             that share it, where Metal's queues wait for each other only inside one command: \
+             the first command buffer of each such queue that runs as its `VkQueue`'s oldest for \
+             over 2 ms holds the command buffers the others committed behind it for its whole \
+             length, and its later ones while its queue holds work, until that queue moves at \
+             its next idle point; a command buffer's GPU start time includes the other queues' \
+             work before it; QueueSharingPolicy::PerQueue keeps each command queue on the \
+             `VkQueue` it took at its creation";
         /// A heap texture sized or made (`heap_texture_size_and_align`, `Heap::new_texture`)
         /// whose images on the device need more bytes or a coarser alignment than Metal's answer,
         /// which the runtime models (`texture/heap_tiled.rs`), and which no shadow of the

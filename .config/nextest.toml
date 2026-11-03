@@ -66,3 +66,11 @@ threads-required = 'num-test-threads'
 [[profile.default.overrides]]
 filter = 'package(metal2vulkan-validation) & test(/^runtime_lane::mesh_draws::object_grids_run_as_metal_runs_them$/)'
 threads-required = 'num-test-threads'
+
+# The runtime's isolation tests of command queues sharing `VkQueue`s run alone. Each holds a
+# compositor's 99th percentile of commit-to-completion latency under 5 ms, and its stalls over
+# 10 ms to at most one, beside an application's 30 ms command buffers: a bound of the GPU's time,
+# which other test processes' work on the same GPU spends too.
+[[profile.default.overrides]]
+filter = 'package(metal2vulkan-runtime) & test(/^tests::queue_share_device::(a_compositor_beside_a_long_queue_keeps_its_latency_once_that_queue_went_long|an_unshared_compositor_beside_a_long_queue_never_stalls)$/)'
+threads-required = 'num-test-threads'

@@ -435,3 +435,62 @@ fn a_presenting_queue_s_lock_holds_no_other_queue_where_the_device_reserved_one(
     }
     layer_reported_nothing_at_all(&messages);
 }
+
+/// The kind a command queue takes as it moves onto a `VkQueue` with another queue's work in flight
+/// ([`a_queue_joining_another_s_busy_vk_queue_is_announced_once`]).
+pub(super) const QUEUE_SHARING: [Degradation; 1] = [Degradation::QueueSharing];
+
+/// A command queue that makes a command buffer while it holds no other uncompleted one, beside a
+/// queue whose short command buffers keep its `VkQueue` busy, joins that `VkQueue` where the device
+/// shares (`QueueSharingPolicy::Adaptive` on a device whose check finds its GPU idle between
+/// `VkQueue`s: NVIDIA's), and the device announces `queue-sharing` once however many queues join:
+/// each notice a join (`WorkCounts::queue_joins`), never one without. On a device that shares no
+/// `VkQueue` (lavapipe, RADV, MoltenVK) nothing joins and nothing is announced.
+#[test]
+fn a_queue_joining_another_s_busy_vk_queue_is_announced_once() {
+    use metal2vulkan_runtime::ResourceOptions;
+    let cache = ScratchCache::new().unwrap();
+    let messages = Messages::default();
+    {
+        let device = validated_device(TEST_DEVICE, &messages, cache.path()).unwrap();
+        assert!(device.settle_queue_switch_check(WAIT), "the check settles");
+        let sharing_kinds = || -> usize {
+            messages
+                .take_notices()
+                .into_iter()
+                .filter_map(|message| message.degradation)
+                .filter(|notice| QUEUE_SHARING.contains(&notice.degradation))
+                .count()
+        };
+        let buffer = device
+            .new_buffer(1 << 20, ResourceOptions::private())
+            .unwrap();
+        let fill = |queue: &CommandQueue| {
+            let command_buffer = queue.command_buffer().unwrap();
+            let mut blit = command_buffer.blit_command_encoder().unwrap();
+            blit.fill_buffer(&buffer, 0..(1 << 20), 0x5a).unwrap();
+            blit.end_encoding().unwrap();
+            command_buffer.commit().unwrap();
+            command_buffer
+        };
+        let busy = device.new_command_queue().unwrap();
+        let joiners: Vec<CommandQueue> = (0..3)
+            .map(|_| device.new_command_queue().unwrap())
+            .collect();
+        for joiner in &joiners {
+            let kept: Vec<CommandBuffer> = (0..24).map(|_| fill(&busy)).collect();
+            let joined = fill(joiner);
+            joined.wait_until_completed_for(WAIT).unwrap();
+            for command_buffer in kept {
+                command_buffer.wait_until_completed_for(WAIT).unwrap();
+            }
+        }
+        let joins = device.work_counts().queue_joins;
+        assert_eq!(
+            sharing_kinds(),
+            usize::from(joins > 0),
+            "announced once, where a queue joined ({joins} joins)"
+        );
+    }
+    layer_reported_nothing_at_all(&messages);
+}

@@ -196,6 +196,14 @@ pub(crate) struct Counters {
     slot_return_nanos: AtomicU64,
     slot_waits: AtomicU64,
     queues_sharing_a_vk_queue: AtomicU64,
+    queue_moves: AtomicU64,
+    queue_joins: AtomicU64,
+    queues_gone_long: AtomicU64,
+    long_queue_settles: AtomicU64,
+    queue_moves_off_unshared: AtomicU64,
+    joins_withheld_from_unshared: AtomicU64,
+    queue_switch_checks_run: AtomicU64,
+    queue_switch_checks_recalled: AtomicU64,
     slot_wait_nanos: AtomicU64,
     completed_waits: AtomicU64,
     event_waits_met: AtomicU64,
@@ -1498,6 +1506,46 @@ impl Counters {
     pub(crate) fn queue_shared_a_vk_queue(&self) {
         self.queues_sharing_a_vk_queue
             .fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// A command queue moved to another `VkQueue` (`queue_share.rs`): onto one with another
+    /// queue's work in flight where `joined`, off one an unshared queue holds where
+    /// `off_unshared`.
+    pub(crate) fn queue_moved(&self, joined: bool, off_unshared: bool) {
+        self.queue_moves.fetch_add(1, Ordering::Relaxed);
+        if joined {
+            self.queue_joins.fetch_add(1, Ordering::Relaxed);
+        }
+        if off_unshared {
+            (self.queue_moves_off_unshared).fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
+    /// A command queue went long (`queue_share.rs`).
+    pub(crate) fn queue_went_long(&self) {
+        self.queues_gone_long.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// A long command queue settled (`queue_share.rs`).
+    pub(crate) fn long_queue_settled(&self) {
+        self.long_queue_settles.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// A command queue's choice passed over a busy `VkQueue` it would have joined, for the
+    /// unshared queue it holds (`queue_share.rs`).
+    pub(crate) fn join_withheld_from_unshared(&self) {
+        (self.joins_withheld_from_unshared).fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// The device's check of its GPU's idling between `VkQueue`s ran in this process
+    /// (`queue_switch_check.rs`).
+    pub(crate) fn queue_switch_check_ran(&self) {
+        (self.queue_switch_checks_run).fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// That check's verdict was read from the record of an earlier one (`queue_share.rs`).
+    pub(crate) fn queue_switch_check_recalled(&self) {
+        (self.queue_switch_checks_recalled).fetch_add(1, Ordering::Relaxed);
     }
 
     /// A batch with work was submitted waiting for `waits` timelines at values the host saw them
@@ -3968,10 +4016,36 @@ pub struct WorkCounts {
     pub slot_wait_nanos: u64,
     /// Command queues made on a `VkQueue` an earlier command queue of the device took too, so
     /// that one's command buffers wait for the other's where Metal's would not: the device shares
-    /// its `VkQueue`s round robin, so a program that makes more command queues than the device
-    /// took `VkQueue`s shares them (`queue.rs`, `device/create.rs`). Zero on a device with a
-    /// `VkQueue` for each.
+    /// its `VkQueue`s round robin at their creation, so a program that makes more command queues
+    /// than the device took `VkQueue`s shares them (`queue.rs`, `device/create.rs`). Zero on a
+    /// device with a `VkQueue` for each. Under `QueueSharingPolicy::Adaptive` queues also share
+    /// by moving, after their creation (`queue_joins`).
     pub queues_sharing_a_vk_queue: u64,
+    /// Command queues that moved to another `VkQueue` of their family as they made a command
+    /// buffer while they held no other uncompleted one (`QueueSharingPolicy::Adaptive`, on a
+    /// device whose GPU idles between `VkQueue`s: `queue_share.rs`). Zero where the device does
+    /// not share.
+    pub queue_moves: u64,
+    /// Of `queue_moves`, those onto a `VkQueue` with another command queue's work in flight.
+    pub queue_joins: u64,
+    /// Command queues marked long: one of their command buffers ran as its `VkQueue`'s oldest in
+    /// flight for over 2 ms, so no queue joins their `VkQueue` from then on.
+    pub queues_gone_long: u64,
+    /// Long command queues that settled, at their next idle point: on an idle `VkQueue` no long or
+    /// unshared queue holds (a move, counted in `queue_moves` too), or where they were.
+    pub long_queue_settles: u64,
+    /// Of `queue_moves`, those off a `VkQueue` an unshared queue
+    /// (`Device::new_command_queue_unshared`) holds.
+    pub queue_moves_off_unshared: u64,
+    /// Choices of a command queue that passed over a busy `VkQueue` whose oldest batch was young,
+    /// which it might have joined, because an unshared queue holds it.
+    pub joins_withheld_from_unshared: u64,
+    /// Runs in this process of the device's check of its GPU's idling between `VkQueue`s
+    /// (`queue_switch_check.rs`), whatever they answered.
+    pub queue_switch_checks_run: u64,
+    /// Devices whose verdict of that check was read from the record of an earlier one of the same
+    /// driver, device and runtime: no check ran for them.
+    pub queue_switch_checks_recalled: u64,
     /// The waits batches with work made for timelines at values the host had seen them reach,
     /// which make what completed work wrote visible to them: one per timeline whose completed
     /// value moved since a batch of the same `VkQueue` last waited for it.
@@ -5578,6 +5652,18 @@ impl Device {
             slot_waits: counters.slot_waits.load(Ordering::Relaxed),
             slot_wait_nanos: counters.slot_wait_nanos.load(Ordering::Relaxed),
             queues_sharing_a_vk_queue: counters.queues_sharing_a_vk_queue.load(Ordering::Relaxed),
+            queue_moves: counters.queue_moves.load(Ordering::Relaxed),
+            queue_joins: counters.queue_joins.load(Ordering::Relaxed),
+            queues_gone_long: counters.queues_gone_long.load(Ordering::Relaxed),
+            long_queue_settles: counters.long_queue_settles.load(Ordering::Relaxed),
+            queue_moves_off_unshared: counters.queue_moves_off_unshared.load(Ordering::Relaxed),
+            joins_withheld_from_unshared: counters
+                .joins_withheld_from_unshared
+                .load(Ordering::Relaxed),
+            queue_switch_checks_run: counters.queue_switch_checks_run.load(Ordering::Relaxed),
+            queue_switch_checks_recalled: counters
+                .queue_switch_checks_recalled
+                .load(Ordering::Relaxed),
             completed_waits: counters.completed_waits.load(Ordering::Relaxed),
             event_waits_met: counters.event_waits_met.load(Ordering::Relaxed),
             shared_event_waits_held: counters.shared_event_waits_held.load(Ordering::Relaxed),

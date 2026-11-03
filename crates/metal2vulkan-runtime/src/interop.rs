@@ -361,6 +361,9 @@ impl CommandQueue {
     /// `f` with the `VkQueue` this queue submits to and its family's index, under the runtime's
     /// lock of that `VkQueue`, which every submission to it takes: the caller's own submissions
     /// and presents (`vkQueuePresentKHR`) go there, externally synchronized as Vulkan requires.
+    /// From the first call on the queue keeps that `VkQueue` for its life: where the device
+    /// shares `VkQueue`s among its command queues (`QueueSharingPolicy::Adaptive`), it moves no
+    /// more.
     /// On MoltenVK, where the runtime relays the driver's command-buffer failures, it submits no
     /// work with a fence of its own after `f` under the same lock, so a failure of the caller's
     /// submissions stays the caller's. There the runtime's frees of its memory wait for the work
@@ -378,11 +381,14 @@ impl CommandQueue {
         // The caller's own submissions are GPU work of the program's: textures' host shadows are
         // read against the device's count of it (`texture/host_shadow.rs`).
         shared.program_gave_gpu_work();
-        let family = shared.queue_family_of(self.vk_queue());
+        // The queue keeps this `VkQueue` for good from here on, so the caller's submissions there
+        // stay in its order (`queue_share.rs`).
+        let vk_queue = self.pinned_vk_queue();
+        let family = shared.queue_family_of(vk_queue);
         // Where the queue's failures are relayed, a mark after `f`'s submissions keeps a failure
         // of theirs the caller's (`device/relay.rs`); where freed memory waits for the work in
         // flight, it waits for that mark (`freed_memory.rs`).
-        let used = shared.use_queue(self.vk_queue(), By::Program, Uses::Unknown, |queue| {
+        let used = shared.use_queue(vk_queue, By::Program, Uses::Unknown, |queue| {
             f(queue, family)
         });
         if let Some(parking) = shared.parking.get() {
