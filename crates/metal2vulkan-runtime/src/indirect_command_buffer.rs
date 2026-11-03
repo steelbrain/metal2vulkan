@@ -664,12 +664,12 @@ enum CommandState {
 /// encoded holds nothing for them; and the kept recordings of its chunks (`kept_commands.rs`),
 /// which each write of a command forgets.
 #[derive(Default)]
-struct Commands {
+struct CommandStates {
     states: BTreeMap<u32, CommandState>,
     kept: KeptChunks,
 }
 
-impl Commands {
+impl CommandStates {
     /// The state the CPU set on command `index`.
     fn state(&self, index: u32) -> Option<CommandState> {
         self.states.get(&index).cloned()
@@ -1031,8 +1031,8 @@ struct IcbShared {
     /// The options asked for, the hazard tracking mode resolved.
     options: ResourceOptions,
     /// The pipeline state the CPU set on each command, and the kept recordings of its chunks
-    /// ([`Commands`]). Held while the CPU writes a record, so writes are one at a time.
-    pipelines: Mutex<Commands>,
+    /// ([`CommandStates`]). Held while the CPU writes a record, so writes are one at a time.
+    pipelines: Mutex<CommandStates>,
     /// An encoder made the buffer resident for writing: the GPU may write its records from then
     /// on (`written_by_gpu`). Set, and read where it decides, under `unforeseen`'s lock.
     gpu_written: AtomicBool,
@@ -1505,7 +1505,7 @@ impl IndirectCommandBuffer {
     /// of `pipelines`.
     fn write(
         &self,
-        commands: &mut Commands,
+        commands: &mut CommandStates,
         index: u32,
         record: &CommandRecord,
     ) -> Result<(), Error> {
@@ -1528,7 +1528,7 @@ impl IndirectCommandBuffer {
     /// Count a write of the CPU's of commands `range` ([`cpu_writes`](Self::cpu_writes)), made,
     /// and forget the kept recordings of the chunks they lie in (`kept_commands.rs`), under
     /// `commands`, the caller's hold of `pipelines`.
-    fn wrote(&self, commands: &mut Commands, range: Range<u32>) {
+    fn wrote(&self, commands: &mut CommandStates, range: Range<u32>) {
         self.0.cpu_writes.fetch_add(1, Ordering::Release);
         commands.kept.wrote(range);
     }
@@ -1931,7 +1931,7 @@ impl IndirectCommandBuffer {
     /// `pipelines`.
     fn write_overflow(
         &self,
-        commands: &mut Commands,
+        commands: &mut CommandStates,
         index: u32,
         stage: BufferStage,
         slot: u32,
@@ -2038,7 +2038,7 @@ impl IndirectCommandBuffer {
     /// Clear the slots past the record's of commands `range`, as a CPU reset does: all but
     /// their dispatch words ([`Overflow::cpu_reset_bytes`]), under `commands`, the caller's hold
     /// of `pipelines`.
-    fn clear_overflow(&self, commands: &mut Commands, range: Range<u32>) -> Result<(), Error> {
+    fn clear_overflow(&self, commands: &mut CommandStates, range: Range<u32>) -> Result<(), Error> {
         let Some(overflow) = self.0.overflow.as_ref() else {
             return Ok(());
         };
