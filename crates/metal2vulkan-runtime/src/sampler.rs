@@ -152,7 +152,8 @@ impl SamplerKey {
 /// state is gone answers none. Such an entry stays until a creation prunes the map, which one
 /// does where the map has grown to twice what the last prune left, and at least to
 /// [`PRUNE_FROM`]: so each creation's share of the prunes is a few entries however many states
-/// live, and the map holds at most about twice the live states.
+/// live, and the map holds at most twice the states live at its last prune, or `PRUNE_FROM`
+/// entries, whichever is more (each entry of a state gone a `Weak`, holding its allocation).
 #[derive(Default)]
 pub(super) struct LiveSamplers {
     states: HashMap<SamplerKey, Weak<SamplerShared>>,
