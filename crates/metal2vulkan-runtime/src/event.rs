@@ -35,14 +35,16 @@
 //! - **Shared event handles** are in-process: a handle shares the event, and opening it gives a
 //!   new `SharedEvent` of the same event. Opening it on another device is refused: Vulkan
 //!   semaphores do not cross devices unless exported, which the runtime does not do.
-//! - **The caller's signals** (`SharedEvent::reserve_vk_signal`, `interop.rs`). A shared event's
-//!   semaphore takes signals of the caller's own submissions (a video queue's, say): the caller
-//!   reserves the next signal index for a Metal value under the scheduler's lock, so no batch
-//!   takes that index meanwhile, and its submission signals it (`event_timeline.rs`). No
-//!   completion turn sees such a signal, so the device's watcher ([`CallerSignals`]) waits for
-//!   each on the host, in reservation order, and observes it as a completion turn would: the
-//!   value rises, host waits wake, notifications come due, and the scheduler looks again. Its
-//!   thread starts at the first reservation, and ends once none was left for [`WATCH_LINGER`].
+//! - **The caller's signals** (`Event::reserve_vk_signal`, `SharedEvent::reserve_vk_signal`,
+//!   `interop.rs`). Either kind's semaphore takes signals of the caller's own submissions (a
+//!   video queue's, say): the caller reserves the next signal index for a Metal value under the
+//!   scheduler's lock, so no batch takes that index meanwhile, and its submission signals it
+//!   (`event_timeline.rs`). A plain event's wait for it chains on the `VkQueue` from the
+//!   reservation, a shared event's is held until it landed. No completion turn sees such a
+//!   signal, so the device's watcher ([`CallerSignals`]) waits for each on the host, in
+//!   reservation order, and observes it as a completion turn would: the value rises, host waits
+//!   wake, notifications come due, and the scheduler looks again. Its thread starts at the first
+//!   reservation, and ends once none was left for [`WATCH_LINGER`].
 //! - **Listeners** run notifications on a thread of their own, one after another in the order they
 //!   came due, started as the first notification is asked for: a listener no notification is
 //!   asked of starts no thread, as Metal's runs its blocks on a dispatch queue, whose threads

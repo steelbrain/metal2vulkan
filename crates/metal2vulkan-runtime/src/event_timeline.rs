@@ -35,15 +35,24 @@
 //! The held batch goes once the value is reached: a host set wakes the scheduler, and so does a
 //! completion turn that observes the GPU signal (`event.rs`).
 //!
-//! **The caller's signals** ([`EventTimeline::signal_apart`]). A shared event's semaphore takes
-//! signals of the caller's own submissions too (`SharedEvent::reserve_vk_signal`): the caller
-//! reserves the next index for a value, as a batch of the scheduler's does, and its submission
-//! signals that index, after the last pending signal's index, whatever queue that one is on (the
-//! runtime knows none of the caller's queues), so the semaphore's signals still execute in index
-//! order. No completion turn sees such a signal: the device's watcher of the caller's signals
-//! waits for it on the host and reports it landed ([`EventTimeline::landed`]), which observes it
-//! and every signal before it but past a signal behind a merge, which its completion turn still
-//! observes first.
+//! **The caller's signals** ([`EventTimeline::signal_apart`]). Either kind's semaphore takes
+//! signals of the caller's own submissions too (`Event::reserve_vk_signal`,
+//! `SharedEvent::reserve_vk_signal`): the caller reserves the next index for a value, as a batch
+//! of the scheduler's does, and its submission signals that index, after the last pending
+//! signal's index, whatever queue that one is on (the runtime knows none of the caller's queues),
+//! so the semaphore's signals still execute in index order. A wait for it is answered as for a
+//! batch's signal ([`EventTimeline::wait`]): a plain event's goes to its `VkQueue` from the
+//! reservation on, maybe before the caller's submission ("applications can submit work via
+//! vkQueueSubmit defining a timeline semaphore wait operation before submitting a corresponding
+//! semaphore signal operation", Vulkan's queue forward progress), and a shared event's is held.
+//! Where the caller's submission fails, its contract signals the index from the host
+//! (`vkSignalSemaphore`): that moves the semaphore itself, which releases a Vulkan wait as the
+//! submission's signal would, and is no host set ([`EventTimeline::set`], which never touches the
+//! semaphore and only a shared event takes), so it leaves a plain event's timeline unsettable.
+//! No completion turn sees such a signal: the device's watcher of the caller's signals waits for
+//! it on the host and reports it landed ([`EventTimeline::landed`]), which observes it and every
+//! signal before it but past a signal behind a merge, which its completion turn still observes
+//! first.
 //!
 //! **A signal behind a merge is seen at its completion turn alone** ([`EventTimeline::keep`]).
 //! A batch submitted while the device keeps a copied host buffer may write the copy, whose bytes

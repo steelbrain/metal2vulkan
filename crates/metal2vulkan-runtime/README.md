@@ -212,7 +212,8 @@ the runtime made.
   `CommandQueue::with_vk_queue` lends a queue's `VkQueue` under the runtime's lock: the consumer's
   submissions there sit in that command queue's order, and in that of any other command queue
   sharing the `VkQueue`. From its first call the command queue keeps that `VkQueue` for its life.
-- `Texture::vk_image`, `Buffer::vk_buffer` and `SharedEvent::vk_semaphore` give an object's handle.
+- `Texture::vk_image`, `Buffer::vk_buffer`, `Event::vk_semaphore` and `SharedEvent::vk_semaphore`
+  give an object's handle.
   A texture over a buffer's bytes that aliases them gives a linear image (the same one for textures
   of one image over the same bytes of one import of host pages, which share it), which over a
   no-copy buffer's or dma-buf host pages may be of `VK_IMAGE_TILING_DRM_FORMAT_MODIFIER_EXT`
@@ -220,13 +221,19 @@ the runtime made.
   of memory plane 0.
 - `CommandBuffer::encode_wait_for_vk_semaphore` and `encode_signal_vk_semaphore` order a command
   buffer against the consumer's own work.
-- A shared event's timeline semaphore orders the consumer's submissions against command buffers'
-  `encodeWaitForEvent:` and `encodeSignalEvent:` of the event. Its counter is a signal index, not
-  the event's value: `SharedEvent::vk_wait(value)` answers the counter a submission waits for (or
-  that the value is reached, or not yet signalled), and `unsafe SharedEvent::reserve_vk_signal(value)`
+- An event's timeline semaphore, plain or shared, orders the consumer's submissions against
+  command buffers' `encodeWaitForEvent:` and `encodeSignalEvent:` of the event. Its counter is a
+  signal index, not the event's value: `vk_wait(value)` answers the counter a submission waits for
+  (or that the value is reached, or not yet signalled), and `unsafe reserve_vk_signal(value)`
   reserves the counter one submission signals, after the counter it names, or answers that Metal
-  drops the signal. The device watches for the consumer's signals landing, so command buffers that
-  wait for them run, and keeps the event's value in step.
+  drops the signal (`Event` and `SharedEvent` have both). A command buffer's wait for a plain
+  event's reserved signal goes to its `VkQueue` with a Vulkan wait for the counter, maybe before
+  the consumer's submission is made, so the consumer signals from a queue no such command buffer
+  is ahead of (an extra or reserved queue). A shared event's value may be set from the host
+  (`setSignaledValue:`), which no Vulkan wait can answer, so a command buffer's wait for its
+  reserved signal is held until the device's watcher saw the signal land: an event the host never
+  sets avoids that hold as a plain one. The device watches for the consumer's signals landing and
+  keeps the event's value in step.
 - `Device::new_texture_with_vk_image` makes a `Private` texture over the consumer's `VkImage` (a
   swapchain image, for presenting). Placed `IdPlacement::Outside`, it takes no resource ID, so the
   program's textures are numbered as with no window.

@@ -226,9 +226,9 @@ pub struct DeviceOptions {
     /// (`metal2vulkan-extra-queues-absent`, through [`messages`](Self::messages) or on stderr).
     /// The runtime never submits to these queues: the caller is their only submitter, and
     /// orders its work against the runtime's through semaphores
-    /// ([`SharedEvent::reserve_vk_signal`](crate::SharedEvent::reserve_vk_signal),
-    /// [`SharedEvent::vk_wait`](crate::SharedEvent::vk_wait)). The runtime's own buffers and
-    /// images stay shared among its own queue families
+    /// ([`Event::reserve_vk_signal`](crate::Event::reserve_vk_signal),
+    /// [`Event::vk_wait`](crate::Event::vk_wait), and a shared event's same hooks). The runtime's
+    /// own buffers and images stay shared among its own queue families
     /// ([`DeviceHandles::queue_families`](crate::DeviceHandles::queue_families)), which need not
     /// include an extra queue's: a submission to an extra queue of another family uses only
     /// objects made to be shared with that family, the caller's own (which Metal-side code
@@ -261,9 +261,9 @@ pub struct DeviceOptions {
     /// [`Texture::vk_image`](crate::Texture::vk_image)) as well as the caller's, with no
     /// ownership transfer, under those handles' contracts: while the object lives, ordered
     /// against the runtime's work on it through semaphores
-    /// ([`SharedEvent::vk_wait`](crate::SharedEvent::vk_wait),
-    /// [`SharedEvent::reserve_vk_signal`](crate::SharedEvent::reserve_vk_signal),
-    /// [`CommandBuffer::encode_wait_for_vk_semaphore`](crate::CommandBuffer::encode_wait_for_vk_semaphore),
+    /// ([`Event::vk_wait`](crate::Event::vk_wait),
+    /// [`Event::reserve_vk_signal`](crate::Event::reserve_vk_signal), a shared event's same
+    /// hooks, [`CommandBuffer::encode_wait_for_vk_semaphore`](crate::CommandBuffer::encode_wait_for_vk_semaphore),
     /// [`CommandBuffer::encode_signal_vk_semaphore`](crate::CommandBuffer::encode_signal_vk_semaphore))
     /// or completion, and an image the runtime made left in `VK_IMAGE_LAYOUT_GENERAL`. The caller
     /// is the queue's only submitter: its submissions there sit in no command queue's order, and

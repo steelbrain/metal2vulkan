@@ -7893,7 +7893,10 @@ method	metal2vulkan-runtime::EncodedRenderCommand::vertex_attribute_stride	pub f
 method	metal2vulkan-runtime::EncodedRenderCommand::vertex_buffer_address	pub fn vertex_buffer_address(&self, index: u64) -> Option<u64>
 method	metal2vulkan-runtime::Event::device	pub fn device(&self) -> &Device
 method	metal2vulkan-runtime::Event::label	pub fn label(&self) -> Option<String>
+method	metal2vulkan-runtime::Event::reserve_vk_signal	pub unsafe fn reserve_vk_signal(&self, value: u64) -> Result<VkEventSignal, Error>
 method	metal2vulkan-runtime::Event::set_label	pub fn set_label(&self, label: &str)
+method	metal2vulkan-runtime::Event::vk_semaphore	pub unsafe fn vk_semaphore(&self) -> vk::Semaphore
+method	metal2vulkan-runtime::Event::vk_wait	pub fn vk_wait(&self, value: u64) -> VkEventWait
 method	metal2vulkan-runtime::FamilyRow::label	pub fn label(self) -> &'static str
 method	metal2vulkan-runtime::FeatureRow::label	pub fn label(self) -> &'static str
 method	metal2vulkan-runtime::Fence::device	pub fn device(&self) -> &Device
