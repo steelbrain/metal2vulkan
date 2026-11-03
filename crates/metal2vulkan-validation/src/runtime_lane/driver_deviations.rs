@@ -738,9 +738,35 @@ fn half_pair_holds(got: u32, want: u32, canonical: bool) -> bool {
     })
 }
 
+/// [`half_pair_holds`] within what the stage's `notes` record of a [`HALF_FMA_CASES`] thread's two
+/// `half` results, `fma(a, b, c)` in the low half and `a * b + c` in the high: each within one unit
+/// in its last place of Metal's where the stage records `PrecisionNote::NativeFma` (the device's
+/// `Fma` of the operands held in `float`, its result rounded to `half`; `llvm.fmuladd` takes it
+/// too), and the high half any `half` where the stage records `PrecisionNote::FastMathRewrites`
+/// (the device's compiler fuses the contractible pair or not, unbounded where one side alone
+/// fuses it).
+fn half_pair_within(got: u32, want: u32, canonical: bool, notes: &[PrecisionNote]) -> bool {
+    let native_fma = notes.contains(&PrecisionNote::NativeFma);
+    let rewrites = notes.contains(&PrecisionNote::FastMathRewrites);
+    // A `half`'s place among the finite values and the infinities, both zeros one place.
+    let rank = |h: u16| match h & 0x8000 {
+        0 => i32::from(h),
+        _ => -i32::from(h & 0x7FFF),
+    };
+    [0, 16].into_iter().all(|shift| {
+        let (g, w) = ((got >> shift) as u16, (want >> shift) as u16);
+        half_pair_holds(u32::from(g), u32::from(w), canonical)
+            || (native_fma && !half_nan(g) && !half_nan(w) && (rank(g) - rank(w)).abs() <= 1)
+            || (shift == 16 && rewrites)
+    })
+}
+
 /// Where the profile takes the deviation, both cases' kernels take the device's 16-bit `Fma`
 /// (they require `VkProperty::MetalHalfFma`) and every thread's two `half` results are the Metal
-/// row's of the same chip, with and without fast math. Elsewhere neither kernel requires it.
+/// row's of the same chip, with and without fast math, but the high half (`a * b + c`) where the
+/// stage records `PrecisionNote::FastMathRewrites`: the device's compiler fuses the contractible
+/// pair or not (MoltenVK's on the Apple M3 Max does not, where Metal's does, 559 of the 1024
+/// threads). Elsewhere neither kernel requires it.
 #[test]
 fn half_fused_multiply_adds_the_device_answers_are_metals() {
     let messages = Messages::default();
@@ -757,14 +783,20 @@ fn half_fused_multiply_adds_the_device_answers_are_metals() {
                 "{case_name} on {name}: the kernel takes the device's 16-bit Fma exactly where \
                  the profile takes the deviation"
             );
+            let rewrites = case_notes(&device, &case).contains(&PrecisionNote::FastMathRewrites);
             let run = run_case(&device, &case).unwrap();
             let metal = metal_row(&case, METAL_ENVIRONMENT);
-            let differ = differing_of(&run.output, &metal, 4, &[HALF_WORD]);
+            let mut differ = differing_of(&run.output, &metal, 4, &[HALF_WORD]);
+            let all = differ.len();
+            // The contractible pair's half, the device compiler's choice under the rewrites.
+            differ.retain(|&(_, _, got, want)| !rewrites || got & 0xFFFF != want & 0xFFFF);
             eprintln!(
-                "half fma {case_name} on {name} (the device's Fma: {metals}): {} of {} half \
-                 words differ from Metal",
+                "half fma {case_name} on {name} (the device's Fma: {metals}; fast-math rewrites \
+                 recorded: {rewrites}): {} of {} half words differ from Metal, {} more in the \
+                 contractible pair's half alone",
                 differ.len(),
-                metal.len() / 16
+                metal.len() / 16,
+                all - differ.len()
             );
             if metals {
                 assert!(
@@ -885,8 +917,10 @@ fn float_denormals_read_as_metal_reads_them() {
 /// takes `DriverDeviation::MetalFloatDenormals`: the product answers Metal's flushed denormal
 /// (2.2), and the fused pair Metal's canonical NaN where the profile takes
 /// `DriverDeviation::MetalCanonicalNans`, a NaN of the device's bits elsewhere
-/// (`PrecisionNote::NativeNanEncoding`, [`float_word_holds`]). Elsewhere the denormals are the
-/// device's and the test prints how many words differ.
+/// (`PrecisionNote::NativeNanEncoding`, [`float_word_holds`]); the two `half` results within what
+/// the stage's notes record ([`half_pair_within`]: the device's `half` `Fma` on the RTX 5080
+/// Laptop GPU, a unit in the last place from Metal's in 300 threads). Elsewhere the denormals are
+/// the device's and the test prints how many words differ.
 #[test]
 fn fused_pairs_answer_metals_nans_and_denormals() {
     let messages = Messages::default();
@@ -902,26 +936,28 @@ fn fused_pairs_answer_metals_nans_and_denormals() {
         let mut failures = Vec::new();
         for case_name in HALF_FMA_CASES {
             let case = public_case(case_name).unwrap();
+            let notes = case_notes(&device, &case);
             let run = run_case(&device, &case).unwrap();
             let metal = metal_row(&case, METAL_ENVIRONMENT);
             assert_eq!(run.output.len(), metal.len(), "{case_name} on {name}");
-            let (mut differ, mut nans) = (Vec::new(), 0);
+            let (mut differ, mut within) = (Vec::new(), 0);
             for i in 0..metal.len() / 4 {
                 let (got, want) = (word(&run.output, i), word(&metal, i));
                 // Word 2 holds the two `half` results, the others a `float` each.
                 let holds = match i % 4 == HALF_WORD {
-                    true => half_pair_holds(got, want, canonical),
+                    true => half_pair_within(got, want, canonical, &notes),
                     false => float_word_holds(got, want, canonical),
                 };
                 if !holds {
                     differ.push((i / 4, i % 4, got, want));
                 } else if got != want {
-                    nans += 1;
+                    within += 1;
                 }
             }
             eprintln!(
-                "fused pairs {case_name} on {name} (the device's denormals, as Metal's: {metals}): \
-                 {} of {} words differ from Metal, {nans} more NaNs of the device's bits",
+                "fused pairs {case_name} on {name} (the device's denormals, as Metal's: {metals}; \
+                 notes {notes:?}): {} of {} words differ from Metal, {within} more within what the \
+                 notes record",
                 differ.len(),
                 metal.len() / 4
             );
