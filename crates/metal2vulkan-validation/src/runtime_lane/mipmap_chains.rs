@@ -297,11 +297,12 @@ fn the_device_s_blit_chain_filters_each_level_and_is_announced() {
 /// Every format the compute filter computes, from random bytes (every bit pattern: NaNs,
 /// infinities, subnormals, out-of-range codes), in 2D textures (one texel high, a square of a
 /// power of two, one past 65 texels, halving and not), a 2D array, a cube and a 3D
-/// texture: a format the device's blits filter takes its blit chain, and every other takes the
-/// compute filter, each level the device wrote within `MipmapFilterChain::outside_bound` of the
-/// filter on the CPU of the level above as the device read it back. The extended-range formats,
-/// which no blit filters, take the filter on every device. `device-filtered-mipmaps` is
-/// announced once.
+/// texture: a format the device's blits filter takes its blit chain in every shape (but the 3D one
+/// on a driver whose blits do not filter a volume, `RuntimeDriverDefect::VolumeBlitsUnfiltered`,
+/// which takes the compute filter), and every other takes the compute filter in every shape, each
+/// level the device wrote within `MipmapFilterChain::outside_bound` of the filter on the CPU of
+/// the level above as the device read it back. The extended-range formats, which no blit filters,
+/// take the filter on every device. `device-filtered-mipmaps` is announced once.
 #[test]
 fn formats_the_blits_cannot_filter_take_the_compute_filter_level_by_level() {
     let cache = ScratchCache::new().unwrap();
@@ -319,6 +320,9 @@ fn formats_the_blits_cannot_filter_take_the_compute_filter_level_by_level() {
             (TextureType::Cube, [4, 4, 1], 6, 3),
             (TextureType::Type3D, [5, 4, 3], 1, 3),
         ];
+        // A driver whose blits do not filter a volume: its 3D textures take the compute filter.
+        let volume_blits = (device.properties().driver_defects)
+            .contains(&RuntimeDriverDefect::VolumeBlitsUnfiltered);
         let mut seed = 0x51f1_5eed_cafe_f00du64;
         let (mut checked, mut off_model) = (0usize, 0usize);
         let (mut by_filter, mut by_blits) = (Vec::new(), Vec::new());
@@ -369,9 +373,15 @@ fn formats_the_blits_cannot_filter_take_the_compute_filter_level_by_level() {
                 }
             }
             let filter = made[0] == Made::Filter;
+            let filtered_shape =
+                |ty: TextureType| filter || (ty == TextureType::Type3D && volume_blits);
             assert!(
-                made.iter().all(|&m| (m == Made::Filter) == filter),
-                "{pf:?}: one way for every shape: {made:?}"
+                shapes
+                    .iter()
+                    .zip(&made)
+                    .all(|(shape, &m)| (m == Made::Filter) == filtered_shape(shape.0)),
+                "{pf:?}: one way for every shape (the compute filter for a volume where the \
+                 driver's blits do not filter one, {volume_blits}): {made:?}"
             );
             if filter {
                 by_filter.push(pf);
