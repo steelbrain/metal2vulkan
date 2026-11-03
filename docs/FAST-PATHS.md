@@ -974,11 +974,11 @@ else.
   chunk of which a write reached since, records as one that keeps nothing, so a range executed
   once pays nothing for keeping. Every other execution reads and records each of its commands at
   each commit: one of a buffer the GPU may write (from its first `use_resource` for writing or blit
-  into it on), one of a buffer of mesh or patch draws alone (neither `DRAW` nor `DRAW_INDEXED`
-  among its command types), a host step, a range read from a buffer, one with a check, a
-  visibility result, tile threadgroup memory, a rasterization-rate map, a memoryless attachment, a
-  shadowed texture, or an inherited table that binds anything, one in a command buffer with an
-  executed-commands handler, a compute one inside command predication, and one of a range holding
-  a chunk whose last recording was not plain (a mesh or patch draw, a draw that splits its
-  instance or needs work around it, one that meets a notice its device announces at each
-  occurrence), until a write reaches that chunk. Not announced.
+  into it on), one of a buffer of mesh or patch draws alone (neither `DRAW` nor `DRAW_INDEXED` among
+  its command types), a host step, a range read from a buffer, one with a check that may see
+  something among its commands, a visibility result, tile threadgroup memory, a rasterization-rate
+  map, a memoryless attachment, a shadowed texture, or an inherited table that binds anything, one
+  in a command buffer with an executed-commands handler, a compute one inside command predication,
+  and one of a range holding a chunk whose last recording was not plain (a mesh or patch draw, a
+  draw that splits its instance or needs work around it, one that meets a notice its device
+  announces at each occurrence), until a write reaches that chunk. Not announced.

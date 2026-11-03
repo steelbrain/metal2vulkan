@@ -12,7 +12,9 @@
 //!   another target, and twice in one pass;
 //! - a command encoded again or reset records its chunk again, and only it;
 //! - a write of the GPU's (a blit's reset) runs no kept recording;
-//! - another set of resident resources, or another range, records its chunks again.
+//! - another set of resident resources, or another range, records its chunks again;
+//! - an execution with a check keeps its chunks as an unchecked one does where the check's needs
+//!   rule out what the records may hold, and keeps nothing where they do not.
 //!
 //! And so do compute commands: `icb_replay_template`, command `c` binding its own parameters and
 //! output windows, so every command's dispatch writes words of its own.
@@ -30,17 +32,32 @@ use metal2vulkan::pipeline::{
 use metal2vulkan_devtools::{engine_dir, llvm_assemble};
 use metal2vulkan_runtime::{
     Buffer, ClearColor, CommandQueue, ComputePipelineState, Device, IndirectCommandBuffer,
-    IndirectCommandBufferDescriptor, LoadAction, PipelineOptions, Region, RenderPassDescriptor,
-    RenderPipelineState, ResourceOptions, ResourceRef, Size, StoreAction, Texture,
-    TextureDescriptor,
+    IndirectCommandBufferDescriptor, IndirectCommandCheck, IndirectCommandCheckNeeds, LoadAction,
+    PipelineOptions, Region, RenderPassDescriptor, RenderPipelineState, ResourceOptions,
+    ResourceRef, Size, StoreAction, Texture, TextureDescriptor,
 };
 use std::ops::Range;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
 
 /// The target's width and height.
 const W: u64 = 64;
 const H: u64 = 48;
 /// The commands: three chunks of the runtime's 256, the last a part.
 const N: u64 = 600;
+
+/// An execution's check: what it looks for, and the count of the commands it was called with.
+type Checked<'c> = (IndirectCommandCheckNeeds, &'c Arc<AtomicU64>);
+
+/// A check of `checked`'s needs that counts each command it is called with into `checked`'s
+/// count.
+fn counting((needs, calls): Checked<'_>) -> (IndirectCommandCheck, IndirectCommandCheckNeeds) {
+    let calls = Arc::clone(calls);
+    let check: IndirectCommandCheck = Box::new(move |_, _| {
+        calls.fetch_add(1, Ordering::Relaxed);
+    });
+    (check, needs)
+}
 
 /// What the executions draw with: the commands' state, their buffers, the target and a queue.
 struct Scene {
@@ -135,6 +152,30 @@ impl Scene {
         (range, times): (Range<u64>, usize),
         extra: Option<&Buffer>,
     ) {
+        self.run_with(target, icb, (range, times), extra, None);
+    }
+
+    /// [`run`](Self::run) of `range` once, the execution given a check of `checked`'s needs
+    /// that counts the commands it is called with.
+    fn run_checked(
+        &self,
+        target: &Texture,
+        icb: &IndirectCommandBuffer,
+        range: Range<u64>,
+        checked: Checked<'_>,
+    ) {
+        self.run_with(target, icb, (range, 1), None, Some(checked));
+    }
+
+    /// [`run`](Self::run), each execution given a check of `checked`'s where there is one.
+    fn run_with(
+        &self,
+        target: &Texture,
+        icb: &IndirectCommandBuffer,
+        (range, times): (Range<u64>, usize),
+        extra: Option<&Buffer>,
+        checked: Option<Checked<'_>>,
+    ) {
         let command_buffer = self.queue.command_buffer().unwrap();
         let mut pass = RenderPassDescriptor::new();
         let color = &mut pass.color_attachments[0];
@@ -157,9 +198,14 @@ impl Scene {
                 .unwrap();
         }
         for _ in 0..times {
-            encoder
-                .execute_commands_in_buffer(icb, range.clone())
-                .unwrap();
+            match checked {
+                None => encoder.execute_commands_in_buffer(icb, range.clone()),
+                Some(checked) => {
+                    let (check, needs) = counting(checked);
+                    encoder.execute_commands_in_buffer_checked(icb, range.clone(), check, needs)
+                }
+            }
+            .unwrap();
         }
         encoder.end_encoding().unwrap();
         complete(&command_buffer);
@@ -326,6 +372,56 @@ fn another_residency_or_range_records_its_chunks_again() {
     });
 }
 
+/// An execution with a check whose needs rule out what the records may hold (commands under
+/// states that may encode indirect commands: the encoder's state, which the commands inherit,
+/// may not) calls the check at no commit and keeps its chunks from its second execution, as an
+/// unchecked one does (`WorkCounts::indirect_chunks_kept`, `kept_contexts_made`). One whose check
+/// looks for draws of points, which the records hold, keeps nothing, and the check sees every
+/// command at each commit.
+#[test]
+fn a_checked_execution_keeps_where_its_check_sees_nothing() {
+    on_device(|device, _| {
+        let scene = Scene::new(device);
+        let icb = scene.icb(device);
+        let target = Scene::target(device);
+        let all = drawn(0..N, |c| c);
+        let calls = Arc::new(AtomicU64::new(0));
+        let run = |needs| {
+            counted(device, || {
+                scene.run_checked(&target, &icb, 0..N, (needs, &calls));
+            })
+        };
+        let blind = IndirectCommandCheckNeeds::new(false, true);
+        assert_eq!(
+            run(blind),
+            [N, 0, 0, 0],
+            "the first execution keeps nothing"
+        );
+        assert_eq!(
+            run(blind),
+            [N, 0, 0, 3],
+            "the second records three chunks to keep"
+        );
+        assert_eq!(run(blind), [0, 3, N, 0], "three chunks kept");
+        assert_eq!(pixels(&target), all);
+        assert_eq!(
+            calls.load(Ordering::Relaxed),
+            0,
+            "a check with nothing to see"
+        );
+        let points = IndirectCommandCheckNeeds::new(true, false);
+        for _ in 0..3 {
+            assert_eq!(run(points), [N, 0, 0, 0], "a check that sees keeps nothing");
+        }
+        assert_eq!(pixels(&target), all);
+        assert_eq!(
+            calls.load(Ordering::Relaxed),
+            3 * N,
+            "the check sees every command at each commit"
+        );
+    });
+}
+
 /// What the compute executions dispatch with: the commands' state, each command's parameters
 /// (16 bytes apart: command `c`'s are `c + 1` and `1000 c`), their output, and a queue.
 /// Command `c`'s four threads write `(c + 1)(t + 1) + 1000 c` to word `t` of its 16-byte window
@@ -396,6 +492,16 @@ impl Dispatches {
     /// In a command buffer of its own, committed and waited for: the output zeroed, then a
     /// compute encoder that makes the buffers resident and executes `range` of `icb`.
     fn run(&self, icb: &IndirectCommandBuffer, range: Range<u64>) {
+        self.run_with(icb, range, None);
+    }
+
+    /// [`run`](Self::run), the execution given a check of `checked`'s where there is one.
+    fn run_with(
+        &self,
+        icb: &IndirectCommandBuffer,
+        range: Range<u64>,
+        checked: Option<Checked<'_>>,
+    ) {
         let command_buffer = self.queue.command_buffer().unwrap();
         let mut blit = command_buffer.blit_command_encoder().unwrap();
         blit.fill_buffer(&self.out, 0..16 * N, 0).unwrap();
@@ -408,7 +514,14 @@ impl Dispatches {
         encoder
             .use_resources(&used, ResourceUsage::READ.union(ResourceUsage::WRITE))
             .unwrap();
-        encoder.execute_commands_in_buffer(icb, range).unwrap();
+        match checked {
+            None => encoder.execute_commands_in_buffer(icb, range),
+            Some(checked) => {
+                let (check, needs) = counting(checked);
+                encoder.execute_commands_in_buffer_checked(icb, range, check, needs)
+            }
+        }
+        .unwrap();
         encoder.end_encoding().unwrap();
         complete(&command_buffer);
     }
@@ -477,5 +590,33 @@ fn compute_commands_run_their_kept_recordings_until_written() {
         let [_, chunks, ..] = counted(device, || work.run(&icb, 0..N));
         assert_eq!(chunks, 0, "no chunk kept after the GPU's write");
         assert_eq!(work.out(), dispatched((0..200).chain(550..N), params));
+    });
+}
+
+/// A compute execution with a check of every kind, whose needs the records rule out (no draw,
+/// and no state that may encode indirect commands), calls the check at no commit and keeps its
+/// chunks from its second execution, as an unchecked one does.
+#[test]
+fn a_checked_compute_execution_keeps_where_its_check_sees_nothing() {
+    on_device(|device, _| {
+        let work = Dispatches::new(device);
+        let icb = work.icb(device);
+        let all = dispatched(0..N, |c| c);
+        let calls = Arc::new(AtomicU64::new(0));
+        let checked = (IndirectCommandCheckNeeds::ALL, &calls);
+        let run = || counted(device, || work.run_with(&icb, 0..N, Some(checked)));
+        assert_eq!(run(), [N, 0, 0, 0], "the first execution keeps nothing");
+        assert_eq!(
+            run(),
+            [N, 0, 0, 3],
+            "the second records three chunks to keep"
+        );
+        assert_eq!(run(), [0, 3, N, 0], "three chunks kept");
+        assert_eq!(work.out(), all);
+        assert_eq!(
+            calls.load(Ordering::Relaxed),
+            0,
+            "a check with nothing to see"
+        );
     });
 }

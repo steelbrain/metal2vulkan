@@ -4,12 +4,14 @@
 //! - **Which executions.** One `commit` records from the CPU's records (no host step, no GPU
 //!   form), of a range in the call, of a buffer whose command types hold a draw of primitives
 //!   (`DRAW` or `DRAW_INDEXED`: a mesh or patch draw is never plain, so a buffer of those alone
-//!   has no chunk to keep), with no check of the caller's, no visibility result counted,
-//!   no shadowed texture, no tile threadgroup memory argument set or reached, no rasterization
-//!   rate map, no memoryless attachment or stand-in, no record barrier the buffer may hold, no
-//!   write before the fragments and no indirect read of the encoder's draws before the call, no
-//!   fragment write of the pass noted before it, no inherited table that binds anything, in a
-//!   command buffer with no executed-commands handler that is not encoded again after its commit;
+//!   has no chunk to keep), with no check of the caller's that may see something among its
+//!   commands (one whose needs rule out what the buffer's records may hold calls nothing at
+//!   `commit` either, `RenderExecution::check_sees`), no visibility result counted, no shadowed
+//!   texture, no tile threadgroup memory argument set or reached, no rasterization rate map, no
+//!   memoryless attachment or stand-in, no record barrier the buffer may hold, no write before
+//!   the fragments and no indirect read of the encoder's draws before the call, no fragment write
+//!   of the pass noted before it, no inherited table that binds anything, in a command buffer
+//!   with no executed-commands handler that is not encoded again after its commit;
 //!   no chunk of its range last recorded otherwise than plainly; and a chunk of its range run
 //!   before, no write reaching it since (`kept_commands.rs`, **From the second execution**): a
 //!   range's first execution records as one that keeps nothing.
@@ -158,7 +160,7 @@ impl RenderExecution {
         let keeps = !range.is_empty()
             && self.icb.descriptor().command_types.intersects(primitives)
             && !self.icb.gpu_written()
-            && self.check.is_none()
+            && !self.check_sees_now()
             && self.lent.is_none()
             && layout.visibility.is_none()
             && self.shadows.is_empty()

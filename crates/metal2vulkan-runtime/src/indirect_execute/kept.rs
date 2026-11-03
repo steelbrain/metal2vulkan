@@ -2,9 +2,11 @@
 //! the chunks no write reached again (`kept_commands.rs`).
 //!
 //! - **Which executions.** One `commit` records from the CPU's records (not the host step), of a
-//!   range in the call, outside a block of command predication, with no check of the caller's,
-//!   no inherited table that binds anything, in a command buffer with no executed-commands handler
-//!   that is not encoded again after its commit; no chunk of its range last recorded otherwise
+//!   range in the call, outside a block of command predication, with no check of the caller's
+//!   that may see something among its commands (one whose needs rule out what the buffer's
+//!   records may hold calls nothing at `commit` either, `Execute::check_sees`), no inherited
+//!   table that binds anything, in a command buffer with no executed-commands handler that is
+//!   not encoded again after its commit; no chunk of its range last recorded otherwise
 //!   than plainly; and a chunk of its range run before, no write reaching it since
 //!   (`kept_commands.rs`, **From the second execution**): a range's first execution records as
 //!   one that keeps nothing.
@@ -70,7 +72,7 @@ impl Execute {
         let inherited = self.icb.descriptor().inherit_buffers;
         let keeps = !range.is_empty()
             && !self.icb.gpu_written()
-            && self.check.is_none()
+            && !self.check_sees()
             && self.gate.is_none()
             && self.preprocess_gate.is_none()
             && (!inherited || self.table.binds_nothing())
