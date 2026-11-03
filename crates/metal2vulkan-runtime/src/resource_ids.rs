@@ -17,7 +17,9 @@
 //!   Every sampler state has an ID, with or without argument-buffer support, as on Metal (probes 5
 //!   and 7), and a texture view has one of its own, as each `MTLTexture` does. The runtime's own
 //!   textures (scratch and checks no program sees, the in-place check's on its thread among them)
-//!   take none: they answer 0. A function table's ID is always plain.
+//!   take none: they answer 0. A program's texture takes its ID as its making's last step, once
+//!   nothing but the runtime's own fault can fail it, so a refused making takes none and the IDs
+//!   follow the program's order of makings. A function table's ID is always plain.
 //! - **Numbering is Metal's** (the coordinator's ruling of 2026-10-07: a program that writes an ID
 //!   into memory and reads it back sees the number, and the consumer measured Metal's, so Metal's
 //!   numbers are the contract, where only "plain allocation skips reserved IDs" was kept before).

@@ -1822,10 +1822,11 @@ impl Device {
         if let SparseBacking::Emulated { need } = backing {
             let image =
                 self.new_emulated_texture(heap, (plan, shape), mask, extras, (cache, allow))?;
-            let storage = Storage::Image(image.shared());
+            let image = image.shared();
+            // Its last step that may fail, before the texture takes its ID (`resource_ids.rs`).
+            self.start_tile_map(&image)?;
             let id = IdUse::Program(descriptor.placement);
-            let texture = Texture::made(self, storage, record, None, id);
-            self.start_tile_map(&texture)?;
+            let texture = Texture::made(self, Storage::Image(image), record, None, id);
             heap.hold_texture(&texture);
             self.degrade(Degradation::EmulatedSparseTexture, || {
                 let object = format!(
@@ -1897,11 +1898,12 @@ impl Device {
             staging_copies: false,
             objects: ObjectsToken::default(),
         };
-        let storage = Storage::Image(image.shared());
+        let image = image.shared();
+        // Its last step that may fail, before the texture takes its ID (`resource_ids.rs`):
+        // dropping `image` on failure releases it.
+        self.start_tile_map(&image)?;
         let id = IdUse::Program(descriptor.placement);
-        let texture = Texture::made(self, storage, record, None, id);
-        // Dropping `texture` on failure releases the image.
-        self.start_tile_map(&texture)?;
+        let texture = Texture::made(self, Storage::Image(image), record, None, id);
         if !shared.sparse.strict {
             self.degrade(Degradation::NonStrictResidency, || {
                 let object = format!(
@@ -2026,12 +2028,12 @@ impl Device {
         })
     }
 
-    /// Give sparse texture `texture`, just made, its tile map's bytes with nothing mapped, where
-    /// its type has a tile map: staged for the device's next submission, which copies them in
-    /// before any of its commands (`Buffer::fill_first_from`), so the making waits for no GPU
+    /// Give a sparse texture's `image`, just made, its tile map's bytes with nothing mapped,
+    /// where its type has a tile map: staged for the device's next submission, which copies them
+    /// in before any of its commands (`Buffer::fill_first_from`), so the making waits for no GPU
     /// work. Its image's move (and an emulated one's zeros) the image noted as it was made.
-    fn start_tile_map(&self, texture: &Texture) -> Result<(), Error> {
-        let Some(image) = texture.sparse_image() else {
+    fn start_tile_map(&self, image: &Image) -> Result<(), Error> {
+        let Owner::Sparse(image) = &image.owner else {
             return Err(internal("a sparse texture without its sparse image"));
         };
         let Some(tile_map) = image.tile_map() else {
@@ -2140,10 +2142,16 @@ impl Device {
             false => self.with_decoded_twin(image, &layout, descriptor, true)?,
         };
         let record = ViewRecord::of_descriptor(&layout, descriptor);
-        let storage = Storage::Image(image.shared());
-        let texture = Texture::made(self, storage, record, None, id_use);
-        texture.start_decoded_twin()?;
-        Ok(texture)
+        let image = image.shared();
+        // Its last step that may fail, before the texture takes its ID (`resource_ids.rs`).
+        image.start_decoded_twin()?;
+        Ok(Texture::made(
+            self,
+            Storage::Image(image),
+            record,
+            None,
+            id_use,
+        ))
     }
 
     /// A 2D texture or array of `descriptor` (checked as `layout`) over `texels`, for Metal's

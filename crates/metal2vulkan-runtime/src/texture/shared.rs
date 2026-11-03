@@ -118,9 +118,10 @@ impl Device {
         }
         let image = self.with_decoded_twin(image, &layout, descriptor, true)?;
         let record = ViewRecord::of_descriptor(&layout, descriptor);
-        let storage = Storage::Image(image.shared());
-        let texture = Texture::made(self, storage, record, None, id_use);
-        texture.start_decoded_twin()?;
+        let image = image.shared();
+        // Its last step that may fail, before the texture takes its ID (`resource_ids.rs`).
+        image.start_decoded_twin()?;
+        let texture = Texture::made(self, Storage::Image(image), record, None, id_use);
         // A shared texture takes the device's sampler ID as any texture of the device's does
         // (`resource_ids.rs`); one opened from a handle needs none, the handle's texture having
         // taken it on this device.

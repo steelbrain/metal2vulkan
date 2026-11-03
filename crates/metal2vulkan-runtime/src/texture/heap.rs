@@ -3290,10 +3290,14 @@ impl Device {
             }
         };
         let record = ViewRecord::of_descriptor(&p.layout, descriptor);
-        let storage = Storage::Image(image.shared());
+        let image = image.shared();
+        // It holds what its bytes held: its twin decodes all of it before any command reads it.
+        // Before the texture takes its ID (`resource_ids.rs`): what follows fails only on the
+        // runtime's own fault (`internal`).
+        image.decode_whole()?;
         let texture = Texture::made(
             self,
-            storage,
+            Storage::Image(image),
             record,
             None,
             IdUse::Program(descriptor.placement),
@@ -3316,8 +3320,6 @@ impl Device {
             tiles.know_samples(self, call, &texture, inexact);
         }
         heap.hold_texture(&texture);
-        // It holds what its bytes held: its twin decodes all of it before any command reads it.
-        texture.decode_whole()?;
         // Over host pages, each texture laid out otherwise than Metal tiles it is announced, in
         // the program's call that made it, with its ID; and in any heap a multisample texture whose
         // image lies in memory of its own, and a shadow of the uncompressed tiles of a texture

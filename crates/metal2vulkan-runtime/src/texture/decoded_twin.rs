@@ -33,7 +33,7 @@
 //! twin is made as its carrier's CPU copies go: with host-transfer usage, or shared with the
 //! staging queue, and moved to `GENERAL` there alone as it is made, its texels started as the zero
 //! blocks' decode the same way, a constant fill queued with the texture's making
-//! ([`Texture::start_decoded_twin`]). The runtime stages no GPU decode of such a twin of its own:
+//! ([`Image::start_decoded_twin`]). The runtime stages no GPU decode of such a twin of its own:
 //! one in flight could read the old blocks before a later write and copy their texels into the
 //! twin after that write's CPU decode. A blit's decode (`decode_twin`) is the caller's command's,
 //! and covers only what it wrote, as Metal's write of those texels would.
@@ -335,7 +335,7 @@ pub(super) struct Decoded {
     /// How the blocks decode.
     pub(super) decode: TwinDecode,
     /// It was made moved alone (`Start::Moved`): its texels start as the CPU's decode of the zero
-    /// blocks, written as the texture is made ([`Texture::start_decoded_twin`]).
+    /// blocks, written as the texture is made ([`Image::start_decoded_twin`]).
     started_on_the_cpu: bool,
     /// The layout and descriptor of the texture it was made for, by which an ASTC carrier's
     /// second twin is made ([`Image::make_second_twin`]).
@@ -588,9 +588,9 @@ impl Device {
     /// ([`degrade_block_decode`](Device::degrade_block_decode)). Refused where the device does
     /// not take the twin's format (no conformant device). `fresh`: the image holds the zeros of a
     /// new texture, which the twin starts as (where the image takes host or staging copies, by
-    /// the decode the caller stages once the image is shared, [`Texture::start_decoded_twin`]);
+    /// the decode the caller stages once the image is shared, [`Image::start_decoded_twin`]);
     /// else the caller decodes the whole twin once the image is shared
-    /// ([`Texture::decode_whole`]).
+    /// ([`Image::decode_whole`]).
     pub(super) fn with_decoded_twin(
         &self,
         mut image: Image,
@@ -654,7 +654,7 @@ impl Device {
         // Its uses are the image's (the twin shares its resource identity): its own goes unused.
         // A routed twin is moved to `GENERAL` alone as it is made, so a CPU decode may write it
         // from then on; its texels start as the CPU's decode of the zero blocks, written on the
-        // host or the staging queue as the texture is made (`start_decoded_twin`): 6 to 10 ms for
+        // host or the staging queue as the texture is made (`Image::start_decoded_twin`): 6 to 10 ms for
         // 2048 x 2048. No GPU decode the runtime stages of its own is in flight to race a later
         // write's CPU decode.
         let identity = Identity::new(HazardTrackingMode::Default, false);
@@ -776,38 +776,6 @@ impl Texture {
     fn decoding_image(&self) -> Option<Arc<Image>> {
         let image = view_shadow::truth(self.image().ok()?);
         image.decoded.is_some().then(|| Arc::clone(image))
-    }
-
-    /// Decode the texture's whole image into its decoded twin before any command reads it: a
-    /// heap's texture, which holds what its bytes held. Staged for the device's next submission
-    /// as a host call's copy is (`TexelCopy`), or past the bound made now. Nothing for a texture
-    /// without one.
-    pub(super) fn decode_whole(&self) -> Result<(), Error> {
-        let Some(image) = self.decoding_image() else {
-            return Ok(());
-        };
-        image.stage_decode(&whole_regions(image.plan()))
-    }
-
-    /// Start the texture's decoded twin where it was made moved alone (`Start::Moved`,
-    /// [`Device::with_decoded_twin`]): the decode of a new texture's zero blocks, every level's,
-    /// queued for the device's decode thread (`twin_decode.rs`), which fills the twin with it on
-    /// the host or the staging queue as its copies go. Nothing for any other texture.
-    pub(super) fn start_decoded_twin(&self) -> Result<(), Error> {
-        let Some(image) = self.decoding_image() else {
-            return Ok(());
-        };
-        if !image
-            .decoded
-            .as_deref()
-            .is_some_and(|d| d.started_on_the_cpu)
-        {
-            return Ok(());
-        }
-        for region in whole_regions(image.plan()) {
-            image.queue_twin_decode(&region, None)?;
-        }
-        Ok(())
     }
 }
 
@@ -933,6 +901,38 @@ fn whole_regions(plan: &ImagePlan) -> Vec<ImageRegion> {
 }
 
 impl Image {
+    /// Decode the whole image, just made and shared, into its decoded twin before any command
+    /// reads it: a heap's texture's, which holds what its bytes held. Staged for the device's
+    /// next submission as a host call's copy is (`TexelCopy`), or past the bound made now; before
+    /// its texture is made, so the texture takes its resource ID only once its making cannot
+    /// fail (`resource_ids.rs`). Nothing for an image without one.
+    pub(super) fn decode_whole(self: &Arc<Self>) -> Result<(), Error> {
+        if self.decoded.is_none() {
+            return Ok(());
+        }
+        self.stage_decode(&whole_regions(self.plan()))
+    }
+
+    /// Start the decoded twin of the image, just made and shared, where it was made moved alone
+    /// (`Start::Moved`, [`Device::with_decoded_twin`]): the decode of a new texture's zero
+    /// blocks, every level's, queued for the device's decode thread (`twin_decode.rs`), which
+    /// fills the twin with it on the host or the staging queue as its copies go; before its
+    /// texture is made, so the texture takes its resource ID only once its making cannot fail
+    /// (`resource_ids.rs`). Nothing for any other image.
+    pub(super) fn start_decoded_twin(self: &Arc<Self>) -> Result<(), Error> {
+        if !self
+            .decoded
+            .as_deref()
+            .is_some_and(|d| d.started_on_the_cpu)
+        {
+            return Ok(());
+        }
+        for region in whole_regions(self.plan()) {
+            self.queue_twin_decode(&region, None)?;
+        }
+        Ok(())
+    }
+
     /// Stage the decode of `regions` of the image into its decoded twin for the device's next
     /// submission (`TexelCopy::decode_only`), what the image holds there already: a heap's
     /// bytes. Past the bound, made now. Nothing for an image without a twin. (no longer a host
@@ -1790,7 +1790,7 @@ pub(crate) enum PassScratch {
     Own,
     /// The device's (`FirstMoves::decode_scratch`), made once: a pass a submission takes from the
     /// device's staged work, which runs after every such pass before it. It is no staged byte
-    /// (the bound), so a texture's start (`Texture::start_decoded_twin`) allocates nothing.
+    /// (the bound), so a texture's start (`Image::start_decoded_twin`) allocates nothing.
     Device,
 }
 
