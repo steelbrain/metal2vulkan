@@ -16,7 +16,7 @@ profile	intel-irisxe-rplp-anv	c57b380689e33e05
 profile	intel-uhd770-rpls-anv	c57b380689e33e05
 profile	lavapipe	8b0e38e4b195da6b
 profile	lunarg-desktop-baseline-2023	a4079dbb79661db5
-profile	moltenvk-m3	b82837f9130215bf
+profile	moltenvk-m3	0a8291d5ecbf3f75
 profile	nvidia-pascal-linux	ffe884de52decdda
 profile	nvidia-rtx50-linux	55dfd90c715d7263
 profile	nvidia-rtx5080-laptop	c017cadc61d61b42

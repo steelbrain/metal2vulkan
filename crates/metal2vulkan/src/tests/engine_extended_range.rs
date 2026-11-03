@@ -648,9 +648,10 @@ fn argb8_storage_slots_rotate_their_bytes() {
 /// NaN is Metal's `0x7e00` where it takes `DriverDeviation::MetalHalfStorageNans` (MoltenVK's: the
 /// module requires its property), else the device's (`PrecisionNote::DeviceNanEncoding`); a
 /// formatless slot's notes hold under the format bound there (`tests::engine_half_storage_notes`).
-/// A formatless slot may also reach a packed small float image, whose NaN is the device's on every
-/// profile (noted too), or a normalized one, whose conversion is the device's on every profile
-/// (noted too). The held lanes cover every tie between neighbouring halves and its
+/// A formatless slot may also reach a packed small float image, whose NaN is the device's (noted
+/// too) but where the profile takes `DriverDeviation::MetalSmallFloatNans` (the module requires
+/// its property), or a normalized one, whose conversion is the device's on every profile (noted
+/// too). The held lanes cover every tie between neighbouring halves and its
 /// neighbours, past the largest, the infinities and NaNs.
 #[test]
 fn half_float_storage_slots_leave_their_writes_to_the_device() {
@@ -756,9 +757,15 @@ fn half_float_storage_slots_leave_their_writes_to_the_device() {
                 nans,
                 "{what}"
             );
+            let small = p.takes_driver_deviation(DriverDeviation::MetalSmallFloatNans);
+            assert_eq!(
+                relied.contains(&VkProperty::MetalSmallFloatNans),
+                formatless && small,
+                "{what}"
+            );
             assert_eq!(
                 a.precision.contains(&PrecisionNote::DeviceNanEncoding),
-                !nans || formatless,
+                !nans || (formatless && !small),
                 "{what}: {:?}",
                 a.precision
             );

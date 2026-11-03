@@ -463,6 +463,10 @@ struct Kernels {
     /// Whether `read_half`'s stage rounds a `half` by the device's conversion
     /// (`PrecisionNote::NativeHalfConversion`), not as Metal does.
     native_half: bool,
+    /// Whether `write_masked_half`'s stage records `PrecisionNote::NativeNanEncoding`, announced
+    /// as its state is made: not where the device's moves of a `half` NaN are Metal's
+    /// (`DriverDeviation::MetalNanMoves`) and its write's store accounts for the texel's NaN.
+    half_write_nans: bool,
 }
 
 impl Kernels {
@@ -498,6 +502,8 @@ impl Kernels {
             exact: metal_sampler(device),
             native_half: stage_notes(device, &bitcode, "read_half")
                 .contains(&PrecisionNote::NativeHalfConversion),
+            half_write_nans: stage_notes(device, &bitcode, "write_masked_half")
+                .contains(&PrecisionNote::NativeNanEncoding),
         }
     }
 }
@@ -2615,8 +2621,9 @@ fn write_then_read(
 /// read the planes as written (where the device converts the texture, its conversion of them:
 /// `ycbcr_device_reads`). A dispatch writing no texel keeps every byte. Nothing is announced
 /// past the lane's pipeline states' own notes, on a device without unified memory the first
-/// `Shared` buffer's `shared-in-system-memory`, and where the device converts a texture itself
-/// `ycbcr-filter-not-exact`.
+/// `Shared` buffer's `shared-in-system-memory`, where the device converts a texture itself
+/// `ycbcr-filter-not-exact`, and where the `half` write's own stage does not record it
+/// (`Kernels::half_write_nans`) its variant's `native-nan-encoding`.
 #[test]
 fn a_four_four_four_texture_s_writes_store_metal_s_codes() {
     use PixelFormat as P;
@@ -2737,6 +2744,13 @@ fn a_four_four_four_texture_s_writes_store_metal_s_codes() {
         };
         if by_devices {
             expected.push(Degradation::YCbCrFilterNotExact);
+        }
+        // The write's variant for such a texture (`StorageImageClass::YCbCrWrite`) hands the
+        // widened `half`'s bits to the runtime's encode as words, which records
+        // `native-nan-encoding` on every device: announced at its first dispatch where the
+        // kernel's own stage did not record it.
+        if !kernels.half_write_nans {
+            expected.push(Degradation::NativeNanEncoding);
         }
         let expected = &expected[..];
         let notices = assert_once(&messages.take_notices(), expected);
@@ -3513,6 +3527,38 @@ fn assert_half_reads(kernels: &Kernels, texels: &[u8], want: &[[u16; 3]], case: 
     assert_half_steps(kernels, texels, want, 8192, case);
 }
 
+/// A `half` nearest sample's `float4`s `texels` through a runtime sampler slot against Metal's
+/// `half` read of the steps `want` (of `1 / 8192`): each channel [`half_away`] of its step, or
+/// within one `half` ulp of it, where the slot's word reads one texel and the device rounds its
+/// `float` (`PrecisionNote::HalfTexelConversion`, which the runtime announces at the dispatch that
+/// binds such a texture there; MoltenVK on the Apple M3 Max rounds toward zero), alpha 1. The
+/// channels so rounded are counted, printed and returned.
+fn assert_half_samples(texels: &[u8], want: &[[u16; 3]], case: &str) -> usize {
+    let mut rounded = 0usize;
+    for (i, (t, w)) in texels.as_chunks::<16>().0.iter().zip(want).enumerate() {
+        let c = |i: usize| f32::from_le_bytes(t[4 * i..4 * i + 4].try_into().unwrap());
+        assert_eq!(c(3), 1.0, "{case}: texel {i}'s alpha");
+        for (k, &step) in w.iter().enumerate() {
+            let (got, metal) = (c(k), half_away(step));
+            if got.to_bits() == metal.to_bits() {
+                continue;
+            }
+            // The step's binade's `half` ulp: the device's `half` lies within one of Metal's.
+            let v = f64::from(step) / 8192.0;
+            let ulp = 2f64.powi(v.log2().floor() as i32 - 10);
+            assert!(
+                (f64::from(got) - f64::from(metal)).abs() <= ulp,
+                "{case}: texel {i} channel {k} (step {step}): {got} against Metal's {metal}"
+            );
+            rounded += 1;
+        }
+    }
+    if rounded > 0 {
+        println!("YCBCR-HALF-SAMPLE {case}: {rounded} channels the device's rounding");
+    }
+    rounded
+}
+
 /// A `half` read's `float4`s `texels` against `want`'s steps of `1 / grid`, alpha 1: each step's
 /// `half`, rounded with ties away from zero on the grid `8192` ([`half_away`]) and exact on the
 /// grid `2048`. Where the read's stage rounds by the device's conversion (`Kernels::native_half`,
@@ -3548,10 +3594,11 @@ fn assert_half_steps(kernels: &Kernels, texels: &[u8], want: &[[u16; 3]], grid: 
 /// The `_sRGB` twins over their surfaces read what Metal reads (`ycbcr_read` states it):
 /// `YCBCR8_420_2P_sRGB` over `420v` and `420f`, and `YCBCR10_420_2P_sRGB` over `x420`, `xf20`,
 /// `x422` and `xf44`, without a matrix, with BT.709 and with BT.2020. Each texel's `float` `read()`
-/// and a linear sample at its centre are its step of `1/8192`; a `half` read and a `half` nearest
-/// sample that step rounded with ties away from zero; and a linear sample between the texels the
-/// filter of the kept image, whose planes no function reads in place ([`Between`], Metal's step
-/// on the grid `8192` where read in place). The filter notices are [`assert_filter_notices`]'s. A
+/// and a linear sample at its centre are its step of `1/8192`; a `half` read that step rounded with
+/// ties away from zero, and a `half` nearest sample through the runtime's sampler slot that or,
+/// announced, the device's rounding of it ([`assert_half_samples`]); and a linear sample between
+/// the texels the filter of the kept image, whose planes no function reads in place
+/// ([`Between`], Metal's step on the grid `8192` where read in place). The filter notices are [`assert_filter_notices`]'s. A
 /// twin the device converts itself reads Vulkan's conversion of the same codes through the curve
 /// instead, within the device's bound (`ycbcr_device_reads`), and its linear sample between the
 /// texels the filter of those.
@@ -3563,6 +3610,7 @@ fn srgb_twins_read_what_metal_reads() {
         let nearest = sampler(device, SamplerMinMagFilter::Nearest);
         let mut steps = Between::new(device);
         let mut seed = 70;
+        let mut rounded = 0;
         let surfaces: [(PixelFormat, &[u8; 4], YCbCrRange); 6] = [
             (PixelFormat::YCBCR84202PSRGB, b"420v", YCbCrRange::Video),
             (PixelFormat::YCBCR84202PSRGB, b"420f", YCbCrRange::Full),
@@ -3617,23 +3665,27 @@ fn srgb_twins_read_what_metal_reads() {
                 let half = texels_of(device, &kernels.read_half, &texture, None);
                 let nearest_half =
                     texels_of(device, &kernels.sample_half, &texture, Some(&nearest));
+                // Each result, whether it is a `half`, and whether a sampler slot sampled it.
                 let checks = [
                     (
                         &sampled,
-                        false,
+                        (false, true),
                         format!("{case}: a linear sample at the centres"),
                     ),
-                    (&half, true, format!("{case}: a half read()")),
+                    (&half, (true, false), format!("{case}: a half read()")),
                     (
                         &nearest_half,
-                        true,
+                        (true, true),
                         format!("{case}: a half nearest sample"),
                     ),
                 ];
-                for (texels, half, what) in checks {
+                for (texels, (half, slot), what) in checks {
                     match (by_device, half) {
                         (true, _) => {
                             assert_device_reads(texels, &vulkan, (codes.output, half), &what)
+                        }
+                        (false, true) if slot => {
+                            rounded += assert_half_samples(texels, &want, &what)
                         }
                         (false, true) => assert_half_reads(&kernels, texels, &want, &what),
                         (false, false) => assert_eq!(grid_of(texels, 8192), want, "{what}"),
@@ -3643,7 +3695,13 @@ fn srgb_twins_read_what_metal_reads() {
                 steps.texels(&between, &read, in_place, &case);
             }
         }
-        steps.finish(device, &counts(&messages.take_notices()), "sRGB twins");
+        let notices = counts(&messages.take_notices());
+        // A `half` the device's rounding answered was announced.
+        assert!(
+            rounded == 0 || notices.contains_key(&Degradation::HalfTexelConversion),
+            "{rounded} half sample channels the device's rounding, unannounced: {notices:?}"
+        );
+        steps.finish(device, &notices, "sRGB twins");
     });
 }
 

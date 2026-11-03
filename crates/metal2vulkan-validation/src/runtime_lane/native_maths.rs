@@ -583,7 +583,10 @@ fn half_operands() -> Vec<[f32; 2]> {
 /// operands rounded, or rounded itself), exactly. CI's lavapipe (Mesa 26.0.8 with LLVM 21.1.8)
 /// rounds here (8192 of 8192). A device whose float controls make its conversion Metal's (the
 /// module declares `RoundingModeRTE`, `DenormPreserve` and `SignedZeroInfNanPreserve` for 16
-/// bits: ANV and RADV) records neither and answers Metal's exactly.
+/// bits: ANV and RADV) records neither and answers Metal's exactly, and so does one whose
+/// conversion is measured to be Metal's (MoltenVK on the Apple M3 Max's macOS 27 identity,
+/// `DriverDeviation::MetalHalfConversion`: the module requires its property), whose `half` sum
+/// is its own 16-bit addition.
 #[test]
 fn half_rounding_answers_within_its_recorded_bound() {
     let bitcode = llvm_assemble_text(&half_kernel()).unwrap();
@@ -626,10 +629,14 @@ fn half_rounding_answers_within_its_recorded_bound() {
                 .filter_map(|kind| kind.precision_note())
                 .filter(|note| kinds.contains(note))
                 .collect();
-            // A rounding by the bare quantize is the device's: only the float controls answer
-            // Metal's.
-            let metal_s = controlled;
-            eprintln!("{name}: float controls {controlled}; announced {announced:?}");
+            // A rounding by the bare quantize is the device's: only the float controls, or a
+            // conversion measured to be Metal's, answer Metal's.
+            let measured = required.contains(&VkProperty::MetalHalfConversion);
+            let metal_s = controlled || measured;
+            eprintln!(
+                "{name}: float controls {controlled}; measured conversion {measured}; announced \
+                 {announced:?}"
+            );
             assert_eq!(announced.len(), usize::from(!metal_s), "{name}");
             let operands = half_operands();
             let bytes: Vec<u8> = operands
