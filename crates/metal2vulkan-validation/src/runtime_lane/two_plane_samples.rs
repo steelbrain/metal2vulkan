@@ -12,7 +12,10 @@
 //!
 //! Metal's answer: the SHA-256 of each case's 4,096 results ([`METAL`]; an Apple
 //! M4 under macOS 27.0.1, through the probe's constexpr samplers, plain and under Metal's
-//! validation layer alike), which the probe keeps. A nearest case is Metal's bytes; a linear one
+//! validation layer alike), which the probe keeps. A nearest case is Metal's results, each a
+//! texel's read, which the device converts (`PrecisionNote::DevicePackConversion`, announced): each
+//! within its bound of Metal's result in Metal's recording of the case (the conformance suite's
+//! `xr-two-plane-samples-*`, which gives the digest), a `half` one of Metal's `float`; a linear one
 //! runs, its blend the device's `FMix` of the decoded taps (`bicubic-filter-arithmetic`), which a
 //! digest cannot bound, so its values are compared by the conformance suite's
 //! `xr-two-plane-samples` cases. A differing case is printed with its first results, on one
@@ -23,11 +26,14 @@
 
 use super::degrade_notices::on_device;
 use super::extended_range_samples::state;
+use super::extended_range_targets::half_value;
 use super::extended_range_two_planes::digest;
 use super::read_through_views::{draw, sampling_state, Sampled};
 use super::two_plane_copies::{lane, planes, Rng, FORMATS};
+use super::xr_codes::{assert_announced, half_within, recorded, value_within};
 use super::{buffer_with, read_buffer};
 use metal2vulkan::bind::SamplerDescriptor;
+use metal2vulkan::metal::format::ExtendedRange;
 use metal2vulkan::metal::{PixelFormat, SamplerAddressMode, SamplerMinMagFilter, TextureUsage};
 use metal2vulkan_runtime::{CommandBufferStatus, Size, TextureDescriptor};
 use std::time::Duration;
@@ -158,7 +164,7 @@ fn sampler(name: &str) -> SamplerDescriptor {
 /// device's, module docs).
 #[test]
 fn two_plane_samples_are_metal_s() {
-    on_device(|device, _| {
+    on_device(|device, messages| {
         let lane = lane(device);
         let coords: Vec<u8> = coordinates()
             .into_iter()
@@ -168,7 +174,11 @@ fn two_plane_samples_are_metal_s() {
         let coords = buffer_with(device, &coords).unwrap();
         let mut wrong = Vec::new();
         let mut checked = 0;
+        // The results within the device's conversion of Metal's, and Metal's `float` results of a
+        // case, which its `half` ones narrow.
+        let (mut moved, mut floats) = (0, Vec::new());
         for (format, name) in FORMATS {
+            let form = ExtendedRange::of(format).expect("a two-plane format");
             let (texture, _, _) = lane.filled(format, 4, (SIDE, SIDE));
             for s in ["nc", "lc", "nr", "lr"] {
                 let runtime = device.new_sampler_state(&sampler(s)).unwrap();
@@ -212,13 +222,54 @@ fn two_plane_samples_are_metal_s() {
                             continue;
                         }
                         checked += 1;
-                        if got != want {
+                        // Metal's results, whole, from its recording of the case, which give its
+                        // digest; each the device's read of the texel within its bound.
+                        let recording =
+                            format!("xr-two-plane-samples-{}", case[4..].replace('.', "-"));
+                        let metal = recorded(&recording, &["output", "runtime-sampler"]);
+                        assert_eq!(digest(&metal), want, "{recording}: the recorded results");
+                        let lanes = |b: &[u8]| -> Vec<f32> {
+                            match half {
+                                true => b
+                                    .as_chunks::<2>()
+                                    .0
+                                    .iter()
+                                    .map(|h| half_value(u16::from_le_bytes(*h)))
+                                    .collect(),
+                                false => b
+                                    .as_chunks::<4>()
+                                    .0
+                                    .iter()
+                                    .map(|f| f32::from_le_bytes(*f))
+                                    .collect(),
+                            }
+                        };
+                        let (got_lanes, want_lanes) = (lanes(&bytes), lanes(&metal));
+                        if !half {
+                            floats = want_lanes.clone();
+                        }
+                        let mut past = 0;
+                        for (i, (g, w)) in got_lanes.iter().zip(&want_lanes).enumerate() {
+                            let alpha = i % 4 == 3;
+                            let held = match half {
+                                true => half_within(form, *g, floats[i], alpha),
+                                false => value_within(form, *g, *w, alpha),
+                            };
+                            match (g.to_bits() == w.to_bits(), held) {
+                                (true, _) => {}
+                                (false, true) => moved += 1,
+                                (false, false) => past += 1,
+                            }
+                        }
+                        if past > 0 {
                             let first: String = bytes[..(16 * size) as usize]
                                 .iter()
                                 .map(|b| format!("{b:02x}"))
                                 .collect();
                             wrong.push(format!(
-                                "{case} through {kernel}: {got}, Metal {want}; the first 16 results {first}"
+                                "{case} through {kernel}: {past} results past the device's \
+                                 conversion of Metal's ({got}, Metal {want}); the first 16 results \
+                                 {first}"
                             ));
                         }
                     }
@@ -229,11 +280,13 @@ fn two_plane_samples_are_metal_s() {
             println!("XR-TWO-PLANE-SAMPLES-DIFFERS {}: {line}", device.name());
         }
         println!(
-            "XR-TWO-PLANE-SAMPLES {}: {checked} cases of {SAMPLES} samples checked, {} differ from Metal",
+            "XR-TWO-PLANE-SAMPLES {}: {checked} cases of {SAMPLES} samples checked, {} differ from \
+             Metal past the device's conversion, {moved} results within it",
             device.name(),
             wrong.len()
         );
         assert!(wrong.is_empty(), "{} cases differ from Metal", wrong.len());
+        assert_announced(messages, moved, "the nearest samples");
     });
 }
 

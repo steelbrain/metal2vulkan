@@ -889,6 +889,8 @@ mod word_samples_msaa;
 #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
 mod wrapped_buffers;
 #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+mod xr_codes;
+#[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
 mod ycbcr_device_reads;
 #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
 mod ycbcr_in_place;

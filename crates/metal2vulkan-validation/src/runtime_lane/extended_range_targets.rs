@@ -34,6 +34,9 @@
 //! their inputs, the stored texel and the model's.
 
 use super::resolves::{lane, quiet, Lane};
+use super::xr_codes::{
+    assert_announced, codes, metal_read, nearest_code, read_within, texel_within,
+};
 use super::{buffer_with, read_buffer, WAIT};
 use crate::air_library::AirLibrary;
 use crate::candidate::runtime_samples::{library, shape};
@@ -459,7 +462,11 @@ fn differences(got: &[u8], want: &[u8], size: usize, inputs: &[[f32; 4]]) -> Vec
         .collect()
 }
 
-/// Each format's draws of the probe's outputs, `float` and `half`, store Metal's texels.
+/// Each format's draws of the probe's outputs, `float` and `half`, store Metal's texels: each code
+/// within one of Metal's and the bits Metal does not read Metal's, a two-plane target's codes
+/// (through its kernel reads, each the code whose Metal read is nearest it) within one of Metal's
+/// and each read within its bound of Metal's read of that code, where the conversion is the
+/// device's (`PrecisionNote::DevicePackConversion`, announced).
 #[test]
 fn draws_store_metals_extended_range_texels() {
     let (messages, _cache, lane) = lane();
@@ -473,11 +480,8 @@ fn draws_store_metals_extended_range_texels() {
     let half_bytes: Vec<u8> = halves.iter().flat_map(|h| h.to_le_bytes()).collect();
     assert_eq!(digest(&floats), SOURCE_FLOAT, "the probe's float outputs");
     assert_eq!(digest(&half_bytes), SOURCE_HALF, "the probe's half outputs");
-    let (write, read) = (
-        kernel(&lane, "xr2p_write_half"),
-        kernel(&lane, "xr2p_read_float"),
-    );
-    let mut wrong = Vec::new();
+    let read = kernel(&lane, "xr2p_read_float");
+    let (mut wrong, mut moved) = (Vec::new(), 0);
     for f in &FORMATS {
         // The model's texels, of the `half` each output rounds to.
         let (mut plane, mut bytes) = (Vec::new(), Vec::new());
@@ -495,33 +499,61 @@ fn draws_store_metals_extended_range_texels() {
             let what = format!("{:?} from {}", f.pf, if half { "half" } else { "float" });
             let values = if half { &half_bytes } else { &floats };
             let target = draw(&lane, f, values, half);
+            let size = texel_size(f.form);
             if f.alpha.is_none() {
-                let size = texel_size(f.form);
                 let got = lane.read(&target, (0, 0), size as u64, BlitOption::None);
-                if digest(&got) != f.drawn {
-                    for line in differences(&got, &plane, size, &inputs) {
-                        wrong.push(format!("{what}: {line}"));
+                let mut differ = Vec::new();
+                for (i, (g, w)) in got.chunks(size).zip(plane.chunks(size)).enumerate() {
+                    match (g == w, texel_within(f.form, g, w)) {
+                        (true, _) => {}
+                        (false, true) => moved += 1,
+                        (false, false) => differ.push(i),
                     }
+                }
+                for &i in differ.iter().take(6) {
+                    let at = i * size..(i + 1) * size;
+                    let bits = inputs[i].map(f32::to_bits);
+                    wrong.push(format!(
+                        "{what}: texel {i} of {bits:08x?}: {:02x?}, Metal's {:02x?}",
+                        &got[at.clone()],
+                        &plane[at]
+                    ));
                 }
                 continue;
             }
-            // A two-plane target against a texture written from the `half` values.
-            let size = (WIDTH as u64, HEIGHT as u64);
-            let reference = texture(
-                &lane,
-                f.pf,
-                size,
-                TextureUsage::SHADER_READ | TextureUsage::SHADER_WRITE,
-            );
-            let input = buffer_with(&lane.device, &half_bytes).unwrap();
-            dispatch(&lane, &write, &reference, (&input, 0), size);
-            let (got, want) = (
-                reads(&lane, &read, &target, size),
-                reads(&lane, &read, &reference, size),
-            );
-            if got != want {
-                for line in differences(&got, &want, 16, &inputs) {
-                    wrong.push(format!("{what} (reads): {line}"));
+            // A two-plane target through its kernel reads: the codes they came from, and the reads.
+            let got = reads(&lane, &read, &target, (WIDTH as u64, HEIGHT as u64));
+            let mut differ = 0;
+            for (i, texel) in got.as_chunks::<16>().0.iter().enumerate() {
+                let (want, _) = codes(f.form, &plane[i * size..(i + 1) * size]);
+                let want = [want[0], want[1], want[2], u32::from(bytes[i])];
+                let lanes = texel
+                    .as_chunks::<4>()
+                    .0
+                    .iter()
+                    .map(|b| f32::from_le_bytes(*b));
+                let (mut same, mut held) = (true, true);
+                for (c, (v, code)) in lanes.zip(want).enumerate() {
+                    let alpha = c == 3;
+                    let read_code = nearest_code(f.form, v, alpha);
+                    same &= read_code == code && v == metal_read(f.form, code, alpha);
+                    held &=
+                        read_code.abs_diff(code) <= 1 && read_within(f.form, v, read_code, alpha);
+                }
+                match (same, held) {
+                    (true, _) => {}
+                    (false, true) => moved += 1,
+                    (false, false) => {
+                        differ += 1;
+                        if differ <= 6 {
+                            let bits = inputs[i].map(f32::to_bits);
+                            wrong.push(format!(
+                                "{what} (reads): texel {i} of {bits:08x?}: {:02x?}, Metal's codes \
+                                 {want:?}",
+                                &texel[..]
+                            ));
+                        }
+                    }
                 }
             }
         }
@@ -529,11 +561,13 @@ fn draws_store_metals_extended_range_texels() {
     for line in &wrong {
         println!("XR-TARGETS-DIFFERS {name}: {line}");
     }
+    println!("XR-TARGETS {name}: {moved} drawn texels within the device's conversion of Metal's");
     assert!(
         wrong.is_empty(),
         "{} texels differ from Metal's",
         wrong.len()
     );
+    assert_announced(&messages, moved, "the draws");
     quiet(lane, &messages);
 }
 
@@ -589,7 +623,7 @@ fn clears_store_metals_extended_range_texels() {
     let values = clear_values();
     assert_eq!(values.len(), 484, "the clear colors");
     let read = kernel(&lane, "xr2p_read_float");
-    let mut wrong = Vec::new();
+    let (mut wrong, mut moved) = (Vec::new(), 0);
     for f in &FORMATS {
         let size = texel_size(f.form) as u64;
         let n = values.len() as u64;
@@ -664,25 +698,130 @@ fn clears_store_metals_extended_range_texels() {
                 }
             }
         }
+        // Metal's reads of the clears' codes, which give Metal's digest; the device's are its
+        // conversion of the same codes.
+        let (codes, model) = cleared_reads(f.form, &values);
+        assert_eq!(
+            digest(&model),
+            f.cleared_reads,
+            "{:?}: the model's clears' reads",
+            f.pf
+        );
         let got = read_buffer(&floats, 0, 16 * n).unwrap();
-        if digest(&got) != f.cleared_reads {
+        let lanes = got
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .map(|b| f32::from_le_bytes(*b));
+        let mut differ = Vec::new();
+        for (i, (v, want)) in lanes.zip(model.as_chunks::<4>().0).enumerate() {
+            let (texel, c) = (i / 4, i % 4);
+            let held = match codes[texel][c] {
+                Some(code) => read_within(f.form, v, code, c == 3),
+                None => v == 1.0,
+            };
+            match (v.to_bits() == u32::from_le_bytes(*want), held) {
+                (true, _) => {}
+                (false, true) => moved += 1,
+                (false, false) => differ.push(i),
+            }
+        }
+        for &i in differ.iter().take(6) {
+            let want = f32::from_le_bytes(model.as_chunks::<4>().0[i]);
+            let got = f32::from_le_bytes(got.as_chunks::<4>().0[i]);
             wrong.push(format!(
-                "{:?} clears' reads: {}, Metal's {}",
+                "{:?} clear {} of {}: channel {} reads {got:e}, Metal's {want:e}",
                 f.pf,
-                digest(&got),
-                f.cleared_reads
+                i / 4,
+                values[i / 4],
+                i % 4
             ));
         }
     }
     for line in &wrong {
         println!("XR-TARGETS-DIFFERS {name}: {line}");
     }
+    println!("XR-TARGETS {name}: {moved} clears' reads within the device's conversion of Metal's");
     assert!(
         wrong.is_empty(),
         "{} clears differ from Metal's",
         wrong.len()
     );
+    assert_announced(&messages, moved, "the clears' reads");
     quiet(lane, &messages);
+}
+
+/// The codes of each clear of `values` into a texel of `form` (Metal's, `clear_texel`'s), and the
+/// bytes of Metal's `float4` reads of them: its read of each code ([`metal_read`]), `BGR10_XR`'s
+/// alpha 1.
+fn cleared_reads(form: ExtendedRange, values: &[f64]) -> (Vec<[Option<u32>; 4]>, Vec<u8>) {
+    let codes: Vec<[Option<u32>; 4]> = values
+        .iter()
+        .map(|&v| rgba_codes(form, form.clear_texel([v; 4], ClearRoute::ThroughHalf)))
+        .collect();
+    let reads = codes
+        .iter()
+        .flat_map(|texel| {
+            (0..4).map(|c| texel[c].map_or(1.0, |code| metal_read(form, code, c == 3)))
+        })
+        .flat_map(f32::to_le_bytes)
+        .collect();
+    (codes, reads)
+}
+
+/// The models give Metal's digests: each format's draws of the probe's `half` outputs, a two-plane
+/// format's alpha bytes, its clears' bytes and its `float` reads of them.
+#[test]
+fn the_models_give_metal_s_digests() {
+    let halves: Vec<u16> = outputs().iter().flat_map(|v| v.map(half_bits)).collect();
+    let values = clear_values();
+    for f in &FORMATS {
+        let (mut plane, mut bytes) = (Vec::new(), Vec::new());
+        for v in halves.chunks(4) {
+            let color = [0, 1, 2, 3].map(|c| f64::from(half_value(v[c])));
+            let (p, a) = metal_bytes(f.form, f.form.clear_texel(color, ClearRoute::ThroughHalf));
+            plane.extend(p);
+            bytes.extend(a);
+        }
+        assert_eq!(digest(&plane), f.drawn, "{:?}: the drawn texels", f.pf);
+        if let Some(alpha) = f.alpha {
+            assert_eq!(digest(&bytes), alpha, "{:?}: the drawn alpha bytes", f.pf);
+        }
+        if let Some(cleared) = f.cleared {
+            let model: Vec<u8> = values
+                .iter()
+                .flat_map(|&v| {
+                    metal_bytes(f.form, f.form.clear_texel([v; 4], ClearRoute::ThroughHalf)).0
+                })
+                .collect();
+            assert_eq!(digest(&model), cleared, "{:?}: the clears' bytes", f.pf);
+        }
+        let (_, reads) = cleared_reads(f.form, &values);
+        assert_eq!(
+            digest(&reads),
+            f.cleared_reads,
+            "{:?}: the clears' reads",
+            f.pf
+        );
+    }
+}
+
+/// The red, green, blue and alpha codes of the raw texel `raw` of `form` (`clear_texel`'s); none
+/// for `BGR10_XR`'s alpha, which reads 1.
+fn rgba_codes(form: ExtendedRange, raw: [u32; 4]) -> [Option<u32>; 4] {
+    match form {
+        ExtendedRange::Bgra10 { .. } => [2, 1, 0, 3].map(|f| Some(raw[f] >> 6)),
+        _ => {
+            let w = raw[0];
+            let alpha = matches!(form, ExtendedRange::Planes { .. }).then_some(raw[1]);
+            [
+                Some(w >> 20 & 0x3ff),
+                Some(w >> 10 & 0x3ff),
+                Some(w & 0x3ff),
+                alpha,
+            ]
+        }
+    }
 }
 
 /// Colors whose texels differ between Metal's two clear routes: ties between codes, which the

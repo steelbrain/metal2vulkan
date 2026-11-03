@@ -19,8 +19,10 @@
 //! of the 1,024 alpha values whose product lies just above a half).
 
 use super::degrade_notices::on_device;
+use super::xr_codes::{assert_announced, texel_within};
 use crate::air_library::AirLibrary;
 use metal2vulkan::error::DriverDeviation;
+use metal2vulkan::metal::format::ExtendedRange;
 use metal2vulkan::metal::{PixelFormat, TextureUsage};
 use metal2vulkan::pipeline::{ComputePipelineDescriptor, StageSource};
 use metal2vulkan_devtools::{engine_dir, llvm_assemble};
@@ -305,8 +307,14 @@ fn metal(
     panic!("no Metal bytes of {kernel} {color:?} {joined:?} {texture}")
 }
 
-/// The texel `got` and Metal's `want` part at, both as hex, or `None` where they are alike.
-fn unlike_metal(got: &[u8], want: &[u8], texel: usize) -> Option<String> {
+/// The first texel (of `texel` bytes) of `got` that does not hold as Metal's `want` by `held`, both
+/// as hex, or `None` where every texel holds.
+fn unlike_metal(
+    got: &[u8],
+    want: &[u8],
+    texel: usize,
+    held: impl Fn(&[u8], &[u8]) -> bool,
+) -> Option<String> {
     if got == want {
         return None;
     }
@@ -317,8 +325,7 @@ fn unlike_metal(got: &[u8], want: &[u8], texel: usize) -> Option<String> {
     let at = got
         .chunks(texel)
         .zip(want.chunks(texel))
-        .position(|(a, b)| a != b)
-        .expect("a differing texel");
+        .position(|(a, b)| !held(a, b))?;
     let (a, b) = (at * texel, (at + 1) * texel);
     Some(format!(
         "texel ({}, {}) is {}, Metal's {}",
@@ -356,10 +363,12 @@ fn the_inputs_and_the_outputs_are_the_harness_s() {
 
 /// Every output texture of both kernels, for every pairing of plane 0's and the joined texture's
 /// formats, holds Metal's bytes, the split's alpha plane where the device is measured to store
-/// Metal's codes (the module docs).
+/// Metal's codes (the module docs). The extended-range textures' codes are the device's conversion
+/// of the `half`s the kernels move (`PrecisionNote::DevicePackConversion`, announced): each within
+/// one of Metal's, the bits Metal does not read Metal's.
 #[test]
 fn two_extended_range_planes_join_and_split_as_metal_does() {
-    on_device(|device, _| {
+    on_device(|device, messages| {
         let measured = device
             .compile_device()
             .profile()
@@ -367,7 +376,7 @@ fn two_extended_range_planes_join_and_split_as_metal_does() {
         let queue = device.new_command_queue().unwrap();
         let join = state(device, "xr_planes_join");
         let split = state(device, "xr_planes_split");
-        let mut wrong = Vec::new();
+        let (mut wrong, mut moved) = (Vec::new(), 0);
         for color in [PixelFormat::BGR10XR, PixelFormat::BGR10XRSRGB] {
             for joined in [PixelFormat::BGRA10XR, PixelFormat::BGRA10XRSRGB] {
                 let plane = texture(device, color, &color_bytes());
@@ -388,7 +397,20 @@ fn two_extended_range_planes_join_and_split_as_metal_does() {
                         "color" => texel_bytes(color),
                         _ => texel_bytes(ALPHA),
                     };
-                    if let Some(unlike) = unlike_metal(&bytes, want, texel as usize) {
+                    let form = match what {
+                        "joined" => ExtendedRange::of(joined),
+                        "color" => ExtendedRange::of(color),
+                        _ => None,
+                    };
+                    let held = |g: &[u8], w: &[u8]| {
+                        g == w || form.is_some_and(|form| texel_within(form, g, w))
+                    };
+                    moved += bytes
+                        .chunks(texel as usize)
+                        .zip(want.chunks(texel as usize))
+                        .filter(|(g, w)| g != w && held(g, w))
+                        .count();
+                    if let Some(unlike) = unlike_metal(&bytes, want, texel as usize, held) {
                         let line = format!("{kernel} {color:?} {joined:?} {what}: {unlike}");
                         match what == "alpha" && !measured {
                             true => {
@@ -403,10 +425,15 @@ fn two_extended_range_planes_join_and_split_as_metal_does() {
         for line in &wrong {
             println!("XR-PLANES-DIFFERS {}: {line}", device.name());
         }
+        println!(
+            "XR-PLANES {}: {moved} texels within the device's conversion of Metal's",
+            device.name()
+        );
         assert!(
             wrong.is_empty(),
             "{} outputs differ from Metal",
             wrong.len()
         );
+        assert_announced(messages, moved, "the joined and split planes");
     });
 }

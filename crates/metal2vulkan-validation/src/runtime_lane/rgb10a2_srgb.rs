@@ -34,23 +34,33 @@
 //! The device's `isRGB10A2GammaSupported` answers as the texture's linear filter does. A
 //! difference is printed on an `RGB10A2-SRGB-DIFFERS` line.
 
-use super::degrade_notices::on_device;
+use super::degrade_notices::{counts, on_device};
 use super::extended_range_samples::state_of;
+use super::extended_range_targets::half_value;
 use super::resolves::{lane_with, quiet, Lane};
+use super::xr_codes::{
+    assert_announced, assert_counted, half_within, recorded, value_within, written_within,
+};
 use super::{buffer_with, read_buffer, WAIT};
 use crate::candidate::runtime_samples::{library, shape};
 use metal2vulkan::bind::SamplerDescriptor;
+use metal2vulkan::metal::format::ExtendedRange;
 use metal2vulkan::metal::{PixelFormat, PrimitiveType, SamplerMinMagFilter, TextureUsage};
-use metal2vulkan::pipeline::{ColorAttachmentDescriptor, RenderPipelineDescriptor, StageSource};
+use metal2vulkan::pipeline::{
+    ColorAttachmentDescriptor, PrecisionNote, RenderPipelineDescriptor, StageSource,
+};
 use metal2vulkan_runtime::{
-    BlitOption, Buffer, ClearColor, CommandBufferStatus, ComputePipelineState, Device, LoadAction,
-    Origin, PipelineOptions, PrivateFlag, Region, RenderPassDescriptor, RenderPipelineState,
-    ResourceOptions, SamplerState, Size, StoreAction, Texture, TextureDescriptor,
+    BlitOption, Buffer, ClearColor, CommandBufferStatus, ComputePipelineState, Degradation, Device,
+    LoadAction, Origin, PipelineOptions, PrivateFlag, Region, RenderPassDescriptor,
+    RenderPipelineState, ResourceOptions, SamplerState, Size, StoreAction, Texture,
+    TextureDescriptor,
 };
 use sha2::{Digest, Sha256};
 use std::fmt::Write as _;
 
 const PF: PixelFormat = PixelFormat::RGB10A2UnormSRGB;
+/// Its form.
+const FORM: ExtendedRange = ExtendedRange::Rgb10A2Srgb;
 
 /// Metal's digests: reads, writes, samples (nearest `float`, nearest `half`, linear `float`,
 /// linear `half`), clears (1 x 1, 64 x 64), stores (`float`, `half`) and loads.
@@ -260,8 +270,10 @@ fn xorshift(s: &mut u64) -> u64 {
 /// Reads, writes and samples of a 586 texture by a kernel are Metal's.
 #[test]
 fn kernels_read_write_and_sample_rgb10a2_srgb_as_metal_does() {
-    on_device(|device, _| {
+    on_device(|device, messages| {
         let mut wrong = Vec::new();
+        // The values within the device's conversion of Metal's, and the linear samples apart.
+        let (mut moved, mut filtered) = (0, 0);
         let shared = ResourceOptions::shared();
         // Reads.
         let fetch = state_of(device, "fpv_bfloat_textures", "fpv_bfloat_fetch");
@@ -276,18 +288,29 @@ fn kernels_read_write_and_sample_rgb10a2_srgb_as_metal_does() {
         let width = buffer_with(device, &1024u32.to_le_bytes()).unwrap();
         dispatch(device, &fetch, &t, (None, &[&out, &width]), (1024, 1));
         let got = words(&read_buffer(&out, 0, 1024 * 16).unwrap());
-        let mut text = String::new();
-        for (c, w) in got.as_chunks::<4>().0.iter().enumerate() {
-            writeln!(
-                text,
-                "read {c} {:08x} {:08x} {:08x} {:08x}",
-                w[0], w[1], w[2], w[3]
-            )
-            .unwrap();
-        }
-        covers(&text, got.len() / 4, "reads");
-        if digest(&text) != READS {
-            wrong.push(format!("reads {} (Metal's {READS})", digest(&text)));
+        let metal = words(&recorded("rgb10a2-srgb-reads", &["output", "codes"]));
+        let text = |words: &[u32]| {
+            let mut text = String::new();
+            for (c, w) in words.as_chunks::<4>().0.iter().enumerate() {
+                writeln!(
+                    text,
+                    "read {c} {:08x} {:08x} {:08x} {:08x}",
+                    w[0], w[1], w[2], w[3]
+                )
+                .unwrap();
+            }
+            text
+        };
+        assert_eq!(digest(&text(&metal)), READS, "the recorded reads");
+        covers(&text(&got), got.len() / 4, "reads");
+        let (near, past) = lanes_within(&got, &metal, |g, w, c| {
+            value_within(FORM, f32::from_bits(g), f32::from_bits(w), c == 3)
+        });
+        moved += near;
+        if past > 0 {
+            wrong.push(format!(
+                "reads: {past} lanes past the device's conversion of Metal's"
+            ));
         }
         // Writes.
         let write = state_of(device, "fpv_bfloat_textures", "fpv_bfloat_write");
@@ -309,13 +332,23 @@ fn kernels_read_write_and_sample_rgb10a2_srgb_as_metal_does() {
             (4096, height),
         );
         let got = words_of(&t, (4096, height));
-        let mut text = String::new();
-        for (k, w) in got.iter().enumerate() {
-            writeln!(text, "write {k} {w:08x}").unwrap();
-        }
-        covers(&text, got.len(), "writes");
-        if digest(&text) != WRITES {
-            wrong.push(format!("writes {} (Metal's {WRITES})", digest(&text)));
+        let metal = words(&recorded("rgb10a2-srgb-writes", &["output", "words"]));
+        let text = |words: &[u32]| {
+            let mut text = String::new();
+            for (k, w) in words.iter().enumerate() {
+                writeln!(text, "write {k} {w:08x}").unwrap();
+            }
+            text
+        };
+        assert_eq!(digest(&text(&metal)), WRITES, "the recorded writes");
+        covers(&text(&got), got.len(), "writes");
+        let written = values(&WRITE_SPECIALS, got.len());
+        let (near, past, first) = words_within(&got, &metal, &written);
+        moved += near;
+        if past > 0 {
+            wrong.push(format!(
+                "writes: {past} words past the device's encode of Metal's: {first:?}"
+            ));
         }
         // Samples.
         let mut s = 0x243f_6a88_85a3_08d3u64;
@@ -337,6 +370,8 @@ fn kernels_read_write_and_sample_rgb10a2_srgb_as_metal_does() {
             .flat_map(f32::to_le_bytes)
             .collect();
         let coords = buffer_with(device, &coords).unwrap();
+        // Metal's nearest `float` samples, which its `half` ones narrow.
+        let mut nearest_floats = Vec::new();
         for (linear, filter) in [SamplerMinMagFilter::Nearest, SamplerMinMagFilter::Linear]
             .into_iter()
             .enumerate()
@@ -360,38 +395,90 @@ fn kernels_read_write_and_sample_rgb10a2_srgb_as_metal_does() {
                     (4096, 1),
                 );
                 let bytes = read_buffer(&out, 0, 4096 * size as u64).unwrap();
-                let mut text = String::new();
-                for (&(n, m), v) in positions.iter().zip(bytes.chunks_exact(size)) {
-                    match half {
-                        1 => {
-                            let h = |c: usize| u16::from_le_bytes([v[2 * c], v[2 * c + 1]]);
-                            writeln!(
-                                text,
-                                "s {linear} h {n} {m} {:04x} {:04x} {:04x} {:04x}",
-                                h(0),
-                                h(1),
-                                h(2),
-                                h(3)
-                            )
+                let case = format!(
+                    "rgb10a2-srgb-samples-{}-{}",
+                    ["nearest", "linear"][linear],
+                    ["f", "h"][half]
+                );
+                let metal = recorded(&case, &["output", "samples"]);
+                let text = |bytes: &[u8]| {
+                    let mut text = String::new();
+                    for (&(n, m), v) in positions.iter().zip(bytes.chunks_exact(size)) {
+                        match half {
+                            1 => {
+                                let h = |c: usize| u16::from_le_bytes([v[2 * c], v[2 * c + 1]]);
+                                writeln!(
+                                    text,
+                                    "s {linear} h {n} {m} {:04x} {:04x} {:04x} {:04x}",
+                                    h(0),
+                                    h(1),
+                                    h(2),
+                                    h(3)
+                                )
+                            }
+                            _ => {
+                                let w = words(v);
+                                writeln!(
+                                    text,
+                                    "s {linear} f {n} {m} {:08x} {:08x} {:08x} {:08x}",
+                                    w[0], w[1], w[2], w[3]
+                                )
+                            }
                         }
-                        _ => {
-                            let w = words(v);
-                            writeln!(
-                                text,
-                                "s {linear} f {n} {m} {:08x} {:08x} {:08x} {:08x}",
-                                w[0], w[1], w[2], w[3]
-                            )
-                        }
+                        .unwrap();
                     }
-                    .unwrap();
+                    text
+                };
+                assert_eq!(
+                    digest(&text(&metal)),
+                    SAMPLES[linear][half],
+                    "{case}: recorded"
+                );
+                covers(&text(&bytes), bytes.len() / size, "samples");
+                // A nearest sample is a texel's read; a linear one filters the device's reads by
+                // its own arithmetic (`bicubic-filter-arithmetic`, whose class is unbounded), so it
+                // runs and is counted, its values the conformance suite's `rgb10a2-srgb-samples-*`
+                // cases'.
+                let lanes = |b: &[u8]| -> Vec<f32> {
+                    match half {
+                        1 => b
+                            .as_chunks::<2>()
+                            .0
+                            .iter()
+                            .map(|h| half_value(u16::from_le_bytes(*h)))
+                            .collect(),
+                        _ => words(b).into_iter().map(f32::from_bits).collect(),
+                    }
+                };
+                let (got, want) = (lanes(&bytes), lanes(&metal));
+                if linear == 1 {
+                    filtered += got
+                        .iter()
+                        .zip(&want)
+                        .filter(|(g, w)| g.to_bits() != w.to_bits())
+                        .count();
+                    continue;
                 }
-                covers(&text, bytes.len() / size, "samples");
-                let want = SAMPLES[linear][half];
-                if digest(&text) != want {
+                if half == 0 {
+                    nearest_floats = want.clone();
+                }
+                let mut past = 0;
+                for (i, (g, w)) in got.iter().zip(&want).enumerate() {
+                    let alpha = i % 4 == 3;
+                    let held = match half {
+                        1 => half_within(FORM, *g, nearest_floats[i], alpha),
+                        _ => value_within(FORM, *g, *w, alpha),
+                    };
+                    match (g.to_bits() == w.to_bits(), held) {
+                        (true, _) => {}
+                        (false, true) => moved += 1,
+                        (false, false) => past += 1,
+                    }
+                }
+                if past > 0 {
                     wrong.push(format!(
-                        "samples linear {linear} half {half}: {} (Metal's {want}); first: {}",
-                        digest(&text),
-                        text.lines().next().unwrap_or_default()
+                        "samples nearest half {half}: {past} lanes past the device's conversion \
+                         of Metal's"
                     ));
                 }
             }
@@ -399,10 +486,22 @@ fn kernels_read_write_and_sample_rgb10a2_srgb_as_metal_does() {
         for line in &wrong {
             println!("RGB10A2-SRGB-DIFFERS {}: {line}", device.name());
         }
+        println!(
+            "RGB10A2-SRGB {}: {moved} values within the device's conversion of Metal's, {filtered} \
+             linear sample lanes apart",
+            device.name()
+        );
         assert!(
             wrong.is_empty(),
             "{} answers differ from Metal's",
             wrong.len()
+        );
+        let announced = counts(&messages.take_notices());
+        assert_counted(&announced, moved, "the kernels' reads, writes and samples");
+        let note = Degradation::from_precision_note(PrecisionNote::BicubicFilterArithmetic);
+        assert!(
+            filtered == 0 || announced.contains_key(&note),
+            "{filtered} linear sample lanes apart, bicubic-filter-arithmetic unannounced"
         );
         let gamma = device
             .private_properties()
@@ -465,6 +564,8 @@ fn blit_words(lane: &Lane, target: &Texture, (width, height): (u64, u64)) -> Vec
 fn passes_clear_store_and_load_rgb10a2_srgb_as_metal_does() {
     let (messages, _cache, lane) = lane_with(|_| {});
     let mut wrong = Vec::new();
+    // The stored words within a code of Metal's, the device's encode.
+    let mut moved = 0;
     // Clears.
     let colors: Vec<[f64; 4]> = (0..2049 + RENDER_SPECIALS.len())
         .map(|k| match k {
@@ -585,16 +686,29 @@ fn passes_clear_store_and_load_rgb10a2_srgb_as_metal_does() {
         .unwrap_or_else(|e| panic!("{fragment}: the pass: {e}"));
         let got = blit_words(&lane, &target, (4096, height));
         let kind = if half == 1 { "half" } else { "float" };
-        let mut text = String::new();
-        for (k, w) in got.iter().enumerate() {
-            writeln!(text, "store {kind} {k} {w:08x}").unwrap();
-        }
-        covers(&text, got.len(), "stores");
-        if digest(&text) != STORES[half] {
+        let case = format!("rgb10a2-srgb-stores-{}", ["f", "h"][half]);
+        let metal = words(&recorded(&case, &["output", "words"]));
+        let text = |words: &[u32]| {
+            let mut text = String::new();
+            for (k, w) in words.iter().enumerate() {
+                writeln!(text, "store {kind} {k} {w:08x}").unwrap();
+            }
+            text
+        };
+        assert_eq!(digest(&text(&metal)), STORES[half], "{case}: recorded");
+        covers(&text(&got), got.len(), "stores");
+        let stored: Vec<[f32; 4]> = match half {
+            1 => all
+                .iter()
+                .map(|v| v.map(|c| half_value(half_bits(c))))
+                .collect(),
+            _ => all.clone(),
+        };
+        let (near, past, first) = words_within(&got, &metal, &stored);
+        moved += near;
+        if past > 0 {
             wrong.push(format!(
-                "stores {kind}: {} (Metal's {})",
-                digest(&text),
-                STORES[half]
+                "stores {kind}: {past} words past the device's encode of Metal's: {first:?}"
             ));
         }
     }
@@ -664,12 +778,57 @@ fn passes_clear_store_and_load_rgb10a2_srgb_as_metal_does() {
     for line in &wrong {
         println!("RGB10A2-SRGB-DIFFERS {}: {line}", lane.device.name());
     }
+    println!(
+        "RGB10A2-SRGB {}: {moved} stored words within a code of Metal's",
+        lane.device.name()
+    );
     assert!(
         wrong.is_empty(),
         "{} answers differ from Metal's",
         wrong.len()
     );
+    assert_announced(&messages, moved, "the stores");
     quiet(lane, &messages);
+}
+
+/// The words of `got`, writes of `values`, that are not `want`'s but hold within the device's
+/// encode's bound of each ([`written_within`]), and those past it, with the first few of those.
+fn words_within(got: &[u32], want: &[u32], values: &[[f32; 4]]) -> (usize, usize, Vec<String>) {
+    let (mut near, mut past, mut first) = (0, 0, Vec::new());
+    for (k, ((g, w), v)) in got.iter().zip(want).zip(values).enumerate() {
+        match (
+            g == w,
+            written_within(FORM, &g.to_le_bytes(), &w.to_le_bytes(), v),
+        ) {
+            (true, _) => {}
+            (false, true) => near += 1,
+            (false, false) => {
+                past += 1;
+                if first.len() < 4 {
+                    first.push(format!("{k} of {v:?}: {g:08x}, Metal's {w:08x}"));
+                }
+            }
+        }
+    }
+    (near, past, first)
+}
+
+/// The lanes (`float` bits, four a texel) of `got` that are not `want`'s but hold by `held` (the
+/// device's, Metal's and the lane's channel), and those that do not.
+fn lanes_within(
+    got: &[u32],
+    want: &[u32],
+    held: impl Fn(u32, u32, usize) -> bool,
+) -> (usize, usize) {
+    let (mut near, mut past) = (0, 0);
+    for (i, (&g, &w)) in got.iter().zip(want).enumerate() {
+        match (g == w, held(g, w, i % 4)) {
+            (true, _) => {}
+            (false, true) => near += 1,
+            (false, false) => past += 1,
+        }
+    }
+    (near, past)
 }
 
 /// The lane's `half` conversion is MSL's round to nearest even.

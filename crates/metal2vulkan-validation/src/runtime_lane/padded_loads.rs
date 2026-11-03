@@ -29,14 +29,18 @@
 //! no vertices and its scissored draw have it too, as the probes' did.)
 
 use super::degrade_notices::counts;
-use super::extended_range_targets::digest;
+use super::extended_range_targets::{digest, half_bits, half_value};
 use super::resolves::{lane_with, quiet, Lane};
+use super::xr_codes::texel_within;
 use super::{buffer_with, read_buffer};
 use crate::candidate::runtime_samples::{library, shape};
+use metal2vulkan::metal::format::ExtendedRange;
 use metal2vulkan::metal::{
     ColorWriteMask, IndirectCommandType, PixelFormat, PrimitiveType, TextureType, TextureUsage,
 };
-use metal2vulkan::pipeline::{ColorAttachmentDescriptor, RenderPipelineDescriptor, StageSource};
+use metal2vulkan::pipeline::{
+    ColorAttachmentDescriptor, PrecisionNote, RenderPipelineDescriptor, StageSource,
+};
 use metal2vulkan_runtime::{
     Buffer, Degradation, IndirectCommandBufferDescriptor, LoadAction, PipelineOptions,
     RenderPassDescriptor, ResourceOptions, ScissorRect, StoreAction, TextureDescriptor,
@@ -471,6 +475,57 @@ fn the_inputs_are_the_probes() {
     assert_eq!(sha(&values()), VALUES_SHA, "the values");
 }
 
+/// The words Metal's pass stores where its draw writes every word of `pf`: each channel's drawn
+/// value ([`values`]) rounded to `half` toward zero, as Metal's store rounds a `float` output,
+/// then stored as a kernel write stores it (`ExtendedRange::write_code`), its low six bits zero.
+fn drawn_words(pf: PixelFormat) -> Vec<u8> {
+    let form = ExtendedRange::of(pf).expect("a padded format");
+    let channels = match pf {
+        PixelFormat::R10UnormX6 | PixelFormat::R10UnormX6SRGB => 1,
+        _ => 2,
+    };
+    // The `half` of `x` (in `[0, 1]`) toward zero.
+    let toward_zero = |x: f32| {
+        let h = half_bits(x);
+        match half_value(h) > x {
+            true => half_value(h - 1),
+            false => half_value(h),
+        }
+    };
+    values()
+        .as_chunks::<16>()
+        .0
+        .iter()
+        .flat_map(|texel| {
+            (0..channels).map(move |c| {
+                let v = f32::from_le_bytes(texel[4 * c..4 * c + 4].try_into().unwrap());
+                let code = form.write_code(toward_zero(v), false).expect("a code");
+                (code << 6) as u16
+            })
+        })
+        .flat_map(u16::to_le_bytes)
+        .collect()
+}
+
+/// [`drawn_words`] gives Metal's digest of every case whose draw writes every word.
+#[test]
+fn the_drawn_model_gives_metal_s_digests() {
+    let mut checked = 0;
+    for (pf, bits, pass, metal) in METAL {
+        let channels = match pf {
+            PixelFormat::R10UnormX6 | PixelFormat::R10UnormX6SRGB => 1,
+            _ => 2,
+        };
+        let every = (0..WIDTH * HEIGHT)
+            .all(|t| (0..channels).all(|c| writes((bits, pass), (t % WIDTH, t / WIDTH), c)));
+        if every {
+            checked += 1;
+            assert_eq!(digest(&drawn_words(pf)), metal, "{pf:?} {bits} {pass:?}");
+        }
+    }
+    assert!(checked > 0, "no case draws every word");
+}
+
 /// The probe's `float4` values, one a texel.
 fn values() -> Vec<u8> {
     (0..WIDTH * HEIGHT)
@@ -658,8 +713,13 @@ fn a_loading_pass_that_draws_keeps_the_padded_words_it_does_not_write() {
         lane_with(|options| options.announce_each = [kept].into_iter().collect());
     let mut differ = Vec::new();
     let (mut whole, mut kept_words) = (0, 0);
+    // The drawn words within a code of Metal's, the device's encode.
+    let mut near = 0;
+    // Whether the runtime announced the device's conversion (`device-pack-conversion`), whose
+    // announcement each case's notices take.
+    let mut packs = false;
     for case in METAL {
-        let (pf, bits, pass, metal) = case;
+        let (pf, bits, pass, _) = case;
         let channels = match pf {
             PixelFormat::R10UnormX6 | PixelFormat::R10UnormX6SRGB => 1,
             _ => 2,
@@ -687,10 +747,25 @@ fn a_loading_pass_that_draws_keeps_the_padded_words_it_does_not_write() {
             differ.push(case);
         }
         if every {
+            // Each word the device's encode of the drawn value: its code within one of Metal's
+            // (the model's, which gives Metal's digest), its low six bits Metal's.
             whole += 1;
-            let got = digest(&got);
-            if got != metal {
-                eprintln!("PADDED-LOADS-DIFFERS {pf:?} mask {bits} {pass:?}: {got}");
+            let form = ExtendedRange::of(pf).expect("a padded format");
+            let model = drawn_words(pf);
+            let mut past = 0;
+            for (g, w) in got.chunks(2).zip(model.chunks(2)) {
+                match (g == w, texel_within(form, g, w)) {
+                    (true, _) => {}
+                    (false, true) => near += 1,
+                    (false, false) => past += 1,
+                }
+            }
+            if past > 0 {
+                eprintln!(
+                    "PADDED-LOADS-DIFFERS {pf:?} mask {bits} {pass:?}: {past} words past a code of \
+                     Metal's, {}",
+                    digest(&got)
+                );
                 differ.push(case);
             }
         }
@@ -700,12 +775,18 @@ fn a_loading_pass_that_draws_keeps_the_padded_words_it_does_not_write() {
             pass != Pass::Undrawn,
             "{pf:?} {bits} {pass:?}: {announced:?}"
         );
+        let pack = Degradation::from_precision_note(PrecisionNote::DevicePackConversion);
+        packs |= announced.contains_key(&pack);
     }
     eprintln!(
-        "PADDED-LOADS {} cases, {} differ: {whole} drawn whole against Metal's, {kept_words} \
-         words kept",
+        "PADDED-LOADS {} cases, {} differ: {whole} drawn whole against Metal's ({near} words \
+         within a code), {kept_words} words kept",
         METAL.len(),
         differ.len()
+    );
+    assert!(
+        near == 0 || packs,
+        "{near} drawn words within the device's conversion, device-pack-conversion unannounced"
     );
     assert!(whole > 0 && kept_words > 0, "no case of either kind ran");
     assert!(
