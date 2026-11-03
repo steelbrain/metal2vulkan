@@ -411,6 +411,8 @@ pub trait Gpu: Sync {
     fn wait_for_fence(&self, encoder: &mut Self::ComputeEncoder, fence: &Self::Fence);
     /// `useResources:count:usage:` of `buffers`, `MTLResourceUsageRead`.
     fn use_buffers(&self, encoder: &mut Self::ComputeEncoder, buffers: &[&Self::Buffer]);
+    /// `useResources:count:usage:` of `textures`, `MTLResourceUsageRead`.
+    fn use_textures(&self, encoder: &mut Self::ComputeEncoder, textures: &[&Self::Texture]);
     /// `executeCommandsInBuffer:withRange:` of commands `0..count`.
     fn execute_commands(
         &self,

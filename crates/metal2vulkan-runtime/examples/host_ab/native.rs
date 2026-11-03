@@ -1075,6 +1075,18 @@ impl Gpu for Native {
         unsafe { encoder.useResources_count_usage(first, resources.len(), MTLResourceUsage::Read) };
     }
 
+    fn use_textures(&self, encoder: &mut Self::ComputeEncoder, textures: &[&Self::Texture]) {
+        let resources: Vec<NonNull<ProtocolObject<dyn MTLResource>>> = textures
+            .iter()
+            .map(|texture| NonNull::from(ProtocolObject::from_ref(&***texture)))
+            .collect();
+        let Some(first) = NonNull::new(resources.as_ptr().cast_mut()) else {
+            return;
+        };
+        // SAFETY: `first` points at `resources.len()` live resources, held by `textures`.
+        unsafe { encoder.useResources_count_usage(first, resources.len(), MTLResourceUsage::Read) };
+    }
+
     fn execute_commands(
         &self,
         encoder: &mut Self::ComputeEncoder,

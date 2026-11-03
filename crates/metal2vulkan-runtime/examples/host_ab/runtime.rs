@@ -1007,6 +1007,16 @@ impl Gpu for Runtime {
             .expect("use_resources");
     }
 
+    fn use_textures(&self, encoder: &mut rt::ComputeCommandEncoder, textures: &[&rt::Texture]) {
+        let resources: Vec<_> = textures
+            .iter()
+            .map(|texture| texture.as_resource())
+            .collect();
+        encoder
+            .use_resources(&resources, ResourceUsage::READ)
+            .expect("use_resources");
+    }
+
     fn execute_commands(
         &self,
         encoder: &mut rt::ComputeCommandEncoder,

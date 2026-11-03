@@ -620,21 +620,25 @@ const RESIDENT: usize = 4096;
 /// and buffers are set, one `useResources:count:usage:` (reading) of none, 1, 256 or 4096
 /// buffers, or of one buffer 4096 times (`same_4096`), then `draws` single-threadgroup dispatches
 /// of the tiny kernel; `moving_0`, `_16`, `_256` and `_4096` as many after none, 16, 256 or 4096,
-/// each dispatch after the output buffer's offset moved. Per variant: the `useResources` call, the
-/// encoding thread's wall time per dispatch, the process's CPU time per dispatch, and the command
-/// buffer's whole time.
+/// each dispatch after the output buffer's offset moved; `textures_256` and `_4096` as many after
+/// 256 or 4096 4-by-4 textures made resident. Per variant: the `useResources` call, the encoding
+/// thread's wall time per dispatch, the process's CPU time per dispatch, and the command buffer's
+/// whole time.
 fn encode_resident<G: Gpu>(g: &G, s: &Scene<G>, sizes: &Sizes, runs: &dyn Fn(String) -> bool) {
-    // (name, resident buffers, one buffer `count` times, the output's offset moving).
+    // (name, resident buffers or textures, one buffer `count` times, the output's offset moving,
+    // textures).
     let variants = [
-        ("0", 0, false, false),
-        ("1", 1, false, false),
-        ("256", 256, false, false),
-        ("4096", 4096, false, false),
-        ("same_4096", 4096, true, false),
-        ("moving_0", 0, false, true),
-        ("moving_16", 16, false, true),
-        ("moving_256", 256, false, true),
-        ("moving_4096", 4096, false, true),
+        ("0", 0, false, false, false),
+        ("1", 1, false, false, false),
+        ("256", 256, false, false, false),
+        ("4096", 4096, false, false, false),
+        ("same_4096", 4096, true, false, false),
+        ("moving_0", 0, false, true, false),
+        ("moving_16", 16, false, true, false),
+        ("moving_256", 256, false, true, false),
+        ("moving_4096", 4096, false, true, false),
+        ("textures_256", 256, false, false, true),
+        ("textures_4096", 4096, false, false, true),
     ];
     let wanted: Vec<_> = (variants.iter())
         .filter(|(name, ..)| runs(format!("dispatch_resident_{name}")))
@@ -644,10 +648,21 @@ fn encode_resident<G: Gpu>(g: &G, s: &Scene<G>, sizes: &Sizes, runs: &dyn Fn(Str
     }
     let n = sizes.draws;
     let resident: Vec<G::Buffer> = (0..RESIDENT).map(|_| g.buffer(256)).collect();
-    for &&(name, count, same, moving) in &wanted {
-        let list: Vec<&G::Buffer> = match same {
-            true => vec![&resident[0]; count],
-            false => resident[..count].iter().collect(),
+    let textures: Vec<G::Texture> = match wanted.iter().any(|(.., textures)| *textures) {
+        true => (0..RESIDENT)
+            .map(|_| g.texture(Format::Rgba8, 4, 4, false))
+            .collect(),
+        false => Vec::new(),
+    };
+    for &&(name, count, same, moving, of_textures) in &wanted {
+        let list: Vec<&G::Buffer> = match (same, of_textures) {
+            (_, true) => Vec::new(),
+            (true, false) => vec![&resident[0]; count],
+            (false, false) => resident[..count].iter().collect(),
+        };
+        let texture_list: Vec<&G::Texture> = match of_textures {
+            true => textures[..count].iter().collect(),
+            false => Vec::new(),
         };
         let (mut using, mut wall, mut cpu, mut total) = (vec![], vec![], vec![], vec![]);
         let mut counts = None;
@@ -664,7 +679,10 @@ fn encode_resident<G: Gpu>(g: &G, s: &Scene<G>, sizes: &Sizes, runs: &dyn Fn(Str
                 g.set_buffer(&mut encoder, &s.tiny_out, 0, 0);
                 g.set_buffer(&mut encoder, &s.tiny_values, 0, 1);
                 let t1 = Instant::now();
-                g.use_buffers(&mut encoder, &list);
+                match of_textures {
+                    true => g.use_textures(&mut encoder, &texture_list),
+                    false => g.use_buffers(&mut encoder, &list),
+                }
                 let t2 = Instant::now();
                 for dispatch in 0..n {
                     if moving {
