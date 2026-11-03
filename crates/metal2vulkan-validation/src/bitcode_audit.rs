@@ -308,6 +308,16 @@ pub fn text_fingerprint(ll: &str) -> Result<Fingerprint, String> {
             if dropped_family(&callee).is_some() {
                 continue;
             }
+            // Decode drops the call of MSL's empty inline assembly too: `asm sideeffect "", ""`
+            // at the call type `void ()`, with no flag but `sideeffect` (`llvm-dis` prints a flag
+            // or a vararg type before the template, and an operand inside the parentheses).
+            let rest = body.split_once("call ").map_or("", |(_, rest)| rest);
+            if rest
+                .strip_prefix("void asm sideeffect \"\", \"\"()")
+                .is_some_and(|tail| tail.is_empty() || tail.starts_with([' ', ',']))
+            {
+                continue;
+            }
             *out.opcodes.entry(op.to_string()).or_default() += 1;
             out.call(&callee);
         } else {
@@ -755,6 +765,26 @@ declare i32 @air.x(i32)
         let globals: Vec<_> = f.globals.iter().map(String::as_str).collect();
         assert_eq!(globals, vec!["g", "quoted\"name"]);
         assert!(text_fingerprint("define void @k() {\n  ret void\n").is_err());
+    }
+
+    /// The call of MSL's empty inline assembly, which decode drops, is not counted; any other
+    /// inline assembly stays an indirect call.
+    #[test]
+    fn the_text_scanner_skips_the_empty_inline_assembly_decode_drops() {
+        let text = r#"define void @k(i32 %0) {
+  tail call void asm sideeffect "", ""() #3, !srcloc !34
+  call void asm sideeffect "", ""(), !srcloc !35
+  call void asm sideeffect alignstack "", ""()
+  call void asm sideeffect "nop", ""()
+  call void asm sideeffect "", "r"(i32 %0)
+  call void asm "", ""()
+  ret void
+}
+"#;
+        let f = text_fingerprint(text).unwrap();
+        assert_eq!(f.opcodes.get("call"), Some(&4));
+        let callees: Vec<_> = f.callees.iter().map(|(k, v)| (k.as_str(), *v)).collect();
+        assert_eq!(callees, vec![("<indirect>", 4)]);
     }
 
     #[test]
