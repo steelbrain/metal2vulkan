@@ -33,6 +33,10 @@
 //!   and counts a sampler set of its own;
 //! - a host step drawing a state made after the commit, whose fragment samples through its argument
 //!   buffer, binds the neutrals the state's creation made, and makes none.
+//! - a frame whose host step waits for an event that a command buffer of another queue, committed
+//!   after it, signals (ahead of the frame on its queue, or at its start) ends, and so does one
+//!   whose signaller first reads what the frame writes (the buffer its draws write, or a texture
+//!   over the `Private` buffer its color target lies over), reading it as it stood before.
 
 use super::degrade_notices::{
     assert_made_once, forced, made_render_kinds, on_device, on_device_with, shared_in_system_memory,
@@ -911,6 +915,221 @@ fn commands_a_kernel_writes_are_drawn_by_a_host_step() {
         assert!(looked_up[2] <= looked_up[1], "{looked_up:?}");
         assert_made_once(messages, &HOST_STEPS, &forced_with(device, &[]));
     });
+}
+
+/// How long a command buffer of [`a_frame_waiting_for_a_later_signal_ends`] may take before the
+/// test takes it as stuck.
+const CYCLE_BOUND: std::time::Duration = std::time::Duration::from_secs(20);
+
+/// What the signaller of [`a_frame_waiting_for_a_later_signal_ends`] reads before it signals.
+#[derive(Clone, Copy, Debug)]
+enum Touches {
+    /// Nothing.
+    Nothing,
+    /// The buffer the frame's draws write.
+    Written,
+    /// A texture over the one `Private` buffer the frame's color target lies over too, as a host's
+    /// cache of surfaces places a compositor's texture and a page's canvas.
+    SharedBuffer,
+}
+
+/// The width of [`Touches::SharedBuffer`]'s textures, `RGBA8Unorm` in rows of 256 bytes, and their
+/// height.
+const SURFACE_WIDTH: u64 = 64;
+const SURFACE_HEIGHT: u64 = 4;
+
+/// A frame whose commands a kernel may write, so a host step records them, waits for an event that
+/// a command buffer of another queue committed after it signals: in a command buffer ahead of the
+/// frame on its own queue, and then at the frame's start. Metal orders command buffers of two
+/// queues through events alone, so it schedules the signaller first and both complete; where the
+/// signaller first reads what the frame writes (`touches`), it reads it as it stood before the
+/// frame, which is scheduled after the signal. Each command buffer ends within [`CYCLE_BOUND`],
+/// with no context closed; one stuck past it is released by the CPU's signal of the event, and the
+/// test fails.
+fn a_frame_waiting_for_a_later_signal_ends(device: &Device, touches: Touches) {
+    let shared = matches!(touches, Touches::SharedBuffer);
+    let own = Setup::new(device);
+    // A frame into a color target draws with the template's state of that color.
+    let setup = match shared {
+        true => Setup {
+            state: colored_template_state(device, PixelFormat::RGBA8Unorm),
+            ..own
+        },
+        false => own,
+    };
+    let writer = indirect_host_steps::state(device, "icb_render_replay_encode_draw_only", false);
+    let commands = 8;
+    let icb = icb(device, &descriptor(), commands);
+    for index in 0..commands {
+        setup.command(&icb, index, 0);
+    }
+    let arguments = buffer_with(device, &icb.gpu_resource_id().0.to_le_bytes()).unwrap();
+    let (frames, others) = (
+        device.new_command_queue().unwrap(),
+        device.new_command_queue().unwrap(),
+    );
+    let row = SURFACE_WIDTH * 4;
+    // The `Private` buffer, the frame's color target over it and the compositor's texture.
+    let surfaces = shared.then(|| {
+        let under = device
+            .new_buffer(row * SURFACE_HEIGHT, ResourceOptions::private())
+            .unwrap();
+        let mut surface = TextureDescriptor::texture_2d(
+            PixelFormat::RGBA8Unorm,
+            SURFACE_WIDTH,
+            SURFACE_HEIGHT,
+            false,
+        );
+        surface.usage = TextureUsage::RENDER_TARGET | TextureUsage::SHADER_READ;
+        surface.resource_options = ResourceOptions::private();
+        let target = under.new_texture(&surface, 0, row).unwrap();
+        let compositor = under.new_texture(&surface, 0, row).unwrap();
+        (under, target, compositor)
+    });
+    let mut frame_pass = pass();
+    if let Some((_, target, _)) = &surfaces {
+        frame_pass.render_target_width = SURFACE_WIDTH;
+        frame_pass.render_target_height = SURFACE_HEIGHT;
+        let color = &mut frame_pass.color_attachments[0];
+        color.texture = Some(target.clone());
+        color.load_action = LoadAction::Clear;
+        color.clear_color = metal2vulkan_runtime::ClearColor::new(1.0, 1.0, 1.0, 1.0);
+        color.store_action = StoreAction::Store;
+    }
+    let length = match touches {
+        Touches::SharedBuffer => row * SURFACE_HEIGHT,
+        Touches::Nothing | Touches::Written => setup.out.length(),
+    };
+    for gate in [true, false] {
+        pipelines_settled(device);
+        let out = setup.out.contents().expect("a Shared buffer");
+        // SAFETY: `out` holds its length's bytes, and no command buffer uses it now.
+        unsafe { std::ptr::write_bytes(out.as_ptr(), 0, setup.out.length() as usize) };
+        if let Some((under, ..)) = &surfaces {
+            let zeroed = frames.command_buffer().unwrap();
+            let mut blit = zeroed.blit_command_encoder().unwrap();
+            blit.fill_buffer(under, 0..under.length(), 0).unwrap();
+            blit.end_encoding().unwrap();
+            complete(&zeroed);
+        }
+        let event = device.new_shared_event().unwrap();
+        let ahead = gate.then(|| {
+            let ahead = frames.command_buffer().unwrap();
+            ahead.encode_wait_for_event((&event).into(), 1).unwrap();
+            ahead.commit().unwrap();
+            ahead
+        });
+        let frame = frames.command_buffer().unwrap();
+        if !gate {
+            frame.encode_wait_for_event((&event).into(), 1).unwrap();
+        }
+        let mut writing = frame.compute_command_encoder().unwrap();
+        writing.set_compute_pipeline_state(&writer).unwrap();
+        writing.set_buffer(Some(&arguments), 0, 0).unwrap();
+        writing.set_buffer(Some(&setup.params), 0, 1).unwrap();
+        writing.set_buffer(Some(&setup.out), 0, 2).unwrap();
+        writing
+            .use_resource(icb.as_resource(), ResourceUsage::WRITE)
+            .unwrap();
+        let threads = Size::new(commands, 1, 1);
+        writing.dispatch_threads(threads, threads).unwrap();
+        writing.end_encoding().unwrap();
+        let mut encoder = frame.render_command_encoder(&frame_pass).unwrap();
+        setup.resident(&mut encoder);
+        encoder
+            .execute_commands_in_buffer(&icb, 0..commands)
+            .unwrap();
+        encoder.end_encoding().unwrap();
+        frame.commit().unwrap();
+        let read = buffer_with(device, &vec![0xff; length as usize]).unwrap();
+        let signaller = others.command_buffer().unwrap();
+        let mut blit = signaller.blit_command_encoder().unwrap();
+        match (touches, &surfaces) {
+            (Touches::Written, _) => blit
+                .copy_from_buffer_to_buffer(&setup.out, 0, &read, 0, length)
+                .unwrap(),
+            (Touches::SharedBuffer, Some((_, _, compositor))) => blit
+                .copy_from_texture_to_buffer(
+                    compositor,
+                    0,
+                    0,
+                    metal2vulkan_runtime::Origin::new(0, 0, 0),
+                    Size::new(SURFACE_WIDTH, SURFACE_HEIGHT, 1),
+                    &read,
+                    0,
+                    row,
+                    0,
+                    metal2vulkan_runtime::BlitOption::None,
+                )
+                .unwrap(),
+            (Touches::Nothing | Touches::SharedBuffer, _) => {}
+        }
+        blit.end_encoding().unwrap();
+        signaller.encode_signal_event((&event).into(), 1).unwrap();
+        signaller.commit().unwrap();
+        let all: Vec<&CommandBuffer> = [&signaller]
+            .into_iter()
+            .chain(&ahead)
+            .chain([&frame])
+            .collect();
+        let ended: Vec<bool> = all
+            .iter()
+            .map(|command_buffer| command_buffer.wait_until_completed_for(CYCLE_BOUND).is_ok())
+            .collect();
+        if ended.contains(&false) {
+            event.set_signaled_value(1);
+            for command_buffer in &all {
+                command_buffer.wait_until_completed_for(WAIT).unwrap();
+            }
+        }
+        assert!(
+            ended.iter().all(|&ended| ended),
+            "gate {gate}, {touches:?}: the signaller{}, the frame: ended {ended:?}",
+            if gate { ", the gate" } else { "" }
+        );
+        for command_buffer in &all {
+            assert_eq!(command_buffer.status(), CommandBufferStatus::Completed);
+        }
+        let drawn = Drawn {
+            window: 0,
+            start: 0,
+            count: 4 * commands as usize,
+            instances: 1,
+            base: 0,
+        };
+        assert_eq!(
+            setup.output(),
+            expected(&[drawn]),
+            "gate {gate}, {touches:?}"
+        );
+        if !matches!(touches, Touches::Nothing) {
+            let before = read_buffer(&read, 0, length).unwrap();
+            assert!(
+                before.iter().all(|&byte| byte == 0),
+                "gate {gate}, {touches:?}: read after the frame"
+            );
+        }
+    }
+}
+
+/// A host step's frame waiting for a later signal of another queue ends
+/// ([`a_frame_waiting_for_a_later_signal_ends`]).
+#[test]
+fn a_host_step_waiting_for_a_later_signal_of_another_queue_ends() {
+    on_device(|device, _| a_frame_waiting_for_a_later_signal_ends(device, Touches::Nothing));
+}
+
+/// So does one whose signaller first reads the buffer the frame's draws write.
+#[test]
+fn a_host_step_waiting_for_a_later_signal_that_reads_its_writes_ends() {
+    on_device(|device, _| a_frame_waiting_for_a_later_signal_ends(device, Touches::Written));
+}
+
+/// So does one whose signaller first reads a texture over the `Private` buffer the frame's color
+/// target lies over.
+#[test]
+fn a_host_step_waiting_for_a_later_signal_that_reads_its_target_s_buffer_ends() {
+    on_device(|device, _| a_frame_waiting_for_a_later_signal_ends(device, Touches::SharedBuffer));
 }
 
 /// A host step draws on what its commit compiled: commands a kernel writes, drawn by a host step
