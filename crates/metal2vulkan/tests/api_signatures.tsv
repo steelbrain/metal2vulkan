@@ -262,7 +262,6 @@ assoc-const	metal2vulkan::bind::RasterizationRateMap::PARAMETER_DATA_ALIGNMENT	p
 assoc-const	metal2vulkan::bind::RasterizationRateMap::PARAMETER_DATA_SIZE	pub const PARAMETER_DATA_SIZE: u64
 assoc-const	metal2vulkan::bind::RateMapRegions::MAX_REGIONS	pub const MAX_REGIONS: usize
 assoc-const	metal2vulkan::bind::ReplayFaults::ACTION	pub const ACTION: ReplayFaults
-assoc-const	metal2vulkan::bind::ReplayFaults::ADDRESS	pub const ADDRESS: ReplayFaults
 assoc-const	metal2vulkan::bind::ReplayFaults::BARRIER	pub const BARRIER: ReplayFaults
 assoc-const	metal2vulkan::bind::ReplayFaults::BUFFERS	pub const BUFFERS: ReplayFaults
 assoc-const	metal2vulkan::bind::ReplayFaults::ENCODING	pub const ENCODING: ReplayFaults
@@ -734,7 +733,6 @@ assoc-const-value	metal2vulkan::bind::RasterizationRateMap::PARAMETER_DATA_ALIGN
 assoc-const-value	metal2vulkan::bind::RasterizationRateMap::PARAMETER_DATA_SIZE	format::BYTES as u64
 assoc-const-value	metal2vulkan::bind::RateMapRegions::MAX_REGIONS	128 * 128
 assoc-const-value	metal2vulkan::bind::ReplayFaults::ACTION	ReplayFaults(1 <<1)
-assoc-const-value	metal2vulkan::bind::ReplayFaults::ADDRESS	ReplayFaults(1 <<7)
 assoc-const-value	metal2vulkan::bind::ReplayFaults::BARRIER	ReplayFaults(1 <<11)
 assoc-const-value	metal2vulkan::bind::ReplayFaults::BUFFERS	ReplayFaults(1 <<3)
 assoc-const-value	metal2vulkan::bind::ReplayFaults::ENCODING	ReplayFaults(1 <<0)

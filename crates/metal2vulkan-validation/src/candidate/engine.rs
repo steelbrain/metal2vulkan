@@ -1429,9 +1429,9 @@ pub fn compute_request<'a>(
 /// fails it, as the host replay failed: the records passed the host contract's decode before the
 /// replay (`validate_records`: no encoding fault, malformed record, draw, missing pipeline, or
 /// state set while inherited), every allocation of the run is resident and the execution's capacity
-/// is the storage's, so an encoding, record, action, pipeline, buffers, address, or range fault is
-/// a case the host replay fails too (a dynamic stride, an address in no allocation) or a preprocess
-/// that disagrees with the host contract.
+/// is the storage's, so an encoding, record, action, pipeline, buffers, or range fault is a case
+/// the host replay fails too (a dynamic stride) or a preprocess that disagrees with the host
+/// contract.
 pub fn replay_fault_verdict(what: &str, faults: metal2vulkan::bind::ReplayFaults) -> ExecutorError {
     use metal2vulkan::bind::ReplayFaults as F;
     let names = [
@@ -1441,7 +1441,6 @@ pub fn replay_fault_verdict(what: &str, faults: metal2vulkan::bind::ReplayFaults
         (F::BUFFERS, "buffers"),
         (F::VARIANT, "no registered variant"),
         (F::GROUP_COUNT, "a grid past 2^32 - 1 threads"),
-        (F::ADDRESS, "an address in no resident allocation"),
         (F::RECORD, "a malformed record"),
         (F::RANGE, "a command past the storage's capacity"),
         (F::REGIONS, "more regions than the execution records"),

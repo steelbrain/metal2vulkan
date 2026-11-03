@@ -74,8 +74,11 @@
 //!   holds the resources the command buffer's encoders made resident and the device's live
 //!   buffers Metal reaches unnamed (`live_buffers.rs`, `BindState::resident_ranges`), as a directly
 //!   encoded command's does: every buffer of its own, and a no-copy buffer or a heap's buffer once
-//!   a command buffer's commands used it. Where the live buffers are past the search's capacity,
-//!   the execution takes the host step.
+//!   a command buffer's commands used it. A record's address in none of them (a buffer the
+//!   program released before the execution, among others) misses as the host step's does: its
+//!   slot is unbound, so it reads zero and drops writes, the command runs, and the command
+//!   buffer's execution report counts the miss (`bind::replay`). Where the live buffers are past
+//!   the search's capacity, the execution takes the host step.
 //! - **Objects.** Per execution: the preprocess's scratch (a region of the command buffer's upload
 //!   arena, `upload.rs`) and what the recording makes (`generated_execute.rs`,
 //!   `dispatch_execute.rs`); the command buffer holds them until it completes. The execution record

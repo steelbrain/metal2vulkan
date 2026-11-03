@@ -60,10 +60,12 @@
 //! draw, no pipeline (or one set while inherited), a buffer set while inherited or bound with a
 //! dynamic stride, a region no registered variant runs (an edge's remainder size included), more
 //! regions than the execution records per command ([`ReplayExecution::regions`]), a threadgroup
-//! grid above `2^32 - 1` threads, a kernel buffer address in no resident allocation, or a command
-//! at or past the capacity the record storage's header states (whose record is not read: the
-//! execution's capacity must be the storage's). The consumer reads the status after the command
-//! buffer ran.
+//! grid above `2^32 - 1` threads, or a command at or past the capacity the record storage's header
+//! states (whose record is not read: the execution's capacity must be the storage's). The
+//! consumer reads the status after the command buffer ran. A kernel buffer whose address no
+//! resident allocation holds is no fault: its slot is unbound (it reads as a buffer never set),
+//! counted as a resident miss ([`StatusBits::RESIDENT_MISS`], the [`StatusWord::ResidentMisses`]
+//! count), and the command runs, as the host's step leaves it unbound and counts it.
 //!
 //! **The scratch** is one consumer buffer with a device address and `STORAGE_BUFFER |
 //! INDIRECT_BUFFER` usage, of [`ReplayLayout::bytes`]: the slot tables (the preprocess writes
@@ -991,6 +993,28 @@ fn report(fb: &mut FunctionBuilder<'_>, t: Types, status: Value, faults: Value) 
     Ok(())
 }
 
+/// OR `RESIDENT_MISS` into the status word of the `ExecutionStatus` buffer at `status`, and add
+/// `missed` (a `u32`) to its resident misses.
+fn report_misses(
+    fb: &mut FunctionBuilder<'_>,
+    t: Types,
+    status: Value,
+    missed: Value,
+) -> BResult<()> {
+    let bit = k32(fb, StatusBits::RESIDENT_MISS.0)?;
+    let word = at(fb, status, u64::from(StatusWord::Status.byte_offset()))?;
+    let p = fb.device_place(word, t.u32_)?;
+    fb.atomic(AtomicOp::Or, p, Scope::Device, Semantics::RELAXED, bit)?;
+    let word = at(
+        fb,
+        status,
+        u64::from(StatusWord::ResidentMisses.byte_offset()),
+    )?;
+    let p = fb.device_place(word, t.u32_)?;
+    fb.atomic(AtomicOp::IAdd, p, Scope::Device, Semantics::RELAXED, missed)?;
+    Ok(())
+}
+
 /// Where the generated-commands path's sequences lie: the stream's address, the command's first
 /// sequence (a `u64` index), the stride (a `u64`), and the dispatch token's offset in a sequence
 /// (a `u64`).
@@ -1356,6 +1380,8 @@ pub fn typed_module(limits: [u32; 3]) -> BResult<TypedModule> {
     })?;
     let no = fb.module().const_value(no)?;
     let fault = counter(fb, t, 0)?;
+    // The command's kernel buffers whose addresses no resident allocation holds.
+    let misses = counter(fb, t, 0)?;
 
     // The record: `records + header + (first + s) * record bytes`.
     let first64 = wide(fb, t, first)?;
@@ -1511,8 +1537,9 @@ pub fn typed_module(limits: [u32; 3]) -> BResult<TypedModule> {
     // below the entry's unpadded extent, so an allocation holds at least one byte there at its
     // own length (`BufferBinding::resolve_buffer` of 1 byte); zero when unbound, but for the
     // bind offset, which holds a nil buffer's address word, so the kernel sees the offset as
-    // the buffer's address, as Metal's does. A dynamic stride of a bound buffer is no replayed
-    // template's.
+    // the buffer's address, as Metal's does. An address no allocation holds leaves its slot
+    // unbound and counts a resident miss, as a replay of draws does. A dynamic stride of a bound
+    // buffer is no replayed template's.
     let source = fb.select(inherit_buffers, parent, rec)?;
     let bindings = k32(fb, BINDING_COUNT as u32)?;
     count_loop(fb, t, bindings, |fb, n| {
@@ -1543,7 +1570,11 @@ pub fn typed_module(limits: [u32; 3]) -> BResult<TypedModule> {
         let hit = fb.binary(BinOp::LogicalAnd, found, inside)?;
         let missed = fb.unary(UnOp::LogicalNot, hit)?;
         let miss = fb.binary(BinOp::LogicalAnd, live, missed)?;
-        flag(fb, fault, miss, ReplayFaults::ADDRESS.0)?;
+        let one = k32(fb, 1)?;
+        let add = fb.select(miss, one, zero32)?;
+        let m = fb.load(misses, MemAccess::default())?;
+        let m = fb.binary(BinOp::IAdd, m, add)?;
+        fb.store(misses, m, MemAccess::default())?;
         let used = fb.binary(BinOp::LogicalAnd, live, hit)?;
         let host = roots::entry_field(fb, resident, root, roots::HOST)?;
         let base = roots::entry_field(fb, resident, root, roots::GUEST)?;
@@ -1963,7 +1994,19 @@ pub fn typed_module(limits: [u32; 3]) -> BResult<TypedModule> {
         report(fb, t, status, faults)?;
         Ok(ArmEnd::FallThrough(Vec::new()))
     });
-    fb.if_(&mut (), faulted, reported, None)?;
+    // A command that runs counts its misses as a resident miss of the command buffer, as the
+    // host's step counts an address no resident allocation holds.
+    let counted: ArmFn<'_, ()> = Box::new(move |fb, _| {
+        let missed = fb.load(misses, MemAccess::default())?;
+        let any_miss = fb.binary(BinOp::INotEqual, missed, zero32)?;
+        let count: ArmFn<'_, ()> = Box::new(move |fb, _| {
+            report_misses(fb, t, status, missed)?;
+            Ok(ArmEnd::FallThrough(Vec::new()))
+        });
+        fb.if_(&mut (), any_miss, count, None)?;
+        Ok(ArmEnd::FallThrough(Vec::new()))
+    });
+    fb.if_(&mut (), faulted, reported, Some(counted))?;
     fb.ret(None)?;
     let id = f.finish()?;
     b.entry(

@@ -696,33 +696,6 @@ fn a_command_no_variant_replays_dispatches_nothing_and_says_why() {
             faults: ReplayFaults::VARIANT.0,
         },
         Refused {
-            name: "an address in no allocation",
-            record: record(
-                groups([2, 1, 1], local),
-                Some(TOKEN),
-                &[(2, 0x7_dead_0000)],
-                32,
-            ),
-            faults: ReplayFaults::ADDRESS.0,
-        },
-        Refused {
-            name: "an address at an allocation's end",
-            record: record(groups([2, 1, 1], local), Some(TOKEN), &[(2, A.0 + 256)], 32),
-            faults: ReplayFaults::ADDRESS.0,
-        },
-        // B is 60 bytes, padded to 64: an address in the padding is in no allocation, as the
-        // host's resolve finds.
-        Refused {
-            name: "an address at an allocation's own end, inside its padding",
-            record: record(groups([2, 1, 1], local), Some(TOKEN), &[(2, B.0 + 60)], 32),
-            faults: ReplayFaults::ADDRESS.0,
-        },
-        Refused {
-            name: "an address past an allocation's own end, inside its padding",
-            record: record(groups([2, 1, 1], local), Some(TOKEN), &[(2, B.0 + 61)], 32),
-            faults: ReplayFaults::ADDRESS.0,
-        },
-        Refused {
             name: "a dynamic stride",
             record: {
                 let mut r = CommandRecord {
@@ -872,6 +845,52 @@ fn a_command_no_variant_replays_dispatches_nothing_and_says_why() {
         assert_eq!(ran.args(0, 0), [0; 3], "{name}");
         assert_eq!(ran.args(1, 0), [2, 1, 1], "{name}");
         assert_eq!(ran.status.replay_faults.0, faults, "{name}");
+    }
+}
+
+/// A kernel buffer whose address no resident allocation holds leaves its slot unbound (as a
+/// buffer never set) and counts one resident miss, as the host's step does, and the command still
+/// dispatches: an address in no allocation, at an allocation's end, and at or past an
+/// allocation's own end inside its padding (B is 60 bytes, padded to 64), each beside a bound
+/// buffer. A command that dispatches nothing counts none of its misses.
+#[test]
+fn an_address_no_allocation_holds_leaves_its_slot_unbound_and_counts_a_miss() {
+    let dev = device();
+    let local = [8, 1, 1];
+    let variants = [variant(TOKEN, local, 32)];
+    for (name, missed) in [
+        ("an address in no allocation", 0x7_dead_0000),
+        ("an address at an allocation's end", A.0 + 256),
+        (
+            "an address at an allocation's own end, inside its padding",
+            B.0 + 60,
+        ),
+        (
+            "an address past an allocation's own end, inside its padding",
+            B.0 + 61,
+        ),
+    ] {
+        let records = [
+            record(
+                groups([2, 1, 1], local),
+                Some(TOKEN),
+                &[(0, A.0), (2, missed)],
+                32,
+            ),
+            record(Action::Empty, None, &[(2, missed)], 0),
+        ];
+        let ran = preprocess(&dev, &ReplayExecution::new(2, 0, 2), &variants, &records, 0);
+        assert!(!ran.status.replay_fault, "{name}: {:?}", ran.status);
+        assert!(ran.status.resident_miss, "{name}");
+        assert_eq!(ran.status.resident_misses, 1, "{name}");
+        assert_eq!(ran.args(0, 0), [2, 1, 1], "{name}");
+        assert_eq!(ran.entry(0, 2), [A.1, A.0, padded(A.2), 0], "{name}");
+        assert_eq!(
+            ran.entry(0, 4),
+            [0; 4],
+            "{name}: the missed slot is unbound"
+        );
+        assert_eq!(ran.args(1, 0), [0; 3], "{name}");
     }
 }
 

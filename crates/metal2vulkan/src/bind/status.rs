@@ -300,8 +300,9 @@ impl ReplayFaults {
     /// or one whose threadgroups of the variant's size no group count within
     /// `maxComputeWorkGroupCount` holds.
     pub const GROUP_COUNT: ReplayFaults = ReplayFaults(1 << 6);
-    /// A kernel buffer's address is in no allocation of the resident set.
-    pub const ADDRESS: ReplayFaults = ReplayFaults(1 << 7);
+    // Bit 7 (a kernel buffer's address in no allocation of the resident set) is not reported:
+    // such a slot is unbound and counted as a resident miss (`StatusBits::RESIDENT_MISS`), and
+    // the command runs, as the host's step runs it.
     /// The record is one `CommandRecord::decode` rejects (an action no record encodes, a barrier
     /// flag other than 0 or 1), or sets an imageblock size with one side 0.
     pub const RECORD: ReplayFaults = ReplayFaults(1 << 8);
@@ -386,12 +387,12 @@ mod tests {
         assert_eq!(r.resident_misses, 0);
         bytes = [0u8; 32];
         bytes[0..4].copy_from_slice(&StatusBits::REPLAY_FAULT.0.to_le_bytes());
-        let faults = ReplayFaults::VARIANT.0 | ReplayFaults::ADDRESS.0;
+        let faults = ReplayFaults::VARIANT.0 | ReplayFaults::RECORD.0;
         bytes[8..12].copy_from_slice(&faults.to_le_bytes());
         let r = ExecutionStatus::decode(&bytes);
         assert!(r.replay_fault && !r.overflow);
         assert!(r.replay_faults.contains(ReplayFaults::VARIANT));
-        assert!(r.replay_faults.contains(ReplayFaults::ADDRESS));
+        assert!(r.replay_faults.contains(ReplayFaults::RECORD));
         assert!(!r.replay_faults.contains(ReplayFaults::ENCODING));
         assert!(!r.index_pool_overflow);
         bytes = [0u8; 32];
@@ -436,7 +437,6 @@ mod tests {
             ReplayFaults::BUFFERS,
             ReplayFaults::VARIANT,
             ReplayFaults::GROUP_COUNT,
-            ReplayFaults::ADDRESS,
             ReplayFaults::RECORD,
             ReplayFaults::RANGE,
             ReplayFaults::REGIONS,

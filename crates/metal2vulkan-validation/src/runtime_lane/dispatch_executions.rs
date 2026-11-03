@@ -36,6 +36,10 @@
 //!   a check that looks for nothing still uncalled; where the CPU sets such a state after the
 //!   commit, before the batch is submitted, the host step records the execution instead and calls
 //!   the check. Each runs the same; the host step is announced once.
+//! - a command naming a buffer the program released before the execution, with the buffer made
+//!   resident for reading (`commit` records the CPU's records), for reading and writing, or for
+//!   writing in an earlier encoder (on the GPU alone), runs with that slot unbound, reading zero,
+//!   and the command buffer's report counts the miss; nothing is announced.
 
 use super::degrade_notices::assert_made_once;
 use super::generated_executions::flat_template;
@@ -935,5 +939,98 @@ fn a_check_given_something_to_see_after_the_commit_takes_the_host_step() {
         let identifiers = [Degradation::UnmeasuredUniqueIdentifier];
         let kinds: Vec<Degradation> = STEPPED.iter().chain(&identifiers).copied().collect();
         announced(device, messages, &kinds);
+    });
+}
+
+/// How a test makes the buffer of [`a_command_s_released_buffer_runs_its_slot_unbound`]
+/// resident: for reading in the executing encoder (`commit` records the CPU's records), for
+/// reading and writing there, or for writing in an earlier encoder of the command buffer (the GPU
+/// may write the records, so the execution runs on the GPU alone).
+#[derive(Clone, Copy, Debug)]
+enum Resident {
+    Read,
+    ReadWrite,
+    EarlierWrite,
+}
+
+/// A command naming a buffer the program released before its execution runs with that slot
+/// unbound, as a nil buffer's slot, however the buffer is made resident ([`Resident`]):
+/// `a4_index_word`'s `out[t] = in[3t + 1]` reads zero through it and writes its four words, and
+/// the command buffer's report counts the miss; a 16-byte and a 1 MiB buffer, nothing announced.
+/// Metal runs the dispatch (the consumer's probe on an M3 Max, a Radeon Pro 5300M and a UHD 630).
+#[test]
+fn a_command_s_released_buffer_runs_its_slot_unbound() {
+    on_device(|device, messages| {
+        let pipeline = indirect_host_steps::state(device, "a4_index_word", true);
+        let writer = indirect_host_steps::state(device, "a4_index_word", false);
+        let scratch = buffer_with(device, &[0; 64]).unwrap();
+        let queue = device.new_command_queue().unwrap();
+        for resident in [Resident::Read, Resident::ReadWrite, Resident::EarlierWrite] {
+            for length in [16u64, 1 << 20] {
+                let words: Vec<u8> = (0..length / 4)
+                    .flat_map(|i| (10 * (i as u32 + 1)).to_le_bytes())
+                    .collect();
+                let input = buffer_with(device, &words).unwrap();
+                let out = buffer_with(device, &[0xee; 16]).unwrap();
+                let mut descriptor = IndirectCommandBufferDescriptor::new();
+                descriptor.command_types = IndirectCommandType::CONCURRENT_DISPATCH_THREADS;
+                descriptor.max_kernel_buffer_bind_count = 2;
+                let icb = device
+                    .new_indirect_command_buffer(&descriptor, 1, ResourceOptions::shared())
+                    .unwrap();
+                let command = icb.indirect_compute_command_at(0).unwrap();
+                command.set_compute_pipeline_state(&pipeline).unwrap();
+                command.set_kernel_buffer(Some(&input), 0, 0).unwrap();
+                command.set_kernel_buffer(Some(&out), 0, 1).unwrap();
+                command
+                    .concurrent_dispatch_threads(Size::new(4, 1, 1), Size::new(4, 1, 1))
+                    .unwrap();
+                drop(input);
+                let command_buffer = queue.command_buffer().unwrap();
+                if let Resident::EarlierWrite = resident {
+                    let mut encoder = command_buffer.compute_command_encoder().unwrap();
+                    encoder.set_compute_pipeline_state(&writer).unwrap();
+                    encoder.set_buffer(Some(&scratch), 0, 0).unwrap();
+                    encoder.set_buffer(Some(&scratch), 32, 1).unwrap();
+                    encoder
+                        .use_resource(icb.as_resource(), ResourceUsage::WRITE)
+                        .unwrap();
+                    let one = Size::new(1, 1, 1);
+                    encoder.dispatch_threads(one, one).unwrap();
+                    encoder.end_encoding().unwrap();
+                }
+                let usage = match resident {
+                    Resident::Read | Resident::EarlierWrite => ResourceUsage::READ,
+                    Resident::ReadWrite => ResourceUsage::READ.union(ResourceUsage::WRITE),
+                };
+                let mut encoder = command_buffer.compute_command_encoder().unwrap();
+                encoder
+                    .use_resource(
+                        out.as_resource(),
+                        ResourceUsage::READ.union(ResourceUsage::WRITE),
+                    )
+                    .unwrap();
+                encoder.use_resource(icb.as_resource(), usage).unwrap();
+                encoder.execute_commands_in_buffer(&icb, 0..1).unwrap();
+                encoder.end_encoding().unwrap();
+                let case = format!("{resident:?}, a {length}-byte buffer");
+                command_buffer.commit().unwrap();
+                command_buffer.wait_until_completed_for(WAIT).unwrap();
+                assert_eq!(
+                    command_buffer.status(),
+                    CommandBufferStatus::Completed,
+                    "{case}"
+                );
+                assert_eq!(
+                    read_buffer(&out, 0, 16).unwrap(),
+                    [0; 16],
+                    "{case}: the dispatch ran with the slot unbound"
+                );
+                let report = command_buffer.execution_report().unwrap();
+                assert!(report.resident_miss, "{case}: {report:?}");
+                assert_eq!(report.resident_misses, 1, "{case}");
+            }
+        }
+        announced(device, messages, &[]);
     });
 }
