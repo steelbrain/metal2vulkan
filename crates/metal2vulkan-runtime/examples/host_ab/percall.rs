@@ -52,10 +52,11 @@ fn counted(name: &str) -> bool {
 /// (a driver call of `vkfloor.rs`, whose name starts with `vk_`, is no Metal call and is
 /// exempt), and `scripts/api-cost-coverage` reads it to say how much of the public surface the
 /// table times and how much is still untimed.
-pub const TIMED: [(&str, &str); 60] = [
+pub const TIMED: [(&str, &str); 61] = [
     ("command_buffer", "CommandQueue::command_buffer"),
     ("commit_empty", "CommandBuffer::commit"),
     ("commit_one_dispatch", "CommandBuffer::commit"),
+    ("commit_no_copy_dispatch", "CommandBuffer::commit"),
     ("on_completed", "CommandBuffer::add_completed_handler"),
     ("status_completed", "CommandBuffer::status"),
     (
@@ -557,6 +558,9 @@ struct Objects<G: Gpu> {
     event: G::SharedEvent,
     fence: G::Fence,
     pages: *mut u8,
+    /// Two no-copy buffers over pages of their own, which the no-copy commit group's dispatch
+    /// binds.
+    no_copy: Vec<G::Buffer>,
     /// A command buffer of one fill, committed and completed, whose status, times and wait the
     /// read groups take.
     done: G::CommandBuffer,
@@ -609,6 +613,14 @@ impl<G: Gpu> Objects<G> {
             fence: g.fence(),
             // SAFETY: the pages outlive every buffer made over them; nothing unmaps them.
             pages: unsafe { host_pages(NO_COPY_BUFFERS * NO_COPY_EACH) },
+            no_copy: {
+                // SAFETY: as `pages`: page-aligned read-write memory of this many bytes, which
+                // nothing unmaps.
+                let pages = unsafe { host_pages(2 * NO_COPY_EACH) };
+                (0..2)
+                    .map(|i| unsafe { g.buffer_no_copy(pages.add(i * NO_COPY_EACH), NO_COPY_EACH) })
+                    .collect()
+            },
             done,
         }
     }
@@ -654,6 +666,29 @@ pub fn percall<G: Gpu>(g: &G, s: &Scene<G>, library: &G::Library, sizes: &Sizes)
                     g.set_compute_pipeline(&mut e, &s.tiny[0]);
                     g.set_buffer(&mut e, &o.output, 0, 0);
                     g.set_buffer(&mut e, &o.input, 0, 1);
+                    g.dispatch(&mut e, 1, 64);
+                    g.end_compute(e);
+                    cb
+                })
+                .collect::<Vec<_>>()
+        },
+        |held: &mut Vec<G::CommandBuffer>, i| g.commit(&held[i]),
+        |held| held.iter().for_each(|cb| g.wait(cb)),
+    );
+    // And one whose dispatch binds two no-copy buffers, whose host imports the commit counts
+    // (`WorkCounts::host_imports_used`).
+    group(
+        g,
+        "commit_no_copy_dispatch",
+        (16, w),
+        || {
+            (0..16)
+                .map(|_| {
+                    let cb = g.command_buffer();
+                    let mut e = g.compute_encoder(&cb);
+                    g.set_compute_pipeline(&mut e, &s.tiny[0]);
+                    g.set_buffer(&mut e, &o.no_copy[0], 0, 0);
+                    g.set_buffer(&mut e, &o.no_copy[1], 0, 1);
                     g.dispatch(&mut e, 1, 64);
                     g.end_compute(e);
                     cb
