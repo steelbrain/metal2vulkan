@@ -40,9 +40,9 @@ pub(super) enum Deferred {
     /// a scrub, neither `commit` nor a host step records it, but its batch's submission, once the
     /// commit's stamp is published (`shadow::GatedCopyIn`, `dirty_pages.rs`).
     GatedCopyIn(Arc<GatedCopyIn>),
-    /// The merge of a run's pass over a linear attachment rendered apart (`pass_runs.rs`): as
-    /// with a scrub, neither `commit` nor a host step records it, but its batch's submission,
-    /// unless a later pass of the run took it over.
+    /// The merge of a run's pass over a linear attachment rendered apart, or over a shadowed
+    /// texture merged back (`pass_runs.rs`): as with a scrub, neither `commit` nor a host step
+    /// records it, but its batch's submission, unless a later pass of the run took it over.
     RunMerge(Arc<RunMerge>),
     /// A render pass that executes render commands (`render/executions.rs`).
     RenderPass(Arc<DeferredPass>),
@@ -127,8 +127,9 @@ impl Deferred {
     /// before it and back as the encoder ends (`render/shadows.rs`).
     /// Nor is a dispatch whose pipelines were being made: its shadowed textures were copied in
     /// at the dispatch, and its writes are its encoder's to copy back. Nor is a gated copy in,
-    /// which is one of the encoder's shadow copies, nor a linear attachment's merge, which
-    /// touches no shadowed texture (`pass_runs.rs`).
+    /// which is one of the encoder's shadow copies, nor a run's merge (`pass_runs.rs`): a linear
+    /// attachment's touches no shadowed texture, and a shadowed texture's is the copy back its
+    /// encoder took out of its shadows to leave there.
     pub(super) fn leaves_shadows(&self) -> bool {
         match self {
             Deferred::Execute(_)
@@ -340,6 +341,12 @@ impl Deferred {
         }
     }
 
+    /// Whether it is a run's pass's merge (`pass_runs.rs`), which an encoding again of its pass
+    /// replaces with that pass's own merge (`command_buffer/reencode.rs`).
+    pub(super) fn joins_a_run(&self) -> bool {
+        matches!(self, Deferred::RunMerge(_))
+    }
+
     /// Whether a commit may record it on the GPU alone, for good
     /// ([`record_on_gpu`](Self::record_on_gpu)): an execution's, or a render pass's that executes
     /// render commands.
@@ -421,7 +428,7 @@ impl Deferred {
             Deferred::Dispatch(dispatch) => dispatch.record(command_buffer),
             Deferred::SparseScrub(_) => Err(internal("a sparse scrub's host step")),
             Deferred::GatedCopyIn(_) => Err(internal("a gated copy in's host step")),
-            Deferred::RunMerge(_) => Err(internal("a linear merge's host step")),
+            Deferred::RunMerge(_) => Err(internal("a run's merge's host step")),
             Deferred::RenderPass(pass) => pass.record(command_buffer, true),
             Deferred::Pending(dispatch) => dispatch.record(command_buffer),
             Deferred::Loop(check) => check.step(command_buffer),
@@ -497,7 +504,7 @@ impl Deferred {
     /// command buffer's execution and a render pass that executes render commands, whose
     /// commands its step resolves from records, an indirect dispatch and a scrub, which their
     /// steps or submissions record. A dispatch whose pipelines were being made records the uses
-    /// its encoding noted, a gated copy in writes the shadow it names, a linear attachment's merge
+    /// its encoding noted, a gated copy in writes the shadow it names, a run's merge
     /// the bytes its pass noted it writes, and a loop's check records nothing.
     pub(super) fn reaches_unnamed(&self) -> bool {
         match self {
@@ -518,17 +525,19 @@ impl Deferred {
     /// what its encoding resolved (`pending_dispatch.rs`), and so does a render pass `commit`
     /// left for the pipelines its draws and tile dispatches record (`pipelines`) that executes no
     /// render commands, whose instances' commands its calls recorded
-    /// (`render/pending_tile.rs`). Everything else its step resolves as it records: a rebind
-    /// meanwhile is refused.
+    /// (`render/pending_tile.rs`). So does a run's merge (`pass_runs.rs`), which writes only the
+    /// bytes its encoder's commands named (a linear attachment's, none over host pages; a
+    /// shadowed texture's truth, whose uses its pass noted): a rebind of them encodes that
+    /// encoder again, the merge with it. Everything else its step resolves as it records: a
+    /// rebind meanwhile is refused.
     pub(super) fn resolved_at_its_calls(&self, pipelines: bool) -> bool {
         match self {
-            Deferred::Pending(_) => true,
+            Deferred::Pending(_) | Deferred::RunMerge(_) => true,
             Deferred::RenderPass(pass) => pipelines && !pass.executes(),
             Deferred::Execute(_)
             | Deferred::Dispatch(_)
             | Deferred::SparseScrub(_)
             | Deferred::GatedCopyIn(_)
-            | Deferred::RunMerge(_)
             | Deferred::Loop(_) => false,
         }
     }

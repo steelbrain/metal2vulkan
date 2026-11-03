@@ -13,11 +13,11 @@
 //! (`linear_attachment.rs`, `linear_merge.rs`), as NVIDIA's devices render it beside a depth
 //! attachment: the passes form a run or two merged once each (`pass_runs.rs`,
 //! `tests::linear_runs`), each merge taking one scratch, and the runtime's device memory grows by
-//! no scratch a pass. A target that is a shadow
-//! (host pages on every device, and rows the device's linear images do not lay out) is merged
-//! back at each encoder's end (`shadow_merge.rs`): its merges after the first take the scratch an
-//! earlier encoder was done with. Either way the texels equal those the same passes leave in a
-//! private texture of the same first texels, and the bytes between the rows keep theirs.
+//! no scratch a pass. A target that is a shadow merged back (host pages on every device, and
+//! rows the device's linear images do not lay out, `shadow_merge.rs`) is kept before the first
+//! pass and merged back after the last, its passes one run (`pass_runs.rs`,
+//! `tests::shadow_runs`). Either way the texels equal those the same passes leave in a private
+//! texture of the same first texels, and the bytes between the rows keep theirs.
 //!
 //! Device tests: compiled only under the validation crate's GPU safety cfgs (`m2v_gpu`,
 //! `m2v_cpu_icd`), on the kind of device the cfg selects. The functions are the owned fixture
@@ -337,8 +337,8 @@ fn reference(queue: &CommandQueue, state: &RenderPipelineState, width: u64) -> V
 /// [`passes`] over a target over `over`'s buffer of `width` texels a row, `row` bytes apart, the
 /// rule forced: its texels equal the private texture's, the bytes between its rows keep theirs,
 /// and its merges take few scratches (a linear image's, one a run; a shadow's merged back, one
-/// lent to every later one), the device's memory growing by less than an eighth of what a
-/// scratch a pass would take.
+/// keep and one merge for the run of passes), the device's memory growing by less than an eighth
+/// of what a scratch a pass would take.
 fn one_scratch(over: Over, (width, row): (u64, u64)) {
     let cache = Scratch::new(&format!("merge-scratch-{over:?}-{width}"));
     let host = Host::new(row * H);
@@ -371,14 +371,15 @@ fn one_scratch(over: Over, (width, row): (u64, u64)) {
     let recorded = delta(|c| c.linear_merges_recorded);
     let taken_over = delta(|c| c.linear_merges_taken_over);
     let shadow_reused = delta(|c| c.shadow_merge_scratches_reused);
+    let kept = delta(|c| c.shadow_texels_kept);
     let grown = encoded.device_memory_allocated - before.device_memory_allocated;
     // A merge of every texel's rows: its kept and changed parts.
     let scratch = 2 * width * TEXEL * H;
     println!(
         "MERGE-SCRATCH {over:?}: {apart} passes apart, linear merges {recorded} recorded and \
          {taken_over} taken over, linear scratches {made} made and {reused} reused, shadow \
-         scratches {shadow_reused} reused; device memory grew {grown} bytes while encoding ({} \
-         merges' scratch)",
+         scratches {shadow_reused} reused, shadow texels kept {kept}; device memory grew {grown} \
+         bytes while encoding ({} merges' scratch)",
         grown / scratch
     );
     match (linear, merged) {
@@ -401,10 +402,8 @@ fn one_scratch(over: Over, (width, row): (u64, u64)) {
                 "each run's merge takes one scratch"
             );
         }
-        (false, true) => assert!(
-            shadow_reused >= PASSES as u64 - 1,
-            "every shadow merge after the first takes a scratch: {shadow_reused}"
-        ),
+        // One run of passes (`pass_runs.rs`): kept once, every texel, before the first.
+        (false, true) => assert_eq!(kept, width * H, "the passes keep once, as one run"),
         (false, false) => println!("MERGE-SCRATCH {over:?}: no merge"),
     }
     assert!(

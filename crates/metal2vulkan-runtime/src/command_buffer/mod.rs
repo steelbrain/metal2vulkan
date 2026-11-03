@@ -102,7 +102,7 @@ use super::replay::Replay;
 use super::residency::Residency;
 use super::resource::{ObjectId, ResourceKey};
 use super::scheduler::{BatchSync, Hand, StepWaits};
-use super::shadow::ShadowCarry;
+use super::shadow::{ShadowCarry, ShadowCopy};
 use super::spares::CommandPool;
 use super::sparse::encoder::SparseUpdate;
 use super::sparse::indirect;
@@ -678,9 +678,12 @@ pub(super) struct State {
     /// How many batches it had once its last ended encoder joined one: the encoder opening next
     /// carries nothing where it starts another ([`State::shadows_to_carry`]).
     carry_batches: usize,
-    /// Its open runs of passes over a linear attachment rendered apart, merged once
-    /// (`pass_runs.rs`).
+    /// Its open runs of passes over one attachment merged once: a linear attachment rendered
+    /// apart, or a shadowed texture merged back (`pass_runs.rs`).
     pass_runs: PassRuns,
+    /// The keeps the encoder being encoded again records after itself, where it leaves a run of
+    /// passes another pass went on in (`pass_runs.rs`, `command_buffer/reencode.rs`).
+    pub(super) replaying_keeps: Vec<ShadowCopy>,
     /// The pools of its commands' set 0 (`descriptor_arena.rs`), given back or released with
     /// the uploads.
     pub(super) descriptors: DescriptorArena,
@@ -1460,7 +1463,7 @@ impl State {
         }
     }
 
-    /// Its open runs of passes over a linear attachment rendered apart (`pass_runs.rs`).
+    /// Its open runs of passes over one attachment merged once (`pass_runs.rs`).
     pub(super) fn pass_runs(&mut self) -> &mut PassRuns {
         &mut self.pass_runs
     }
@@ -1994,6 +1997,7 @@ impl CommandBuffer {
                 shadow_carry: Some(ShadowCarry::default()),
                 carry_batches: 1,
                 pass_runs: PassRuns::default(),
+                replaying_keeps: Vec::new(),
                 descriptors: DescriptorArena::default(),
                 status_words: None,
                 mesh_grid_past: false,
@@ -3141,6 +3145,11 @@ impl CommandBuffer {
                 state.retained.push(Box::new(ticket));
             }
             state.status = CommandBufferStatus::Committed;
+            // No run of passes goes on past the commit: each lets go of its scratch and kept
+            // image, its merge recorded at its batch's submission (`pass_runs.rs`).
+            for held in state.pass_runs.close() {
+                held.end();
+            }
             // Its set-0 cache is shut here, before anything records again: from the commit on it
             // holds what its commands took only weakly (below), so no handle a kept set holds is
             // held against another object taking it -- which is the cache's own precondition

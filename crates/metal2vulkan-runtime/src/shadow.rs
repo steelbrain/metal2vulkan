@@ -71,7 +71,14 @@
 //!   texel ([`ShadowUse::overwrites`]) keeps nothing, as its copy back writes only texels it
 //!   wrote; that copy back goes before the keep of a later command that writes through the
 //!   texture, since the merge after the keep takes only the words changed since it. The keeps'
-//!   scratch is the encoder's, one per texture and rectangle.
+//!   scratch is the encoder's, one per texture and rectangle. A run of render passes over the
+//!   texture, one after another in one batch with nothing between them that may touch its bytes
+//!   (`pass_runs.rs`), is kept before its first pass and merged after its last: each later pass
+//!   goes on over the image the one before left ([`ShadowSync::go_on`]), with no keep, and its
+//!   merge compares the first keep; a pass of the run that writes outside that keep merges it and
+//!   keeps every texel next, which every later pass of the run writes inside, and one that needs
+//!   texels beyond those the image holds (its copy in moved only a pass's scissors' texels) merges
+//!   what was kept and copies every texel in.
 //! - **Overwrites over logged pages** ([`ShadowCopies::logged`]: host pages whose consumer logs
 //!   every write to them, `dirty_pages.rs`). A command that replaces every texel of such a shadow
 //!   takes the merge instead of the plain copy back: its copy in (which moves only the rows the
@@ -111,9 +118,12 @@
 //!   the merge reads there is as Metal's answer. A block can reach past the tiles the draws reach
 //!   (a 256-byte block of a row holds 64 such texels, two of those tiles), never past the
 //!   rectangle; and the merge undoes only a write made between its read of the block and its
-//!   store, a shorter window than a tile's from its load to its store. A use joined with another
-//!   that writes through the texture otherwise (a draw's write to it as a bound texture) stores
-//!   the words alone.
+//!   store, a shorter window than a tile's from its load to its store. A run of such passes
+//!   (`pass_runs.rs`) merges once over its keep, which holds every pass's rectangle (the first
+//!   pass's, or every texel once a pass wrote outside it): a block holding a word one pass changed
+//!   may reach past that pass's rectangle, by less than a block, never past the keep's, under the
+//!   same window. A use joined with another that writes through the texture otherwise (a draw's
+//!   write to it as a bound texture) stores the words alone.
 //! - **Ordering.** A copy is a command of the encoder with uses of both the buffer's bytes and the
 //!   image, so the tracker orders it against the encoder's other commands and other encoders'
 //!   like any use: the texture and its buffer are one resource to it. In an encoder whose
@@ -790,6 +800,18 @@ impl ShadowCopies {
         x0 <= x && y0 <= y && x1 >= x + extent.width && y1 >= y + extent.height
     }
 
+    /// Every texel of a one-region 2D texture's image over a buffer's bytes, `[x0, y0, x1, y1)`, as
+    /// [`covers`](Self::covers) takes a rectangle; `None` for any other shadow.
+    pub(super) fn whole_area(&self) -> Option<[u32; 4]> {
+        let [region] = (self.target())?.image_regions(true)? else {
+            return None;
+        };
+        let x = u32::try_from(region.image_offset.x).ok()?;
+        let y = u32::try_from(region.image_offset.y).ok()?;
+        let extent = region.image_extent;
+        Some([x, y, x + extent.width, y + extent.height])
+    }
+
     /// Whether `used` touches the texture's truth: its bytes, or its image's levels and layers.
     pub(super) fn meets(&self, used: &Use<ResourceKey>) -> bool {
         let (key, range) = self.truth();
@@ -839,7 +861,7 @@ impl ShadowCopies {
     }
 
     /// Whether two shadowed textures copy some of the same truth.
-    fn shares_truth(&self, other: &ShadowCopies) -> bool {
+    pub(super) fn shares_truth(&self, other: &ShadowCopies) -> bool {
         let ((key, range), (other_key, other_range)) = (self.truth(), other.truth());
         let mine = [Some(key), self.alias()];
         let theirs = [Some(other_key), other.alias()];
@@ -851,7 +873,7 @@ impl ShadowCopies {
 
     /// The key of the host memory the truth's buffer joined (`host_aliases.rs`): a use of it
     /// touches the same bytes as one of the buffer's own.
-    fn alias(&self) -> Option<ResourceKey> {
+    pub(super) fn alias(&self) -> Option<ResourceKey> {
         match &self.source {
             ShadowSource::Bytes { alias, .. }
             | ShadowSource::Converted { alias, .. }
@@ -2135,9 +2157,12 @@ fn merged_back(shadow: &ShadowUse) -> bool {
 /// texels inside `kept` (`None` every texel), stores whole blocks where it is cut to the texels'
 /// rows (`shadow_merge.rs`): the command replaces every texel ([`ShadowUse::overwrites`], over
 /// logged pages, as [`merged_back`] takes it), or writes through it only by a render pass's
-/// stores of the tiles of its area ([`ShadowUse::tile_stores`]) and the keep is that area.
+/// stores of the tiles of its area ([`ShadowUse::tile_stores`]) and the keep holds that area (it
+/// is that area, or the rectangle bounding it and the areas of the passes of its run before it,
+/// `pass_runs.rs`, each of which wrote through the texture by such stores alone).
 fn stores_blocks(shadow: &ShadowUse, kept: Option<[u32; 4]>) -> bool {
-    shadow.overwrites || (shadow.tile_stores && kept.is_some() && kept == shadow.area)
+    let kept_area = kept.is_some() && shadow.area.is_some() && holds(kept, shadow.area);
+    shadow.overwrites || (shadow.tile_stores && kept_area)
 }
 
 /// Whether a command that replaces every texel of `shadow` ([`ShadowUse::overwrites`]) takes no
@@ -2349,6 +2374,12 @@ struct Entry<M> {
     /// first use's copy in is the one the carry takes off the run
     /// (`WorkCounts::shadow_texels_first_copy_in_carried`).
     carried: bool,
+    /// Its image goes on from a run of passes before this encoder's, kept in `merge` before the
+    /// run's first ([`ShadowSync::go_on`], `pass_runs.rs`): a command that writes outside what
+    /// that keep holds keeps every texel of the texture next, and one that needs texels beyond
+    /// what the image holds copies every texel in, so the run's later passes write inside the
+    /// keep and read inside the image.
+    run: bool,
     /// When [`Standing::Current`], the rectangle bounding the texels whose bytes changed since the image's
     /// copy in, where only writes [`Within`] it changed them (the module's rules): the next
     /// command that uses the texture copies those in first, or those of them it reads where it
@@ -2763,6 +2794,7 @@ impl<M: Clone + KeptArea> ShadowSync<M> {
                     scratch: None,
                     stale,
                     carried: carried.is_some(),
+                    run: false,
                 });
                 self.entries.len() - 1
             }
@@ -2823,6 +2855,52 @@ impl<M: Clone + KeptArea> ShadowSync<M> {
         }
     }
 
+    /// Go on with a run of passes over the texture of `copies` (`pass_runs.rs`): its image, which
+    /// the encoder carries, as the run's passes left it, written through since `merge` kept it
+    /// before the run's first, as an earlier command of this encoder would have left it. So the
+    /// encoder's first command that writes through it takes no keep, and the copy back after its
+    /// last is a merge in `merge` (or in a scratch a later keep took, where a command writes
+    /// outside what `merge` keeps, after a merge in it: [`before`](Self::before)). Whether it
+    /// could: `false`, changing nothing, where the encoder carries no such image, or one stale
+    /// somewhere, or met the texture already.
+    pub(super) fn go_on(&mut self, copies: &Arc<ShadowCopies>, merge: M) -> bool {
+        let key = copies.shadow_key;
+        let met = self.entries.iter().any(|e| e.copies.shadow_key == key);
+        let carried = (self.carry.entries.iter())
+            .any(|carried| carried.copies.shadow_key == key && carried.stale.is_none());
+        if met || !carried {
+            return false;
+        }
+        let i = self.entry(copies);
+        let entry = &mut self.entries[i];
+        entry.dirty = true;
+        entry.area = None;
+        entry.merge = Some(merge.clone());
+        entry.scratch = Some(merge);
+        entry.run = true;
+        true
+    }
+
+    /// The copy back of what the encoder's commands wrote through the texture of `copies`, taken
+    /// now as the merge a run's pass leaves to its batch's submission (`pass_runs.rs`): where its
+    /// image was kept as it merges back and written through since, not two ways, its merge
+    /// ([`copy_back`](Self::copy_back)), after which the image holds the truth as the commands
+    /// left it, carried on as the encoder ends. `None`, changing nothing, for any other texture.
+    pub(super) fn leave_merge(&mut self, copies: &ShadowCopies) -> Option<ShadowCopy<M>> {
+        let key = copies.shadow_key;
+        let i = self
+            .entries
+            .iter()
+            .position(|e| e.copies.shadow_key == key)?;
+        let entry = &self.entries[i];
+        if !entry.dirty || entry.merge.is_none() || entry.two_ways {
+            return None;
+        }
+        let mut copies = Vec::new();
+        self.copy_back(i, &mut copies);
+        copies.pop()
+    }
+
     /// The copies to record, in order, before a command that uses the shadowed textures
     /// `shadows` and has `uses` (every use of the command, the textures' among them): merges of
     /// the textures kept before the command before, copies back of what the command touches,
@@ -2873,20 +2951,26 @@ impl<M: Clone + KeptArea> ShadowSync<M> {
                 merged_kept.push(Arc::clone(&shadow.copies));
                 // The texels the command writes, where it bounds them and the copies are cut so.
                 let writes = shadow.area.filter(|_| shadow.copies.cuts_back());
-                let scratch = self
+                let entry = self
                     .entries
                     .iter()
-                    .find(|e| e.copies.shadow_key == shadow.copies.shadow_key)
-                    .and_then(|e| e.scratch.as_ref());
+                    .find(|e| e.copies.shadow_key == shadow.copies.shadow_key);
+                let scratch = entry.and_then(|e| e.scratch.as_ref());
                 // A scratch made for a command of the other kind (one whose merge stores whole
                 // blocks, or one whose does not) is merged and kept again in a new one: only such
                 // a command's merge stores whole blocks (`shadow_merge.rs`).
                 let same = |scratch: &M| scratch.in_blocks() == stores_blocks(shadow, writes);
+                // A run's pass that writes outside its run's keep keeps every texel next, which
+                // every later pass of the run writes inside (`pass_runs.rs`).
+                let run = entry.is_some_and(|e| e.run);
                 let area = match scratch {
                     Some(scratch) if holds(scratch.kept_area(), writes) && same(scratch) => {
                         continue
                     }
-                    Some(scratch) => bounding(scratch.kept_area(), writes),
+                    Some(scratch) => match (run, writes, shadow.copies.whole_area()) {
+                        (true, Some(_), Some(whole)) => Some(whole),
+                        _ => bounding(scratch.kept_area(), writes),
+                    },
                     None => writes,
                 };
                 let made_for = MergeFor {
@@ -2960,6 +3044,12 @@ impl<M: Clone + KeptArea> ShadowSync<M> {
             let entry = &self.entries[i];
             let beyond_held =
                 entry.standing == Standing::Current && !overwrites && !holds(entry.held, needs);
+            // A pass of a run of passes that needs texels beyond those takes every texel in, so
+            // the run's later passes need none beyond them (`pass_runs.rs`).
+            let needs = match beyond_held && entry.run {
+                true => None,
+                false => needs,
+            };
             // The image holds the buffer's texels only inside its last copy in's rectangle: what
             // the encoder wrote through it goes back first, then the copy in below moves what
             // this command needs.

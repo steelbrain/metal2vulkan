@@ -53,7 +53,9 @@ use super::residency::{Residency, Used};
 use super::resource::ResourceKey;
 use super::retained::Retained;
 use super::row_copies::RowCopies;
-use super::shadow::{CopyCause, GatedCopyIn, ShadowCopy, ShadowSync, ShadowUse, Step, Within};
+use super::shadow::{
+    CopyCause, GatedCopyIn, ShadowCopies, ShadowCopy, ShadowSync, ShadowUse, Step, Within,
+};
 use super::shadow_copy_in::CopyIn;
 use super::shadow_merge::{MergeLease, ShadowMerge};
 use super::sparse::encoder::SparseUpdate;
@@ -63,7 +65,7 @@ use super::unique_identifier::ScheduledWork;
 use super::used_resources::EncoderKind;
 use super::Device;
 use crate::device::functions::Vk;
-use crate::work_counts::Begun;
+use crate::work_counts::{Begun, Counters};
 use ash::vk;
 use metal2vulkan::bind::ReplayFaults;
 use std::any::Any;
@@ -71,7 +73,7 @@ use std::collections::BTreeSet;
 use std::marker::PhantomData;
 use std::panic::Location;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Weak};
 
 /// The next core's [`EncoderCore::id`]: from 1, so none is `retained::HeldBy`'s 0.
 static CORES: AtomicU64 = AtomicU64::new(1);
@@ -194,11 +196,12 @@ impl Segment {
     }
 
     /// Whether an encoder encoded again (`replay.rs`) records its place: a dispatch whose
-    /// pipelines were being made ([`pends`](Self::pends)), left as a segment again, or work a
-    /// commit may record on the GPU alone, recorded there again (`Deferred::record_on_gpu`). Its
-    /// log is kept only where every segment does.
+    /// pipelines were being made ([`pends`](Self::pends)), left as a segment again, work a
+    /// commit may record on the GPU alone, recorded there again (`Deferred::record_on_gpu`), or a
+    /// run's pass's merge, which the pass encoded again records after itself as a pass alone
+    /// does, leaving its run (`pass_runs.rs`). Its log is kept only where every segment does.
     pub(super) fn records_again(&self) -> bool {
-        self.pends() || self.work.may_run_on_gpu_alone()
+        self.pends() || self.work.may_run_on_gpu_alone() || self.work.joins_a_run()
     }
 
     /// What its recording will use, on `device`, while `commit` left it to the host step for the
@@ -328,9 +331,10 @@ pub(super) struct EncoderCore {
     /// in the command buffer (`WorkCounts::shadow_texels_first_copied_in_again`).
     first_copies: Vec<(ResourceKey, u64)>,
     /// Its holds on the kept images its merges took from its queue (`texture/kept_image.rs`),
-    /// and on the scratch they took from its command buffer (`merge_scratch.rs`): no keep of
-    /// another encoder takes one before this one ends, its merges done.
-    kept_leases: Vec<MergeLease>,
+    /// and on the scratch they took from its command buffer (`merge_scratch.rs`), each with the
+    /// merge that took it: no keep of another encoder takes one before this one ends, its merges
+    /// done, or a run of passes that took it over ends (`pass_runs.rs`).
+    kept_leases: Vec<(Weak<ShadowMerge>, MergeLease)>,
     /// The heaps its commands used through what the encoder made resident; `end` hands them,
     /// and those of `keys`, to the command buffer, whose commit marks them used.
     heaps: Vec<Heap>,
@@ -1471,18 +1475,23 @@ impl EncoderCore {
         let aliased = self.aliased(uses);
         let uses = aliased.as_deref().unwrap_or(uses);
         // The kept images its merges take are held to the encoder's end, those of a refused
-        // command let go of here.
+        // command let go of here. An encoder encoded again borrows none, nor its command buffer's
+        // scratch: its place may lie inside a run of passes that holds one (`pass_runs.rs`).
         let images = self.open.command_buffer.command_queue().kept_images();
         let pool = self.open.command_buffer.merge_scratch();
+        let lent = !self.replaying && !crate::replay::is_replaying();
         let held = self.kept_leases.len();
         let leases = &mut self.kept_leases;
         let planned = self
             .shadows
             .before(shadows, uses, |copies, made_for, area| {
                 let merging = (made_for.two_ways, made_for.blocks, area);
-                let (merge, lease) = ShadowMerge::new(&device, copies, merging, (images, pool))?;
-                leases.extend(lease);
-                Ok(Arc::new(merge))
+                let made = ShadowMerge::new(&device, copies, merging, (images, pool), lent)?;
+                let (merge, lease) = (Arc::new(made.0), made.1);
+                if let Some(lease) = lease {
+                    leases.push((Arc::downgrade(&merge), lease));
+                }
+                Ok(merge)
             });
         let copies = match planned {
             Ok(copies) => copies,
@@ -1569,40 +1578,7 @@ impl EncoderCore {
     /// into the scratch dispatch (`WorkCounts::shadow_merge_copies_dispatched`), and the texels the
     /// keeps copy (`WorkCounts::shadow_texels_kept`).
     fn count_shadow_copies(&self, copies: &[ShadowCopy]) {
-        let texels_in = copies.iter().map(ShadowCopy::texels_in).sum();
-        let texels_back = copies.iter().map(ShadowCopy::texels_back).sum();
-        let counts = &self.device().shared().counts;
-        counts.shadow_copies_planned(copies.len(), texels_in, texels_back);
-        for copy in copies {
-            counts.shadow_copy_in_planned(copy);
-        }
-        let bounded = (copies.iter())
-            .filter(|copy| copy.cause == Some(CopyCause::Bounded))
-            .count();
-        if bounded > 0 {
-            counts.bounded_shadow_copies_planned(bounded);
-        }
-        let dispatched = copies
-            .iter()
-            .filter(|copy| match &copy.step {
-                Step::Keep(merge) => merge.dispatches(),
-                Step::Merge(merge) => merge.changed_dispatches(),
-                Step::Into | Step::Back => false,
-            })
-            .count();
-        if dispatched > 0 {
-            counts.shadow_merge_copies_dispatched(dispatched);
-        }
-        let kept: u64 = copies
-            .iter()
-            .filter_map(|copy| match &copy.step {
-                Step::Keep(merge) => Some(merge.texels_kept()),
-                _ => None,
-            })
-            .sum();
-        if kept > 0 {
-            counts.shadow_texels_kept(kept);
-        }
+        count_shadow_copies(&self.device().shared().counts, copies);
     }
 
     /// Note that the encoder's work from here on waits for another writer the program ordered
@@ -1912,6 +1888,33 @@ impl EncoderCore {
     /// Whether this core encodes an ended encoder again (`command_buffer/reencode.rs`).
     pub(super) fn encodes_again(&self) -> bool {
         self.replaying
+    }
+
+    /// Go on with a run of passes over the shadowed texture of `copies`, kept in `merge` before
+    /// the run's first (`pass_runs.rs`, `ShadowSync::go_on`): whether the encoder carries its
+    /// image, and took it so.
+    pub(super) fn go_on_shadow(
+        &mut self,
+        copies: &Arc<ShadowCopies>,
+        merge: Arc<ShadowMerge>,
+    ) -> bool {
+        self.shadows.go_on(copies, merge)
+    }
+
+    /// The merge of what the encoder's commands wrote through the shadowed texture of `copies`,
+    /// which a run's pass leaves to its batch's submission (`pass_runs.rs`,
+    /// `ShadowSync::leave_merge`).
+    pub(super) fn leave_shadow_merge(&mut self, copies: &ShadowCopies) -> Option<ShadowCopy> {
+        self.shadows.leave_merge(copies)
+    }
+
+    /// The encoder's hold on what `merge` took (its scratch, or its kept image), handed to a run
+    /// of passes that holds it past the encoder's end (`pass_runs.rs`); `None` where it holds
+    /// none for it.
+    pub(super) fn take_lease(&mut self, merge: &Arc<ShadowMerge>) -> Option<MergeLease> {
+        let merge = Arc::downgrade(merge);
+        let at = (self.kept_leases.iter()).position(|(of, _)| of.ptr_eq(&merge))?;
+        Some(self.kept_leases.swap_remove(at).1)
     }
 
     /// The new `VkCommandBuffer` the encoder's commands go on in after a segment
@@ -2371,6 +2374,14 @@ impl EncoderCore {
         let copies = self.sample_moves(copies);
         self.count_shadow_copies(&copies);
         self.shadow_copies(&copies);
+        // A pass of a run that a later pass went on over keeps the run's scratch again, from the
+        // image it left, for that pass's run (`pass_runs.rs`); the encoding again clears them
+        // as it ends (`command_buffer/reencode.rs`).
+        let keeps = (self.open.command_buffer.state().replaying_keeps).clone();
+        if !keeps.is_empty() {
+            self.count_shadow_copies(&keeps);
+            self.shadow_copies(&keeps);
+        }
         if self.uses.broke_hold() {
             return Err(internal("a held depth used but as its attachment"));
         }
@@ -2703,7 +2714,7 @@ pub(super) struct Captured {
     pub(super) taken: Taken,
     holds: Holds,
     heaps: Vec<Heap>,
-    kept_leases: Vec<MergeLease>,
+    kept_leases: Vec<(Weak<ShadowMerge>, MergeLease)>,
     attachment_shadows: Vec<ResourceKey>,
     first_copies: Vec<(ResourceKey, u64)>,
     twin_writes: Vec<TwinWrite>,
@@ -2883,4 +2894,43 @@ fn keep_with_copy_in(
         })?;
     let both = merge.keep_in(device, &copy.copies, &region)?;
     Some((j, both, merge.keep_in_uses(&copy.copies)))
+}
+
+/// Count shadowed textures' `copies` as planned into `counts` ([`EncoderCore`]'s
+/// `count_shadow_copies`): also a run's merge as its batch's submission records it
+/// (`pass_runs.rs`).
+pub(super) fn count_shadow_copies(counts: &Counters, copies: &[ShadowCopy]) {
+    let texels_in = copies.iter().map(ShadowCopy::texels_in).sum();
+    let texels_back = copies.iter().map(ShadowCopy::texels_back).sum();
+    counts.shadow_copies_planned(copies.len(), texels_in, texels_back);
+    for copy in copies {
+        counts.shadow_copy_in_planned(copy);
+    }
+    let bounded = (copies.iter())
+        .filter(|copy| copy.cause == Some(CopyCause::Bounded))
+        .count();
+    if bounded > 0 {
+        counts.bounded_shadow_copies_planned(bounded);
+    }
+    let dispatched = copies
+        .iter()
+        .filter(|copy| match &copy.step {
+            Step::Keep(merge) => merge.dispatches(),
+            Step::Merge(merge) => merge.changed_dispatches(),
+            Step::Into | Step::Back => false,
+        })
+        .count();
+    if dispatched > 0 {
+        counts.shadow_merge_copies_dispatched(dispatched);
+    }
+    let kept: u64 = copies
+        .iter()
+        .filter_map(|copy| match &copy.step {
+            Step::Keep(merge) => Some(merge.texels_kept()),
+            _ => None,
+        })
+        .sum();
+    if kept > 0 {
+        counts.shadow_texels_kept(kept);
+    }
 }

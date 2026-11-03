@@ -97,7 +97,7 @@ const RUNS: u64 = 7;
 
 /// The state that draws a rectangle (`tob_rect`) of the color in fragment buffer 0
 /// (`tob_solid`) with no attachment.
-fn attachmentless(device: &Device) -> RenderPipelineState {
+pub(super) fn attachmentless(device: &Device) -> RenderPipelineState {
     let library = library(device, "engine/tob_renders.ll");
     let function = |name: &str| {
         let function = library.new_function_with_name(name).unwrap();

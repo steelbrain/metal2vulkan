@@ -336,12 +336,15 @@ impl ShadowMerge {
     /// texels (the module docs), else of every texel. A kept image is one of `images`, its
     /// queue's, held by the lease returned, which the encoder keeps to its end, else one made
     /// and kept there; a scratch one `pool`, its command buffer's, lends, else one made, held by
-    /// the lease too. Refused as `new_buffer` refuses the scratch.
+    /// the lease too. Where not `lent` (an encoder encoded again, whose place may lie inside a
+    /// run of passes holding one, `pass_runs.rs`), neither is taken from `images` or `pool`.
+    /// Refused as `new_buffer` refuses the scratch.
     pub(super) fn new(
         device: &Device,
         copies: &ShadowCopies,
         (two_ways, blocks, area): (bool, bool, Option<[u32; 4]>),
         (images, pool): (&KeptImages, &Arc<MergeScratch>),
+        lent: bool,
     ) -> Result<(ShadowMerge, Option<MergeLease>), Error> {
         let (
             ShadowSource::Bytes {
@@ -429,7 +432,7 @@ impl ShadowMerge {
         let mut lease = None;
         let mut zero = None;
         let (held, placed) = if let Some((texel, extent)) = kept_image {
-            let image = match images.take(texel, extent) {
+            let image = match lent.then(|| images.take(texel, extent)).flatten() {
                 Some(TakenImage {
                     image,
                     lease: taken,
@@ -465,7 +468,10 @@ impl ShadowMerge {
             let written = cut.is_some() || (in_place && copies.copies_out_whole(rounded));
             let spares = copies.merge_scratch.clone();
             let whole = roles * rounded.next_multiple_of(PART_ALIGNMENT);
-            let lent = pool.take(ScratchKind::Shadow, length).or_else(|| {
+            let pooled = lent
+                .then(|| pool.take(ScratchKind::Shadow, length))
+                .flatten();
+            let lent = pooled.or_else(|| {
                 let spare = spares.take(length)?;
                 Some(Scratch::new(
                     spare,

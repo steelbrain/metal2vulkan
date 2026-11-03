@@ -311,6 +311,8 @@ mod shadow_carried_read;
 mod shadow_host_writes;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod shadow_merge_read;
+#[cfg(any(m2v_gpu, m2v_cpu_icd))]
+mod shadow_runs;
 mod shadow_stencil;
 #[cfg(all(debug_assertions, any(m2v_gpu, m2v_cpu_icd)))]
 mod shared_draw_locks;

@@ -197,7 +197,7 @@ use super::hang;
 use super::kept_barriers::{KeptBarriers, SlotStamps};
 use super::{lock, recording_error, submission_error, CommandBufferShared, State};
 use crate::deferred::Deferred;
-use crate::encoder::RecordedSegment;
+use crate::encoder::{count_shadow_copies, RecordedSegment};
 use crate::error::CommandBufferError;
 use crate::error::{internal, Error};
 use crate::event::EventShared;
@@ -1301,9 +1301,9 @@ impl CommandBufferShared {
     /// Record the segments of encoders `range` that their batch's submission records: the
     /// scrubs (`Deferred::SparseScrub`), with the mappings it applied, and the gated copies in
     /// (`Deferred::GatedCopyIn`), with the regions their logs say changed since the commit's
-    /// stamp, published by now; and the merges of runs of passes over a linear attachment
-    /// (`Deferred::RunMerge`), each the run's last pass's, the ones taken over recording
-    /// nothing.
+    /// stamp, published by now; and the merges of runs of passes over a linear attachment or a
+    /// shadowed texture (`Deferred::RunMerge`), each the run's last pass's (or the last before a
+    /// pass encoded again), the ones taken over recording nothing.
     fn record_scrubs(
         &self,
         state: &mut State,
@@ -1349,10 +1349,15 @@ impl CommandBufferShared {
                     },
                     // SAFETY: the command buffer is recording, outside a render pass; the merge,
                     // its images and its scratch are held until it completes (its pass's encoder
-                    // retains them), and the images rest in `GENERAL`.
+                    // retains them, and the segment its copies), and the images rest in
+                    // `GENERAL`.
                     Deferred::RunMerge(merge) => {
                         unsafe { merge.record(device.shared().vk(), buffer) };
-                        device.shared().counts.linear_merge_recorded();
+                        let counts = &device.shared().counts;
+                        match merge.shadow() {
+                            Some(copy) => count_shadow_copies(counts, std::slice::from_ref(copy)),
+                            None => counts.linear_merge_recorded(),
+                        }
                     }
                     _ => {}
                 }

@@ -43,6 +43,11 @@
 //!   its host step needs. Work a host step recorded again since (with the barriers between its
 //!   commands, `gpu_execute::Rerecord`, or as a route outgrew it, `DeferredPass::outgrown`)
 //!   keeps that step's recording.
+//! - **Runs of passes.** An encoder encoded again that was a pass of a run of passes over a
+//!   shadowed texture merged once (`pass_runs.rs`) leaves the run once it is put in place: the
+//!   merge of the run's pass before it, which it took over, records after all, and it keeps the
+//!   run's scratch after its own merge where a later pass went on over it (`State::replaying_keeps`,
+//!   recorded by `EncoderCore::finish_replay`). Its run's other passes are not encoded again.
 //! - **What cannot be encoded again stays as before.** An encoder whose log is gone (a compute
 //!   encoder of a command buffer that used command predication whose unit laid a step before it
 //!   opened, or one of its own that the unit's later encoders read, or a loop, or left work out;
@@ -56,6 +61,7 @@ use super::rebound_use::Unlogged;
 use super::{lock, CommandBuffer, CommandBufferShared, State};
 use crate::deferred::{Deferred, StepInputs};
 use crate::encoder::{RecordedSegment, Replayed, ReplayedPart, Segment};
+use crate::pass_runs::RunMerge;
 use crate::pipeline::budget::Urgency;
 use crate::replay::Replay;
 use crate::residency::Residency;
@@ -136,15 +142,27 @@ impl CommandBufferShared {
             // A compute encoder of a command buffer that used command predication, which
             // encodes again exactly, does so in its unit begun anew
             // (`Predication::replaying`).
-            let residency = {
+            // The merges its first encoding left to runs of passes (`pass_runs.rs`): encoded again,
+            // it leaves them, and keeps after itself what a later pass of a run went on over.
+            let (residency, runs) = {
                 let mut state = lock(&self.state);
                 state.replaying_predication = match state.predicated {
                     true => state.predication.replaying(at),
                     false => None,
                 };
-                state.residency_before(at, replay.kind())
+                let runs: Vec<Arc<RunMerge>> = (state.recorded.iter())
+                    .filter(|part| part.encoder == at)
+                    .flat_map(|part| &part.segments)
+                    .filter_map(|segment| match &segment.work {
+                        Deferred::RunMerge(merge) => Some(Arc::clone(merge)),
+                        _ => None,
+                    })
+                    .collect();
+                state.replaying_keeps = runs.iter().filter_map(|run| run.keep_after()).collect();
+                (state.residency_before(at, replay.kind()), runs)
             };
             let run = replay.run(&handle, residency);
+            lock(&self.state).replaying_keeps.clear();
             // Its steps' gates listed as the commit lists the first encoding's.
             let run = {
                 let mut state = lock(&self.state);
@@ -190,6 +208,9 @@ impl CommandBufferShared {
                 Ok(()) => {
                     counts.encoder_reencoded();
                     spliced.push(at);
+                    for run in &runs {
+                        run.leave();
+                    }
                 }
                 Err(unspliced) => {
                     counts.reencode_refused();
@@ -314,7 +335,8 @@ impl State {
     /// `VkCommandBuffer`s go with the pool unsubmitted. Refused, changing nothing and giving
     /// `replayed` back, where its place holds other parts than the encoding again's, or a segment
     /// but one whose pipelines are being made (which goes, the encoding again having left one of
-    /// its own in its place) or work its commit recorded on the GPU alone, or its group was
+    /// its own in its place), work its commit recorded on the GPU alone, or a run's merge (which
+    /// goes, the encoding again merging after itself, `pass_runs.rs`), or its group was
     /// submitted, or the command buffer completed.
     pub(super) fn splice_replay(
         &mut self,
@@ -329,8 +351,9 @@ impl State {
         let replaces = |part: &usize| {
             let recorded = &self.recorded[*part];
             recorded.sparse.is_empty()
-                && (recorded.segments.iter())
-                    .all(|segment| segment.keeps_pipelines() || segment.gpu_alone)
+                && (recorded.segments.iter()).all(|segment| {
+                    segment.keeps_pipelines() || segment.gpu_alone || segment.work.joins_a_run()
+                })
         };
         let unjudged = self.unjudged_parts();
         let fits = !self.finished()

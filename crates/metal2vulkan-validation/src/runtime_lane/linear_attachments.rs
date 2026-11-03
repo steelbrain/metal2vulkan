@@ -1873,9 +1873,10 @@ fn many_reference(queue: &CommandQueue, pipeline: &RenderPipelineState, width: u
 /// (`merge_scratch.rs`): its texels equal those the same passes leave in a private texture, and
 /// the bytes between its rows keep theirs. Where the device renders it apart by the rule
 /// (`linear_merge.rs`), the passes form a run or two merged once each (`pass_runs.rs`), each
-/// merge taking one scratch; where it is a shadow merged back (`shadow_merge.rs`), every
-/// merge after the first takes a scratch an earlier encoder was done with. Either way the device's
-/// memory grows by less than an eighth of a scratch a pass while they are encoded.
+/// merge taking one scratch; where it is a shadow merged back (`shadow_merge.rs`), the passes
+/// form one run, kept once before the first and merged once after the last (`pass_runs.rs`).
+/// Either way the device's memory grows by less than an eighth of a scratch a pass while they are
+/// encoded.
 fn many_passes_over(over: ManyOver, (width, row): (u64, u64)) {
     on_device(|device, _| {
         let queue = device.new_command_queue().unwrap();
@@ -1890,8 +1891,8 @@ fn many_passes_over(over: ManyOver, (width, row): (u64, u64)) {
             return;
         };
         let apart = by_the_rule(device) && aliased(&texture);
-        // A shadow merged back at each encoder's end: one over bytes another writer may write,
-        // all but a tracked `Private` buffer's, whose shadow is copied back.
+        // A shadow merged back: one over bytes another writer may write, all but a tracked
+        // `Private` buffer's, whose shadow is copied back.
         let shadow = !aliased(&texture) && over != ManyOver::Private;
         let before = device.work_counts();
         let encoded = many_passes(&queue, &pipeline, &texture);
@@ -1903,6 +1904,7 @@ fn many_passes_over(over: ManyOver, (width, row): (u64, u64)) {
         let recorded = delta(|c| c.linear_merges_recorded);
         let taken_over = delta(|c| c.linear_merges_taken_over);
         let shadow_reused = delta(|c| c.shadow_merge_scratches_reused);
+        let kept = delta(|c| c.shadow_texels_kept);
         let grown = encoded.device_memory_allocated - before.device_memory_allocated;
         // A merge of every texel's rows: its kept and changed parts.
         let scratch = 2 * width * TEXEL * MANY_H;
@@ -1910,8 +1912,8 @@ fn many_passes_over(over: ManyOver, (width, row): (u64, u64)) {
             "LINEAR-ATTACHMENT many passes over {over:?} {width}x{MANY_H}, rows of {row}, on {}: \
              apart by the rule {apart}, shadow {shadow}; {through} passes through copies, linear \
              merges {recorded} recorded and {taken_over} taken over, linear scratches {made} made \
-             and {reused} reused, shadow scratches {shadow_reused} reused; device memory grew \
-             {grown} bytes while encoding",
+             and {reused} reused, shadow scratches {shadow_reused} reused, shadow texels kept \
+             {kept}; device memory grew {grown} bytes while encoding",
             device.name()
         );
         // One run (`pass_runs.rs`), or two where the second pass's box reaches past the
@@ -1933,11 +1935,9 @@ fn many_passes_over(over: ManyOver, (width, row): (u64, u64)) {
                 "each run's merge takes one scratch"
             );
         }
+        // One run of passes (`pass_runs.rs`): kept once, every texel, before the first.
         if shadow {
-            assert!(
-                shadow_reused >= MANY as u64 - 1,
-                "every merge after the first takes a scratch: {shadow_reused}"
-            );
+            assert_eq!(kept, width * MANY_H, "the passes keep once, as one run");
         }
         assert!(
             grown < scratch * MANY as u64 / 8,

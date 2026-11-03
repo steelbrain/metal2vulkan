@@ -13,7 +13,8 @@
 //!   once its pass's merge is recorded (`LinearMerge::record_merge`), or a run's of passes merged
 //!   once as the pass that ends the run ends, after which its merge lies (`pass_runs.rs`); a
 //!   shadow's as the encoder that planned it goes (its [`ScratchLease`], held with the encoder's
-//!   kept-image leases). A
+//!   kept-image leases), or that of a run of passes over a shadowed texture as the run ends or
+//!   its command buffer commits (`pass_runs.rs`). A
 //!   scratch the pool lends is held by the merges that used it, which their command buffer
 //!   retains until it completes; the pool holds none of them (a weak reference each), so the
 //!   bytes go as before, once the command buffer completed: a shadow's back to its spares, for a
@@ -27,14 +28,15 @@
 //!      submission order (a run's, by its first pass's fill and keep and the merge its last pass
 //!      leaves, between which it is lent to none); a shadow's by its keeps and merges, which the
 //!      encoder records before its next command that touches the bytes another way, or as it
-//!      ends (`shadow.rs`).
+//!      ends (`shadow.rs`), or a run's by its first pass's keep and the merge its last pass
+//!      leaves, between which it is lent to none (`pass_runs.rs`).
 //!   2. A command buffer's encoders go in order: one is open at a time (a render encoder's end
 //!      left to the lowering thread is lowered before the next encoder opens,
 //!      `render/deferral.rs`), and its batches go to its queue's one `VkQueue` in order, which the
 //!      queue keeps from the command buffer's making to its completion (`queue_share.rs`). A
 //!      predicated loop's laying submitted again, and an encoder a rebind encodes again
-//!      (`command_buffer/reencode.rs`), repeat or replace whole encoders; the latter's linear
-//!      merges borrow no scratch, as its place may lie inside a run's span. So the spans from the
+//!      (`command_buffer/reencode.rs`), repeat or replace whole encoders; the latter's merges
+//!      borrow no scratch, as its place may lie inside a run's span. So the spans from the
 //!      first to the last command of two encoders that took one scratch never interleave in
 //!      submission order.
 //!   3. Each span writes every byte of the scratch it reads before reading it (the copies into

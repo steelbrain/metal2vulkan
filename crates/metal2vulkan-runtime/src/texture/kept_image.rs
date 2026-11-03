@@ -12,8 +12,8 @@
 //!
 //! Each command queue keeps the kept images its keeps made ([`KeptImages`]), for any merge of its
 //! of the same view and extent, whatever its shadow (a texture made each frame over the same
-//! bytes takes the last frame's): the encoder that took one holds it to its end
-//! ([`KeptLease`]), and the command buffers that used it hold it (`Arc`) until they complete.
+//! bytes takes the last frame's): the encoder that took one holds it to its end, or the run of
+//! passes it begins to the run's end (`pass_runs.rs`; [`KeptLease`]), and the command buffers that used it hold it (`Arc`) until they complete.
 //! `WorkCounts::shadow_merge_kept_images_made`, `shadow_merge_kept_images_followed` and
 //! `shadow_merge_kept_images_live` count them.
 
@@ -105,11 +105,14 @@ impl KeptImage {
 /// its uses is the queue's:
 /// 1. A keep and its merge lie in one encoder: a merged-back shadow is merged before the
 ///    encoder's next command that touches its bytes another way or at the encoder's end, and a
-///    command writing two ways is merged before the next command (`shadow.rs`).
-/// 2. So the spans from a keep to its merge of two encoders that took the image never interleave
-///    in submission order: one encoder of a command buffer is open at a time, and they go in
-///    order; each span lies in one batch, and a logical queue's batches go to its one `VkQueue`
-///    in its order, a command buffer's whole.
+///    command writing two ways is merged before the next command (`shadow.rs`); or in one run of
+///    render passes, in one batch, which holds the image from its first pass's keep until it ends
+///    or its command buffer commits, after its last merge in submission order (`pass_runs.rs`).
+///    An encoder a rebind encodes again takes no image of the pool (`ShadowMerge::new`).
+/// 2. So the spans from a keep to its merge of two encoders (or runs) that took the image never
+///    interleave in submission order: one encoder of a command buffer is open at a time, and they
+///    go in order; each span lies in one batch, and a logical queue's batches go to its one
+///    `VkQueue` in its order, a command buffer's whole.
 /// 3. The span submitted second keeps after the first's merge, which ends with a barrier from
 ///    every command to every command (`Barrier::everything`, `shadow_merge.rs`): outside a render
 ///    pass, a pipeline barrier's first synchronization scope is every command before it in
@@ -149,7 +152,8 @@ impl Pooled {
 }
 
 /// An open encoder's hold on a kept image it took from its queue's pool ([`KeptImages`]): no
-/// other keep takes the image while it lives. The encoder holds it to its end, or its drop.
+/// other keep takes the image while it lives. The encoder holds it to its end, or its drop; a run
+/// of passes over the shadowed texture, past the encoder's end to the run's (`pass_runs.rs`).
 pub(crate) struct KeptLease {
     held: Arc<AtomicU64>,
     take: u64,

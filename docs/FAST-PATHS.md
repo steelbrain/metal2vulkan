@@ -296,13 +296,23 @@ recorded here.
   twelve in one 10.4-12.9 against 14.5-16.2 ms, and one 0.76-0.83 against 0.92-1.42 ms. That
   image takes the scratch buffer's place, 8.3 MB at 1920x1080, and is its queue's: a later keep of
   the queue of the same view and extent, whatever its texture, takes it once the encoder that
-  took it ended, without waiting for the command buffers that used it, which the merge's closing
-  barrier and the image's tracked uses order (`texture/kept_image.rs`); at most two that no open
-  encoder holds stay for each view and extent, and none untaken over 256 takes. On the Iris Xe
+  took it ended (or the run of passes it began, below), without waiting for the command buffers
+  that used it, which the merge's closing barrier and the image's tracked uses order
+  (`texture/kept_image.rs`); at most two that no open encoder holds stay for each view and
+  extent, and none untaken over 256 takes. On the Iris Xe
   (`surface_texture_costs::surface_texture_cost_parts`, four shadowed textures a frame, 1,582,016
   texels), over anonymous pages, merged back, passes that draw took 5.0-5.4 ms a frame from commit
   to completion, and under scissors (790,448 texels) 3.6-3.9 ms; over tracked `Private` buffers,
-  copied back, 3.1 ms and 2.2-2.4 ms.
+  copied back, 3.1 ms and 2.2-2.4 ms. Render passes one after another in one batch over one
+  such texture, each loading and storing it as a color, with nothing between them that may touch
+  its bytes, are one run (`pass_runs.rs`): kept before the first pass and merged after the last.
+  700 such passes in one command buffer, each blending one rectangle over a 1024x1024
+  `BGRA8Unorm` texture over host pages with rows of 15360 bytes, took 3 shadow copies against
+  1,401 and kept 1,048,576 texels against 734,003,200; from commit to completion, 31.6-35.3 ms
+  against 69.3-99.9 ms on the M3 Max (MoltenVK 1.4.2) and 6.6-10.0 ms against 40.6-43.0 ms on
+  the RTX 5080 Laptop GPU (NVIDIA 615.71.09); with a 1x1 render encoder of no attachment between
+  every two, 61.6-65.0 ms against 107.4-118.6 ms and 9.7-12.3 ms against 44.5-47.1 ms (the
+  second to fourth of four such command buffers in a process).
 - **A no-copy buffer's deallocator runs in its release.** On an M3 Max under macOS 27.0.1 an unused
   no-copy buffer's deallocator ran inside its final release, on the releasing thread, every time.
   So a release that frees the buffer's import while a deallocator waits for the free frees it

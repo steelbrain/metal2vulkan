@@ -228,6 +228,11 @@ impl InstanceShadows {
         self.shadows.is_empty()
     }
 
+    /// The shadowed textures the draws use.
+    pub(super) fn copies(&self) -> impl Iterator<Item = &Arc<ShadowCopies>> {
+        self.shadows.iter().map(|shadow| &shadow.copies)
+    }
+
     /// Whether each of `shadows` is among the gathered textures, writing only where the gathered
     /// use may: an execution's draw uses only what its call gathered (`render/executions.rs`).
     pub(super) fn covers(&self, shadows: &[ShadowUse]) -> bool {

@@ -303,7 +303,7 @@ use super::linear_merge::{LinearMerge, MERGE_STAGES};
 use super::live_bind::{Emptied, LiveBind, Reshape, SettledHere};
 use super::nan_clear::{keeps_nan_sign, NanDepthWrite};
 use super::owned_kernel::OwnedModule;
-use super::pass_runs::{Joined, Joining, RunKey, RunMerge};
+use super::pass_runs::{Joined, Joining, RunHeld, RunKey, RunMerge, RunWork};
 use super::pipeline::Settled;
 use super::pipeline::{BufferForms, DrawPipeline};
 use super::pipeline::{DrawDynamic, RawPipeline, RenderVariant, VariantObjects};
@@ -333,7 +333,8 @@ use super::sample_planes::{self, Planes, PlanesCommands};
 use super::sample_positions;
 use super::sampler::OwnedSampler;
 use super::sampler::{ArgumentSamplers, SamplerState};
-use super::shadow::{self, ShadowCopy};
+use super::shadow::{self, ShadowCopies, ShadowCopy, ShadowTarget, Step};
+use super::shadow_merge::{MergeLease, ShadowMerge};
 use super::shadow_stencil::ShadowStencil;
 use super::sparse::emulated::Scrub;
 use super::tessellation::{FactorBuffer, Factors};
@@ -1082,6 +1083,16 @@ struct RunColor {
     index: usize,
     joining: Joining,
     on: Option<(Arc<LinearMerge>, Arc<RunMerge>)>,
+}
+
+/// A pass's color that is a shadowed texture merged back, joining a run as the pass ends
+/// (`pass_runs.rs`): its shadow, its run's key and bytes, and where it goes on with the run
+/// before it, that run's merge (whose keep the encoder went on from), the hold on its scratch,
+/// and its last pass's merge left to its submission.
+struct ShadowRunColor {
+    copies: Arc<ShadowCopies>,
+    joining: Joining,
+    on: Option<(Arc<ShadowMerge>, Option<MergeLease>, Arc<RunMerge>)>,
 }
 
 /// One render pass instance of an encoder's pass (the module docs).
@@ -4691,11 +4702,13 @@ impl RenderLowering {
                 (loaded(index, c) && stored(c)).then_some((index, c, own))
             })
             .collect::<Vec<_>>();
-        // A linear attachment's passes rendered apart, one after another, merge once, after the
-        // last (`pass_runs.rs`): the colors whose merge the pass leaves to its batch's
-        // submission, each with what it took from the runs, and the runs it goes on with, ends
-        // or passes. Nothing changes where the encoder is encoded again.
+        // A linear attachment's passes rendered apart, and a shadowed texture's merged back, one
+        // after another, merge once, after the last (`pass_runs.rs`): the colors whose merge the
+        // pass leaves to its batch's submission, each with what it took from the runs, and the
+        // runs it goes on with, ends or passes. Nothing changes where the encoder is encoded
+        // again.
         let mut runs: Vec<RunColor> = Vec::new();
+        let mut shadow_runs: Vec<ShadowRunColor> = Vec::new();
         let run_point = match core.encodes_again() || crate::replay::is_replaying() {
             true => None,
             false => Some(core.command_buffer().state().run_point()),
@@ -4737,10 +4750,12 @@ impl RenderLowering {
                 })
             };
             // The keys and images of the pass's attachments: their textures', their stand-ins'
-            // and their planes'.
+            // and their planes'; and the shadows among them.
             let mut attached: Vec<(ResourceKey, Option<vk::Image>)> = Vec::new();
+            let mut attached_shadows: Vec<Arc<ShadowCopies>> = Vec::new();
             let mut attach = |texture: &Texture| {
                 attached.push((texture.use_key(), texture.raw_image().ok()));
+                attached_shadows.extend(texture.shadow().cloned());
             };
             for c in layout.colors.iter().flatten() {
                 attach(&c.target.texture);
@@ -4771,7 +4786,7 @@ impl RenderLowering {
             let mut joining = Vec::new();
             for &(index, c, own) in &merging {
                 let bytes = own.own.texture.use_key();
-                let key = RunKey {
+                let key = RunKey::Linear {
                     backing: c.target.texture.raw_image()?,
                     surface: own.own.texture.raw_image()?,
                     subresource: (own.own.level, own.own.layer, own.own.layers),
@@ -4795,32 +4810,136 @@ impl RenderLowering {
                     joining.push(Joining { key, bytes, area });
                 }
             }
+            // The shadows the pass's draws take.
+            let drawn_shadows: Vec<&Arc<ShadowCopies>> = (instances.iter())
+                .flat_map(|instance| instance.shadows.copies())
+                .collect();
+            // Whether `copies`, a shadow the pass takes, lies over the bytes `bytes` of a run's
+            // texture of shadow `key`: that shadow, one over the same bytes, or one over host
+            // pages they meet (overlapping host ranges name the same bytes, as above).
+            let pages_meet = |a: ResourceKey, b: ResourceKey| {
+                let (a, b) = (rebinds.host_range(a), rebinds.host_range(b));
+                a.zip(b)
+                    .is_some_and(|(a, b)| a.start < b.end && b.start < a.end)
+            };
+            let over = |copies: &ShadowCopies, key: ResourceKey, bytes: ResourceKey| {
+                let (truth, _) = copies.truth();
+                copies.shadow_key == key
+                    || truth == bytes
+                    || copies.alias() == Some(bytes)
+                    || pages_meet(truth, bytes)
+            };
+            // A shadowed texture's color that joins: one the pass loads and stores and renders
+            // itself (no stand-in, no planes), of a pass of one render pass instance, its truth a
+            // buffer's bytes it merges back into, laid out as one image's texels at its first
+            // level and slice; that names neither those bytes nor their host range, and whose
+            // other attachments and draws take no shadow over them (the texture itself bound to
+            // a draw among them) and lie over none of them.
+            for (c, copies) in (layout.colors.iter().flatten())
+                .filter_map(|c| Some((c, c.target.texture.shadow()?)))
+            {
+                let (bytes, _) = copies.truth();
+                let key = copies.shadow_key;
+                let image = matches!(copies.target(), Some(ShadowTarget::Image { .. }))
+                    && copies.whole_area().is_some()
+                    && c.target.level == 0
+                    && c.target.layer == 0;
+                let alone = attached
+                    .iter()
+                    .filter(|&&(k, _)| k == key || k == bytes)
+                    .count()
+                    == 1
+                    && (attached_shadows.iter())
+                        .filter(|other| over(other, key, bytes))
+                        .count()
+                        == 1
+                    && !drawn_shadows.iter().any(|other| over(other, key, bytes));
+                let joins = quiet
+                    && !laying
+                    && !inline
+                    && instances.len() == 1
+                    && image
+                    && copies.merges_back()
+                    && c.load == LoadAction::Load
+                    && stored(c)
+                    && c.stand_in.is_none()
+                    && c.planes.is_none()
+                    && !named.contains(&bytes)
+                    && !host_overlap(bytes)
+                    && alone;
+                if joins {
+                    let joined = Joining {
+                        key: RunKey::Shadow(key),
+                        bytes,
+                        area: [0; 4],
+                    };
+                    shadow_runs.push(ShadowRunColor {
+                        copies: Arc::clone(copies),
+                        joining: joined,
+                        on: None,
+                    });
+                }
+            }
+            joining.extend(shadow_runs.iter().map(|run| run.joining));
             let touches = |key: &RunKey, bytes: ResourceKey| {
+                let attached_over = |&(k, image): &(ResourceKey, Option<vk::Image>)| match *key {
+                    RunKey::Linear {
+                        backing, surface, ..
+                    } => k == bytes || image.is_some_and(|i| i == backing || i == surface),
+                    RunKey::Shadow(shadow) => k == bytes || k == shadow,
+                };
+                let shadow_over = |copies: &&Arc<ShadowCopies>| match *key {
+                    RunKey::Linear { .. } => false,
+                    RunKey::Shadow(shadow) => over(copies, shadow, bytes),
+                };
                 !quiet
                     || named.contains(&bytes)
                     || host_overlap(bytes)
-                    || attached.iter().any(|&(k, image)| {
-                        k == bytes || image.is_some_and(|i| i == key.backing || i == key.surface)
-                    })
+                    || attached.iter().any(attached_over)
+                    || attached_shadows.iter().any(|copies| shadow_over(&copies))
+                    || drawn_shadows.iter().any(shadow_over)
             };
             let (joined, ended) = core
                 .command_buffer()
                 .state()
                 .pass_runs()
                 .end_of(now, &joining, touches);
-            // Each run it ends lends its scratch on: its merge lies before this pass.
-            for merge in ended {
-                merge.lend();
+            // Each run it ends lets go of its scratch: its merge lies before this pass.
+            for held in ended {
+                held.end();
             }
             let whole = [0, 0, layout.extent[0], layout.extent[1]];
-            for (run, joined) in runs.iter_mut().zip(joined) {
+            let mut joined = joined.into_iter();
+            for (run, joined) in runs.iter_mut().zip(&mut joined) {
                 match joined {
-                    Joined::On { area, merge, last } => {
+                    Joined::On {
+                        area,
+                        held: RunHeld::Linear(merge),
+                        last,
+                    } => {
                         run.joining.area = area;
                         run.on = Some((merge, last));
                     }
+                    Joined::On { held, .. } => held.end(),
                     Joined::Outgrew => run.joining.area = whole,
                     Joined::Opens => {}
+                }
+            }
+            // A shadowed color going on with its run takes its image as the run's passes left
+            // it, kept before the first: where the encoder still carries it.
+            for (run, joined) in shadow_runs.iter_mut().zip(joined) {
+                match joined {
+                    Joined::On {
+                        held: RunHeld::Shadow { merge, lease },
+                        last,
+                        ..
+                    } => {
+                        if core.go_on_shadow(&run.copies, Arc::clone(&merge)) {
+                            run.on = Some((merge, lease, last));
+                        }
+                    }
+                    Joined::On { held, .. } => held.end(),
+                    Joined::Outgrew | Joined::Opens => {}
                 }
             }
         }
@@ -5765,7 +5884,8 @@ impl RenderLowering {
             if !core.note_left_uses(MERGE_STAGES, merge.merge_uses()) {
                 continue;
             }
-            let left = RunMerge::new(Arc::clone(merge));
+            let took = run.on.as_ref().map(|(_, last)| Arc::clone(last));
+            let left = RunMerge::new(RunWork::Linear(Arc::clone(merge)), took);
             core.defer(Deferred::RunMerge(Arc::clone(&left)))?;
             if let Some((_, last)) = &run.on {
                 last.take_over();
@@ -5774,7 +5894,7 @@ impl RenderLowering {
             let now = run_point.ok_or_else(|| internal("a run's pass encoded again"))?;
             (core.command_buffer().state().pass_runs()).open(
                 run.joining,
-                Arc::clone(merge),
+                RunHeld::Linear(Arc::clone(merge)),
                 left,
                 now,
             );
@@ -5871,6 +5991,48 @@ impl RenderLowering {
             .chain(stood_in)
             .chain(planes_images)
             .collect();
+        // Each shadowed color of a run leaves its merge to its batch's submission, its uses noted
+        // here, as its encoder's end would have merged it; the run's merge before it, taken over
+        // once it is (`pass_runs.rs`). The run holds the merge's scratch past the encoder's end.
+        for ShadowRunColor {
+            copies,
+            joining,
+            on,
+        } in shadow_runs
+        {
+            let Some(copy) = core.leave_shadow_merge(&copies) else {
+                continue;
+            };
+            let Step::Merge(merge) = &copy.step else {
+                return Err(internal("a run's copy back that merges nothing"));
+            };
+            let merge = Arc::clone(merge);
+            if !core.note_left_uses(copy.stages(), &copy.uses()) {
+                continue;
+            }
+            // Reported to a log of the pages as the shadow's own, as the copy back would be.
+            if let Some((log, bytes)) = copy.written_log(&device) {
+                core.command_buffer().dirty().wrote_back(log, bytes);
+            }
+            // The scratch of the run it went on with, or of the keep it made since (a merge of
+            // the run's, then a keep that holds more, `ShadowSync::before`).
+            let (lease, took) = match on {
+                Some((kept, lease, last)) if Arc::ptr_eq(&kept, &merge) => (lease, Some(last)),
+                Some((_, lease, last)) => {
+                    drop(lease);
+                    (core.take_lease(&merge), Some(last))
+                }
+                None => (core.take_lease(&merge), None),
+            };
+            let left = RunMerge::new(RunWork::Shadow(copy), took.clone());
+            core.defer(Deferred::RunMerge(Arc::clone(&left)))?;
+            if let Some(last) = &took {
+                last.take_over();
+            }
+            let now = run_point.ok_or_else(|| internal("a run's pass encoded again"))?;
+            let held = RunHeld::Shadow { merge, lease };
+            (core.command_buffer().state().pass_runs()).open(joining, held, left, now);
+        }
         // What the pass's commands use, held until the command buffer completes as one object,
         // which lets go of them in this order: the command buffer lets go of what it holds from
         // the last retained back.
