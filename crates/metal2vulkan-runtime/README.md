@@ -319,8 +319,13 @@ Calls Metal does not have, for a consumer that emulates a Metal device:
   finds its GPU idle between consecutive work of two `VkQueue`s (NVIDIA's driver), the other
   command queues move among the `VkQueue`s of their family at their idle points and share them
   ([docs/API.md](../../docs/API.md#the-policy)); this one keeps the `VkQueue` it takes for its
-  life, no queue moves onto it, and a queue already there leaves at its next idle point. Under
-  `QueueSharingPolicy::PerQueue`, and on a device that does not share, it is
+  life, no queue moves onto it, and a queue already there leaves at its next idle point. A
+  shared queue waits behind another's long command buffer once per queue that goes long: the
+  first long command buffer of a queue it shares a `VkQueue` with holds its command buffers for
+  that command buffer's whole length (beside 30 ms command buffers on an RTX 5080, a compositor's
+  64 completions over 10 ms and one of 30 ms). Make a queue that must never wait so (a
+  compositor's) with this call: on that GPU, none of its completions took over 10 ms in any run.
+  Under `QueueSharingPolicy::PerQueue`, and on a device that does not share, it is
   `new_command_queue_with_max_command_buffer_count`. A count of 0 and a lost device are refused
   as there.
 

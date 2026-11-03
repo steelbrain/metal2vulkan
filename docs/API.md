@@ -227,11 +227,14 @@ compile does. `DevicePolicy::default()` is `DevicePolicy::UNTRUSTED`:
   family whose oldest batch has run under 0.5 ms, so short command buffers of several queues run
   with no switch between them. A queue whose batch ran over 2 ms as its `VkQueue`'s oldest is
   long: no queue joins its `VkQueue`, and it moves once more, at its next such make, to an idle
-  `VkQueue` of its own. The first long command buffer of a queue that shared holds the command
-  buffers committed behind it there for its whole length, announced `queue-sharing` at the
-  device's first join (section 9). A queue made with `Device::new_command_queue_unshared` never
-  moves, and no queue joins its `VkQueue`: a compositor's, whose command buffers must not wait
-  behind an application's. Presenting queues, and a queue that lent its `VkQueue`
+  `VkQueue` of its own. So a queue waits behind another's long command buffer once per queue
+  that goes long, about that command buffer's length: the first long command buffer of a queue
+  that shared holds the command buffers committed behind it there for its whole length,
+  announced `queue-sharing` at the device's first join (section 9). A queue made with
+  `Device::new_command_queue_unshared` never moves, and no queue joins its `VkQueue`: the form
+  for a queue whose command buffers must never wait behind another's (a compositor's beside an
+  application's; on the RTX 5080 Laptop GPU none of its completions took over 10 ms in any run,
+  where a shared one's had one stall of 30 ms beside 30 ms command buffers). Presenting queues, and a queue that lent its `VkQueue`
   (`CommandQueue::with_vk_queue`), never move. Before the check answers, and on a device whose
   check finds no idling or that has no two `VkQueue`s of one family (MoltenVK, RADV, lavapipe),
   each queue keeps the `VkQueue` it took at its creation, round robin.

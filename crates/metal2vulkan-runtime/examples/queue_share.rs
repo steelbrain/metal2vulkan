@@ -3,7 +3,8 @@
 //!
 //! ```sh
 //! cargo run --release -p metal2vulkan-runtime --example queue_share -- <mode> \
-//!     [--policy adaptive|per-queue] [--seconds S] [--dispatches N] [--unshared]
+//!     [--policy adaptive|per-queue] [--seconds S] [--dispatches N] [--unshared] \
+//!     [--threads T --in-flight F [--one-vk-queue]]
 //! ```
 //!
 //! Every command buffer is one of two kinds. A *draw*: a render pass over a 512x512 `RGBA8Unorm`
@@ -30,6 +31,10 @@
 //!   share of the run (from their GPU start and end times, in commit order on the GPU).
 //! - **rates**: 2 and 8 threads, each its own queue, committing draws as fast as they can with 3,
 //!   then 1, in flight a thread: command buffers a second, and the GPU's idle share at switches.
+//!   With `--threads` and `--in-flight`, that one shape, with each command buffer's GPU end and
+//!   commit to its completed handler, the device's submission, scheduler and wake counts per
+//!   command buffer, and the busiest threads' CPU (Linux); `--one-vk-queue` puts every thread's
+//!   queue on one `VkQueue`, each lent once (`with_vk_queue`) so it never moves.
 //! - **idle-queues**: one thread committing draws in turn over 16, then 2,048 queues, 3 in flight:
 //!   command buffers a second, and the thread's time in `command_buffer` per command buffer.
 
@@ -68,6 +73,11 @@ struct Options {
     seconds: f64,
     dispatches: u64,
     unshared: bool,
+    /// `rates` of this many threads alone (0: the default set).
+    threads: usize,
+    in_flight: usize,
+    /// `rates` with every thread's queue on one `VkQueue`, each lent once so it never moves.
+    one_vk_queue: bool,
 }
 
 fn options() -> Options {
@@ -78,6 +88,9 @@ fn options() -> Options {
         seconds: 2.0,
         dispatches: 300,
         unshared: false,
+        threads: 0,
+        in_flight: 3,
+        one_vk_queue: false,
     };
     while let Some(arg) = args.next() {
         let mut value = || args.next().unwrap_or_else(|| panic!("{arg} needs a value"));
@@ -92,6 +105,9 @@ fn options() -> Options {
             "--seconds" => options.seconds = value().parse().unwrap(),
             "--dispatches" => options.dispatches = value().parse().unwrap(),
             "--unshared" => options.unshared = true,
+            "--threads" => options.threads = value().parse().unwrap(),
+            "--in-flight" => options.in_flight = value().parse().unwrap(),
+            "--one-vk-queue" => options.one_vk_queue = true,
             other => panic!("unknown argument {other}"),
         }
     }
@@ -513,32 +529,126 @@ fn interleave(kit: &Arc<Kit>, options: &Options) {
 
 /// `threads` threads, each its own queue, committing draws with `in_flight` in flight: command
 /// buffers a second over the run, and the GPU's idle share at switches.
+/// The queues of `threads` threads: each its own where `one` is false; else all on the first's
+/// `VkQueue`, made until the round robin comes back to it, each lent once so it never moves.
+fn rate_queues(kit: &Kit, threads: usize, one: bool) -> Vec<CommandQueue> {
+    if !one {
+        return (0..threads).map(|_| kit.queue(false)).collect();
+    }
+    // SAFETY: the closures keep the handle only to compare it; nothing is submitted.
+    let raw = |queue: &CommandQueue| unsafe { queue.with_vk_queue(|raw, _| raw) };
+    let first = kit.queue(false);
+    let home = raw(&first);
+    let mut queues = vec![first];
+    let mut others = Vec::new();
+    while queues.len() < threads {
+        let queue = kit.queue(false);
+        match raw(&queue) == home {
+            true => queues.push(queue),
+            false => others.push(queue),
+        }
+    }
+    queues
+}
+
+/// Per-thread CPU time of this process by thread name, in clock ticks (Linux; empty elsewhere).
+fn thread_ticks() -> Vec<(u64, String, u64)> {
+    let Ok(tasks) = std::fs::read_dir("/proc/self/task") else {
+        return Vec::new();
+    };
+    let mut ticks = Vec::new();
+    for task in tasks.flatten() {
+        let Ok(stat) = std::fs::read_to_string(task.path().join("stat")) else {
+            continue;
+        };
+        let (Some(open), Some(close)) = (stat.find('('), stat.rfind(')')) else {
+            continue;
+        };
+        let name = stat[open + 1..close].to_owned();
+        let fields: Vec<&str> = stat[close + 2..].split(' ').collect();
+        let (Some(user), Some(system)) = (fields.get(11), fields.get(12)) else {
+            continue;
+        };
+        let tid = task.file_name().to_string_lossy().parse().unwrap_or(0);
+        ticks.push((
+            tid,
+            name,
+            user.parse::<u64>().unwrap_or(0) + system.parse::<u64>().unwrap_or(0),
+        ));
+    }
+    ticks
+}
+
+/// The busiest threads between `before` and `after`, as a share of `seconds` each.
+fn busiest(before: &[(u64, String, u64)], after: &[(u64, String, u64)], seconds: f64) -> String {
+    let mut used: Vec<(f64, String)> = after
+        .iter()
+        .map(|(tid, name, ticks)| {
+            let was = before
+                .iter()
+                .find(|(t, _, _)| t == tid)
+                .map_or(0, |(_, _, t)| *t);
+            ((ticks - was) as f64 / 100.0 / seconds, name.clone())
+        })
+        .filter(|(share, _)| *share > 0.02)
+        .collect();
+    used.sort_by(|a, b| b.0.total_cmp(&a.0));
+    used.iter()
+        .take(8)
+        .map(|(share, name)| format!("{name} {:.0}%", share * 100.0))
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+/// The p50 and p99 of `samples`, in microseconds.
+fn quantiles(samples: &mut [f64]) -> String {
+    if samples.is_empty() {
+        return "none".to_owned();
+    }
+    samples.sort_by(f64::total_cmp);
+    let at = |p: f64| samples[((samples.len() as f64 * p) as usize).min(samples.len() - 1)] * 1e6;
+    format!("p50 {:.1} p99 {:.1} us", at(0.5), at(0.99))
+}
+
 fn rate(kit: &Arc<Kit>, options: &Options, threads: usize, in_flight: usize) {
     let stop = Arc::new(AtomicBool::new(false));
     let times = Arc::new(Mutex::new(Vec::new()));
+    // Each command buffer's GPU end to its completed handler, and its commit to that handler.
+    let latencies = Arc::new(Mutex::new((Vec::new(), Vec::new())));
+    let queues = rate_queues(kit, threads, options.one_vk_queue);
+    let counts = kit.device.work_counts();
+    let cpu = thread_ticks();
     let began = Instant::now();
-    let handles: Vec<_> = (0..threads)
-        .map(|thread| {
+    let handles: Vec<_> = (queues.into_iter().enumerate())
+        .map(|(thread, queue)| {
             let kit = Arc::clone(kit);
             let stop = Arc::clone(&stop);
             let times = Arc::clone(&times);
+            let latencies = Arc::clone(&latencies);
             std::thread::spawn(move || {
-                let queue = kit.device.new_command_queue().unwrap();
                 let target = kit.target();
                 let mut flying = std::collections::VecDeque::new();
                 let mut made = 0u64;
                 while !stop.load(Ordering::Relaxed) {
                     let command_buffer = kit.draw(&queue, &target);
                     let times = Arc::clone(&times);
+                    let latencies = Arc::clone(&latencies);
+                    let committed = Arc::new(Mutex::new(0.0));
+                    let at = Arc::clone(&committed);
                     command_buffer
                         .add_completed_handler(Box::new(move |done: &CommandBuffer| {
+                            let now = metal2vulkan_runtime::host_time();
                             if let (Ok(start), Ok(end)) =
                                 (done.gpu_start_time(), done.gpu_end_time())
                             {
                                 times.lock().unwrap().push((thread, start, end));
+                                let mut latencies = latencies.lock().unwrap();
+                                latencies.0.push(now - end);
+                                latencies.1.push(now - *at.lock().unwrap());
                             }
                         }))
                         .unwrap();
+                    *committed.lock().unwrap() = metal2vulkan_runtime::host_time();
                     command_buffer.commit().unwrap();
                     flying.push_back(command_buffer);
                     made += 1;
@@ -558,15 +668,48 @@ fn rate(kit: &Arc<Kit>, options: &Options, threads: usize, in_flight: usize) {
     stop.store(true, Ordering::Relaxed);
     let made: u64 = handles.into_iter().map(|h| h.join().unwrap()).sum();
     let elapsed = began.elapsed().as_secs_f64();
+    let cpu_after = thread_ticks();
     std::thread::sleep(Duration::from_millis(100));
+    let after = kit.device.work_counts();
     let (idle, switches) = switch_idle(&mut times.lock().unwrap());
+    let mut latencies = latencies.lock().unwrap();
+    let per = |a: u64, b: u64| (a - b) as f64 / made.max(1) as f64;
     println!(
-        "rates (policy {:?}): {threads} threads, {in_flight} in flight: {:.1}k command buffers/s; GPU idle at {switches} switches {:.1}%; {}",
+        "rates (policy {:?}{}): {threads} threads, {in_flight} in flight: {:.1}k command buffers/s; GPU idle at {switches} switches {:.1}%; {}",
         options.policy,
+        if options.one_vk_queue { ", one VkQueue" } else { "" },
         made as f64 / elapsed / 1e3,
         idle * 100.0,
         kit.counts()
     );
+    println!(
+        "  GPU end to handler {}; commit to handler {}",
+        quantiles(&mut latencies.0),
+        quantiles(&mut latencies.1)
+    );
+    println!(
+        "  per command buffer: submissions {:.2}, submit infos {:.2}, VkCommandBuffers {:.2}, scheduler passes {:.2} (by waiters {:.2}, their batches {:.2}), scheduler sleeps {:.2} (woken by commits {:.2}, completions {:.2}), timeline waits {:.2}, fence waits {:.2}, waiter parks {:.2} (timed out {:.2}), waiter wakes {:.2}, handler-thread wakes {:.2}, command-buffer wakes {:.2}, completed where seen {:.2}, turns taken {:.2}, submit {:.1} us",
+        per(after.queue_submissions, counts.queue_submissions),
+        per(after.submit_infos, counts.submit_infos),
+        per(after.command_buffers_submitted, counts.command_buffers_submitted),
+        per(after.scheduler_passes, counts.scheduler_passes),
+        per(after.scheduler_passes_by_waiters, counts.scheduler_passes_by_waiters),
+        per(after.batches_submitted_by_waiters, counts.batches_submitted_by_waiters),
+        per(after.scheduler_sleeps, counts.scheduler_sleeps),
+        per(after.scheduler_wakes_commit, counts.scheduler_wakes_commit),
+        per(after.scheduler_wakes_completion, counts.scheduler_wakes_completion),
+        per(after.timeline_waits, counts.timeline_waits),
+        per(after.fence_waits, counts.fence_waits),
+        per(after.completion_waiter_parks, counts.completion_waiter_parks),
+        per(after.completion_waiter_parks_timed_out, counts.completion_waiter_parks_timed_out),
+        per(after.wakes_completion_waiters, counts.wakes_completion_waiters),
+        per(after.wakes_handler_threads, counts.wakes_handler_threads),
+        per(after.wakes_command_buffer_waiters, counts.wakes_command_buffer_waiters),
+        per(after.completed_where_seen, counts.completed_where_seen),
+        per(after.completion_turns_where_taken, counts.completion_turns_where_taken),
+        per(after.batch_submit_nanos, counts.batch_submit_nanos) / 1e3,
+    );
+    println!("  threads' CPU: {}", busiest(&cpu, &cpu_after, elapsed));
 }
 
 fn idle_queues(kit: &Arc<Kit>, options: &Options, count: usize) {
@@ -623,6 +766,9 @@ fn main() {
         "alternating" => beside(&kit, &options, Duration::from_millis(2), 1, 1),
         "slow-alternating" => beside(&kit, &options, Duration::from_millis(1500), 1, 1),
         "interleave" => interleave(&kit, &options),
+        "rates" if options.threads > 0 => {
+            rate(&kit, &options, options.threads, options.in_flight);
+        }
         "rates" => {
             for in_flight in [3, 1] {
                 for threads in [2, 8] {
