@@ -10,9 +10,13 @@
 //! - every CPU read sees them, through the texture or a view;
 //! - overlapping writes into one texture keep their order.
 //!
+//! And bursts of new textures, which read zero on Metal: every read of a fresh texture, GPU or CPU,
+//! reads zero, and a first write into one lands after its zeros.
+//!
 //! Where the device copies on its staging queue, the counts show the batching
-//! (`WorkCounts::staging_copies_queued`, `staging_flushes`, `staging_gpu_waits`): no submission
-//! during a burst, one that carries it all, waited for on the GPU by the batch that reads it.
+//! (`WorkCounts::staging_moves_queued`, `staging_copies_queued`, `staging_flushes`,
+//! `staging_gpu_waits`): no submission during a burst, one that carries it all, waited for on the
+//! GPU by the batch that reads it.
 //! Each test prints the path it saw (`STAGING-BATCH` lines).
 
 use super::host_memory::on_device;
@@ -87,13 +91,15 @@ fn copy_out(command_buffer: &CommandBuffer, texture: &Texture, side: u64) -> Buf
     out
 }
 
-/// The counts that tell the path apart: host copies, staging submissions, copies queued for the
-/// staging queue, staging submissions that carried them, GPU waits for them, internal
-/// submissions.
+/// The counts that tell the path apart: host copies, images started on the host, staging
+/// submissions, first moves and copies queued for the staging queue, staging submissions that
+/// carried them, GPU waits for them, internal submissions.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct Path {
     host: u64,
+    started: u64,
     staging: u64,
+    moves: u64,
     queued: u64,
     flushes: u64,
     gpu_waits: u64,
@@ -104,7 +110,9 @@ impl Path {
     fn between(before: &WorkCounts, after: &WorkCounts) -> Path {
         Path {
             host: after.host_texel_copies - before.host_texel_copies,
+            started: after.images_started_on_the_host - before.images_started_on_the_host,
             staging: after.staging_submissions - before.staging_submissions,
+            moves: after.staging_moves_queued - before.staging_moves_queued,
             queued: after.staging_copies_queued - before.staging_copies_queued,
             flushes: after.staging_flushes - before.staging_flushes,
             gpu_waits: after.staging_gpu_waits - before.staging_gpu_waits,
@@ -460,6 +468,180 @@ fn a_handed_out_texture_s_writes_are_made_by_their_calls() {
                 (1, 1),
                 "{name}: a handed-out texture's write is made by its call"
             );
+        }
+    });
+}
+
+/// 600 new `Managed` textures, as an icon cache makes them (16 to 512 texels square,
+/// `BGRA8Unorm` and `RGBA8Unorm`), each made with no submission waited for: a later command
+/// buffer's blits read zero from every one, and so does `get_bytes`. Where the device copies on
+/// its staging queue, the moves and zeros were queued and the command buffer's batch carried all
+/// 600 in one submission there, which it waited for on the GPU.
+#[test]
+fn a_burst_of_new_textures_makes_no_staging_submission() {
+    const MADE: usize = 600;
+    const SIDES: [u64; 6] = [16, 32, 64, 128, 256, 512];
+    on_device(|device| {
+        let name = device.name();
+        let queue = device.new_command_queue().unwrap();
+        let before = device.work_counts();
+        let textures: Vec<(Texture, u64)> = (0..MADE)
+            .map(|i| {
+                let side = SIDES[i % SIDES.len()];
+                let format = match i % 2 {
+                    0 => PixelFormat::BGRA8Unorm,
+                    _ => PixelFormat::RGBA8Unorm,
+                };
+                (texture(device, format, side, managed()), side)
+            })
+            .collect();
+        let made = Path::between(&before, &device.work_counts());
+        let command_buffer = queue.command_buffer().unwrap();
+        let outs: Vec<Buffer> = (textures.iter())
+            .map(|(texture, side)| copy_out(&command_buffer, texture, *side))
+            .collect();
+        command_buffer.commit().unwrap();
+        command_buffer.wait_until_completed_for(WAIT).unwrap();
+        assert_eq!(command_buffer.error(), None, "{name}: the blits");
+        let read = Path::between(&before, &device.work_counts());
+        for (i, (out, (_, side))) in outs.iter().zip(&textures).enumerate() {
+            let bytes = read_buffer(out, 0, 4 * side * side).unwrap();
+            assert!(
+                bytes.iter().all(|&b| b == 0),
+                "{name}: the blit of new texture {i} reads zero"
+            );
+        }
+        for (i, (texture, side)) in textures.iter().enumerate() {
+            assert!(
+                read_back(texture, *side).iter().all(|&b| b == 0),
+                "{name}: get_bytes of new texture {i} reads zero"
+            );
+        }
+        let route = match (made.started as usize == MADE, made.moves as usize == MADE) {
+            (true, _) => "started on the host",
+            (false, true) => "queued for the staging queue",
+            _ => "started by submissions",
+        };
+        println!(
+            "STAGING-BATCH {name}: {MADE} new textures {route}: made {made:?}, with the command \
+             buffer that read them {read:?}"
+        );
+        if made.moves > 0 {
+            assert_eq!(
+                (made.moves as usize, made.staging, made.internal),
+                (MADE, 0, 0),
+                "{name}: new textures queued for the staging queue make no submission"
+            );
+            assert_eq!(
+                (read.staging, read.flushes),
+                (1, 1),
+                "{name}: the command buffer's batch carried the 600 in one staging submission"
+            );
+            assert!(
+                read.gpu_waits >= 1,
+                "{name}: the batch waited for the staging submission on the GPU"
+            );
+        }
+    });
+}
+
+/// A new texture's first write lands after its zeros, whichever first reads it: a
+/// `replace_region` of part of it read back by `get_bytes` and by a later command buffer's blit,
+/// and a later command buffer's blit into part of it read back by `get_bytes`, each read zero
+/// outside the part and the written bytes inside it; and a new texture read before any write
+/// reads zero.
+#[test]
+fn a_new_texture_s_first_write_lands_after_its_zeros() {
+    const SIDE: u64 = 64;
+    const PART: u64 = 24;
+    on_device(|device| {
+        let name = device.name();
+        let queue = device.new_command_queue().unwrap();
+        let part = Region::new_2d(8, 16, PART, PART);
+        let written = texels(PART, 11);
+        let mut wanted = vec![0; (4 * SIDE * SIDE) as usize];
+        for y in 0..PART {
+            let at = (4 * ((part.origin.y + y) * SIDE + part.origin.x)) as usize;
+            let from = (4 * y * PART) as usize;
+            let row = (4 * PART) as usize;
+            wanted[at..at + row].copy_from_slice(&written[from..from + row]);
+        }
+        for options in [ResourceOptions::shared(), managed()] {
+            let mode = options.storage_mode();
+            // Written by the CPU, read by the CPU.
+            let before = device.work_counts();
+            let cpu = texture(device, PixelFormat::RGBA8Unorm, SIDE, options);
+            cpu.replace_region(part, 0, 0, &written, 4 * PART, 0)
+                .unwrap();
+            let queued = Path::between(&before, &device.work_counts());
+            assert!(
+                read_back(&cpu, SIDE) == wanted,
+                "{mode:?} on {name}: get_bytes reads zero around the first write"
+            );
+            let read = Path::between(&before, &device.work_counts());
+            // Written by the CPU, read by a later command buffer.
+            let gpu = texture(device, PixelFormat::RGBA8Unorm, SIDE, options);
+            gpu.replace_region(part, 0, 0, &written, 4 * PART, 0)
+                .unwrap();
+            let command_buffer = queue.command_buffer().unwrap();
+            let out = copy_out(&command_buffer, &gpu, SIDE);
+            command_buffer.commit().unwrap();
+            command_buffer.wait_until_completed_for(WAIT).unwrap();
+            assert_eq!(command_buffer.error(), None, "{mode:?} on {name}");
+            assert!(
+                read_buffer(&out, 0, 4 * SIDE * SIDE).unwrap() == wanted,
+                "{mode:?} on {name}: a later blit reads zero around the first write"
+            );
+            // Written by a command buffer's blit, read by the CPU.
+            let blitted = texture(device, PixelFormat::RGBA8Unorm, SIDE, options);
+            let source = device
+                .new_buffer_with_bytes(&written, ResourceOptions::shared())
+                .unwrap();
+            let command_buffer = queue.command_buffer().unwrap();
+            let mut blit = command_buffer.blit_command_encoder().unwrap();
+            blit.copy_from_buffer_to_texture(
+                &source,
+                0,
+                4 * PART,
+                0,
+                Size::new(PART, PART, 1),
+                &blitted,
+                0,
+                0,
+                Origin::new(part.origin.x, part.origin.y, 0),
+                BlitOption::None,
+            )
+            .unwrap();
+            blit.end_encoding().unwrap();
+            command_buffer.commit().unwrap();
+            command_buffer.wait_until_completed_for(WAIT).unwrap();
+            assert_eq!(command_buffer.error(), None, "{mode:?} on {name}");
+            assert!(
+                read_back(&blitted, SIDE) == wanted,
+                "{mode:?} on {name}: get_bytes reads zero around a blit's first write"
+            );
+            // Read before any write.
+            let fresh = texture(device, PixelFormat::RGBA8Unorm, SIDE, options);
+            assert!(
+                read_back(&fresh, SIDE).iter().all(|&b| b == 0),
+                "{mode:?} on {name}: a new texture read at once reads zero"
+            );
+            println!(
+                "STAGING-BATCH {name}: {mode:?} a new texture's first write: queued {queued:?}, \
+                 read back {read:?}"
+            );
+            if queued.moves > 0 {
+                assert_eq!(
+                    (queued.moves, queued.queued, queued.staging),
+                    (1, 1, 0),
+                    "{mode:?} on {name}: the move and the write queued, nothing submitted"
+                );
+                assert_eq!(
+                    (read.staging, read.flushes),
+                    (1, 1),
+                    "{mode:?} on {name}: the read carried the move and the write"
+                );
+            }
         }
     });
 }

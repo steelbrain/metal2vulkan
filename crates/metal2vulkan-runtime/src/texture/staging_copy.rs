@@ -11,9 +11,14 @@
 //!   writes its zeros). It is made concurrent among the device's families and the staging queue's,
 //!   so its uses change no owner: measured on the RTX 3090, 50 clears and 50 copies of a 1080p
 //!   image cost the same either way (0.24 ms and 1.32 ms).
-//! - **Made.** It is moved to `GENERAL` and zeroed on the staging queue as it is made, from a
-//!   staging buffer of zeros (a copy engine clears nothing), waited for
-//!   (`FirstMove::record_alone`): no batch finds its move waiting.
+//! - **Made.** Its move to `GENERAL` and its zeros, copied from the staging queue's own buffer
+//!   of zeros (a copy engine clears nothing; the device's own zeros are exclusive to its
+//!   families), are queued for the staging queue's next submission as it is shared
+//!   ([`Image::queue_staging_moves`]), before any copy into it: the making waits for no
+//!   submission, and no batch finds its move waiting. Whatever reads it first, a batch, an
+//!   internal submission, a `get_bytes` or a hand-out, finds the zeros written first, as below;
+//!   a first `replace_region` is queued after them. Counted:
+//!   `WorkCounts::staging_moves_queued`.
 //! - **Copied in.** `replace_region` packs the caller's bytes into a staging buffer of their own
 //!   before it returns, and queues the copy into the image for the staging queue's next
 //!   submission ([`Queued`]), which carries every copy queued so far, in the order they were
@@ -47,12 +52,13 @@
 //!   (`Image::decode_written`): the twin is made to take the staging queue's copies where its
 //!   carrier does.
 
-use super::first_move::{STAGED_BYTES, STAGED_COPIES};
+use super::first_move::{FirstMove, STAGED_BYTES, STAGED_COPIES};
+use super::ZERO_BYTES;
 use super::{image_aspects, staging_buffer, transfer_barrier, Image, ImagePlan, Staging};
 use crate::device::{lock, Device};
 use crate::error::Error;
 use crate::exit_guard::{self, Call};
-use crate::memory::Placement;
+use crate::memory::{Memory, Placement};
 use crate::release;
 use ash::vk;
 use metal2vulkan::metal::format::is_depth_stencil;
@@ -61,7 +67,7 @@ use metal2vulkan::vk::{ImageAspectFlags, ImageUsageFlags};
 use std::sync::{Arc, Weak};
 
 /// The work queued for the staging queue's next submission (the module docs), in the device's
-/// first moves (`FirstMoves::register_staging`), and what bounds it.
+/// first moves (`FirstMoves::staging`), and what bounds it.
 #[derive(Default)]
 pub(crate) struct Queued {
     work: Vec<Work>,
@@ -73,14 +79,34 @@ pub(crate) struct Queued {
     draining: usize,
 }
 
-/// One copy queued: of `copy` from the staging buffer `bytes` into `raw`, the `VkImage` of the
-/// image `keeper` keeps (its own, or its decoded twin's), held weakly: an image gone takes its
-/// copy with it.
-struct Work {
+/// One piece of work queued for `raw`, the `VkImage` of the image `keeper` keeps (its own, or its
+/// decoded twin's), held weakly: an image gone takes its work with it.
+pub(super) struct Work {
     keeper: Weak<Image>,
     raw: vk::Image,
-    bytes: StagedBytes,
-    copy: vk::BufferImageCopy,
+    what: What,
+}
+
+/// What a piece of queued work does.
+enum What {
+    /// The image's first move, and its zeros from the staging queue's own
+    /// (`FirstMoves::staging_zeros`): queued as the image is shared, before any copy into it.
+    Move(FirstMove),
+    /// A host call's copy of `copy` from the staging buffer `bytes`.
+    Copy {
+        bytes: StagedBytes,
+        copy: vk::BufferImageCopy,
+    },
+}
+
+impl Work {
+    /// The staging buffer it holds, where it is a copy.
+    fn into_bytes(self) -> Option<StagedBytes> {
+        match self.what {
+            What::Copy { bytes, .. } => Some(bytes),
+            What::Move(_) => None,
+        }
+    }
 }
 
 /// A staging buffer's objects, which nothing frees as they drop: the queue that holds them
@@ -123,12 +149,22 @@ impl StagedBytes {
         unsafe { release::object(shared.vk(), self.raw) };
         lock(&shared.memory).free(shared.vk(), &self.placement);
     }
+
+    /// Free it at the device's teardown; the device is idle.
+    pub(super) fn destroy(self, device: &ash::Device, memory: &mut Memory) {
+        // SAFETY: the device is idle.
+        unsafe { release::object(device, self.raw) };
+        memory.free(device, &self.placement);
+    }
 }
 
 impl Queued {
-    /// Queue `work`; whether the work queued now passed [`STAGED_COPIES`] or [`STAGED_BYTES`].
+    /// Queue `work`; whether the work queued now passed [`STAGED_COPIES`] pieces or
+    /// [`STAGED_BYTES`] bytes.
     fn push(&mut self, work: Work) -> bool {
-        self.bytes += work.bytes.len;
+        if let What::Copy { bytes, .. } = &work.what {
+            self.bytes += bytes.len;
+        }
         self.work.push(work);
         self.work.len() > STAGED_COPIES || self.bytes > STAGED_BYTES
     }
@@ -140,11 +176,9 @@ impl Queued {
     }
 
     /// The device's teardown: free the staging buffers queued; the device is idle.
-    pub(super) fn destroy(&mut self, device: &ash::Device, memory: &mut crate::memory::Memory) {
-        for work in self.work.drain(..) {
-            // SAFETY: the device is idle and no submission used the buffer.
-            unsafe { release::object(device, work.bytes.raw) };
-            memory.free(device, &work.bytes.placement);
+    pub(super) fn destroy(&mut self, device: &ash::Device, memory: &mut Memory) {
+        for bytes in self.work.drain(..).filter_map(Work::into_bytes) {
+            bytes.destroy(device, memory);
         }
         self.bytes = 0;
     }
@@ -171,7 +205,7 @@ impl Drop for Flushed {
     }
 }
 
-/// The queued work taken by one submission: each copy whose image is still there, and the
+/// The queued work taken by one submission: each piece whose image is still there, and the
 /// staging buffers of those gone, to free.
 struct Taken {
     live: Vec<(Arc<Image>, Work)>,
@@ -179,17 +213,44 @@ struct Taken {
 }
 
 impl Taken {
-    /// Record the copies in order, a barrier before each into an image an earlier one wrote:
-    /// copies into one image keep their order.
+    /// Record the work in order: each run of moves with one barrier, then their zeros
+    /// (`FirstMove::record_several`), and the copies, a barrier before each into an image an
+    /// earlier piece wrote, so the work on one image keeps its order (a move before every copy
+    /// into its image: it was queued as the image was shared).
     ///
     /// # Safety
     ///
-    /// `command_buffer` is recording on the staging queue, after a barrier from every command
-    /// before; every image is live, in `GENERAL`, shared with the staging queue; every staging
-    /// buffer holds its bytes.
-    unsafe fn record(&self, raw: &ash::Device, command_buffer: vk::CommandBuffer) {
+    /// `command_buffer` is recording on the staging queue, of `family`'s queue flags, after a
+    /// barrier from every command before; every image is live, shared with the staging queue, in
+    /// the layout its move starts from where a move of it is queued and in `GENERAL` otherwise;
+    /// every staging buffer holds its bytes.
+    unsafe fn record(
+        &self,
+        raw: &ash::Device,
+        command_buffer: vk::CommandBuffer,
+        family: vk::QueueFlags,
+    ) {
         let mut written: Vec<vk::Image> = Vec::new();
-        for (_, work) in &self.live {
+        let mut at = 0;
+        while at < self.live.len() {
+            let moves: Vec<&FirstMove> = (self.live[at..].iter())
+                .map_while(|(_, work)| match &work.what {
+                    What::Move(first) => Some(first),
+                    What::Copy { .. } => None,
+                })
+                .collect();
+            if !moves.is_empty() {
+                // SAFETY: the caller's; each move's image is in the layout its move starts from.
+                unsafe { FirstMove::record_several(&moves, raw, command_buffer, family) };
+                written.extend(moves.iter().map(|first| first.image));
+                at += moves.len();
+                continue;
+            }
+            let work = &self.live[at].1;
+            at += 1;
+            let What::Copy { bytes, copy } = &work.what else {
+                unreachable!("a run of moves is recorded above");
+            };
             if written.contains(&work.raw) {
                 let barrier = vk::MemoryBarrier::default()
                     .src_access_mask(vk::AccessFlags::TRANSFER_WRITE)
@@ -213,10 +274,10 @@ impl Taken {
             unsafe {
                 raw.cmd_copy_buffer_to_image(
                     command_buffer,
-                    work.bytes.raw,
+                    bytes.raw,
                     work.raw,
                     vk::ImageLayout::GENERAL,
-                    &[work.copy],
+                    &[*copy],
                 );
             }
             exit_guard::called(Call::CmdCopyBufferToImage);
@@ -229,7 +290,12 @@ impl Taken {
         for bytes in self.gone {
             bytes.free(device);
         }
-        let (images, bytes) = self.live.into_iter().map(|(i, w)| (i, w.bytes)).unzip();
+        let mut images = Vec::with_capacity(self.live.len());
+        let mut bytes = Vec::new();
+        for (image, work) in self.live {
+            images.push(image);
+            bytes.extend(work.into_bytes());
+        }
         Flushed {
             device: device.clone(),
             value,
@@ -306,21 +372,23 @@ impl Device {
         for work in work {
             match work.keeper.upgrade() {
                 Some(image) => taken.live.push((image, work)),
-                None => taken.gone.push(work.bytes),
+                None => taken.gone.extend(work.into_bytes()),
             }
         }
         let copies = taken.live.len();
         let submitted = match (copies, after) {
             (0, None) => Ok(None),
             (copies, after) => staging
-                .submit(|raw, command_buffer, _| {
+                .submit(|raw, command_buffer, family| {
                     if copies > 0 {
                         transfer_barrier(raw, command_buffer, true);
                         // SAFETY: recording on the staging queue after a barrier from every
-                        // command before; each image is held live (`taken`), rests in `GENERAL`
-                        // (moved as it was made) and is shared with the staging queue; each
-                        // staging buffer holds the bytes packed into it.
-                        unsafe { taken.record(raw, command_buffer) };
+                        // command before; each image is held live (`taken`) and shared with the
+                        // staging queue, in `UNDEFINED` where its move is queued (it was queued as
+                        // the image was shared, before any other work on it, and nothing else
+                        // moves an image that copies here) and in `GENERAL` after it; each staging
+                        // buffer holds the bytes packed into it.
+                        unsafe { taken.record(raw, command_buffer, family) };
                     }
                     match after {
                         Some(after) => after(raw, command_buffer),
@@ -365,7 +433,58 @@ impl Device {
     }
 }
 
+impl Device {
+    /// The staging queue's buffer of [`ZERO_BYTES`] zeros, which the moves queued there copy
+    /// from (`FirstMoves::staging_zeros`), made now if it is not yet.
+    pub(super) fn staging_zeros(&self) -> Result<vk::Buffer, Error> {
+        let mut zeros = lock(&self.shared().textures.first_moves.staging_zeros);
+        if let Some(zeros) = &*zeros {
+            return Ok(zeros.raw);
+        }
+        let mut made = StagedBytes::new(self, ZERO_BYTES)?;
+        made.bytes().fill(0);
+        let raw = made.raw;
+        *zeros = Some(made);
+        Ok(raw)
+    }
+}
+
 impl Image {
+    /// Queue for the staging queue's next submission the first moves of its images that copy
+    /// there (its own, its decoded twins'), which wait in them (the module docs): as it is
+    /// shared, before any copy into them is queued, in its place in the order where
+    /// registrations wait for it (`FirstMoves::queue_staging`). Past the bound, the submission
+    /// is made now, waited for; one that fails leaves the work queued for the next.
+    pub(super) fn queue_staging_moves(self: &Arc<Self>) {
+        let images = std::iter::once(&**self)
+            .chain(self.decoded.as_deref().map(|decoded| &decoded.image))
+            .chain(self.second.get().map(|decoded| &decoded.image));
+        let moves: Vec<FirstMove> = images
+            .filter(|image| image.staging_copies)
+            .filter_map(|image| lock(&image.first_move).take())
+            .collect();
+        if moves.is_empty() {
+            return;
+        }
+        let shared = self.device.shared();
+        let count = moves.len() as u64;
+        let past = shared.textures.first_moves.queue_staging(|queued| {
+            let mut past = false;
+            for first in moves {
+                past |= queued.push(Work {
+                    keeper: Arc::downgrade(self),
+                    raw: first.image,
+                    what: What::Move(first),
+                });
+            }
+            past
+        });
+        shared.counts.staging_moves_queued(count);
+        if past {
+            let _ = self.device.flush_staging_waited();
+        }
+    }
+
     /// Whether its CPU copies may run on the staging queue: it was made so (a decoded twin's
     /// decode is staged, the module docs).
     pub(super) fn takes_staging_copies(&self) -> bool {
@@ -406,8 +525,7 @@ impl Image {
         let work = Work {
             keeper: Arc::downgrade(keeper),
             raw,
-            bytes,
-            copy,
+            what: What::Copy { bytes, copy },
         };
         let shared = self.device.shared();
         let past = lock(&shared.textures.first_moves.staging).push(work);

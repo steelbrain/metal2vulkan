@@ -290,7 +290,7 @@ fn layouts_counted(before: &WorkCounts, after: &WorkCounts) -> [u64; 4] {
 /// answered size holds them; the bytes it is made over, `replaceRegion`, a blit into it, the CPU's
 /// writes and a buffer's over the bytes meet its texels there, and `getBytes` and a blit out of it
 /// read them; no byte between them changes. Counted tiled, with no layout notice; made with no
-/// zeros (`WorkCounts::images_started_on_the_host`, `staging_submissions`).
+/// zeros (`WorkCounts::images_started_on_the_host`, `staging_submissions`, `staging_moves_queued`).
 #[test]
 fn a_host_heap_s_plain_texture_lies_in_metal_s_tiles() {
     on_device(|device, messages| {
@@ -325,10 +325,15 @@ fn a_host_heap_s_plain_texture_lies_in_metal_s_tiles() {
                 "{what}: counted tiled"
             );
             assert_eq!(
-                (made.images_started_on_the_host, made.staging_submissions),
+                (
+                    made.images_started_on_the_host,
+                    made.staging_submissions,
+                    made.staging_moves_queued
+                ),
                 (
                     before.images_started_on_the_host,
-                    before.staging_submissions
+                    before.staging_submissions,
+                    before.staging_moves_queued
                 ),
                 "{what}: made with no zeros"
             );

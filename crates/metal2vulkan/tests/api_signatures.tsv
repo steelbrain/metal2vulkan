@@ -2973,6 +2973,7 @@ field	metal2vulkan-runtime::WorkCounts.stage_tables_read_in_part	pub stage_table
 field	metal2vulkan-runtime::WorkCounts.staging_copies_queued	pub staging_copies_queued: u64
 field	metal2vulkan-runtime::WorkCounts.staging_flushes	pub staging_flushes: u64
 field	metal2vulkan-runtime::WorkCounts.staging_gpu_waits	pub staging_gpu_waits: u64
+field	metal2vulkan-runtime::WorkCounts.staging_moves_queued	pub staging_moves_queued: u64
 field	metal2vulkan-runtime::WorkCounts.staging_submissions	pub staging_submissions: u64
 field	metal2vulkan-runtime::WorkCounts.stale_detached_reaches	pub stale_detached_reaches: u64
 field	metal2vulkan-runtime::WorkCounts.stamped_buffers_kept	pub stamped_buffers_kept: u64

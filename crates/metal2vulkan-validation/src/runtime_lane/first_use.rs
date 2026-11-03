@@ -1464,12 +1464,12 @@ fn shared_textures_copy_on_the_host_while_the_gpu_is_busy() {
             let texture = device.new_texture(&descriptor(options)).unwrap();
             let made = device.work_counts();
             let hosted = made.images_started_on_the_host > before.images_started_on_the_host;
-            let staged = made.staging_submissions > before.staging_submissions;
+            let staged = made.staging_moves_queued > before.staging_moves_queued;
             println!(
                 "HOST-COPY {mode:?} texture on {name}: {}",
                 match (hosted, staged) {
                     (true, _) => "moved and zeroed on the host",
-                    (false, true) => "moved and zeroed on the staging queue",
+                    (false, true) => "its move and zeros queued for the staging queue",
                     (false, false) => "copied through submissions",
                 }
             );
@@ -1510,8 +1510,9 @@ fn shared_textures_copy_on_the_host_while_the_gpu_is_busy() {
                 );
                 assert_eq!(copied.host_texel_copies - before.host_texel_copies, 3);
             }
-            // On the staging queue each read waits for its own submission alone, the second
-            // carrying the write queued before it.
+            // On the staging queue each read waits for its own submission alone: the busy work's
+            // batch carried the new texture's queued move there before its own submission, and
+            // the second read carries the write queued before it.
             if staged {
                 assert_eq!(
                     (read_mark_then, write_mark_then),
@@ -1523,9 +1524,9 @@ fn shared_textures_copy_on_the_host_while_the_gpu_is_busy() {
                     copied.internal_submissions, before.internal_submissions,
                     "{mode:?} on {name}: a staging copy made an internal submission"
                 );
-                assert_eq!(copied.staging_submissions - made.staging_submissions, 2);
+                assert_eq!(copied.staging_submissions - made.staging_submissions, 3);
                 assert_eq!(copied.staging_copies_queued - made.staging_copies_queued, 1);
-                assert_eq!(copied.staging_flushes - made.staging_flushes, 1);
+                assert_eq!(copied.staging_flushes - made.staging_flushes, 2);
             }
             release(&mark);
             busy_work.wait_until_completed_for(WAIT).unwrap();
@@ -1559,12 +1560,12 @@ fn shared_textures_copy_on_the_host_while_the_gpu_is_busy() {
         let took = at.elapsed();
         let made = device.work_counts();
         let hosted = made.images_started_on_the_host > before.images_started_on_the_host;
-        let staged = made.staging_submissions > before.staging_submissions;
+        let staged = made.staging_moves_queued > before.staging_moves_queued;
         println!(
             "HOST-COPY a {side}x{side} RGBA8Unorm Shared texture made in {took:?} on {name} ({})",
             match (hosted, staged) {
                 (true, _) => "its zeros written on the host",
-                (false, true) => "its zeros written on the staging queue",
+                (false, true) => "its zeros queued for the staging queue",
                 (false, false) => "its zeros left to the next submission",
             }
         );
@@ -1625,7 +1626,7 @@ fn frame_sized_textures_copy_texel_exact() {
             let texture = device.new_texture(&descriptor).unwrap();
             let made = device.work_counts();
             let hosted = made.images_started_on_the_host > before.images_started_on_the_host;
-            let staged = made.staging_submissions > before.staging_submissions;
+            let staged = made.staging_moves_queued > before.staging_moves_queued;
             let cached = takes_host_cached_memory(device);
             if has_a_copy_engine(device) && !cached {
                 assert!(
@@ -1843,7 +1844,7 @@ fn cpu_copies_return_while_queued_work_waits_on_a_later_event() {
             .collect();
         let made = device.work_counts();
         let hosted = made.images_started_on_the_host - before.images_started_on_the_host == 2;
-        let staged = made.staging_submissions - before.staging_submissions == 2;
+        let staged = made.staging_moves_queued - before.staging_moves_queued == 2;
         // The queued work reads both textures once the event is signalled.
         let queues: Vec<CommandQueue> = (0..4)
             .map(|_| device.new_command_queue().unwrap())
@@ -1943,10 +1944,15 @@ fn multisampled_shared_textures_start_by_a_clear() {
                 });
                 let made = device.work_counts();
                 assert_eq!(
-                    (made.images_started_on_the_host, made.staging_submissions),
+                    (
+                        made.images_started_on_the_host,
+                        made.staging_submissions,
+                        made.staging_moves_queued
+                    ),
                     (
                         before.images_started_on_the_host,
-                        before.staging_submissions
+                        before.staging_submissions,
+                        before.staging_moves_queued
                     ),
                     "{name}: a 4x {format:?} texture started by a copy"
                 );

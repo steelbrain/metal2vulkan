@@ -1720,6 +1720,7 @@ impl Gpu for Runtime {
             ("host_texel_copies", c.host_texel_copies),
             ("staging_submissions", c.staging_submissions),
             ("staging_copies_queued", c.staging_copies_queued),
+            ("staging_moves_queued", c.staging_moves_queued),
             ("staging_flushes", c.staging_flushes),
             ("staging_gpu_waits", c.staging_gpu_waits),
             ("uncached_host_images", c.uncached_host_images),

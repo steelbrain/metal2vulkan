@@ -245,6 +245,7 @@ pub(crate) struct Counters {
     texel_shadows_dropped: AtomicU64,
     staging_submissions: AtomicU64,
     staging_copies_queued: AtomicU64,
+    staging_moves_queued: AtomicU64,
     staging_flushes: AtomicU64,
     staging_gpu_waits: AtomicU64,
     uncached_host_images: AtomicU64,
@@ -1776,7 +1777,14 @@ impl Counters {
         self.staging_copies_queued.fetch_add(1, Ordering::Relaxed);
     }
 
-    /// A staging submission carried queued copies (`texture/staging_copy.rs`).
+    /// New images' first moves were queued for the staging queue's next submission
+    /// (`texture/staging_copy.rs`).
+    pub(crate) fn staging_moves_queued(&self, moves: u64) {
+        self.staging_moves_queued
+            .fetch_add(moves, Ordering::Relaxed);
+    }
+
+    /// A staging submission carried queued moves or copies (`texture/staging_copy.rs`).
     pub(crate) fn staging_flush(&self) {
         self.staging_flushes.fetch_add(1, Ordering::Relaxed);
     }
@@ -4596,18 +4604,21 @@ pub struct WorkCounts {
     /// texture's texels (`texture/host_shadow.rs`): a commit of the program's, its own Vulkan
     /// submission, another `VkImage` presented, or a detach.
     pub texel_shadows_dropped: u64,
-    /// Submissions on the device's staging queue (`device/staging.rs`): a `Shared` or `Managed`
-    /// texture's first move, a `get_bytes`, or the copies queued for it
-    /// (`staging_copies_queued`), on a device that copies none on the host from memory the host
-    /// caches.
+    /// Submissions on the device's staging queue (`device/staging.rs`): a `get_bytes`, or the
+    /// first moves and copies queued for it (`staging_moves_queued`, `staging_copies_queued`), on
+    /// a device that copies none on the host from memory the host caches.
     pub staging_submissions: u64,
     /// `replace_region` copies (and decoded twins' copies) queued for the staging queue's next
     /// submission rather than submitted each alone (`texture/staging_copy.rs`).
     pub staging_copies_queued: u64,
-    /// Staging submissions that carried queued copies: one per burst of them, made before the
-    /// device's next batch or internal submission, or by a `get_bytes` before its read, a
-    /// texture's `VkImage` handed out, the program's use of a `VkQueue`, or past the bound
-    /// (`texture/staging_copy.rs`).
+    /// New `Shared` and `Managed` textures' first moves and zeros (and their decoded twins')
+    /// queued for the staging queue's next submission rather than submitted and waited for as
+    /// the texture is made (`texture/staging_copy.rs`).
+    pub staging_moves_queued: u64,
+    /// Staging submissions that carried queued moves or copies: one per burst of them, made
+    /// before the device's next batch or internal submission, or by a `get_bytes` before its
+    /// read, a texture's `VkImage` handed out, the program's use of a `VkQueue`, or past the
+    /// bound (`texture/staging_copy.rs`).
     pub staging_flushes: u64,
     /// Batches and internal submissions that waited on the GPU for a staging submission the host
     /// had not seen complete (`Device::staging_wait`, `device/staging.rs`), in place of a wait on
@@ -6196,6 +6207,7 @@ impl Device {
             texel_shadows_dropped: counters.texel_shadows_dropped.load(Ordering::Relaxed),
             staging_submissions: counters.staging_submissions.load(Ordering::Relaxed),
             staging_copies_queued: counters.staging_copies_queued.load(Ordering::Relaxed),
+            staging_moves_queued: counters.staging_moves_queued.load(Ordering::Relaxed),
             staging_flushes: counters.staging_flushes.load(Ordering::Relaxed),
             staging_gpu_waits: counters.staging_gpu_waits.load(Ordering::Relaxed),
             uncached_host_images: counters.uncached_host_images.load(Ordering::Relaxed),

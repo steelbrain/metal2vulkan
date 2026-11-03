@@ -1087,8 +1087,14 @@ impl Image {
         image
     }
 
-    /// Register the image with the device's first moves (`texture/first_move.rs`).
+    /// Register the image with the device's first moves (`texture/first_move.rs`): the moves of
+    /// its images that copy on the staging queue queued there (`texture/staging_copy.rs`), the
+    /// rest waiting for the device's next submission.
     fn register_first_move(self: &Arc<Self>) {
+        self.queue_staging_moves();
+        if !self.move_waits() {
+            return;
+        }
         let weak: Weak<Image> = Arc::downgrade(self);
         let fresh: Weak<dyn Fresh> = weak;
         self.device.shared().textures.first_moves.register(fresh);
@@ -3212,26 +3218,16 @@ impl Device {
             self.shared().counts.image_started_on_the_host();
             return Ok(image);
         }
+        // Its move is queued for the staging queue as it is shared (`texture/staging_copy.rs`),
+        // its zeros the staging queue's own, which no other queue uses: the device's own zeros
+        // are exclusive to its families. Dropping `image` on failure releases everything above.
         if moved && staging_copies {
-            // SAFETY: the staging command buffer is recording; the image is live, bound to
-            // memory of its own, which nothing used yet, in `UNDEFINED`, which the move leaves.
-            self.submit_staging(|raw, command_buffer, family| unsafe {
-                first.record_alone(raw, command_buffer, family)
-            })?;
+            *lock(&image.first_move) = Some(first);
             return Ok(image);
         }
-        // Its zeros are a staging buffer's, which nothing else uses: the device's own zeros are
-        // exclusive to its families. Dropping `image` on failure releases everything above.
-        if let (true, Some((length, copies))) = (staging_copies, &zero) {
-            let mut zeros = Staging::new(self, *length)?;
-            zeros.bytes().fill(0);
-            let first = first.zeroed(zeros.raw, copies);
-            // SAFETY: the staging command buffer is recording; the image is live, bound to
-            // memory of its own, which nothing used yet, and made with transfer usage; every
-            // copy lies within it and reads within the zeros.
-            self.submit_staging(|raw, command_buffer, family| unsafe {
-                first.record_alone(raw, command_buffer, family)
-            })?;
+        if let (true, Some((_, copies))) = (staging_copies, &zero) {
+            let zeros = self.staging_zeros()?;
+            *lock(&image.first_move) = Some(first.zeroed(zeros, copies));
             return Ok(image);
         }
         // A `Private` texture of the program's (the runtime's own images are held). Dropping

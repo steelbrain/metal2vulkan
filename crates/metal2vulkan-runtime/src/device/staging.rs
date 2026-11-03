@@ -27,11 +27,11 @@
 //!   before the next one is recorded: its command buffer is one of up to [`BUFFERS`], each reused
 //!   once the host saw the value it signalled reached.
 //! - **Who uses it.** A texture made to copy through it (`texture/staging_copy.rs`) has its first
-//!   move and zeros written here as it is made, waited for, and its `replace_region` copies queued
-//!   for the next submission here, which carries them all ([`StagingLock::submit`]): the next
-//!   batch or internal submission of the device's makes it before its own, and a `get_bytes`
-//!   carries them before its read. So none of its work waits in `texture/first_move.rs` for a
-//!   batch.
+//!   move and zeros, and its `replace_region` copies, queued for the next submission here, which
+//!   carries them all ([`StagingLock::submit`]): the next batch or internal submission of the
+//!   device's makes it before its own, and a `get_bytes` carries them before its read. So none
+//!   of its work waits in `texture/first_move.rs` for a batch, and neither its making nor its
+//!   writes wait for a submission.
 
 use super::{lock, Device, LoaderWord};
 use crate::error::{internal, vulkan, Error};
@@ -350,16 +350,6 @@ impl Device {
         let timeline = *(staging.timeline.get())
             .ok_or_else(|| internal("a staging wait before any staging submission"))?;
         wait_for(self, timeline, value)
-    }
-
-    /// Record `record` on the staging queue ([`StagingLock::submit`]) and wait for it on the
-    /// host.
-    pub(crate) fn submit_staging(
-        &self,
-        record: impl FnOnce(&ash::Device, vk::CommandBuffer, vk::QueueFlags),
-    ) -> Result<(), Error> {
-        let value = self.staging_lock()?.submit(record)?;
-        self.wait_staging(value)
     }
 
     /// The staging queue's last submission while the host has not seen it complete: what every

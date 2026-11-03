@@ -17,7 +17,9 @@
 //!   too; its image of a format a clear writes is cleared ([`FirstMove::cleared`]) rather than
 //!   copied over, single- or multisampled. An image that takes a rebind's new `VkImage` notes that
 //!   one's (`rebind.rs`). The image (or stand-in) is registered weakly once it is shared
-//!   ([`FirstMoves::register`]). An image over a dma-buf of its own pages (`dma_buf.rs`) starts
+//!   ([`FirstMoves::register`]); an image that copies on the device's staging queue queues its
+//!   move and zeros there instead, which every submission of the device's makes there before its
+//!   own (`texture/staging_copy.rs`, [`FirstMoves::queue_staging`]). An image over a dma-buf of its own pages (`dma_buf.rs`) starts
 //!   `UNDEFINED` too, and its move is an acquire from `VK_QUEUE_FAMILY_FOREIGN_EXT` for the
 //!   device's queue family (`VK_QUEUE_FAMILY_IGNORED` where its images are concurrent among
 //!   several), from `GENERAL` (which keeps its bytes, as Vulkan's foreign images keep theirs only
@@ -535,25 +537,26 @@ impl FirstMove {
         }
     }
 
-    /// Record the move alone into `command_buffer`, of a family of `family`'s queue flags: its
-    /// barrier, after every command before, then its writes of zero (and pattern), then the
-    /// barrier that makes them visible to every command after and to the host
-    /// (`device/staging.rs`: a texture moved on the staging queue as it is made, which no batch
-    /// then finds waiting).
+    /// Record `moves` into `command_buffer`, of a family of `family`'s queue flags, on the staging
+    /// queue (`texture/staging_copy.rs`): one barrier carrying every move, after every command
+    /// before, then each one's writes of zero; the barrier that makes them visible after is the
+    /// caller's.
     ///
     /// # Safety
     ///
-    /// `command_buffer` is recording, outside a render pass, for a queue family the image is
-    /// shared with, of `family`'s flags; the image is live, in the layout its move starts from,
-    /// and nothing uses it until the submission completed.
-    pub(crate) unsafe fn record_alone(
-        &self,
+    /// `command_buffer` is recording, outside a render pass, for a queue family each image is
+    /// shared with, of `family`'s flags; each image is live, in the layout its move starts from,
+    /// and nothing else uses it until the submission completed.
+    pub(super) unsafe fn record_several(
+        moves: &[&FirstMove],
         device: &ash::Device,
         command_buffer: vk::CommandBuffer,
         family: vk::QueueFlags,
     ) {
         let all = vk::PipelineStageFlags::ALL_COMMANDS;
-        // SAFETY: the caller's contract; the image is live, in the layout the move starts from.
+        let barriers: Vec<vk::ImageMemoryBarrier<'_>> =
+            moves.iter().map(|first| first.barrier(family)).collect();
+        // SAFETY: the caller's contract; each image is live, in the layout its move starts from.
         unsafe {
             device.cmd_pipeline_barrier(
                 command_buffer,
@@ -562,17 +565,15 @@ impl FirstMove {
                 vk::DependencyFlags::empty(),
                 &[],
                 &[],
-                &[self.barrier(family)],
+                &barriers,
             );
         }
         exit_guard::called(Call::CmdPipelineBarrier);
-        if self.writes() {
-            // SAFETY: as above; the image is in `GENERAL` now and has `TRANSFER_DST` usage where
-            // it reads zero.
-            unsafe { self.record_zero(device, command_buffer, family) };
+        for first in moves.iter().filter(|first| first.writes()) {
+            // SAFETY: as above; each image is in `GENERAL` now and has `TRANSFER_DST` usage
+            // where it reads zero.
+            unsafe { first.record_zero(device, command_buffer, family) };
         }
-        transfer_barrier(device, command_buffer, false);
-        exit_guard::called(Call::CmdPipelineBarrier);
     }
 
     /// The barrier of the move, recorded for a family of `family`'s queue flags, before every
@@ -865,6 +866,11 @@ pub(crate) struct FirstMoves {
     /// copies into images that copy there, which every submission of the device's makes there
     /// before its own.
     pub(super) staging: Mutex<super::staging_copy::Queued>,
+    /// The staging queue's buffer of [`ZERO_BYTES`] zero bytes, host-visible, which the moves
+    /// queued there copy from (`texture/staging_copy.rs`): made at the first, kept with the
+    /// device, and used by no other queue, as the device's own zeros are exclusive to its
+    /// families.
+    pub(super) staging_zeros: Mutex<Option<super::staging_copy::StagedBytes>>,
 }
 
 /// The side of each of the device's multisampled scratch images ([`FirstMoves::scratch`]): its
@@ -930,6 +936,18 @@ impl FirstMoves {
     pub(crate) fn register(&self, fresh: Weak<dyn Fresh>) {
         let _order = self.registration_place();
         lock(&self.waiting).push(Waiting::Moves(fresh));
+    }
+
+    /// Queue work for the staging queue's next submission (`texture/staging_copy.rs`) with
+    /// `queue`, in its place in the order where registrations wait for it (the module docs): a
+    /// new image's move, which a batch's texture table must not name before the batch, or one
+    /// before it, took it.
+    pub(super) fn queue_staging<R>(
+        &self,
+        queue: impl FnOnce(&mut super::staging_copy::Queued) -> R,
+    ) -> R {
+        let _order = self.registration_place();
+        queue(&mut lock(&self.staging))
     }
 
     /// The new buffer `keeper`, whose bytes `range` of `buffer` the host cannot write, waits for
@@ -1236,6 +1254,9 @@ impl FirstMoves {
     /// device is idle.
     pub(crate) fn destroy(&self, device: &ash::Device, memory: &mut Memory) {
         lock(&self.staging).destroy(device, memory);
+        if let Some(zeros) = lock(&self.staging_zeros).take() {
+            zeros.destroy(device, memory);
+        }
         if let Some(zeros) = &*lock(&self.zeros) {
             zeros.destroy(device, memory);
         }
