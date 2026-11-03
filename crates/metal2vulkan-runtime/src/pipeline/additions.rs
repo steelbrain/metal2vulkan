@@ -6,16 +6,31 @@
 //! - **Required threads per threadgroup.** Creation stops, with or without API validation, a
 //!   size with an axis of 0, one of more threads than the device's limit, and one of more threads
 //!   than the descriptor's `maxTotalThreadsPerThreadgroup`; it fails (an error, not a stop) where
-//!   that maximum is above the size's threads. The state's `maxTotalThreadsPerThreadgroup` stays
-//!   the kernel's own. API validation stops a direct, threads or indirect dispatch, and a tile
-//!   dispatch, whose threadgroup differs on any axis; without it Metal runs the size given, and
-//!   so does the runtime. An indirect command buffer's dispatch is not checked, and runs the size
-//!   it was encoded with.
+//!   that maximum is above the size's threads. API validation stops a direct, threads or indirect
+//!   dispatch, and a tile dispatch, whose threadgroup differs on any axis; without it Metal runs
+//!   the size given, and so does the runtime. An indirect command buffer's dispatch is not
+//!   checked, and runs the size it was encoded with.
 //! - **Binary functions, added.** Adding to a stage of a state made without its support flag
 //!   (`supportAddingBinaryFunctions`, or the vertex and fragment forms) is an API validation stop;
 //!   without validation Metal adds them. The added state has the base state's handles and one for
 //!   each added function; an addition the stage already links keeps its handle, and adding
 //!   nothing makes a state alike.
+//!
+//! Measured on an M3 Max under macOS 27.0.1, each state of a source compiled once and never
+//! before (a number baked into it):
+//! - **A required size is the state's thread limit.** A compute state's
+//!   `maxTotalThreadsPerThreadgroup` is the size's threads: 1 for 1x1x1, 21 for 7x3x1, 128 for
+//!   8x8x2, 64 for 1x1x64, 1024 for 32x32x1. A tile state's, with
+//!   `threadgroupSizeMatchesTileSize` on or off, is the threads rounded down to a multiple of 4:
+//!   0 for 1x1, 2x1 and 3x1, 8 for 3x3, 20 for 7x3, 64 for 8x8. A tile dispatch of such a state's
+//!   own size runs no thread where the threads are not a multiple of 4, and the command buffer
+//!   completes with no error. With no size, both kinds answer 1024. Metal keeps a state it
+//!   compiled and hands its limit to a later state of the same function that differs only in the
+//!   required size, in the same process (compute and tile) and in a later one (tile). A
+//!   measurement of one function under several sizes therefore reads the first size's limit
+//!   throughout. The runtime answers each state's own size's threads
+//!   (`ComputePipelineState::max_total_threads_per_threadgroup`), and a tile state's dispatch of
+//!   a size that is not a multiple of 4 runs (docs/API.md, accepted differences).
 //!
 //! Measured on an M3 Max under macOS 27.0.1 (`binary_function_linking.m`, of libraries compiled
 //! from source and of metallibs alike, plain and with `MTL_DEBUG_LAYER=1`):

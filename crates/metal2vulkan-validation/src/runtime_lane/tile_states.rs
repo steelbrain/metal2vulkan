@@ -7,7 +7,8 @@
 //!   the attachments' texels packed, or the aliased layout's size whatever the formats pack to; its
 //!   memory length for a tile is that times the tile's cells, unrounded; it supports no indirect
 //!   command buffers and echoes the descriptor's `threadgroupSizeMatchesTileSize`. Its thread limit
-//!   is Metal's 1024 where the device runs it, lowered by the descriptor's.
+//!   is Metal's 1024 where the device runs it, lowered by the descriptor's. Where the descriptor
+//!   requires a threadgroup size, the limit is that size's threads.
 //! - Creation refuses what Metal's does: a function reaching an attachment the descriptor gives
 //!   no format.
 //! - A binary archive holds a tile pipeline it was given (`add_tile_render_pipeline_functions`),
@@ -133,6 +134,39 @@ fn a_tile_state_answers_metals_queries() {
                 Ok(24 * 256)
             );
         }
+    });
+}
+
+/// A tile state whose descriptor requires a threadgroup size answers that size's threads as its
+/// `maxTotalThreadsPerThreadgroup`, as Metal's tile state does where Metal compiles it for the
+/// first time (an M3 Max, macOS 27.0.1: 64 for 8x8 and 256 for 16x16). It answers 1 for 1x1,
+/// where Metal rounds the threads down to a multiple of 4 and answers 0 (docs/API.md, accepted
+/// differences). Where the device holds fewer threads than the size, the answer is the device's
+/// limit. The same descriptor with no size keeps today's answer.
+#[test]
+fn a_tile_state_with_a_required_size_answers_its_threads() {
+    on_device(|device| {
+        let mut grid = descriptor(device, "k10ts_tile_grid", &GRID);
+        let unrequired = state(device, &grid)
+            .unwrap()
+            .max_total_threads_per_threadgroup();
+        assert!((1..=1024).contains(&unrequired), "{unrequired}");
+        for (required, threads) in [([1, 1, 1], 1), ([8, 8, 1], 64), ([16, 16, 1], 256)] {
+            grid.required_threads_per_threadgroup = Some(required);
+            let made = state(device, &grid).unwrap();
+            assert_eq!(
+                made.max_total_threads_per_threadgroup(),
+                threads.min(unrequired),
+                "{required:?}"
+            );
+        }
+        grid.required_threads_per_threadgroup = None;
+        assert_eq!(
+            state(device, &grid)
+                .unwrap()
+                .max_total_threads_per_threadgroup(),
+            unrequired
+        );
     });
 }
 

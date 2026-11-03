@@ -546,7 +546,9 @@ pub struct ComputePipelineMetalInfo {
     /// simdgroups' scratch, by the function's own maximum and by the descriptor's (a compute or
     /// tile descriptor's `max_total_threads_per_threadgroup`). A tile pipeline's
     /// (`Device::compile_tile_pipeline`) is at most 1024, the 32x32 tile threadgroup, and is the
-    /// largest threadgroup of even sides within those limits, as Metal rounds it.
+    /// largest threadgroup of even sides within those limits, as Metal rounds it. A descriptor's
+    /// `required_threads_per_threadgroup` does not change it. Metal's state answers that size's
+    /// threads instead, and so does `metal2vulkan-runtime`'s.
     pub max_total_threads_per_threadgroup: u32,
     /// `maxTotalThreadsPerThreadgroup` on Apple's GPUs, before this device's limits: the least
     /// of 1024, the function's own maximum and the descriptor's (a compute pipeline answers a

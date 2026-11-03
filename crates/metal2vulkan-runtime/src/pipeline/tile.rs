@@ -11,9 +11,12 @@
 //!   for render target 0", and a member whose type the attachment's format does not hold, which
 //!   Metal's API validation stops (an M3 Max and an M4).
 //! - **Answers.** A tile pipeline's state answers its descriptor's
-//!   `threadgroup_size_matches_tile_size`, no indirect command buffers, and the compiled
-//!   pipeline's `max_total_threads_per_threadgroup`: Metal's 1024, or the descriptor's limit, where
-//!   the device runs a threadgroup of 1024 threads, else the device's lower limit.
+//!   `threadgroup_size_matches_tile_size`, no indirect command buffers, and a
+//!   `max_total_threads_per_threadgroup`. That is the threads of the descriptor's
+//!   `required_threads_per_threadgroup` where it requires a size, as a compute state's is
+//!   (`ComputePipelineState::max_total_threads_per_threadgroup`), and otherwise the compiled
+//!   pipeline's: Metal's 1024, or the descriptor's limit, where the device runs a threadgroup of
+//!   1024 threads, else the device's lower limit.
 //!   `imageblock_sample_length` is the aliased explicit imageblock's size, which the compile
 //!   records (`RuntimeFact::AliasedImageblock`), else the attachments' texels packed as Metal packs
 //!   them, after an explicit imageblock that stands alone as a fragment function's

@@ -138,6 +138,21 @@ use std::collections::{BTreeMap, HashSet, VecDeque};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock, Weak};
 
+/// The `maxTotalThreadsPerThreadgroup` a compute or tile state answers. `required` is the size
+/// its descriptor requires, `None` where it requires none (Metal's all-zero size), and `compiled`
+/// is the compiled pipeline's answer on this device. Where a size is required, the answer is its
+/// threads, within `compiled`; where none is, it is `compiled`.
+pub(super) fn reported_max_total_threads(required: Option<[u32; 3]>, compiled: u32) -> u32 {
+    match required {
+        Some(required) => required
+            .iter()
+            .try_fold(1u32, |threads, &axis| threads.checked_mul(axis))
+            .unwrap_or(u32::MAX)
+            .min(compiled),
+        None => compiled,
+    }
+}
+
 /// `imageblockMemoryLengthForDimensions:` for an explicit imageblock of `cell_bytes` a cell (the
 /// compile's), none without an imageblock or at a width or height of 0. Otherwise each side rounds
 /// up to a power of two and the depth is ignored, as Metal does on an M3 and an M4 (its API takes
@@ -1009,8 +1024,23 @@ impl ComputePipelineState {
         }
     }
 
-    /// `maxTotalThreadsPerThreadgroup`.
+    /// `maxTotalThreadsPerThreadgroup`. Where the descriptor states a
+    /// `required_threads_per_threadgroup`, it is that size's threads, as Metal answers for a
+    /// compute state compiled for the first time (measured on an M3 Max, macOS 27.0.1). A tile
+    /// state answers the same, where Metal's rounds the threads down to a multiple of 4
+    /// (docs/API.md, accepted differences). It is lowered only where this device holds fewer
+    /// threads than the size. Where the descriptor states no size, it is the compiled pipeline's
+    /// answer.
     pub fn max_total_threads_per_threadgroup(&self) -> u32 {
+        reported_max_total_threads(
+            self.required_threads(),
+            self.pipeline_max_total_threads_per_threadgroup(),
+        )
+    }
+
+    /// The compiled pipeline's `maxTotalThreadsPerThreadgroup` on this device, whatever size the
+    /// descriptor requires: the most threads a threadgroup of the pipeline holds here.
+    pub(crate) fn pipeline_max_total_threads_per_threadgroup(&self) -> u32 {
         self.0
             .base
             .pipeline

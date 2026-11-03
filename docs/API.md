@@ -4010,6 +4010,22 @@ each item named states the rule in full.
 - **A simdgroup barrier in divergent code waits for its tangle**, as SPIR-V defines it. The Metal
   Shading Language requires every thread of the SIMD-group to execute a `simdgroup_barrier` that
   any of them executes in a conditional or a loop iteration, so Metal defines no answer there.
+- **A state whose descriptor requires a threadgroup size answers that size's threads** as its
+  `maxTotalThreadsPerThreadgroup`, lowered only to the device's own limit
+  (`ComputePipelineState::max_total_threads_per_threadgroup`, and a tile state's
+  `RenderPipelineState::max_total_threads_per_threadgroup`). A compute state compiled by Metal
+  for the first time answers the same (M3 Max, macOS 27.0.1, each state of a source compiled
+  once: 1 for 1x1x1, 21 for 7x3x1, 128 for 8x8x2, 1024 for 32x32x1). The runtime differs in two
+  ways:
+  - A tile state answers the size's threads and runs a dispatch of its size. Metal's tile state
+    rounds the threads down to a multiple of 4 (0 for 1x1, 2x1 and 3x1, 8 for 3x3, 20 for 7x3),
+    and its dispatch of a size that is not a multiple of 4 runs no thread, with the command
+    buffer completed and no error.
+  - Each state answers its own size. Metal hands a state of a function it has already compiled
+    under another size the earlier state's limit, in the same process or a later one. An 8x8
+    tile state then answered 16 after a 4x4 one, and its 8x8 dispatch ran no thread. A compute
+    state of the same `MTLFunction` answered 16 after a 4x4x1 state, with an 8x8x1 size and with
+    none, where the runtime's answers 64 and the compiled limit.
 
 **Process exit**
 

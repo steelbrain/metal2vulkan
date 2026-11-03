@@ -1174,7 +1174,9 @@ impl RenderPipelineState {
     }
 
     /// `maxTotalThreadsPerThreadgroup`: 0 for a drawing state, as Metal answers (measured on an
-    /// M3 Max and an M4); a tile pipeline's compile's (`tile.rs`).
+    /// M3 Max and an M4). A tile state answers as its tile function's compute state does
+    /// (`ComputePipelineState::max_total_threads_per_threadgroup`, `tile.rs`): a required size's
+    /// threads, else the compiled pipeline's limit.
     pub fn max_total_threads_per_threadgroup(&self) -> u32 {
         match &self.0 {
             Kind::Graphics(_) => 0,

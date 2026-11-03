@@ -389,7 +389,7 @@ impl FlatCall<'_> {
         FlatIndirect::new(
             arguments,
             form,
-            flat_local(pipeline.max_total_threads_per_threadgroup()),
+            flat_local(pipeline.pipeline_max_total_threads_per_threadgroup()),
             pipeline.metal_max_total_threads_per_threadgroup(),
         )
     }
@@ -405,7 +405,7 @@ impl FlatCall<'_> {
             return None;
         };
         let arguments = self.buffer.device_address()?.checked_add(self.offset)?;
-        let max_threads = pipeline.max_total_threads_per_threadgroup();
+        let max_threads = pipeline.pipeline_max_total_threads_per_threadgroup();
         let threads: u64 = threads_per_group.iter().map(|&n| u64::from(n)).product();
         if threads == 0 || threads > u64::from(max_threads) {
             return None;

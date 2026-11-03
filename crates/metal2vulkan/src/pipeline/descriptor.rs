@@ -660,8 +660,9 @@ pub struct ComputePipelineDescriptor {
     pub max_call_stack_depth: u32,
     /// `requiredThreadsPerThreadgroup`: `None` for Metal's zero size, no requirement. The runtime
     /// refuses a dispatch of another threadgroup size, as Metal's API validation stops one. The
-    /// pipeline does not depend on it (the state's `maxTotalThreadsPerThreadgroup` stays the
-    /// kernel's, as Metal's does), so it is not part of the key.
+    /// compiled pipeline does not depend on it, so it is not part of the key, and its
+    /// `metal_info` answers the kernel's limit. The runtime's state answers the size's threads as
+    /// its `maxTotalThreadsPerThreadgroup`, as Metal's state does.
     pub required_threads_per_threadgroup: Option<[u32; 3]>,
     /// `supportAddingBinaryFunctions`: binary functions may be added to a state made from this
     /// descriptor. Not part of the key.
@@ -768,7 +769,9 @@ pub struct TileRenderPipelineDescriptor {
     pub max_call_stack_depth: u32,
     /// `requiredThreadsPerThreadgroup`: `None` for Metal's zero size, no requirement. The runtime
     /// refuses a tile dispatch of another threadgroup size, as Metal's API validation stops one.
-    /// Not part of the key.
+    /// Not part of the key. The runtime's state answers the size's threads as its
+    /// `maxTotalThreadsPerThreadgroup`, as a compute descriptor's
+    /// ([`ComputePipelineDescriptor::required_threads_per_threadgroup`]).
     pub required_threads_per_threadgroup: Option<[u32; 3]>,
     /// `supportAddingBinaryFunctions`: binary functions may be added to the tile stage of a
     /// state made from this descriptor. Not part of the key.

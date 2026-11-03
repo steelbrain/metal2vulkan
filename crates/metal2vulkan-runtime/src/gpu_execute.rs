@@ -485,7 +485,7 @@ fn prepare(
     // for the state alone, since the kernel does not observe Metal's threadgroups.
     let threads = [
         FLAT_THREADS
-            .min(pipeline.max_total_threads_per_threadgroup())
+            .min(pipeline.pipeline_max_total_threads_per_threadgroup())
             .max(1),
         1,
         1,

@@ -6,13 +6,20 @@
 //! (lavapipe) holds 512 of its threads a threadgroup, where Metal holds 1024. Its state answers
 //! the device's number; a threadgroup past Metal's 1024 runs nothing, as plain Metal's does; one
 //! within Metal's limit but past the device's is the device's gap, refused typed in every dispatch
-//! form, and never run as nothing.
+//! form, and never run as nothing. A state whose descriptor requires a threadgroup size answers
+//! that size's threads, within the device's number.
 
 use super::indirect_host_steps::state;
 use super::tile_states::on_device;
 use super::{buffer_with, read_buffer, WAIT};
+use crate::air_library::AirLibrary;
 use metal2vulkan::error::{BindError, Feature};
-use metal2vulkan_runtime::{CommandBufferStatus, ComputeCommandEncoder, Device, Error, Size};
+use metal2vulkan::pipeline::{ComputePipelineDescriptor, StageSource};
+use metal2vulkan_devtools::{engine_dir, llvm_assemble};
+use metal2vulkan_runtime::{
+    CommandBufferStatus, ComputeCommandEncoder, ComputePipelineState, Device, Error,
+    PipelineOptions, Size,
+};
 
 /// Metal's threads a threadgroup.
 const METAL: u64 = 1024;
@@ -146,6 +153,47 @@ fn a_compute_threadgroup_past_the_devices_limit_within_metals_is_refused_typed()
                 ),
                 None => unreachable!("the encoder ran"),
             }
+        }
+    });
+}
+
+/// The state of the owned fixture `stem`'s kernel, its descriptor requiring `required` threads per
+/// threadgroup.
+fn required_state(device: &Device, stem: &str, required: [u32; 3]) -> ComputePipelineState {
+    let bitcode = llvm_assemble(&engine_dir().join(format!("{stem}.ll"))).unwrap();
+    let library = device.new_library_with_air(&bitcode).unwrap();
+    let function = library.new_function_with_name(stem).unwrap();
+    let mut descriptor =
+        ComputePipelineDescriptor::new(StageSource::Function(function.function_descriptor()));
+    descriptor.required_threads_per_threadgroup = Some(required);
+    device
+        .new_compute_pipeline_state(&descriptor, &PipelineOptions::default())
+        .unwrap()
+}
+
+/// A compute state whose descriptor requires a threadgroup size answers that size's threads as
+/// its `maxTotalThreadsPerThreadgroup`, as Metal's compute state does where Metal compiles it for
+/// the first time (an M3 Max, macOS 27.0.1: 1 for 1x1x1, 21 for 7x3x1, 128 for 8x8x2). Where the
+/// device holds fewer threads than the size, the answer is the device's limit, which the state
+/// with no size answers.
+#[test]
+fn a_compute_state_with_a_required_size_answers_its_threads() {
+    on_device(|device| {
+        let stem = "ttg_compute_simd_scratch";
+        let unrequired = state(device, stem, false).max_total_threads_per_threadgroup();
+        assert!((32..=1024).contains(&unrequired), "{unrequired}");
+        for (required, threads) in [([1, 1, 1], 1), ([7, 3, 1], 21), ([8, 8, 2], 128)] {
+            let made = required_state(device, stem, required);
+            assert_eq!(
+                made.max_total_threads_per_threadgroup(),
+                threads.min(unrequired),
+                "{required:?}"
+            );
+            let [width, height, depth] = required.map(u64::from);
+            assert_eq!(
+                made.required_threads_per_threadgroup(),
+                Size::new(width, height, depth)
+            );
         }
     });
 }

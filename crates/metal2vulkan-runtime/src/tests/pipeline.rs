@@ -1,9 +1,10 @@
 //! The checks a compute pipeline state's descriptor passes before its compile
 //! (`pipeline::duplicate_linked_name`, by the name each linked function links under), the
 //! imageblock length it answers
-//! (`pipeline::imageblock_memory_length`), the specialization values a failed draw's
-//! pipeline names (`pipeline::specialization_values`), and which form of a key a driver's facts
-//! choose (`pipeline::views_read_at_bind`).
+//! (`pipeline::imageblock_memory_length`), the thread limit a state whose descriptor requires a
+//! threadgroup size answers (`pipeline::reported_max_total_threads`), the specialization values a
+//! failed draw's pipeline names (`pipeline::specialization_values`), and which form of a key a
+//! driver's facts choose (`pipeline::views_read_at_bind`).
 //!
 //! The check reads only the linked functions' names, so any library function stands in for a
 //! visible one. The runtime reaches only the public compile-and-plan layer (`api_surface`), its
@@ -12,7 +13,8 @@
 //! no tool runs and no `METAL2VULKAN_*` knob is read.
 
 use super::super::pipeline::{
-    duplicate_linked_name, imageblock_memory_length, specialization_values, views_read_at_bind,
+    duplicate_linked_name, imageblock_memory_length, reported_max_total_threads,
+    specialization_values, views_read_at_bind,
 };
 use super::super::values::Size;
 use metal2vulkan::cache::SpecializationKey;
@@ -260,4 +262,43 @@ fn every_committed_driver_reads_its_uniform_views_at_their_residuals() {
             .into_iter()
             .collect()
     ));
+}
+
+/// A compute or tile state whose descriptor requires a threadgroup size answers that size's
+/// threads as its `maxTotalThreadsPerThreadgroup`. Metal's compute state does the same where Metal
+/// compiles it for the first time (an M3 Max, macOS 27.0.1, sources compiled once each): 1 for
+/// 1x1x1, 21 for 7x3x1, 128 for 8x8x2, 64 for 1x1x64 and 1024 for 1024x1x1. Metal's tile state
+/// rounds the threads down to a multiple of 4 (0 for 1x1, 20 for 7x3), and ours answers the
+/// threads. Where the device holds fewer threads than the size, the device's own limit stays. A
+/// state that requires no size keeps the compiled pipeline's answer, today's.
+#[test]
+fn a_required_size_is_the_states_thread_limit() {
+    for (required, threads) in [
+        ([1, 1, 1], 1),
+        ([2, 2, 1], 4),
+        ([7, 3, 1], 21),
+        ([8, 8, 1], 64),
+        ([8, 8, 2], 128),
+        ([1, 1, 64], 64),
+        ([32, 32, 1], 1024),
+        ([1024, 1, 1], 1024),
+    ] {
+        assert_eq!(
+            reported_max_total_threads(Some(required), 1024),
+            threads,
+            "{required:?}"
+        );
+    }
+    // The device's lower limit stays where the size is past it.
+    assert_eq!(reported_max_total_threads(Some([32, 32, 1]), 960), 960);
+    assert_eq!(reported_max_total_threads(Some([16, 16, 1]), 960), 256);
+    // No size: the compiled pipeline's answer, whatever it is.
+    for compiled in [1024, 960, 512, 64] {
+        assert_eq!(reported_max_total_threads(None, compiled), compiled);
+    }
+    // Axes whose product passes u32 do not wrap.
+    assert_eq!(
+        reported_max_total_threads(Some([u32::MAX, u32::MAX, 2]), 1024),
+        1024
+    );
 }
