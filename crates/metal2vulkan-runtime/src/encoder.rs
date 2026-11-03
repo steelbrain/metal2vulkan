@@ -1121,8 +1121,7 @@ impl EncoderCore {
         // texture is no longer carried, whatever this encoder uses (`shadow::ShadowCarry`).
         self.shadows.wrote(tracked);
         self.open.command_buffer.note_dirty(tracked);
-        let barrier = self.uses.barrier(tracked, reach);
-        self.uses.record_reaching(stages, tracked, barrier, reach);
+        let barrier = self.uses.order(stages, tracked, reach);
         if barrier.is_some() {
             self.device().shared().counts.command_barrier();
         }

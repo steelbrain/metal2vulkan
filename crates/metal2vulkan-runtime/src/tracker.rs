@@ -7,7 +7,7 @@
 //!   encoder's dispatches run in encoded order: `MTLDispatchTypeSerial` "dispatches are executed
 //!   in dispatched order", and a memory barrier on a serial encoder is "allowed, but ignored", so
 //!   the order covers untracked resources too (Metal's headers; documented, not measured). Before
-//!   each command, [`EncoderUses::barrier`] compares its uses with the encoder's earlier commands:
+//!   each command, [`EncoderUses::order`] compares its uses with the encoder's earlier commands:
 //!   tracked resources per resource and range. Untracked memory may alias across resources, so
 //!   it orders by what a command's uses say of it ([`Reach`]). A command whose uses name every
 //!   byte of untracked memory it touches (a blit's, a shadow's copy) orders per key and range
@@ -312,7 +312,7 @@ impl<K> Use<K> {
     }
 
     /// Whether the use touches nothing: an empty range, or neither a read nor a write.
-    fn is_nothing(&self) -> bool {
+    pub(super) fn is_nothing(&self) -> bool {
         self.range.is_empty() || (self.read.is_empty() && self.write.is_empty())
     }
 
@@ -1041,27 +1041,32 @@ fn coalesce(entries: &mut Vec<Entry>) {
     }
 }
 
-/// The uses one per key and range, sorted by key, without the ones that touch nothing.
-fn merged<S: Copy + Ord + Hash>(uses: impl IntoIterator<Item = Use<S>>) -> Vec<Use<S>> {
-    let mut merged: Vec<Use<S>> = Vec::new();
-    let mut index: KeyMap<(S, UseRange), usize> = KeyMap::default();
-    for used in uses {
-        if used.is_nothing() {
-            continue;
+/// `uses` (none of which touches nothing) one per key and range, sorted by key, each key's ranges
+/// in the order they first came, the reads and writes of a range's uses joined: in place, in their
+/// own storage.
+pub(super) fn merge<S: Copy + Ord>(uses: &mut Vec<Use<S>>) {
+    // Stable: a key's uses keep their order.
+    uses.sort_by_key(|used| used.key);
+    // `uses[..kept]` are merged, `uses[group..kept]` those of the key at hand.
+    let mut kept = 0;
+    let mut group = 0;
+    for at in 0..uses.len() {
+        if group < kept && uses[group].key != uses[at].key {
+            group = kept;
         }
-        match index.get(&(used.key, used.range.clone())) {
-            Some(&at) => {
-                merged[at].read = merged[at].read.union(used.read);
-                merged[at].write = merged[at].write.union(used.write);
+        match (group..kept).find(|&k| uses[k].range == uses[at].range) {
+            Some(k) => {
+                let (read, write) = (uses[at].read, uses[at].write);
+                uses[k].read = uses[k].read.union(read);
+                uses[k].write = uses[k].write.union(write);
             }
             None => {
-                index.insert((used.key, used.range.clone()), merged.len());
-                merged.push(used);
+                uses.swap(kept, at);
+                kept += 1;
             }
         }
     }
-    merged.sort_by_key(|used| used.key);
-    merged
+    uses.truncate(kept);
 }
 
 /// How far a command's uses say which untracked memory it touches, inside an encoder Metal orders
@@ -1115,6 +1120,11 @@ pub(super) struct EncoderUses<K> {
     held: Vec<K>,
     /// A use of a held image but as a depth/stencil attachment was recorded after its hold.
     broke: bool,
+    /// The last command's uses as the encoder orders them ([`inside_uses`]): to compare with the
+    /// earlier commands', and as it keeps them where those differ (a command with an untracked
+    /// use). Each command's are written over the last one's storage.
+    compared: Vec<Use<Class<K>>>,
+    kept: Vec<Use<Class<K>>>,
 }
 
 /// A fence an encoder waits for or updates, and the stages of its draws the call names: a render
@@ -1186,6 +1196,8 @@ impl<K: Copy + Ord + Hash> EncoderUses<K> {
             updates: Vec::new(),
             held: Vec::new(),
             broke: false,
+            compared: Vec::new(),
+            kept: Vec::new(),
         }
     }
 
@@ -1196,19 +1208,41 @@ impl<K: Copy + Ord + Hash> EncoderUses<K> {
 
     /// The barrier a command with `uses`, which say what untracked memory it touches as `reach`
     /// does, needs after the encoder's earlier commands: none in an encoder whose commands are
-    /// not ordered. Nothing changes until [`EncoderUses::record`].
-    pub(super) fn barrier(&self, uses: &[Use<K>], reach: Reach) -> Option<Barrier> {
+    /// not ordered. Nothing the encoder orders by changes until [`EncoderUses::order`].
+    pub(super) fn barrier(&mut self, uses: &[Use<K>], reach: Reach) -> Option<Barrier> {
         if !self.ordered {
             return None;
         }
+        inside_uses(uses, reach, false, &mut self.compared);
         // One encoder runs on one queue: its commands need barriers, never waits.
-        depend(
-            &self.inside,
-            &inside_uses(uses, reach, false),
-            (Point::default(), 0),
-        )
-        .barrier
-        .needed()
+        depend(&self.inside, &self.compared, (Point::default(), 0))
+            .barrier
+            .needed()
+    }
+
+    /// Order a command whose `uses` say what untracked memory it touches as `reach` does after the
+    /// encoder's earlier commands, and note it recorded, in `stages`, after the barrier it needs
+    /// ([`barrier`](Self::barrier)), which this answers. The command's uses as the encoder compares
+    /// them are those it keeps where every use is tracked ([`inside_uses`]), so they are made once.
+    pub(super) fn order(
+        &mut self,
+        stages: vk::PipelineStageFlags2,
+        uses: &[Use<K>],
+        reach: Reach,
+    ) -> Option<Barrier> {
+        let barrier = self.barrier(uses, reach);
+        if self.ordered {
+            let kept = match uses.iter().all(|used| used.tracked) {
+                true => &self.compared,
+                false => {
+                    inside_uses(uses, reach, true, &mut self.kept);
+                    &self.kept
+                }
+            };
+            admit(&mut self.inside, kept, barrier, &[], Point::default());
+        }
+        self.note(stages, uses);
+        barrier
     }
 
     /// Note a recorded command that may touch untracked memory its uses do not name
@@ -1219,18 +1253,16 @@ impl<K: Copy + Ord + Hash> EncoderUses<K> {
         uses: &[Use<K>],
         barrier: Option<Barrier>,
     ) {
-        self.record_reaching(stages, uses, barrier, Reach::Unnamed);
+        if self.ordered {
+            inside_uses(uses, Reach::Unnamed, true, &mut self.kept);
+            admit(&mut self.inside, &self.kept, barrier, &[], Point::default());
+        }
+        self.note(stages, uses);
     }
 
-    /// [`record`](Self::record) of a command whose `uses` say what untracked memory it touches
-    /// as `reach` does.
-    pub(super) fn record_reaching(
-        &mut self,
-        stages: vk::PipelineStageFlags2,
-        uses: &[Use<K>],
-        barrier: Option<Barrier>,
-        reach: Reach,
-    ) {
+    /// Note a command the encoder orders recorded, in `stages`, with `uses`: its held images'
+    /// holds, its part's stages and tracked uses.
+    fn note(&mut self, stages: vk::PipelineStageFlags2, uses: &[Use<K>]) {
         if !self.held.is_empty() {
             let held = &self.held;
             self.broke |= uses.iter().any(|used| {
@@ -1242,16 +1274,6 @@ impl<K: Copy + Ord + Hash> EncoderUses<K> {
         part.stages |= uses.iter().fold(stages, |all, used| {
             all | used.read.stages | used.write.stages
         });
-        if self.ordered {
-            admit(
-                &mut self.inside,
-                &inside_uses(uses, reach, true),
-                barrier,
-                &[],
-                Point::default(),
-            );
-        }
-        let part = self.current();
         // Room for a few resources at once, made at the part's first: grown from nothing, the map
         // would allocate again at its fourth and eighth.
         if part.tracked.capacity() == 0 {
@@ -1700,18 +1722,20 @@ fn coalesce_uses<K>(uses: &mut Vec<Use<K>>) {
     }
 }
 
-/// The uses of a command of `reach` as the encoder orders them ([`Class`]): to compare with the
-/// earlier commands' (`recorded` false), or as it keeps them (`recorded` true). A tracked use is
-/// its key's. An untracked use of a [`Reach::Named`] command compares with its key's and with
-/// the accesses of the commands that do not name theirs, and is kept as its key's and as an
-/// access of all untracked memory; one of a [`Reach::Unnamed`] command compares with every
-/// untracked access, and is kept as an access of all untracked memory, and of the commands that
-/// do not name theirs.
-fn inside_uses<K: Copy + Ord + Hash>(
+/// The uses of a command of `reach` as the encoder orders them ([`Class`]), written over `into`:
+/// to compare with the earlier commands' (`recorded` false), or as it keeps them (`recorded`
+/// true), one per class and range, sorted by class, without those that touch nothing ([`merge`]).
+/// A tracked use is its key's, either way. An untracked use of a [`Reach::Named`] command compares
+/// with its key's and with the accesses of the commands that do not name theirs, and is kept as
+/// its key's and as an access of all untracked memory; one of a [`Reach::Unnamed`] command
+/// compares with every untracked access, and is kept as an access of all untracked memory, and of
+/// the commands that do not name theirs.
+fn inside_uses<K: Copy + Ord>(
     uses: &[Use<K>],
     reach: Reach,
     recorded: bool,
-) -> Vec<Use<Class<K>>> {
+    into: &mut Vec<Use<Class<K>>>,
+) {
     let class = |used: &Use<K>, key: Class<K>, range: UseRange| Use {
         key,
         tracked: used.tracked,
@@ -1719,7 +1743,8 @@ fn inside_uses<K: Copy + Ord + Hash>(
         read: used.read,
         write: used.write,
     };
-    merged(uses.iter().flat_map(|used| {
+    into.clear();
+    for used in uses {
         let (first, second) = match (used.tracked, reach, recorded) {
             (true, _, _) => (Class::Key(used.key), None),
             (false, Reach::Named, false) => (Class::Key(used.key), Some(Class::Unnamed)),
@@ -1731,11 +1756,13 @@ fn inside_uses<K: Copy + Ord + Hash>(
             Class::Key(_) => used.range.clone(),
             Class::Untracked | Class::Unnamed => UseRange::UNTRACKED,
         };
-        [Some(class(used, first, range))]
+        let classes = [Some(class(used, first, range))]
             .into_iter()
             .chain([second.map(|key| class(used, key, UseRange::UNTRACKED))])
-            .flatten()
-    }))
+            .flatten();
+        into.extend(classes.filter(|used| !used.is_nothing()));
+    }
+    merge(into);
 }
 
 /// What one ended encoder hands to its queue's tracker at commit.
@@ -1857,6 +1884,13 @@ impl<K: Copy + Ord + Hash> EncoderUses<K> {
     pub(super) fn range_room(&self, key: K) -> Option<usize> {
         let part = self.parts.iter().last()?;
         part.tracked.get(&key).map(|few| few.rest.capacity())
+    }
+
+    /// Where the storage of the lists its last command was ordered by lies, and its room: the
+    /// list compared with the earlier commands', then the one kept apart ([`inside_uses`]).
+    #[cfg(test)]
+    pub(super) fn ordered_storage(&self) -> [(usize, usize); 2] {
+        [&self.compared, &self.kept].map(|list| (list.as_ptr().addr(), list.capacity()))
     }
 }
 

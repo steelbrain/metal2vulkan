@@ -3,8 +3,8 @@
 //! `VkQueue`s, and the legacy masks.
 
 use crate::tracker::{
-    ordered, Access, Barrier, EncoderUses, Footprint, GeometryWrites, IndirectReads, LegacyBarrier,
-    Point, Reach, Summary, Tracker, Use, UseRange, Wait, ENTRIES_PER_KEY,
+    merge, ordered, Access, Barrier, EncoderUses, Footprint, GeometryWrites, IndirectReads,
+    LegacyBarrier, Point, Reach, Summary, Tracker, Use, UseRange, Wait, ENTRIES_PER_KEY,
 };
 use ash::vk;
 use std::ops::Range;
@@ -60,8 +60,7 @@ fn barrier(src: Access, dst: Access) -> Option<Barrier> {
 fn encoder(commands: &[&[Use<Key>]]) -> Summary<Key> {
     let mut uses = EncoderUses::new(true);
     for command in commands {
-        let barrier = uses.barrier(command, Reach::Unnamed);
-        uses.record(vk::PipelineStageFlags2::NONE, command, barrier);
+        uses.order(vk::PipelineStageFlags2::NONE, command, Reach::Unnamed);
     }
     uses.finish()
 }
@@ -717,9 +716,7 @@ fn untracked_memory_is_one_class_inside_an_encoder() {
 #[test]
 fn named_untracked_memory_orders_per_key_and_range_inside_an_encoder() {
     let named = |uses: &mut EncoderUses<Key>, command: &[Use<Key>]| {
-        let barrier = uses.barrier(command, Reach::Named);
-        uses.record_reaching(TRANSFER, command, barrier, Reach::Named);
-        barrier
+        uses.order(TRANSFER, command, Reach::Named)
     };
     let write = |key, range| [Use::writes(key, false, bytes(range), copy_write())];
     let read = |key, range| [Use::reads(key, false, bytes(range), copy_read())];
@@ -1006,8 +1003,7 @@ fn random_encoder(next: &mut impl FnMut(u64) -> u64) -> Summary<Key> {
             _ => reads(key, range, shader_read()),
         };
         let command = [used];
-        let barrier = uses.barrier(&command, Reach::Unnamed);
-        uses.record(vk::PipelineStageFlags2::NONE, &command, barrier);
+        uses.order(vk::PipelineStageFlags2::NONE, &command, Reach::Unnamed);
     }
     if next(4) == 0 {
         uses.wait_for_fence(100 + next(2), None);
@@ -1407,8 +1403,7 @@ fn an_encoder_summary_stays_bounded() {
     let mut uses = EncoderUses::<Key>::new(true);
     for at in 0..1000u64 {
         let command = [reads(1, bytes(at * 4..at * 4 + 4), copy_read())];
-        let barrier = uses.barrier(&command, Reach::Unnamed);
-        uses.record(TRANSFER, &command, barrier);
+        uses.order(TRANSFER, &command, Reach::Unnamed);
     }
     let summary = uses.finish();
     assert!(summary.uses().len() <= ENTRIES_PER_KEY);
@@ -1883,7 +1878,7 @@ fn a_resource_used_at_moving_ranges_allocates_its_list_once() {
     let mut uses = EncoderUses::new(false);
     for at in 0..3 * ENTRIES_PER_KEY as u64 {
         let used = [reads(1, bytes(256 * at..256 * at + 16), shader_read())];
-        uses.record_reaching(COMPUTE, &used, None, Reach::Named);
+        uses.order(COMPUTE, &used, Reach::Named);
         if at > 0 {
             assert_eq!(uses.range_room(1), Some(ENTRIES_PER_KEY + 1), "range {at}");
         }
@@ -1923,4 +1918,90 @@ fn a_summary_lists_its_uses_by_resource_each_in_recorded_order() {
         })
         .collect();
     assert_eq!(got, expected);
+}
+
+/// An ordered encoder's commands write the uses it orders them by over the last command's storage
+/// ([`EncoderUses::ordered_storage`]): commands of as many uses as the first make no list again,
+/// and a command whose every use is tracked keeps the list it compared, making none apart; a
+/// command with an untracked use makes the one it keeps once, and the commands like it after it
+/// none.
+#[test]
+fn an_encoder_orders_its_commands_in_storage_it_keeps() {
+    let mut uses = EncoderUses::<Key>::new(true);
+    let tracked = [
+        reads(1, bytes(0..64), copy_read()),
+        writes(2, bytes(0..64), copy_write()),
+        reads(1, bytes(0..64), shader_read()),
+    ];
+    uses.order(TRANSFER, &tracked, Reach::Unnamed);
+    let first = uses.ordered_storage();
+    assert_eq!(first[1].1, 0, "a list kept apart for tracked uses");
+    for _ in 0..64 {
+        uses.order(TRANSFER, &tracked, Reach::Unnamed);
+        assert_eq!(uses.ordered_storage(), first);
+    }
+    let untracked = [
+        reads(1, bytes(0..64), copy_read()),
+        Use::writes(3, false, bytes(0..64), copy_write()),
+    ];
+    uses.order(TRANSFER, &untracked, Reach::Named);
+    let second = uses.ordered_storage();
+    assert_eq!(second[0], first[0]);
+    assert!(second[1].1 > 0, "no list kept apart for an untracked use");
+    for _ in 0..64 {
+        uses.order(TRANSFER, &untracked, Reach::Named);
+        uses.order(TRANSFER, &tracked, Reach::Unnamed);
+        assert_eq!(uses.ordered_storage(), second);
+    }
+}
+
+/// The uses an encoder orders a command by are those a merge through a map of each key and range
+/// makes, sorted by key ([`merge`]'s reference, the form it took before): for commands of random
+/// uses of few keys and ranges, repeated and touching nothing among them, the same uses in the
+/// same order, so the encoder's barriers are the same.
+#[test]
+fn merging_in_place_keeps_each_key_and_range_once_in_order() {
+    fn reference(uses: &[Use<Key>]) -> Vec<Use<Key>> {
+        let mut merged: Vec<Use<Key>> = Vec::new();
+        let mut index = std::collections::HashMap::new();
+        for used in uses.iter().filter(|used| !used.is_nothing()) {
+            match index.get(&(used.key, used.range.clone())) {
+                Some(&at) => {
+                    let known: &mut Use<Key> = &mut merged[at];
+                    known.read = known.read.union(used.read);
+                    known.write = known.write.union(used.write);
+                }
+                None => {
+                    index.insert((used.key, used.range.clone()), merged.len());
+                    merged.push(used.clone());
+                }
+            }
+        }
+        merged.sort_by_key(|used| used.key);
+        merged
+    }
+    let mut seed = 0x2545_f491_4f6c_dd1du64;
+    let mut next = |n: u64| {
+        seed ^= seed << 13;
+        seed ^= seed >> 7;
+        seed ^= seed << 17;
+        seed % n
+    };
+    for _ in 0..2000 {
+        let uses: Vec<Use<Key>> = (0..next(12))
+            .map(|_| {
+                let start = 16 * next(3);
+                let range = bytes(start..start + 16 * next(3));
+                let access =
+                    [copy_read(), copy_write(), shader_read(), Access::NONE][next(4) as usize];
+                match next(2) {
+                    0 => reads(next(4), range, access),
+                    _ => writes(next(4), range, access),
+                }
+            })
+            .collect();
+        let mut merged: Vec<Use<Key>> = uses.iter().filter(|u| !u.is_nothing()).cloned().collect();
+        merge(&mut merged);
+        assert_eq!(merged, reference(&uses), "{uses:?}");
+    }
 }

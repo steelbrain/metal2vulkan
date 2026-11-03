@@ -505,8 +505,7 @@ fn a_sample_through_a_second_key_waits_for_a_render_through_the_first() {
     let summary = |uses: &[Use<ResourceKey>]| {
         let mut encoder = EncoderUses::new(true);
         let uses = aliases.augment(uses).unwrap_or_else(|| uses.to_vec());
-        let barrier = encoder.barrier(&uses, Reach::Unnamed);
-        encoder.record(vk::PipelineStageFlags2::NONE, &uses, barrier);
+        encoder.order(vk::PipelineStageFlags2::NONE, &uses, Reach::Unnamed);
         encoder.finish()
     };
     let render = Use::writes(
