@@ -604,6 +604,7 @@ fn record_kept(
                         index: owned.index,
                         indirect: owned.indirect,
                         dynamic: &owned.dynamic,
+                        settled: None,
                         topology: owned.topology,
                         primitive_restart: owned.primitive_restart,
                         state: &owned.state,

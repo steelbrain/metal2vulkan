@@ -426,6 +426,8 @@ mod untouched;
 mod vertex_reach;
 mod vertex_strides;
 
+#[cfg(all(test, debug_assertions, any(m2v_gpu, m2v_cpu_icd)))]
+pub(crate) use bound::dynamic_compares;
 use bound::{Bound, EqualShapes, Now, Recorded};
 use deferral::Logged;
 pub(crate) use deferral::{lowering, DeferredEncoders, EndInFlight};
@@ -9624,8 +9626,10 @@ impl RenderLowering {
         self.barrier_splits += usize::from(run_barrier_split);
         self.run_barrier = false;
         self.gathering().add(&draw_shadows, uses);
-        // Whether it recorded a barrier in its instance, or a state command (`Recorded`).
-        let (mut barriered, mut draw_alone) = (false, false);
+        // Whether it recorded a barrier in its instance, or a state command (`Recorded`); and the
+        // count of the record's recordings just after its last recorded through it, where one did
+        // (`Bound::records`): what it holds kept (`Kept::settled`).
+        let (mut barriered, mut draw_alone, mut through_record) = (false, false, None);
         if !empty && !culled {
             for source in index.into_iter().chain(indirect) {
                 match (source.copy_steps(&mut self.core), before_instance) {
@@ -9860,6 +9864,7 @@ impl RenderLowering {
                                 index,
                                 indirect,
                                 dynamic,
+                                settled: None,
                                 topology,
                                 primitive_restart,
                                 state,
@@ -9890,7 +9895,11 @@ impl RenderLowering {
                                         Some(replayed) => unsafe {
                                             replayed.record(&recording, bound, &replay_holes)
                                         },
-                                        None => unsafe { recording.record(bound) },
+                                        None => {
+                                            let recorded = unsafe { recording.record(bound) };
+                                            through_record = Some(bound.records());
+                                            recorded
+                                        }
                                     }
                                 }
                                 (None, _) => owned.push(recording.owned()),
@@ -10101,6 +10110,7 @@ impl RenderLowering {
                 draw_alone,
                 stamps: self.table_stamps(),
                 rebinds,
+                settled: through_record,
             };
             self.again.keep(kept);
         }
@@ -11524,6 +11534,11 @@ struct Recording<'a> {
     /// The dynamic states the pipeline holds: its own, but for those of a part it lacks (the
     /// fragment states of a pipeline that discards rasterization, `fragment_state`).
     dynamic: &'a [vk::DynamicState],
+    /// Where the record it records through holds its pipeline and its dynamic states as the
+    /// last recording through it set them, of the same values (a draw rebound:
+    /// `render/draw_again/rebound.rs`), those of `dynamic` no value of the record holds, which it
+    /// sets at every draw: it compares the others with none (`render/bound.rs`).
+    settled: Option<&'a [vk::DynamicState]>,
     /// The draw's input assembly, which the pipeline takes as dynamic state where it makes the
     /// topology dynamic.
     topology: metal2vulkan::vk::PrimitiveTopology,
@@ -11717,7 +11732,7 @@ impl Recording<'_> {
                 topology: self.topology,
                 primitive_restart: self.primitive_restart,
             };
-            for &state in self.dynamic {
+            for &state in self.settled.unwrap_or(self.dynamic) {
                 // The write masks, which only a draw read through snapshots makes dynamic, are
                 // its pair's to set at every draw (below).
                 if state == vk::DynamicState::COLOR_WRITE_MASK_EXT || !bound.dynamic(state, now) {
@@ -11762,6 +11777,7 @@ impl Recording<'_> {
             }
             record_draw_command(raw, cb, self.draw, self.indirect, self.mesh);
         }
+        bound.recorded();
         Recorded {
             states: recorded,
             writes_pushed,

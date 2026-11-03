@@ -21,6 +21,7 @@
 use super::blit_holds::{until, Scratch, WAIT};
 use super::encoder_holds::{bytes_of, library, pass, words_of};
 use super::rebind_behind_a_wait::{Page, BYTES};
+use crate::render::dynamic_compares;
 use crate::{
     BlitOption, Buffer, CommandBufferStatus, Degradation, DegradeNotice, Device, DeviceKind,
     DeviceOptions, Error, MessageSink, Origin, PipelineOptions, Region, RenderCommandEncoder,
@@ -797,4 +798,130 @@ fn draws_after_texture_and_sampler_changes_rebind_what_every_step_binds() {
             assert_eq!(rebound.counted(count), every.counted(count), "{name}");
         }
     }
+}
+
+/// What each of `draws` draws of `state`'s rectangles from `rectangles` (as
+/// [`offset_rectangles`]' in one color, the `at`th of the rectangle `at` modulo [`DRAWS`], and
+/// `between(at)` called before the `at`th draw but the first) changed of the device's counts `of`
+/// and of the compares of dynamic states' values the encoding thread made (`render/bound.rs`),
+/// the first draw's left out.
+fn compared_by_each(
+    device: &Device,
+    (state, rectangles, draws): (&RenderPipelineState, &Buffer, u64),
+    between: impl Fn(&mut RenderCommandEncoder, u64),
+    of: fn(&WorkCounts) -> u64,
+) -> (Ran, Vec<(u64, u64)>) {
+    let drawn = std::cell::RefCell::new(Vec::new());
+    let ran = run(device, |encoder| {
+        drawn.borrow_mut().clear();
+        encoder.set_render_pipeline_state(state).unwrap();
+        encoder.set_vertex_buffer(Some(rectangles), 0, 0).unwrap();
+        let color = bytes_of(&[1.0f32 / 64.0; 4], f32::to_le_bytes);
+        encoder.set_fragment_bytes(&color, 0).unwrap();
+        rectangle(encoder);
+        for at in 1..draws {
+            encoder
+                .set_vertex_buffer_offset(16 * (at % DRAWS), 0)
+                .unwrap();
+            between(encoder, at);
+            let before = (of(&device.work_counts()), dynamic_compares());
+            rectangle(encoder);
+            let after = (of(&device.work_counts()), dynamic_compares());
+            drawn
+                .borrow_mut()
+                .push((after.0 - before.0, after.1 - before.1));
+        }
+    });
+    (ran, drawn.into_inner())
+}
+
+/// A rebound draw compares none of the dynamic states a record of its command buffer holds a
+/// value of with it: nothing recorded through the record since the kept draw, or the draw rebound
+/// before, set them, so it holds them as they set them (`Kept::settled`); a draw that takes every
+/// step compares them.
+#[test]
+fn draws_rebound_compare_no_dynamic_state_their_record_holds() {
+    let scratch = Scratch::new("rebound-compares");
+    let device = device(&scratch.0, &[], &Heard::default());
+    let state = adding_state(&device);
+    let columns = rectangles_from_columns(&device);
+    let drawn = (&state, &columns);
+    let rebound = |counts: &WorkCounts| counts.draws_rebound;
+    warm(&device, |encoder| {
+        offset_rectangles(encoder, drawn, |_| 1.0 / 64.0, |_| {})
+    });
+    let all = (&state, &columns, DRAWS);
+    let (_, each) = compared_by_each(&device, all, |_, _| {}, rebound);
+    let rebound_draws: Vec<_> = each.iter().filter(|(rebound, _)| *rebound == 1).collect();
+    assert!(
+        rebound_draws.len() as u64 >= (DRAWS - 1) / 2 - 1,
+        "draws rebound: {each:?}"
+    );
+    assert!(
+        rebound_draws.iter().all(|(_, compared)| *compared == 0),
+        "dynamic states compared by draws rebound (rebound, compared): {each:?}"
+    );
+    assert!(
+        (each.iter()).any(|&(rebound, compared)| rebound == 0 && compared > 0),
+        "a draw taking every step compares its dynamic states: {each:?}"
+    );
+}
+
+/// Draws after something recorded into their command buffer between them, or after a call that
+/// changed a dynamic state, set what the same draws each taking every step set: of 15 draws,
+/// after another blend color before the 3rd (the state set again), a barrier inside the pass
+/// before the 7th, and a barrier that splits the pass before the 11th (another command buffer,
+/// whose record begins empty), the draws rebound between them, with the same commands of every
+/// kind, state commands and pixels. Each draw after the blend color or the barrier inside the
+/// pass compares its dynamic states again, and the one after the blend color records a state
+/// command; the draws after the split record after their calls (none is recorded as it is
+/// called), so their commands and pixels alone show what they set.
+#[test]
+fn draws_after_a_state_set_or_a_barrier_set_what_every_step_sets() {
+    use metal2vulkan::metal::{BarrierScope, RenderStages};
+    let scratch = Scratch::new("rebound-after-recordings");
+    let device = device(&scratch.0, &[], &Heard::default());
+    let state = adding_state(&device);
+    let columns = rectangles_from_columns(&device);
+    let drawn = (&state, &columns);
+    let (fragment, vertex) = (RenderStages::FRAGMENT, RenderStages::VERTEX);
+    // Apart enough that draws rebound come between them in builds with debug assertions too
+    // (where a kept draw's first draw again takes every step).
+    let came = |encoder: &mut RenderCommandEncoder, at: u64| match at {
+        3 => encoder.set_blend_color(0.25, 0.25, 0.25, 0.25),
+        7 => encoder.memory_barrier_with_scope(BarrierScope::RENDER_TARGETS, fragment, fragment),
+        11 => encoder.memory_barrier_with_scope(BarrierScope::BUFFERS, fragment, vertex),
+        _ => {}
+    };
+    // And the blend color the encoder holds set again before each draw: every step at each.
+    let every_step = |encoder: &mut RenderCommandEncoder, at: u64| {
+        came(encoder, at);
+        let color = if at >= 3 { 0.25 } else { 0.0 };
+        encoder.set_blend_color(color, color, color, color);
+    };
+    let states = |counts: &WorkCounts| counts.draw_states_recorded;
+    warm(&device, |encoder| {
+        offset_rectangles(encoder, drawn, |_| 1.0 / 64.0, |_| {})
+    });
+    let fifteen = (&state, &columns, 15);
+    let (between, each) = compared_by_each(&device, fifteen, came, states);
+    let (every, _) = compared_by_each(&device, fifteen, every_step, states);
+    let rebound = |counts: &WorkCounts| counts.draws_rebound;
+    assert!(between.counted(rebound) > 0, "no draw rebound");
+    assert_eq!(every.counted(rebound), 0);
+    assert_eq!(between.commands, every.commands);
+    assert_eq!(between.counted(states), every.counted(states));
+    assert_eq!(between.words, every.words, "the pixels of the draws");
+    // `each[at - 1]` is the `at`th draw's.
+    for at in [3, 7] {
+        let (_, compared) = each[at - 1];
+        assert!(
+            compared > 0,
+            "the draw after {at}'s call compared nothing: {each:?}"
+        );
+    }
+    assert!(
+        each[2].0 > 0,
+        "the draw after another blend color set none: {each:?}"
+    );
 }

@@ -63,6 +63,13 @@
 //! Only draws record these commands into the command buffer; its other commands (barriers and
 //! queries) disturb none of them. A record follows one command buffer: a draw into another
 //! begins it again, empty.
+//!
+//! A record counts the recordings recorded through it and its beginnings again
+//! ([`Bound::records`]): where the count is what it was just after a draw's recording, nothing
+//! was recorded into the command buffer through it since, so it holds that draw's pipeline and
+//! dynamic states as the draw set them. A draw rebound after it, of the same pipeline and states,
+//! then compares none of the states a value here holds (`render/draw_again/rebound.rs`), each of
+//! whose compares would answer that it holds them.
 
 use ash::vk;
 
@@ -162,6 +169,23 @@ pub(super) struct Bound {
     /// The dynamic states set that still hold, and their values.
     set: States,
     values: Option<Values>,
+    /// The recordings recorded through it and its beginnings again (the module docs), from its
+    /// first; only ever counted up.
+    records: u64,
+}
+
+#[cfg(debug_assertions)]
+thread_local! {
+    /// The compares of a dynamic state's value with a record's this thread made
+    /// ([`Bound::dynamic`]), in builds with debug assertions.
+    static DYNAMIC_COMPARES: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+/// How many dynamic states' values this thread compared with a record's so far
+/// ([`Bound::dynamic`]).
+#[cfg(all(test, debug_assertions, any(m2v_gpu, m2v_cpu_icd)))]
+pub(crate) fn dynamic_compares() -> u64 {
+    DYNAMIC_COMPARES.with(std::cell::Cell::get)
 }
 
 /// Dynamic states whose values [`Values`] holds, a bit each: a draw tests and notes each of its
@@ -238,9 +262,29 @@ impl Bound {
         if self.command_buffer != command_buffer {
             *self = Bound {
                 command_buffer,
+                records: self.records + 1,
                 ..Bound::default()
             };
         }
+    }
+
+    /// The recordings recorded through it and its beginnings again so far (the module docs).
+    #[inline]
+    pub(super) fn records(&self) -> u64 {
+        self.records
+    }
+
+    /// Count a recording recorded through it (`render::Recording::record`).
+    #[inline]
+    pub(super) fn recorded(&mut self) {
+        self.records += 1;
+    }
+
+    /// Whether a value here holds dynamic `state` ([`dynamic`](Self::dynamic) compares it), else
+    /// a draw that makes it dynamic sets it at every draw.
+    #[inline]
+    pub(super) fn holds_value(state: vk::DynamicState) -> bool {
+        States::bit(state).is_some()
     }
 
     /// Whether binding `pipeline`, which holds the dynamic states `dynamic` (the module docs),
@@ -468,6 +512,8 @@ impl Bound {
         let Some(bit) = States::bit(state) else {
             return true;
         };
+        #[cfg(debug_assertions)]
+        DYNAMIC_COMPARES.with(|compares| compares.set(compares.get() + 1));
         let values = self.values.get_or_insert_with(|| Values::of(now));
         let held = self.set.0 & bit != 0;
         if held && values.holds(state, now) == Some(true) {
@@ -648,6 +694,28 @@ mod tests {
                 range: 64,
             }),
         }
+    }
+
+    /// A record counts the recordings through it and its beginnings again: following the
+    /// command buffer it follows counts nothing, following another begins it again, empty, and
+    /// counts that.
+    #[test]
+    fn a_record_counts_its_recordings_and_its_beginnings_again() {
+        let mut bound = Bound::default();
+        assert_eq!(bound.records(), 0);
+        bound.follow(vk::CommandBuffer::from_raw(2));
+        assert_eq!(bound.records(), 1);
+        assert!(bound.pipeline(vk::Pipeline::from_raw(3), &[], false));
+        bound.recorded();
+        bound.follow(vk::CommandBuffer::from_raw(2));
+        assert_eq!(bound.records(), 2);
+        assert!(!bound.pipeline(vk::Pipeline::from_raw(3), &[], false));
+        bound.follow(vk::CommandBuffer::from_raw(4));
+        assert_eq!(bound.records(), 3);
+        assert!(
+            bound.pipeline(vk::Pipeline::from_raw(3), &[], false),
+            "begun again"
+        );
     }
 
     /// A push after a pipeline bind of the same layout carries only the writes that changed, the

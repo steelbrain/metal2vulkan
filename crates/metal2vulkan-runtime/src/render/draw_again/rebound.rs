@@ -33,7 +33,10 @@
 //! - **What it records and notes.** Its uses noted as any draw notes them (`note_reaching`, the
 //!   unordered writes, the pass's reads, the instance's gathered uses, indirect reads and geometry
 //!   writes); the state commands that changed and its draw, recorded through the kept draw's
-//!   recording against what its command buffer holds (`render/bound.rs`); its tables' new objects
+//!   recording against what its command buffer holds (`render/bound.rs`), which compares none of
+//!   the dynamic states a value there holds where nothing recorded through the record since the
+//!   kept draw, or the draw rebound before, set them (`Kept::settled`): it holds them, of the
+//!   values this draw sets, as every compare would answer; its tables' new objects
 //!   and its new samplers retained; and the rest as a draw again: kept for recording again (but
 //!   where it met a notice met at each occurrence, as its every step forgets it then), its
 //!   execution record, its counts into its thread's shard of the device's (`shards.rs`).
@@ -54,7 +57,7 @@ use crate::draw_source::{DrawSource, IndexBind};
 use crate::error::Error;
 use crate::live_bind::{LiveBind, Reshape};
 use crate::pipeline::{RenderStateKind, Settled};
-use crate::render::{Assembly, DrawBuffers, DrawState, Recording};
+use crate::render::{Assembly, Bound, DrawBuffers, DrawState, Recording};
 
 /// The most slots a draw rebound takes changed: a draw after more takes every step.
 const SLOTS: usize = 8;
@@ -70,6 +73,8 @@ pub(crate) struct KeptStorage {
     writes: Vec<Write>,
     /// Its dynamic states.
     dynamic: Vec<vk::DynamicState>,
+    /// Those of them no value of a record holds (`Bound::holds_value`), which every draw sets.
+    unheld: Vec<vk::DynamicState>,
     /// The rest of its recording.
     recording: Option<KeptRecording>,
 }
@@ -101,6 +106,9 @@ impl KeptStorage {
         self.writes.extend(writes.iter().filter_map(Write::unheld));
         self.dynamic.clear();
         self.dynamic.extend_from_slice(dynamic);
+        self.unheld.clear();
+        let unheld = dynamic.iter().filter(|&&state| !Bound::holds_value(state));
+        self.unheld.extend(unheld);
         self.recording = Some(recording);
     }
 
@@ -498,6 +506,11 @@ impl RenderLowering {
         let owned = (live.kept.recording.as_ref())
             .ok_or_else(|| crate::error::internal("a draw rebound without its recording"))?;
         let shared = self.core.device().shared();
+        let settled = (self.again.kept.as_ref()).and_then(|kept| kept.settled);
+        let bound = match self.current.inline {
+            true => &mut self.held_bound,
+            false => &mut self.current.bound,
+        };
         let recording = Recording {
             raw: shared.vk(),
             command_buffer: self.current.draws,
@@ -515,6 +528,9 @@ impl RenderLowering {
             index: owned.index,
             indirect: None,
             dynamic: &live.kept.dynamic,
+            // Nothing recorded through the record since the kept draw, or the draw rebound
+            // before, set the pipeline and dynamic states this draw sets (`Kept::settled`).
+            settled: (settled == Some(bound.records())).then_some(&live.kept.unheld[..]),
             topology: owned.topology,
             primitive_restart: owned.primitive_restart,
             state: &owned.state,
@@ -523,21 +539,19 @@ impl RenderLowering {
             draw: owned.draw,
             pair: None,
         };
-        let bound = match self.current.inline {
-            true => &mut self.held_bound,
-            false => &mut self.current.bound,
-        };
         // SAFETY: as the kept draw's recording: the secondary command buffer (or the pass's,
         // inline) records the kept draw's instance, and only this encoder records it; every
         // object recorded is live until the command buffer completes (the kept draw's retained,
         // and the tables' retained below); `bound` is the record of what its draws bound there.
         let recorded = unsafe { recording.record(bound) };
+        let settled = bound.records();
         if let Some(written) = written {
             self.core.keep_set_zero(written, &live.kept.writes);
         }
         let kept = (self.again.kept.as_mut())
             .ok_or_else(|| crate::error::internal("a draw rebound without its kept draw"))?;
         kept.stamps = stamps;
+        kept.settled = Some(settled);
         // Whether its uses read an image: what its drawing again notes (`Kept::reads_images`).
         if images {
             kept.reads_images = live.uses.iter().any(super::reads_image);

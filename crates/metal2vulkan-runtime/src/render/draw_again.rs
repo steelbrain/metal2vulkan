@@ -121,6 +121,11 @@ pub(super) struct Kept {
     /// Whether its encoder's bind state keeps what a draw rebound takes of it (`LiveBind::kept`,
     /// `rebound.rs`).
     pub(super) rebinds: bool,
+    /// The count of its instance's record's recordings just after its recording, or the last
+    /// draw rebound after it, recorded through it (`Bound::records`): while the record's count is
+    /// this, the record holds the pipeline and dynamic states it set, which a draw rebound then
+    /// compares with none. `None` where it recorded through none.
+    pub(super) settled: Option<u64>,
 }
 
 /// An index source as a kept draw read it in place: the Metal buffer, by key, and offset, and
@@ -557,7 +562,8 @@ impl Checked {
         }
         let again = encoder.again.kept.as_mut();
         let again = again.unwrap_or_else(|| panic!("a draw again kept no draw"));
-        let (draw_alone, stamps, under) = (again.draw_alone, again.stamps, again.under);
+        let (draw_alone, stamps, under, settled) =
+            (again.draw_alone, again.stamps, again.under, again.settled);
         assert!(
             draw_alone || rebound,
             "a draw again recorded a state command"
@@ -567,10 +573,12 @@ impl Checked {
             "a draw rebound whose every step keeps nothing to rebind"
         );
         // A draw rebound reads its tables under their stamps now, its uses noted into the state
-        // now.
-        (again.draw_alone, again.stamps, again.under) = (kept.draw_alone, kept.stamps, kept.under);
+        // now; and every step recorded through its instance's record since (`Kept::settled`).
+        (again.draw_alone, again.stamps, again.under, again.settled) =
+            (kept.draw_alone, kept.stamps, kept.under, kept.settled);
         assert!(*again == kept, "a draw again kept another draw");
-        (again.draw_alone, again.stamps, again.under) = (draw_alone, stamps, under);
+        (again.draw_alone, again.stamps, again.under, again.settled) =
+            (draw_alone, stamps, under, settled);
         encoder.again.hits = hits;
     }
 }
