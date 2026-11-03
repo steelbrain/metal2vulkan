@@ -2666,7 +2666,7 @@ pub(super) struct Captured {
     pub(super) taken: Taken,
     holds: Holds,
     heaps: Vec<Heap>,
-    kept_leases: Vec<KeptLease>,
+    kept_leases: Vec<MergeLease>,
     attachment_shadows: Vec<ResourceKey>,
     first_copies: Vec<(ResourceKey, u64)>,
     twin_writes: Vec<TwinWrite>,
