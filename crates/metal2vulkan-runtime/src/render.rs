@@ -11858,9 +11858,15 @@ impl Recording<'_> {
                     recorded += 1;
                 }
             }
-            if !self.push.is_empty() && bound.pushes(self.layout, self.push) {
-                for (stages, offset, bytes) in self.push {
-                    raw.cmd_push_constants(cb, self.layout, *stages, *offset, bytes);
+            let pushed = match self.push.is_empty() {
+                true => None,
+                false => Some(bound.pushes(self.layout, self.push)).filter(|p| p.any()),
+            };
+            if let Some(pushed) = pushed {
+                for (at, (stages, offset, bytes)) in self.push.iter().enumerate() {
+                    if pushed.has(at) {
+                        raw.cmd_push_constants(cb, self.layout, *stages, *offset, bytes);
+                    }
                 }
                 recorded += 1;
             }

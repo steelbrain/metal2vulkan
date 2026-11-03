@@ -16,7 +16,9 @@
 //! - **Descriptor sets and push constants.** Kept while they are bound or pushed with the same
 //!   `VkPipelineLayout` (the same layout is compatible for every set and for the push constants);
 //!   a bind or push with another layout forgets what the earlier one held. A draw's push
-//!   constants are left out only where they are the same writes, in order, as the last ones.
+//!   constants carry, of the same writes in order as the last push's (each write's stages, offset
+//!   and length), only those whose bytes differ, and each later one that overlaps one of those
+//!   for a stage both name; of other writes, every one ([`Bound::pushes`]).
 //! - **A pushed set 0** (`pipeline::objects::pushes_set_zero`). Kept while pushed with the same
 //!   layout: a push of the same bindings and elements, in order, carries only the writes that
 //!   differ from those set 0 holds (none: left out), as the descriptors it does not write keep
@@ -161,6 +163,10 @@ pub(super) struct Bound {
     push_layout: vk::PipelineLayout,
     pushes: Vec<(vk::ShaderStageFlags, u32, usize)>,
     push_bytes: Vec<u8>,
+    /// `push_bytes` before the last push (builds with debug assertions: [`check_pushed`]), its
+    /// storage kept from push to push, so a draw allocates as many times as without them.
+    #[cfg(debug_assertions)]
+    push_before: Vec<u8>,
     /// Each vertex buffer binding: its buffer, offset and, bound with the strides dynamic, its
     /// stride.
     vertex: Vec<(u32, vk::Buffer, u64, Option<u64>)>,
@@ -255,6 +261,68 @@ pub(super) struct Now<'a> {
 
 // The checks a draw makes here, at every draw, are inline: they join `Recording::record` in
 // whichever codegen unit it lands in, as the state they test is matched there too.
+/// Which writes of a draw's push constants its push carries ([`Bound::pushes`]): by index.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) struct Pushed(u64);
+
+impl Pushed {
+    /// Every write.
+    const ALL: Pushed = Pushed(u64::MAX);
+    /// The most writes a push leaves any out of: of more, every one is pushed.
+    const MOST: usize = 64;
+
+    /// Whether the push carries any write.
+    pub(super) fn any(self) -> bool {
+        self.0 != 0
+    }
+
+    /// Whether the push carries write `at`.
+    pub(super) fn has(self, at: usize) -> bool {
+        self == Pushed::ALL || self.0 >> at & 1 != 0
+    }
+}
+
+/// That pushing `pushed` of `writes` over push constants that hold the last push's writes, whose
+/// bytes were `before` (one after another, each write's stages, offset and length those of
+/// `writes`), leaves every stage reading what pushing every write leaves it: at each byte a write
+/// sets for a stage, the last pushed write that sets it, else the last push's, is the last write
+/// that sets it. Nothing allocated.
+#[cfg(debug_assertions)]
+fn check_pushed(writes: &[PushWrite], before: &[u8], pushed: Pushed) {
+    let sets = |write: &PushWrite, bit: u32, byte: usize| {
+        let start = write.1 as usize;
+        write.0.as_raw() >> bit & 1 != 0 && start <= byte && byte < start + write.2.len()
+    };
+    for write in writes {
+        for bit in (0..32).filter(|bit| write.0.as_raw() >> bit & 1 != 0) {
+            for byte in write.1 as usize..write.1 as usize + write.2.len() {
+                let last = (writes.iter().rev()).find(|w| sets(w, bit, byte));
+                let every = last.map(|w| w.2[byte - w.1 as usize]);
+                let carried = match (writes.iter().enumerate().rev())
+                    .find(|&(at, w)| pushed.has(at) && sets(w, bit, byte))
+                {
+                    Some((_, w)) => Some(w.2[byte - w.1 as usize]),
+                    None => {
+                        let (mut at, mut held) = (0, None);
+                        for w in writes {
+                            if sets(w, bit, byte) {
+                                held = Some(before[at + byte - w.1 as usize]);
+                            }
+                            at += w.2.len();
+                        }
+                        held
+                    }
+                };
+                assert_eq!(
+                    every, carried,
+                    "a push of some of a draw's push-constant writes leaves stage bit {bit} \
+                     reading another byte {byte} than a push of all of them"
+                );
+            }
+        }
+    }
+}
+
 impl Bound {
     /// Follow `command_buffer`: where the record is another's, it begins again, empty.
     #[inline]
@@ -436,33 +504,67 @@ impl Bound {
         Some(changed.max(u64::from(self.forgotten)))
     }
 
-    /// Whether pushing `writes` with `layout` sets anything: noted as pushed where it does.
+    /// Which of `writes`, a draw's push-constant writes with `layout`, its push carries: noted as
+    /// pushed. All of them where the last push was of another layout or of other writes (their
+    /// count, or a write's stages, offset or length); else those whose bytes differ from the last
+    /// push's, and each write after one of those that shares a stage and a byte with it, which a
+    /// push of all of them would leave its own bytes over. Push constants are updated
+    /// incrementally (`vkCmdPushConstants`: "causing shader stages in stageFlags to read the new
+    /// data from pValues for push constants modified by this command, while still reading the
+    /// previous data for push constants not modified by this command"), so the stages read what
+    /// a push of every write would leave them (checked in builds with debug assertions).
     #[inline]
-    pub(super) fn pushes(&mut self, layout: vk::PipelineLayout, writes: &[PushWrite]) -> bool {
-        let same = self.push_layout == layout
+    pub(super) fn pushes(&mut self, layout: vk::PipelineLayout, writes: &[PushWrite]) -> Pushed {
+        let same_writes = self.push_layout == layout
             && self.pushes.len() == writes.len()
-            && self
-                .pushes
-                .iter()
-                .zip(writes)
-                .all(|(&(stages, offset, length), write)| {
-                    (stages, offset, length) == (write.0, write.1, write.2.len())
-                })
-            && writes
-                .iter()
-                .flat_map(|write| write.2.iter())
-                .eq(self.push_bytes.iter());
-        if same {
-            return false;
+            && writes.len() <= Pushed::MOST
+            && (self.pushes.iter().zip(writes)).all(|(&(stages, offset, length), write)| {
+                (stages, offset, length) == (write.0, write.1, write.2.len())
+            });
+        if !same_writes {
+            self.push_layout = layout;
+            self.pushes.clear();
+            self.push_bytes.clear();
+            for (stages, offset, bytes) in writes {
+                self.pushes.push((*stages, *offset, bytes.len()));
+                self.push_bytes.extend_from_slice(bytes);
+            }
+            return Pushed::ALL;
         }
-        self.push_layout = layout;
-        self.pushes.clear();
-        self.push_bytes.clear();
-        for (stages, offset, bytes) in writes {
-            self.pushes.push((*stages, *offset, bytes.len()));
-            self.push_bytes.extend_from_slice(bytes);
+        #[cfg(debug_assertions)]
+        {
+            self.push_before.clear();
+            self.push_before.extend_from_slice(&self.push_bytes);
         }
-        true
+        let mut changed = 0u64;
+        let mut at = 0;
+        for (i, write) in writes.iter().enumerate() {
+            let held = &mut self.push_bytes[at..at + write.2.len()];
+            if *held != write.2[..] {
+                held.copy_from_slice(&write.2);
+                changed |= 1 << i;
+            }
+            at += write.2.len();
+        }
+        // A later write a changed one overlaps for a stage both name, pushed again after it.
+        let overlaps = |a: &PushWrite, b: &PushWrite| {
+            let (a_end, b_end) = (a.1 as usize + a.2.len(), b.1 as usize + b.2.len());
+            a.0.intersects(b.0) && (a.1 as usize) < b_end && (b.1 as usize) < a_end
+        };
+        let mut pushed = changed;
+        for i in 0..writes.len() {
+            if pushed >> i & 1 == 0 {
+                continue;
+            }
+            for (j, later) in writes.iter().enumerate().skip(i + 1) {
+                if overlaps(&writes[i], later) {
+                    pushed |= 1 << j;
+                }
+            }
+        }
+        #[cfg(debug_assertions)]
+        check_pushed(writes, &self.push_before, Pushed(pushed));
+        Pushed(pushed)
     }
 
     /// Whether binding `buffer` at `offset` to vertex buffer `binding` (with `stride`, where the
@@ -678,7 +780,7 @@ fn rect(rect: &vk::Rect2D) -> [i64; 4] {
 
 #[cfg(test)]
 mod tests {
-    use super::Bound;
+    use super::{Bound, Pushed};
     use crate::binding::{Info, SetWrite};
     use ash::vk::{self, Handle};
 
@@ -716,6 +818,56 @@ mod tests {
             bound.pipeline(vk::Pipeline::from_raw(3), &[], false),
             "begun again"
         );
+    }
+
+    /// A push of the same writes as the last one carries those whose bytes changed, and each
+    /// later one that overlaps one of those for a shared stage; a push of another layout or of
+    /// other writes carries every one.
+    #[test]
+    fn a_push_carries_the_writes_that_changed() {
+        let (vertex, fragment) = (vk::ShaderStageFlags::VERTEX, vk::ShaderStageFlags::FRAGMENT);
+        let (a, b) = (
+            vk::PipelineLayout::from_raw(1),
+            vk::PipelineLayout::from_raw(2),
+        );
+        let carried =
+            |pushed: Pushed, n: usize| (0..n).filter(|&at| pushed.has(at)).collect::<Vec<_>>();
+        let mut bound = Bound::default();
+        bound.follow(vk::CommandBuffer::from_raw(2));
+        let apart = |v: u8, f: u8| vec![(vertex, 0, vec![v; 16]), (fragment, 16, vec![f; 16])];
+        assert_eq!(carried(bound.pushes(a, &apart(1, 2)), 2), [0, 1]);
+        assert!(!bound.pushes(a, &apart(1, 2)).any(), "the same bytes");
+        assert_eq!(
+            carried(bound.pushes(a, &apart(3, 2)), 2),
+            [0],
+            "the vertex write"
+        );
+        assert_eq!(
+            carried(bound.pushes(a, &apart(3, 4)), 2),
+            [1],
+            "the fragment write"
+        );
+        assert_eq!(
+            carried(bound.pushes(b, &apart(3, 4)), 2),
+            [0, 1],
+            "another layout"
+        );
+        let longer = vec![(vertex, 0, vec![3; 32]), (fragment, 32, vec![4; 16])];
+        assert_eq!(
+            carried(bound.pushes(b, &longer), 2),
+            [0, 1],
+            "other lengths"
+        );
+        // A write of both stages, then one of the fragment stage over its second half.
+        let both = vertex | fragment;
+        let over = |w: u8, f: u8| vec![(both, 0, vec![w; 16]), (fragment, 8, vec![f; 8])];
+        assert_eq!(carried(bound.pushes(a, &over(1, 2)), 2), [0, 1]);
+        assert_eq!(
+            carried(bound.pushes(a, &over(5, 2)), 2),
+            [0, 1],
+            "pushed again after"
+        );
+        assert_eq!(carried(bound.pushes(a, &over(5, 6)), 2), [1]);
     }
 
     /// A push after a pipeline bind of the same layout carries only the writes that changed, the

@@ -251,9 +251,15 @@ impl ReplayedDraws {
             // `layout`, as the first command's write it lies in did, and the arguments lie in the
             // scratch, which holds `INDIRECT_BUFFER` usage as every upload chunk does.
             unsafe {
-                if !writes.is_empty() && bound.pushes(layout, &writes) {
-                    for (stages, offset, bytes) in &writes {
-                        raw.cmd_push_constants(command_buffer, layout, *stages, *offset, bytes);
+                let pushed = match writes.is_empty() {
+                    true => None,
+                    false => Some(bound.pushes(layout, &writes)).filter(|p| p.any()),
+                };
+                if let Some(pushed) = pushed {
+                    for (at, (stages, offset, bytes)) in writes.iter().enumerate() {
+                        if pushed.has(at) {
+                            raw.cmd_push_constants(command_buffer, layout, *stages, *offset, bytes);
+                        }
                     }
                     recorded.states += 1;
                 }
