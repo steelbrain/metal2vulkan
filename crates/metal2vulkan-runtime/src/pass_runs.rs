@@ -12,26 +12,33 @@
 //! one command buffer, each over the same attachment: hundreds of keeps and merges (and, for a
 //! linear attachment, copies in), each between barriers from every command to every command.
 //!
-//! - **A run** is a command buffer's passes over one attachment (a linear attachment rendered
-//!   apart through one kept image, or one shadowed texture), in one batch, each loading and
-//!   storing it, with nothing between them that may touch its bytes or the image the passes
-//!   render. Its first pass copies in and keeps as a pass does alone; each later pass renders
-//!   over what the one before left in the image, with no copy in and no keep; and the merge after
-//!   its last pass compares the first pass's keep with the image the last pass left, so it writes
-//!   every word one of the passes changed, and no other. A linear attachment's pass whose box
-//!   reaches past its run's ends that run and opens the next over its whole render area, which
-//!   every later box lies in. A shadowed texture's pass that writes outside the rectangle its
-//!   run's keep holds merges what the run kept before it and keeps every texel again; one that
-//!   reads outside the texels its image holds (the first pass copied in its scissors' alone)
-//!   merges it and copies every texel in first (`ShadowSync::before`, as a command of one encoder
-//!   would); and the run goes on over that keep, every later pass inside both.
+//! - **A run** is a command buffer's passes over one attachment (a linear attachment rendered apart
+//!   through one kept image, or one shadowed texture), in one batch, each loading and storing it,
+//!   with nothing between them that may touch its bytes or the image the passes render; a shadowed
+//!   texture's opens at the second such pass (**The merge goes last**). Its first pass copies in
+//!   (or takes the image carried) and keeps as a pass does alone; each later pass renders over what
+//!   the one before left in the image, with no copy in and no keep; and the merge after its last
+//!   pass compares the first pass's keep with the image the last pass left, so it writes every word
+//!   one of the passes changed, and no other. A linear attachment's pass whose box reaches past its
+//!   run's ends that run and opens the next over its whole render area, which every later box lies
+//!   in. A shadowed texture's pass that writes outside the rectangle its run's keep holds merges
+//!   what the run kept before it and keeps every texel again; one that reads outside the texels its
+//!   image holds (the first pass copied in its scissors' alone) merges it and copies every texel in
+//!   first (`ShadowSync::before`, as a command of one encoder would); and the run goes on over that
+//!   keep, every later pass inside both.
 //! - **The merge goes last.** Each pass of a run leaves its merge to its batch's submission
 //!   ([`RunMerge`], `Deferred::RunMerge`), a segment between its own command buffers and the next
 //!   encoder's; a later pass of the run, as its encoder ends, takes it over, and that segment
 //!   records nothing. The merge recorded is the run's last pass's, in that pass's place, between
-//!   barriers from every command to every command. Its uses are noted as each pass ends, as a
-//!   merge recorded there notes them, so the tracker orders the work after each pass after a
-//!   write of the bytes.
+//!   barriers from every command to every command. Its uses are noted as each pass ends, as a merge
+//!   recorded there notes them, so the tracker orders the work after each pass after a write of the
+//!   bytes. A segment splits its encoder's commands into another `VkCommandBuffer`, and records its
+//!   own at the submission, which a pass no later pass goes on from pays for nothing. So a shadowed
+//!   texture's pass that would open a run merges in place instead, as its encoder ends, as a pass
+//!   alone does, and only marks where a run may start ([`PassRuns::placed`]); the pass that follows
+//!   it opens the run, its image carried with no copy in, keeping it again, as nothing may write
+//!   the bytes between a run's keep and its merge but that merge (a byte its passes changed and
+//!   changed back keeps the bytes' value, below).
 //! - **Why the bytes are Metal's.** Within the run, nothing reads the attachment's bytes or
 //!   writes them another way (below): between two of its passes the bytes are what the first
 //!   copy in read (or what the work before the run left), and the image holds them, as Metal's
@@ -92,8 +99,8 @@
 //!
 //! Counted: `WorkCounts::linear_merges_recorded` (one per linear run, one per pass that merges
 //! alone) and `WorkCounts::linear_merges_taken_over`; a shadowed texture's run's keep and merge
-//! once each in `WorkCounts::shadow_copies` (its merge as it records) and
-//! `WorkCounts::shadow_texels_kept`, its scratch planned once
+//! once each, and those of the pass merged in place before it, in `WorkCounts::shadow_copies`
+//! (its merge as it records) and `WorkCounts::shadow_texels_kept`, each scratch planned once
 //! (`WorkCounts::shadow_merge_dispatches_planned`).
 
 use super::linear_merge::LinearMerge;
@@ -290,14 +297,17 @@ pub(super) enum Joined {
     Outgrew,
     /// It opens a run over the box its draws write in.
     Opens,
+    /// It follows a shadowed texture's pass that merged in place ([`PassRuns::placed`]): it
+    /// opens a run, keeping the texture again, its merge left to its submission.
+    Placed,
 }
 
-/// An open run: its color, what it holds, the latest pass's merge left to its submission, where
-/// that pass ended, and how many render encoders ended since that touch none of it.
+/// An open run: its color, what it holds and the latest pass's merge left to its submission
+/// (neither for a pass merged in place, [`PassRuns::placed`]), where that pass ended, and how many
+/// render encoders ended since that touch none of it.
 struct Open {
     joining: Joining,
-    held: RunHeld,
-    last: Arc<RunMerge>,
+    left: Option<(RunHeld, Arc<RunMerge>)>,
     at: RunPoint,
     passed: usize,
 }
@@ -346,18 +356,21 @@ impl PassRuns {
                 .position(|j| j.key == run.joining.key && j.bytes == run.joining.bytes);
             match at {
                 Some(at) if follows && joining[at].fits(&run.joining) => {
-                    joined[at] = Joined::On {
-                        area: run.joining.area,
-                        held: run.held,
-                        last: run.last,
+                    joined[at] = match run.left {
+                        Some((held, last)) => Joined::On {
+                            area: run.joining.area,
+                            held,
+                            last,
+                        },
+                        None => Joined::Placed,
                     };
                 }
                 Some(at) if follows => {
                     joined[at] = Joined::Outgrew;
-                    ended.push(run.held);
+                    ended.extend(run.left.map(|(held, _)| held));
                 }
                 _ if !follows || touches(&run.joining.key, run.joining.bytes) => {
-                    ended.push(run.held);
+                    ended.extend(run.left.map(|(held, _)| held));
                 }
                 _ => {
                     run.passed += 1;
@@ -380,8 +393,19 @@ impl PassRuns {
     ) {
         self.open.push(Open {
             joining,
-            held,
-            last,
+            left: Some((held, last)),
+            at: now,
+            passed: 0,
+        });
+    }
+
+    /// Mark where a run of `joining`'s shadowed texture may start: its pass ending at `now`
+    /// merged in place (the module's **The merge goes last**), and the pass that follows it opens
+    /// the run ([`Joined::Placed`]).
+    pub(super) fn placed(&mut self, joining: Joining, now: RunPoint) {
+        self.open.push(Open {
+            joining,
+            left: None,
             at: now,
             passed: 0,
         });
@@ -390,6 +414,9 @@ impl PassRuns {
     /// End every open run as the command buffer commits, after which none goes on: what each
     /// holds, to let go of ([`RunHeld::end`]).
     pub(super) fn close(&mut self) -> Vec<RunHeld> {
-        self.open.drain(..).map(|run| run.held).collect()
+        self.open
+            .drain(..)
+            .filter_map(|run| run.left.map(|(held, _)| held))
+            .collect()
     }
 }

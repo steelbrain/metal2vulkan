@@ -14,9 +14,9 @@
 //! attachment: the passes form a run or two merged once each (`pass_runs.rs`,
 //! `tests::linear_runs`), each merge taking one scratch, and the runtime's device memory grows by
 //! no scratch a pass. A target that is a shadow merged back (host pages on every device, and
-//! rows the device's linear images do not lay out, `shadow_merge.rs`) is kept before the first
-//! pass and merged back after the last, its passes one run (`pass_runs.rs`,
-//! `tests::shadow_runs`). Either way the texels equal those the same passes leave in a private
+//! rows the device's linear images do not lay out, `shadow_merge.rs`) is kept and merged back
+//! about its first pass, and kept before the second and merged back after the last, its later
+//! passes one run (`pass_runs.rs`, `tests::shadow_runs`). Either way the texels equal those the same passes leave in a private
 //! texture of the same first texels, and the bytes between the rows keep theirs.
 //!
 //! Device tests: compiled only under the validation crate's GPU safety cfgs (`m2v_gpu`,
@@ -402,8 +402,9 @@ fn one_scratch(over: Over, (width, row): (u64, u64)) {
                 "each run's merge takes one scratch"
             );
         }
-        // One run of passes (`pass_runs.rs`): kept once, every texel, before the first.
-        (false, true) => assert_eq!(kept, width * H, "the passes keep once, as one run"),
+        // One run of passes (`pass_runs.rs`): kept twice, every texel, before the first pass,
+        // which merges in place, and before the second, which opens the run.
+        (false, true) => assert_eq!(kept, 2 * width * H, "the passes keep twice, as one run"),
         (false, false) => println!("MERGE-SCRATCH {over:?}: no merge"),
     }
     assert!(

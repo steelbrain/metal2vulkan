@@ -1093,6 +1093,8 @@ struct ShadowRunColor {
     copies: Arc<ShadowCopies>,
     joining: Joining,
     on: Option<(Arc<ShadowMerge>, Option<MergeLease>, Arc<RunMerge>)>,
+    /// It follows a pass that merged in place ([`Joined::Placed`]): it opens the run.
+    opens: bool,
 }
 
 /// One render pass instance of an encoder's pass (the module docs).
@@ -4877,6 +4879,7 @@ impl RenderLowering {
                         copies: Arc::clone(copies),
                         joining: joined,
                         on: None,
+                        opens: false,
                     });
                 }
             }
@@ -4922,7 +4925,7 @@ impl RenderLowering {
                     }
                     Joined::On { held, .. } => held.end(),
                     Joined::Outgrew => run.joining.area = whole,
-                    Joined::Opens => {}
+                    Joined::Opens | Joined::Placed => {}
                 }
             }
             // A shadowed color going on with its run takes its image as the run's passes left
@@ -4939,6 +4942,7 @@ impl RenderLowering {
                         }
                     }
                     Joined::On { held, .. } => held.end(),
+                    Joined::Placed => run.opens = true,
                     Joined::Outgrew | Joined::Opens => {}
                 }
             }
@@ -5994,12 +5998,20 @@ impl RenderLowering {
         // Each shadowed color of a run leaves its merge to its batch's submission, its uses noted
         // here, as its encoder's end would have merged it; the run's merge before it, taken over
         // once it is (`pass_runs.rs`). The run holds the merge's scratch past the encoder's end.
+        // A color that neither goes on with a run nor follows a pass merged in place merges in
+        // place, as its encoder ends, and marks where a run may start.
         for ShadowRunColor {
             copies,
             joining,
             on,
+            opens,
         } in shadow_runs
         {
+            let now = run_point.ok_or_else(|| internal("a run's pass encoded again"))?;
+            if on.is_none() && !opens {
+                (core.command_buffer().state().pass_runs()).placed(joining, now);
+                continue;
+            }
             let Some(copy) = core.leave_shadow_merge(&copies) else {
                 continue;
             };
@@ -6029,7 +6041,6 @@ impl RenderLowering {
             if let Some(last) = &took {
                 last.take_over();
             }
-            let now = run_point.ok_or_else(|| internal("a run's pass encoded again"))?;
             let held = RunHeld::Shadow { merge, lease };
             (core.command_buffer().state().pass_runs()).open(joining, held, left, now);
         }

@@ -9,16 +9,18 @@
 //! attachmentless render encoder, a pass over another texture, a blit reading the texture's
 //! texels, a blit reading the buffer's bytes, an event signal, a pass naming the texture's
 //! buffer, and a pass over a second texture over the same bytes. The sequence runs three times:
-//! over the texture, where its passes form the runs the steps make, kept and merged once each;
+//! over the texture, where its passes form the runs the steps make, each of more than one pass
+//! kept and merged after its first pass, in place, and once more for the rest;
 //! over the texture again with a blit between every two encoders, which ends every run, so every
 //! pass keeps and merges for itself; and over a private texture of the same first texels. The
 //! texels each blit read mid-sequence, and those the sequence left, are the same in all three,
 //! and the bytes between the rows keep theirs.
 //!
-//! A second sequence draws over the whole texture under a scissor a pass at a time: the run's
-//! first pass keeps its scissor's texels, the second, outside them, merges that keep and keeps
-//! every texel, and the run goes on over that keep, its merges storing whole blocks of the rows
-//! as a pass's alone does (`shadow.rs`'s **Stored attachments**).
+//! A second sequence draws over the whole texture under a scissor a pass at a time: the first
+//! pass keeps its scissor's texels and merges in place, the second opens the run, keeping its
+//! own scissor's, the third, outside them, merges that keep and keeps every texel, and the run
+//! goes on over that keep, its merges storing whole blocks of the rows as a pass's alone does
+//! (`shadow.rs`'s **Stored attachments**).
 //!
 //! A third sequence encodes passes over the texture, some binding a second no-copy buffer
 //! (which their function does not read), behind a wait for a shared event only the host
@@ -125,8 +127,9 @@ fn steps() -> Vec<Step> {
     steps
 }
 
-/// The passes over the texture or the second one among [`steps`], and the runs they make, each
-/// opened by one of [`FIRSTS`], the passes that keep.
+/// The passes over the texture or the second one among [`steps`], and the spans of passes that
+/// follow each other they make, each begun by one of [`FIRSTS`]: its first pass merges in place
+/// and its second opens the run, each keeping ([`keeping`]).
 const PASSES: u64 = 14 + LAST_RUN as u64;
 const RUNS: u64 = 9;
 const FIRSTS: [Step; RUNS as usize] = [
@@ -140,6 +143,37 @@ const FIRSTS: [Step; RUNS as usize] = [
     Draw(12),
     Draw(14),
 ];
+
+/// The passes of [`steps`] over the texture or the second one, in the spans [`FIRSTS`] begin.
+fn spans() -> Vec<Vec<Step>> {
+    let mut spans: Vec<Vec<Step>> = Vec::new();
+    for step in steps() {
+        if !matches!(step, Draw(_) | Alias(_)) {
+            continue;
+        }
+        if FIRSTS.contains(&step) {
+            spans.push(Vec::new());
+        }
+        spans
+            .last_mut()
+            .expect("the first pass begins a span")
+            .push(step);
+    }
+    spans
+}
+
+/// The passes that keep: each span's first, which merges in place, and its second, which opens
+/// the run (`pass_runs.rs`'s **The merge goes last**).
+fn keeping() -> Vec<Step> {
+    (spans().iter())
+        .flat_map(|span| span.iter().take(2).copied())
+        .collect()
+}
+
+/// How many of the spans hold more than one pass, and so a run besides the pass merged in place.
+fn longer_runs() -> u64 {
+    spans().iter().filter(|span| span.len() > 1).count() as u64
+}
 
 /// The state that blends a half-transparent rectangle (`tob_rect`, corners from vertex buffer 0)
 /// of the color in fragment buffer 0 (`tob_solid`) over a `BGRA8Unorm` color, of no depth.
@@ -526,8 +560,8 @@ fn same(what: &str, got: &Got, expected: &[u8]) {
 
 /// [`steps`] over the texture as runs and with every pass apart, against the private texture's:
 /// the same texels read mid-sequence and left at its end, the bytes between the rows kept, and
-/// one keep and one merge a run (every pass's where apart), each run's first pass the one that
-/// keeps ([`FIRSTS`]).
+/// one keep and one merge a span of one pass, two for a longer one (every pass's where apart),
+/// each span's first two passes the ones that keep ([`keeping`]).
 #[test]
 fn runs_over_host_pages_keep_and_merge_once() {
     let host = Host::new(ROW * H);
@@ -581,7 +615,7 @@ fn runs_over_host_pages_keep_and_merge_once() {
         let passes = (steps().into_iter()).filter(|step| matches!(step, Draw(_) | Alias(_)));
         let firsts: Vec<Step> = match apart {
             true => passes.collect(),
-            false => FIRSTS.to_vec(),
+            false => keeping(),
         };
         assert_eq!(keeps, firsts, "apart {apart}: the passes that keep");
         for (at, (got, expected)) in got.iter().zip(&expected).enumerate() {
@@ -602,23 +636,95 @@ fn runs_over_host_pages_keep_and_merge_once() {
     assert_eq!(apart.planned % PASSES, 0, "every pass apart merges alike");
     let (kept, planned) = (apart.kept / PASSES, apart.planned / PASSES);
     assert_eq!(kept, W * H, "a pass apart keeps every texel");
-    assert_eq!(runs.kept, RUNS * kept, "one keep a run");
-    assert_eq!(runs.planned, RUNS * planned, "one merge a run");
+    let keeps = RUNS + longer_runs();
+    assert_eq!(
+        runs.kept,
+        keeps * kept,
+        "a keep a span, two for a longer one"
+    );
+    assert_eq!(
+        runs.planned,
+        keeps * planned,
+        "a merge planned for each keep"
+    );
     assert_eq!(
         runs.copied_in, apart.copied_in,
         "the runs copy in what the passes apart do"
     );
     assert_eq!(
         apart.copies - runs.copies,
-        2 * (PASSES - RUNS),
-        "each later pass of a run neither keeps nor merges"
+        2 * (PASSES - RUNS) - 2 * longer_runs(),
+        "each pass of a run past its first neither keeps nor merges"
+    );
+}
+
+/// The passes of [`a_pass_alone_merges_in_place`]'s run.
+const ALONE_RUN: usize = 3;
+
+/// A pass over the texture alone in its command buffer, then [`ALONE_RUN`] passes over it in
+/// another. The pass alone merges in place as its encoder ends, so its encoder's commands go on
+/// in no other `VkCommandBuffer` (`WorkCounts::command_buffers_begun_continuations`), and it
+/// copies in, keeps and merges once each. Of the run, the first pass does the same; the second
+/// keeps again and opens the run, and it and each later pass leave their merges to their
+/// batch's submission, their encoders' commands going on in another `VkCommandBuffer`, the
+/// last's recorded. The texels left are a private texture's, and the bytes between the rows keep
+/// theirs: the run's blends change some bytes back to the value the first pass's keep holds, so
+/// a run that went on over that keep past the merge in place would leave the first pass's value.
+#[test]
+fn a_pass_alone_merges_in_place() {
+    let host = Host::new(ROW * H);
+    let cache = Scratch::new("shadow-runs-alone");
+    let device = device(&cache.0);
+    let queue = device.new_command_queue().unwrap();
+    let blending = blending(&device);
+    let reference = private_texture(&queue);
+    let Some(buffer) = over_pages(&device, &host) else {
+        return;
+    };
+    fill(&host);
+    let texture = texture_over(&buffer);
+    let mut counted = Vec::new();
+    for (first, passes) in [(0, 1), (1, ALONE_RUN)] {
+        for over in [&reference, &texture] {
+            let before = device.work_counts();
+            let command_buffer = queue.command_buffer().unwrap();
+            for i in first..first + passes {
+                pass(&command_buffer, over, &blending, (i, Corners::Drawn), None);
+            }
+            command_buffer.commit().unwrap();
+            command_buffer.wait_until_completed_for(WAIT).unwrap();
+            assert_eq!(command_buffer.error(), None);
+            let after = device.work_counts();
+            let begun = |c: &WorkCounts| c.command_buffers_begun_continuations;
+            let copies = after.shadow_copies - before.shadow_copies;
+            counted.push((passes, begun(&after) - begun(&before), copies));
+        }
+    }
+    println!("SHADOW-RUNS alone: (passes, continuations, shadow copies) {counted:?}");
+    let (alone, run) = (counted[1], counted[3]);
+    assert_eq!(
+        alone,
+        (1, 0, 3),
+        "a pass alone copies in, keeps and merges in place"
+    );
+    assert_eq!(
+        run,
+        (ALONE_RUN, ALONE_RUN as u64 - 1, 5),
+        "a copy in, two keeps and two merges, the run's passes leaving their merges"
+    );
+    drop(texture);
+    let bytes = host_bytes(&host, ROW * H);
+    same(
+        "the bytes left",
+        &(texels(&bytes), between_changed(&bytes)),
+        &texels_of(&queue, &reference),
     );
 }
 
 /// The passes of [`rebound_passes_leave_their_runs`], and those of them whose rectangle is read
 /// from the buffer the rebind moves.
 const REBOUND_PASSES: usize = 12;
-const NAMING: [usize; 3] = [3, 4, 8];
+const NAMING: [usize; 4] = [0, 3, 4, 8];
 
 /// The rectangle the moved buffer's pages hold before the rebind, and the one its new pages hold.
 const BEFORE: [f32; 4] = [-1.0, -1.0, 1.0, 1.0];
@@ -640,13 +746,15 @@ fn corners(i: usize, from: &Buffer) -> (usize, Corners<'_>) {
     }
 }
 
-/// Passes over the texture behind a wait for a shared event only the host signals, three of them
-/// drawing the rectangle a second no-copy buffer holds, which is rebound over pages holding
-/// another before the signal: the rebind encodes those three again before the first submission
-/// (`command_buffer/reencode.rs`), so they draw the new pages' rectangle, each leaving its run as
-/// it copies in, keeps and merges for itself; the passes before and after them form runs of
-/// their own. The texels left are those of a private texture whose three passes drew the new
-/// rectangle, and the bytes between the rows keep theirs.
+/// Passes over the texture behind a wait for a shared event only the host signals, four of them
+/// drawing the rectangle a second no-copy buffer holds (the first among them, which merged in
+/// place), which is rebound over pages holding another before the signal: the rebind encodes
+/// those four again before the first submission (`command_buffer/reencode.rs`), so they draw the
+/// new pages' rectangle, each copying in, keeping and merging for itself; each of the three a
+/// later pass went on from leaves its run, keeping the run's scratch again after itself, and
+/// the passes before and after them form runs of their own. The texels left are those of a
+/// private texture whose four passes drew the new rectangle, and the bytes between the rows keep
+/// theirs.
 #[test]
 fn rebound_passes_leave_their_runs() {
     let (host, moved, moved_to) = (Host::new(ROW * H), Host::new(1 << 16), Host::new(1 << 16));
@@ -716,6 +824,14 @@ fn rebound_passes_leave_their_runs() {
         encoded.encoders_reencoded - before.encoders_reencoded,
         NAMING.len() as u64,
         "the rebind encodes the passes that bound the buffer again"
+    );
+    // The first pass's keep and the run's, then each pass encoded again: its own keep, and,
+    // where a later pass went on from it, one after itself.
+    let again: u64 = NAMING.iter().map(|&i| if i == 0 { 1 } else { 2 }).sum();
+    assert_eq!(
+        count.kept,
+        (2 + again) * W * H,
+        "each pass encoded again keeps for itself, and for the pass that went on from it"
     );
     drop(texture);
     let bytes = host_bytes(&host, ROW * H);
@@ -810,8 +926,9 @@ fn scissored(
 
 /// [`SCISSORS`]'s passes over the texture, as a run and with every pass apart, against a private
 /// texture's: the same texels left and the bytes between the rows kept. As a run the first pass
-/// keeps its scissor's texels and the second, which writes outside them, every texel, and no
-/// later pass keeps; where the passes apart merge in whole blocks, so do the run's merges.
+/// keeps its scissor's texels and merges in place, the second, which opens the run, its own
+/// scissor's, and the third, which writes outside them, every texel, and no later pass keeps;
+/// where the passes apart merge in whole blocks, so do the run's merges.
 #[test]
 fn scissored_runs_keep_again_once_and_merge_in_blocks() {
     let host = Host::new(ROW * H);
@@ -844,7 +961,7 @@ fn scissored_runs_keep_again_once_and_merge_in_blocks() {
         );
         let firsts: Vec<usize> = match apart {
             true => (0..SCISSORS.len()).collect(),
-            false => vec![0, 1],
+            false => vec![0, 1, 2],
         };
         assert_eq!(
             keeps, firsts,
@@ -853,11 +970,11 @@ fn scissored_runs_keep_again_once_and_merge_in_blocks() {
         counted.push(count);
     }
     let (run, apart) = (&counted[0], &counted[1]);
-    let [_, _, width, height] = SCISSORS[0];
+    let scissor = |i: usize| SCISSORS[i][2] * SCISSORS[i][3];
     assert_eq!(
         run.kept,
-        width * height + W * H,
-        "the first scissor's texels, then every texel"
+        scissor(0) + scissor(1) + W * H,
+        "the first two scissors' texels, then every texel"
     );
     if apart.in_blocks == apart.planned {
         assert_eq!(

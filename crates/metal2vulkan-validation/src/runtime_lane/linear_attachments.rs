@@ -1874,7 +1874,8 @@ fn many_reference(queue: &CommandQueue, pipeline: &RenderPipelineState, width: u
 /// the bytes between its rows keep theirs. Where the device renders it apart by the rule
 /// (`linear_merge.rs`), the passes form a run or two merged once each (`pass_runs.rs`), each
 /// merge taking one scratch; where it is a shadow merged back (`shadow_merge.rs`), the passes
-/// form one run, kept once before the first and merged once after the last (`pass_runs.rs`).
+/// form one run after the first, which merges in place: kept before the first and the second,
+/// and merged after the first and the last (`pass_runs.rs`).
 /// Either way the device's memory grows by less than an eighth of a scratch a pass while they are
 /// encoded.
 fn many_passes_over(over: ManyOver, (width, row): (u64, u64)) {
@@ -1935,9 +1936,14 @@ fn many_passes_over(over: ManyOver, (width, row): (u64, u64)) {
                 "each run's merge takes one scratch"
             );
         }
-        // One run of passes (`pass_runs.rs`): kept once, every texel, before the first.
+        // One run of passes (`pass_runs.rs`): kept twice, every texel, before the first pass,
+        // which merges in place, and before the second, which opens the run.
         if shadow {
-            assert_eq!(kept, width * MANY_H, "the passes keep once, as one run");
+            assert_eq!(
+                kept,
+                2 * width * MANY_H,
+                "the passes keep twice, as one run"
+            );
         }
         assert!(
             grown < scratch * MANY as u64 / 8,
