@@ -92,6 +92,7 @@ use metal2vulkan::metal::{
     SamplerReductionMode,
 };
 use std::any::Any;
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex, Weak};
 
@@ -143,6 +144,57 @@ impl SamplerKey {
             reduction_mode: d.reduction_mode,
             support_argument_buffers: options.support_argument_buffers,
         }
+    }
+}
+
+/// The device's live sampler states, by what decides whether a request shares one
+/// ([`SamplerKey`]): an equal request gets the live state, as Metal's does, and an entry whose
+/// state is gone answers none. Such an entry stays until a creation prunes the map, which one
+/// does where the map has grown to twice what the last prune left, and at least to
+/// [`PRUNE_FROM`]: so each creation's share of the prunes is a few entries however many states
+/// live, and the map holds at most about twice the live states.
+#[derive(Default)]
+pub(super) struct LiveSamplers {
+    states: HashMap<SamplerKey, Weak<SamplerShared>>,
+    /// The length at which a creation prunes first.
+    prune_at: usize,
+    /// The entries the prunes have looked at (the device tests: `tests/sampler_prunes.rs`).
+    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+    looked_at: usize,
+}
+
+/// The least length at which a creation prunes the live states' map.
+const PRUNE_FROM: usize = 64;
+
+impl LiveSamplers {
+    /// `key`'s live state, where one lives.
+    fn live(&self, key: &SamplerKey) -> Option<Arc<SamplerShared>> {
+        self.states.get(key).and_then(Weak::upgrade)
+    }
+
+    /// Keep `state` as `key`'s, first dropping the entries of the states gone where the map has
+    /// grown to its bound. Dropping one lets go of a `Weak` alone: no state is dropped under the
+    /// map's lock.
+    fn keep(&mut self, key: SamplerKey, state: &Arc<SamplerShared>) {
+        if self.states.len() >= self.prune_at.max(PRUNE_FROM) {
+            #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+            {
+                self.looked_at += self.states.len();
+            }
+            self.states.retain(|_, state| state.strong_count() > 0);
+            self.prune_at = 2 * self.states.len();
+        }
+        self.states.insert(key, Arc::downgrade(state));
+    }
+}
+
+impl Device {
+    /// The length of the device's map of live sampler states and the entries its prunes have
+    /// looked at (the device tests).
+    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+    pub(crate) fn live_sampler_entries(&self) -> (usize, usize) {
+        let live = lock(&self.shared().samplers);
+        (live.states.len(), live.looked_at)
     }
 }
 
@@ -625,7 +677,7 @@ impl Device {
         let key = SamplerKey::of(descriptor, options);
         // Under the map's lock, so equal requests on two threads get one state.
         let mut live = lock(&shared.samplers);
-        if let Some(state) = live.get(&key).and_then(std::sync::Weak::upgrade) {
+        if let Some(state) = live.live(&key) {
             return Ok(SamplerState(state));
         }
         let id = IdHold::take(&shared.resource_ids, IdSpace::Sampler, options.placement);
@@ -638,8 +690,7 @@ impl Device {
             kept: Mutex::new(KeptSamplers::new()),
             held_by: HeldBy::default(),
         }));
-        live.retain(|_, state| state.strong_count() > 0);
-        live.insert(key, Arc::downgrade(&state.0));
+        live.keep(key, &state.0);
         let hold = &state.0.id;
         // Sampler slots have no readers: the device counts the command buffers that list them.
         hold.hold(Holder::Sampler(Arc::downgrade(&state.0)));

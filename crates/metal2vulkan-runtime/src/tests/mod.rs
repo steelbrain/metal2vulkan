@@ -274,6 +274,8 @@ mod sampler_cache;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod sampler_cache_live;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
+mod sampler_prunes;
+#[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod sampler_sets;
 mod scheduler;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]

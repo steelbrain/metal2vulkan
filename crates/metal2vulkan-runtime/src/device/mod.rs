@@ -73,7 +73,7 @@ use super::render_state::DepthRanges;
 use super::render_target::KeptRenderPasses;
 use super::resource_ids::{ResourceIds, SamplerIdReads};
 use super::sample_planes::PlanesObjects;
-use super::sampler::{SamplerCount, SamplerKey, SamplerShared};
+use super::sampler::{LiveSamplers, SamplerCount};
 use super::scheduler::Scheduler;
 use super::shader_cache::{CacheSetup, ShaderCache};
 use super::sharing::Sharing;
@@ -91,7 +91,7 @@ use metal2vulkan::bind::RegionLimits;
 use metal2vulkan::device::{DeviceDescription, EnableSet};
 use metal2vulkan::error::RuntimeDriverDefect;
 use relay::Flights;
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock, Weak};
 use std::time::Instant;
@@ -257,7 +257,7 @@ pub(super) struct DeviceShared {
     pub(super) sampler_ids: SamplerIdReads,
     /// The live sampler states, by what decides whether a request shares one (`sampler.rs`):
     /// an equal request gets the live state, as Metal's does.
-    pub(super) samplers: Mutex<HashMap<SamplerKey, Weak<SamplerShared>>>,
+    pub(super) samplers: Mutex<LiveSamplers>,
     /// The device's live Vulkan samplers, held to `maxSamplerAllocationCount`
     /// (`DeviceShared::create_sampler`).
     pub(super) sampler_count: SamplerCount,
