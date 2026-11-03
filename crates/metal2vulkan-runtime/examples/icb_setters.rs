@@ -3,7 +3,7 @@
 //! executing.
 //!
 //! ```sh
-//! cargo run --release -p metal2vulkan-runtime --example icb_setters [-- [render|compute|all] [--repetitions N] [--calls]]
+//! cargo run --release -p metal2vulkan-runtime --example icb_setters [-- [render|compute|all] [--repetitions N] [--calls] [--kept]]
 //! ```
 //!
 //! - **render**: a buffer of [`COMMANDS`] commands of `DRAW` alone, 2 vertex buffers and 1
@@ -25,25 +25,33 @@
 //! the same fields (`CommandRecord::write_field` into one record's bytes, no lock and no check),
 //! the floor a setter's write costs.
 //!
+//! With `--kept`, the compute row also runs its encoding after executions that kept the
+//! buffer's chunks' recordings (`kept_commands.rs`), as a consumer's frame executes the buffer and
+//! then encodes it again: before each repetition, untimed, a compute encoder executes every
+//! command twice, each in a command buffer committed and waited for, the second running every
+//! chunk from the first's recordings (the printed `indirect_chunks_kept` of each second one). That
+//! mode submits work to the GPU; the rest submits nothing.
+//!
 //! The pipeline states are the owned fixture's (`runtime_examples.ll`'s `colored_vertex`,
 //! `colored_fragment` and `scale_and_offset`), assembled by `llvm-as` from `PATH` or
-//! `METAL2VULKAN_LLVM_AS`. Nothing is submitted.
+//! `METAL2VULKAN_LLVM_AS`.
 
 use metal2vulkan::bind::indirect_commands::{
     Action, BufferBinding, BufferStage, CommandRecord, RecordField, COMMAND_BYTES,
 };
-use metal2vulkan::metal::{IndirectCommandType, PixelFormat, PrimitiveType};
+use metal2vulkan::metal::{IndirectCommandType, PixelFormat, PrimitiveType, ResourceUsage};
 use metal2vulkan::pipeline::{
     ColorAttachmentDescriptor, ComputePipelineDescriptor, RenderPipelineDescriptor, StageSource,
 };
 use metal2vulkan_runtime::{
-    Buffer, ComputePipelineState, Device, IndirectCommandBuffer, IndirectCommandBufferDescriptor,
-    Library, PipelineOptions, RenderPipelineState, ResourceOptions, Size,
+    Buffer, CommandBufferStatus, CommandQueue, ComputePipelineState, Device, IndirectCommandBuffer,
+    IndirectCommandBufferDescriptor, Library, PipelineOptions, RenderPipelineState,
+    ResourceOptions, ResourceRef, Size,
 };
 use std::hint::black_box;
 use std::num::NonZeroU64;
 use std::path::Path;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 /// The example's result: every runtime refusal is a typed `metal2vulkan_runtime::Error`.
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
@@ -90,10 +98,21 @@ struct Sample {
 }
 
 /// Run `body` once untimed, then `repetitions` times, each measured.
-fn measure(repetitions: usize, mut body: impl FnMut()) -> Vec<Sample> {
+fn measure(repetitions: usize, body: impl FnMut()) -> Vec<Sample> {
+    measure_after(repetitions, || {}, body)
+}
+
+/// [`measure`], with `prepare` run untimed before each run of `body`.
+fn measure_after(
+    repetitions: usize,
+    mut prepare: impl FnMut(),
+    mut body: impl FnMut(),
+) -> Vec<Sample> {
+    prepare();
     body();
     (0..repetitions)
         .map(|_| {
+            prepare();
             let (before, start) = (counts(), Instant::now());
             body();
             let nanos = start.elapsed().as_nanos() as f64;
@@ -270,7 +289,7 @@ fn render(device: &Device, repetitions: usize, calls: bool) -> Result<()> {
 }
 
 /// The compute row (the module docs).
-fn compute(device: &Device, repetitions: usize, calls: bool) -> Result<()> {
+fn compute(device: &Device, repetitions: usize, (calls, kept): (bool, bool)) -> Result<()> {
     let state = compute_state(device)?;
     let mut descriptor = IndirectCommandBufferDescriptor::new();
     descriptor.command_types = IndirectCommandType::CONCURRENT_DISPATCH;
@@ -306,12 +325,44 @@ fn compute(device: &Device, repetitions: usize, calls: bool) -> Result<()> {
         &measure(repetitions, || encode(&icb)),
         per,
     );
-    if !calls {
-        return Ok(());
-    }
     let commands: Vec<_> = (0..COMMANDS)
         .map(|index| icb.indirect_compute_command_at(u64::from(index)).unwrap())
         .collect();
+    if kept {
+        let queue = device.new_command_queue()?;
+        let chunks = std::cell::RefCell::new(Vec::new());
+        // Twice: the second execution runs every chunk from the first's kept recordings.
+        let prepare = || {
+            execute(&queue, &icb, &buffers);
+            let before = device.work_counts().indirect_chunks_kept;
+            execute(&queue, &icb, &buffers);
+            let ran = device.work_counts().indirect_chunks_kept - before;
+            chunks.borrow_mut().push(ran);
+        };
+        let rows = [
+            (
+                "compute command, chunks kept",
+                measure_after(repetitions, prepare, || encode(&icb)),
+            ),
+            (
+                "  set_kernel_buffer, chunks kept",
+                measure_after(repetitions, prepare, || {
+                    for command in &commands {
+                        command.set_kernel_buffer(Some(&buffers[1]), 0, 1).unwrap();
+                    }
+                }),
+            ),
+        ];
+        for (row, samples) in &rows {
+            report(row, samples, per);
+        }
+        let mut chunks = chunks.into_inner();
+        chunks.dedup();
+        println!("  (chunks each second execution ran from kept recordings: {chunks:?})");
+    }
+    if !calls {
+        return Ok(());
+    }
     let each = |call: &dyn Fn(&metal2vulkan_runtime::IndirectComputeCommand)| {
         measure(repetitions, || commands.iter().for_each(call))
     };
@@ -362,6 +413,33 @@ fn compute(device: &Device, repetitions: usize, calls: bool) -> Result<()> {
     Ok(())
 }
 
+/// Execute every command of `icb`, which dispatches over `buffers`, in a command buffer of
+/// `queue`, committed and waited for.
+fn execute(queue: &CommandQueue, icb: &IndirectCommandBuffer, buffers: &[Buffer]) {
+    let command_buffer = queue.command_buffer().unwrap();
+    let mut encoder = command_buffer.compute_command_encoder().unwrap();
+    for buffer in buffers {
+        let usage = ResourceUsage::READ | ResourceUsage::WRITE;
+        encoder
+            .use_resource(ResourceRef::Buffer(buffer), usage)
+            .unwrap();
+    }
+    encoder
+        .execute_commands_in_buffer(icb, 0..u64::from(COMMANDS))
+        .unwrap();
+    encoder.end_encoding().unwrap();
+    command_buffer.commit().unwrap();
+    command_buffer
+        .wait_until_completed_for(Duration::from_secs(60))
+        .unwrap();
+    assert_eq!(
+        command_buffer.status(),
+        CommandBufferStatus::Completed,
+        "{:?}",
+        command_buffer.error()
+    );
+}
+
 /// The field a buffer setter writes: `buffer` at `offset`, at slot `slot` of `stage`.
 fn buffer_field(stage: BufferStage, slot: usize, buffer: &Buffer, offset: u64) -> RecordField {
     RecordField::Buffer {
@@ -397,6 +475,7 @@ fn main() -> Result<()> {
         .and_then(|at| arguments.get(at + 1))
         .map_or(Ok(REPETITIONS), |count| count.parse())?;
     let calls = arguments.iter().any(|argument| argument == "--calls");
+    let kept = arguments.iter().any(|argument| argument == "--kept");
     let device = Device::system_default()?;
     println!(
         "device: {}; {COMMANDS} commands a repetition, median of {repetitions}",
@@ -407,10 +486,10 @@ fn main() -> Result<()> {
     }
     match mode {
         "render" => render(&device, repetitions, calls),
-        "compute" => compute(&device, repetitions, calls),
+        "compute" => compute(&device, repetitions, (calls, kept)),
         "all" => {
             render(&device, repetitions, calls)?;
-            compute(&device, repetitions, calls)
+            compute(&device, repetitions, (calls, kept))
         }
         other => Err(format!("unknown mode {other}: render, compute or all").into()),
     }
