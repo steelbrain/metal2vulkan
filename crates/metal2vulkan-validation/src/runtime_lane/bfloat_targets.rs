@@ -31,19 +31,25 @@
 //!   full-screen draw of the owned fixture's fill into a new target of each format, at the default
 //!   `textureWriteRoundingMode` and at `NearestEven`, of every code's `float`, of every `half`
 //!   code, and of the `float`s around each code's tie: Metal's answer is the SHA-256 of the
-//!   target's bytes.
+//!   target's bytes. A model of Metal's codes (each output rounded to `half` by the pipeline's
+//!   rounding, then to the nearest bfloat, every NaN `0x7fc0`) gives every one of those digests;
+//!   the runtime's codes are compared with it code by code, a NaN's bits the device's
+//!   (`PrecisionNote::DevicePackConversion`).
 //!
 //! A difference is printed on a `BFLOAT-TARGETS-DIFFERS` line.
 
+use super::degrade_notices::counts;
 use super::extended_range_targets::digest;
 use super::resolves::{lane, lane_with, quiet, Lane};
 use super::{buffer_with, read_buffer, WAIT};
 use crate::candidate::runtime_samples::{library, shape};
 use metal2vulkan::metal::format::{ClearRoute, ExtendedRange};
 use metal2vulkan::metal::{PixelFormat, PrimitiveType, TextureUsage, TextureWriteRoundingMode};
-use metal2vulkan::pipeline::{ColorAttachmentDescriptor, RenderPipelineDescriptor, StageSource};
+use metal2vulkan::pipeline::{
+    ColorAttachmentDescriptor, PrecisionNote, RenderPipelineDescriptor, StageSource,
+};
 use metal2vulkan_runtime::{
-    BlitOption, ClearColor, LoadAction, Origin, PipelineOptions, RenderPassDescriptor,
+    BlitOption, ClearColor, Degradation, LoadAction, Origin, PipelineOptions, RenderPassDescriptor,
     ResourceOptions, Size, StoreAction, Texture, TextureDescriptor,
 };
 
@@ -859,13 +865,105 @@ fn drawn(
     read_buffer(&back, 0, length).unwrap()
 }
 
+/// Metal's `half` of the `float` of bits `b` as a draw into a bfloat attachment rounds a `float`
+/// output: toward zero, saturating at `65504`, or to nearest even where `nearest_even`; a NaN
+/// `0x7e00`.
+fn metal_output_half(b: u32, nearest_even: bool) -> u16 {
+    let sign = ((b >> 16) & 0x8000) as u16;
+    let a = b & 0x7fff_ffff;
+    if a > 0x7f80_0000 {
+        return 0x7e00;
+    }
+    if a == 0x7f80_0000 || a == 0 {
+        return sign | ((a >> 13) as u16 & 0x7c00);
+    }
+    // The value is `full * 2^exp`; `e` its `half` exponent, at least the denormals' `-14`.
+    let (full, exp) = match a >> 23 {
+        0 => (a, -149),
+        e => ((a & 0x7f_ffff) | 0x80_0000, e as i32 - 150),
+    };
+    let mut e = (31 - full.leading_zeros() as i32 + exp).max(-14);
+    // The bits below the `half`'s last place: at least 13, as a `float` holds 24.
+    let shift = (e - 10 - exp) as u32;
+    let mut q = match shift {
+        1..26 => {
+            let (q, rem, tie) = (full >> shift, full & ((1 << shift) - 1), 1 << (shift - 1));
+            match nearest_even && (rem > tie || (rem == tie && q & 1 == 1)) {
+                true => q + 1,
+                false => q,
+            }
+        }
+        _ => 0,
+    };
+    if q >= 2048 {
+        q >>= 1;
+        e += 1;
+    }
+    let bits = match q < 1024 {
+        true => q,
+        false => ((e + 15) as u32) << 10 | (q & 0x3ff),
+    };
+    sign | match (bits >= 0x7c00, nearest_even) {
+        (false, _) => bits as u16,
+        (true, true) => 0x7c00,
+        (true, false) => 0x7bff,
+    }
+}
+
+/// Metal's bfloat code of the `half` of bits `h` a draw's tile holds: its `float` rounded to the
+/// nearest bfloat, ties to even, a NaN `0x7fc0`.
+fn metal_bfloat(h: u16) -> u16 {
+    if h & 0x7c00 == 0x7c00 && h & 0x3ff != 0 {
+        return 0x7fc0;
+    }
+    let b = half_value(h).to_bits();
+    let (high, low) = (b >> 16, b & 0xffff);
+    let up = low > 0x8000 || (low == 0x8000 && high & 1 == 1);
+    (high + u32::from(up)) as u16
+}
+
+/// Whether bfloat code `c` is a NaN.
+fn bfloat_nan(c: u16) -> bool {
+    c & 0x7f80 == 0x7f80 && c & 0x7f != 0
+}
+
+/// The target bytes Metal's draw of `sweep_of` into a bfloat format of `channels` channels
+/// leaves under `rounding` ([`metal_output_half`], then [`metal_bfloat`]): the model the test
+/// holds to Metal's digests in [`DRAWN`].
+fn metal_drawn(sweep_of: Sweep, channels: u64, rounding: TextureWriteRoundingMode) -> Vec<u8> {
+    let (_, _, _, values) = sweep(sweep_of, channels);
+    let halves = matches!(sweep_of, Sweep::Halves);
+    let nearest_even = rounding == TextureWriteRoundingMode::NearestEven;
+    let lane = if halves { 2 } else { 4 };
+    values
+        .chunks_exact(4 * lane)
+        .flat_map(|texel| {
+            texel.chunks_exact(lane).take(channels as usize).map(|v| {
+                let h = match halves {
+                    true => u16::from_le_bytes([v[0], v[1]]),
+                    false => metal_output_half(
+                        u32::from_le_bytes([v[0], v[1], v[2], v[3]]),
+                        nearest_even,
+                    ),
+                };
+                metal_bfloat(h)
+            })
+        })
+        .flat_map(u16::to_le_bytes)
+        .collect()
+}
+
 /// A fragment function's `float4` and `half4` outputs to a bfloat attachment store Metal's
 /// codes, at the default `textureWriteRoundingMode` and at `NearestEven`: every code's `float`
-/// and the `float`s around each code's tie, and every `half` code.
+/// and the `float`s around each code's tie, and every `half` code. Metal's codes are the model
+/// [`metal_drawn`] gives, which the test holds to Metal's digests first: the output rounded to
+/// `half` by the pipeline's rounding, then to the nearest bfloat, every NaN `0x7fc0`. Every code
+/// is Metal's but a NaN, whose bits are the device's (the runtime keeps a NaN a NaN by its quiet
+/// bit, `PrecisionNote::DevicePackConversion`, which the runtime then announces).
 #[test]
 fn bfloat_draws_store_metal_s_codes() {
     let (messages, _cache, lane) = lane();
-    let mut wrong = Vec::new();
+    let (mut wrong, mut nans) = (Vec::new(), 0);
     for (pf, sweep_of, toward_zero, nearest_even) in DRAWN {
         let channels = FORMATS
             .iter()
@@ -876,10 +974,31 @@ fn bfloat_draws_store_metal_s_codes() {
             (TextureWriteRoundingMode::TowardZero, toward_zero),
             (TextureWriteRoundingMode::NearestEven, nearest_even),
         ] {
-            let got = digest(&drawn(&lane, (pf, channels), sweep_of, rounding));
-            if got != metal {
+            let model = metal_drawn(sweep_of, channels, rounding);
+            assert_eq!(
+                digest(&model),
+                metal,
+                "{pf:?} {sweep_of:?} {rounding:?}: the model of Metal's codes"
+            );
+            let got = drawn(&lane, (pf, channels), sweep_of, rounding);
+            let (mut differ, mut first) = (0, Vec::new());
+            let codes = got.as_chunks::<2>().0.iter().zip(model.as_chunks::<2>().0);
+            for (k, (g, w)) in codes.enumerate() {
+                let (g, w) = (u16::from_le_bytes(*g), u16::from_le_bytes(*w));
+                match (g == w, bfloat_nan(g) && bfloat_nan(w)) {
+                    (true, _) => {}
+                    (false, true) => nans += 1,
+                    (false, false) => {
+                        differ += 1;
+                        if first.len() < 8 {
+                            first.push(format!("{k}: {g:04x}, Metal's {w:04x}"));
+                        }
+                    }
+                }
+            }
+            if differ > 0 {
                 wrong.push(format!(
-                    "{pf:?} {sweep_of:?} {rounding:?}: {got}, Metal's {metal}"
+                    "{pf:?} {sweep_of:?} {rounding:?}: {differ} codes, first {first:?}"
                 ));
             }
         }
@@ -887,10 +1006,22 @@ fn bfloat_draws_store_metal_s_codes() {
     for line in &wrong {
         println!("BFLOAT-TARGETS-DIFFERS {}: {line}", lane.device.name());
     }
+    println!(
+        "BFLOAT-TARGETS {}: {nans} NaN codes of the device's bits",
+        lane.device.name()
+    );
     assert!(
         wrong.is_empty(),
         "{} draws differ from Metal's",
         wrong.len()
     );
+    if nans > 0 {
+        let note = Degradation::from_precision_note(PrecisionNote::DevicePackConversion);
+        let announced = counts(&messages.take_notices());
+        assert!(
+            announced.contains_key(&note),
+            "{nans} NaN codes of the device's bits, unannounced: {announced:?}"
+        );
+    }
     quiet(lane, &messages);
 }
