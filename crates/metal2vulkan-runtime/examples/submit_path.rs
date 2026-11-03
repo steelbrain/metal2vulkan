@@ -2,7 +2,7 @@
 //! shape of a consumer that records a command buffer, adds handlers, commits and never waits.
 //!
 //! ```sh
-//! cargo run --release -p metal2vulkan-runtime --example submit_path [-- latency|cpu|threads|empty|idle|all [--seen] [--bare] [--at-commit]]
+//! cargo run --release -p metal2vulkan-runtime --example submit_path [-- latency|cpu|threads|empty|idle|all [--seen] [--bare] [--at-commit] [--checked]]
 //! ```
 //!
 //! - **latency**: one thread commits a tiny blit command buffer (a fill of 16 bytes) with a
@@ -28,10 +28,11 @@
 //!
 //! With `--at-commit`, latency, cpu and threads commit with `CommandBuffer::commit_and_submit`
 //! (a runtime extension: the committing thread submits where no pass is under way) instead of
-//! `commit`.
+//! `commit`. With `--checked`, their fills carry a submission check that passes them
+//! (`CommandBuffer::set_submission_check`, a runtime extension), as a consumer's detach check does.
 
 use metal2vulkan_runtime::{
-    host_time, Buffer, CommandBuffer, CommandQueue, Device, ResourceOptions,
+    host_time, Buffer, CommandBuffer, CommandQueue, Device, ResourceOptions, Submission,
 };
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
@@ -39,6 +40,9 @@ use std::time::{Duration, Instant};
 
 /// Whether command buffers are committed with `commit_and_submit` (`--at-commit`).
 static AT_COMMIT: AtomicBool = AtomicBool::new(false);
+
+/// Whether the fills carry a submission check (`--checked`).
+static CHECKED: AtomicBool = AtomicBool::new(false);
 
 /// Commit `command_buffer` as `--at-commit` says.
 fn commit(command_buffer: &CommandBuffer) {
@@ -117,6 +121,11 @@ fn tiny(
     let mut blit = command_buffer.blit_command_encoder().unwrap();
     blit.fill_buffer(target, 0..16, 0xa5).unwrap();
     blit.end_encoding().unwrap();
+    if CHECKED.load(Ordering::Relaxed) {
+        command_buffer
+            .set_submission_check(Arc::new(|_: &Submission<'_>| None))
+            .unwrap();
+    }
     if scheduled {
         command_buffer
             .add_scheduled_handler(Box::new(|_: &CommandBuffer| {}))
@@ -455,12 +464,19 @@ fn main() {
     let bare = std::env::args().any(|arg| arg == "--bare");
     let at_commit = std::env::args().any(|arg| arg == "--at-commit");
     AT_COMMIT.store(at_commit, Ordering::Relaxed);
+    let checked = std::env::args().any(|arg| arg == "--checked");
+    CHECKED.store(checked, Ordering::Relaxed);
     println!(
-        "committed with {}",
+        "committed with {}{}",
         if at_commit {
             "commit_and_submit"
         } else {
             "commit"
+        },
+        if checked {
+            ", each with a submission check"
+        } else {
+            ""
         }
     );
     let callbacks: &[Callback] = match seen {
