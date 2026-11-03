@@ -27,7 +27,9 @@
 //!   Then `dispatch_resident_*`: as many dispatches of the tiny kernel after one
 //!   `useResources:count:usage:` of 0, 1, 256 or 4096 buffers, or of one buffer 4096 times
 //!   (`same_4096`); per variant the `useResources` call, and per dispatch the encoding thread's
-//!   wall time after it and the process's CPU time.
+//!   wall time after it and the process's CPU time; `dispatch_resident_moving_0`, `_16`, `_256`
+//!   and `_4096`: as many after none, 16, 256 or 4096 buffers made resident, the output buffer's
+//!   offset moved before each dispatch.
 //! - `fixed`: a command buffer's creation, an encoder of one command each (render, compute,
 //!   blit), and the commit call of a command buffer of 30 such encoders.
 //! - `calls`: the frames of a guest as reims-vgpu's `frame_cost` measures them, call by call: one
@@ -204,7 +206,7 @@
 //! cache, with `--side`), `--variants a,b,...` (the encode workload's variants alone:
 //! `draw_static`, `draw_offset`, `draw_bind`, `draw_pipeline`, `draw_passes`, `dispatch_static`,
 //! `dispatch_offsets`, `dispatch_churn`, `dispatch_resident_0`, `_1`, `_256`, `_4096`,
-//! `_same_4096`; for a profile of one; and the memory workload's parts alone: `create`,
+//! `_same_4096`, `dispatch_resident_moving_0`, `_16`, `_256`, `_4096`; for a profile of one; and the memory workload's parts alone: `create`,
 //! `no_copy`, `held_1m`, `held_64m`, `texture`), `--announce-each a,b,...` (the runtime's device
 //! announces these degradation kinds, by code with or without its `metal2vulkan-degrade-` prefix,
 //! or `all` of them, at every occurrence, `DeviceOptions::announce_each`, as a consumer that hears

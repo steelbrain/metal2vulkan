@@ -619,15 +619,22 @@ const RESIDENT: usize = 4096;
 /// The encode workload's `dispatch_resident_*` variants: a compute encoder whose pipeline state
 /// and buffers are set, one `useResources:count:usage:` (reading) of none, 1, 256 or 4096
 /// buffers, or of one buffer 4096 times (`same_4096`), then `draws` single-threadgroup dispatches
-/// of the tiny kernel. Per variant: the `useResources` call, the encoding thread's wall time per
-/// dispatch, the process's CPU time per dispatch, and the command buffer's whole time.
+/// of the tiny kernel; `moving_0`, `_16`, `_256` and `_4096` as many after none, 16, 256 or 4096,
+/// each dispatch after the output buffer's offset moved. Per variant: the `useResources` call, the
+/// encoding thread's wall time per dispatch, the process's CPU time per dispatch, and the command
+/// buffer's whole time.
 fn encode_resident<G: Gpu>(g: &G, s: &Scene<G>, sizes: &Sizes, runs: &dyn Fn(String) -> bool) {
+    // (name, resident buffers, one buffer `count` times, the output's offset moving).
     let variants = [
-        ("0", 0, false),
-        ("1", 1, false),
-        ("256", 256, false),
-        ("4096", 4096, false),
-        ("same_4096", 4096, true),
+        ("0", 0, false, false),
+        ("1", 1, false, false),
+        ("256", 256, false, false),
+        ("4096", 4096, false, false),
+        ("same_4096", 4096, true, false),
+        ("moving_0", 0, false, true),
+        ("moving_16", 16, false, true),
+        ("moving_256", 256, false, true),
+        ("moving_4096", 4096, false, true),
     ];
     let wanted: Vec<_> = (variants.iter())
         .filter(|(name, ..)| runs(format!("dispatch_resident_{name}")))
@@ -637,7 +644,7 @@ fn encode_resident<G: Gpu>(g: &G, s: &Scene<G>, sizes: &Sizes, runs: &dyn Fn(Str
     }
     let n = sizes.draws;
     let resident: Vec<G::Buffer> = (0..RESIDENT).map(|_| g.buffer(256)).collect();
-    for &&(name, count, same) in &wanted {
+    for &&(name, count, same, moving) in &wanted {
         let list: Vec<&G::Buffer> = match same {
             true => vec![&resident[0]; count],
             false => resident[..count].iter().collect(),
@@ -659,7 +666,11 @@ fn encode_resident<G: Gpu>(g: &G, s: &Scene<G>, sizes: &Sizes, runs: &dyn Fn(Str
                 let t1 = Instant::now();
                 g.use_buffers(&mut encoder, &list);
                 let t2 = Instant::now();
-                for _ in 0..n {
+                for dispatch in 0..n {
+                    if moving {
+                        let offset = (dispatch % RECTS) * RECT_STRIDE;
+                        g.set_buffer(&mut encoder, &s.tiny_out, offset, 0);
+                    }
                     g.dispatch(&mut encoder, 1, 64);
                 }
                 let t3 = Instant::now();
