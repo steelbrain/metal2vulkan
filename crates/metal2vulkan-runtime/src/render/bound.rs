@@ -111,6 +111,12 @@ impl Recorded {
     pub(super) fn count(self, counts: &crate::work_counts::Counters) {
         counts.draw_states_recorded(self.states);
         counts.set_zero_writes_pushed(self.writes_pushed);
+        self.count_equal_shapes(counts);
+    }
+
+    /// Add its pushes that carried set 0 whole to `counts` (`set_zero_equal_shape_switches` and
+    /// kin): what [`count`](Self::count) adds but its states and writes pushed.
+    pub(super) fn count_equal_shapes(self, counts: &crate::work_counts::Counters) {
         let EqualShapes {
             switches,
             carried,

@@ -540,8 +540,9 @@ impl RenderLowering {
             kept.reads_images = live.uses.iter().any(super::reads_image);
         }
         let counts = &self.core.device().shared().counts;
-        counts.draw_rebound((kept.pushes_set_zero, kept.last_vertex));
-        recorded.count(counts);
+        let pushed = (recorded.states, recorded.writes_pushed);
+        counts.draw_rebound((kept.pushes_set_zero, kept.last_vertex), pushed);
+        recorded.count_equal_shapes(counts);
         self.current.recorded = true;
         let again = kept.again;
         let (reads, rasterizes, depth_writes) = (kept.reads, kept.rasterizes, kept.depth_writes);

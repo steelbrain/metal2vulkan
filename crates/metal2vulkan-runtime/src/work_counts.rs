@@ -14,7 +14,7 @@ use super::recorder::CommandsRecorded;
 use super::scheduler::HeldFor;
 use super::shadow::{Backing, CarryTally, CopyCause, Lost, ShadowCopy, ShadowSource};
 use super::Device;
-use crate::shards::Sharded;
+use crate::shards::{Mine, Sharded};
 use ash::vk;
 use std::panic::Location;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -1845,13 +1845,15 @@ impl Counters {
     /// A draw read a stage's table into its encoder's kept bind state
     /// (`ArgumentTable::refresh_reading`).
     pub(crate) fn stage_table_read(&self) {
-        (self.draws.mine().stage_tables_read).fetch_add(1, Ordering::Relaxed);
+        self.draws.mine().add(|counts| &counts.stage_tables_read, 1);
     }
 
     /// One of those reads brought in only the slots calls changed since the table was read
     /// (`ArgumentTable::refresh_changed`).
     pub(crate) fn stage_table_read_in_part(&self) {
-        (self.draws.mine().stage_tables_read_in_part).fetch_add(1, Ordering::Relaxed);
+        self.draws
+            .mine()
+            .add(|counts| &counts.stage_tables_read_in_part, 1);
     }
 
     /// A look at where a no-copy buffer's bytes lie, which takes its pages' lock
@@ -1863,7 +1865,9 @@ impl Counters {
     /// A draw's uses were noted already: the last command its encoder noted had them
     /// (`noted_apart.rs`).
     pub(crate) fn command_noted_as_before(&self) {
-        (self.draws.mine().commands_noted_as_before).fetch_add(1, Ordering::Relaxed);
+        self.draws
+            .mine()
+            .add(|counts| &counts.commands_noted_as_before, 1);
     }
 
     /// A draw settled its variant and plan from its bind shape (`GraphicsState::settle_shape`).
@@ -1880,7 +1884,9 @@ impl Counters {
     /// A draw under the last provoking vertex ran a `VkPipeline` of the last vertex
     /// (`render/provoking.rs`).
     pub(crate) fn provoking_last_pipeline_draw(&self) {
-        (self.draws.mine().provoking_last_pipeline_draws).fetch_add(1, Ordering::Relaxed);
+        self.draws
+            .mine()
+            .add(|counts| &counts.provoking_last_pipeline_draws, 1);
     }
 
     /// A draw under the last provoking vertex drew the list of its primitives in Metal's mode-1
@@ -1990,13 +1996,17 @@ impl Counters {
     /// (`render::Recording::record`).
     pub(crate) fn draw_states_recorded(&self, count: u64) {
         if count > 0 {
-            (self.draws.mine().draw_states_recorded).fetch_add(count, Ordering::Relaxed);
+            self.draws
+                .mine()
+                .add(|counts| &counts.draw_states_recorded, count);
         }
     }
 
     /// A draw recorded with its set 0 pushed (`pipeline::objects::pushes_set_zero`).
     pub(crate) fn draw_pushing_set_zero(&self) {
-        (self.draws.mine().draws_pushing_set_zero).fetch_add(1, Ordering::Relaxed);
+        self.draws
+            .mine()
+            .add(|counts| &counts.draws_pushing_set_zero, 1);
     }
 
     /// A dispatch encoded with its set 0 pushed (`pipeline::objects::pushes_set_zero`).
@@ -2034,18 +2044,23 @@ impl Counters {
     /// `VkPipeline` of the last provoking vertex.
     pub(crate) fn draw_drawn_again(&self, kept: (bool, bool)) {
         let counts = self.draws.mine();
-        counts.draws_as_before.fetch_add(1, Ordering::Relaxed);
-        counts
-            .commands_noted_as_before
-            .fetch_add(1, Ordering::Relaxed);
-        Self::kept_draw(counts, kept);
+        counts.add(|counts| &counts.draws_as_before, 1);
+        counts.add(|counts| &counts.commands_noted_as_before, 1);
+        Self::kept_draw(&counts, kept);
     }
 
-    /// A render draw rebound (`WorkCounts::draws_rebound`); `kept` as `draw_drawn_again`'s.
-    pub(crate) fn draw_rebound(&self, kept: (bool, bool)) {
+    /// A render draw rebound (`WorkCounts::draws_rebound`), which recorded `states` state
+    /// commands and pushed `writes` set-0 writes; `kept` as `draw_drawn_again`'s.
+    pub(crate) fn draw_rebound(&self, kept: (bool, bool), (states, writes): (u64, u64)) {
         let counts = self.draws.mine();
-        counts.draws_rebound.fetch_add(1, Ordering::Relaxed);
-        Self::kept_draw(counts, kept);
+        counts.add(|counts| &counts.draws_rebound, 1);
+        if states > 0 {
+            counts.add(|counts| &counts.draw_states_recorded, states);
+        }
+        if writes > 0 {
+            counts.add(|counts| &counts.set_zero_writes_pushed, writes);
+        }
+        Self::kept_draw(&counts, kept);
     }
 
     /// `tables` stage tables read into a kept draw's bind state, each bringing in only the slots
@@ -2054,23 +2069,19 @@ impl Counters {
     pub(crate) fn tables_read_in_part(&self, tables: u64) {
         if tables > 0 {
             let counts = self.draws.mine();
-            counts
-                .stage_tables_read
-                .fetch_add(tables, Ordering::Relaxed);
-            (counts.stage_tables_read_in_part).fetch_add(tables, Ordering::Relaxed);
+            counts.add(|counts| &counts.stage_tables_read, tables);
+            counts.add(|counts| &counts.stage_tables_read_in_part, tables);
         }
     }
 
     /// What a draw again or rebound counts as the draw it repeats did: a push of set 0 and a
     /// `VkPipeline` of the last provoking vertex.
-    fn kept_draw(counts: &DrawCounters, (pushes_set_zero, last_vertex): (bool, bool)) {
+    fn kept_draw(counts: &Mine<'_, DrawCounters>, (pushes_set_zero, last_vertex): (bool, bool)) {
         if pushes_set_zero {
-            counts
-                .draws_pushing_set_zero
-                .fetch_add(1, Ordering::Relaxed);
+            counts.add(|counts| &counts.draws_pushing_set_zero, 1);
         }
         if last_vertex {
-            (counts.provoking_last_pipeline_draws).fetch_add(1, Ordering::Relaxed);
+            counts.add(|counts| &counts.provoking_last_pipeline_draws, 1);
         }
     }
 
@@ -2104,7 +2115,9 @@ impl Counters {
     /// Draws' pushes of their set 0 carried `count` writes (`render/bound.rs`).
     pub(crate) fn set_zero_writes_pushed(&self, count: u64) {
         if count > 0 {
-            (self.draws.mine().set_zero_writes_pushed).fetch_add(count, Ordering::Relaxed);
+            self.draws
+                .mine()
+                .add(|counts| &counts.set_zero_writes_pushed, count);
         }
     }
 
