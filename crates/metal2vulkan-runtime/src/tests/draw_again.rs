@@ -509,7 +509,7 @@ fn a_notice_announced_at_each_occurrence_is_announced_at_every_draw() {
 
 /// The rectangles of [`offset_rectangles`]' draws, 16 bytes apart: the `at`th from column `at` of
 /// the target to its right edge, so that each column shows how many draws reached it.
-fn rectangles_from_columns(device: &Device) -> Buffer {
+pub(super) fn rectangles_from_columns(device: &Device) -> Buffer {
     let rectangles: Vec<f32> = (0..DRAWS)
         .flat_map(|at| [-1.0 + at as f32 * 2.0 / SIDE as f32, -1.0, 1.0, 1.0])
         .collect();

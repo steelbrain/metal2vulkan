@@ -392,14 +392,12 @@ impl RenderLowering {
         let objects = variant.objects();
         let rebound = {
             let device = self.core.device();
-            let mut state = self.core.command_buffer().state();
             let writes = &mut live.kept.writes[..];
             let set_zero = (writes, objects.dynamic_bindings(), &mut live.offsets[..]);
             let samplers = (Some(&mut self.bind_memo), &mut live.samplers);
             binding::rebind_into(
                 call,
                 device,
-                &mut state,
                 (&**plan, &command, &tables),
                 slots,
                 set_zero,

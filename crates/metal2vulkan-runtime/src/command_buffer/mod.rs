@@ -2068,7 +2068,6 @@ impl CommandBuffer {
         &self.0.fresh
     }
 
-    /// The state, locked.
     /// Note `work` of an encoder it ended, which its scheduling hands to the device's identifier
     /// allocations ([`UniqueIdentifiers::scheduled`](crate::unique_identifier::UniqueIdentifiers::scheduled)).
     pub(super) fn note_scheduled_work(&self, work: ScheduledWork) {
@@ -2077,7 +2076,11 @@ impl CommandBuffer {
         state.scheduled_work.render |= work.render;
     }
 
+    /// The state, locked: a lock its encoders on other threads share (counted, in builds with
+    /// debug assertions: [`state_locks`]).
     pub(super) fn state(&self) -> MutexGuard<'_, State> {
+        #[cfg(debug_assertions)]
+        STATE_LOCKS.with(|locks| locks.set(locks.get() + 1));
         lock(&self.0.state)
     }
 
@@ -5248,4 +5251,17 @@ fn life(kernel: &KernelTimes, times: &Times) -> Life {
         kernel_start: kernel.start(),
         completed: times.completed,
     }
+}
+
+#[cfg(debug_assertions)]
+thread_local! {
+    /// The locks this thread took of command buffers' states (`CommandBuffer::state`), in builds
+    /// with debug assertions.
+    static STATE_LOCKS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+/// How many command buffers' states this thread locked so far (`CommandBuffer::state`).
+#[cfg(all(test, debug_assertions, any(m2v_gpu, m2v_cpu_icd)))]
+pub(crate) fn state_locks() -> u64 {
+    STATE_LOCKS.with(std::cell::Cell::get)
 }
