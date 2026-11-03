@@ -676,12 +676,13 @@ driver's. Each is open work.
   without them), except on MoltenVK, which hands the indices to Metal. An exact form, a
   layered pass drawn once per layer keeping the primitives whose first vertex selects it, is not
   built.
-- **Commit to completion.** A command buffer takes longer from commit to completion through the
-  runtime than a bare driver submission: on a quiet Radeon 780M (RADV) an empty command buffer took
-  51.6 µs against a bare barrier's 45.1 µs. On MoltenVK most of the rest is the two GPU timestamps
-  each timed command buffer writes: on an M4 a bare barrier took 14.7 µs alone and 167.8 µs with
-  them. `DeviceOptions::gpu_times_from_host` (off by default, announced) answers GPU times from the
-  host clock and spares them.
+- **Commit to completion.** A command buffer that is submitted takes longer from commit to
+  completion through the runtime than a bare driver submission. On MoltenVK most of the difference
+  is the two GPU timestamps each timed command buffer writes: on an M4 a bare barrier took 14.7 µs
+  alone and 167.8 µs with them. `DeviceOptions::gpu_times_from_host` (off by default, announced)
+  answers GPU times from the host clock and spares them. An empty command buffer is not submitted
+  (`WorkCounts::command_buffers_unsubmitted`): its commit and wait took 2.6 µs on an RTX 5080 and
+  1.8 µs on an M3.
 - **A texture made while a batch is submitted waits for that submission on a device without
   `descriptorBindingUpdateUnusedWhilePending`** (the `vk12-floor` profile), where its making
   registers a first move (a `Private` texture's): the registration takes the first-move order,
