@@ -391,20 +391,16 @@ pub fn group<G: Gpu, S>(
 /// where a 12% change in a time would not. Each row is a fact measured on this M3 Max that the
 /// runtime should not quietly lose: an upper bound, so a call that does *less* work passes and the
 /// row is then tightened.
-const HELD: [(&str, &str, f64); 45] = [
-    // A draw records exactly one draw command and makes no driver object: the cost it pays at the
-    // call is planning, which is settled work and nothing a driver charges for.
-    ("draw_strip", "rt_draws_at_commit", 1.0),
-    ("draw_strip", "rt_draws_at_call", 0.0),
+const HELD: [(&str, &str, f64); 46] = [
+    // A draw records exactly one draw command, at the call, and makes no driver object: the cost
+    // it pays there is planning and recording, which is settled work and nothing a driver
+    // charges for.
+    ("draw_strip", "rt_draws_at_call", 1.0),
     ("draw_strip", "rt_vk_images_made_at_call", 0.0),
     ("draw_strip", "rt_vk_buffers_made_at_call", 0.0),
     ("draw_strip", "rt_vk_memory_allocations_at_call", 0.0),
-    ("draw_triangles", "rt_draws_at_commit", 1.0),
-    (
-        "draw_indexed",
-        "rt_recorded_cmd_draw_indexed_at_commit",
-        1.0,
-    ),
+    ("draw_triangles", "rt_draws_at_call", 1.0),
+    ("draw_indexed", "rt_recorded_cmd_draw_indexed_at_call", 1.0),
     // And it allocates about once in twenty draws (0.049 measured), nothing a draw of its own.
     ("draw_strip", "allocs", 0.2),
     ("draw_triangles", "allocs", 0.2),
@@ -414,21 +410,22 @@ const HELD: [(&str, &str, f64); 45] = [
     ("draw_strip", "rt_draw_shapes_made_at_call", 0.0),
     ("draw_strip", "rt_sampler_sets_made_at_call", 0.0),
     ("draw_strip", "rt_live_tables_uploaded_at_call", 0.0),
-    // The render pass is begun at the commit, never at the call, and ending the encoding makes no
-    // driver object. Its 25 allocations are the largest counted quantity on the path.
-    ("end_render", "rt_render_passes_begun_at_call", 0.0),
+    // Ending the encoding begins its render pass once, at the call, and makes no driver object.
+    // Its 25 allocations are the largest counted quantity on the path.
+    ("end_render", "rt_render_passes_begun_at_call", 1.0),
     ("end_render", "rt_vk_images_made_at_call", 0.0),
     ("end_render", "allocs", 25.0),
-    ("end_compute", "allocs", 7.0),
-    ("end_blit", "allocs", 7.0),
-    ("dispatch", "rt_dispatches_at_commit", 1.0),
-    ("dispatch", "allocs", 19.0),
+    ("end_compute", "allocs", 8.0),
+    ("end_blit", "allocs", 8.0),
+    // A dispatch records one dispatch command, at the call (8.13 allocations measured).
+    ("dispatch", "rt_dispatches_at_call", 1.0),
+    ("dispatch", "allocs", 8.2),
     // A heap texture's image takes its storage from the heap: one image and one binding, and no
     // allocation of memory of its own.
     ("heap_texture_256", "rt_vk_images_made_at_call", 1.0),
     ("heap_texture_256", "rt_vk_image_bindings_at_call", 1.0),
     ("heap_texture_256", "rt_vk_memory_allocations_at_call", 0.0),
-    ("heap_texture_256", "allocs", 19.0),
+    ("heap_texture_256", "allocs", 20.25),
     // A Shared texture likewise, and it starts its image on the host once.
     ("texture_256_shared", "rt_vk_images_made_at_call", 1.0),
     ("texture_256_shared", "rt_vk_image_bindings_at_call", 1.0),
@@ -452,9 +449,16 @@ const HELD: [(&str, &str, f64); 45] = [
         "rt_vk_memory_allocations_at_call",
         0.0,
     ),
-    // A texture over a buffer's bytes takes a parked image too, and makes one view of it.
-    ("buffer_texture_256", "rt_vk_images_made_at_call", 0.0),
-    ("buffer_texture_256", "rt_vk_image_views_made_at_call", 1.0),
+    // A texture over a buffer's bytes makes its image at the call, bound in the buffer's memory:
+    // one image and one binding, no memory of its own, and no view at the call.
+    ("buffer_texture_256", "rt_vk_images_made_at_call", 1.0),
+    ("buffer_texture_256", "rt_vk_image_bindings_at_call", 1.0),
+    (
+        "buffer_texture_256",
+        "rt_vk_memory_allocations_at_call",
+        0.0,
+    ),
+    ("buffer_texture_256", "rt_vk_image_views_made_at_call", 0.0),
     // A buffer comes out of the runtime's memory pool: no `vkCreateBuffer`, no `vkAllocateMemory`.
     ("buffer_4k", "rt_vk_buffers_made_at_call", 0.0),
     ("buffer_4k", "rt_vk_memory_allocations_at_call", 0.0),
@@ -465,10 +469,10 @@ const HELD: [(&str, &str, f64); 45] = [
     ("buffer_no_copy_1m", "rt_vk_buffers_made_at_call", 1.0),
     ("buffer_no_copy_1m", "rt_vk_memory_allocations_at_call", 1.0),
     ("buffer_no_copy_1m", "rt_vk_buffer_bindings_at_call", 1.0),
-    // Residency is our own bookkeeping: no driver call, and the allocation a resource the standing
-    // cost of 256 of them.
+    // Residency is our own bookkeeping: no driver call, and no allocation a resource (16 for 256
+    // of them).
     ("use_resources_read_256", "rt_vk_buffers_made_at_call", 0.0),
-    ("use_resources_read_256", "allocs", 277.0),
+    ("use_resources_read_256", "allocs", 16.0),
     // One Metal command buffer carrying one dispatch is submitted as two of Vulkan's.
     (
         "commit_one_dispatch",
