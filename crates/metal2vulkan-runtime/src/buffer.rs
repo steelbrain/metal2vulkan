@@ -62,6 +62,10 @@ use std::time::Instant;
 #[derive(Clone)]
 pub struct Buffer(Arc<BufferShared>);
 
+/// The distinct host imports a commit's count of them tells apart in place
+/// ([`Buffer::distinct_host_imports`]) before it lists them.
+const FEW_IMPORTS: usize = 16;
+
 /// A buffer held without keeping it (`used_resources.rs`).
 #[derive(Clone)]
 pub(super) struct WeakBuffer(Weak<BufferShared>);
@@ -3374,16 +3378,32 @@ impl Buffer {
 
     /// The host imports `buffers` lie in now, each counted once however many lie in it
     /// (`host_aliases.rs`): a committed command buffer's used buffers'
-    /// (`WorkCounts::host_imports_used`). Buffers over no host pages count none.
+    /// (`WorkCounts::host_imports_used`). Buffers over no host pages count none. The first
+    /// [`FEW_IMPORTS`] distinct imports are told apart in place, with no list made and nothing
+    /// sorted; past them, all of them are listed and sorted. An import lives while a buffer of
+    /// `buffers` holds it, so no two of them share an address.
     pub(super) fn distinct_host_imports(buffers: &[Buffer]) -> u64 {
-        let mut imports: Vec<*const HostImport> = buffers
-            .iter()
-            .filter_map(|buffer| buffer.host_pages())
-            .map(|pages| Arc::as_ptr(&pages.import))
-            .collect();
-        imports.sort_unstable();
-        imports.dedup();
-        imports.len() as u64
+        let imports = || {
+            (buffers.iter())
+                .filter_map(|buffer| buffer.host_pages())
+                .map(|pages| Arc::as_ptr(&pages.import))
+        };
+        let mut few = [std::ptr::null::<HostImport>(); FEW_IMPORTS];
+        let mut seen = 0;
+        for import in imports() {
+            if few[..seen].contains(&import) {
+                continue;
+            }
+            if seen == FEW_IMPORTS {
+                let mut all: Vec<*const HostImport> = imports().collect();
+                all.sort_unstable();
+                all.dedup();
+                return all.len() as u64;
+            }
+            few[seen] = import;
+            seen += 1;
+        }
+        seen as u64
     }
 
     /// Note `noted`, a texture over the buffer's bytes (`TexturesOver`), where they are host

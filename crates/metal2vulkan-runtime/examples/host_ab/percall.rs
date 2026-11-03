@@ -391,7 +391,7 @@ pub fn group<G: Gpu, S>(
 /// where a 12% change in a time would not. Each row is a fact measured on this M3 Max that the
 /// runtime should not quietly lose: an upper bound, so a call that does *less* work passes and the
 /// row is then tightened.
-const HELD: [(&str, &str, f64); 43] = [
+const HELD: [(&str, &str, f64); 45] = [
     // A draw records exactly one draw command and makes no driver object: the cost it pays at the
     // call is planning, which is settled work and nothing a driver charges for.
     ("draw_strip", "rt_draws_at_commit", 1.0),
@@ -475,6 +475,10 @@ const HELD: [(&str, &str, f64); 43] = [
         "rt_vk_command_buffers_submitted",
         2.0,
     ),
+    // Its commit makes four allocations, and five more where its buffers lie over host pages;
+    // counting the host imports they lie in makes none (`Buffer::distinct_host_imports`).
+    ("commit_one_dispatch", "allocs", 4.0),
+    ("commit_no_copy_dispatch", "allocs", 9.0),
 ];
 
 /// Fail where a group's call made more work than [`HELD`] allows it, naming the call, the count,

@@ -115,6 +115,35 @@ fn a_command_buffer_counts_each_import_it_uses_once_and_blits_never_read_apart()
     });
 }
 
+/// A commit's count of the imports its buffers lie in, past the few it tells apart in place
+/// (`Buffer::distinct_host_imports`) as within them: each import once, however many buffers lie in
+/// it and in whatever order they come.
+#[test]
+fn a_commit_counts_each_import_once_past_the_few_it_tells_apart_in_place() {
+    let scratch = Scratch::new("import-counts-many");
+    let hosts: Vec<Host> = (0..18).map(|_| Host::new()).collect();
+    let device = device(&scratch.0);
+    let runs = Arc::new(AtomicUsize::new(0));
+    let Some(first) = over_host(&device, &hosts[0], &runs) else {
+        return;
+    };
+    let mut buffers = vec![first];
+    buffers.extend((hosts[1..].iter()).map(|host| over_host(&device, host, &runs).unwrap()));
+    // A second buffer over exactly the first's bytes lies in its import.
+    let again = over_host(&device, &hosts[0], &runs).unwrap();
+    for imports in [1, 15, 16, 17, 18] {
+        let mut used: Vec<Buffer> = buffers[..imports].to_vec();
+        used.push(again.clone());
+        used.extend(buffers[..imports].iter().rev().cloned());
+        assert_eq!(
+            Buffer::distinct_host_imports(&used),
+            imports as u64,
+            "{imports} imports, each of {} buffers lying in one",
+            used.len()
+        );
+    }
+}
+
 /// The reason gauges: the Metal address, the `VkBuffer`, a binding, a texture over the bytes, a
 /// second buffer, no releasing thread.
 fn reasons(counts: &WorkCounts) -> [u64; 6] {
