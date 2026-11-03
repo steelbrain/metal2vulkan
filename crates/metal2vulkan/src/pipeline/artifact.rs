@@ -603,7 +603,12 @@ pub enum PrecisionNote {
     GradFromBias,
     /// Transcendentals answer within Apple's stated bound, not Metal's bits: the device's own
     /// functions where they are Metal's (MoltenVK), and the device's precision for a call no
-    /// other note bounds. Not recorded by precise `fmod`, whose answer is the one right value on
+    /// other note bounds. Apple states no answer at a NaN operand for a function compiled with
+    /// fast math, and a device whose compiler takes its math mode for the whole entry (MoltenVK)
+    /// answers a precise function of an entry Metal compiles with fast math by its fast form: a
+    /// NaN operand's answer may be a number there (`precise::sin`, `precise::cos` and
+    /// `precise::sincos` of a NaN answer `0` on the Apple M3 Max through MoltenVK 1.4.2, where
+    /// Metal answers the NaN). Not recorded by precise `fmod`, whose answer is the one right value on
     /// every device, nor, on a device whose `float` functions are Metal's own, in an entry Metal
     /// compiles with fast math ([`EntryMath::Fast`]) by a call the device answers as Metal's own
     /// function; there its fast `sinpi`, `cospi`, and `tanpi`, near-equivalents, still record it.

@@ -1078,6 +1078,10 @@ const DFL_HALF_EDGE_CASES: [&str; 2] = [
 /// them.
 const DFL_TRIG_CASE: &str = "precise-trigonometric-functions-at-nan-operands-under-fast-math";
 
+/// The word of a [`DFL_TRIG_CASE`] thread that holds its operand `x` itself; the eleven before it
+/// are the functions' answers.
+const DFL_TRIG_OPERAND: usize = 11;
+
 /// The owned fixtures answer Metal: in the denormal cases every lane of [`DFL_DENORMAL_ROWS`] and
 /// the special lanes of [`DFL_ROOT_ROWS`] where the profile takes
 /// `DriverDeviation::MetalFloatDenormals` (elsewhere a denormal is the device's own, and the test
@@ -1087,10 +1091,15 @@ const DFL_TRIG_CASE: &str = "precise-trigonometric-functions-at-nan-operands-und
 /// device's words printed where it rounds by its own form (its conversion, or its quantize);
 /// and in [`DFL_TRIG_CASE`] every word whose Metal answer is a NaN (the functions' other words are
 /// the math library's precision, not their NaNs). A NaN's bits are Metal's only where the profile
-/// takes `DriverDeviation::MetalCanonicalNans` and Metal answers its canonical NaN; elsewhere the
-/// device answers a NaN of its own bits ([`float_word_holds`]), which the trigonometric kernel
-/// records (`PrecisionNote::NativeNanEncoding`) and the runtime announces. The test prints how many
-/// words of the other rows differ, by row.
+/// takes `DriverDeviation::MetalCanonicalNans`, Metal answers its canonical NaN and the
+/// trigonometric kernel records no `PrecisionNote::NativeNanEncoding`; elsewhere the device answers
+/// a NaN of its own bits ([`float_word_holds`]), which the kernel records and the runtime
+/// announces. A function's answer at a NaN operand may be a number where the kernel records
+/// `PrecisionNote::DeviceTranscendentals`, which the runtime announces: Apple states no answer at a
+/// NaN under fast math, and MoltenVK compiles the kernel's precise functions in its fast-math
+/// entry by their fast forms (`precise::sin`, `precise::cos` and `precise::sincos` of a NaN answer
+/// `0` on the Apple M3 Max through MoltenVK 1.4.2). The test prints how many words of the other
+/// rows differ, by row.
 #[test]
 fn owned_float_fixtures_answer_metal() {
     let messages = Messages::default();
@@ -1103,6 +1112,8 @@ fn owned_float_fixtures_answer_metal() {
         };
         let special = |w: u32| w & 0x7FFF_FFFF == 0 || w & 0x7F80_0000 == 0x7F80_0000;
         let mut failures = Vec::new();
+        // The notes whose answers a case gave, which the runtime must have announced.
+        let mut announces = Vec::new();
         let denormals = takes(&device, DriverDeviation::MetalFloatDenormals);
         let canonical = takes(&device, DriverDeviation::MetalCanonicalNans);
         for case_name in DFL_DENORMAL_CASES {
@@ -1172,9 +1183,14 @@ fn owned_float_fixtures_answer_metal() {
             }
         }
         let case = public_case(DFL_TRIG_CASE).unwrap();
+        let notes = case_notes(&device, &case);
         let run = run_case(&device, &case).unwrap();
         let metal = metal_row(&case, METAL_ENVIRONMENT);
         assert_eq!(run.output.len(), metal.len(), "{DFL_TRIG_CASE} on {name}");
+        // The NaN's bits are the device's where the stage records them so, and a function's NaN
+        // operand may answer a number where it records the device's functions.
+        let device_bits = !canonical || notes.contains(&PrecisionNote::NativeNanEncoding);
+        let functions = notes.contains(&PrecisionNote::DeviceTranscendentals);
         let nans: Vec<usize> = (0..metal.len() / 4)
             .filter(|&i| float_nan(word(&metal, i)))
             .collect();
@@ -1182,28 +1198,45 @@ fn owned_float_fixtures_answer_metal() {
             .iter()
             .filter(|&&i| word(&run.output, i) != word(&metal, i))
             .count();
+        let numbers = nans
+            .iter()
+            .filter(|&&i| !float_nan(word(&run.output, i)))
+            .count();
         let differ: Vec<(usize, usize, u32, u32)> = nans
             .iter()
             .map(|&i| (i / 12, i % 12, word(&run.output, i), word(&metal, i)))
-            .filter(|&(_, _, a, b)| !float_word_holds(a, b, canonical))
+            .filter(|&(_, w, a, b)| {
+                let number = !float_nan(a) && functions && w < DFL_TRIG_OPERAND;
+                !number && !float_word_holds(a, b, !device_bits)
+            })
             .collect();
         eprintln!(
-            "owned precise trig {DFL_TRIG_CASE} on {name} (Metal's canonical NaN: {canonical}): \
-             {} of {} NaN words differ from Metal past a NaN's bits, {bits} in their bits",
+            "owned precise trig {DFL_TRIG_CASE} on {name} (Metal's canonical NaN: {canonical}; \
+             notes {notes:?}): {} of {} NaN words differ from Metal past what the notes record, \
+             {bits} in their bits, {numbers} a number",
             differ.len(),
             nans.len()
         );
         assert!(!nans.is_empty(), "{DFL_TRIG_CASE}: no NaN word");
-        if !canonical {
-            let note = PrecisionNote::NativeNanEncoding;
-            assert!(
-                case_notes(&device, &case).contains(&note),
-                "{DFL_TRIG_CASE} on {name}: the device's NaN, unrecorded"
-            );
-            let announced = notice_counts(&messages.take_notices());
+        for (note, needed) in [
+            (PrecisionNote::NativeNanEncoding, !canonical),
+            (PrecisionNote::DeviceTranscendentals, numbers > 0),
+        ] {
+            if needed {
+                assert!(
+                    notes.contains(&note),
+                    "{DFL_TRIG_CASE} on {name}: {note:?}'s answers, unrecorded"
+                );
+            }
+            if notes.contains(&note) {
+                announces.push((DFL_TRIG_CASE, note));
+            }
+        }
+        let announced = notice_counts(&messages.take_notices());
+        for (case_name, note) in announces {
             assert!(
                 announced.contains_key(&Degradation::from_precision_note(note)),
-                "{DFL_TRIG_CASE} on {name}: the device's NaN, unannounced: {announced:?}"
+                "{case_name} on {name}: {note:?} unannounced: {announced:?}"
             );
         }
         if !differ.is_empty() {

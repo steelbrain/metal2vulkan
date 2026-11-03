@@ -2893,6 +2893,10 @@ bound.
 - `metal2vulkan-degrade-device-transcendentals` (precision). `PrecisionNote::DeviceTranscendentals`:
   Transcendentals answer within Apple's stated bound, not Metal's bits: the device's own functions
   where they are Metal's (MoltenVK), and the device's precision for a call no other note bounds.
+  Apple states no answer at a NaN operand under fast math, and where the device's compiler takes
+  one math mode for the whole entry (MoltenVK) a precise function of a fast-math entry answers by
+  its fast form, so a NaN operand may answer a number (`precise::sin` and `precise::cos` of a NaN
+  answer `0` on the Apple M3 Max through MoltenVK 1.4.2, where Metal answers the NaN).
 - `metal2vulkan-degrade-reduction-order` (precision). `PrecisionNote::ReductionOrder`: Float
   reductions use the device's association order.
 - `metal2vulkan-degrade-device-denormals` (precision). `PrecisionNote::DeviceDenormals`: `float`
