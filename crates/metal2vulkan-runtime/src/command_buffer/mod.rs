@@ -2904,7 +2904,8 @@ impl CommandBuffer {
             // The device's logs of host pages hear of its writes and gated copies in, in commit
             // order, and of the shadows its end left holding their truth (`dirty_pages.rs`).
             // One that waits for an event or a semaphore may run after work committed later,
-            // whose writes no commit before it noted: its copies in count on no hold.
+            // whose writes no commit before it noted: its copies in count on no hold, and its
+            // writes keep the logs they meet from holding until it completes.
             if device.shared().dirty.collects() {
                 let held = match (&failure, &state.shadow_carry) {
                     (None, Some(carry)) => carry.held_whole(),
@@ -2912,10 +2913,13 @@ impl CommandBuffer {
                 };
                 let waits = (state.batches.all().iter())
                     .any(|batch| !batch.waits.is_empty() || !batch.binary_waits.is_empty());
+                // Such a one whose writes went unnoted, nothing collecting them as it encoded,
+                // counts as writing everything (`dirty_pages.rs`, **A waiting writer**).
+                let unnoted = self.0.unnoted.load(Ordering::Relaxed);
                 device
                     .shared()
                     .dirty
-                    .committed(&lock(&self.0.dirty), &held, waits);
+                    .committed(&mut lock(&self.0.dirty), &held, waits, unnoted);
             }
             (segments, places, failure, reached, hangs)
         };

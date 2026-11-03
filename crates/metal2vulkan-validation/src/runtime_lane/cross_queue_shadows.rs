@@ -1,6 +1,7 @@
-//! A shadowed texture's image carried across one command buffer's encoders, where command buffers
-//! of two queues meet the texture or the CPU writes its bytes while one runs (the runtime's
-//! `shadow::ShadowCarry`), on the device the cfg selects under the validation layer. The texture is the one `parallel_encodes` uses: 8x8 `RGBA8Unorm` at rows 48
+//! A shadowed texture's image carried across one command buffer's encoders, and a log's hold of
+//! logged guest pages, where command buffers of two queues meet the texture (the runtime's
+//! `shadow::ShadowCarry` and `dirty_pages.rs`), on the device the cfg selects under the
+//! validation layer. The texture is the one `parallel_encodes` uses: 8x8 `RGBA8Unorm` at rows 48
 //! bytes apart, 16 bytes past its texels, so it is a shadow on every device.
 //!
 //! - **Another queue's encoder in between, a CPU write while it runs.** Command buffer X of queue
@@ -21,6 +22,13 @@
 //!   The CPU waits until the event reads signalled, then writes the buffer. On the M3 Max (macOS
 //!   27.0.1) Metal's read after the signal took the write in both shapes, as an encoder after a
 //!   batch split does here: it copies in before its read, which runs after the spin.
+//! - **A waiting writer under a hold.** Over logged guest pages (`HostMemory::with_dirty_pages`),
+//!   command buffer Y of queue 2 waits for an event, fills a row of the texture's bytes, and then
+//!   spins, so it completes late. Command buffer X of queue 1, committed after Y, reads the
+//!   texture and signals the event: its end holds the texture whole, the hold its commit gives the
+//!   log. Command buffer Z of queue 1, committed after X, reads it: the tracker runs it after Y's
+//!   fill, and its read holds the fill, though the fill was reported to the log at Y's commit,
+//!   before X's hold.
 //!
 //! The spin is the owned fixture `kernel_spin_on_an_unraised_word`, dispatched again and again to
 //! a cap of loads timed on the device beforehand ([`Spin`]). The GPU does not see a CPU store to
@@ -29,9 +37,10 @@
 //! Metal ended one native dispatch of about 1.5 s the same way, and some of about 0.5 s, so the
 //! spin is many short dispatches.
 
+use super::host_memory::{Mapping, GUEST_PAGE};
 use super::parallel_encodes::{
-    completed, texel_dispatch, texel_kernels, texels_of, Rng, TexelKernels, BYTES, ROW, SIDE,
-    TEXEL_ROW, WORDS,
+    completed, gated, texel_dispatch, texel_kernels, texels_of, GuestLog, Rng, TexelKernels, BYTES,
+    ROW, SIDE, TEXEL_ROW, WORDS,
 };
 use super::{
     buffer_with, layer_reported_nothing_at_all, read_buffer, validated_device_with, Messages,
@@ -43,9 +52,11 @@ use metal2vulkan::metal::{PixelFormat, TextureUsage};
 use metal2vulkan_devtools::llvm_assemble;
 use metal2vulkan_runtime::{
     Buffer, CommandBuffer, CommandBufferStatus, ComputeCommandEncoder, ComputePipelineState,
-    Device, EventRef, PipelineOptions, Size, Texture, TextureDescriptor,
+    Device, EventRef, HostMemory, PipelineOptions, ResourceOptions, Size, Texture,
+    TextureDescriptor,
 };
 use std::path::Path;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 /// About how long a spin runs on the GPU: far past the CPU's write, made [`SETTLE`] after the
@@ -404,5 +415,82 @@ fn a_cpu_write_once_a_signal_was_seen_reaches_the_reads_after_it() {
     }
     drop((queue, kernels, spin));
     drop(device);
+    layer_reported_nothing_at_all(&messages);
+}
+
+/// A command buffer that waits for an event writes logged pages a shadowed texture lies in, and
+/// runs after a command buffer committed after it took the log's hold: a third command buffer's
+/// gated copy in still takes the write (the module docs).
+#[test]
+fn a_write_of_logged_pages_after_an_event_wait_reaches_a_copy_in_behind_a_later_hold() {
+    let messages = Messages::default();
+    let cache = ScratchCache::new().unwrap();
+    let (device, kernels, spin) = lane(&messages, &cache);
+    let (first, second) = (
+        device.new_command_queue().unwrap(),
+        device.new_command_queue().unwrap(),
+    );
+    let mapping = Mapping::anonymous(GUEST_PAGE);
+    let initial = Rng(0x9A6E).bytes(BYTES);
+    mapping.write(0, &initial);
+    let log = Arc::new(GuestLog::default());
+    log.told(0..BYTES);
+    // SAFETY: the mapping outlives the buffer, dropped first, and stays writable.
+    let memory = unsafe { HostMemory::new(mapping.pointer()) }.with_dirty_pages(Arc::clone(&log));
+    // SAFETY: as above.
+    let pages = unsafe {
+        device.new_buffer_with_bytes_no_copy(
+            memory,
+            GUEST_PAGE as u64,
+            ResourceOptions::default(),
+            None,
+        )
+    }
+    .unwrap();
+    let texture = shadowed(&device, &pages);
+    let event = device.new_event().unwrap();
+    let (row, value) = (3, 0xa5);
+    let reads = [(); 2].map(|_| read_target(&device));
+    let before = gated(&device.work_counts());
+    let withheld = device.work_counts().dirty_holds_withheld;
+    let y = second.command_buffer().unwrap();
+    y.encode_wait_for_event(EventRef::Event(&event), 1).unwrap();
+    fill_row(&y, &pages, row, value);
+    spin.encode(&y);
+    y.commit().unwrap();
+    let x = first.command_buffer().unwrap();
+    texel_dispatch(&x, &kernels.read, &texture, &reads[0]);
+    x.encode_signal_event(EventRef::Event(&event), 1).unwrap();
+    x.commit().unwrap();
+    let z = first.command_buffer().unwrap();
+    texel_dispatch(&z, &kernels.read, &texture, &reads[1]);
+    z.commit().unwrap();
+    for command_buffer in [&x, &y, &z] {
+        completed(command_buffer);
+    }
+    let after = gated(&device.work_counts());
+    let name = device.name().to_owned();
+    let counts: [u64; 5] = std::array::from_fn(|i| after[i] - before[i]);
+    let withheld = device.work_counts().dirty_holds_withheld - withheld;
+    println!(
+        "CROSS-QUEUE-HOLD on {name}: gated copies in (gated, whole, skipped, bytes whole, bytes \
+         copied) {counts:?}, holds withheld {withheld}, the spin {} dispatches of {} loads",
+        spin.dispatches, spin.cap
+    );
+    assert!(counts[0] > 0, "the copies in were gated");
+    assert!(
+        withheld > 0,
+        "X's hold was withheld while Y, which waits, had not completed"
+    );
+    let read = |at: usize| read_buffer(&reads[at], 0, 4 * WORDS).unwrap();
+    assert_eq!(read(0), texels_of(&initial), "X's read, before the signal");
+    assert_eq!(
+        read(1),
+        texels_of(&filled(&initial, row, value)),
+        "Z's read, after Y's fill"
+    );
+    drop((texture, pages, first, second, kernels, spin, event));
+    drop(device);
+    drop(mapping);
     layer_reported_nothing_at_all(&messages);
 }

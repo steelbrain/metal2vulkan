@@ -5059,6 +5059,11 @@ pub struct WorkCounts {
     pub dirty_waits_unanswered: u64,
     /// The nanoseconds the waits took, on the threads that submit and commit command buffers.
     pub dirty_wait_nanos: u64,
+    /// The holds of shadows over logged pages a commit left untaken, a command buffer committed
+    /// before it that waits for an event or a semaphore having written the shadow's truth and not
+    /// yet completed: it may run after the commit's work (`dirty_pages.rs`, **A waiting
+    /// writer**).
+    pub dirty_holds_withheld: u64,
     /// Of the keeps and merges among `shadow_copies`, those whose copy of the shadow's texels into
     /// the merge's scratch is the dispatch a copy back takes, where the device runs one faster
     /// than its copy (`DriverFact::ShadowCopyBackDispatchFaster`): the same bytes either way.
@@ -6064,6 +6069,7 @@ impl Device {
             dirty_waits: dirty.waits.load(Ordering::Relaxed),
             dirty_waits_unanswered: dirty.waits_unanswered.load(Ordering::Relaxed),
             dirty_wait_nanos: dirty.wait_nanos.load(Ordering::Relaxed),
+            dirty_holds_withheld: dirty.holds_withheld.load(Ordering::Relaxed),
             shadow_merge_copies_dispatched: counters
                 .shadow_merge_copies_dispatched
                 .load(Ordering::Relaxed),

@@ -2581,6 +2581,7 @@ field	metal2vulkan-runtime::WorkCounts.dirty_copies_in_skipped	pub dirty_copies_
 field	metal2vulkan-runtime::WorkCounts.dirty_copies_in_whole	pub dirty_copies_in_whole: u64
 field	metal2vulkan-runtime::WorkCounts.dirty_copy_in_bytes_copied	pub dirty_copy_in_bytes_copied: u64
 field	metal2vulkan-runtime::WorkCounts.dirty_copy_in_bytes_whole	pub dirty_copy_in_bytes_whole: u64
+field	metal2vulkan-runtime::WorkCounts.dirty_holds_withheld	pub dirty_holds_withheld: u64
 field	metal2vulkan-runtime::WorkCounts.dirty_stamps_asked	pub dirty_stamps_asked: u64
 field	metal2vulkan-runtime::WorkCounts.dirty_wait_nanos	pub dirty_wait_nanos: u64
 field	metal2vulkan-runtime::WorkCounts.dirty_waits	pub dirty_waits: u64

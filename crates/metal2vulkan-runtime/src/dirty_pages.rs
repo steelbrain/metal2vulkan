@@ -31,6 +31,14 @@
 //!   batches complete, and at its completion ([`DirtyCommit::report_host_writes`]), but for the
 //!   bytes its shadows' copies back report as their own. Metal's contract has a command reach a
 //!   resource only through a binding or a residency it named.
+//! - **A waiting writer.** A command buffer that waits for an event or a semaphore may run after
+//!   work committed after it. Its writes into the pages are reported at its commit, before that
+//!   work's stamps, so a hold a later commit takes (its image holding the truth as of its stamp)
+//!   would not count them, though they land after the image's copy. So its writes are kept
+//!   ([`WaitingWrites`]) until it completes, and while they meet a shadow's truth or the shadow,
+//!   that shadow's log takes no hold and gives none (`WorkCounts::dirty_holds_withheld`): a log
+//!   made after the commit too, since a shadow's log is made at its first copy in. Its completion
+//!   reports the writes again, and the next commit holds again.
 //! - **Correctness first.** A wait that answers `false`, a source that cannot say, and a copy
 //!   that holds nothing it may count on all copy every byte.
 //!
@@ -375,6 +383,27 @@ pub(crate) struct DirtyShadows {
     /// once one is ([`DirtyShadows::collects`]).
     imports: Mutex<Imports>,
     imported: AtomicBool,
+    /// The writes of the committed command buffers not yet completed that wait for an event or a
+    /// semaphore ([`DirtyShadows::committed`]), each one's apart.
+    waiting: Mutex<Vec<Arc<WaitingWrites>>>,
+}
+
+/// A committed command buffer's writes, kept while it waits for an event or a semaphore and has
+/// not completed (the module docs' **A waiting writer**): it may run after work committed after
+/// it.
+struct WaitingWrites {
+    written: Vec<Use<ResourceKey>>,
+    /// Its writes were more than [`WRITES`], or went unnoted while nothing collected them: they
+    /// meet everything.
+    overflowed: bool,
+}
+
+impl WaitingWrites {
+    /// Whether a write of them meets `copies`' truth or its shadow.
+    fn meets(&self, copies: &ShadowCopies) -> bool {
+        self.overflowed
+            || (self.written.iter()).any(|used| used.key == copies.shadow_key || copies.meets(used))
+    }
 }
 
 /// The logs of host pages imported in place, by the key of each buffer whose uses name them, held
@@ -399,6 +428,7 @@ pub(crate) struct DirtyTally {
     pub(crate) waits: AtomicU64,
     pub(crate) waits_unanswered: AtomicU64,
     pub(crate) wait_nanos: AtomicU64,
+    pub(crate) holds_withheld: AtomicU64,
 }
 
 /// The writers no other shadow or copy in the process is ever given.
@@ -731,6 +761,11 @@ impl DirtyShadows {
             log.wrote_back(range.clone());
         }
         commit.report_host_writes();
+        // Its writes ran and were reported again, stamped after them: the logs they met may hold
+        // again from the next commit on.
+        if let Some(writes) = &commit.waiting {
+            lock(&self.waiting).retain(|kept| !Arc::ptr_eq(kept, writes));
+        }
         if !failed {
             return;
         }
@@ -757,14 +792,43 @@ impl DirtyShadows {
     /// the holds as they stand and a stamp each (no hold where it `waits` for an event or a
     /// semaphore: work committed after it may run before it), its writes let go of the holds of
     /// the shadows they meet, and the shadows its end left holding every texel of the truth
-    /// (`held`) hold from their stamp on.
-    pub(crate) fn committed(&self, commit: &DirtyCommit, held: &[Arc<ShadowCopies>], waits: bool) {
+    /// (`held`) hold from their stamp on. Where it `waits`, its writes are kept until it
+    /// completed ([`WaitingWrites`]), and no log they meet holds or is held: it may run after a
+    /// later commit's work, whose hold its write, reported before that commit's stamp, would not
+    /// undo. Where some of its commands' writes went `unnoted`, nothing collecting them then, its
+    /// writes meet every log.
+    pub(crate) fn committed(
+        &self,
+        commit: &mut DirtyCommit,
+        held: &[Arc<ShadowCopies>],
+        waits: bool,
+        unnoted: bool,
+    ) {
+        let overflowed = commit.overflowed || unnoted;
+        if waits && (overflowed || !commit.written.is_empty()) {
+            let writes = Arc::new(WaitingWrites {
+                written: commit.written.clone(),
+                overflowed,
+            });
+            lock(&self.waiting).push(Arc::clone(&writes));
+            commit.waiting = Some(writes);
+        }
         let DirtyCommit {
             written,
             gates,
             wrote,
             ..
         } = commit;
+        // Whether the writes of a command buffer that waits and has not completed, this one among
+        // them, meet `log`'s truth or shadow.
+        let waited = |log: &ShadowLog| {
+            let Some(copies) = log.copies.upgrade() else {
+                return false;
+            };
+            lock(&self.waiting)
+                .iter()
+                .any(|writes| writes.meets(&copies))
+        };
         // One stamp per source and commit.
         let mut stamps: Vec<(Arc<DirtySource>, DirtyStamp)> = Vec::new();
         let mut stamp_of = |source: &Arc<DirtySource>| {
@@ -776,8 +840,8 @@ impl DirtyShadows {
             stamp
         };
         let mut synced: Vec<(Arc<ShadowLog>, DirtyStamp)> = Vec::new();
-        for gate in gates {
-            let since = match gate.written_before || waits {
+        for gate in gates.iter() {
+            let since = match gate.written_before || waits || waited(&gate.log) {
                 true => None,
                 false => *lock(&gate.log.hold),
             };
@@ -785,10 +849,9 @@ impl DirtyShadows {
             *lock(&gate.decision) = Some(Decision { since, stamp });
             synced.push((Arc::clone(&gate.log), stamp));
         }
-        for (log, range) in wrote {
+        for (log, range) in wrote.iter() {
             log.wrote_back(range.clone());
         }
-        commit.report_host_writes();
         let logs: Vec<Arc<ShadowLog>> = lock(&self.logs).clone();
         for log in &logs {
             let Some(copies) = log.copies.upgrade() else {
@@ -805,10 +868,17 @@ impl DirtyShadows {
                 .copies
                 .upgrade()
                 .is_some_and(|copies| held.iter().any(|h| Arc::ptr_eq(h, &copies)));
-            if holds {
-                *lock(&log.hold) = Some(stamp);
+            if !holds {
+                continue;
+            }
+            match waited(&log) {
+                false => *lock(&log.hold) = Some(stamp),
+                true => {
+                    self.tally.holds_withheld.fetch_add(1, Ordering::Relaxed);
+                }
             }
         }
+        commit.report_host_writes();
     }
 }
 
@@ -820,6 +890,9 @@ pub(crate) struct DirtyCommit {
     written: Vec<Use<ResourceKey>>,
     gates: Vec<Arc<CopyInGate>>,
     wrote: Vec<(Arc<ShadowLog>, Range<u64>)>,
+    /// Its writes as the device keeps them while it waits for an event or a semaphore
+    /// ([`DirtyShadows::committed`]), let go of at its completion.
+    waiting: Option<Arc<WaitingWrites>>,
     /// Its writes were more than [`WRITES`]: `written` holds the first alone.
     overflowed: bool,
     /// Its writes into host pages imported in place whose memory is logged: each pages' logs,
