@@ -857,6 +857,7 @@ impl RenderLowering {
             // The planner refuses a layered pass's dispatch (`NotImplemented(TileShading)`).
             bind.render_target_array_length = self.render_target_array_length;
             bind.used_resources = used_resources.clone();
+            bind.used_in_token_order = true;
             bind.argument_samplers = heap_sets::listed(argument_samplers);
             bind.function_tables = function_tables
                 .iter()

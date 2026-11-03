@@ -35,6 +35,13 @@ pub struct BindState {
     /// whether its pixel format has an alpha: a heap read the shader bounds-checks reads Metal's
     /// out-of-bounds alpha from it, so a texture's facts must be the resident texture's.
     pub used_resources: Vec<UsedResource>,
+    /// The consumer lists `used_resources` in token order: each entry's token at least the one
+    /// before it, so a token's entries lie together. A heap member then finds its entries by
+    /// search, at the logarithm of their count (a debug build asserts the order), rather than
+    /// every command's instantiation reading every entry. Not part of the shape; `false` (the
+    /// default): listed in any order.
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub used_in_token_order: bool,
     /// The render encoder's vertex amplification (`setVertexAmplificationCount:viewMappings:`);
     /// Metal's default of a count of 1 without view mappings otherwise.
     #[cfg_attr(feature = "serde", serde(default))]

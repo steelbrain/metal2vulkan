@@ -574,7 +574,8 @@ impl Residency {
         Some(used)
     }
 
-    /// The bind state's used resources, each with its render stages. A buffer is stated in its
+    /// The bind state's used resources, each with its render stages, in token order (each token
+    /// once). A buffer is stated in its
     /// `VkBuffer`'s space, as the argument table states a bound one (its length and Metal address
     /// widened by its base offset), so the resident range covers every byte the `VkBuffer` maps; a
     /// heap as its own buffer is (`Heap::bytes`), whose range holds every buffer placed in it; a

@@ -1162,8 +1162,10 @@ fn a_member_s_level_count_is_not_the_plan_s() {
     used.resource_id = Some(42);
     let mut state = BindState::default();
     state.used_resources.push(used);
-    let by_token: UsedByToken<'_> =
-        BTreeMap::from([(7, state.used_resources.iter().collect::<Vec<_>>())]);
+    let by_token = UsedByToken::Gathered(BTreeMap::from([(
+        7,
+        state.used_resources.iter().collect::<Vec<_>>(),
+    )]));
     let member = |shape: TextureShape| HeapMember {
         source: HeapSource::Used(7),
         shape,
@@ -1424,4 +1426,80 @@ fn a_heap_member_a_mode_two_write_would_round_is_refused() {
         }
     }
     assert!(checked > 0, "no profile holds a format the check refuses");
+}
+
+/// A state listed in token order (`BindState::used_in_token_order`) is searched, not gathered by
+/// token, and gives the same tables and heap elements as the same state listed so without the
+/// flag: among a buffer per token around them, with a member listed twice under one id, and the
+/// same internal errors for a member listed with two ids and a member not listed.
+#[test]
+fn a_state_in_token_order_finds_its_members_by_search() {
+    let t2d = shape(TextureType::Type2D, PixelFormat::RGBA8Unorm, 1, READ);
+    let texture = || {
+        ResourceClass::Texture(TextureFacts::new(
+            TextureType::Type2D,
+            PixelFormat::RGBA8Unorm,
+        ))
+    };
+    let mut state = BindState::default();
+    let mut template = ResourceTemplate::default();
+    for token in 0..200u32 {
+        let member = token % 50 == 7;
+        let class = match member {
+            true => texture(),
+            false => ResourceClass::Buffer,
+        };
+        let mut u = UsedResource::new(class, token);
+        u.resource_id = member.then_some(u64::from(token) + 1);
+        state.used_resources.push(u);
+        if token == 57 {
+            state.used_resources.push(u);
+        }
+        if member {
+            template.heap_members.push(HeapMember {
+                source: HeapSource::Used(token),
+                shape: t2d,
+                stages: vec![Stage::Kernel],
+            });
+        }
+    }
+    state.heap_placement = HeapPlacement::ResourceId;
+    let planned = PlannedHandleTable {
+        set: 0,
+        binding: 4,
+        stage: Stage::Kernel,
+        entries: 8,
+    };
+    let mut ordered = state.clone();
+    ordered.used_in_token_order = true;
+    assert!(matches!(UsedByToken::of(&ordered), UsedByToken::Listed(_)));
+    assert!(matches!(UsedByToken::of(&state), UsedByToken::Gathered(_)));
+    let tables = |state: &BindState| handle_table_bytes(&template.heap_members, &[planned], state);
+    let elements = |state: &BindState| heap_elements(&template, state, 1024);
+    assert_eq!(
+        tables(&ordered).expect("ordered"),
+        tables(&state).expect("any")
+    );
+    assert_eq!(
+        elements(&ordered).expect("ordered"),
+        elements(&state).expect("any")
+    );
+    // Member 107 listed again with another id, beside its first entry.
+    for state in [&state, &ordered] {
+        let mut twice = state.clone();
+        let at = 1 + twice
+            .used_resources
+            .iter()
+            .position(|u| u.token == 107)
+            .unwrap();
+        let mut again = twice.used_resources[at - 1];
+        again.resource_id = Some(999);
+        twice.used_resources.insert(at, again);
+        assert!(matches!(tables(&twice), Err(BindError::Internal(_))));
+        assert!(matches!(elements(&twice), Err(BindError::Internal(_))));
+        let mut missing = state.clone();
+        missing.used_resources.retain(|u| u.token != 157);
+        assert!(matches!(tables(&missing), Err(BindError::Internal(_))));
+        assert!(matches!(elements(&missing), Err(BindError::Internal(_))));
+    }
 }

@@ -3113,6 +3113,7 @@ field	metal2vulkan::bind::BindState.stages	pub stages: BTreeMap<Stage, StageTabl
 field	metal2vulkan::bind::BindState.stencil_references	pub stencil_references: [u32; 2]
 field	metal2vulkan::bind::BindState.tessellation_factors	pub tessellation_factors: TessellationFactors
 field	metal2vulkan::bind::BindState.tile_threadgroup	pub tile_threadgroup: TileThreadgroupMemory
+field	metal2vulkan::bind::BindState.used_in_token_order	pub used_in_token_order: bool
 field	metal2vulkan::bind::BindState.used_resources	pub used_resources: Vec<UsedResource>
 field	metal2vulkan::bind::BindState.vertex_amplification	pub vertex_amplification: VertexAmplification
 field	metal2vulkan::bind::BindState.view_base_alignment	pub view_base_alignment: u32

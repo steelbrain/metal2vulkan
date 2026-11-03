@@ -350,6 +350,7 @@ fn total(
     let mut state = BindState::default();
     state.stages.insert(Stage::Kernel, StageTable::default());
     state.used_resources = residency.used_resources();
+    state.used_in_token_order = true;
     state.resident_ranges = live;
     let shape = state.shape();
     // Each state with the ID its records name it by: the encoder's where the buffer inherits it;

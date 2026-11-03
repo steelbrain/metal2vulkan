@@ -422,6 +422,7 @@ impl RenderExecution {
             .map_err(|error| HostStepCause::Refused(error.to_string()))?;
         let mut state = BindState::default();
         state.used_resources = residency.used_resources();
+        state.used_in_token_order = true;
         state.resident_ranges = live.ranges().collect();
         let count = range.end - range.start;
         let mut replay =

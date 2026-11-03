@@ -6003,6 +6003,8 @@ impl RenderLowering {
         if !kept {
             reshape.field(&mut state.used_resources, self.residency.used_resources());
         }
+        // Listed by token (`Residency::used_resources`).
+        state.used_in_token_order = true;
         live.read_from.made_resident(generation);
         // Listed again only where the device's sampler states changed since: not where the
         // listing kept is of every live state at the count of their slots' changes that still

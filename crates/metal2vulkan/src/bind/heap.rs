@@ -1490,9 +1490,47 @@ pub(crate) fn planner<'p, 'a>(
         .ok_or_else(|| internal("a heap binding without a handle table"))
 }
 
-/// The used resources of a bind state by token, in the state's order: built once per
-/// instantiation, so each heap member finds its entries without rescanning the state.
-type UsedByToken<'s> = BTreeMap<u32, Vec<&'s UsedResource>>;
+/// The used resources of a bind state by token, in the state's order: a list the consumer gives
+/// in token order (`BindState::used_in_token_order`), whose entries of a token a heap member finds
+/// by search, at the logarithm of their count; else gathered by token once per instantiation, so
+/// each heap member finds its entries without rescanning the state.
+enum UsedByToken<'s> {
+    Listed(&'s [UsedResource]),
+    Gathered(BTreeMap<u32, Vec<&'s UsedResource>>),
+}
+
+impl<'s> UsedByToken<'s> {
+    /// `state`'s used resources by token.
+    fn of(state: &'s BindState) -> UsedByToken<'s> {
+        let used = &state.used_resources;
+        if state.used_in_token_order {
+            debug_assert!(
+                used.windows(2).all(|w| w[0].token <= w[1].token),
+                "used resources listed in token order are not"
+            );
+            return UsedByToken::Listed(used);
+        }
+        let mut gathered: BTreeMap<u32, Vec<&UsedResource>> = BTreeMap::new();
+        for u in used {
+            gathered.entry(u.token).or_default().push(u);
+        }
+        UsedByToken::Gathered(gathered)
+    }
+
+    /// The entries of `token`, in the state's order; `None` where it lists none.
+    fn get(&self, token: u32) -> Option<impl Iterator<Item = &'s UsedResource> + '_> {
+        let (listed, gathered): (&'s [UsedResource], &[&'s UsedResource]) = match self {
+            UsedByToken::Listed(used) => {
+                let start = used.partition_point(|u| u.token < token);
+                let end = start + used[start..].partition_point(|u| u.token == token);
+                (&used[start..end], &[])
+            }
+            UsedByToken::Gathered(gathered) => (&[], gathered.get(&token)?),
+        };
+        let none = listed.is_empty() && gathered.is_empty();
+        (!none).then(|| listed.iter().chain(gathered.iter().copied()))
+    }
+}
 
 /// The resource id of heap member `m` in `state` (whose used resources are `used`), checked
 /// against the plan's shape.
@@ -1510,7 +1548,7 @@ fn member_id(
     match m.source {
         HeapSource::Used(token) => {
             let mut id = None;
-            let entries = used.get(&token).ok_or_else(mismatch)?;
+            let entries = used.get(token).ok_or_else(mismatch)?;
             for u in entries {
                 let ResourceClass::Texture(facts) = u.class else {
                     return Err(mismatch());
@@ -1661,10 +1699,7 @@ fn handle_table_bytes(
     if members.is_empty() && tables.is_empty() {
         return Ok(Vec::new());
     }
-    let mut used = UsedByToken::new();
-    for u in &state.used_resources {
-        used.entry(u.token).or_default().push(u);
-    }
+    let used = UsedByToken::of(state);
     let mut ids = Vec::with_capacity(members.len());
     for m in members {
         ids.push(member_id(m, &used, state)?);
@@ -1931,10 +1966,7 @@ fn heap_elements(
             None => Ok(None),
         }
     };
-    let mut used = UsedByToken::new();
-    for u in &state.used_resources {
-        used.entry(u.token).or_default().push(u);
-    }
+    let used = UsedByToken::of(state);
     let members = template
         .heap_members
         .iter()
