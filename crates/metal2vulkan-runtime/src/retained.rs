@@ -77,6 +77,10 @@ pub(super) struct Retained {
     /// The addresses of the last [`RECENT`] shared objects held, 0 where none (no object's), and
     /// the place the next goes.
     recent: ([usize; RECENT], usize),
+    /// The shared objects asked for that were among them, so not held again (builds with debug
+    /// assertions: [`asked`](Self::asked)).
+    #[cfg(debug_assertions)]
+    found_lately: usize,
 }
 
 impl Retained {
@@ -91,6 +95,10 @@ impl Retained {
         let address = Arc::as_ptr(&object).cast::<()>().addr();
         let (recent, next) = &mut self.recent;
         if recent.contains(&address) {
+            #[cfg(debug_assertions)]
+            {
+                self.found_lately += 1;
+            }
             return;
         }
         recent[*next] = address;
@@ -111,6 +119,14 @@ impl Retained {
     #[cfg(any(test, debug_assertions))]
     pub(super) fn len(&self) -> usize {
         self.holds.as_ref().map_or(0, |holds| holds.0.len())
+    }
+
+    /// How many holds it was asked for: those it keeps, and the shared objects it found among the
+    /// last held (builds with debug assertions: `render/draw_again.rs`'s check, which a hold found
+    /// so must not pass unseen).
+    #[cfg(debug_assertions)]
+    pub(super) fn asked(&self) -> usize {
+        self.len() + self.found_lately
     }
 
     /// The holds as one entry of a command buffer's (the module docs), or none where there are

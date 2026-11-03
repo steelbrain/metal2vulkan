@@ -1371,11 +1371,12 @@ impl EncoderCore {
         self.device().shared().fresh.any()
     }
 
-    /// How many holds and execution records the encoder keeps for its command buffer (builds
-    /// with debug assertions: `render/draw_again.rs`'s check).
+    /// How many holds the encoder was asked for (each kept, or found among those held lately:
+    /// `retained.rs`) and execution records it keeps for its command buffer (builds with debug
+    /// assertions: `render/draw_again.rs`'s check).
     #[cfg(debug_assertions)]
     pub(super) fn retained_holds(&self) -> (usize, usize) {
-        (self.retained.len(), self.executions.len())
+        (self.retained.asked(), self.executions.len())
     }
 
     /// Record one command apart that runs in `stages` with `uses`, and the uses of the host
