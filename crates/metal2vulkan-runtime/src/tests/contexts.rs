@@ -115,10 +115,11 @@ fn job(f: impl FnOnce() + Send + 'static) -> Job {
     Job(Box::new(f))
 }
 
-/// An item that says whether it is plain.
+/// An item that says whether it is plain, and whether it runs where its completion was seen.
 struct Said {
     run: Box<dyn FnOnce() + Send>,
     plain: bool,
+    seen: bool,
 }
 
 impl Run for Said {
@@ -129,12 +130,27 @@ impl Run for Said {
     fn plain(&self) -> bool {
         self.plain
     }
+
+    fn runs_where_seen(&self) -> bool {
+        self.plain || self.seen
+    }
 }
 
 fn said(plain: bool, f: impl FnOnce() + Send + 'static) -> Said {
     Said {
         run: Box::new(f),
         plain,
+        seen: false,
+    }
+}
+
+/// An item that is not plain but runs where its completion was seen (a transition whose only code
+/// of the program's is its completion-seen handlers).
+fn seen(f: impl FnOnce() + Send + 'static) -> Said {
+    Said {
+        run: Box::new(f),
+        plain: false,
+        seen: true,
     }
 }
 
@@ -180,7 +196,7 @@ fn a_plain_item_runs_here_after_its_context_s_plain_items_and_before_later_ones(
             note(&log, "here")();
         }
     };
-    assert!(contexts.run_here(1, said(true, later)).is_ok());
+    assert!(contexts.run_here(1, said(true, later), Said::plain).is_ok());
     assert_eq!(
         *log.lock().unwrap(),
         [("earlier", true), ("here", true)],
@@ -188,9 +204,15 @@ fn a_plain_item_runs_here_after_its_context_s_plain_items_and_before_later_ones(
     );
     // A context holding an item that is not plain, and one a thread runs: given back.
     contexts.post(2, said(false, || {}));
-    assert!(contexts.run_here(2, said(true, || {})).is_err());
-    assert!(contexts.run_here(9, said(true, || {})).is_err());
-    assert!(contexts.run_here(3, said(false, || {})).is_err());
+    assert!(contexts
+        .run_here(2, said(true, || {}), Said::plain)
+        .is_err());
+    assert!(contexts
+        .run_here(9, said(true, || {}), Said::plain)
+        .is_err());
+    assert!(contexts
+        .run_here(3, said(false, || {}), Said::plain)
+        .is_err());
     release.send(()).unwrap();
     finished.recv_timeout(WAIT).unwrap();
     assert_eq!(
@@ -198,6 +220,56 @@ fn a_plain_item_runs_here_after_its_context_s_plain_items_and_before_later_ones(
         [("earlier", true), ("here", true), ("later", false)],
         "the item posted meanwhile ran after it, on the pool's thread"
     );
+    contexts.stop();
+}
+
+/// An item whose only code of the program's is its completion-seen handlers runs on the calling
+/// thread where that thread may run them (`Run::runs_where_seen`), after its context's items that
+/// may run there too; where it may run only plain items (a thread blocking in a wait), it is
+/// given back, and so is any item behind an earlier one of its context that runs elsewhere.
+#[test]
+fn an_item_that_runs_where_seen_runs_here_only_where_the_thread_may_run_it() {
+    let contexts: Contexts<Said> = Contexts::start(1).unwrap();
+    let here = std::thread::current().id();
+    let log = Arc::new(Mutex::new(Vec::new()));
+    let note = move |log: &Arc<Mutex<Vec<(&'static str, bool)>>>, name: &'static str| {
+        let log = Arc::clone(log);
+        move || {
+            let on_here = std::thread::current().id() == here;
+            log.lock().unwrap().push((name, on_here));
+        }
+    };
+    // Plain items only: given back, changing nothing.
+    assert!(contexts
+        .run_here(1, seen(note(&log, "refused")), Said::plain)
+        .is_err());
+    // Where the thread may run completion-seen handlers: after the context's earlier one of the
+    // same kind, on this thread.
+    let (release, released) = mpsc::channel::<()>();
+    let (started, starts) = mpsc::channel::<()>();
+    contexts.post(
+        9,
+        said(false, move || {
+            started.send(()).unwrap();
+            released.recv_timeout(WAIT).unwrap();
+        }),
+    );
+    starts.recv_timeout(WAIT).unwrap();
+    contexts.post(1, seen(note(&log, "earlier")));
+    assert!(contexts
+        .run_here(1, seen(note(&log, "here")), Said::runs_where_seen)
+        .is_ok());
+    assert_eq!(
+        *log.lock().unwrap(),
+        [("earlier", true), ("here", true)],
+        "the context's earlier item, then the item, on this thread"
+    );
+    // Behind an item that runs only on the pool's threads: given back.
+    contexts.post(2, said(false, || {}));
+    assert!(contexts
+        .run_here(2, seen(|| {}), Said::runs_where_seen)
+        .is_err());
+    release.send(()).unwrap();
     contexts.stop();
 }
 

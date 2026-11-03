@@ -2,7 +2,9 @@
 //! completes finishes on the queue waiter that saw its work complete, with no handler thread
 //! woken, as Metal's completion wakes its waiting thread itself (`command_buffer/completion.rs`);
 //! one with a completed handler, and any while the runtime holds a deallocator of the program's,
-//! finishes on its queue's handler thread (`WorkCounts::completed_where_seen`). Likewise
+//! finishes on its queue's handler thread (`WorkCounts::completed_where_seen`). One whose only
+//! code of the program's is its completion-seen handlers finishes where seen too, and runs them
+//! there, once its status is final (`WorkCounts::completion_seen_handlers_where_seen`). Likewise
 //! `CommandBufferShared::schedule`: a command buffer with no scheduled handler is scheduled on the
 //! scheduler's thread as its last batch goes, and one with a scheduled handler on its queue's
 //! handler thread (`WorkCounts::scheduled_where_submitted`).
@@ -11,12 +13,14 @@
 //! `m2v_cpu_icd`), on the kind of device the cfg selects.
 
 use crate::{
-    CommandBuffer, CommandQueue, Device, DeviceKind, DeviceOptions, HostMemory, ResourceOptions,
-    ShaderCacheOptions,
+    CommandBuffer, CommandBufferStatus, CommandQueue, DeadlockCause, Device, DeviceKind,
+    DeviceOptions, Error, HostMemory, ResourceOptions, ShaderCacheOptions,
 };
 use std::alloc::Layout;
 use std::path::{Path, PathBuf};
 use std::ptr::NonNull;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 
 /// The command buffers of each kind.
 const ROUNDS: u64 = 20;
@@ -145,6 +149,168 @@ fn a_command_buffer_with_no_handler_finishes_where_its_completion_is_seen() {
             drop(buffer);
         }
         Err(error) => println!("no buffer over host memory: {error:?}"),
+    }
+    drop(queue);
+    drop(device);
+}
+
+/// What a completion-seen handler saw as it ran.
+#[derive(Debug)]
+struct Seen {
+    /// The thread it ran on.
+    thread: String,
+    /// It ran on one of the device's handler threads.
+    on_handler_thread: bool,
+    /// Its command buffer's status.
+    status: CommandBufferStatus,
+    /// Its command buffer's GPU end: positive, or refused where the device writes no timestamps.
+    gpu_end: Result<f64, Error>,
+    /// Its command buffer's completed handler had run already.
+    after_completed: bool,
+    /// What its wait for its own command buffer's completion answered.
+    own_wait: Result<(), Error>,
+    /// What its wait for its own command buffer's scheduling answered.
+    own_scheduled_wait: Result<(), Error>,
+}
+
+/// [`ROUNDS`] command buffers of `queue`, each a fill of 16 bytes with a completion-seen handler,
+/// and a completed handler where `completed`, each committed and waited for before the next: what
+/// each completion-seen handler saw (each had run by its wait's return), and whether each
+/// completed handler saw its completion-seen handler run before it; and how many of the handlers
+/// the device counted run, and run where seen.
+fn seen_handlers(
+    device: &Device,
+    queue: &CommandQueue,
+    completed: bool,
+) -> (Vec<Seen>, Vec<bool>, u64, u64) {
+    let target = device.new_buffer(16, ResourceOptions::shared()).unwrap();
+    let before = device.work_counts();
+    let (mut seen, mut ordered) = (Vec::new(), Vec::new());
+    for round in 0..ROUNDS {
+        let command_buffer = queue.command_buffer().unwrap();
+        let mut blit = command_buffer.blit_command_encoder().unwrap();
+        blit.fill_buffer(&target, 0..16, round as u8).unwrap();
+        blit.end_encoding().unwrap();
+        let record = Arc::new(Mutex::new(None));
+        let (seen_ran, completed_ran) = (
+            Arc::new(AtomicBool::new(false)),
+            Arc::new(AtomicBool::new(false)),
+        );
+        {
+            let (record, seen_ran, completed_ran) = (
+                Arc::clone(&record),
+                Arc::clone(&seen_ran),
+                Arc::clone(&completed_ran),
+            );
+            command_buffer
+                .add_completion_seen_handler(Box::new(move |buffer: &CommandBuffer| {
+                    let thread = std::thread::current();
+                    *record.lock().unwrap() = Some(Seen {
+                        thread: thread.name().unwrap_or("").to_owned(),
+                        on_handler_thread: crate::contexts::on_handler_thread(),
+                        status: buffer.status(),
+                        gpu_end: buffer.gpu_end_time(),
+                        after_completed: completed_ran.load(Ordering::SeqCst),
+                        own_wait: buffer.wait_until_completed(),
+                        own_scheduled_wait: buffer.wait_until_scheduled(),
+                    });
+                    seen_ran.store(true, Ordering::SeqCst);
+                }))
+                .unwrap();
+        }
+        let saw_seen = Arc::new(AtomicBool::new(false));
+        if completed {
+            let (seen_ran, completed_ran, saw_seen) = (
+                Arc::clone(&seen_ran),
+                Arc::clone(&completed_ran),
+                Arc::clone(&saw_seen),
+            );
+            command_buffer
+                .add_completed_handler(Box::new(move |_: &CommandBuffer| {
+                    saw_seen.store(seen_ran.load(Ordering::SeqCst), Ordering::SeqCst);
+                    completed_ran.store(true, Ordering::SeqCst);
+                }))
+                .unwrap();
+        }
+        command_buffer.commit().unwrap();
+        // Refused once committed, as the other handlers are.
+        assert!(command_buffer
+            .add_completion_seen_handler(Box::new(|_: &CommandBuffer| {}))
+            .is_err());
+        command_buffer.wait_until_completed().unwrap();
+        assert!(
+            seen_ran.load(Ordering::SeqCst),
+            "the wait returned before the handler ran"
+        );
+        seen.push(record.lock().unwrap().take().unwrap());
+        if completed {
+            ordered.push(saw_seen.load(Ordering::SeqCst));
+        }
+    }
+    let after = device.work_counts();
+    (
+        seen,
+        ordered,
+        after.completion_seen_handlers_run - before.completion_seen_handlers_run,
+        after.completion_seen_handlers_where_seen - before.completion_seen_handlers_where_seen,
+    )
+}
+
+/// A command buffer whose only handler is a completion-seen one finishes where its completion is
+/// seen, and runs the handler there, on its queue's waiter, its status `Completed` and its GPU
+/// times placed: at least one of [`ROUNDS`] (as for a command buffer with no handler, an earlier
+/// transition of its queue may hold the context), each counted, with no handler thread woken.
+/// With a completed handler besides, every one runs on its queue's handler thread, before the
+/// completed handler. A wait in one for what has not happened (its own completion) is refused,
+/// one for what happened (its own scheduling) returns, and the command buffer's wait returns only
+/// once it ran.
+#[test]
+fn a_completion_seen_handler_runs_where_the_completion_is_seen() {
+    let scratch = Scratch::new();
+    let device = device(&scratch.0);
+    let queue = device.new_command_queue().unwrap();
+    let refused = Err(Error::WaitWouldDeadlock(
+        DeadlockCause::CompletionSeenHandler,
+    ));
+    let (seen, _, run, where_seen) = seen_handlers(&device, &queue, false);
+    let on_waiters = seen.iter().filter(|seen| !seen.on_handler_thread).count() as u64;
+    println!("completion-seen handlers where seen: {where_seen} of {ROUNDS}");
+    assert_eq!(run, ROUNDS);
+    assert!(
+        where_seen >= 1,
+        "none of {ROUNDS} ran where its completion was seen"
+    );
+    assert_eq!(where_seen, on_waiters, "{seen:#?}");
+    for seen in &seen {
+        if !seen.on_handler_thread {
+            assert!(
+                seen.thread.starts_with("metal2vulkan-queue-wait-"),
+                "ran on {}",
+                seen.thread
+            );
+        }
+        assert_eq!(seen.status, CommandBufferStatus::Completed);
+        assert!(
+            seen.gpu_end.as_ref().map_or(true, |&end| end > 0.0),
+            "{seen:?}"
+        );
+        assert_eq!(seen.own_wait, refused);
+        assert_eq!(seen.own_scheduled_wait, Ok(()));
+    }
+    let (seen, ordered, run, where_seen) = seen_handlers(&device, &queue, true);
+    assert_eq!((run, where_seen), (ROUNDS, 0));
+    assert!(
+        seen.iter()
+            .all(|seen| seen.on_handler_thread && !seen.after_completed),
+        "{seen:#?}"
+    );
+    assert!(
+        ordered.iter().all(|&ordered| ordered),
+        "a completed handler ran first"
+    );
+    for seen in &seen {
+        assert_eq!(seen.status, CommandBufferStatus::Completed);
+        assert_eq!(seen.own_wait, refused);
     }
     drop(queue);
     drop(device);

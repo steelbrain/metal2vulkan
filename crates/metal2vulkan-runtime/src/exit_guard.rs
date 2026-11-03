@@ -1160,6 +1160,14 @@ pub(crate) fn serves_completion() {
     SERVES_COMPLETION.with(|serves| serves.set(true));
 }
 
+/// Whether this thread is one command buffers' completion depends on ([`serves_completion`]): the
+/// scheduler's or a queue's waiter, which never blocks in a wait for a command buffer, so a
+/// command buffer's completion-seen handlers may run on it
+/// (`CommandBufferShared::finish_here`).
+pub(crate) fn serving_completion() -> bool {
+    SERVES_COMPLETION.with(Cell::get)
+}
+
 /// Run `f`, the program's code a release runs (a no-copy buffer's deallocator, the drop of its
 /// keep-alive, of a range token or of a dma-buf source), as [`program`] runs it. In builds with
 /// debug assertions (every test run), end the process where this thread is one command buffers'

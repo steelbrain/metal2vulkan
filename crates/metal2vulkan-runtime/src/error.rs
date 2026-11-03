@@ -292,6 +292,14 @@ pub enum DeadlockCause {
     /// command buffer holds. The handler runs on the thread that submits command buffers, and its
     /// own command buffer's scheduling, with every later transition of its queue, waits for it.
     SubmissionHandler,
+    /// From a completion-seen handler
+    /// ([`CommandBuffer::add_completion_seen_handler`](crate::CommandBuffer::add_completion_seen_handler),
+    /// a runtime extension Metal has no counterpart of), a wait for what has not happened yet: a
+    /// command buffer's scheduling or completion, or a slot of a full queue that no uncommitted
+    /// command buffer holds. The handler may run on the thread that sees command buffers
+    /// complete, and its own command buffer's completion, with every later transition of its
+    /// queue, waits for it.
+    CompletionSeenHandler,
 }
 
 impl fmt::Display for DeadlockCause {
@@ -303,6 +311,9 @@ impl fmt::Display for DeadlockCause {
             DeadlockCause::Exiting => "the process is exiting",
             DeadlockCause::SubmissionHandler => {
                 "it waits in a submission handler, which scheduling waits for"
+            }
+            DeadlockCause::CompletionSeenHandler => {
+                "it waits in a completion-seen handler, which completion waits for"
             }
         })
     }

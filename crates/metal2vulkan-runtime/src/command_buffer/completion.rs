@@ -9,8 +9,9 @@
 //!   (the host saw it before any later submission), the events it signaled are reached, and the
 //!   batch that ends a command buffer finishes it, once the turn read the command buffer's GPU
 //!   timestamps and gave their slot back (`gpu_time.rs`): the turn runs its transition to
-//!   `Completed` itself where that runs none of the program's code, else posts it to its queue's
-//!   context ([`contexts`](crate::contexts)). A turn runs no handler.
+//!   `Completed` itself where that runs none of the program's code but its completion-seen
+//!   handlers (a runtime extension), else posts it to its queue's context
+//!   ([`contexts`](crate::contexts)). A turn runs no other handler.
 //! - **Finished where seen.** Metal's completion wakes a thread waiting for a command buffer with
 //!   no completed handler from the thread that saw it complete, and orders it after its queue's
 //!   earlier completed handlers. Measured on the Apple M3 Max (macOS 27.0.1), 40 runs each: with
@@ -20,12 +21,16 @@
 //!   returned 10 to 23 us after it ended; a command buffer with no handler behind an earlier one of
 //!   its queue whose handler ran 20 ms read `Completed`, and its wait returned, 3 to 23 us after
 //!   that handler ended, 21 to 30 ms after its own `GPUEndTime`. So the turn runs a command
-//!   buffer's transition itself (`CommandBufferShared::finish_here`) where it is plain (no
-//!   completed handler, none being added after the commit, and no notice), its queue's context
-//!   runs on no handler thread and holds only plain transitions, which the turn runs first, in
-//!   order, and the runtime holds none of the program's objects a release drops or runs
-//!   (`program_objects.rs`): its status, release and gate then come from the waiter, which wakes
-//!   the program's waiting thread itself. Everywhere else it is posted, as before. Beside the
+//!   buffer's transition itself (`CommandBufferShared::finish_here`) where it has no completed
+//!   handler (none being added after the commit) and no notice, its queue's context runs on no
+//!   handler thread and holds only such transitions, which the turn runs first, in order, and the
+//!   runtime holds none of the program's objects a release drops or runs (`program_objects.rs`):
+//!   its status, release and gate then come from the waiter, which wakes the program's waiting
+//!   thread itself. Its completion-seen handlers (`CommandBuffer::add_completion_seen_handler`)
+//!   then run on the waiter too, once its status is final, for a program that answers the
+//!   completion where it is seen: one wake where a completed handler's is two (counted:
+//!   `WorkCounts::completion_seen_handlers_where_seen`). Everywhere else it is posted, as before,
+//!   and they run in it on the handler thread. Beside the
 //!   runtime lane's tests on the M3 Max at the utility clamp, the handler thread's wake between
 //!   the turn and the program's thread took up to 13 to 55 ms at a light burst's 99th percentile
 //!   of the queue storm (`runtime_lane::queue_storms`), over Metal's one wake from its completion;

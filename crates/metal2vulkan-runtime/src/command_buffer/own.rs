@@ -29,6 +29,14 @@
 //! later submissions wait for it too. So any wait there for what has not happened (a command
 //! buffer's scheduling or completion, a slot of a full queue no uncommitted command buffer holds)
 //! is refused at once (`DeadlockCause::SubmissionHandler`); one for what happened returns.
+//!
+//! A completion-seen handler (a runtime extension, Metal has none) runs as its command buffer's
+//! transition to `Completed` runs: on the thread that saw the command buffer complete (a queue's
+//! waiter, the scheduler's thread, or the committing thread for one that needs no GPU work) where
+//! that transition runs there, else on its queue's handler thread. That thread's turn finishes
+//! every queue's command buffers, so a wait there for what has not happened would wait for itself,
+//! and its waits are refused as a submission handler's are, wherever it runs
+//! (`DeadlockCause::CompletionSeenHandler`); one for what happened returns.
 
 use crate::error::DeadlockCause;
 use std::cell::Cell;
@@ -46,6 +54,22 @@ pub(crate) enum Step {
     /// or a committing one, which may be a handler thread): its transition to `Scheduled`, and
     /// so every later transition of its queue, waits for them.
     SubmissionHandlers,
+    /// Its completion-seen handlers, as its transition to `Completed` or `Error` runs: on the
+    /// thread that saw it complete, or its queue's handler thread.
+    CompletionSeenHandlers,
+}
+
+impl Step {
+    /// The cause a wait for what has not happened is refused with from this step: a submission
+    /// handler's or a completion-seen handler's, which the device's other work waits for. `None`
+    /// for the steps of a handler thread, whose waits answer by their queues.
+    fn refuses(self) -> Option<DeadlockCause> {
+        match self {
+            Step::SubmissionHandlers => Some(DeadlockCause::SubmissionHandler),
+            Step::CompletionSeenHandlers => Some(DeadlockCause::CompletionSeenHandler),
+            Step::ScheduledHandlers | Step::CompletedHandlers | Step::Release => None,
+        }
+    }
 }
 
 /// A logical queue's serial context: its device (by the shared state's address) and the queue's
@@ -125,8 +149,8 @@ pub(crate) fn completed_wait(marker: Option<Marker>, target: Target, finished: b
     };
     if finished {
         Answer::Wait
-    } else if marker.step == Step::SubmissionHandlers {
-        Answer::Refuse(DeadlockCause::SubmissionHandler)
+    } else if let Some(cause) = marker.step.refuses() {
+        Answer::Refuse(cause)
     } else if marker.buffer == target.buffer && marker.step == Step::Release {
         Answer::Return
     } else if marker.context == target.context {
@@ -147,8 +171,8 @@ pub(crate) fn scheduled_wait(marker: Option<Marker>, target: Target, scheduled: 
         Answer::Refuse(DeadlockCause::OwnQueue)
     } else if scheduled {
         Answer::Wait
-    } else if marker.step == Step::SubmissionHandlers {
-        Answer::Refuse(DeadlockCause::SubmissionHandler)
+    } else if let Some(cause) = marker.step.refuses() {
+        Answer::Refuse(cause)
     } else if marker.context == target.context {
         Answer::Refuse(DeadlockCause::OwnQueue)
     } else {
@@ -168,11 +192,11 @@ pub(crate) fn slot_wait(marker: Option<Marker>, queue: Context, open: bool) -> A
     let Some(marker) = marker else {
         return Answer::Wait;
     };
-    if marker.step == Step::SubmissionHandlers {
+    if let Some(cause) = marker.step.refuses() {
         return if open {
             Answer::Wait
         } else {
-            Answer::Refuse(DeadlockCause::SubmissionHandler)
+            Answer::Refuse(cause)
         };
     }
     if marker.context != queue {

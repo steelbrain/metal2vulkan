@@ -18,7 +18,9 @@
 //! what it retained. A transition that runs none of the program's code runs where it is seen
 //! instead, where its context is free: to `Scheduled` on the scheduler's thread
 //! (`CommandBufferShared::schedule`), to `Completed` on the queue waiter
-//! (`CommandBufferShared::finish_here`). As on Metal, a queue's command buffer whose work completed
+//! (`CommandBufferShared::finish_here`), which also runs one whose only code of the program's is
+//! its completion-seen handlers (a runtime extension), right after its status is final. As on
+//! Metal, a queue's command buffer whose work completed
 //! stays `Committed` while an earlier transition of its queue, a handler, still runs. Its
 //! submission handlers (a runtime extension) run before its transition to `Scheduled`, on the
 //! thread that took its last batch for its queue (submitted it, or held it for one kernel
@@ -134,7 +136,9 @@ use std::time::{Duration, Instant};
 /// A scheduled or completed handler (`MTLCommandBufferHandler`): called once with the command buffer, on one of the
 /// device's handler threads, in its queue's order. A panic inside it is caught. A submission
 /// handler ([`CommandBuffer::add_submission_handler`]) is one too, called on the thread that
-/// submits the command buffer's last batch.
+/// submits the command buffer's last batch, and so is a completion-seen handler
+/// ([`CommandBuffer::add_completion_seen_handler`]), called on the thread that saw the command
+/// buffer complete.
 ///
 /// - **macOS.** The handler threads run at the user-interactive quality of service, whatever the
 ///   class of the thread that committed, as Metal runs its handlers. A thread a handler starts
@@ -585,6 +589,9 @@ pub(super) struct State {
     /// finishes once its batches completed, its scheduled handlers run.
     failure: Option<CommandBufferError>,
     completed: VecDeque<Handler>,
+    /// Its completion-seen handlers ([`CommandBuffer::add_completion_seen_handler`]): run as its
+    /// transition to `Completed` or `Error` runs, its status final, before its completed handlers.
+    seen: VecDeque<Handler>,
     /// The handlers of its executions' records as the runtime reads them
     /// (`executed_commands.rs`).
     pub(crate) executed_handlers: Vec<crate::executed_commands::ExecutedCommandsHandler>,
@@ -1826,6 +1833,7 @@ impl CommandBuffer {
                 parked: 0,
                 failure: None,
                 completed: VecDeque::new(),
+                seen: VecDeque::new(),
                 executed_handlers: Vec::new(),
                 retained: Vec::new(),
                 executions: Vec::new(),
@@ -2387,6 +2395,49 @@ impl CommandBuffer {
             ));
         }
         state.completed.push_back(handler);
+        Ok(())
+    }
+
+    /// Call `handler` once the command buffer completed or failed, its status, error and GPU
+    /// times final, on the runtime's thread that saw it complete, where its transition to
+    /// `Completed` runs there: a runtime extension, no Metal call (the crate's README, "Runtime
+    /// extensions"). Metal tells a program of a completion only on its handler threads, a thread
+    /// wake after the thread that saw it; a program that answers each completion at once (a
+    /// paravirtualized device's interrupt) takes it here, and a command buffer with such
+    /// handlers and no completed handler finishes with no handler thread woken.
+    ///
+    /// - **The thread.** The queue's waiter that saw the command buffer's work complete. Where its
+    ///   transition to `Completed` runs on its queue's handler thread instead, so do these
+    ///   handlers, at the same point of it: where it has a completed handler, an earlier
+    ///   transition of its queue still runs or waits there (a scheduled or completed handler), or
+    ///   the runtime holds a deallocator of the program's
+    ///   ([`Device::new_buffer_with_bytes_no_copy`](super::Device::new_buffer_with_bytes_no_copy)),
+    ///   which no thread that sees command buffers complete may run (counted:
+    ///   `WorkCounts::completion_seen_handlers_run` and
+    ///   `WorkCounts::completion_seen_handlers_where_seen`).
+    /// - **Order.** Its handlers run in the order added, once its status reads `Completed` or
+    ///   `Error` and its GPU times are placed, before its completed handlers, before
+    ///   [`wait_until_completed`](Self::wait_until_completed) returns, and before its queue's next
+    ///   command buffer completes: in its queue's commit order, as completed handlers run.
+    /// - **Keep it short, and never block.** On a queue's waiter it holds back the completion of
+    ///   every queue's command buffers until it returns. A wait in it for what has not happened (a
+    ///   command buffer's scheduling or completion, a slot of a full queue) is refused, wherever it
+    ///   runs (`WaitWouldDeadlock` of [`DeadlockCause::CompletionSeenHandler`]); it must not wait
+    ///   otherwise, nor take a lock that a thread holds while it waits for the device. What it
+    ///   holds goes as it returns, on that thread: no last handle of an object whose release runs
+    ///   the program's code (a no-copy buffer's deallocator).
+    ///
+    /// Refused once the command buffer is committed (`Invalid`, `Problem::HandlerAfterCommit`), as
+    /// [`add_completed_handler`](Self::add_completed_handler) is.
+    pub fn add_completion_seen_handler(&self, handler: Handler) -> Result<(), Error> {
+        let mut state = self.state();
+        if state.enqueued() {
+            return Err(invalid(
+                "add_completion_seen_handler",
+                Problem::HandlerAfterCommit,
+            ));
+        }
+        state.seen.push_back(handler);
         Ok(())
     }
 
@@ -4335,6 +4386,7 @@ impl CommandBufferShared {
             buffer: self.hold(),
             to: To::Scheduled,
             plain,
+            where_seen: plain,
         });
         match shared.contexts.run_alone(self.queue.id(), item) {
             Ok(()) => shared.counts.scheduled_where_submitted(),
@@ -4371,11 +4423,13 @@ impl CommandBufferShared {
 
     /// The last batch of the command buffer `buffer` holds finished with `result`, as the queue
     /// waiter on this thread saw: its transition to `Completed` or `Error` runs here, where it is
-    /// [`plain`](Transition::plain), its queue's context runs on no thread and holds only plain
-    /// items, which run here before it (`Contexts::run_here`), and the runtime holds none of the
-    /// program's objects a release drops or runs (`program_objects.rs`), so its release runs none
-    /// of the program's code. A thread waiting for it is then woken from here, as Metal's
-    /// completion wakes it, with no handler thread woken between. Else it is posted, as
+    /// [`plain`](Transition::plain), or runs none of the program's code but its completion-seen
+    /// handlers ([`where_seen`](Transition::where_seen)) on a thread command buffers' completion
+    /// depends on (`exit_guard::serving_completion`), its queue's context runs on no thread and
+    /// holds only such items, which run here before it (`Contexts::run_here`), and the runtime
+    /// holds none of the program's objects a release drops or runs (`program_objects.rs`), so its
+    /// release runs none of the program's code. A thread waiting for it is then woken from here,
+    /// as Metal's completion wakes it, with no handler thread woken between. Else it is posted, as
     /// [`post_finished`](Self::post_finished) posts it.
     ///
     /// The waiter takes no handle of the device here, and lets each transition's hold go short of
@@ -4387,9 +4441,14 @@ impl CommandBufferShared {
     ) {
         let (contexts, queue) = (buffer.device.shared().contexts.clone(), buffer.queue.id());
         let item = Item::Transition(Transition::finished(buffer, result));
+        // A thread that may block for a command buffer runs none of the program's code here.
+        let may_run: fn(&Item) -> bool = match exit_guard::serving_completion() {
+            true => Item::runs_where_seen,
+            false => Item::plain,
+        };
         let item = match program_objects::Unheld::enter() {
             Some(unheld) => {
-                let ran = contexts.run_here(queue, item);
+                let ran = contexts.run_here(queue, item, may_run);
                 drop(unheld);
                 match ran {
                     Ok(()) => return,
@@ -4582,6 +4641,23 @@ impl CommandBufferShared {
         drop(submitted_holds);
         self.wake_parked(parked);
         let buffer = CommandBuffer(Arc::clone(self));
+        // Its completion-seen handlers first, on this thread, its status final: the thread that
+        // saw it complete where this transition runs there, else its queue's handler thread
+        // (`CommandBuffer::add_completion_seen_handler`).
+        {
+            let _running = Running::enter(self.marker(Step::CompletionSeenHandlers));
+            let where_seen = !contexts::on_handler_thread();
+            loop {
+                let Some(handler) = lock(&self.state).seen.pop_front() else {
+                    break;
+                };
+                self.device
+                    .shared()
+                    .counts
+                    .completion_seen_handler_ran(where_seen);
+                exit_guard::program(|| handler(&buffer));
+            }
+        }
         // Each handler leaves the queue under the lock and runs without it, in the order added
         // (a handler may query the command buffer).
         {
@@ -4694,6 +4770,11 @@ pub(crate) struct Transition {
     /// It runs none of the program's code but what a release of the program's objects runs
     /// (`program_objects.rs`): no handler and no notice.
     plain: bool,
+    /// It runs none of the program's code but that and its completion-seen handlers, which a
+    /// thread that saw its command buffer complete may run
+    /// ([`CommandBuffer::add_completion_seen_handler`]): plain, or a transition to `Completed`
+    /// with no completed handler.
+    where_seen: bool,
 }
 
 /// The status a transition goes to.
@@ -4705,13 +4786,19 @@ enum To {
 
 impl Transition {
     /// The transition of the command buffer `buffer` holds to `Completed` or `Error`, with
-    /// `result`: plain where it has no completed handler (none is added after the commit).
+    /// `result`: it runs where seen where it has no completed handler, and is plain where it has
+    /// no completion-seen handler either (none is added after the commit).
     fn finished(buffer: Hold<CommandBufferShared>, result: Result<(), CommandBufferError>) -> Self {
-        let plain = lock(&buffer.state).completed.is_empty();
+        let (where_seen, plain) = {
+            let state = lock(&buffer.state);
+            let where_seen = state.completed.is_empty();
+            (where_seen, where_seen && state.seen.is_empty())
+        };
         Transition {
             buffer,
             to: To::Finished(result),
             plain,
+            where_seen,
         }
     }
 
@@ -4762,6 +4849,13 @@ impl Run for Item {
     fn plain(&self) -> bool {
         match self {
             Item::Transition(transition) => transition.plain,
+            Item::Release(_) => false,
+        }
+    }
+
+    fn runs_where_seen(&self) -> bool {
+        match self {
+            Item::Transition(transition) => transition.where_seen,
             Item::Release(_) => false,
         }
     }

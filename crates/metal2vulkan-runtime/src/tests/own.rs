@@ -183,30 +183,40 @@ fn a_make_on_a_full_queue_answers_by_where_its_slots_can_come_back() {
 }
 
 /// A submission handler: its command buffer's scheduling, and every later transition of its
-/// queue, waits for it, and on the scheduler thread so do the device's later submissions. So a
-/// wait there for anything that has not happened yet, of any queue or device, is refused; one for
-/// what happened returns.
+/// queue, waits for it, and on the scheduler thread so do the device's later submissions. A
+/// completion-seen handler: its command buffer's completion, and every later transition of its
+/// queue, waits for it, and on the thread that sees command buffers complete so do every queue's
+/// completions. So a wait in either for anything that has not happened yet, of any queue or device,
+/// is refused, each with its own cause; one for what happened returns.
 #[test]
-fn a_submission_handler_s_waits_for_what_has_not_happened_are_refused() {
-    let refused = Answer::Refuse(DeadlockCause::SubmissionHandler);
-    let submitting = marker(Step::SubmissionHandlers);
-    for at in [
-        target(DEVICE, QUEUE, OWN),
-        target(DEVICE, QUEUE, LATER),
-        target(DEVICE, OTHER_QUEUE, LATER),
-        target(OTHER_DEVICE, QUEUE, LATER),
+fn a_submission_or_completion_seen_handler_s_waits_for_what_has_not_happened_are_refused() {
+    for (step, cause) in [
+        (Step::SubmissionHandlers, DeadlockCause::SubmissionHandler),
+        (
+            Step::CompletionSeenHandlers,
+            DeadlockCause::CompletionSeenHandler,
+        ),
     ] {
-        assert_eq!(completed_wait(submitting, at, false), refused);
-        assert_eq!(scheduled_wait(submitting, at, false), refused);
-        assert_eq!(completed_wait(submitting, at, true), Answer::Wait);
-        assert_eq!(scheduled_wait(submitting, at, true), Answer::Wait);
-    }
-    for queue in [
-        context(DEVICE, QUEUE),
-        context(DEVICE, OTHER_QUEUE),
-        context(OTHER_DEVICE, QUEUE),
-    ] {
-        assert_eq!(slot_wait(submitting, queue, false), refused);
-        assert_eq!(slot_wait(submitting, queue, true), Answer::Wait);
+        let refused = Answer::Refuse(cause);
+        let running = marker(step);
+        for at in [
+            target(DEVICE, QUEUE, OWN),
+            target(DEVICE, QUEUE, LATER),
+            target(DEVICE, OTHER_QUEUE, LATER),
+            target(OTHER_DEVICE, QUEUE, LATER),
+        ] {
+            assert_eq!(completed_wait(running, at, false), refused);
+            assert_eq!(scheduled_wait(running, at, false), refused);
+            assert_eq!(completed_wait(running, at, true), Answer::Wait);
+            assert_eq!(scheduled_wait(running, at, true), Answer::Wait);
+        }
+        for queue in [
+            context(DEVICE, QUEUE),
+            context(DEVICE, OTHER_QUEUE),
+            context(OTHER_DEVICE, QUEUE),
+        ] {
+            assert_eq!(slot_wait(running, queue, false), refused);
+            assert_eq!(slot_wait(running, queue, true), Answer::Wait);
+        }
     }
 }

@@ -2528,6 +2528,8 @@ field	metal2vulkan-runtime::WorkCounts.completed_where_seen	pub completed_where_
 field	metal2vulkan-runtime::WorkCounts.completion_arms	pub completion_arms: u64
 field	metal2vulkan-runtime::WorkCounts.completion_arms_after_a_wake	pub completion_arms_after_a_wake: u64
 field	metal2vulkan-runtime::WorkCounts.completion_reads_ran_ahead	pub completion_reads_ran_ahead: u64
+field	metal2vulkan-runtime::WorkCounts.completion_seen_handlers_run	pub completion_seen_handlers_run: u64
+field	metal2vulkan-runtime::WorkCounts.completion_seen_handlers_where_seen	pub completion_seen_handlers_where_seen: u64
 field	metal2vulkan-runtime::WorkCounts.compute_pipeline_create_nanos	pub compute_pipeline_create_nanos: u64
 field	metal2vulkan-runtime::WorkCounts.copied_copy_in_bytes	pub copied_copy_in_bytes: u64
 field	metal2vulkan-runtime::WorkCounts.copied_copy_in_bytes_skipped	pub copied_copy_in_bytes_skipped: u64
@@ -7588,6 +7590,7 @@ method	metal2vulkan-runtime::BufferDescriptor::with_range_of	pub fn with_range_o
 method	metal2vulkan-runtime::BufferDescriptor::with_range_token	pub fn with_range_token(self, token: RangeToken) -> BufferDescriptor<'a>
 method	metal2vulkan-runtime::ClearColor::new	pub fn new(red: f64, green: f64, blue: f64, alpha: f64) -> ClearColor
 method	metal2vulkan-runtime::CommandBuffer::add_completed_handler	pub fn add_completed_handler(&self, handler: Handler) -> Result<(), Error>
+method	metal2vulkan-runtime::CommandBuffer::add_completion_seen_handler	pub fn add_completion_seen_handler(&self, handler: Handler) -> Result<(), Error>
 method	metal2vulkan-runtime::CommandBuffer::add_executed_commands_handler	pub fn add_executed_commands_handler(&self, handler: ExecutedCommandsHandler) -> Result<(), Error>
 method	metal2vulkan-runtime::CommandBuffer::add_scheduled_handler	pub fn add_scheduled_handler(&self, handler: Handler) -> Result<(), Error>
 method	metal2vulkan-runtime::CommandBuffer::add_submission_handler	pub fn add_submission_handler(&self, handler: Handler) -> Result<(), Error>
@@ -11192,6 +11195,7 @@ variant	metal2vulkan-runtime::CopyProblem::SampleCount	SampleCount
 variant	metal2vulkan-runtime::CopyProblem::Size	Size
 variant	metal2vulkan-runtime::CpuCacheMode::DefaultCache	DefaultCache
 variant	metal2vulkan-runtime::CpuCacheMode::WriteCombined	WriteCombined
+variant	metal2vulkan-runtime::DeadlockCause::CompletionSeenHandler	CompletionSeenHandler
 variant	metal2vulkan-runtime::DeadlockCause::Cycle	Cycle
 variant	metal2vulkan-runtime::DeadlockCause::Exiting	Exiting
 variant	metal2vulkan-runtime::DeadlockCause::HandlerThreadCap	HandlerThreadCap

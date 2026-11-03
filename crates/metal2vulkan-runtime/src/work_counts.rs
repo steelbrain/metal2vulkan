@@ -53,6 +53,8 @@ pub(crate) struct Counters {
     trail_waits: AtomicU64,
     trail_waits_blocked: AtomicU64,
     completed_where_seen: AtomicU64,
+    completion_seen_handlers_run: AtomicU64,
+    completion_seen_handlers_where_seen: AtomicU64,
     scheduled_where_submitted: AtomicU64,
     timestamp_slots_taken: AtomicU64,
     timestamp_slots_reset_on_host: AtomicU64,
@@ -824,6 +826,17 @@ impl Counters {
     /// it complete (`CommandBufferShared::finish_here`).
     pub(crate) fn completed_where_seen(&self) {
         self.completed_where_seen.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// A command buffer's completion-seen handler ran, on the thread that saw it complete where
+    /// `where_seen`, else on its queue's handler thread (`CommandBufferShared::complete`).
+    pub(crate) fn completion_seen_handler_ran(&self, where_seen: bool) {
+        self.completion_seen_handlers_run
+            .fetch_add(1, Ordering::Relaxed);
+        if where_seen {
+            self.completion_seen_handlers_where_seen
+                .fetch_add(1, Ordering::Relaxed);
+        }
     }
 
     /// A command buffer's transition to `Scheduled` ran on the scheduler's thread as its last
@@ -3039,6 +3052,14 @@ pub struct WorkCounts {
     /// the program's code or runs on a handler thread then, while the runtime held none of the
     /// program's objects a release drops or runs (`command_buffer/completion.rs`).
     pub completed_where_seen: u64,
+    /// Completion-seen handlers run (`CommandBuffer::add_completion_seen_handler`), each as its
+    /// command buffer's transition to `Completed` or `Error` ran, its status final.
+    pub completion_seen_handlers_run: u64,
+    /// Of those, the ones run on the thread that saw their command buffer complete (a queue's
+    /// waiter), with no handler thread woken: their command buffer had no completed handler, and
+    /// its transition ran there (`completed_where_seen`); the others ran on its queue's handler
+    /// thread.
+    pub completion_seen_handlers_where_seen: u64,
     /// Command buffers whose transition to `Scheduled` ran on the scheduler's thread as their last
     /// batch went, with no handler thread woken: those with no scheduled handler and no
     /// submission handler, whose queue's context held nothing and ran on no thread then
@@ -5142,6 +5163,10 @@ impl Device {
             trail_waits: counters.trail_waits.load(Ordering::Relaxed),
             trail_waits_blocked: counters.trail_waits_blocked.load(Ordering::Relaxed),
             completed_where_seen: counters.completed_where_seen.load(Ordering::Relaxed),
+            completion_seen_handlers_run: (counters.completion_seen_handlers_run)
+                .load(Ordering::Relaxed),
+            completion_seen_handlers_where_seen: (counters.completion_seen_handlers_where_seen)
+                .load(Ordering::Relaxed),
             scheduled_where_submitted: (counters.scheduled_where_submitted).load(Ordering::Relaxed),
             timestamp_slots_taken: counters.timestamp_slots_taken.load(Ordering::Relaxed),
             timestamp_slots_reset_on_host: (counters.timestamp_slots_reset_on_host)

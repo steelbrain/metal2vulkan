@@ -320,6 +320,14 @@ Calls Metal does not have, for a consumer that emulates a Metal device:
 - `CommandBuffer::add_submission_handler` is called when the runtime takes the command buffer's
   last batch for its queue (submits it, or holds it for one kernel submission with later ones);
   `add_executed_commands_handler` each time an execution's indirect records are read.
+- `CommandBuffer::add_completion_seen_handler` is called once the command buffer completed, its
+  status, error and GPU times final, on the runtime's thread that saw it complete (its queue's
+  waiter) where its transition to `Completed` runs there, before its completed handlers and
+  before `wait_until_completed` returns: one with no completed handler then finishes with no
+  handler thread woken. It runs on the queue's handler thread where the transition does (a
+  completed handler, an earlier transition of the queue still there). It must be short and never
+  block; a wait in it for what has not happened is refused
+  (`DeadlockCause::CompletionSeenHandler`).
 - `RenderCommandEncoder::set_color_resolve_target`, `set_depth_resolve_target` and
   `set_stencil_resolve_target` change where a pass resolves until it ends (the last target set
   wins), as Metal's private calls do.

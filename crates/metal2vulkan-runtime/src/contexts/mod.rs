@@ -77,6 +77,13 @@ pub(crate) trait Run: Send + 'static {
     fn plain(&self) -> bool {
         false
     }
+
+    /// Whether the item may run on a runtime thread that saw its command buffer complete: it
+    /// runs none of the program's code but its completion-seen handlers
+    /// (`CommandBuffer::add_completion_seen_handler`). Every plain item does.
+    fn runs_where_seen(&self) -> bool {
+        self.plain()
+    }
 }
 
 /// One device's handler threads. A clone is another handle of the same pool, which holds nothing
@@ -181,15 +188,16 @@ impl<I: Run> Contexts<I> {
     }
 
     /// Run `item` in the context of logical queue `queue` on this thread, after the items that
-    /// context holds, where no thread runs that context and those items and `item` are all
-    /// [`plain`](Run::plain): the context runs on this thread meanwhile, so the items posted to
-    /// it wait for `item`, then run on the pool's threads. Else give `item` back, changing
-    /// nothing.
-    pub(crate) fn run_here(&self, queue: u64, item: I) -> Result<(), I> {
-        if !item.plain() {
+    /// context holds, where no thread runs that context and `may_run` holds for those items and
+    /// `item` ([`plain`](Run::plain), or, on a thread that may run completion-seen handlers,
+    /// [`runs_where_seen`](Run::runs_where_seen)): the context runs on this thread meanwhile, so
+    /// the items posted to it wait for `item`, then run on the pool's threads. Else give `item`
+    /// back, changing nothing.
+    pub(crate) fn run_here(&self, queue: u64, item: I, may_run: fn(&I) -> bool) -> Result<(), I> {
+        if !may_run(&item) {
             return Err(item);
         }
-        let Some(before) = lock(&self.shared.state).lines.take_plain(queue, I::plain) else {
+        let Some(before) = lock(&self.shared.state).lines.take_plain(queue, may_run) else {
             return Err(item);
         };
         for earlier in before {
