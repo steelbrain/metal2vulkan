@@ -65,12 +65,13 @@
 //!   `n` lookups, whatever the encoder made resident before.
 //! - **Generations.** Each change of what a residency holds (a resource made resident, a usage or
 //!   stage widened, a heap used or widened, a live table given or taken) gives it a generation no
-//!   other residency of the process had ([`Residency::generation`]): a compute encoder's dispatch
-//!   that finds the generation, and every other input, its last dispatch settled with takes what
-//!   that one settled (`compute.rs`, `DispatchMemo`), and its residency's share of the bind state
-//!   (the used resources, their shape and the plan's commands) is made once per change. What a
-//!   used resource states besides (a buffer's addresses, an indirect command buffer's hold on
-//!   its ID's slot) changes outside the residency: the memo keys on those apart.
+//!   other residency of the process had ([`Residency::generation`]). An encoder lists its
+//!   residency's share of the bind state (the used resources) again only when the generation, or
+//!   what a used resource states besides (a buffer's addresses, an indirect command buffer's hold
+//!   on its ID's slot), changed since its last draw or dispatch listed it (`live_bind.rs`,
+//!   `compute/live.rs`): so that share is listed once per change, whatever else a command
+//!   changes. A compute dispatch that finds the generation, and every other input, its last
+//!   dispatch settled with takes what that one settled (`compute.rs`, `DispatchMemo`).
 //! - **Stages.** A render encoder makes a resource resident for the render stages it names
 //!   (`useResource:usage:stages:`, `useHeap:stages:`), joined as the usages are: a draw's
 //!   functions reach it in those of their stages alone (the binder's `UsedResource::stages`), and

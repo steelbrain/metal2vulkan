@@ -231,6 +231,9 @@ pub(crate) struct Counters {
     stand_in_copies_made_at_draws: AtomicU64,
     draw_shapes_made: AtomicU64,
     draw_shapes_found: AtomicU64,
+    dispatch_shapes_made: AtomicU64,
+    dispatch_shapes_found: AtomicU64,
+    dispatch_used_resources_listed: AtomicU64,
     argument_samplers_taken: AtomicU64,
     bind_views_worked_out: AtomicU64,
     stage_tables_read: AtomicU64,
@@ -1661,6 +1664,25 @@ impl Counters {
     /// lately (`LiveBind::shape`).
     pub(crate) fn draw_shape_found(&self) {
         self.draw_shapes_found.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// A compute dispatch made the bind shape of its encoder's kept bind state
+    /// (`LiveDispatch::shape`).
+    pub(crate) fn dispatch_shape_made(&self) {
+        self.dispatch_shapes_made.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// A compute dispatch found the bind shape of its encoder's kept bind state among those its
+    /// pipeline state planned for lately (`LiveDispatch::shape`).
+    pub(crate) fn dispatch_shape_found(&self) {
+        self.dispatch_shapes_found.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// A compute dispatch listed what its encoder made resident as its kept bind state's used
+    /// resources (`LiveDispatch::refresh`).
+    pub(crate) fn dispatch_used_resources_listed(&self) {
+        self.dispatch_used_resources_listed
+            .fetch_add(1, Ordering::Relaxed);
     }
 
     /// A draw took the device's live sampler states to list (`sampler::ArgumentSamplers`).
@@ -4179,6 +4201,22 @@ pub struct WorkCounts {
     /// other bind state's shape is its encoder's last draw's (values no shape reads, such as the
     /// depth/stencil state, the stencil references or the blend color, may differ).
     pub draw_shapes_found: u64,
+    /// Bind shapes compute encoders' dispatches made of their encoder's kept bind state
+    /// (`compute/live.rs`): none for a dispatch that took what its encoder's last dispatch settled
+    /// (`dispatches_settled_as_before`), nor for one whose bound slots keep their shapes and whose
+    /// other bind state's shape is its encoder's last dispatch's that settled (an offset moved).
+    pub dispatch_shapes_made: u64,
+    /// Bind shapes compute dispatches found among those their pipeline states planned for lately,
+    /// compared with their bind states in place: none for a dispatch as `dispatch_shapes_made`
+    /// says.
+    pub dispatch_shapes_found: u64,
+    /// Compute dispatches that listed what their encoder made resident as their bind state's used
+    /// resources (`Residency::used_resources`): one at an encoder's first dispatch that settles
+    /// after each change of what it made resident, after a no-copy buffer moved, or after an
+    /// indirect command buffer made resident lost its ID's slot; none for a dispatch whose
+    /// encoder's residency kept its generation since its kept bind state listed them
+    /// (`compute/live.rs`), however many resources it made resident.
+    pub dispatch_used_resources_listed: u64,
     /// Draws (and commands of other encoders that settle as draws do) that took the device's
     /// live sampler states to list as their argument samplers: none for a draw whose kept bind
     /// state lists them at the count of their slots' changes that still holds, whose variant has
@@ -5567,6 +5605,10 @@ impl Device {
                 .load(Ordering::Relaxed),
             draw_shapes_made: counters.draw_shapes_made.load(Ordering::Relaxed),
             draw_shapes_found: counters.draw_shapes_found.load(Ordering::Relaxed),
+            dispatch_shapes_made: counters.dispatch_shapes_made.load(Ordering::Relaxed),
+            dispatch_shapes_found: counters.dispatch_shapes_found.load(Ordering::Relaxed),
+            dispatch_used_resources_listed: (counters.dispatch_used_resources_listed)
+                .load(Ordering::Relaxed),
             argument_samplers_taken: counters.argument_samplers_taken.load(Ordering::Relaxed),
             bind_views_worked_out: counters.bind_views_worked_out.load(Ordering::Relaxed),
             stage_tables_read: counters.stage_tables_read.load(Ordering::Relaxed),

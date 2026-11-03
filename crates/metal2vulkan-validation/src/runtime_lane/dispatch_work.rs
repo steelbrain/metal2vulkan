@@ -414,11 +414,13 @@ struct Planning {
     settled: bool,
 }
 
-/// A dispatch whose bind state has the shape its pipeline state's last direct dispatch planned,
-/// of the same grid, takes that one's variant, plan and made pipelines: one whose buffer's offset
-/// alone moved, and another encoder's first dispatch of the state. A grid or a resource made
-/// resident plans again, and the next dispatch of the new shape takes that. Every dispatch writes
-/// its words. Both ways ([`on_device_both_ways`]).
+/// A dispatch whose bind state has the shape one of its pipeline state's latest direct dispatches
+/// planned, of the same grid, takes that one's variant, plan and made pipelines: one whose buffer's
+/// offset alone moved, and another encoder's first dispatch of the state. A grid or a resource
+/// made resident plans again, and the next dispatch of the new shape takes that; and an encoder of
+/// the first shape again, after one of the other planned, takes what that first shape planned, which
+/// the state keeps beside the other (`pipeline::Planned`), where it kept one alone before. Every
+/// dispatch writes its words. Both ways ([`on_device_both_ways`]).
 #[test]
 fn dispatches_take_what_their_state_planned_for_the_same_shape() {
     on_device_both_ways(|device| {
@@ -427,7 +429,7 @@ fn dispatches_take_what_their_state_planned_for_the_same_shape() {
             .flat_map(u32::to_le_bytes)
             .collect();
         let input = buffer_with(device, &input).unwrap();
-        const WORDS: u64 = 12 * THREADS;
+        const WORDS: u64 = 14 * THREADS;
         let out = buffer_with(device, &vec![0; (4 * WORDS) as usize]).unwrap();
         let queue = device.new_command_queue().unwrap();
         let command_buffer = queue.command_buffer().unwrap();
@@ -466,6 +468,12 @@ fn dispatches_take_what_their_state_planned_for_the_same_shape() {
                 ),
                 step("nothing", 10 * THREADS, 2 * THREADS, (false, true)),
             ],
+            vec![step(
+                "an encoder of the first shape",
+                12 * THREADS,
+                2 * THREADS,
+                (true, false),
+            )],
         ];
         let mut seen = Vec::new();
         for steps in &encoders {
@@ -520,5 +528,91 @@ fn dispatches_take_what_their_state_planned_for_the_same_shape() {
             }
         }
         assert_eq!(words, expected);
+    });
+}
+
+/// The buffers [`dispatches_list_what_their_encoder_made_resident_once_a_change`] makes resident.
+const RESIDENT: usize = 64;
+
+/// A compute encoder's dispatches bring the bind state its last dispatch bound in place: where only
+/// a buffer's offset moved between them, after the encoder made [`RESIDENT`] buffers resident, the
+/// first lists them as its bind state's used resources and finds or makes its shape, and none after
+/// it does either (`WorkCounts::dispatch_used_resources_listed`, `dispatch_shapes_made` and
+/// `dispatch_shapes_found`), each taking what its pipeline state planned for that shape
+/// (`dispatches_planned_as_before`); a buffer made resident lists them again at the next dispatch,
+/// which finds or makes its shape again, and the dispatch after it neither. Every dispatch writes
+/// its words. Both ways ([`on_device_both_ways`]).
+#[test]
+fn dispatches_list_what_their_encoder_made_resident_once_a_change() {
+    const MOVES: u64 = 6;
+    on_device_both_ways(|device| {
+        let kernel = state(device, "a4_index_word", false);
+        let input: Vec<u8> = (0..3 * THREADS as u32).flat_map(u32::to_le_bytes).collect();
+        let input = buffer_with(device, &input).unwrap();
+        let words = THREADS * (MOVES + 2);
+        let out = buffer_with(device, &vec![0; (4 * words) as usize]).unwrap();
+        let resident: Vec<_> = (0..=RESIDENT)
+            .map(|_| buffer_with(device, &[0; 64]).unwrap())
+            .collect();
+        let queue = device.new_command_queue().unwrap();
+        let command_buffer = queue.command_buffer().unwrap();
+        let mut encoder = command_buffer.compute_command_encoder().unwrap();
+        encoder.set_compute_pipeline_state(&kernel).unwrap();
+        encoder.set_buffer(Some(&input), 0, 0).unwrap();
+        let first: Vec<_> = resident[..RESIDENT]
+            .iter()
+            .map(ResourceRef::Buffer)
+            .collect();
+        encoder.use_resources(&first, ResourceUsage::READ).unwrap();
+        // Per dispatch: what it changed, and whether it listed the resources, found or made its
+        // shape, and took what its state planned.
+        let mut seen = Vec::new();
+        for at in 0..MOVES + 2 {
+            let change = match at {
+                0 => "the first",
+                MOVES => "a buffer made resident",
+                _ => "out's offset",
+            };
+            if at == MOVES {
+                let last = ResourceRef::Buffer(&resident[RESIDENT]);
+                encoder.use_resource(last, ResourceUsage::READ).unwrap();
+            }
+            encoder.set_buffer(Some(&out), 4 * THREADS * at, 1).unwrap();
+            let before = device.work_counts();
+            encoder
+                .dispatch_threads(Size::new(THREADS, 1, 1), Size::new(THREADS, 1, 1))
+                .unwrap();
+            let after = device.work_counts();
+            let listed = grew(&before, &after, |c| c.dispatch_used_resources_listed);
+            let shaped = grew(&before, &after, |c| c.dispatch_shapes_made)
+                + grew(&before, &after, |c| c.dispatch_shapes_found);
+            let planned = grew(&before, &after, |c| c.dispatches_planned_as_before);
+            seen.push((change, listed, shaped, planned));
+        }
+        encoder.end_encoding().unwrap();
+        command_buffer.commit().unwrap();
+        command_buffer.wait_until_completed_for(WAIT).unwrap();
+        assert_eq!(command_buffer.status(), CommandBufferStatus::Completed);
+        // The first of each residency lists it and shapes its state; whether it then plans is the
+        // pipeline state's (none of the first shape planned yet; the second's neither).
+        let want: Vec<_> = (0..MOVES + 2)
+            .map(|at| match at {
+                0 => ("the first", 1, 1, 0),
+                MOVES => ("a buffer made resident", 1, 1, 0),
+                _ => ("out's offset", 0, 0, 1),
+            })
+            .collect();
+        assert_eq!(seen, want);
+        let words: Vec<u32> = read_buffer(&out, 0, 4 * words)
+            .unwrap()
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .map(|word| u32::from_le_bytes(*word))
+            .collect();
+        let want: Vec<u32> = (0..MOVES + 2)
+            .flat_map(|_| (0..THREADS as u32).map(|t| 3 * t + 1))
+            .collect();
+        assert_eq!(words, want);
     });
 }

@@ -2582,6 +2582,9 @@ field	metal2vulkan-runtime::WorkCounts.dirty_wait_nanos	pub dirty_wait_nanos: u6
 field	metal2vulkan-runtime::WorkCounts.dirty_waits	pub dirty_waits: u64
 field	metal2vulkan-runtime::WorkCounts.dirty_waits_unanswered	pub dirty_waits_unanswered: u64
 field	metal2vulkan-runtime::WorkCounts.dispatch_pipelines_pooled	pub dispatch_pipelines_pooled: u64
+field	metal2vulkan-runtime::WorkCounts.dispatch_shapes_found	pub dispatch_shapes_found: u64
+field	metal2vulkan-runtime::WorkCounts.dispatch_shapes_made	pub dispatch_shapes_made: u64
+field	metal2vulkan-runtime::WorkCounts.dispatch_used_resources_listed	pub dispatch_used_resources_listed: u64
 field	metal2vulkan-runtime::WorkCounts.dispatches_dropped_still_making	pub dispatches_dropped_still_making: u64
 field	metal2vulkan-runtime::WorkCounts.dispatches_planned_as_before	pub dispatches_planned_as_before: u64
 field	metal2vulkan-runtime::WorkCounts.dispatches_pushing_set_zero	pub dispatches_pushing_set_zero: u64

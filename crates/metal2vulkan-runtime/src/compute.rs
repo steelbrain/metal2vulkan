@@ -13,9 +13,10 @@
 //!    threadgroup memory length that is not a multiple of 16 is taken (the binder rounds every
 //!    length up to 16, as Metal does). `set_imageblock_size` is checked where Metal checks it, at
 //!    the call.
-//! 2. The tables become a `bind::BindState`; the state's memo gives the plan of its shape, on the
-//!    variant the dispatch runs on (compiled when first needed), and `instantiate_dispatch` the
-//!    command's regions, bytes, and push holes.
+//! 2. The tables become a `bind::BindState`, brought in place from the one the encoder's last
+//!    dispatch bound (`compute/live.rs`); the pipeline state's kept plans give the plan of its
+//!    shape, on the variant the dispatch runs on (compiled when first needed), and
+//!    `instantiate_dispatch` the command's regions, bytes, and push holes.
 //! 3. [`binding`](super::binding) gives the descriptors, uploads, and push bytes; the variant
 //!    gives set 0 and one `VkPipeline` per region specialization, and the command buffer set 1,
 //!    the heap, which its dispatches on the variant share ([`heap_sets`](super::heap_sets)).
@@ -97,6 +98,11 @@ use std::ops::Range;
 use std::sync::atomic::AtomicU64;
 use std::sync::{Arc, Mutex, OnceLock};
 
+mod live;
+
+use live::LiveDispatch;
+pub(crate) use live::SpareLiveDispatches;
+
 /// Entries of a compute encoder's threadgroup memory table.
 pub(super) const THREADGROUP_SLOTS: u32 = 31;
 
@@ -176,8 +182,9 @@ pub struct ComputeCommandEncoder {
     /// Its dispatches encoded so far: the next one's order among them, which one whose
     /// pipelines are being made keeps for its failure (`FailedPipeline::draw`).
     dispatches: usize,
-    /// What its last dispatch settled ([`DispatchMemo`]).
-    memo: DispatchMemo,
+    /// Its bind state as its last dispatch that settled bound it, with what that one settled
+    /// (`compute/live.rs`, [`DispatchMemo`]).
+    live: LiveDispatch,
     /// The residency's generation as a command last noted the heaps of what it made resident
     /// (`command_encoded`): no command notes them again before it changes.
     heaps_noted: Option<u64>,
@@ -280,7 +287,8 @@ impl CommandBuffer {
             log: (self.device().shared().rebinds.any())
                 .then(|| self.device().shared().scheduler.spare_logs().compute()),
             dispatches: 0,
-            memo: DispatchMemo::default(),
+            // The bind state the device's last ended compute encoder left (`compute/live.rs`).
+            live: self.device().shared().live_dispatches.take(),
             heaps_noted: None,
         })
     }
@@ -309,7 +317,7 @@ impl ComputeCommandEncoder {
             captures: Captures::default(),
             log: None,
             dispatches: 0,
-            memo: DispatchMemo::default(),
+            live: command_buffer.device().shared().live_dispatches.take(),
             heaps_noted: None,
         })
     }
@@ -321,6 +329,8 @@ impl ComputeCommandEncoder {
         // (`predication.rs`).
         self.end_predication()?;
         self.table.let_go_all(&mut self.core);
+        // Its bind state goes on to the device's next compute encoder (`compute/live.rs`).
+        self.core.device().shared().live_dispatches.give(self.live);
         let replayed = self.core.finish_replay()?;
         Ok((replayed, Some(self.residency)))
     }
@@ -1101,7 +1111,7 @@ impl ComputeCommandEncoder {
                 &tables,
                 call,
                 Counts::Flat(flat),
-                (Some(self.dispatches), None),
+                Some((self.dispatches, &mut self.live)),
             )?
         {
             return Ok(());
@@ -1594,6 +1604,8 @@ impl ComputeCommandEncoder {
         // Its unit of command predication takes what it encoded (`predication.rs`).
         self.end_predication()?;
         self.table.let_go_all(&mut self.core);
+        // Its bind state goes on to the device's next compute encoder (`compute/live.rs`).
+        self.core.device().shared().live_dispatches.give(self.live);
         // Its log, which its command buffer keeps where a rebind may need it (`replay.rs`).
         let replay = self.log.map(|log| Replay::Compute {
             dispatch_type: self.dispatch_type,
@@ -1688,7 +1700,7 @@ impl ComputeCommandEncoder {
             &tables,
             call,
             Counts::Direct(dispatch),
-            (Some(self.dispatches), Some(&mut self.memo)),
+            Some((self.dispatches, &mut self.live)),
         )
         .map(drop)
     }
@@ -1784,7 +1796,7 @@ pub(super) fn record_dispatch(
     call: &'static str,
     dispatch: Dispatch,
 ) -> Result<(), Error> {
-    record(core, tables, call, Counts::Direct(dispatch), (None, None)).map(drop)
+    record(core, tables, call, Counts::Direct(dispatch), None).map(drop)
 }
 
 /// Where a recorded dispatch's group counts come from.
@@ -1881,36 +1893,37 @@ fn apart_samplers(device: &Device, objects: &VariantObjects) -> bool {
             .contains(&RuntimeDriverDefect::ImmutableSamplersLostAfterCopies)
 }
 
-/// What a dispatch settles before it binds ([`settle_dispatch`]): the device's sampler states it
-/// lists (less those at IDs no set-1 sampler array of the variant holds, `unlisted` saying so:
-/// `heap_sets::fit_samplers`), the visible-function tables its state made, its runtime samplers'
-/// address-mode maps, its bind state, and what it planned: the state's shape, and the variant it
-/// runs on with its plan, for `planned.dispatch`.
+/// What a dispatch settles before it binds ([`settle_dispatch`], [`settle_live`]): the device's
+/// sampler states it lists (less those at IDs no set-1 sampler array of the variant holds,
+/// `unlisted` saying so: `heap_sets::fit_samplers`), the visible-function tables its state made,
+/// its runtime samplers' address-mode maps, and what it planned: the state's shape, and the variant
+/// it runs on with its plan, for `planned.dispatch`. Its bind state is apart: the encoder's kept one
+/// (`compute/live.rs`), or one of its own.
 pub(super) struct SettledDispatch {
     argument_samplers: Vec<SamplerState>,
     function_tables: Vec<VisibleFunctionTable>,
     unlisted: Option<(u64, u64)>,
     sampler_maps: SamplerMaps,
-    state: BindState,
     planned: Arc<Planned>,
 }
 
 /// A flat indirect call and its preprocess's description (`indirect_dispatch.rs`).
 type Flat<'a> = Option<(FlatCall<'a>, FlatIndirect)>;
 
-/// What a dispatch of `tables`, of `direct` group counts or of a flat indirect call (`gpu`),
-/// settles ([`SettledDispatch`]) with `function_tables`, its state's, and `samplers`, the
-/// device's sampler states: the flat call's preprocess description beside it, and `None` where
+/// What a dispatch of `tables` that keeps no bind state (an indirect command's, a host step's),
+/// of `direct` group counts or of a flat indirect call (`gpu`), settles ([`SettledDispatch`])
+/// with `function_tables`, its state's, and `samplers`, the device's sampler states, and the bind
+/// state it settled, made whole: the flat call's preprocess description beside it, and `None` where
 /// the GPU path does not take an indirect dispatch (`indirect_dispatch.rs`). A direct dispatch
-/// whose bind state has the shape the state's last direct dispatch planned, of the same dispatch
-/// and buffer forms, takes what that one planned ([`Planned`]); one that plans keeps what it
-/// planned for the next.
+/// whose bind state has the shape one its pipeline state planned lately for the same dispatch and
+/// buffer forms, compared in place (`ComputePipelineState::planned_of`), takes what that one
+/// planned ([`Planned`]); one that plans keeps what it planned for the next.
 fn settle_dispatch<'a>(
     tables: &DispatchTables<'_>,
     (direct, gpu): (Option<Dispatch>, Option<FlatCall<'a>>),
     function_tables: Vec<VisibleFunctionTable>,
     samplers: Vec<SamplerState>,
-) -> Result<Option<(SettledDispatch, Flat<'a>)>, Error> {
+) -> Result<Option<(BindState, SettledDispatch, Flat<'a>)>, Error> {
     let pipeline = tables.pipeline;
     // The device's sampler states, less those at IDs no set-1 sampler array of the variant
     // holds (each array has the variant's heap capacity of elements): a degradation where
@@ -1919,79 +1932,153 @@ fn settle_dispatch<'a>(
     let mut unlisted = None;
     // Its runtime samplers' address modes as the textures they sample map them.
     let sampler_maps = tables.sampler_maps()?;
-    let last = match direct {
-        Some(dispatch) => pipeline
-            .planned()
-            .filter(|last| last.dispatch == dispatch && last.forms == tables.forms),
-        None => None,
-    };
     let (state, planned, as_before, flat) = loop {
         let mut state = tables.bind_state(&argument_samplers, &function_tables);
         sampler_maps.apply(&mut state);
-        let last = last.as_ref().filter(|last| state.has_shape(&last.shape));
-        let (planned, as_before, flat) = match (last, direct, gpu) {
-            (Some(last), ..) => (Arc::clone(last), true, None),
-            (None, Some(dispatch), _) => {
-                let shape = state.shape();
-                let flat = flat_direct(pipeline, &shape, &dispatch, tables.forms)?;
-                let (variant, plan) = match flat {
-                    Some(flat) => flat,
-                    None => pipeline.settle(&shape, &dispatch, tables.forms)?,
-                };
-                let planned = Planned {
-                    shape: Arc::new(shape),
-                    dispatch,
-                    forms: tables.forms,
-                    variant,
-                    plan,
-                    made: OnceLock::new(),
-                };
-                (Arc::new(planned), false, None)
+        let last = direct.and_then(|dispatch| pipeline.planned_of(&state, &dispatch, tables.forms));
+        let (planned, as_before, flat) = match last {
+            Some(last) => (last, true, None),
+            None => {
+                let shape = Arc::new(state.shape());
+                match plan_now(pipeline, tables.forms, shape, (direct, gpu))? {
+                    Some((planned, flat)) => (planned, false, flat),
+                    None => return Ok(None),
+                }
             }
-            (None, None, Some(gpu)) => {
-                let shape = state.shape();
-                let Some((variant, plan, indirect)) = settle_indirect(pipeline, gpu, &shape)?
-                else {
-                    return Ok(None);
-                };
-                let planned = Planned {
-                    shape: Arc::new(shape),
-                    dispatch: flat_dispatch(indirect.threads_per_threadgroup),
-                    forms: tables.forms,
-                    variant,
-                    plan,
-                    made: OnceLock::new(),
-                };
-                (Arc::new(planned), false, Some((gpu, indirect)))
-            }
-            (None, None, None) => return Err(internal("a dispatch of no counts")),
         };
         let set = planned.variant.pipeline().layout.sets.get(1);
         if heap_sets::fit_samplers(set, &mut argument_samplers, &mut unlisted) {
             break (state, planned, as_before, flat);
         }
     };
-    match (as_before, direct) {
-        (true, _) => (pipeline.device().shared().counts).dispatch_planned_as_before(),
-        // A flat dispatch's variant and plan are the flat path's: none a direct one takes.
-        (false, Some(_)) => pipeline.keep_planned(Arc::clone(&planned)),
-        (false, None) => {}
-    }
+    planned_as_before(pipeline, &planned, as_before, direct);
     let settled = SettledDispatch {
         argument_samplers,
         function_tables,
         unlisted,
         sampler_maps,
-        state,
+        planned,
+    };
+    Ok(Some((state, settled, flat)))
+}
+
+/// [`settle_dispatch`] of a compute encoder's own dispatch, through the encoder's kept bind state
+/// `live`, brought in place (`LiveDispatch::refresh`), with `samplers`, the device's sampler
+/// states at `changed` changes of their slots: the state's shape kept where nothing brought in may
+/// have changed it, else found among those the pipeline state planned for lately or made
+/// (`LiveDispatch::shape`), and what it planned for that shape, the very one looked for first
+/// (`ComputePipelineState::planned_for`).
+fn settle_live<'a>(
+    live: &mut LiveDispatch,
+    tables: &DispatchTables<'_>,
+    (direct, gpu): (Option<Dispatch>, Option<FlatCall<'a>>),
+    function_tables: Vec<VisibleFunctionTable>,
+    (changed, samplers): (u64, Vec<SamplerState>),
+) -> Result<Option<(SettledDispatch, Flat<'a>)>, Error> {
+    let pipeline = tables.pipeline;
+    let counts = &pipeline.device().shared().counts;
+    let mut argument_samplers = samplers;
+    let mut unlisted = None;
+    let sampler_maps = tables.sampler_maps()?;
+    // Whether the states were trimmed to those a variant's set-1 sampler arrays hold.
+    let mut trimmed = false;
+    let (planned, as_before, flat) = loop {
+        let listing = (changed, &argument_samplers[..], trimmed);
+        live.refresh(tables, &sampler_maps, listing, &function_tables, counts);
+        let shape = live.shape(counts, |state| pipeline.planned_shape(state));
+        let last =
+            direct.and_then(|dispatch| pipeline.planned_for(&shape, &dispatch, tables.forms));
+        let (planned, as_before, flat) = match last {
+            Some(last) => (last, true, None),
+            None => match plan_now(pipeline, tables.forms, shape, (direct, gpu))? {
+                Some((planned, flat)) => (planned, false, flat),
+                None => return Ok(None),
+            },
+        };
+        let set = planned.variant.pipeline().layout.sets.get(1);
+        if heap_sets::fit_samplers(set, &mut argument_samplers, &mut unlisted) {
+            break (planned, as_before, flat);
+        }
+        trimmed = true;
+    };
+    planned_as_before(pipeline, &planned, as_before, direct);
+    let settled = SettledDispatch {
+        argument_samplers,
+        function_tables,
+        unlisted,
+        sampler_maps,
         planned,
     };
     Ok(Some((settled, flat)))
 }
 
-/// What a compute encoder's last dispatch settled ([`SettledDispatch`]), its commands, and the
-/// `VkPipeline`s its regions found made, kept with what they are a function of: a later dispatch
-/// of the encoder of the same inputs settles, plans and instantiates nothing again, and looks no
-/// pipeline up (`WorkCounts::dispatches_settled_as_before`). Exact:
+/// What a dispatch of a bind state of `shape` in `forms` plans now, of `direct` group counts or of
+/// a flat indirect call (`gpu`): the direct dispatch's flat variant where it takes one, else
+/// `ComputePipelineState::settle`'s; the indirect one's flat or folded variant, with its preprocess
+/// description, or `None` where neither takes it, which then takes its host step.
+fn plan_now<'a>(
+    pipeline: &ComputePipelineState,
+    forms: BufferForms,
+    shape: Arc<BindShape>,
+    (direct, gpu): (Option<Dispatch>, Option<FlatCall<'a>>),
+) -> Result<Option<(Arc<Planned>, Flat<'a>)>, Error> {
+    match (direct, gpu) {
+        (Some(dispatch), _) => {
+            let flat = flat_direct(pipeline, &shape, &dispatch, forms)?;
+            let (variant, plan) = match flat {
+                Some(flat) => flat,
+                None => pipeline.settle(&shape, &dispatch, forms)?,
+            };
+            let planned = Planned {
+                shape,
+                dispatch,
+                forms,
+                variant,
+                plan,
+                made: OnceLock::new(),
+            };
+            Ok(Some((Arc::new(planned), None)))
+        }
+        (None, Some(gpu)) => {
+            let Some((variant, plan, indirect)) = settle_indirect(pipeline, gpu, &shape)? else {
+                return Ok(None);
+            };
+            let planned = Planned {
+                shape,
+                dispatch: flat_dispatch(indirect.threads_per_threadgroup),
+                forms,
+                variant,
+                plan,
+                made: OnceLock::new(),
+            };
+            Ok(Some((Arc::new(planned), Some((gpu, indirect)))))
+        }
+        (None, None) => Err(internal("a dispatch of no counts")),
+    }
+}
+
+/// Count a direct dispatch that took what its pipeline state planned before (`as_before`), or
+/// keep what one planned now for the next; a flat dispatch's variant and plan are the flat path's,
+/// none a direct one takes.
+fn planned_as_before(
+    pipeline: &ComputePipelineState,
+    planned: &Arc<Planned>,
+    as_before: bool,
+    direct: Option<Dispatch>,
+) {
+    match (as_before, direct) {
+        (true, _) => (pipeline.device().shared().counts).dispatch_planned_as_before(),
+        (false, Some(_)) => pipeline.keep_planned(Arc::clone(planned)),
+        (false, None) => {}
+    }
+}
+
+/// What a compute encoder's last dispatch that settled settled ([`SettledDispatch`]), its
+/// commands, and the `VkPipeline`s its regions found made, kept with what they are a function of
+/// beside the encoder's kept bind state, which that dispatch brought in place and binds
+/// (`compute/live.rs`): a later dispatch of the encoder of the same inputs settles, plans and
+/// instantiates nothing again, brings no state in place and looks no pipeline up
+/// (`WorkCounts::dispatches_settled_as_before`). Exact:
 ///
 /// - **The bind state** is a function of the pipeline state (its interface, view base alignment
 ///   and imageblock among it), of what the table binds (its stamp: every call that may change it
@@ -2005,18 +2092,19 @@ fn settle_dispatch<'a>(
 ///   buffer made later with the ID takes: `Residency::holds_slots_as`), of the device's live
 ///   sampler states (`Device::sampler_slots_changed`), of the state's visible-function tables
 ///   (none: a dispatch of a state that made one takes no memo), and of the sampler maps, which
-///   are the table's and the residency's.
+///   are the table's and the residency's. The kept state is this entry's: a dispatch that brings
+///   it in place keeps its own entry or none (`LiveDispatch::let_go`).
 /// - **The variant and plan** are `ComputePipelineState::settle`'s of the shape, the dispatch and
 ///   the buffer forms; **the commands** are the plan's instantiation for the state and the
 ///   dispatch, their regions keyed by the variant for the device (`Variant::keyed_regions`).
 /// - **A region's `VkPipeline`** found made is its variant's for the region's key, which its
 ///   making never changes; regions not all made are looked up again at the next dispatch.
 /// - **A dispatch that settles again** (another table, another residency) takes the variant, the
-///   plan and the made `VkPipeline`s of the state's last direct dispatch that planned where its
-///   bind state has that one's shape ([`Planned`], [`settle_dispatch`]): so does one whose
-///   buffers' offsets alone moved, and an encoder's first dispatch of the state.
+///   plan and the made `VkPipeline`s of one of its pipeline state's latest direct dispatches that
+///   planned, where its bind state has that one's shape ([`Planned`], [`settle_live`]): so does one
+///   whose buffers' offsets alone moved, and an encoder's first dispatch of the state.
 #[derive(Default)]
-pub(super) struct DispatchMemo(Option<Arc<KeptDispatch>>);
+pub(super) struct DispatchMemo(Option<KeptDispatch>);
 
 /// A [`DispatchMemo`]'s entry and what it was settled under.
 pub(super) struct KeptDispatch {
@@ -2038,37 +2126,33 @@ pub(super) struct KeptDispatch {
 }
 
 impl DispatchMemo {
-    /// The entry, where it is of a dispatch of `tables` and `dispatch` at `counted` moves and
-    /// sampler slot changes.
-    fn find(
+    /// Whether the entry is of a dispatch of `tables` and `dispatch` at `counted` moves and
+    /// sampler slot changes, `state` the kept bind state it settled.
+    fn holds(
         &self,
+        state: &BindState,
         tables: &DispatchTables<'_>,
         dispatch: &Dispatch,
         counted: (u64, u64),
-    ) -> Option<Arc<KeptDispatch>> {
-        let kept = self.0.as_ref()?;
-        let same = kept.pipeline == *tables.pipeline
-            && kept.stamp == tables.table.stamp()
-            && kept.settled.planned.dispatch == *dispatch
-            && kept.counted == counted
-            && kept.forms == tables.forms
-            && kept.imageblock == tables.imageblock
-            && kept.stage_in_region == tables.stage_in_region
-            && kept.threadgroup_lengths == *tables.threadgroup_lengths
-            && kept.residency == tables.residency.generation()
-            && (tables.residency).holds_slots_as(&kept.settled.state.used_resources);
-        same.then(|| Arc::clone(kept))
+    ) -> bool {
+        self.0.as_ref().is_some_and(|kept| {
+            kept.pipeline == *tables.pipeline
+                && kept.stamp == tables.table.stamp()
+                && kept.settled.planned.dispatch == *dispatch
+                && kept.counted == counted
+                && kept.forms == tables.forms
+                && kept.imageblock == tables.imageblock
+                && kept.stage_in_region == tables.stage_in_region
+                && kept.threadgroup_lengths == *tables.threadgroup_lengths
+                && kept.residency == tables.residency.generation()
+                && (tables.residency).holds_slots_as(&state.used_resources)
+        })
     }
 
     /// Keep `settled`, a dispatch of `tables` at `counted` moves and sampler slot changes, in
     /// place of the entry.
-    fn keep(
-        &mut self,
-        tables: &DispatchTables<'_>,
-        counted: (u64, u64),
-        settled: SettledDispatch,
-    ) -> Arc<KeptDispatch> {
-        let kept = Arc::new(KeptDispatch {
+    fn keep(&mut self, tables: &DispatchTables<'_>, counted: (u64, u64), settled: SettledDispatch) {
+        self.0 = Some(KeptDispatch {
             pipeline: tables.pipeline.clone(),
             stamp: tables.table.stamp(),
             threadgroup_lengths: tables.threadgroup_lengths.clone(),
@@ -2081,25 +2165,30 @@ impl DispatchMemo {
             commands: OnceLock::new(),
             made: OnceLock::new(),
         });
-        self.0 = Some(Arc::clone(&kept));
-        kept
+    }
+
+    /// The entry, where one is kept.
+    fn entry(&self) -> Option<&KeptDispatch> {
+        self.0.as_ref()
     }
 }
 
 /// Plan, bind, and record the dispatch of `counts` with `tables` into `core` (the module's steps
 /// 2 to 4), for Metal's `call`: `Ok(false)`, recording nothing, where the GPU path does not take
 /// an indirect dispatch (`indirect_dispatch.rs`); a direct one is always recorded or refused.
-/// An encoder's own dispatch (`own`, its order among the encoder's dispatches) inside a block of
-/// command predication runs from the gates its unit's step writes (`predication.rs`), and takes
-/// what its last dispatch settled where it has the same inputs (`memo`, [`DispatchMemo`]). And
-/// one whose `VkPipeline`s are not made yet hands their making to the device's pool and records
-/// later (`pending_dispatch.rs`): an execution's or a host step's dispatch waits for them.
+/// An encoder's own dispatch (`own`: its order among the encoder's dispatches, and the encoder's
+/// kept bind state) inside a block of command predication runs from the gates its unit's step
+/// writes (`predication.rs`), binds the kept state brought in place (`compute/live.rs`), and a
+/// direct one takes what its last dispatch settled where it has the same inputs
+/// ([`DispatchMemo`]). And one whose `VkPipeline`s are not made yet hands their making to the
+/// device's pool and records later (`pending_dispatch.rs`): an execution's or a host step's
+/// dispatch waits for them.
 fn record(
     core: &mut EncoderCore,
     tables: &DispatchTables<'_>,
     call: &'static str,
     counts: Counts<'_>,
-    (own, memo): (Option<usize>, Option<&mut DispatchMemo>),
+    own: Option<(usize, &mut LiveDispatch)>,
 ) -> Result<bool, Error> {
     let pipeline = tables.pipeline;
     let (direct, gpu) = match counts {
@@ -2109,57 +2198,75 @@ fn record(
     // The live visible-function tables the pipeline state made: the encoder's, or an indirect
     // command's own state's.
     let function_tables = pipeline.function_tables();
-    // An encoder's own direct dispatch, of a state that made no table, takes the memo.
-    let memo = match (memo, direct) {
-        (Some(memo), Some(dispatch)) if function_tables.is_empty() => Some((memo, dispatch)),
-        _ => None,
+    let (own, mut live) = match own {
+        Some((own, live)) => (Some(own), Some(live)),
+        None => (None, None),
     };
-    let mut fresh = None;
+    // What a dispatch that takes no memo entry settled, and the bind state one that keeps none
+    // made.
+    let mut settled_here = None;
+    let mut state_here = None;
     let mut flat = None;
-    let kept = match memo {
-        Some((memo, dispatch)) => {
+    match live.as_deref_mut() {
+        Some(live) => {
+            // A direct dispatch, of a state that made no table, takes the memo.
+            let memo = direct.filter(|_| function_tables.is_empty());
             let moved = super::buffer::host_cells_moved();
-            let counted = (moved, core.device().sampler_slots_changed());
-            match memo.find(tables, &dispatch, counted) {
-                Some(kept) => {
-                    core.device().shared().counts.dispatch_settled_as_before();
-                    Some(kept)
-                }
-                None => {
-                    // The sampler states, with the count of changes they are live at.
-                    let (changed, samplers) = core.device().argument_samplers_at();
-                    let settled =
-                        settle_dispatch(tables, (direct, None), function_tables, samplers)?;
-                    let Some((settled, _)) = settled else {
-                        return Err(internal("a direct dispatch the GPU path does not take"));
-                    };
-                    Some(memo.keep(tables, (moved, changed), settled))
+            let held = memo.is_some_and(|dispatch| {
+                let counted = (moved, core.device().sampler_slots_changed());
+                live.memo.holds(&live.state, tables, &dispatch, counted)
+            });
+            if held {
+                core.device().shared().counts.dispatch_settled_as_before();
+            } else {
+                // The sampler states, with the count of changes they are live at.
+                let (changed, samplers) = core.device().argument_samplers_at();
+                let settling = (changed, samplers);
+                let settled = settle_live(live, tables, (direct, gpu), function_tables, settling);
+                // The kept state is no longer what the memo's entry settled.
+                let Some((settled, flat_call)) = settled.inspect_err(|_| live.let_go())? else {
+                    live.let_go();
+                    return Ok(false);
+                };
+                match memo {
+                    Some(_) => live.memo.keep(tables, (moved, changed), settled),
+                    None => {
+                        live.let_go();
+                        settled_here = Some(settled);
+                        flat = flat_call;
+                    }
                 }
             }
         }
         None => {
             let samplers = core.device().argument_samplers();
-            let Some((settled, flat_call)) =
+            let Some((state, settled, flat_call)) =
                 settle_dispatch(tables, (direct, gpu), function_tables, samplers)?
             else {
                 return Ok(false);
             };
-            fresh = Some(settled);
+            state_here = Some(state);
+            settled_here = Some(settled);
             flat = flat_call;
-            None
         }
-    };
-    let settled = match (&kept, &fresh) {
+    }
+    let live = live.as_deref();
+    let kept = live.and_then(|live| live.memo.entry());
+    let settled = match (kept, &settled_here) {
         (Some(kept), _) => &kept.settled,
-        (None, Some(fresh)) => fresh,
+        (None, Some(settled)) => settled,
         (None, None) => return Err(internal("a dispatch settled nowhere")),
+    };
+    let state = match (&state_here, live) {
+        (Some(state), _) => state,
+        (None, Some(live)) => &live.state,
+        (None, None) => return Err(internal("a dispatch's bind state nowhere")),
     };
     let SettledDispatch {
         argument_samplers,
         function_tables,
         unlisted,
         sampler_maps,
-        state,
         planned,
     } = settled;
     let Planned {
@@ -2183,14 +2290,14 @@ fn record(
     // The commands, their regions keyed (`Variant::keyed_regions`): those the memo's entry holds,
     // where it holds them.
     let mut instantiated = None;
-    let commands = match kept.as_ref().and_then(|kept| kept.commands.get()) {
+    let commands = match kept.and_then(|kept| kept.commands.get()) {
         Some(commands) => commands,
         None => {
             let mut commands = plan
                 .instantiate_dispatch(state, &dispatch)
                 .map_err(Error::Bind)?;
             variant.keyed_regions(core.device(), &mut commands);
-            match &kept {
+            match kept {
                 Some(kept) => kept.commands.get_or_init(|| commands),
                 None => &*instantiated.insert(commands),
             }
@@ -2380,7 +2487,7 @@ fn record(
     // bakes them records in one of its own, as one being made does.
     // Those the memo's entry holds, else those found made for what the dispatch planned, of its
     // regions' keys ([`Planned`]).
-    let kept_made = (kept.as_ref())
+    let kept_made = kept
         .and_then(|kept| kept.made.get())
         .or_else(|| planned.made_for(commands))
         .filter(|_| !apart_samplers(&device, &objects));
@@ -2391,7 +2498,7 @@ fn record(
     let waits = laying && !apart_samplers(&device, &objects);
     let (pipelines, pending) = match (own.filter(|_| !waits), kept_made) {
         (Some(_), Some(made)) => {
-            if let Some(kept) = &kept {
+            if let Some(kept) = kept {
                 drop(kept.made.set(made.clone()));
             }
             (made.clone(), None)
@@ -2416,7 +2523,7 @@ fn record(
                 Some(made) if !apart_samplers(&device, &objects) => {
                     // Kept with the entry, which the next dispatch of its inputs takes, and with
                     // what it planned, which the next dispatch of its shape takes.
-                    if let Some(kept) = &kept {
+                    if let Some(kept) = kept {
                         drop(kept.made.set(made.clone()));
                     }
                     // Not a key's residual form, which serves only while its own is made.

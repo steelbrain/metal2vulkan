@@ -121,6 +121,12 @@ impl Reshape {
         self.0 = true;
     }
 
+    /// Whether a change it was told of may have changed the shape: a compute encoder's kept state
+    /// then finds its shape again (`compute/live.rs`).
+    pub(super) fn may_reshape(self) -> bool {
+        self.0
+    }
+
     /// Store `value` in `field`, a field of the kept state beside its stage tables: any change
     /// may change the shape.
     pub(super) fn field<T: PartialEq>(&mut self, field: &mut T, value: T) {

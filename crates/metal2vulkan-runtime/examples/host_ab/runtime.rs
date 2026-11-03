@@ -1719,6 +1719,12 @@ impl Gpu for Runtime {
             ),
             ("draw_shapes_made", c.draw_shapes_made),
             ("draw_shapes_found", c.draw_shapes_found),
+            ("dispatch_shapes_made", c.dispatch_shapes_made),
+            ("dispatch_shapes_found", c.dispatch_shapes_found),
+            (
+                "dispatch_used_resources_listed",
+                c.dispatch_used_resources_listed,
+            ),
             ("argument_samplers_taken", c.argument_samplers_taken),
             ("bind_views_worked_out", c.bind_views_worked_out),
             ("stage_tables_read", c.stage_tables_read),

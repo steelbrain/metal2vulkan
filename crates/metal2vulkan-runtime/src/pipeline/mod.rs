@@ -122,7 +122,7 @@ use crate::resource_ids::{
 use crate::unique_identifier::UniqueIdentifier;
 use memo::{Lru, Remembered};
 use metal2vulkan::bind::{
-    BindShape, BindingPlan, Dispatch, DispatchCommands, DispatchRegion, IndirectRef,
+    BindShape, BindState, BindingPlan, Dispatch, DispatchCommands, DispatchRegion, IndirectRef,
 };
 use metal2vulkan::cache::{SpecializationKey, VariantKey};
 use metal2vulkan::error::{Feature, Needs, RuntimeInput};
@@ -134,7 +134,7 @@ use metal2vulkan::pipeline::{
 };
 use metal2vulkan::reflection::ComputePipelineReflection;
 use sources::Sources;
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, HashSet, VecDeque};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock, Weak};
 
@@ -198,6 +198,10 @@ const PLANS: usize = 64;
 const PIPELINES: usize = 32;
 /// The most variants besides the first a state keeps.
 const VARIANTS: usize = 8;
+/// The most plans a state keeps of its latest direct dispatches that planned ([`Planned`]): a
+/// dispatch of a shape a later one did not push out takes its plan, so encoders of the state whose
+/// bind states have shapes of their own (other resources made resident) each keep theirs.
+const PLANNED: usize = 4;
 
 /// A Metal compute pipeline state (`MTLComputePipelineState`). Cheap to clone (a retain); `Send +
 /// Sync`.
@@ -212,6 +216,12 @@ impl WeakComputePipelineState {
     /// The state, while the program holds it.
     pub(crate) fn upgrade(&self) -> Option<ComputePipelineState> {
         self.0.upgrade().map(ComputePipelineState)
+    }
+
+    /// Whether it names `state`: the very state, not one alike. While it is held, no other state
+    /// lies where it lay, even once the program let it go.
+    pub(crate) fn names(&self, state: &ComputePipelineState) -> bool {
+        std::ptr::eq(Weak::as_ptr(&self.0), Arc::as_ptr(&state.0))
     }
 }
 
@@ -319,8 +329,9 @@ pub(super) struct Program {
     /// Its buffer slots whose bind offset class tells the device's view base alignment apart
     /// (`argument_table::AtBindViews`), of its base's interface.
     at_bind_views: AtBindViews,
-    /// What its last direct dispatch that planned planned ([`Planned`]).
-    planned: Mutex<Option<Arc<Planned>>>,
+    /// What its latest direct dispatches that planned planned ([`Planned`]), the latest used
+    /// first, [`PLANNED`] at most.
+    planned: Mutex<VecDeque<Arc<Planned>>>,
 }
 
 /// What a direct dispatch of a compute state planned (`compute::settle_dispatch`): the variant
@@ -328,7 +339,8 @@ pub(super) struct Program {
 /// [`ComputePipelineState::settle`] answers them, a function of those three alone; and the
 /// `VkPipeline`s of its regions of those keys, where all were found made. A later dispatch of the
 /// same dispatch and forms whose bind state has the shape takes them, from any encoder, rather
-/// than settling them again (`WorkCounts::dispatches_planned_as_before`).
+/// than settling them again (`WorkCounts::dispatches_planned_as_before`), while the state keeps
+/// them among its latest [`PLANNED`] ([`ComputePipelineState::planned_for`]).
 pub(crate) struct Planned {
     pub(crate) shape: Arc<BindShape>,
     pub(crate) dispatch: Dispatch,
@@ -338,6 +350,13 @@ pub(crate) struct Planned {
     /// Each region's key and its made `VkPipeline`, where all were found made, each its key's own
     /// (none a residual form's, `dispatch_making.rs`).
     pub(crate) made: OnceLock<(Vec<RegionKey>, Vec<Arc<RawPipeline>>)>,
+}
+
+/// The entry at `at` of a state's kept plans ([`Planned`]), moved first as the one used last.
+fn used(planned: &mut VecDeque<Arc<Planned>>, at: usize) -> Arc<Planned> {
+    let entry = planned.remove(at).expect("a kept plan's position");
+    planned.push_front(Arc::clone(&entry));
+    entry
 }
 
 impl Planned {
@@ -850,7 +869,7 @@ impl ComputePipelineState {
                 label: options.label.clone(),
                 pieces,
                 at_bind_views,
-                planned: Mutex::new(None),
+                planned: Mutex::new(VecDeque::with_capacity(PLANNED)),
             };
             StateShared {
                 id,
@@ -1289,14 +1308,63 @@ impl ComputePipelineState {
         ComputeProgram(Arc::clone(&self.0.program))
     }
 
-    /// What its last direct dispatch that planned planned ([`Planned`]).
-    pub(super) fn planned(&self) -> Option<Arc<Planned>> {
-        lock(&self.0.planned).clone()
+    /// The shape of `state` among those of what its latest direct dispatches planned
+    /// ([`Planned`]), compared with the state in place (`BindState::position_of_shape`, which makes
+    /// the shape of the resources it lists at most once for all of them): what a dispatch of
+    /// `state` plans for where it has one, found without its shape made (`compute/live.rs`).
+    pub(super) fn planned_shape(&self, state: &BindState) -> Option<Arc<BindShape>> {
+        let planned = lock(&self.0.planned);
+        let at = state.position_of_shape(planned.iter().map(|planned| &*planned.shape))?;
+        Some(Arc::clone(&planned[at].shape))
     }
 
-    /// Keep `planned`, a direct dispatch's, in place of what the last planned.
+    /// What its latest direct dispatches planned for a dispatch of `dispatch` in `forms` of a bind
+    /// state of shape `shape` ([`Planned`]): the very shape looked for first (its encoder's kept
+    /// one, `compute/live.rs`, or one [`planned_shape`](Self::planned_shape) found here), else an
+    /// equal one compared whole. Used now, so it is the last to go.
+    pub(super) fn planned_for(
+        &self,
+        shape: &Arc<BindShape>,
+        dispatch: &Dispatch,
+        forms: BufferForms,
+    ) -> Option<Arc<Planned>> {
+        let mut planned = lock(&self.0.planned);
+        let of = |p: &Arc<Planned>| p.dispatch == *dispatch && p.forms == forms;
+        let at = (planned.iter())
+            .position(|p| of(p) && Arc::ptr_eq(&p.shape, shape))
+            .or_else(|| (planned.iter()).position(|p| of(p) && p.shape == *shape))?;
+        Some(used(&mut planned, at))
+    }
+
+    /// What its latest direct dispatches planned for a dispatch of `dispatch` in `forms` of
+    /// `state`, compared with the state in place ([`planned_shape`](Self::planned_shape)), for a
+    /// dispatch that keeps no state of its own (an indirect command's, a host step's). Used now, so
+    /// it is the last to go.
+    pub(super) fn planned_of(
+        &self,
+        state: &BindState,
+        dispatch: &Dispatch,
+        forms: BufferForms,
+    ) -> Option<Arc<Planned>> {
+        let mut planned = lock(&self.0.planned);
+        let of = (planned.iter()).filter(|p| p.dispatch == *dispatch && p.forms == forms);
+        let found = state.position_of_shape(of.map(|p| &*p.shape))?;
+        let at = (planned.iter())
+            .enumerate()
+            .filter(|(_, p)| p.dispatch == *dispatch && p.forms == forms)
+            .nth(found)
+            .map(|(at, _)| at)?;
+        Some(used(&mut planned, at))
+    }
+
+    /// Keep `planned`, a direct dispatch's, first among what its latest direct dispatches planned,
+    /// in place of the one used least lately where [`PLANNED`] are kept.
     pub(super) fn keep_planned(&self, planned: Arc<Planned>) {
-        *lock(&self.0.planned) = Some(planned);
+        let mut kept = lock(&self.0.planned);
+        if kept.len() == PLANNED {
+            kept.pop_back();
+        }
+        kept.push_front(planned);
     }
 
     /// The variant `dispatch` of a bind state of `shape` runs on in `forms`, and its plan for
