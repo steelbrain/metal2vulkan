@@ -1,7 +1,9 @@
 //! Constant folding for SCCP.
 //!
 //! Folds exactly what the spec lists: integer arithmetic and comparisons, `fcmp` on constants
-//! (exact IEEE comparison of the stored values), casts among integers, same-width bit casts, int to
+//! (exact IEEE comparison of the stored values, a NaN by the predicate's order; never of a
+//! subnormal operand, which a device that flushes subnormals compares as zero), casts among
+//! integers, same-width bit casts, int to
 //! pointer of zero and pointer to int of null, `freeze` of a constant, and element and member
 //! access on constant vectors and aggregates. SCCP does **no float arithmetic folding**: the
 //! device's denormal and fast-math behavior is the lowering's contract. Anything else, and any
@@ -441,7 +443,9 @@ impl Folder<'_> {
         self.mk(ty, Const::Float(bits), m).map(Some)
     }
 
-    /// `fcmp pred a, b` over scalar floats: an exact IEEE comparison, typed `ty` (`i1`).
+    /// `fcmp pred a, b` over scalar floats: an exact IEEE comparison, typed `ty` (`i1`). A NaN
+    /// operand answers by the predicate's order. A subnormal operand is `None`: a device that
+    /// flushes subnormals compares it as a zero of its sign, so the answer is the device's.
     pub fn fcmp(
         &mut self,
         pred: FloatPredicate,
@@ -453,6 +457,9 @@ impl Folder<'_> {
         let (Some(x), Some(y)) = (self.float(a), self.float(b)) else {
             return Ok(None);
         };
+        if self.subnormal(a, x) || self.subnormal(b, y) {
+            return Ok(None);
+        }
         let uno = x.is_nan() || y.is_nan();
         use FloatPredicate as P;
         let r = match pred {
@@ -474,6 +481,17 @@ impl Folder<'_> {
             P::Une => uno || x != y,
         };
         self.mk_int(ty, u64::from(r), m)
+    }
+
+    /// Whether `x`, the value of the float constant `c`, is subnormal in `c`'s format.
+    fn subnormal(&self, c: ConstId, x: f64) -> bool {
+        let min_normal = match self.ty(c).and_then(|t| self.types.get(t)) {
+            Some(Type::Half) => 2f64.powi(-14),
+            Some(Type::BFloat | Type::Float) => f64::from(f32::MIN_POSITIVE),
+            Some(Type::Double) => f64::MIN_POSITIVE,
+            _ => return false,
+        };
+        x != 0.0 && x.abs() < min_normal
     }
 
     /// `op v to ty`.

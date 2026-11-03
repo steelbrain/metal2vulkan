@@ -14,7 +14,8 @@
 //! the one path the constants decide, a callee runs in a new frame, and every value is a
 //! constant, a pointer into a global (`global + byte offset`), or **undefined from an unsupplied
 //! function constant** (the SCCP lattice's `Fc`). What it evaluates: integer arithmetic,
-//! comparisons, and casts ([`Folder`]), `fcmp` on constants, `select`, element and member access,
+//! comparisons, and casts ([`Folder`]), `fcmp` on constants with no subnormal operand, `select`,
+//! element and member access,
 //! shuffles, `air.convert` of an integer or `bool`, a scalar or each lane of a vector, to another
 //! integer (as C++ converts it) or to `bool` (`x != 0`), and of a scalar one to a float (rounded
 //! to nearest even, as `sitofp` and `uitofp` are), scalar `fadd`, `fsub`, `fmul`,

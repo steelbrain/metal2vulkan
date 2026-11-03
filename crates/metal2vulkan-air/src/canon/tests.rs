@@ -22,6 +22,7 @@ mod aggregates;
 mod command_buffers;
 mod constant_fields;
 mod conversions;
+mod float_compares;
 mod global_builtins;
 mod private_memory;
 mod table_copies;
