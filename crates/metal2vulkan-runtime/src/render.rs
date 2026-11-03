@@ -1383,9 +1383,9 @@ pub(crate) struct RenderLowering {
     core: EncoderCore,
     /// The pass's instances before the current one, which the draws record into.
     earlier: Vec<Instance>,
-    /// The instance the draws record into, in a box: the encoder moves as its pass ends, and
-    /// the instance with it by its box (`end_pass`).
-    current: Box<Instance>,
+    /// The instance the draws record into, in the encoder's box, which its open makes once
+    /// (`assemble`): no box of its own to make at each open.
+    current: Instance,
     /// Versioned, as the state and the amplification are: a draw's shape is derived from them
     /// (`render/draw_shape.rs`).
     layout: Versioned<PassLayout>,
@@ -1993,7 +1993,7 @@ impl RenderLowering {
         Box::new(RenderLowering {
             core,
             earlier: Vec::new(),
-            current: Box::new(Instance {
+            current: Instance {
                 draws,
                 shape: Versioned::new(shape.clone()),
                 compatible: Arc::clone(&compatible),
@@ -2021,7 +2021,7 @@ impl RenderLowering {
                 planned: false,
                 feedback: Feedback::NONE,
                 storage_colors: 0,
-            }),
+            },
             state: Versioned::new(EncoderState::metal_defaults(area)),
             scissors: ScissorRects::metal_default(area),
             render_target_array_length,
@@ -4095,10 +4095,8 @@ impl RenderLowering {
         // The bind state its last draw left, which the device's next render encoder starts from
         // (`live_bind.rs`): no draw holds it once the encoder ends.
         core.device().shared().live_binds.give(live);
-        // The pass's instances in order, each by a box: the current one's, and the earlier ones'
-        // (a pass split) each moved into one.
-        let mut instances = Vec::with_capacity(earlier.len() + 1);
-        instances.extend(earlier.into_iter().map(Box::new));
+        // The pass's instances in order: the earlier ones (a pass split), then the current one.
+        let mut instances = earlier;
         instances.push(current);
         // The first instance's render pass and framebuffer, where it recorded inline in the
         // command buffer the encoder holds for the pass (`render/inline_first.rs`), and the
@@ -5279,7 +5277,7 @@ impl RenderLowering {
                 shadows: gathered,
                 drawn: instance_drawn,
                 ..
-            } = *instance;
+            } = instance;
             if index == 0 {
                 first_gathered = Some((gathered, instance_drawn));
             }
@@ -6080,7 +6078,7 @@ impl RenderLowering {
             let viewed = self
                 .earlier
                 .iter()
-                .chain([&*self.current])
+                .chain([&self.current])
                 .any(|i| i.reformats.iter().any(|r| r.index == index as usize));
             if copies.is_some() && viewed {
                 return Err(Error::NotImplemented(RuntimeGap::Render));
@@ -6448,15 +6446,15 @@ impl RenderLowering {
                     (false, false) => cause,
                 };
                 self.core.device().shared().counts.instance_split(cause);
-                let previous = std::mem::replace(&mut self.current, instance);
-                self.earlier.push(*previous);
+                let previous = std::mem::replace(&mut self.current, *instance);
+                self.earlier.push(previous);
                 self.barrier_splits += usize::from(self.barrier);
                 if self.barrier {
                     self.reload_at.insert(self.earlier.len());
                 }
             } else {
                 // It takes the place of the current one, whose draws it records again.
-                let mut instance = instance;
+                let mut instance = *instance;
                 instance.drawn.join(&self.current.drawn);
                 let replaced = std::mem::replace(&mut self.current, instance);
                 self.end_unrun(&replaced);
@@ -6697,7 +6695,7 @@ impl RenderLowering {
             && self
                 .earlier
                 .iter()
-                .chain([&*self.current])
+                .chain([&self.current])
                 .any(|instance| instance.reformats.iter().any(|r| r.copies))
     }
 

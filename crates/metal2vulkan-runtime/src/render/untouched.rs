@@ -38,11 +38,7 @@ use crate::render_values::{LoadAction, StoreAction};
 /// module docs): `called` false (no draw call), `instances` one that nothing recorded into, and its
 /// attachments' load and store actions as settled (an unknown store made `DontCare`) keeping every
 /// texel, no depth written with a NaN before it.
-pub(super) fn changes_nothing(
-    layout: &PassLayout,
-    called: bool,
-    instances: &[Box<Instance>],
-) -> bool {
+pub(super) fn changes_nothing(layout: &PassLayout, called: bool, instances: &[Instance]) -> bool {
     let keeps = |load: LoadAction, store: StoreAction| {
         matches!(load, LoadAction::Load | LoadAction::DontCare)
             && matches!(store, StoreAction::Store | StoreAction::DontCare)

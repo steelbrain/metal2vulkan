@@ -180,7 +180,7 @@ impl RenderLowering {
         };
         let previous_layout = stood.map(|layout| std::mem::replace(&mut *self.layout, *layout));
         self.kept_attachments = None;
-        let mut previous = std::mem::replace(&mut self.current, instance);
+        let mut previous = std::mem::replace(&mut self.current, *instance);
         let mut again = Ok(());
         if let Some(draws) = previous.rerecord.as_mut() {
             for kept in draws.iter_mut() {
