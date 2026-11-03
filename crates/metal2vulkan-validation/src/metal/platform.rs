@@ -1230,18 +1230,26 @@ pub(super) fn threads_per_threadgroup_within_limit(
     limit: usize,
     what: &str,
 ) -> Result<(), String> {
-    let total = threads_per_threadgroup
-        .iter()
-        .try_fold(1usize, |total, extent| total.checked_mul(*extent as usize))
-        .ok_or_else(|| {
-            format!("{what} threadgroup {threads_per_threadgroup:?} overflows a thread count")
-        })?;
+    let total = threads_per_threadgroup_total(threads_per_threadgroup, what)?;
     if total > limit {
         return Err(format!(
                 "{what} dispatch asks for {total} threads a threadgroup ({threads_per_threadgroup:?}),                  but the pipeline permits {limit}"
             ));
     }
     Ok(())
+}
+
+/// The threads of a threadgroup of `threads_per_threadgroup`, refused where they overflow a count.
+pub(super) fn threads_per_threadgroup_total(
+    threads_per_threadgroup: [u32; 3],
+    what: &str,
+) -> Result<usize, String> {
+    threads_per_threadgroup
+        .iter()
+        .try_fold(1usize, |total, extent| total.checked_mul(*extent as usize))
+        .ok_or_else(|| {
+            format!("{what} threadgroup {threads_per_threadgroup:?} overflows a thread count")
+        })
 }
 
 fn mtl_size(size: [u32; 3]) -> MTLSize {

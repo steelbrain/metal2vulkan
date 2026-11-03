@@ -9,8 +9,8 @@ use super::{
     make_acceleration_structures, make_argument_buffer_buffers, make_argument_buffer_textures,
     make_buffers, make_function, make_indirect_commands, make_render_function_tables,
     make_render_targets, make_samplers, make_texture_arrays, make_textures, mtl_size,
-    selected_output, threads_per_threadgroup_within_limit, MetalContext, MetalOutputResources,
-    NativeBuffers, NativePipeline, ShaderFacts, Texture,
+    selected_output, threads_per_threadgroup_total, threads_per_threadgroup_within_limit,
+    MetalContext, MetalOutputResources, NativeBuffers, NativePipeline, ShaderFacts, Texture,
 };
 use crate::case::{AuthoredCase, ImplicitImageblockCoverage};
 use crate::gpu::compile;
@@ -81,6 +81,17 @@ pub(super) fn execute_tile(
     pipeline_descriptor.setThreadgroupSizeMatchesTileSize(false);
     pipeline_descriptor
         .setRequiredThreadsPerThreadgroup(mtl_size(dispatch.threads_per_threadgroup));
+    // The limit is the required size's threads, the limit Metal answers for such a pipeline it
+    // compiles for the first time. Metal keeps a tile pipeline it has compiled and returns it for
+    // a later descriptor of the same function that differs only in `requiredThreadsPerThreadgroup`,
+    // in this process or a later one, with the first pipeline's limit (measured on an M3 Max,
+    // macOS 27.0.1). A case's limit would then follow whichever case of its function ran first:
+    // the 8x8 case of a fixture got 16 after its 4x4 case. The descriptor's own limit separates
+    // the pipelines, so each threadgroup size gets a pipeline of its own.
+    pipeline_descriptor.setMaxTotalThreadsPerThreadgroup(threads_per_threadgroup_total(
+        dispatch.threads_per_threadgroup,
+        "Metal tile",
+    )?);
     if let Some(linked) = &linked.descriptor {
         pipeline_descriptor.setLinkedFunctions(Some(linked));
     }

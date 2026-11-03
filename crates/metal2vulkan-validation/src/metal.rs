@@ -25,7 +25,7 @@ use std::sync::Arc;
 /// change no recorded row can observe (a case kind no earlier oracle ran, or one it refused) needs
 /// no bump; its commit says why. The commit that bumps it says what changed; this comment keeps no
 /// history.
-pub const ORACLE_ABI: &str = "metal-literal-resources-v48";
+pub const ORACLE_ABI: &str = "metal-literal-resources-v49";
 
 /// The case's own module: the AIR the oracle compiles for it and how it bounds its execution.
 #[derive(Clone)]
