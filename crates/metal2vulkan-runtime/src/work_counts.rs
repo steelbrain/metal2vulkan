@@ -1989,18 +1989,24 @@ impl Counters {
         Self::kept_draw(counts, kept);
     }
 
-    /// A render draw rebound (`WorkCounts::draws_rebound`), whose bind brought in `tables` stage
-    /// tables in part; `kept` as `draw_drawn_again`'s.
-    pub(crate) fn draw_rebound(&self, tables: u64, kept: (bool, bool)) {
+    /// A render draw rebound (`WorkCounts::draws_rebound`); `kept` as `draw_drawn_again`'s.
+    pub(crate) fn draw_rebound(&self, kept: (bool, bool)) {
         let counts = self.draws.mine();
         counts.draws_rebound.fetch_add(1, Ordering::Relaxed);
-        counts
-            .stage_tables_read
-            .fetch_add(tables, Ordering::Relaxed);
-        counts
-            .stage_tables_read_in_part
-            .fetch_add(tables, Ordering::Relaxed);
         Self::kept_draw(counts, kept);
+    }
+
+    /// `tables` stage tables read into a kept draw's bind state, each bringing in only the slots
+    /// calls changed (`render/draw_again/rebound.rs`), whether the draw is then rebound or takes
+    /// every step, which finds them read.
+    pub(crate) fn tables_read_in_part(&self, tables: u64) {
+        if tables > 0 {
+            let counts = self.draws.mine();
+            counts
+                .stage_tables_read
+                .fetch_add(tables, Ordering::Relaxed);
+            (counts.stage_tables_read_in_part).fetch_add(tables, Ordering::Relaxed);
+        }
     }
 
     /// What a draw again or rebound counts as the draw it repeats did: a push of set 0 and a

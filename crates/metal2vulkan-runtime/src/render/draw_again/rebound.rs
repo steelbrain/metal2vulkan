@@ -183,7 +183,7 @@ impl RenderLowering {
         let live = Arc::clone(&self.live);
         let mut held = crate::device::lock(&live);
         let live = &mut *held;
-        let Some((changed, read)) = self.bring_in(live, stamps) else {
+        let Some(changed) = self.bring_in(live, stamps) else {
             return Again::No;
         };
         if !self.rebind(call, live, &changed, (draw, buffers)) {
@@ -208,7 +208,7 @@ impl RenderLowering {
         if let Err(refused) = attached {
             return Again::Refused(refused);
         }
-        let counted = (stamps, read, changed.images());
+        let counted = (stamps, changed.images());
         let recorded = self.record_rebound(live, (call, assembly, draw), buffers, counted);
         if let Err(refused) = recorded {
             return Again::Refused(refused);
@@ -220,10 +220,11 @@ impl RenderLowering {
     }
 
     /// Bring into the kept draw's bind state the slots calls changed since in each table whose
-    /// stamp is no longer the kept draw's: the changed slots, and how many tables were read in
-    /// part; `None` where one is not a buffer slot, a table keeps no list of them, or the shape
-    /// changed (then the kept state makes its shape again, as any draw's does).
-    fn bring_in(&self, live: &mut LiveBind, stamps: [Stamp; 4]) -> Option<(Changed, u64)> {
+    /// stamp is no longer the kept draw's, each table so read counted read in part
+    /// (`WorkCounts::stage_tables_read_in_part`): the changed slots; `None` where one is not a
+    /// buffer, texture or sampler slot, a table keeps no list of them, or the shape changed (then
+    /// the kept state makes its shape again, as any draw's does).
+    fn bring_in(&self, live: &mut LiveBind, stamps: [Stamp; 4]) -> Option<Changed> {
         let RenderStateKind::Graphics(pipeline) = self.pipeline.as_ref()?.kind() else {
             return None;
         };
@@ -305,9 +306,12 @@ impl RenderLowering {
         }
         live.read_from
             .read(stamps, (interface, || pipeline.held()), &maps, moved);
+        // Read now, whatever the draw does next: a draw that takes every step from here finds
+        // them read, as the draw rebound does.
+        (self.core.device().shared().counts).tables_read_in_part(read);
         let reshaped = reshape.may_reshape();
         live.reshaped(reshape);
-        (!reshaped).then_some((changed, read))
+        (!reshaped).then_some(changed)
     }
 
     /// Work out again in `live` what the slots `changed` decide of the kept draw, `draw` of
@@ -458,7 +462,7 @@ impl RenderLowering {
         live: &mut LiveBind,
         (call, assembly, draw): (&'static str, Assembly, &DrawCall),
         buffers: &DrawBuffers<'_>,
-        (stamps, read, images): ([Stamp; 4], u64, bool),
+        (stamps, images): ([Stamp; 4], bool),
     ) -> Result<(), Error> {
         let kept = settles_kept(self, live)
             .then_some(live.settled.as_ref())
@@ -536,7 +540,7 @@ impl RenderLowering {
             kept.reads_images = live.uses.iter().any(super::reads_image);
         }
         let counts = &self.core.device().shared().counts;
-        counts.draw_rebound(read, (kept.pushes_set_zero, kept.last_vertex));
+        counts.draw_rebound((kept.pushes_set_zero, kept.last_vertex));
         recorded.count(counts);
         self.current.recorded = true;
         let again = kept.again;
