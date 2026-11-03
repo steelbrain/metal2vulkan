@@ -15,7 +15,10 @@
 //! results, through linear samplers of every address mode, a border colour, and (2D) pixel
 //! coordinates; but a 3D texture's mirror-clamped axes, which no probe measured.
 
+use super::degrade_notices::counts as notice_counts;
 use super::depth_compares::{pipeline_of, run_held, Held, Through};
+use super::driver_deviations::stage_notes;
+use super::extended_range_targets::half_bits;
 use super::{layer_reported_nothing_at_all, validated_device, Messages, ScratchCache};
 use crate::gpu::TEST_DEVICE;
 use metal2vulkan::bind::SamplerDescriptor;
@@ -23,9 +26,10 @@ use metal2vulkan::device::VkProperty;
 use metal2vulkan::metal::{
     PixelFormat, SamplerAddressMode, SamplerBorderColor, SamplerMinMagFilter, TextureType,
 };
+use metal2vulkan::pipeline::PrecisionNote;
 use metal2vulkan_devtools::llvm_assemble_text;
 use metal2vulkan_runtime::{
-    ComputePipelineState, Device, Region, SamplerState, Texture, TextureDescriptor,
+    ComputePipelineState, Degradation, Device, Region, SamplerState, Texture, TextureDescriptor,
 };
 use std::collections::BTreeMap;
 
@@ -337,20 +341,26 @@ fn sampler(
 }
 
 /// The kernels of one shape and result: the slot's and the heap's through a constexpr sampler,
-/// and through a runtime sampler slot, and the heap's through its argument buffer's sampler.
+/// and through a runtime sampler slot, and the heap's through its argument buffer's sampler; and
+/// whether each heap kernel records `PrecisionNote::HalfTexelConversion` (in that order).
 struct Kernels {
     slot_constexpr: ComputePipelineState,
     heap_constexpr: ComputePipelineState,
     slot_runtime: ComputePipelineState,
     heap_runtime: ComputePipelineState,
     heap_argument: ComputePipelineState,
+    half_texels: [bool; 3],
 }
 
 impl Kernels {
     fn new(device: &Device, three: bool, half: bool) -> Kernels {
-        let make = |heap: bool, through: Through| {
-            let text = kernel(heap, through, three, half);
-            pipeline_of(device, &llvm_assemble_text(&text).unwrap(), "k")
+        let bitcode = |heap: bool, through: Through| {
+            llvm_assemble_text(&kernel(heap, through, three, half)).unwrap()
+        };
+        let make = |heap: bool, through: Through| pipeline_of(device, &bitcode(heap, through), "k");
+        let noted = |through: Through| {
+            stage_notes(device, &bitcode(true, through), "k")
+                .contains(&PrecisionNote::HalfTexelConversion)
         };
         let constexpr = Through::Constexpr(LINEAR_EDGE);
         Kernels {
@@ -359,14 +369,34 @@ impl Kernels {
             slot_runtime: make(false, Through::Runtime),
             heap_runtime: make(true, Through::Runtime),
             heap_argument: make(true, Through::Argument),
+            half_texels: [constexpr, Through::Runtime, Through::Argument].map(noted),
         }
     }
+}
+
+/// Whether the `half` results `got` and `want` (each widened to `float`) lie within one unit in
+/// the last place of each other: `PrecisionNote::HalfTexelConversion`'s bound, a `half` result
+/// the device's `float` texel rounded to nearest even where Metal rounds a 32-bit float texel's
+/// sample toward zero (`docs/FAST-PATHS.md`).
+fn within_half_ulp(got: f32, want: f32) -> bool {
+    let rank = |x: f32| {
+        let h = half_bits(x);
+        match h & 0x8000 {
+            0 => i32::from(h),
+            _ => -i32::from(h & 0x7FFF),
+        }
+    };
+    !got.is_nan() && !want.is_nan() && (rank(got) - rank(want)).abs() <= 1
 }
 
 /// Every linear sample of a heap texture (2D and 3D, `float` and `half` results; through a
 /// constexpr sampler, a runtime sampler slot, and its argument buffer's sampler) answers each lane
 /// bit for bit as the slot texture's sample through the same state (module docs), but within
-/// [`DEVICE_FILTER`] where the device's own sampler filters (`device_filters`).
+/// [`DEVICE_FILTER`] where the device's own sampler filters (`device_filters`), and a `half`
+/// result within one unit in its last place where the heap kernel records
+/// `PrecisionNote::HalfTexelConversion` ([`within_half_ulp`]): through the argument buffer's
+/// sampler on the Apple M3 Max through MoltenVK 1.4.2, a 32-bit float texture's `half` sample is
+/// the `float` one rounded to nearest even, where the slot's is Metal's, rounded toward zero.
 #[test]
 fn heap_linear_samples_answer_as_slot_samples() {
     let cache = ScratchCache::new().unwrap();
@@ -377,6 +407,8 @@ fn heap_linear_samples_answer_as_slot_samples() {
         let within = device_filters(&device);
         let mut noise = Noise(0x5eed_d499);
         let mut compared = 0usize;
+        // The `half` lanes a unit in the last place apart where the heap kernel records it.
+        let mut half_ulps = 0usize;
         // The differing lanes by group (format, shape, result, sampler), with the first few.
         let mut wrong: BTreeMap<String, (usize, Vec<String>)> = BTreeMap::new();
         for three in [false, true] {
@@ -384,12 +416,15 @@ fn heap_linear_samples_answer_as_slot_samples() {
             for format in FORMATS {
                 let texture = texture(&device, format, three, &mut noise);
                 let mut judge =
-                    |what: String, within: bool, jobs: &[[f32; 4]], slot: &[f32], heap: &[f32]| {
+                    |what: String, noted: bool, jobs: &[[f32; 4]], slot: &[f32], heap: &[f32]| {
                         for (j, job) in jobs.iter().enumerate() {
                             for lane in 0..4 {
                                 let (want, got) = (slot[4 * j + lane], heap[4 * j + lane]);
                                 compared += 1;
-                                if !alike(got, want, within) {
+                                if noted && !alike(got, want, within) && within_half_ulp(got, want)
+                                {
+                                    half_ulps += 1;
+                                } else if !alike(got, want, within) {
                                     let shape = if three { "3D" } else { "2D" };
                                     let group = wrong
                                         .entry(format!("{format:?} {shape} {what}"))
@@ -424,7 +459,7 @@ fn heap_linear_samples_answer_as_slot_samples() {
                     );
                     judge(
                         format!("{result} constexpr sampler"),
-                        within,
+                        *half && k.half_texels[0],
                         &normalized,
                         &slot,
                         &heap,
@@ -444,25 +479,27 @@ fn heap_linear_samples_answer_as_slot_samples() {
                             &jobs,
                             1,
                         );
-                        for (what, held, runtime, state_of) in [
+                        for (what, held, runtime, state_of, noted) in [
                             (
                                 "runtime sampler",
                                 Held::Argument(None),
                                 Some(&s),
                                 &k.heap_runtime,
+                                k.half_texels[1],
                             ),
                             (
                                 "argument buffer's sampler",
                                 Held::Argument(Some(&s)),
                                 None,
                                 &k.heap_argument,
+                                k.half_texels[2],
                             ),
                         ] {
                             let heap =
                                 run_held(&device, (&texture, held, runtime), state_of, &jobs, 1);
                             judge(
                                 format!("{result} {what} {state:?}"),
-                                within,
+                                *half && noted,
                                 &jobs,
                                 &slot,
                                 &heap,
@@ -477,12 +514,21 @@ fn heap_linear_samples_answer_as_slot_samples() {
             .iter()
             .map(|(group, (n, first))| format!("{group}: {n} lanes\n  {}", first.join("\n  ")))
             .collect();
-        eprintln!("{name}: {differ} of {compared} lanes differ");
+        eprintln!(
+            "{name}: {differ} of {compared} lanes differ, {half_ulps} more `half` lanes a unit in \
+             the last place apart under a recorded half-texel-conversion"
+        );
         assert!(
             wrong.is_empty(),
             "{name}: {differ} of {compared} lanes differ, in {} groups:\n{}",
             groups.len(),
             groups.join("\n")
+        );
+        let announced = notice_counts(&messages.take_notices());
+        let note = Degradation::from_precision_note(PrecisionNote::HalfTexelConversion);
+        assert!(
+            half_ulps == 0 || announced.contains_key(&note),
+            "{name}: the half-texel-conversion answers, unannounced: {announced:?}"
         );
     }
     layer_reported_nothing_at_all(&messages);
