@@ -244,6 +244,9 @@ pub(crate) struct Counters {
     texel_shadow_reads: AtomicU64,
     texel_shadows_dropped: AtomicU64,
     staging_submissions: AtomicU64,
+    staging_copies_queued: AtomicU64,
+    staging_flushes: AtomicU64,
+    staging_gpu_waits: AtomicU64,
     uncached_host_images: AtomicU64,
     cpu_block_decodes: AtomicU64,
     block_decode_passes: AtomicU64,
@@ -1765,6 +1768,23 @@ impl Counters {
     /// A submission on the staging queue was made (`device/staging.rs`).
     pub(crate) fn staging_submission(&self) {
         self.staging_submissions.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// A host call's copy was queued for the staging queue's next submission
+    /// (`texture/staging_copy.rs`).
+    pub(crate) fn staging_copy_queued(&self) {
+        self.staging_copies_queued.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// A staging submission carried queued copies (`texture/staging_copy.rs`).
+    pub(crate) fn staging_flush(&self) {
+        self.staging_flushes.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// A submission of the device's waited on the GPU for a staging submission the host had not
+    /// seen complete (`device/staging.rs`).
+    pub(crate) fn staging_gpu_wait(&self) {
+        self.staging_gpu_waits.fetch_add(1, Ordering::Relaxed);
     }
 
     /// A texture's host-transfer image was placed in memory the host does not cache
@@ -4576,10 +4596,23 @@ pub struct WorkCounts {
     /// texture's texels (`texture/host_shadow.rs`): a commit of the program's, its own Vulkan
     /// submission, another `VkImage` presented, or a detach.
     pub texel_shadows_dropped: u64,
-    /// Submissions on the device's staging queue (`device/staging.rs`), each one a host call
-    /// waits for: a `Shared` or `Managed` texture's first move, `replace_region` or `get_bytes`
-    /// on a device that copies none on the host from memory the host caches.
+    /// Submissions on the device's staging queue (`device/staging.rs`): a `Shared` or `Managed`
+    /// texture's first move, a `get_bytes`, or the copies queued for it
+    /// (`staging_copies_queued`), on a device that copies none on the host from memory the host
+    /// caches.
     pub staging_submissions: u64,
+    /// `replace_region` copies (and decoded twins' copies) queued for the staging queue's next
+    /// submission rather than submitted each alone (`texture/staging_copy.rs`).
+    pub staging_copies_queued: u64,
+    /// Staging submissions that carried queued copies: one per burst of them, made before the
+    /// device's next batch or internal submission, or by a `get_bytes` before its read, a
+    /// texture's `VkImage` handed out, the program's use of a `VkQueue`, or past the bound
+    /// (`texture/staging_copy.rs`).
+    pub staging_flushes: u64,
+    /// Batches and internal submissions that waited on the GPU for a staging submission the host
+    /// had not seen complete (`Device::staging_wait`, `device/staging.rs`), in place of a wait on
+    /// the host.
+    pub staging_gpu_waits: u64,
     /// New `Shared` and `Managed` textures' images with host-transfer usage placed in memory the
     /// host does not cache, where the device has none the image may take
     /// (`texture/host_copy.rs`): their host copies read at uncached memory's speed (a 1080p
@@ -6162,6 +6195,9 @@ impl Device {
             texel_shadow_reads: counters.texel_shadow_reads.load(Ordering::Relaxed),
             texel_shadows_dropped: counters.texel_shadows_dropped.load(Ordering::Relaxed),
             staging_submissions: counters.staging_submissions.load(Ordering::Relaxed),
+            staging_copies_queued: counters.staging_copies_queued.load(Ordering::Relaxed),
+            staging_flushes: counters.staging_flushes.load(Ordering::Relaxed),
+            staging_gpu_waits: counters.staging_gpu_waits.load(Ordering::Relaxed),
             uncached_host_images: counters.uncached_host_images.load(Ordering::Relaxed),
             cpu_block_decodes: counters.cpu_block_decodes.load(Ordering::Relaxed),
             block_decode_passes: counters.block_decode_passes.load(Ordering::Relaxed),

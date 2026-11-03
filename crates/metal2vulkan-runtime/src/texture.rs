@@ -1105,6 +1105,10 @@ impl Image {
     /// handed out, which rests in `GENERAL` (`Texture::vk_image`), and holds what host calls copied
     /// in.
     fn settle(&self) -> Result<(), Error> {
+        // The copies queued for the staging queue, waited for (`texture/staging_copy.rs`).
+        if self.takes_staging_copies() {
+            self.device.flush_staging_waited()?;
+        }
         let firsts = &self.device.shared().textures.first_moves;
         let at: *const Image = self;
         if !self.move_waits() && !firsts.texels_wait(at.cast()) {
@@ -3848,6 +3852,50 @@ pub(super) fn zero_copies(
     (length, copies)
 }
 
+/// A host-visible, mapped buffer of `len` bytes for copies both ways, bound to its placement: a
+/// staging buffer's objects ([`Staging`], `staging_copy::StagedBytes`).
+fn staging_buffer(device: &Device, len: u64) -> Result<(vk::Buffer, Placement), Error> {
+    let shared = device.shared();
+    let raw_device = shared.vk();
+    usize::try_from(len).map_err(|_| Error::OutOfMemory(MemoryKind::Host))?;
+    let info = shared.sharing().buffer(
+        vk::BufferCreateInfo::default()
+            .size(len)
+            .usage(vk::BufferUsageFlags::TRANSFER_SRC | vk::BufferUsageFlags::TRANSFER_DST),
+    );
+    // SAFETY: the device is live and `info` valid.
+    let raw = unsafe { crate::creation::buffer(raw_device, &info) }.map_err(vulkan)?;
+    // SAFETY: `raw` is a live buffer of this device.
+    let requirements = unsafe { raw_device.get_buffer_memory_requirements(raw) };
+    let placement = match crate::memory::allocate(
+        &shared.memory,
+        raw_device,
+        &requirements,
+        MemoryClass::Shared,
+    ) {
+        Ok(placement) => placement,
+        Err(error) => {
+            // SAFETY: the buffer is unused.
+            unsafe { release::object(raw_device, raw) };
+            return Err(error);
+        }
+    };
+    // SAFETY: the placement meets the buffer's requirements and is not bound elsewhere.
+    let bound = unsafe {
+        crate::creation::bind_buffer(raw_device, raw, placement.memory, placement.offset)
+    };
+    if placement.mapped.is_none() || bound.is_err() {
+        // SAFETY: the buffer is unused.
+        unsafe { release::object(raw_device, raw) };
+        lock(&shared.memory).free(raw_device, &placement);
+        return Err(match bound {
+            Err(error) => vulkan(error),
+            Ok(()) => Error::OutOfMemory(MemoryKind::Host),
+        });
+    }
+    Ok((raw, placement))
+}
+
 /// A host-visible buffer `replace_region` and `get_bytes` copy through, released when dropped.
 struct Staging<'a> {
     device: &'a Device,
@@ -3859,51 +3907,14 @@ struct Staging<'a> {
 impl Staging<'_> {
     /// A staging buffer of `len` bytes.
     fn new(device: &Device, len: u64) -> Result<Staging<'_>, Error> {
-        let shared = device.shared();
-        let raw_device = shared.vk();
         let size = usize::try_from(len).map_err(|_| Error::OutOfMemory(MemoryKind::Host))?;
-        let info = shared.sharing().buffer(
-            vk::BufferCreateInfo::default()
-                .size(len)
-                .usage(vk::BufferUsageFlags::TRANSFER_SRC | vk::BufferUsageFlags::TRANSFER_DST),
-        );
-        // SAFETY: the device is live and `info` valid.
-        let raw = unsafe { crate::creation::buffer(raw_device, &info) }.map_err(vulkan)?;
-        // SAFETY: `raw` is a live buffer of this device.
-        let requirements = unsafe { raw_device.get_buffer_memory_requirements(raw) };
-        let placement = match crate::memory::allocate(
-            &shared.memory,
-            raw_device,
-            &requirements,
-            MemoryClass::Shared,
-        ) {
-            Ok(placement) => placement,
-            Err(error) => {
-                // SAFETY: the buffer is unused.
-                unsafe { release::object(raw_device, raw) };
-                return Err(error);
-            }
-        };
-        let staging = Staging {
+        let (raw, placement) = staging_buffer(device, len)?;
+        Ok(Staging {
             device,
             raw,
             placement,
             len: size,
-        };
-        if staging.placement.mapped.is_none() {
-            return Err(Error::OutOfMemory(MemoryKind::Host));
-        }
-        // SAFETY: the placement meets the buffer's requirements and is not bound elsewhere.
-        unsafe {
-            crate::creation::bind_buffer(
-                raw_device,
-                raw,
-                staging.placement.memory,
-                staging.placement.offset,
-            )
-        }
-        .map_err(vulkan)?;
-        Ok(staging)
+        })
     }
 
     /// The staging bytes, through the mapping.
@@ -5526,7 +5537,7 @@ impl Texture {
         }
         // Packed into the staging buffer from the caller's bytes.
         if truth.takes_staging_copies()
-            && truth.staging_write(copy, len as u64, |staged| bytes.pack(&host, staged))?
+            && truth.staging_write(truth, copy, len as u64, |staged| bytes.pack(&host, staged))?
         {
             // A decoded twin's decode, staged; on the CPU while a batch may read it.
             return truth.decode_written(&image_region, pack);

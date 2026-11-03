@@ -47,7 +47,9 @@
 //!   -- waiting for what the submission waits for: MoltenVK runs each `VkSubmitInfo` as a Metal
 //!   command buffer of its own, so it adds none (`command_buffer/submit.rs`).
 //! - **Staged copies**. `replace_region` of a texture whose `VkImage` is its own for good (in
-//!   memory of its own, or a heap's own pages) and takes no host copies stages the bytes
+//!   memory of its own, or a heap's own pages) and takes no host or staging-queue copies (those
+//!   are queued for the staging queue instead, whose submission of them every submission of the
+//!   device's makes before its own: `texture/staging_copy.rs`) stages the bytes
 //!   ([`TexelCopy`], [`FirstMoves::register_texels`]): the next submission copies them in at
 //!   the start of its work, after the first work's `VkSubmitInfo`, each copy after the writes before
 //!   it, and holds the image and the staging buffer until it completed.
@@ -606,11 +608,11 @@ enum Zero {
 
 /// The most bytes host calls' copies stage for the device's next submission before one is made
 /// for them, waited for (the module docs).
-const STAGED_BYTES: u64 = 256 << 20;
+pub(super) const STAGED_BYTES: u64 = 256 << 20;
 
 /// The most copies host calls stage for the device's next submission before one is made for
 /// them, waited for (the module docs): a bound on the work waiting, whatever its bytes.
-const STAGED_COPIES: usize = 4096;
+pub(super) const STAGED_COPIES: usize = 4096;
 
 /// A new buffer's fill: copies of the device's zeros onto `range` of `buffer`, or a fill of its
 /// words with zeros (`word_fill.rs`), or copies of the bytes a staging buffer holds, or a
@@ -859,6 +861,10 @@ pub(crate) struct FirstMoves {
     /// (`texture/decoded_twin.rs`, `PassScratch::Device`), and its bytes: made at the first such
     /// decode, kept with the device.
     decode_scratch: Mutex<Option<(Zeros, u64)>>,
+    /// The work queued for the staging queue's next submission (`texture/staging_copy.rs`):
+    /// copies into images that copy there, which every submission of the device's makes there
+    /// before its own.
+    pub(super) staging: Mutex<super::staging_copy::Queued>,
 }
 
 /// The side of each of the device's multisampled scratch images ([`FirstMoves::scratch`]): its
@@ -1229,6 +1235,7 @@ impl FirstMoves {
     /// Release the buffer of zeros, the patterns' and the scratch images into `memory`; the
     /// device is idle.
     pub(crate) fn destroy(&self, device: &ash::Device, memory: &mut Memory) {
+        lock(&self.staging).destroy(device, memory);
         if let Some(zeros) = &*lock(&self.zeros) {
             zeros.destroy(device, memory);
         }

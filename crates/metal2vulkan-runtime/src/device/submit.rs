@@ -63,6 +63,11 @@ impl OwnTimeline {
         let _ = self.semaphore.set(semaphore);
     }
 
+    /// The value through which the host saw its submissions complete (0 before the first).
+    pub(super) fn value(&self) -> u64 {
+        self.completed.load(Ordering::Acquire)
+    }
+
     /// The host saw the timeline reach `value`.
     pub(super) fn reached(&self, value: u64) {
         self.completed.fetch_max(value, Ordering::AcqRel);
@@ -175,6 +180,10 @@ impl Device {
             *internal = Some(Internal::new(self)?);
         }
         let taken = firsts.take(&named);
+        // The copies queued for the staging queue, submitted there first, which this waits for on
+        // the GPU (below), holding what they copied until it completed
+        // (`texture/staging_copy.rs`).
+        let _staged = self.flush_staging()?;
         let Some(objects) = internal.as_mut() else {
             unreachable!("made above");
         };
@@ -215,10 +224,16 @@ impl Device {
         // SAFETY: the fence is unsignaled or signaled and not pending.
         unsafe { raw.reset_fences(&[objects.fence]) }.map_err(vulkan)?;
         let buffers = [objects.buffer];
-        // And the last binding of a no-copy buffer's dma-bufs, until it completed.
+        // And the last binding of a no-copy buffer's dma-bufs, and the staging queue's last
+        // submission, until each completed.
+        let staging = self.staging_wait();
+        if staging.is_some() {
+            shared.counts.staging_gpu_wait();
+        }
         let waits: Vec<(vk::Semaphore, u64)> = (waits.iter())
             .map(|point| (shared.queues[point.queue].timeline, point.value))
             .chain(self.binding_wait())
+            .chain(staging)
             .collect();
         let wait_semaphores: Vec<vk::Semaphore> = waits.iter().map(|wait| wait.0).collect();
         let wait_values: Vec<u64> = waits.iter().map(|wait| wait.1).collect();

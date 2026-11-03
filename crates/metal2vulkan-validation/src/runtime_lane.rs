@@ -799,6 +799,8 @@ mod stage_in_regions;
 #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
 mod stage_in_strides;
 #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+mod staging_batches;
+#[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
 mod state_ids;
 #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
 mod steps_apart;

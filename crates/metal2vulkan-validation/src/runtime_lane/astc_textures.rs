@@ -498,7 +498,7 @@ fn astc_cpu_writes_decode_on_the_cpu() {
             target.replace_region(whole, 0, 0, &blocks, row, 0).unwrap();
             let after = device.work_counts();
             let routed = after.host_texel_copies > before.host_texel_copies
-                || after.staging_submissions > before.staging_submissions;
+                || after.staging_copies_queued > before.staging_copies_queued;
             let out = buffer_with(device, &[0; 16 * 16 * 16]).unwrap();
             let reads = read_after(&queue, &state, &target, &out, None);
             reads.wait_until_completed_for(WAIT).unwrap();

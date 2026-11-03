@@ -257,6 +257,12 @@ impl Drop for Riding {
 
 impl Image {
     /// The `VkImage`, handed out: the image keeps it for good (it takes no storage form after).
+    /// Whether its `VkImage` was handed out (`Texture::vk_image`): the caller may use it
+    /// anywhere from then on, unseen.
+    pub(super) fn handed_out(&self) -> bool {
+        self.form.exported.load(Ordering::Relaxed)
+    }
+
     fn export(&self) -> vk::Image {
         let _views = lock(&self.views);
         self.form.exported.store(true, Ordering::Relaxed);

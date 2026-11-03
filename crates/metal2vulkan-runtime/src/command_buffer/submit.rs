@@ -51,7 +51,10 @@
 //! and the RTX 3090, about 2 ms of CPU in one `vkQueueSubmit` in about every thousand waits and
 //! signals) takes no such wait: each batch with work starts instead with a command buffer of
 //! barriers whose first is [`Barrier::after_completed`], which makes what completed batches
-//! wrote visible to every later command, and the staging queue's copies signal no timeline.
+//! wrote visible to every later command. Every batch, on every driver, waits for the staging
+//! queue's last submission while the host has not seen it complete (`Device::staging_wait`):
+//! one that carries the copies a burst of host calls queued is made just before the batch and
+//! waited for on the GPU, not the host (`texture/staging_copy.rs`).
 //! Where every batch waited, about twice as many of its submissions took that long as where
 //! batches only signal.
 //!
@@ -600,6 +603,12 @@ impl CommandBufferShared {
         // writes until its submission was made (`heap_sets::hold`).
         let firsts = &shared.textures.first_moves;
         let first_work = firsts.take_holding(|_| true, || crate::heap_sets::hold(device));
+        // The copies queued for the staging queue, submitted there first, which the batch waits
+        // for on the GPU (below), holding what they copied until it completed
+        // (`texture/staging_copy.rs`).
+        let staged = device
+            .flush_staging()
+            .map_err(|error| recording_error(device, error))?;
         let entry = (!entries.is_empty()).then(|| Summary::outside_encoders(entry_uses));
         let exit = (!exits.is_empty()).then(|| Summary::outside_encoders(exit_uses));
         // The held depths' moves before each encoder that names one, into the layout it needs
@@ -821,6 +830,14 @@ impl CommandBufferShared {
             wait_values.push(value);
             wait_stages.push(vk::PipelineStageFlags::ALL_COMMANDS);
         }
+        // And the staging queue's last submission, on every `VkQueue`, until the host saw it
+        // complete: what it copied may be among what the work reads (`device/staging.rs`).
+        if let Some((timeline, value)) = device.staging_wait() {
+            wait_semaphores.push(timeline);
+            wait_values.push(value);
+            wait_stages.push(vk::PipelineStageFlags::ALL_COMMANDS);
+            shared.counts.staging_gpu_wait();
+        }
         let mut order_semaphores: Vec<vk::Semaphore> =
             order_waits.iter().map(|&(s, _)| s).collect();
         let mut order_values: Vec<u64> = order_waits.iter().map(|&(_, value)| value).collect();
@@ -974,6 +991,9 @@ impl CommandBufferShared {
         // (`heap_sets.rs`). One committed and not yet submitted holds no gone texture.
         if let Some(ticket) = state.heaps.submit(device) {
             state.retained.push(Box::new(ticket));
+        }
+        if let Some(staged) = staged {
+            state.retained.push(Box::new(staged));
         }
         // The batch waits in the group, its submission's changes made below, where it may and
         // took no first work, the device wrapped no image of the caller's it names since it was

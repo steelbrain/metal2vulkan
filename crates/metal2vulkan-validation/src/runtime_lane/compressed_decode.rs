@@ -1244,7 +1244,7 @@ fn writes_behind_work_in_flight_read_the_new_blocks() {
                 let after = device.work_counts();
                 let cpu = after.cpu_block_decodes - before.cpu_block_decodes;
                 let hosted = after.host_texel_copies > before.host_texel_copies;
-                let staged = after.staging_submissions > before.staging_submissions;
+                let staged = after.staging_copies_queued > before.staging_copies_queued;
                 let route = match (hosted, staged) {
                     (true, _) => "on the host",
                     (false, true) => "on the staging queue",

@@ -1066,7 +1066,11 @@ impl Image {
     /// [`twin_decoded`](Self::twin_decoded) then lets the batches that wait for it go. A failure
     /// is said on the device's message sink as an error (`metal2vulkan-twin-decode-failed`): the
     /// call that queued it has returned.
-    pub(super) fn finish_twin_decode(&self, region: &ImageRegion, blocks: Option<&[u8]>) {
+    pub(super) fn finish_twin_decode(
+        self: &Arc<Self>,
+        region: &ImageRegion,
+        blocks: Option<&[u8]>,
+    ) {
         let shared = self.device.shared();
         let result = match self.decoded.as_deref() {
             Some(decoded) => self.write_decoded(decoded, region, blocks),
@@ -1121,7 +1125,7 @@ impl Image {
     /// threads: whether on the host (else on the staging queue). An internal error where the twin
     /// takes neither copy, or took none.
     fn write_decoded(
-        &self,
+        self: &Arc<Self>,
         decoded: &Decoded,
         region: &ImageRegion,
         blocks: Option<&[u8]>,
@@ -1185,7 +1189,8 @@ impl Image {
                     }
                     false => {
                         let (copy, len) = (buffer_image_copy(&band), texels.len() as u64);
-                        twin.staging_write(copy, len, |staged| staged.copy_from_slice(&texels))?
+                        let fill = |staged: &mut [u8]| staged.copy_from_slice(&texels);
+                        twin.staging_write(self, copy, len, fill)?
                     }
                 };
                 if !written {

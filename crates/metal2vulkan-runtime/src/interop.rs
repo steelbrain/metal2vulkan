@@ -491,6 +491,10 @@ impl CommandQueue {
         // The caller's own submissions are GPU work of the program's: textures' host shadows are
         // read against the device's count of it (`texture/host_shadow.rs`).
         shared.program_gave_gpu_work();
+        // The copies queued for the staging queue are made first, waited for: the caller's
+        // submissions may read what they wrote (`texture/staging_copy.rs`). A failure there is a
+        // lost device, which the caller's own submissions then meet.
+        let _ = self.device().flush_staging_waited();
         // The queue keeps this `VkQueue` for good from here on, so the caller's submissions there
         // stay in its order (`queue_share.rs`).
         let vk_queue = self.pinned_vk_queue();

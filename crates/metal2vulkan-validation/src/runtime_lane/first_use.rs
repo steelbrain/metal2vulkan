@@ -1510,7 +1510,8 @@ fn shared_textures_copy_on_the_host_while_the_gpu_is_busy() {
                 );
                 assert_eq!(copied.host_texel_copies - before.host_texel_copies, 3);
             }
-            // On the staging queue each copy waits for its own submission alone.
+            // On the staging queue each read waits for its own submission alone, the second
+            // carrying the write queued before it.
             if staged {
                 assert_eq!(
                     (read_mark_then, write_mark_then),
@@ -1522,7 +1523,9 @@ fn shared_textures_copy_on_the_host_while_the_gpu_is_busy() {
                     copied.internal_submissions, before.internal_submissions,
                     "{mode:?} on {name}: a staging copy made an internal submission"
                 );
-                assert_eq!(copied.staging_submissions - made.staging_submissions, 3);
+                assert_eq!(copied.staging_submissions - made.staging_submissions, 2);
+                assert_eq!(copied.staging_copies_queued - made.staging_copies_queued, 1);
+                assert_eq!(copied.staging_flushes - made.staging_flushes, 1);
             }
             release(&mark);
             busy_work.wait_until_completed_for(WAIT).unwrap();
