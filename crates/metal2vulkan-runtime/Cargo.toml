@@ -60,6 +60,12 @@ path = "examples/host_ab/main.rs"
 name = "submit_path"
 path = "examples/submit_path.rs"
 
+# Not a consumer's example: the CPU cost of an indirect command buffer's command setters, a
+# render and a compute command encoded field by field (examples/icb_setters.rs).
+[[example]]
+name = "icb_setters"
+path = "examples/icb_setters.rs"
+
 # Not a consumer's example: command queues sharing `VkQueue`s, each workload under the policy its
 # arguments name (examples/queue_share.rs).
 [[example]]
