@@ -279,6 +279,7 @@ mod render_stage_digests;
 mod rerun_arenas;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod reserved_queues;
+mod residency;
 mod resource;
 mod resource_ids;
 mod retained;

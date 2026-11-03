@@ -95,7 +95,7 @@ use metal2vulkan::bind::{ResidentRange, ResourceClass, UsedResource};
 use metal2vulkan::metal::{RenderStages, ResourceUsage};
 use metal2vulkan::pipeline::{BindingSource, PipelineLayout, Stage, SyntheticBinding};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 /// The generation last given to a residency of the process ([`Residency::generation`]).
 static GENERATIONS: AtomicU64 = AtomicU64::new(0);
@@ -150,6 +150,94 @@ pub(super) struct Residency {
     /// The module docs' generation: 0 while it holds nothing it was given, else one no other
     /// residency of the process had, drawn at its last change.
     generation: u64,
+    /// The buffers and heaps' own buffers of `used` by Metal address, made at the first
+    /// [`resolve`](Self::resolve) after one was made resident.
+    addresses: OnceLock<Arc<AddressIndex>>,
+}
+
+/// Where each buffer and heap's own buffer a residency made resident lies in Metal's address
+/// space: the pieces of the space between their starts and ends in order, each with the first
+/// made resident of those that hold it, and the ends, each with the first made resident of
+/// those that end there. Made in the logarithm of their count times it; a look costs its
+/// logarithm.
+pub(super) struct AddressIndex {
+    /// `(start, token)`: from `start` to the next piece's, the first resource made resident of
+    /// those holding every address there (`None`: none holds them).
+    pieces: Vec<(u128, Option<u32>)>,
+    /// `(end, token)`, sorted: the first made resident of those that end at `end`.
+    ends: Vec<(u128, u32)>,
+}
+
+impl AddressIndex {
+    /// The index of the buffers and heaps' own buffers of `used`, by token.
+    fn of_used(used: &[(Used, ResourceUsage, RenderStages)]) -> AddressIndex {
+        let ranges = (used.iter().zip(0u32..)).filter_map(|((used, ..), token)| {
+            let buffer = match used {
+                Used::Buffer(buffer) | Used::Heap { bytes: buffer, .. } => buffer,
+                Used::Texture(_) | Used::IndirectCommandBuffer(_) => return None,
+            };
+            Some((buffer.metal_address().0, buffer.length(), token))
+        });
+        AddressIndex::of(ranges)
+    }
+
+    /// The index of `ranges`, each `(start, length, token)`.
+    pub(super) fn of(ranges: impl Iterator<Item = (u64, u64, u32)>) -> AddressIndex {
+        // `(start, end, token)`, sorted by start.
+        let mut ranges: Vec<(u128, u128, u32)> = ranges
+            .map(|(start, length, token)| {
+                let start = u128::from(start);
+                (start, start + u128::from(length), token)
+            })
+            .collect();
+        ranges.sort_unstable();
+        let mut ends: Vec<(u128, u32)> =
+            ranges.iter().map(|&(_, end, token)| (end, token)).collect();
+        ends.sort_unstable();
+        ends.dedup_by_key(|&mut (end, _)| end);
+        let mut bounds: Vec<u128> = (ranges.iter())
+            .flat_map(|&(start, end, _)| [start, end])
+            .collect();
+        bounds.sort_unstable();
+        bounds.dedup();
+        // A sweep over the bounds: the resources holding each piece, the first made resident
+        // on top, those that ended dropped as they reach the top.
+        let mut holding = std::collections::BinaryHeap::new();
+        let mut next = ranges.iter().peekable();
+        let mut pieces: Vec<(u128, Option<u32>)> = Vec::with_capacity(bounds.len());
+        for at in bounds {
+            while let Some(&&(start, end, token)) = next.peek() {
+                if start > at {
+                    break;
+                }
+                holding.push((std::cmp::Reverse(token), end));
+                next.next();
+            }
+            while holding.peek().is_some_and(|&(_, end)| end <= at) {
+                holding.pop();
+            }
+            let first = holding.peek().map(|&(std::cmp::Reverse(token), _)| token);
+            if pieces.last().is_none_or(|&(_, last)| last != first) {
+                pieces.push((at, first));
+            }
+        }
+        AddressIndex { pieces, ends }
+    }
+
+    /// The first resource made resident of those holding `address`, else of those that end
+    /// there.
+    pub(super) fn first_holding(&self, address: u64) -> Option<u32> {
+        let address = u128::from(address);
+        let piece = self.pieces.partition_point(|&(start, _)| start <= address);
+        let holding = piece.checked_sub(1).and_then(|piece| self.pieces[piece].1);
+        holding.or_else(|| {
+            let end = self
+                .ends
+                .binary_search_by_key(&address, |&(end, _)| end)
+                .ok()?;
+            Some(self.ends[end].1)
+        })
+    }
 }
 
 /// `read` and `write` of all of `buffer`'s bytes.
@@ -482,6 +570,7 @@ impl Residency {
         self.tokens.insert(used.clone(), token);
         self.used.push((used.clone(), usage, stages));
         self.generation = next_generation();
+        self.addresses = OnceLock::new();
         Some(used)
     }
 
@@ -591,27 +680,29 @@ impl Residency {
             .collect()
     }
 
-    /// The resident buffer that Metal address `address` lies in, and its offset there: a buffer
-    /// made resident, else a heap's own buffer (`Heap::bytes`), else, for a command buffer's,
-    /// one of the device's live buffers of their own. An address at a resource's end is in it too
-    /// (an empty binding), where no resource holds it. `None`: in none of them.
+    /// The resident buffer that Metal address `address` lies in, and its offset there: the first
+    /// made resident of the buffers and heaps' own buffers (`Heap::bytes`) that hold it, else the
+    /// first whose end it is (an empty binding), else, for a command buffer's, one of the
+    /// device's live buffers of their own. `None`: in none of them. Looked up in the
+    /// residency's [`AddressIndex`], made at the first look after a buffer or heap was made
+    /// resident: a look costs the logarithm of their count, not their count.
     pub(super) fn resolve(&self, address: u64) -> Option<(Buffer, u64)> {
-        let ranges = || {
-            self.used.iter().filter_map(|(used, ..)| {
-                let buffer = match used {
-                    Used::Buffer(buffer) => buffer,
-                    Used::Heap { bytes, .. } => bytes,
-                    Used::Texture(_) | Used::IndirectCommandBuffer(_) => return None,
-                };
-                let offset = address.checked_sub(buffer.metal_address().0)?;
-                (offset <= buffer.length()).then_some((buffer, offset))
-            })
-        };
-        let inside = ranges().find(|(buffer, offset)| *offset < buffer.length());
-        inside
-            .or_else(|| ranges().next())
-            .map(|(buffer, offset)| (buffer.clone(), offset))
-            .or_else(|| self.live.as_ref()?.resolve(address))
+        let index = self.addresses.get_or_init(|| {
+            let index = AddressIndex::of_used(&self.used);
+            if let Some((buffer, _)) = self.buffers_written().next() {
+                let counts = &buffer.device().shared().counts;
+                counts.resident_address_index_made();
+            }
+            Arc::new(index)
+        });
+        let found = index.first_holding(address).and_then(|token| {
+            let buffer = match self.used.get(token as usize)? {
+                (Used::Buffer(buffer), ..) | (Used::Heap { bytes: buffer, .. }, ..) => buffer,
+                (Used::Texture(_) | Used::IndirectCommandBuffer(_), ..) => return None,
+            };
+            Some((buffer.clone(), address - buffer.metal_address().0))
+        });
+        found.or_else(|| self.live.as_ref()?.resolve(address))
     }
 
     /// What a command buffer's next compute or render (`render`) encoder starts with, of the

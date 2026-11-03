@@ -258,6 +258,7 @@ pub(crate) struct Counters {
     dispatch_used_resources_listed: AtomicU64,
     resident_textures_looked_at: AtomicU64,
     resident_resources_joined: AtomicU64,
+    resident_address_indexes_made: AtomicU64,
     heap_tables_worked_out: AtomicU64,
     argument_samplers_taken: AtomicU64,
     bind_views_worked_out: AtomicU64,
@@ -1835,6 +1836,12 @@ impl Counters {
     pub(crate) fn resident_resources_joined(&self, count: u64) {
         self.resident_resources_joined
             .fetch_add(count, Ordering::Relaxed);
+    }
+
+    /// A residency's buffers were indexed by Metal address (`residency::AddressIndex`).
+    pub(crate) fn resident_address_index_made(&self) {
+        self.resident_address_indexes_made
+            .fetch_add(1, Ordering::Relaxed);
     }
 
     /// A command's pipeline layout was read for the device's texture and sampler tables it binds
@@ -4547,6 +4554,11 @@ pub struct WorkCounts {
     /// resources once. None for a command buffer whose work never reads it, however many
     /// resources its encoders made resident.
     pub resident_resources_joined: u64,
+    /// Indexes of the buffers and heaps a residency made resident by Metal address, which an
+    /// indirect command buffer's commands' addresses resolve in (`Residency::resolve`): one at
+    /// the first look after a resource was made resident into a residency holding a buffer or a
+    /// heap, however many addresses the commands name.
+    pub resident_address_indexes_made: u64,
     /// Reads of a pipeline layout for the device's texture and sampler tables its commands bind
     /// (`heap_sets.rs`): one per variant for compute dispatches, at its first (`HeapTables`); one
     /// per table looked for at each draw and tile dispatch (`heap_sets::texture_table`,
@@ -6021,6 +6033,8 @@ impl Device {
             resident_textures_looked_at: (counters.resident_textures_looked_at)
                 .load(Ordering::Relaxed),
             resident_resources_joined: (counters.resident_resources_joined).load(Ordering::Relaxed),
+            resident_address_indexes_made: (counters.resident_address_indexes_made)
+                .load(Ordering::Relaxed),
             heap_tables_worked_out: counters.heap_tables_worked_out.load(Ordering::Relaxed),
             argument_samplers_taken: counters.argument_samplers_taken.load(Ordering::Relaxed),
             bind_views_worked_out: counters.bind_views_worked_out.load(Ordering::Relaxed),
