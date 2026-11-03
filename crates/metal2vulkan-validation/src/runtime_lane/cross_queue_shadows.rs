@@ -29,6 +29,14 @@
 //!   log. Command buffer Z of queue 1, committed after X, reads it: the tracker runs it after Y's
 //!   fill, and its read holds the fill, though the fill was reported to the log at Y's commit,
 //!   before X's hold.
+//! - **Both on one `VkQueue`.** The signal in between and the waiting writer again, with no spin
+//!   and on a device made under `QueueSharingPolicy::Adaptive` (over the lane's `exact_answers()`)
+//!   whose check has answered: queue 2 makes Y while queue 1 keeps short command buffers in
+//!   flight, so where the device shares it joins queue 1's `VkQueue` (`queue_share.rs`), and X and
+//!   Z run there beside Y, none long. Y is held until X's signal was submitted, so it goes after
+//!   X's first batch on that `VkQueue`: the read after the signal holds Y's fill, X's hold is
+//!   still withheld while Y has not completed, and Z's read holds the fill. Where the device
+//!   shares no `VkQueue` the cases run on two and say so.
 //!
 //! The spin is the owned fixture `kernel_spin_on_an_unraised_word`, dispatched again and again to
 //! a cap of loads timed on the device beforehand ([`Spin`]). The GPU does not see a CPU store to
@@ -48,12 +56,13 @@ use super::{
 };
 use crate::air_library::AirLibrary as _;
 use crate::gpu::TEST_DEVICE;
+use metal2vulkan::device::QueueSharingPolicy;
 use metal2vulkan::metal::{PixelFormat, TextureUsage};
 use metal2vulkan_devtools::llvm_assemble;
 use metal2vulkan_runtime::{
-    Buffer, CommandBuffer, CommandBufferStatus, ComputeCommandEncoder, ComputePipelineState,
-    Device, EventRef, HostMemory, PipelineOptions, ResourceOptions, Size, Texture,
-    TextureDescriptor,
+    Buffer, CommandBuffer, CommandBufferStatus, CommandQueue, ComputeCommandEncoder,
+    ComputePipelineState, Device, DeviceOptions, EventRef, HostMemory, PipelineOptions,
+    ResourceOptions, Size, Texture, TextureDescriptor,
 };
 use std::path::Path;
 use std::sync::Arc;
@@ -207,7 +216,18 @@ fn fill_row(command_buffer: &CommandBuffer, truth: &Buffer, row: u64, value: u8)
 /// A device under the validation layer, its texel kernels, each run once so that no later dispatch
 /// of them waits at a host step for its `VkPipeline`, and the spin.
 fn lane(messages: &Messages, cache: &ScratchCache) -> (Device, TexelKernels, Spin) {
-    let device = validated_device_with(TEST_DEVICE, messages, cache.path(), |_| {}).unwrap();
+    let (device, kernels) = lane_device(messages, cache, |_| {});
+    let spin = Spin::new(&device);
+    (device, kernels, spin)
+}
+
+/// [`lane`]'s device, with `adjust`'s options, and its texel kernels, each run once.
+fn lane_device(
+    messages: &Messages,
+    cache: &ScratchCache,
+    adjust: impl FnOnce(&mut DeviceOptions),
+) -> (Device, TexelKernels) {
+    let device = validated_device_with(TEST_DEVICE, messages, cache.path(), adjust).unwrap();
     let kernels = texel_kernels(&device);
     let scratch = buffer_with(&device, &vec![0; BYTES as usize]).unwrap();
     let texture = shadowed(&device, &scratch);
@@ -221,8 +241,190 @@ fn lane(messages: &Messages, cache: &ScratchCache) -> (Device, TexelKernels, Spi
     texel_dispatch(&warm, &kernels.read, &texture, &words);
     warm.commit().unwrap();
     completed(&warm);
-    let spin = Spin::new(&device);
-    (device, kernels, spin)
+    (device, kernels)
+}
+
+/// [`lane_device`] under `QueueSharingPolicy::Adaptive`, its check answered: whether it shares
+/// `VkQueue`s, said where it does not.
+fn sharing_lane(messages: &Messages, cache: &ScratchCache) -> (Device, TexelKernels, bool) {
+    let (device, kernels) = lane_device(messages, cache, |options| {
+        options.policy.queue_sharing = QueueSharingPolicy::Adaptive;
+    });
+    assert!(
+        device.settle_queue_switch_check(Duration::from_secs(20)),
+        "the check settles"
+    );
+    let shares = device.shares_vk_queues();
+    if !shares {
+        println!(
+            "{} shares no VkQueue, so the one-VkQueue cases run on two: {}",
+            device.name(),
+            device.queue_switch_check_report()
+        );
+    }
+    (device, kernels, shares)
+}
+
+/// Keep `busy`'s `VkQueue` busy with short fills of `scratch`, then make `joiner`'s command buffer,
+/// which joins that `VkQueue` where the device shares (the module docs): the command buffer, and
+/// the fills, to be waited for once the case ran. Where it shares, both queues are on one
+/// `VkQueue` and neither is long.
+fn joined(
+    device: &Device,
+    busy: &CommandQueue,
+    joiner: &CommandQueue,
+    shares: bool,
+) -> (CommandBuffer, Vec<CommandBuffer>) {
+    let scratch = device
+        .new_buffer(16 << 20, ResourceOptions::private())
+        .unwrap();
+    let fills: Vec<CommandBuffer> = (0..24)
+        .map(|_| {
+            let command_buffer = busy.command_buffer().unwrap();
+            let mut blit = command_buffer.blit_command_encoder().unwrap();
+            blit.fill_buffer(&scratch, 0..(16 << 20), 0x77).unwrap();
+            blit.end_encoding().unwrap();
+            command_buffer.commit().unwrap();
+            command_buffer
+        })
+        .collect();
+    fills.last().unwrap().wait_until_scheduled().unwrap();
+    let joins = device.work_counts().queue_joins;
+    let made = joiner.command_buffer().unwrap();
+    let (on, with) = (joiner.vk_queue_sharing(), busy.vk_queue_sharing());
+    if shares {
+        assert!(device.work_counts().queue_joins > joins, "the queue joined");
+        assert_eq!(on, with, "both queues on one VkQueue, neither long");
+        assert!(!on.1, "neither queue is long");
+    }
+    (made, fills)
+}
+
+/// [`an_encoder_after_a_signal_reads_what_another_queue_wrote_after_it`] with the two queues on
+/// one `VkQueue` where the device shares (the module docs).
+#[test]
+fn an_encoder_after_a_signal_reads_another_queue_s_write_on_one_vk_queue() {
+    let messages = Messages::default();
+    let cache = ScratchCache::new().unwrap();
+    let (device, kernels, shares) = sharing_lane(&messages, &cache);
+    let (first, second) = (
+        device.new_command_queue().unwrap(),
+        device.new_command_queue().unwrap(),
+    );
+    let initial = Rng(0x5162).bytes(BYTES);
+    let (row, value) = (6, 0x4d);
+    let truth = buffer_with(&device, &initial).unwrap();
+    let texture = shadowed(&device, &truth);
+    let event = device.new_event().unwrap();
+    let reads = [(); 2].map(|_| read_target(&device));
+    let (y, fills) = joined(&device, &first, &second, shares);
+    y.encode_wait_for_event(EventRef::Event(&event), 1).unwrap();
+    fill_row(&y, &truth, row, value);
+    y.commit().unwrap();
+    let x = first.command_buffer().unwrap();
+    texel_dispatch(&x, &kernels.read, &texture, &reads[0]);
+    x.encode_signal_event(EventRef::Event(&event), 1).unwrap();
+    texel_dispatch(&x, &kernels.read, &texture, &reads[1]);
+    x.commit().unwrap();
+    for command_buffer in fills.iter().chain([&x, &y]) {
+        completed(command_buffer);
+    }
+    println!(
+        "ONE-VKQUEUE-SIGNAL on {}: sharing {shares}, X's queue {:?}, Y's {:?}",
+        device.name(),
+        first.vk_queue_sharing(),
+        second.vk_queue_sharing()
+    );
+    let read = |at: usize| read_buffer(&reads[at], 0, 4 * WORDS).unwrap();
+    assert_eq!(
+        read(0),
+        texels_of(&initial),
+        "the encoder before the signal"
+    );
+    assert_eq!(
+        read(1),
+        texels_of(&filled(&initial, row, value)),
+        "the encoder after the signal, which Y's fill runs before"
+    );
+    drop((texture, truth, first, second, kernels, event));
+    drop(device);
+    layer_reported_nothing_at_all(&messages);
+}
+
+/// [`a_write_of_logged_pages_after_an_event_wait_reaches_a_copy_in_behind_a_later_hold`] with no
+/// spin and the two queues on one `VkQueue` where the device shares (the module docs).
+#[test]
+fn a_waiting_writer_s_hold_is_withheld_on_one_vk_queue() {
+    let messages = Messages::default();
+    let cache = ScratchCache::new().unwrap();
+    let (device, kernels, shares) = sharing_lane(&messages, &cache);
+    let (first, second) = (
+        device.new_command_queue().unwrap(),
+        device.new_command_queue().unwrap(),
+    );
+    let mapping = Mapping::anonymous(GUEST_PAGE);
+    let initial = Rng(0x9A6F).bytes(BYTES);
+    mapping.write(0, &initial);
+    let log = Arc::new(GuestLog::default());
+    log.told(0..BYTES);
+    // SAFETY: the mapping outlives the buffer, dropped first, and stays writable.
+    let memory = unsafe { HostMemory::new(mapping.pointer()) }.with_dirty_pages(Arc::clone(&log));
+    // SAFETY: as above.
+    let pages = unsafe {
+        device.new_buffer_with_bytes_no_copy(
+            memory,
+            GUEST_PAGE as u64,
+            ResourceOptions::default(),
+            None,
+        )
+    }
+    .unwrap();
+    let texture = shadowed(&device, &pages);
+    let event = device.new_event().unwrap();
+    let (row, value) = (2, 0x5b);
+    let reads = [(); 2].map(|_| read_target(&device));
+    let before = gated(&device.work_counts());
+    let withheld = device.work_counts().dirty_holds_withheld;
+    let (y, fills) = joined(&device, &first, &second, shares);
+    y.encode_wait_for_event(EventRef::Event(&event), 1).unwrap();
+    fill_row(&y, &pages, row, value);
+    y.commit().unwrap();
+    let x = first.command_buffer().unwrap();
+    texel_dispatch(&x, &kernels.read, &texture, &reads[0]);
+    x.encode_signal_event(EventRef::Event(&event), 1).unwrap();
+    x.commit().unwrap();
+    let z = first.command_buffer().unwrap();
+    texel_dispatch(&z, &kernels.read, &texture, &reads[1]);
+    z.commit().unwrap();
+    for command_buffer in fills.iter().chain([&x, &y, &z]) {
+        completed(command_buffer);
+    }
+    let after = gated(&device.work_counts());
+    let counts: [u64; 5] = std::array::from_fn(|i| after[i] - before[i]);
+    let withheld = device.work_counts().dirty_holds_withheld - withheld;
+    println!(
+        "ONE-VKQUEUE-HOLD on {}: sharing {shares}, X's queue {:?}, Y's {:?}, gated copies in \
+         (gated, whole, skipped, bytes whole, bytes copied) {counts:?}, holds withheld {withheld}",
+        device.name(),
+        first.vk_queue_sharing(),
+        second.vk_queue_sharing()
+    );
+    assert!(counts[0] > 0, "the copies in were gated");
+    assert!(
+        withheld > 0,
+        "X's hold was withheld while Y, which waits, had not completed"
+    );
+    let read = |at: usize| read_buffer(&reads[at], 0, 4 * WORDS).unwrap();
+    assert_eq!(read(0), texels_of(&initial), "X's read, before the signal");
+    assert_eq!(
+        read(1),
+        texels_of(&filled(&initial, row, value)),
+        "Z's read, after Y's fill"
+    );
+    drop((texture, pages, first, second, kernels, event));
+    drop(device);
+    drop(mapping);
+    layer_reported_nothing_at_all(&messages);
 }
 
 /// Another queue's encoder of the texture ends between a command buffer's two, and the CPU writes

@@ -13,6 +13,9 @@
 //!   `VkQueue` read, `joins_withheld_from_unshared` above 0 where the device shares), a queue
 //!   placed on one leaves it at its next idle point (`queue_moves_off_unshared`), and under
 //!   `PerQueue` an unshared queue takes the round robin's next `VkQueue`, as any queue does.
+//! - **Untimed devices.** A device that answers GPU times from the host (`gpu_times_from_host`)
+//!   does not share, and counts it (`queue_sharing_untimed`) where it has two `VkQueue`s of one
+//!   family to share: a queue is known long only by its command buffers' timestamps.
 //! - **Isolation.** A compositor's small command buffers, committed at 4,800 a second and never
 //!   waited for, beside an application's command buffers of about 30 ms each: once the
 //!   application's queue went long, the compositor's 99th percentile over 2 s stays under 5 ms
@@ -45,9 +48,8 @@ const SETTLING: Duration = Duration::from_millis(50);
 /// The bytes one fill of a long command buffer writes.
 const FILL_BYTES: u64 = 64 << 20;
 
-/// The device the cfg selects under `queue_sharing`, its shader cache in `cache`, its check
-/// settled.
-fn device(cache: &Scratch, queue_sharing: QueueSharingPolicy) -> Device {
+/// The options of the device the cfg selects under `queue_sharing`, its shader cache in `cache`.
+fn options(cache: &Scratch, queue_sharing: QueueSharingPolicy) -> DeviceOptions {
     let mut options = DeviceOptions {
         kinds: match cfg!(m2v_cpu_icd) {
             true => vec![DeviceKind::Cpu],
@@ -65,7 +67,12 @@ fn device(cache: &Scratch, queue_sharing: QueueSharingPolicy) -> Device {
     };
     options.policy = DevicePolicy::UNTRUSTED;
     options.policy.queue_sharing = queue_sharing;
-    let device = Device::system_default_with(&options).unwrap();
+    options
+}
+
+/// That device, its check settled.
+fn device(cache: &Scratch, queue_sharing: QueueSharingPolicy) -> Device {
+    let device = Device::system_default_with(&options(cache, queue_sharing)).unwrap();
     assert!(device.settle_queue_switch_check(WAIT), "the check settles");
     println!("{queue_sharing:?}: {}", device.queue_switch_check_report());
     device
@@ -81,6 +88,7 @@ fn each_policy(leg: &str, test: impl Fn(&Device, bool)) {
             !shares || policy == QueueSharingPolicy::Adaptive,
             "no device shares under PerQueue"
         );
+        assert_eq!(device.work_counts().queue_sharing_untimed, 0, "{policy:?}");
         test(&device, shares);
         if !shares {
             assert_eq!(device.work_counts().queue_moves, 0, "{policy:?}");
@@ -342,6 +350,9 @@ fn under_per_queue_an_unshared_queue_takes_the_round_robin_s_next_vk_queue() {
 /// What one isolation run measured: the compositor's latencies in milliseconds.
 struct Isolation {
     latencies: Vec<f64>,
+    /// Each queue's changes of `VkQueue` or long mark (`CommandQueue::vk_queue_sharing`) over the
+    /// run, in words.
+    moves: String,
 }
 
 impl Isolation {
@@ -395,14 +406,18 @@ fn isolation(
     let fills = long_fills(&app, &big);
     let small = device.new_buffer(4096, ResourceOptions::private()).unwrap();
     let stop = Arc::new(AtomicBool::new(false));
+    let began = Instant::now();
     let application = {
         let stop = Arc::clone(&stop);
         std::thread::spawn(move || {
+            let mut seen = Seen::default();
             while !stop.load(Ordering::Relaxed) {
                 let command_buffer = long(&app, &big, fills);
+                seen.note(&app, began);
                 command_buffer.commit().unwrap();
                 command_buffer.wait_until_completed_for(WAIT).unwrap();
             }
+            seen.0
         })
     };
     let latencies = Arc::new(Mutex::new(Vec::new()));
@@ -417,8 +432,10 @@ fn isolation(
             let period = Duration::from_secs_f64(1.0 / 4800.0);
             let mut next = Instant::now();
             let mut last = None;
+            let mut seen = Seen::default();
             while !stop.load(Ordering::Relaxed) {
                 let command_buffer = compositor.command_buffer().unwrap();
+                seen.note(&compositor, began);
                 let mut blit = command_buffer.blit_command_encoder().unwrap();
                 blit.fill_buffer(&small, 0..256, 3).unwrap();
                 blit.end_encoding().unwrap();
@@ -444,10 +461,11 @@ fn isolation(
             if let Some(last) = last {
                 last.wait_until_completed_for(WAIT).unwrap();
             }
+            seen.0
         })
     };
-    let began = Instant::now();
-    while !ready(device) && began.elapsed() < WAIT {
+    let waiting = Instant::now();
+    while !ready(device) && waiting.elapsed() < WAIT {
         std::thread::sleep(Duration::from_millis(5));
     }
     assert!(ready(device), "the run did not reach its measured part");
@@ -456,15 +474,65 @@ fn isolation(
     std::thread::sleep(Duration::from_secs(2));
     recording.store(false, Ordering::Relaxed);
     stop.store(true, Ordering::Relaxed);
-    composing.join().unwrap();
-    application.join().unwrap();
+    let counts = device.work_counts();
+    let moves = format!(
+        "compositor {}; application {}; moves {} joins {} gone long {} settles {}",
+        composing.join().unwrap(),
+        application.join().unwrap(),
+        counts.queue_moves,
+        counts.queue_joins,
+        counts.queues_gone_long,
+        counts.long_queue_settles
+    );
     let latencies = latencies.lock().unwrap().clone();
     assert!(
         latencies.len() > 1000,
         "{} compositor samples",
         latencies.len()
     );
-    Isolation { latencies }
+    Isolation { latencies, moves }
+}
+
+/// A queue's changes of `VkQueue` or long mark, each at its command buffer's count and the
+/// milliseconds into the run, in words.
+#[derive(Default)]
+struct Seen(String, u64, Option<(usize, bool)>);
+
+impl Seen {
+    fn note(&mut self, queue: &CommandQueue, began: Instant) {
+        let now = queue.vk_queue_sharing();
+        if self.2 != Some(now) {
+            let long = if now.1 { " long" } else { "" };
+            let at = began.elapsed().as_secs_f64() * 1e3;
+            self.0 += &format!("#{} {at:.1} ms VkQueue {}{long}, ", self.1, now.0);
+            self.2 = Some(now);
+        }
+        self.1 += 1;
+    }
+}
+
+#[test]
+fn a_device_that_answers_gpu_times_from_the_host_does_not_share_and_counts_it() {
+    let scratch = Scratch::new("queue-share-untimed");
+    let mut options = options(&scratch, QueueSharingPolicy::Adaptive);
+    options.gpu_times_from_host = true;
+    let device = Device::system_default_with(&options).unwrap();
+    assert!(device.settle_queue_switch_check(WAIT), "the check settles");
+    let counts = device.work_counts();
+    let could = crate::queue_switch_check::pair(&device).is_some();
+    println!(
+        "{}; could share: {could}",
+        device.queue_switch_check_report()
+    );
+    assert!(!device.shares_queues());
+    assert_eq!(counts.queue_sharing_untimed, u64::from(could));
+    assert_eq!(counts.queue_switch_checks_run, 0);
+    let queue = device.new_command_queue().unwrap();
+    let target = device
+        .new_buffer(1 << 20, ResourceOptions::private())
+        .unwrap();
+    wait_all(burst(&queue, &target, 8));
+    assert_eq!(device.work_counts().queue_moves, 0);
 }
 
 #[test]
@@ -477,11 +545,11 @@ fn a_compositor_beside_a_long_queue_keeps_its_latency_once_that_queue_went_long(
         let ready = |device: &Device| device.work_counts().queues_gone_long >= 1;
         let run = isolation(device, compositor, ready);
         println!(
-            "p99 {:.2} ms, {} stalls of {} samples; {:?}",
+            "p99 {:.2} ms, {} stalls of {} samples; {}",
             run.p99(),
             run.stalls(),
             run.latencies.len(),
-            device.work_counts().queues_gone_long
+            run.moves
         );
         assert!(run.p99() < 5.0, "p99 {:.2} ms", run.p99());
         assert!(run.stalls() <= 1, "{} stalls", run.stalls());
@@ -497,10 +565,11 @@ fn an_unshared_compositor_beside_a_long_queue_never_stalls() {
         let compositor = device.new_command_queue_unshared(64).unwrap();
         let run = isolation(device, compositor, |_| true);
         println!(
-            "p99 {:.2} ms, {} stalls of {} samples",
+            "p99 {:.2} ms, {} stalls of {} samples; {}",
             run.p99(),
             run.stalls(),
-            run.latencies.len()
+            run.latencies.len(),
+            run.moves
         );
         assert!(run.p99() < 5.0, "p99 {:.2} ms", run.p99());
         assert_eq!(run.stalls(), 0, "the unshared compositor stalled");

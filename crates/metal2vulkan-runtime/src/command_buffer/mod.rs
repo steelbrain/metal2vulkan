@@ -4302,7 +4302,9 @@ impl CommandBufferShared {
     /// timestamps takes its times here: encoder-less, where its queue reached it; answered from
     /// the host, its kernel end (or its queue's latest end) and its completion. Every one moves
     /// its queue's latest GPU end: its own, or its completion where it has none (an upper bound
-    /// of its GPU end).
+    /// of its GPU end). One whose timestamps say its GPU work ran for over
+    /// `queue_share::LONG_HEAD` marks its queue long, before the turn finishes it
+    /// (`queue_share.rs`).
     pub(super) fn place_gpu_times(&self) {
         let shared = self.device.shared();
         let mut state = lock(&self.state);
@@ -4343,6 +4345,16 @@ impl CommandBufferShared {
                 }
             }
         });
+        let long = match (state.times.stamped, shared.timing.clock()) {
+            (Stamped::Read(Some((start, end))), Some(clock)) => {
+                clock.duration(start, end) > crate::queue_share::LONG_HEAD
+            }
+            _ => false,
+        };
+        drop(state);
+        if long {
+            self.queue.went_long();
+        }
     }
 
     /// The scheduler submitted the last batch, or held it in a group (`group.rs`): in the queue's

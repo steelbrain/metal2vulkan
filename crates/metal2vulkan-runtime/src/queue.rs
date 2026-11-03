@@ -28,10 +28,10 @@
 //! Past them, and on a device whose families have one queue each (MoltenVK's four, RADV's and
 //! lavapipe's single graphics queue), queues share and the waiting stands; each queue that takes a
 //! `VkQueue` another took is counted (`WorkCounts::queues_sharing_a_vk_queue`). Where queues move,
-//! they share by choice, to spare the GPU's idling at each switch, and a queue whose command
-//! buffer ran over 2 ms as its `VkQueue`'s oldest is long: it holds the queues that shared with it
-//! through that command buffer and while it holds work, then moves to a `VkQueue` of its own at
-//! its next idle point, and no queue joins it (`queue-sharing`, `queue_share.rs`).
+//! they share by choice, to spare the GPU's idling at each switch, and a queue whose command buffer
+//! ran on the GPU for over 2 ms, by its own timestamps, is long: it holds the queues that shared
+//! with it through that command buffer and while it holds work, then moves to a `VkQueue` of its
+//! own at its next idle point, and no queue joins it (`queue-sharing`, `queue_share.rs`).
 //!
 //! **Isolation.** A queue made with `Device::new_command_queue_unshared` never moves, and no queue
 //! joins its `VkQueue`: where the device shares, it takes a `VkQueue` no command queue holds where
@@ -560,19 +560,21 @@ impl CommandQueue {
         joined
     }
 
-    /// One of the queue's command buffers ran as its `VkQueue`'s oldest in flight for over
-    /// `queue_share::LONG_HEAD`: a round robin's queue is long from now on, counted once on its
-    /// `VkQueue` (`WorkCounts::queues_gone_long`). Called by the waiter that saw it complete,
-    /// under the completion's lock, while the command buffer holds its slot, so the queue moves
-    /// meanwhile no more than it holds another `VkQueue` (`command_buffer/completion.rs`).
+    /// One of the queue's command buffers ran on the GPU for over `queue_share::LONG_HEAD`, by
+    /// its own timestamps: where the device shares, a round robin's queue is long from now on,
+    /// counted once on its `VkQueue` (`WorkCounts::queues_gone_long`). Called by the completion
+    /// turn that read them, before it finishes the command buffer, which holds its slot until
+    /// then, so the queue moves meanwhile no more than it holds another `VkQueue`
+    /// (`CommandBufferShared::place_gpu_times`).
     pub(super) fn went_long(&self) {
         let queue = &self.0;
+        let shared = queue.device.shared();
         if queue.kind != Kind::RoundRobin
+            || !shared.queue_switch.shares()
             || queue.sharing.fetch_or(LONG, Ordering::AcqRel) & LONG != 0
         {
             return;
         }
-        let shared = queue.device.shared();
         let vk_queue = queue.vk_queue.load(Ordering::Acquire);
         shared.queues[vk_queue].share.went_long();
         shared.counts.queue_went_long();
@@ -610,6 +612,15 @@ impl CommandQueue {
     /// buffers' making to that command buffer's completion ([`QueueShared::vk_queue`]).
     pub(super) fn vk_queue(&self) -> usize {
         self.0.vk_queue.load(Ordering::Acquire)
+    }
+
+    /// No Metal counterpart, for the lanes that watch command queues share `VkQueue`s
+    /// (`queue_share.rs`): the index of the device's `VkQueue` the queue submits to now, and
+    /// whether it is long.
+    #[doc(hidden)]
+    pub fn vk_queue_sharing(&self) -> (usize, bool) {
+        let long = self.0.sharing.load(Ordering::Acquire) & LONG != 0;
+        (self.vk_queue(), long)
     }
 
     /// The backings of memoryless attachments the queue keeps for its passes

@@ -2817,6 +2817,7 @@ field	metal2vulkan-runtime::WorkCounts.queue_drains	pub queue_drains: u64
 field	metal2vulkan-runtime::WorkCounts.queue_joins	pub queue_joins: u64
 field	metal2vulkan-runtime::WorkCounts.queue_moves	pub queue_moves: u64
 field	metal2vulkan-runtime::WorkCounts.queue_moves_off_unshared	pub queue_moves_off_unshared: u64
+field	metal2vulkan-runtime::WorkCounts.queue_sharing_untimed	pub queue_sharing_untimed: u64
 field	metal2vulkan-runtime::WorkCounts.queue_submissions	pub queue_submissions: u64
 field	metal2vulkan-runtime::WorkCounts.queue_switch_checks_recalled	pub queue_switch_checks_recalled: u64
 field	metal2vulkan-runtime::WorkCounts.queue_switch_checks_run	pub queue_switch_checks_run: u64
@@ -7675,6 +7676,7 @@ method	metal2vulkan-runtime::CommandQueue::command_buffer	pub fn command_buffer(
 method	metal2vulkan-runtime::CommandQueue::device	pub fn device(&self) -> &Device
 method	metal2vulkan-runtime::CommandQueue::label	pub fn label(&self) -> Option<String>
 method	metal2vulkan-runtime::CommandQueue::set_label	pub fn set_label(&self, label: &str)
+method	metal2vulkan-runtime::CommandQueue::vk_queue_sharing	pub fn vk_queue_sharing(&self) -> (usize, bool)
 method	metal2vulkan-runtime::CommandQueue::with_vk_queue	pub unsafe fn with_vk_queue<R>(&self, f: impl FnOnce(vk::Queue, u32) -> R) -> R
 method	metal2vulkan-runtime::CommitFailure::new	pub fn new(code: u64) -> CommitFailure
 method	metal2vulkan-runtime::ComputeCommandEncoder::dispatch_threadgroups	pub fn dispatch_threadgroups(&mut self, groups: Size, threads: Size) -> Result<(), Error>
@@ -7833,6 +7835,7 @@ method	metal2vulkan-runtime::Device::settle_in_place_checks	pub fn settle_in_pla
 method	metal2vulkan-runtime::Device::settle_queue_switch_check	pub fn settle_queue_switch_check(&self, timeout: Duration) -> bool
 method	metal2vulkan-runtime::Device::shader_cache_directory	pub fn shader_cache_directory(&self) -> &Path
 method	metal2vulkan-runtime::Device::shader_cache_statistics	pub fn shader_cache_statistics(&self) -> ShaderCacheStatistics
+method	metal2vulkan-runtime::Device::shares_vk_queues	pub fn shares_vk_queues(&self) -> bool
 method	metal2vulkan-runtime::Device::sparse_tile_size	pub fn sparse_tile_size(&self, texture_type: TextureType, pixel_format: PixelFormat, sample_count: u64) -> Size
 method	metal2vulkan-runtime::Device::sparse_tile_size_for_page	pub fn sparse_tile_size_for_page(&self, _texture_type: TextureType, pixel_format: PixelFormat, sample_count: u64, page: SparsePageSize) -> Size
 method	metal2vulkan-runtime::Device::sparse_tile_size_in_bytes	pub fn sparse_tile_size_in_bytes(&self) -> u64

@@ -225,9 +225,9 @@ compile does. `DevicePolicy::default()` is `DevicePolicy::UNTRUSTED`:
   on the RTX 5080 Laptop GPU idles about 50 us at each such switch), a command queue that makes a
   command buffer while it holds no other uncompleted one moves onto the busy `VkQueue` of its
   family whose oldest batch has run under 0.5 ms, so short command buffers of several queues run
-  with no switch between them. A queue whose batch ran over 2 ms as its `VkQueue`'s oldest is
-  long: no queue joins its `VkQueue`, and it moves once more, at its next such make, to an idle
-  `VkQueue` of its own. So a queue waits behind another's long command buffer once per queue
+  with no switch between them. A queue one of whose command buffers ran on the GPU for over 2 ms,
+  by its own timestamps, is long: no queue joins its `VkQueue`, and it moves once more, at its next
+  such make, to an idle `VkQueue` of its own. So a queue waits behind another's long command buffer once per queue
   that goes long, about that command buffer's length: the first long command buffer of a queue
   that shared holds the command buffers committed behind it there for its whole length,
   announced `queue-sharing` at the device's first join (section 9). A queue made with
@@ -237,7 +237,10 @@ compile does. `DevicePolicy::default()` is `DevicePolicy::UNTRUSTED`:
   where a shared one's had one stall of 30 ms beside 30 ms command buffers). Presenting queues, and a queue that lent its `VkQueue`
   (`CommandQueue::with_vk_queue`), never move. Before the check answers, and on a device whose
   check finds no idling or that has no two `VkQueue`s of one family (MoltenVK, RADV, lavapipe),
-  each queue keeps the `VkQueue` it took at its creation, round robin.
+  each queue keeps the `VkQueue` it took at its creation, round robin. So does a device whose
+  command buffers write no GPU timestamps it reads (`DeviceOptions::gpu_times_from_host`, or a
+  driver whose timestamps wait for every queue's), counted `WorkCounts::queue_sharing_untimed`: a
+  queue is known long only by its command buffers' timestamps.
   `queue_sharing = QueueSharingPolicy::PerQueue`, which `exact_answers()` selects, keeps each
   command queue on that `VkQueue` everywhere and runs no check.
 
@@ -2614,8 +2617,8 @@ bound.
   `Device::new_command_queue_unshared`, which never move and which no queue joins. Cost: its
   command buffers run in one `VkQueue`'s order with those of the command queues that share it,
   where Metal's queues wait for each other only inside one command: the first command buffer of
-  each such queue that runs as its `VkQueue`'s oldest for over 2 ms holds the command buffers the
-  others committed behind it for its whole length, and its later ones while its queue holds work,
+  each such queue whose GPU work runs over 2 ms holds the command buffers the others committed
+  behind it for its whole length, and its later ones while its queue holds work,
   until that queue moves at its next idle point; a command buffer's GPU start time includes the
   other queues' work before it; QueueSharingPolicy::PerQueue keeps each command queue on the
   `VkQueue` it took at its creation.

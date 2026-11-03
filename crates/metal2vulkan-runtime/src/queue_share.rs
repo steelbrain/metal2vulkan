@@ -31,10 +31,19 @@
 //!   the one with the most batches in flight, then the latest submission; else it stays, unless a
 //!   long or unshared queue holds its own `VkQueue`; then the most recently used idle one; else it
 //!   stays.
-//! - **Long queues.** A batch that ran as its `VkQueue`'s oldest in flight for over [`LONG_HEAD`]
-//!   marks its command queue long, from the waiter that saw it complete, under the completion's
-//!   lock, before the turn that finishes it, so before the queue's next command buffer is made
-//!   (`command_buffer/completion.rs`). A long queue moves once more, at its next such make: to an
+//! - **Long queues.** A command buffer whose GPU work ran for over [`LONG_HEAD`], by its own
+//!   timestamps (its first batch's start to its last's end), marks its command queue long, in the
+//!   completion turn that read them, before the turn finishes it, so before the queue's next
+//!   command buffer is made (`CommandBufferShared::place_gpu_times`). Its own GPU time, not the
+//!   host's view of how long it ran as its `VkQueue`'s oldest: that view also holds its wait for
+//!   the GPU to start it and the waiter's lateness to see it complete, which marked a queue of
+//!   one-draw command buffers long on the RTX 5080 Laptop GPU beside another process's 30 ms ones
+//!   (draws of 11 and 16 us of GPU time seen 2.0 and 2.3 ms after they became their `VkQueue`'s
+//!   oldest, 1.8 and 2.1 ms of it before they started). A device whose command buffers write no
+//!   timestamps the host can read
+//!   (`gpu_times_from_host`, a driver whose timestamps wait for every queue's, or no calibrated
+//!   timestamps) does not share ([`Verdict::Unchecked`],
+//!   `WorkCounts::queue_sharing_untimed`). A long queue moves once more, at its next such make: to an
 //!   idle `VkQueue` of its family that no long or unshared queue holds, the one used least
 //!   recently, else it stays; then never again. So the first long command buffer of a queue that
 //!   shared holds the command buffers the queues sharing its `VkQueue` committed behind it for its
@@ -63,14 +72,16 @@ use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU64, AtomicU8, AtomicUsize,
 use std::sync::{Condvar, Mutex};
 use std::time::{Duration, Instant};
 
-/// A batch that ran as its `VkQueue`'s oldest in flight for longer than this, in nanoseconds,
-/// marks its command queue long: 2 ms. Measured against 10 ms on the RTX 5080 Laptop GPU, beside
-/// an application queue of 30 ms command buffers: both mark that queue at its first one, but only
-/// 2 ms also marks a queue of 2 to 10 ms command buffers, which at 10 ms the queues sharing with it
-/// would stall behind again and again (the compositor's p99 4.81 ms against 24.0 ms where the long
-/// queue stays home, 2.15 against 3.48 ms where it moves). The cost: a queue whose short command
-/// buffers the GPU slices behind another `VkQueue`'s work for over 2 ms (measured in 3 of 7 runs,
-/// at 2 to 6 ms) is marked long too, which only stops it sharing.
+/// A command buffer whose GPU work ran for longer than this, in nanoseconds, by its own
+/// timestamps, marks its command queue long: 2 ms. Measured against 10 ms on the RTX 5080 Laptop
+/// GPU (each batch timed by its host-seen age as its `VkQueue`'s oldest), beside an application
+/// queue of 30 ms command buffers: both mark that queue at its first
+/// one, but only 2 ms also marks a queue of 2 to 10 ms command buffers, which at 10 ms the queues
+/// sharing with it would stall behind again and again (the compositor's p99 4.81 ms against
+/// 24.0 ms where the long queue stays home, 2.15 against 3.48 ms where it moves). A command buffer
+/// the GPU runs in slices between other work counts those slices too, which only stops its queue
+/// sharing: one-draw command buffers beside another process's 30 ms ones spanned up to 1.52 ms
+/// there.
 pub(crate) const LONG_HEAD: u64 = 2_000_000;
 
 /// A busy `VkQueue` is joined only while its oldest batch in flight has run less than this, in
@@ -282,8 +293,10 @@ pub(crate) enum Verdict {
     /// It does not.
     DoesNotIdle,
     /// No measurement: the device has no two `VkQueue`s of its primary family in the round
-    /// robin, writes no timestamps there or calibrates none (timestamps of two `VkQueue`s compare
-    /// only on a calibrated device), its policy is `PerQueue`, or a run failed.
+    /// robin, writes no timestamps there, calibrates none (timestamps of two `VkQueue`s compare
+    /// only on a calibrated device) or answers GPU times from the host
+    /// ([`queue_switch_check::timed`](crate::queue_switch_check::timed)), its policy is
+    /// `PerQueue`, or a run failed.
     Unchecked,
 }
 
@@ -464,41 +477,7 @@ pub(crate) fn decode(identity: &DriverIdentity, bytes: &[u8]) -> Option<(Verdict
     matches!(verdict, Verdict::Idles | Verdict::DoesNotIdle).then_some((verdict, cost))
 }
 
-/// What a `VkQueue`'s waiter reads before its wait for the queue's oldest batch in flight, where
-/// the device shares `VkQueue`s ([`Device::head_watch`]).
-#[derive(Clone, Copy, Debug)]
-pub(crate) struct HeadWatch {
-    /// The value the host saw the queue's timeline reach.
-    completed: u64,
-    /// When the batch became the queue's oldest.
-    since: u64,
-}
-
-impl HeadWatch {
-    /// Whether the batch, seen complete as the wait's value moved to `value`, ran as its queue's
-    /// oldest for over [`LONG_HEAD`]. A value that did not move says nothing of the batch.
-    pub(crate) fn ran_long(&self, value: u64) -> bool {
-        value > self.completed
-            && crate::gpu_time::host_nanos().saturating_sub(self.since) > LONG_HEAD
-    }
-}
-
 impl Device {
-    /// For `VkQueue` `queue`'s waiter, where the device shares `VkQueue`s and the queue is the
-    /// round robin's: what it reads before its wait ([`HeadWatch`]); `None` elsewhere, or where
-    /// the queue's oldest batch became its oldest before the device shared.
-    pub(crate) fn head_watch(&self, queue: usize) -> Option<HeadWatch> {
-        let shared = self.shared();
-        if !self.shares_queues() || queue >= shared.round_robin() {
-            return None;
-        }
-        let slot = &shared.queues[queue];
-        Some(HeadWatch {
-            completed: slot.completed_value(),
-            since: slot.share.head_since()?,
-        })
-    }
-
     /// Whether the device shares `VkQueue`s now ([`QueueSwitch::shares`]).
     pub(crate) fn shares_queues(&self) -> bool {
         self.shared().queue_switch.shares()
@@ -615,11 +594,17 @@ impl Device {
     /// As the device is made: its verdict where the check cannot measure (`Unchecked`, below) or
     /// a record holds it (settled, the round robin's `VkQueue`s then watched where it shares);
     /// else it waits for the check, which the first command queue of the round robin starts. A
-    /// record that does not decode is no record.
+    /// record that does not decode is no record. A device with two `VkQueue`s to share whose
+    /// command buffers write no timestamps it reads is counted (`WorkCounts::queue_sharing_untimed`).
     pub(crate) fn recall_queue_switch_check(&self) {
         let shared = self.shared();
         let switch = &shared.queue_switch;
         if !switch.adaptive || crate::queue_switch_check::pair(self).is_none() {
+            switch.settle(Verdict::Unchecked, 0, None);
+            return;
+        }
+        if !crate::queue_switch_check::timed(self) {
+            shared.counts.queue_sharing_untimed();
             switch.settle(Verdict::Unchecked, 0, None);
             return;
         }
@@ -652,6 +637,14 @@ impl Device {
     pub fn settle_queue_switch_check(&self, timeout: Duration) -> bool {
         self.start_queue_switch_check();
         self.shared().queue_switch.wait(timeout)
+    }
+
+    /// No Metal counterpart: whether the device shares `VkQueue`s now, its policy `Adaptive` and
+    /// its check's verdict `Idles` (the module docs). A runtime extension for the lanes that
+    /// assert a queue joined another's `VkQueue` where the device shares.
+    #[doc(hidden)]
+    pub fn shares_vk_queues(&self) -> bool {
+        self.shares_queues()
     }
 
     /// The device's check's verdict, the switch cost it measured, how long it ran in this process

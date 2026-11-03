@@ -323,6 +323,10 @@ fn fixture_bitcode() -> Vec<u8> {
 /// Each draw's queue number and its GPU start and end there, in seconds.
 type Times = Arc<Mutex<Vec<(usize, f64, f64)>>>;
 
+/// A queue's changes of `VkQueue` or long mark: its command buffers made by then, the
+/// microseconds into the run, and its `VkQueue` and mark.
+type Seen = Vec<(u64, u128, (usize, bool))>;
+
 /// The p50, p99 and largest of `samples` (milliseconds), and how many are stalls.
 fn summary(samples: &mut [f64]) -> String {
     if samples.is_empty() {
@@ -629,8 +633,16 @@ fn rate(kit: &Arc<Kit>, options: &Options, threads: usize, in_flight: usize) {
                 let target = kit.target();
                 let mut flying = std::collections::VecDeque::new();
                 let mut made = 0u64;
+                // Each change of the queue's `VkQueue` or long mark: at which command buffer,
+                // how far into the run.
+                let mut seen = Vec::new();
+                let started = Instant::now();
                 while !stop.load(Ordering::Relaxed) {
                     let command_buffer = kit.draw(&queue, &target);
+                    let now = queue.vk_queue_sharing();
+                    if seen.last().is_none_or(|&(_, _, last)| last != now) {
+                        seen.push((made, started.elapsed().as_micros(), now));
+                    }
                     let times = Arc::clone(&times);
                     let latencies = Arc::clone(&latencies);
                     let committed = Arc::new(Mutex::new(0.0));
@@ -660,13 +672,14 @@ fn rate(kit: &Arc<Kit>, options: &Options, threads: usize, in_flight: usize) {
                 for done in flying {
                     done.wait_until_completed().unwrap();
                 }
-                made
+                (made, seen)
             })
         })
         .collect();
     std::thread::sleep(Duration::from_secs_f64(options.seconds));
     stop.store(true, Ordering::Relaxed);
-    let made: u64 = handles.into_iter().map(|h| h.join().unwrap()).sum();
+    let each: Vec<(u64, Seen)> = handles.into_iter().map(|h| h.join().unwrap()).collect();
+    let made: u64 = each.iter().map(|(made, _)| made).sum();
     let elapsed = began.elapsed().as_secs_f64();
     let cpu_after = thread_ticks();
     std::thread::sleep(Duration::from_millis(100));
@@ -710,6 +723,21 @@ fn rate(kit: &Arc<Kit>, options: &Options, threads: usize, in_flight: usize) {
         per(after.batch_submit_nanos, counts.batch_submit_nanos) / 1e3,
     );
     println!("  threads' CPU: {}", busiest(&cpu, &cpu_after, elapsed));
+    for (thread, (made, seen)) in each.iter().enumerate() {
+        let changes: Vec<String> = seen
+            .iter()
+            .map(|(at, us, (vk_queue, long))| {
+                format!(
+                    "#{at} {us}us VkQueue {vk_queue}{}",
+                    if *long { " long" } else { "" }
+                )
+            })
+            .collect();
+        println!(
+            "  thread {thread}: {made} command buffers; {}",
+            changes.join(", ")
+        );
+    }
 }
 
 fn idle_queues(kit: &Arc<Kit>, options: &Options, count: usize) {

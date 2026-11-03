@@ -1809,9 +1809,8 @@ degradations! {
         QueueSharing = "queue-sharing", Performance,
             "its command buffers run in one `VkQueue`'s order with those of the command queues \
              that share it, where Metal's queues wait for each other only inside one command: \
-             the first command buffer of each such queue that runs as its `VkQueue`'s oldest for \
-             over 2 ms holds the command buffers the others committed behind it for its whole \
-             length, and its later ones while its queue holds work, until that queue moves at \
+             the first command buffer of each such queue whose GPU work runs over 2 ms holds \
+             the command buffers the others committed behind it for its whole length, and its later ones while its queue holds work, until that queue moves at \
              its next idle point; a command buffer's GPU start time includes the other queues' \
              work before it; QueueSharingPolicy::PerQueue keeps each command queue on the \
              `VkQueue` it took at its creation";

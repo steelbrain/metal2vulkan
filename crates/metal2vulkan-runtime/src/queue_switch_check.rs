@@ -58,14 +58,24 @@ const WAIT_SLICE: Duration = Duration::from_millis(100);
 const FEWEST: usize = ROUNDS / 2;
 
 /// The two `VkQueue`s the check measures, by index among the device's: the first two the round
-/// robin lends of the primary family, where the device calibrates its timestamps and that family
-/// writes them; `None` elsewhere.
+/// robin lends of the primary family; `None` where it lends fewer.
 pub(crate) fn pair(device: &Device) -> Option<(usize, usize)> {
     let shared = device.shared();
-    shared.timing.clock()?.calibration?;
     let mut same = (0..shared.round_robin())
         .filter(|&index| shared.queues[index].family == shared.queue_family);
     Some((same.next()?, same.next()?))
+}
+
+/// Whether the device's command buffers write timestamps the host reads, and it calibrates them:
+/// the check compares two `VkQueue`s' timestamps, and a queue is known long only by its command
+/// buffers' own (`queue_share.rs`). Not where it answers GPU times from the host
+/// (`gpu_times_from_host`, or a driver whose timestamps wait for every queue's).
+pub(crate) fn timed(device: &Device) -> bool {
+    let timing = &device.shared().timing;
+    !timing.answers_from_host()
+        && timing
+            .clock()
+            .is_some_and(|clock| clock.calibration.is_some())
 }
 
 /// Start the check on a thread of its own: whether it started.
@@ -81,7 +91,7 @@ fn run(weak: crate::device::WeakDevice) {
     let Some(device) = weak.upgrade() else {
         return;
     };
-    let Some(pair) = pair(&device) else {
+    let Some(pair) = pair(&device).filter(|_| timed(&device)) else {
         device.settle_queue_switch(Verdict::Unchecked, 0, None);
         return;
     };

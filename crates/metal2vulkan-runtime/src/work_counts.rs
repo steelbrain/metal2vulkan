@@ -207,6 +207,7 @@ pub(crate) struct Counters {
     joins_withheld_from_unshared: AtomicU64,
     queue_switch_checks_run: AtomicU64,
     queue_switch_checks_recalled: AtomicU64,
+    queue_sharing_untimed: AtomicU64,
     slot_wait_nanos: AtomicU64,
     completed_waits: AtomicU64,
     event_waits_met: AtomicU64,
@@ -1565,6 +1566,12 @@ impl Counters {
     /// That check's verdict was read from the record of an earlier one (`queue_share.rs`).
     pub(crate) fn queue_switch_check_recalled(&self) {
         (self.queue_switch_checks_recalled).fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// A device that could share `VkQueue`s does not: its command buffers write no timestamps it
+    /// reads (`queue_switch_check::timed`).
+    pub(crate) fn queue_sharing_untimed(&self) {
+        (self.queue_sharing_untimed).fetch_add(1, Ordering::Relaxed);
     }
 
     /// A batch with work was submitted waiting for `waits` timelines at values the host saw them
@@ -4079,8 +4086,8 @@ pub struct WorkCounts {
     pub queue_moves: u64,
     /// Of `queue_moves`, those onto a `VkQueue` with another command queue's work in flight.
     pub queue_joins: u64,
-    /// Command queues marked long: one of their command buffers ran as its `VkQueue`'s oldest in
-    /// flight for over 2 ms, so no queue joins their `VkQueue` from then on.
+    /// Command queues marked long: one of their command buffers ran on the GPU for over 2 ms, by
+    /// its own timestamps, so no queue joins their `VkQueue` from then on.
     pub queues_gone_long: u64,
     /// Long command queues that settled, at their next idle point: on an idle `VkQueue` no long or
     /// unshared queue holds (a move, counted in `queue_moves` too), or where they were.
@@ -4097,6 +4104,11 @@ pub struct WorkCounts {
     /// Devices whose verdict of that check was read from the record of an earlier one of the same
     /// driver, device and runtime: no check ran for them.
     pub queue_switch_checks_recalled: u64,
+    /// Devices of `QueueSharingPolicy::Adaptive` with two `VkQueue`s of one family to share that
+    /// do not share, because their command buffers write no calibrated GPU timestamps the host
+    /// reads (`gpu_times_from_host`, a driver whose timestamps wait for every queue's, or none):
+    /// a queue is known long only by its command buffers' own GPU time. No check ran for them.
+    pub queue_sharing_untimed: u64,
     /// The waits batches with work made for timelines at values the host had seen them reach,
     /// which make what completed work wrote visible to them: one per timeline whose completed
     /// value moved since a batch of the same `VkQueue` last waited for it.
@@ -5755,6 +5767,7 @@ impl Device {
             queue_switch_checks_recalled: counters
                 .queue_switch_checks_recalled
                 .load(Ordering::Relaxed),
+            queue_sharing_untimed: counters.queue_sharing_untimed.load(Ordering::Relaxed),
             completed_waits: counters.completed_waits.load(Ordering::Relaxed),
             event_waits_met: counters.event_waits_met.load(Ordering::Relaxed),
             shared_event_waits_held: counters.shared_event_waits_held.load(Ordering::Relaxed),

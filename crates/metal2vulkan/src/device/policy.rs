@@ -434,16 +434,18 @@ pub enum ExtendedRangeBlitPolicy {
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum QueueSharingPolicy {
     /// The default, on a device whose own check, run once per driver and release, finds the GPU
-    /// idle when consecutive work comes from another `VkQueue` of one family; elsewhere, and
-    /// before the check answered, as [`PerQueue`](Self::PerQueue). A command queue that makes a
-    /// command buffer while it holds no other uncompleted one takes the busiest `VkQueue` of its
-    /// family whose oldest batch has run under 0.5 ms, else stays. A queue one of whose batches
-    /// ran as its `VkQueue`'s oldest for over 2 ms is long from then on: at its next such point
-    /// it takes an idle `VkQueue` no long queue holds and stays there, and no queue moves onto a
-    /// long queue's `VkQueue`. So the first long command buffer of a queue that shared holds the
-    /// command buffers the queues sharing with it committed behind it, once per queue that goes
-    /// long. Announced `queue-sharing` at the first move onto a `VkQueue` with another queue's
-    /// work in flight.
+    /// idle when consecutive work comes from another `VkQueue` of one family; elsewhere, and before
+    /// the check answered, as [`PerQueue`](Self::PerQueue). A command queue that makes a command
+    /// buffer while it holds no other uncompleted one takes the busiest `VkQueue` of its family
+    /// whose oldest batch has run under 0.5 ms, else stays. A queue one of whose command buffers
+    /// ran on the GPU for over 2 ms, by its own timestamps, is long from then on: at its next such
+    /// point it takes an idle `VkQueue` no long queue holds and stays there, and no queue moves
+    /// onto a long queue's `VkQueue`. So the first long command buffer of a queue that shared holds
+    /// the command buffers the queues sharing with it committed behind it, once per queue that goes
+    /// long. Announced `queue-sharing` at the first move onto a `VkQueue` with another queue's work
+    /// in flight. A device whose command buffers write no GPU timestamps the host reads (the
+    /// runtime's `gpu_times_from_host`, or a driver whose timestamps wait for every queue's) does
+    /// not share, and the runtime counts it (`WorkCounts::queue_sharing_untimed`).
     #[default]
     Adaptive,
     /// Each command queue on the `VkQueue` it took at its creation, round robin, for its life:

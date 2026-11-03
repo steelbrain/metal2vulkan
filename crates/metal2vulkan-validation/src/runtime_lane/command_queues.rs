@@ -12,8 +12,11 @@
 //! [`WAIT`].
 
 use super::host_memory::Mapping;
-use super::{layer_reported_nothing_at_all, validated_device, Messages, ScratchCache};
+use super::{
+    layer_reported_nothing_at_all, validated_device, validated_device_with, Messages, ScratchCache,
+};
 use crate::gpu::TEST_DEVICE;
+use metal2vulkan::device::QueueSharingPolicy;
 use metal2vulkan_runtime::{
     BufferContents, BufferDescriptor, CommandBuffer, CommandQueue, DeadlockCause, Deallocator,
     Degradation, Device, Error, EventRef, HostMemory, Invalid, KeepAlive, Problem, ResourceOptions,
@@ -442,18 +445,30 @@ pub(super) const QUEUE_SHARING: [Degradation; 1] = [Degradation::QueueSharing];
 
 /// A command queue that makes a command buffer while it holds no other uncompleted one, beside a
 /// queue whose short command buffers keep its `VkQueue` busy, joins that `VkQueue` where the device
-/// shares (`QueueSharingPolicy::Adaptive` on a device whose check finds its GPU idle between
-/// `VkQueue`s: NVIDIA's), and the device announces `queue-sharing` once however many queues join:
-/// each notice a join (`WorkCounts::queue_joins`), never one without. On a device that shares no
-/// `VkQueue` (lavapipe, RADV, MoltenVK) nothing joins and nothing is announced.
+/// shares (`QueueSharingPolicy::Adaptive`, set here over the lane's `exact_answers()`, on a device
+/// whose check finds its GPU idle between `VkQueue`s: NVIDIA's), and the device announces
+/// `queue-sharing` once however many queues join: each notice a join (`WorkCounts::queue_joins`,
+/// above 0 where the device shares), never one without. On a device that shares no `VkQueue`
+/// (lavapipe, RADV, MoltenVK) nothing joins and nothing is announced, and the test says why.
 #[test]
 fn a_queue_joining_another_s_busy_vk_queue_is_announced_once() {
     use metal2vulkan_runtime::ResourceOptions;
     let cache = ScratchCache::new().unwrap();
     let messages = Messages::default();
     {
-        let device = validated_device(TEST_DEVICE, &messages, cache.path()).unwrap();
+        let device = validated_device_with(TEST_DEVICE, &messages, cache.path(), |options| {
+            options.policy.queue_sharing = QueueSharingPolicy::Adaptive;
+        })
+        .unwrap();
         assert!(device.settle_queue_switch_check(WAIT), "the check settles");
+        let shares = device.shares_vk_queues();
+        if !shares {
+            println!(
+                "{} shares no VkQueue, so no queue joins: {}",
+                device.name(),
+                device.queue_switch_check_report()
+            );
+        }
         let sharing_kinds = || -> usize {
             messages
                 .take_notices()
@@ -462,13 +477,15 @@ fn a_queue_joining_another_s_busy_vk_queue_is_announced_once() {
                 .filter(|notice| QUEUE_SHARING.contains(&notice.degradation))
                 .count()
         };
+        // 16 MiB a fill: tens of microseconds each on the RTX 5080 Laptop GPU, so the busy queue's
+        // oldest batch is young when a joiner looks and no command buffer runs long.
         let buffer = device
-            .new_buffer(1 << 20, ResourceOptions::private())
+            .new_buffer(16 << 20, ResourceOptions::private())
             .unwrap();
         let fill = |queue: &CommandQueue| {
             let command_buffer = queue.command_buffer().unwrap();
             let mut blit = command_buffer.blit_command_encoder().unwrap();
-            blit.fill_buffer(&buffer, 0..(1 << 20), 0x5a).unwrap();
+            blit.fill_buffer(&buffer, 0..(16 << 20), 0x5a).unwrap();
             blit.end_encoding().unwrap();
             command_buffer.commit().unwrap();
             command_buffer
@@ -479,6 +496,8 @@ fn a_queue_joining_another_s_busy_vk_queue_is_announced_once() {
             .collect();
         for joiner in &joiners {
             let kept: Vec<CommandBuffer> = (0..24).map(|_| fill(&busy)).collect();
+            // Submitted, so the busy `VkQueue` has work in flight as the joiner makes its own.
+            kept.last().unwrap().wait_until_scheduled().unwrap();
             let joined = fill(joiner);
             joined.wait_until_completed_for(WAIT).unwrap();
             for command_buffer in kept {
@@ -486,6 +505,11 @@ fn a_queue_joining_another_s_busy_vk_queue_is_announced_once() {
             }
         }
         let joins = device.work_counts().queue_joins;
+        assert_eq!(
+            joins > 0,
+            shares,
+            "{joins} joins where the device shares: {shares}"
+        );
         assert_eq!(
             sharing_kinds(),
             usize::from(joins > 0),
