@@ -218,8 +218,12 @@ impl LiveDispatch {
             .map(VisibleFunctionTable::listed)
             .collect();
         reshape.field(&mut state.function_tables, listed);
-        // A value no shape reads (`BindState::heap_placement`).
+        // Values no shape reads (`BindState::heap_placement`, `used_in_token_order`,
+        // `resident_apart`): the residency lists its used resources in token order, and root tables
+        // the commit points elsewhere keep them out, as a dispatch's whole state has them.
         state.heap_placement = HeapPlacement::ResourceId;
+        state.used_in_token_order = true;
+        state.resident_apart = true;
         #[cfg(debug_assertions)]
         self.check_whole(tables, maps, samplers, function_tables);
         if reshape.may_reshape() {
