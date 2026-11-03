@@ -1,5 +1,6 @@
 //! Loops whose trip count the constants decide are unrolled where their counter decides a
-//! branch of their body, and SCCP then folds what each iteration's copy decides.
+//! branch of their body, and SCCP then folds what each iteration's copy decides; the unrolled
+//! body is kept only where it is no larger than the loop.
 
 use super::*;
 use crate::ir::{LoopHints, Unroll};
@@ -24,10 +25,17 @@ enum Ops {
     Run,
 }
 
+/// The operations of the default arm of [`counted`]'s switch: more than [`unroll::TRIPS`] copies
+/// of one cheap case, so that a loop whose copies take the cheap cases is larger than its copies.
+const HEAVY: u64 = 80;
+
+/// The cheap opcodes the loops of these tests take.
+const CHEAP: [u32; 4] = [1, 2, 2, 1];
+
 /// A kernel whose loop runs `i` from 0 while `bound` holds, switching on lane `i & 3` of the
 /// `<4 x i32>` opcodes `ops`: case 1 adds 3 to the accumulator, case 2 multiplies it by 5, any
-/// other value xors it with 7. The accumulator starts from parameter 1's first word and is stored
-/// to parameter 0. `hints` go on the latch.
+/// other value applies [`HEAVY`] xors and adds. The accumulator starts from parameter 1's first
+/// word and is stored to parameter 0. `hints` go on the latch.
 fn counted(bound: Bound, ops: Ops, hints: Option<LoopHints>) -> Result<Entry, Error> {
     let mut m = ModuleBuilder::new();
     let void = m.void();
@@ -106,7 +114,15 @@ fn counted(bound: Bound, ops: Ops, hints: Option<LoopHints>) -> Result<Entry, Er
     let b = f.bin(BinOp::Mul, acc, five);
     f.br(latch);
     f.switch_to(other);
-    let c = f.bin(BinOp::Xor, acc, seven);
+    let mut c = acc;
+    for k in 0..HEAVY {
+        c = if k % 2 == 0 {
+            f.bin(BinOp::Xor, c, seven)
+        } else {
+            let step = f.module().const_int(i32t, k);
+            f.bin(BinOp::Add, c, step)
+        };
+    }
     f.br(latch);
     f.switch_to(latch);
     let next = f.push(
@@ -188,14 +204,14 @@ fn ops_of(text: &str) -> Vec<&str> {
 
 #[test]
 fn a_loop_whose_counter_indexes_a_constant_vector_is_unrolled_and_folded() {
-    // Six iterations over the lanes 1, 2, 9, 1, then 1, 2 again: the counter's lane decides each
+    // Six iterations over the lanes 1, 2, 2, 1, then 1, 2 again: the counter's lane decides each
     // copy's switch, so straight-line code remains, the counter's own `add`s folded away.
-    let e = counted(Bound::Trips(6), Ops::Supplied([1, 2, 9, 1]), None).unwrap();
+    let e = counted(Bound::Trips(6), Ops::Supplied(CHEAP), None).unwrap();
     let text = body_text(&e);
     assert!(!text.contains("switch"), "{text}");
     assert_eq!(
         ops_of(&text),
-        ["add", "mul", "xor", "add", "add", "mul"],
+        ["add", "mul", "mul", "add", "add", "mul"],
         "{text}"
     );
 }
@@ -204,33 +220,35 @@ fn a_loop_whose_counter_indexes_a_constant_vector_is_unrolled_and_folded() {
 fn a_loop_past_the_ceilings_or_its_hints_stays_a_loop() {
     // More iterations than the ceiling.
     let trips = u64::from(unroll::TRIPS) + 1;
-    let text = body_text(&counted(Bound::Trips(trips), Ops::Supplied([1, 2, 9, 1]), None).unwrap());
+    let text = body_text(&counted(Bound::Trips(trips), Ops::Supplied(CHEAP), None).unwrap());
     assert!(text.contains("switch"), "{text}");
     // A trip count only the run knows.
-    let text = body_text(&counted(Bound::Run, Ops::Supplied([1, 2, 9, 1]), None).unwrap());
+    let text = body_text(&counted(Bound::Run, Ops::Supplied(CHEAP), None).unwrap());
     assert!(text.contains("switch"), "{text}");
     // `llvm.loop.unroll.disable` on the latch.
     let hints = LoopHints {
         unroll: Unroll::Disable,
         must_progress: true,
     };
-    let text =
-        body_text(&counted(Bound::Trips(4), Ops::Supplied([1, 2, 9, 1]), Some(hints)).unwrap());
+    let text = body_text(&counted(Bound::Trips(4), Ops::Supplied(CHEAP), Some(hints)).unwrap());
     assert!(text.contains("switch"), "{text}");
     // At the ceiling the loop is unrolled.
     let trips = u64::from(unroll::TRIPS);
-    let text = body_text(&counted(Bound::Trips(trips), Ops::Supplied([1, 2, 9, 1]), None).unwrap());
+    let text = body_text(&counted(Bound::Trips(trips), Ops::Supplied(CHEAP), None).unwrap());
     assert!(!text.contains("switch"), "{text}");
     assert_eq!(ops_of(&text).len(), unroll::TRIPS as usize, "{text}");
 }
 
 #[test]
-fn an_unsupplied_vector_unrolls_to_its_false_ways() {
-    // Undefined lanes read as zero at an index the loop's counter varies, so the switch stays a
-    // switch until unrolling makes each copy's index a constant: every copy takes the default.
-    let text = body_text(&counted(Bound::Trips(3), Ops::Unsupplied, None).unwrap());
-    assert!(!text.contains("switch"), "{text}");
-    assert_eq!(ops_of(&text), ["xor", "xor", "xor"], "{text}");
+fn a_loop_whose_copies_would_be_larger_stays_a_loop() {
+    // Every copy would take the heavy default arm: three of them are larger than the loop, which
+    // stays, its switch with it. Undefined lanes read as zero, so an unsupplied vector is the
+    // same.
+    for ops in [Ops::Supplied([9, 9, 9, 9]), Ops::Unsupplied] {
+        let text = body_text(&counted(Bound::Trips(3), ops, None).unwrap());
+        assert!(text.contains("switch"), "{text}");
+        assert_eq!(ops_of(&text).len() as u64, HEAVY + 3, "{text}");
+    }
 }
 
 #[test]

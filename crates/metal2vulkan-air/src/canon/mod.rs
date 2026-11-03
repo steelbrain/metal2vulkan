@@ -33,7 +33,8 @@
 //!    its initializer (`const_loads`); unreachable blocks are deleted. A value use of an unsupplied
 //!    constant that survives is `Error::NeedsInput(FunctionConstant)`. **Unrolling**: a loop whose
 //!    trip count SCCP made constant, and whose counter decides a branch of its body, is unrolled
-//!    within fixed ceilings, and SCCP runs again over the copies (`unroll`).
+//!    within fixed ceilings, and SCCP runs again over the copies; the result is kept where it is
+//!    no larger than the loops it replaces (`unroll`).
 //! 8. **Post-check**: no unknown intrinsic, indirect call, or call to an undefined non-intrinsic
 //!    function survives, and no reachable branch tests `undef`. A table call's refused candidate,
 //!    a table call no linked function answers, and a function pointer used as a value are refused
@@ -599,17 +600,35 @@ pub fn specialize_dynamic(
         body
     };
     // Loops whose trip count the constants decided, unrolled where their counters decide a branch
-    // of their body; SCCP after each round folds what the copies decide.
+    // of their body; SCCP after each round folds what the copies decide. The unrolled body is
+    // kept only where it comes out no larger than the loops it replaces (`unroll::live_size`).
     let mut grown = 0;
+    let mut trial: Option<(Body, BTreeSet<u32>)> = None;
     for _ in 0..unroll::ROUNDS {
-        let Some(unrolled) = unroll::round(&body, &mut parts, &mut grown, m)? else {
+        let current = trial.as_ref().map_or(&body, |(b, _)| b);
+        let Some(unrolled) = unroll::round(current, &mut parts, &mut grown, m)? else {
             break;
         };
-        body.release(m);
         let solved = solve(&unrolled, &mut parts, &fcs, &name, m)?;
         unrolled.release(m);
-        undefined_reads.extend(solved.reads);
-        body = solved.body;
+        let reads = match trial {
+            Some((old, mut reads)) => {
+                old.release(m);
+                reads.extend(solved.reads);
+                reads
+            }
+            None => solved.reads,
+        };
+        trial = Some((solved.body, reads));
+    }
+    if let Some((unrolled, reads)) = trial {
+        if unroll::live_size(&unrolled, m)? <= unroll::live_size(&body, m)? {
+            body.release(m);
+            body = unrolled;
+            undefined_reads.extend(reads);
+        } else {
+            unrolled.release(m);
+        }
     }
     matmul2d::refuse_left(&body, &parts, &ep.stage, &name, m)?;
     post_check(&body, &parts, &stubs, &name, &control_points(ep), m)?;

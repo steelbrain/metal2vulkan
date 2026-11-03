@@ -24,7 +24,10 @@
 //!
 //! Only the outermost qualifying loops are unrolled in a round; a loop nested in one is copied
 //! with it, and the next round, after SCCP, takes each copy whose counter now decides its body.
-//! There are at most [`ROUNDS`] rounds. Unrolling changes no operation: every instruction is copied
+//! There are at most [`ROUNDS`] rounds. The body all rounds leave, folded, replaces the entry's
+//! only where it is no larger ([`live_size`]): where what the copies decide removes less than the
+//! copies add (a loop whose counter picks among a few cheap arms of a body it runs many times),
+//! the loops stay, as the module is what the driver compiles. Unrolling changes no operation: every instruction is copied
 //! as it is, with its flags, and runs as many times as before, so what the program computes is the
 //! same. The ceilings bound only how large the copies may grow, which bounds the translation's
 //! time and memory; a loop past them stays a loop and computes the same answers.
@@ -56,6 +59,72 @@ pub(super) const SLICE: u32 = 256;
 
 /// No entry in a dense table.
 const NONE: u32 = u32::MAX;
+
+/// The size of `body` once nothing unobserved is left in it: every instruction that is not
+/// [`super::sccp::is_pure`] (a store, a call, an atomic, a terminator), and every pure one such an
+/// instruction reads, directly or through others, but for unconditional branches and PHIs of one
+/// entry, which the copies of an unrolled loop leave where its blocks join. A pure value nothing
+/// of those reads (a counter SCCP folded, an address no load uses any more) is not counted, as
+/// the deletion of unobserved code removes it later.
+pub(super) fn live_size(body: &Body, m: &mut Meter) -> Result<u64, Error> {
+    scoped(m, |m, held| {
+        let mut live = filled(m, held, body.insts.len(), false)?;
+        let mut work: Vec<InstId> = Vec::new();
+        for b in body.blocks.ids() {
+            for (i, inst) in body.block_insts(b) {
+                m.tick(1)?;
+                if !super::sccp::is_pure(&inst.kind) {
+                    mark(&mut work, &mut live, i, m)?;
+                }
+            }
+        }
+        let mut n = 0u64;
+        let mut used: Vec<InstId> = Vec::new();
+        while let Some(i) = work.pop() {
+            m.tick(1)?;
+            let inst = body
+                .insts
+                .get(i)
+                .ok_or_else(|| invariant("instruction out of range"))?;
+            // A jump and a PHI of one entry are no work of their own: they go where blocks merge.
+            let copy = match &inst.kind {
+                InstKind::Br { .. } => true,
+                InstKind::Phi { incoming, .. } => incoming.len() == 1,
+                _ => false,
+            };
+            n += u64::from(!copy);
+            let mut count = 0;
+            inst.kind.for_each_value(|_| count += 1);
+            used.clear();
+            m.grow(&mut used, count)?;
+            inst.kind.for_each_value(|v| {
+                if let Value::Inst(u) = v {
+                    used.push(u);
+                }
+            });
+            for &u in &used {
+                mark(&mut work, &mut live, u, m)?;
+            }
+        }
+        *held = held
+            .saturating_add((work.capacity() + used.capacity()) * std::mem::size_of::<InstId>());
+        Ok(n)
+    })
+}
+
+/// Mark instruction `i` of [`live_size`] live and queue it, once.
+fn mark(work: &mut Vec<InstId>, live: &mut [bool], i: InstId, m: &mut Meter) -> Result<(), Error> {
+    match live.get_mut(i.index()) {
+        Some(seen) if !*seen => {
+            *seen = true;
+            m.grow(work, 1)?;
+            work.push(i);
+            Ok(())
+        }
+        Some(_) => Ok(()),
+        None => Err(invariant("instruction out of range")),
+    }
+}
 
 /// One loop to unroll.
 struct Plan {

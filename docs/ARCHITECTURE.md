@@ -11,8 +11,9 @@ metallib | AIR bitcode
   ── decode ──────► a typed AIR module and its ABI                      air::{bitstream, bitcode, ir, intrinsics, abi}
   ── specialize ──► one inlined entry: function constants baked,        air::canon
                     constants propagated, loops of constant trip
-                    count unrolled where that decides a branch,
-                    linked functions resolved, pointee types erased
+                    count unrolled where that decides a branch and
+                    leaves the entry no larger, linked functions
+                    resolved, pointee types erased
   ── analyze ─────► MemoryPlan: provenance, one representation          memory
                     per value, slot windows
   ── select ──────► Plan: a strategy per instruction and interface      lower::select, lower::strategy
@@ -66,7 +67,7 @@ rest is `crates/metal2vulkan/src/`.
 
 | Module | Role |
 |---|---|
-| `air` (`metal2vulkan-air`) | The container (metallib, bitcode wrapper, raw module), the bitstream and bitcode readers, the typed IR, the `air.*` and `llvm.*` intrinsic families, the metadata ABI (`AirAbi`), and canonicalization (`canon`: inlining, function constants, SCCP (reading the integer fields of a constant global whose value is known), the unrolling of loops whose constant trip count decides a branch, devirtualization, linking, pruning, pointee erasure, the speculation of the short branch arms Metal's backend runs in every lane, and the split of a whole array's or struct's load or store in buffer or threadgroup memory into its members' accesses). Canonicalization also writes the formats the binder and runtime read: the visible-function table's words and the rasterization-rate map's parameter data |
+| `air` (`metal2vulkan-air`) | The container (metallib, bitcode wrapper, raw module), the bitstream and bitcode readers, the typed IR, the `air.*` and `llvm.*` intrinsic families, the metadata ABI (`AirAbi`), and canonicalization (`canon`: inlining, function constants, SCCP (reading the integer fields of a constant global whose value is known), the unrolling of loops whose constant trip count decides a branch where that leaves the entry no larger, devirtualization, linking, pruning, pointee erasure, the speculation of the short branch arms Metal's backend runs in every lane, and the split of a whole array's or struct's load or store in buffer or threadgroup memory into its members' accesses). Canonicalization also writes the formats the binder and runtime read: the visible-function table's words and the rasterization-rate map's parameter data |
 | `graph` | The shared RPO, dominator tree, loop forest and SCC |
 | `budget` | `Budget`, `CancelToken`, and the per-attempt `Meter`: deadline, cancellation, work units, the byte ledger and every structural cap |
 | `memory/` | Pointer provenance, the `MemoryPlan`, leaf access emitters, arenas, root and handle lookups, word composition, atomics |
