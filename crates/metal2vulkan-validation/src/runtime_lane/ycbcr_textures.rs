@@ -1902,15 +1902,16 @@ fn a_ycbcr_sample_the_exact_filter_does_not_reach_is_announced() {
 }
 
 /// A filtered sample of a YCbCr texture through a sampler Metal's exact filter is not measured
-/// for, which the device filters, is announced, never silent: through a runtime sampler slot an
-/// anisotropic one (16) and one whose min and mag filters differ announce [`YCBCR_FILTERS`] once,
-/// naming the slot and the format, and no generic filter notice; through a constexpr sampler an
-/// anisotropic one, one with a linear mip filter and one whose filters differ announce the
-/// generic `float-sample-filter` once (the constexpr note holds whatever the slot holds, so it
-/// names no format). Those notes are of a device that samples through Metal's own sampler
-/// (`VkProperty::MetalSampler`); elsewhere every case is the device's own filter, announced
-/// `device-sampling` once and none of those (but `ycbcr-filter-not-exact` where the device
-/// converted the texture itself, `ycbcr_device_reads`). Each case runs on a device of its own. On a device
+/// for, which the device filters, is announced, never silent: through a runtime sampler slot or a
+/// constexpr sampler, an anisotropic one (16) and one whose min and mag filters differ (and a
+/// constexpr one with a linear mip filter) announce [`YCBCR_FILTERS`] once, naming the slot and
+/// the format, and no generic filter notice: the filter note of either holds where the slot's
+/// bound format is two-plane YCbCr (`lower::sampler::linear::metal_filtered_ycbcr`), which the
+/// runtime announces as its own kind. Those notes are of a device that samples through Metal's
+/// own sampler (`VkProperty::MetalSampler`); elsewhere every case is the device's own filter,
+/// announced `device-sampling` once and none of those (but `ycbcr-filter-not-exact` where the
+/// device converted the texture itself, `ycbcr_device_reads`). Each case runs on a device of its
+/// own. On a device
 /// that reads the planes in place (`ycbcr_in_place.rs`) the constexpr linear mip filter is read
 /// there, Metal's filter of the texture's one level whatever the mip filter, as a runtime sampler's
 /// is everywhere: Metal's step, with no YCbCr filter notice (the function's generic note, of its
@@ -1998,31 +1999,20 @@ fn a_ycbcr_sample_through_an_unmeasured_filter_is_announced() {
                 assert_eq!(ycbcr, by_device.then_some(&1), "{case}");
                 return;
             }
-            match through {
-                Through::Runtime => {
-                    assert_eq!(counts.get(&YCBCR_FILTERS[0]), Some(&1), "{case}");
-                    for kind in [
-                        Degradation::FloatSampleFilter,
-                        Degradation::HalfSampleFilter,
-                    ] {
-                        assert_eq!(counts.get(&kind), None, "{case}");
-                    }
-                    let notice = notices
-                        .iter()
-                        .filter_map(|m| m.degradation.as_ref())
-                        .find(|n| n.degradation == YCBCR_FILTERS[0])
-                        .unwrap();
-                    let named = format!("texture 0 bound as {:?}", PixelFormat::YCBCR84202P);
-                    assert!(notice.reason.contains(&named), "{case}: {notice:?}");
-                }
-                _ => {
-                    assert_eq!(
-                        counts.get(&Degradation::FloatSampleFilter),
-                        Some(&1),
-                        "{case}"
-                    );
-                }
+            assert_eq!(counts.get(&YCBCR_FILTERS[0]), Some(&1), "{case}");
+            for kind in [
+                Degradation::FloatSampleFilter,
+                Degradation::HalfSampleFilter,
+            ] {
+                assert_eq!(counts.get(&kind), None, "{case}");
             }
+            let notice = notices
+                .iter()
+                .filter_map(|m| m.degradation.as_ref())
+                .find(|n| n.degradation == YCBCR_FILTERS[0])
+                .unwrap();
+            let named = format!("texture 0 bound as {:?}", PixelFormat::YCBCR84202P);
+            assert!(notice.reason.contains(&named), "{case}: {notice:?}");
         });
     }
 }
