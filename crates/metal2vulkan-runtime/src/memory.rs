@@ -15,7 +15,7 @@
 //! - **Entry point.** [`allocate`] with the resource's memory requirements and its
 //!   [`MemoryClass`]; [`Memory::free`] with the placement it gave. Buffers use it in step 1;
 //!   textures and heaps add their classes and callers in their own steps. Imported host memory
-//!   has its own entry, [`Memory::import_host`]: one dedicated block per import, never
+//!   has its own entry, [`import_host`]: one dedicated block per import, never
 //!   pooled, freed through the same [`Memory::free`]. So has a buffer's fresh pages
 //!   ([`import_own_pages`], `fresh_pages.rs`): a dedicated block that unmaps them once its
 //!   memory is freed, as an import through a read-only view of the caller's pages unmaps the view
@@ -146,7 +146,7 @@ enum Fit {
     Apart,
 }
 
-/// Why [`Memory::import_host`] imported nothing.
+/// Why [`import_host`] imported nothing.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum ImportFailure {
     /// No memory type of the class is among the allowed ones.
@@ -640,7 +640,7 @@ pub(super) enum FreeCause {
     /// A kept empty pooled block freed so that a block of its memory type can be made
     /// ([`Memory::release_kept`]).
     KeptForRoom = 3,
-    /// The caller's host memory, imported as a dedicated block ([`Memory::import_host`]) and
+    /// The caller's host memory, imported as a dedicated block ([`import_host`]) and
     /// freed as its placement went.
     HostImport = 4,
     /// A buffer's fresh pages, imported as a dedicated block ([`import_own_pages`],
@@ -665,7 +665,7 @@ pub(super) struct Census {
     pub(super) empty: u64,
     /// Dedicated blocks: a placement larger than half a block, or one placed apart.
     pub(super) dedicated: u64,
-    /// The caller's host memory imported ([`Memory::import_host`]), a block each.
+    /// The caller's host memory imported ([`import_host`]), a block each.
     pub(super) imported: u64,
 }
 
@@ -701,13 +701,13 @@ pub(super) struct Block {
     /// Its buffer of addresses, from the first placement that needs an address (the module
     /// docs).
     addresses: Option<BlockAddresses>,
-    /// It is the caller's host memory, imported ([`Memory::import_host`]).
+    /// It is the caller's host memory, imported ([`import_host`]).
     imported: bool,
     /// The pages its memory was imported from, where the runtime mapped them for it
     /// ([`import_own_pages`]): unmapped once the memory is freed.
     pages: Option<OwnPages>,
     /// The read-only view of the caller's pages its memory was imported from, which drops the
-    /// GPU's writes ([`Memory::import_host`], `read_only_view.rs`): unmapped once the memory is
+    /// GPU's writes ([`import_host`], `read_only_view.rs`): unmapped once the memory is
     /// freed.
     view: Option<ReadOnlyView>,
     /// Its memory type.
@@ -730,7 +730,7 @@ struct BlockAddresses {
 impl Block {
     /// The cause its `vkFreeMemory` is counted under. A block freed as the one placement in it
     /// went ([`FreeCause::Dedicated`]) that is an import of its own is counted as that import
-    /// instead: the caller's host memory ([`Memory::import_host`]) or a buffer's fresh pages
+    /// instead: the caller's host memory ([`import_host`]) or a buffer's fresh pages
     /// ([`import_own_pages`]), each a dedicated block of one placement. Any other cause stands:
     /// a block freed at the device's teardown is counted there whatever it held.
     fn cause(&self, given: FreeCause) -> FreeCause {
@@ -1557,47 +1557,6 @@ impl Memory {
         reached
     }
 
-    /// Import the caller's host memory, `size` bytes at `pointer` (both multiples of the device's
-    /// import alignment), as a dedicated block of the best memory type of `class` among
-    /// `allowed` (the types both the pointer and the resource take): its placement at offset 0,
-    /// whose `mapped` is `pointer`. Where `view` is given, a read-only view of those pages
-    /// (`read_only_view.rs`), the view is imported in their place, and unmapped once the memory
-    /// is freed. The block is never pooled and is freed with the placement, as a dedicated block
-    /// is (`host_memory.rs`). Refused when no type of `class` is among `allowed`, else with the
-    /// failure of the last type tried, the view unmapped.
-    ///
-    /// # Safety
-    ///
-    /// The `size` bytes at `pointer` are host memory of this process that stays mapped until the
-    /// placement is freed; `view`, where given, views them whole.
-    pub(super) unsafe fn import_host(
-        &mut self,
-        device: &ash::Device,
-        (pointer, view): (NonNull<u8>, Option<ReadOnlyView>),
-        size: u64,
-        allowed: u32,
-        class: MemoryClass,
-    ) -> Result<Placement, ImportFailure> {
-        let types = candidates(&self.types, allowed, class, self.unified);
-        let imported = view.as_ref().map_or(pointer, ReadOnlyView::pointer);
-        // SAFETY: the caller's contract; the view stays mapped while the block holds it.
-        let (memory, type_index) =
-            unsafe { import_pointer(device, imported, size, &types, self.device_address) }?;
-        let block = Block {
-            memory,
-            size,
-            mapped: Some(Mapped(pointer)),
-            addresses: None,
-            imported: true,
-            pages: None,
-            view,
-            type_index,
-        };
-        let host = pointer.as_ptr() as usize;
-        self.say_block(&format!("imported host memory 0x{host:x}"), &block);
-        Ok(self.add_import(block, type_index, size))
-    }
-
     /// The best memory type of `class` among `allowed`, where it has one.
     pub(super) fn best_type(&self, allowed: u32, class: MemoryClass) -> Option<u32> {
         candidates(&self.types, allowed, class, self.unified)
@@ -1912,8 +1871,58 @@ fn color_image_types(device: &ash::Device, sharing: Sharing<'_>) -> Result<u32, 
     })
 }
 
+/// Import the caller's host memory, `size` bytes at `pointer` (both multiples of the device's
+/// import alignment), as a dedicated block of `memory`'s best memory type of `class` among
+/// `allowed` (the types both the pointer and the resource take): its placement at offset 0,
+/// whose `mapped` is `pointer`. Where `view` is given, a read-only view of those pages
+/// (`read_only_view.rs`), the view is imported in their place, and unmapped once the memory
+/// is freed. The block is never pooled and is freed with the placement, as a dedicated block
+/// is (`host_memory.rs`). The import, which faults in and pins the pages, is made with
+/// `memory`'s lock released, as a new block is ([`place`]): the device's other placements wait
+/// for none of it. Refused when no type of `class` is among `allowed`, else with the failure of
+/// the last type tried, the view unmapped.
+///
+/// # Safety
+///
+/// The `size` bytes at `pointer` are host memory of this process that stays mapped until the
+/// placement is freed; `view`, where given, views them whole.
+pub(super) unsafe fn import_host(
+    memory: &Mutex<Memory>,
+    device: &ash::Device,
+    (pointer, view): (NonNull<u8>, Option<ReadOnlyView>),
+    size: u64,
+    allowed: u32,
+    class: MemoryClass,
+) -> Result<Placement, ImportFailure> {
+    let (types, device_address) = {
+        let memory = lock(memory);
+        (
+            candidates(&memory.types, allowed, class, memory.unified),
+            memory.device_address,
+        )
+    };
+    let imported = view.as_ref().map_or(pointer, ReadOnlyView::pointer);
+    // SAFETY: the caller's contract; the view stays mapped while the block holds it.
+    let (raw, type_index) =
+        unsafe { import_pointer(device, imported, size, &types, device_address) }?;
+    let block = Block {
+        memory: raw,
+        size,
+        mapped: Some(Mapped(pointer)),
+        addresses: None,
+        imported: true,
+        pages: None,
+        view,
+        type_index,
+    };
+    let host = pointer.as_ptr() as usize;
+    let mut memory = lock(memory);
+    memory.say_block(&format!("imported host memory 0x{host:x}"), &block);
+    Ok(memory.add_import(block, type_index, size))
+}
+
 /// Import `pages`, which the runtime mapped for a buffer of its own (`fresh_pages.rs`), as
-/// memory of type `type_index` in `memory`, as [`Memory::import_host`] imports the caller's: a
+/// memory of type `type_index` in `memory`, as [`import_host`] imports the caller's: a
 /// dedicated block, which unmaps the pages once its memory is freed, and its placement at
 /// offset 0. The import is made with `memory`'s lock released, as a new block is ([`place`]).
 /// Refused with the driver's failure, the pages unmapped.

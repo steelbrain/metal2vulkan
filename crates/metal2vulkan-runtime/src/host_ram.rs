@@ -19,6 +19,12 @@
 //!   what an object over fresh RAM waited for at every chunk's first object (a 2 MiB heap in 32
 //!   over consecutive fresh RAM): so the whole RAM is resident and pinned from soon after the
 //!   use begins. Counted: `WorkCounts::host_ram_chunks_imported_ahead`.
+//! - **Paced.** The thread runs as the system's batch work (never at a weight the system may
+//!   starve: it holds a chunk's lock and, pinning, the process's memory map lock), yields between
+//!   chunks, and on Linux faults each chunk's pages in 2 MiB at a time before its import, so that
+//!   the import pins pages in place rather than holding the memory map lock while it faults in
+//!   64 MiB ([`pace`], [`fault_in`]). Each import is made with the device's memory lock released
+//!   (`memory::import_host`), so the device's other placements wait for none of it.
 //! - **One run in place.** A no-copy object whose pages are one run inside one chunk is a
 //!   `VkBuffer` bound in that chunk's import (`buffer_descriptor.rs`), made and bound as an import
 //!   of the object's own pages would be: its size reaches no further than the object's last page,
@@ -331,10 +337,15 @@ impl RamOnDevice {
 /// ([`Device::use_host_ram`]): one chunk at a time ([`RamOnDevice::next_ahead`]), each under its
 /// own lock and inside a section of the exit guard, until every chunk is imported or failed, the
 /// use ended, the device went or was lost, or the process exits. It holds the device and the RAM
-/// weakly between chunks, so neither outlives its last holder for it by more than one import. A
-/// chunk it fails to import (out of memory, pages the driver or the runtime refuses) is left to
-/// the first object over it, which meets the same answer on its own thread, as without this thread.
+/// weakly between chunks, so neither outlives its last holder for it by more than one import. A chunk it fails to import
+/// (out of memory, pages the driver or the runtime refuses) is left to the first object over it,
+/// which meets the same answer on its own thread, as without this thread.
+///
+/// Paced ([`pace`], [`fault_in`]): it runs as the system's batch work, yields between chunks,
+/// and on Linux faults a chunk's pages in 2 MiB at a time before its import, so that the
+/// import, which pins them, finds them in place.
 fn import_ahead(device: WeakDevice, ram: Weak<RamOnDevice>) {
+    pace();
     loop {
         let (Some(device), Some(ram)) = (device.upgrade(), ram.upgrade()) else {
             return;
@@ -349,6 +360,8 @@ fn import_ahead(device: WeakDevice, ram: Weak<RamOnDevice>) {
         let Some(slot) = ram.next_ahead() else {
             return;
         };
+        // With no lock held: an object over the chunk meanwhile imports it itself, as before.
+        fault_in(&ram.slots[slot].span);
         let Some(busy) = exit_guard::enter() else {
             return;
         };
@@ -356,8 +369,66 @@ fn import_ahead(device: WeakDevice, ram: Weak<RamOnDevice>) {
             ram.slots[slot].tried.store(true, Ordering::Relaxed);
         }
         drop(busy);
+        drop((ram, device));
+        std::thread::yield_now();
     }
 }
+
+/// The scheduling the device's thread ([`import_ahead`]) runs at: the system's batch work, never
+/// a lower weight. It holds a chunk's lock, which an object over the chunk waits on, and the
+/// pin it makes holds the process's memory map lock, which every `mmap`, `munmap` and, behind
+/// one queued, every page fault of the process waits on: a thread the system starves would hold
+/// those for as long as it is starved. On Linux, `SCHED_BATCH` (its nice value kept): measured on
+/// an RTX 5080 laptop's 24 threads all busy, a thread faulting in 64 MiB pieces of fresh memory
+/// at nice 19 kept another thread's `mmap` waiting up to 511 ms and at `SCHED_IDLE` 1039 ms,
+/// where at `SCHED_BATCH` it waited at most 12 ms, as at the default. On Apple's systems, the
+/// utility class, the lowest the system does not hold to its efficiency cores alone.
+fn pace() {
+    #[cfg(target_os = "linux")]
+    {
+        let keep = libc::sched_param { sched_priority: 0 };
+        // SAFETY: the calling thread's own policy, from a live parameter; a refusal leaves it.
+        let _ = unsafe { libc::sched_setscheduler(0, libc::SCHED_BATCH, &keep) };
+    }
+    #[cfg(target_vendor = "apple")]
+    {
+        // SAFETY: the calling thread's own class; a refusal leaves it.
+        let _ =
+            unsafe { libc::pthread_set_qos_class_self_np(libc::qos_class_t::QOS_CLASS_UTILITY, 0) };
+    }
+}
+
+/// Fault in the pages of `span`, a chunk of the RAM, 2 MiB at a time, yielding between
+/// (`MADV_POPULATE_WRITE`, Linux 5.14: each page as a write would, no byte changed), so that the
+/// chunk's import pins pages in place: each step holds the process's memory map lock for one
+/// huge page's fault, where an import of fresh pages holds it while it faults in all 64 MiB.
+/// A kernel that refuses (an older one) leaves the faults to the import, as before.
+#[cfg(target_os = "linux")]
+fn fault_in(span: &Range<u64>) {
+    const STEP: u64 = 2 * 1024 * 1024;
+    let mut at = span.start;
+    while at < span.end {
+        let length = STEP.min(span.end - at);
+        // SAFETY: the span is pages of the RAM's ranges, mapped readable and writable while the
+        // RAM lives (`HostRam::new`), which the caller holds; the advice writes no byte.
+        let faulted = unsafe {
+            libc::madvise(
+                at as *mut libc::c_void,
+                length as usize,
+                libc::MADV_POPULATE_WRITE,
+            )
+        };
+        if faulted != 0 {
+            return;
+        }
+        std::thread::yield_now();
+        at += length;
+    }
+}
+
+/// Elsewhere the import faults the chunk's pages in itself.
+#[cfg(not(target_os = "linux"))]
+fn fault_in(_: &Range<u64>) {}
 
 /// A device's import of one chunk of a RAM (`VK_EXT_external_memory_host`): the memory, and a
 /// `VkBuffer` over the whole chunk, for the runtime's own copies between the chunk and memory of
@@ -373,7 +444,7 @@ pub(crate) struct RamChunk {
     span: Range<u64>,
     /// The `VkBuffer` over the whole chunk.
     raw: vk::Buffer,
-    /// The import's placement: a dedicated block of the device's memory (`Memory::import_host`).
+    /// The import's placement: a dedicated block of the device's memory (`memory::import_host`).
     placement: Placement,
     /// The RAM, let go of once the memory is freed; `None` once let go of.
     ram: Option<Arc<HostRam>>,
@@ -569,8 +640,9 @@ impl Device {
     /// not reached imports it as it is made, one over the chunk the thread is importing waits for
     /// that import, and once the thread is done no making waits for one
     /// (`WorkCounts::host_ram_chunks_imported_ahead`). So the whole RAM's pages are faulted in
-    /// and pinned from soon after this call. A system that cannot start the thread leaves every
-    /// chunk to the first object over it. The use lasts until the returned [`HostRamUse`] is
+    /// and pinned from soon after this call. The thread is paced (the system's batch work, a
+    /// yield between chunks). A system that cannot start the thread leaves every chunk to the
+    /// first object over it. The use lasts until the returned [`HostRamUse`] is
     /// dropped; a device may use several RAMs at once whose ranges are apart, and a new RAM once
     /// an earlier use of the same ranges ended (a VMM's next guest).
     ///
@@ -705,7 +777,7 @@ impl Device {
 
     /// Import `span`, host pages of `ram`, as a chunk: a dedicated block of memory of a coherent
     /// type both the pages and a host-allocation buffer allow, with the device-address flag where
-    /// the device enables `bufferDeviceAddress` (`Memory::import_host`), and a `VkBuffer` over the
+    /// the device enables `bufferDeviceAddress` (`memory::import_host`), and a `VkBuffer` over the
     /// whole of it. Refused where the device's import alignment misses the span's start or end,
     /// it passes the device's allocation size, or the driver refuses the pages (or the runtime
     /// does for it, `Device::refuse_unpinnable`).
@@ -769,7 +841,8 @@ impl Device {
         // SAFETY: the caller's contract keeps the pages mapped while the chunk, which frees the
         // placement as it goes, holds the RAM.
         let imported = unsafe {
-            lock(&shared.memory).import_host(
+            super::memory::import_host(
+                &shared.memory,
                 raw_device,
                 (pointer, None),
                 size,

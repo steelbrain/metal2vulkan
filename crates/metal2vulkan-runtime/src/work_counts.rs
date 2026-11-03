@@ -2339,7 +2339,7 @@ impl Counters {
         }
     }
 
-    /// The device imported `bytes` of host pages by their pointer (`Memory::import_host`).
+    /// The device imported `bytes` of host pages by their pointer (`memory::import_host`).
     pub(crate) fn host_pointer_import_made(&self, bytes: u64) {
         (self.host_pointer_imports_made).fetch_add(1, Ordering::Relaxed);
         (self.host_pointer_import_bytes_made).fetch_add(bytes, Ordering::Relaxed);
@@ -3235,7 +3235,7 @@ pub struct MemoryFrees {
     /// failed to be made: the allocator giving memory back under pressure.
     pub kept_for_room: u64,
     /// Imports of the caller's host memory, a dedicated block each, freed as their placement went
-    /// (`Memory::import_host`).
+    /// (`memory::import_host`).
     pub host_import: u64,
     /// Imports of a buffer's fresh pages, a dedicated block each, freed as their placement went
     /// (`fresh_pages.rs`).
@@ -3712,7 +3712,7 @@ pub struct WorkCounts {
     /// `vkFreeMemory` each, and the allocator's whole share of
     /// `object_churn.vk_memory_freed`.
     pub memory_frees: MemoryFrees,
-    /// Its live imports of the caller's host memory, a block each (`Memory::import_host`).
+    /// Its live imports of the caller's host memory, a block each (`memory::import_host`).
     pub host_imports_live: u64,
     /// Its blocks that went while batches submitted before were in flight, on a device whose
     /// driver fails pending work as memory a device-address buffer lay in is freed

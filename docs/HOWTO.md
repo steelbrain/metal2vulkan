@@ -450,7 +450,14 @@ pages then takes a kernel mapping per page) can give the device the guest's RAM 
   it is importing waits for that import, and once it is done no making waits for one. So the whole
   RAM is faulted in and pinned from soon after `use_host_ram`, where a chunk's pages were faulted
   in only when an object over it was first made (on an RTX 5080 laptop with no other load: 7.5 ms
-  a chunk of fresh `memfd` RAM under `MADV_HUGEPAGE`, 2 s for 16 GiB). The
+  a chunk of fresh `memfd` RAM under `MADV_HUGEPAGE`, 1.5 to 8.4 s for 16 GiB, the most where
+  the kernel compacts memory for the huge pages). The thread is paced: it runs as the system's batch
+  work (`SCHED_BATCH` on Linux, the utility class on Apple's systems), never at a weight the
+  system starves, since it holds a chunk's lock and, as it pins, the process's memory map lock; it
+  yields between chunks; and on Linux it faults each chunk's pages in 2 MiB at a time
+  (`MADV_POPULATE_WRITE`) before the import pins them. On that laptop with every CPU busy,
+  another thread's `mmap` waited at most 7.7 ms (in 99 of 100 at most 1.6 ms) during the import
+  of 16 GiB, which took 3.7 to 6.7 s. Each import is made with the device's memory lock released. The
   object's `VkBuffer` is made as an import of its own pages would make it and bound in the chunk
   at its run (`chunk_bound_buffers_made`): no import of its own, no gate asked, its `contents`
   still the pointer, and its size reaching no page past its own, so neither its Metal range, a

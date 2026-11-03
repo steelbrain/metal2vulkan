@@ -1766,12 +1766,13 @@ impl Device {
             }
         }
         // SAFETY: the caller's contract keeps the pages mapped until the placement is freed.
-        let placement =
-            unsafe { lock(&shared.memory).import_host(raw_device, pages, size, allowed, class) }
-                .map_err(|failure| match failure {
-                    ImportFailure::NoMemoryType => not_importable(),
-                    ImportFailure::Vulkan(error) => import_refused(error),
-                })?;
+        let placement = unsafe {
+            super::memory::import_host(&shared.memory, raw_device, pages, size, allowed, class)
+        }
+        .map_err(|failure| match failure {
+            ImportFailure::NoMemoryType => not_importable(),
+            ImportFailure::Vulkan(error) => import_refused(error),
+        })?;
         // SAFETY: the placement is the pages' memory, the buffer's size and requirements of it
         // available from `at` (the caller's), and the buffer is unbound.
         let bound = unsafe {
