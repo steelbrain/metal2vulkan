@@ -62,7 +62,7 @@ pub(super) fn host_page() -> usize {
 }
 
 /// One shared memory object of `len` bytes: the consumer's guest RAM.
-struct GuestRam {
+pub(super) struct GuestRam {
     fd: libc::c_int,
     len: usize,
     /// The guest RAM's own mapping, through which the CPU writes and reads.
@@ -70,7 +70,7 @@ struct GuestRam {
 }
 
 impl GuestRam {
-    fn new(len: usize) -> GuestRam {
+    pub(super) fn new(len: usize) -> GuestRam {
         static NEXT: AtomicUsize = AtomicUsize::new(0);
         let name = std::ffi::CString::new(format!(
             "/m2v-rt4-{}-{}",
@@ -96,18 +96,18 @@ impl GuestRam {
 
     /// A second mapping of `len` bytes from `offset`, aligned to the guest page, as the consumer
     /// maps a task's pages.
-    fn map(&self, offset: usize, len: usize, protection: libc::c_int) -> Mapping {
+    pub(super) fn map(&self, offset: usize, len: usize, protection: libc::c_int) -> Mapping {
         assert!(offset + len <= self.len);
         Mapping::of(self.fd, offset, len, GUEST_PAGE, protection)
     }
 
     /// A copy of the guest RAM's bytes `range`.
-    fn read(&self, range: std::ops::Range<usize>) -> Vec<u8> {
+    pub(super) fn read(&self, range: std::ops::Range<usize>) -> Vec<u8> {
         self.view.read(range)
     }
 
     /// Write `bytes` into the guest RAM at `offset`.
-    fn write(&self, offset: usize, bytes: &[u8]) {
+    pub(super) fn write(&self, offset: usize, bytes: &[u8]) {
         self.view.write(offset, bytes);
     }
 }
