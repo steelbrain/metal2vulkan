@@ -116,8 +116,8 @@ impl Number {
 }
 
 /// The numbers a command buffer's host steps give the instances they make: drawn at its commit,
-/// in the program's call, and counted across its steps, which the steps' thread
-/// (`scheduler/steps.rs`) runs one after another in the batches' order.
+/// in the program's call, and counted across its steps, which the steps' threads
+/// (`scheduler/steps.rs`) run one after another in the batches' order, one at a time.
 pub(crate) struct StepNumbers {
     at: u64,
     made: AtomicU32,

@@ -1217,7 +1217,7 @@ impl Counters {
             .fetch_add(1, Ordering::Relaxed);
     }
 
-    /// The steps' thread recorded a batch's host step, which took `took` (`scheduler/steps.rs`).
+    /// A steps' thread recorded a batch's host step, which took `took` (`scheduler/steps.rs`).
     pub(crate) fn host_step_recorded(&self, took: std::time::Duration) {
         self.host_steps_recorded.fetch_add(1, Ordering::Relaxed);
         self.host_step_nanos.fetch_add(
@@ -3606,11 +3606,11 @@ pub struct WorkCounts {
     /// for the encoder's sRGB or YCbCr textures, that bakes samplers no variant of the program's
     /// made).
     pub host_step_sampler_sets_made: u64,
-    /// Batches' host steps the steps' thread recorded (`scheduler/steps.rs`): each batch whose
+    /// Batches' host steps the steps' threads recorded (`scheduler/steps.rs`): each batch whose
     /// segments a host step records, once, apart from the scheduler's thread, which submits other
-    /// queues' batches meanwhile.
+    /// queues' batches meanwhile, and from other queues' steps.
     pub host_steps_recorded: u64,
-    /// Nanoseconds the steps' thread spent recording those host steps
+    /// Nanoseconds the steps' threads spent recording those host steps, summed
     /// ([`host_steps_recorded`](Self::host_steps_recorded)): the records read, the commands
     /// recorded, and what a step made, the `VkPipeline`s no settle made before it among them
     /// ([`host_step_pipelines_made`](Self::host_step_pipelines_made)).
@@ -4097,7 +4097,7 @@ pub struct WorkCounts {
     pub heads_held_for_decodes: u64,
     /// Heads found held because their host step has not been recorded: it waits for a pipeline it
     /// records, or at its gate (`heads_waiting_at_their_gate`), or it is queued for the steps'
-    /// thread or being recorded there (`scheduler/steps.rs`), which records one at a time.
+    /// threads or being recorded there (`scheduler/steps.rs`), which record a step a thread.
     pub heads_held_for_host_steps: u64,
     /// Heads found held because their command buffer's submission checks have not run
     /// (`command_buffer/checks.rs`): the checks wait for an event value to be reached

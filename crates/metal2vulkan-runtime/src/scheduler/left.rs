@@ -1,5 +1,5 @@
 //! What the scheduler's passes leave its thread to do without the lock (a batch's submission
-//! checks; a batch's host step, which it hands to the steps' thread, `steps.rs`), and the thread's
+//! checks; a batch's host step, which it hands to the steps' threads, `steps.rs`), and the thread's
 //! way through it once woken ([`work_through`]).
 //!
 //! - **Commits first.** Before each piece of work, the thread makes rounds for as long as the
@@ -20,7 +20,7 @@ use std::collections::VecDeque;
 pub(crate) enum Kind {
     /// A batch's submission checks (`command_buffer/checks.rs`).
     Check,
-    /// A batch's host step, handed to the steps' thread (`steps.rs`).
+    /// A batch's host step, handed to the steps' threads (`steps.rs`).
     Step,
 }
 

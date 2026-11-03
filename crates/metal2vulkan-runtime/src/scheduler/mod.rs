@@ -80,11 +80,13 @@
 //!   (`CommandBufferShared::needs_host_step`) is held, once otherwise ready, until every
 //!   `VkQueue` completed what was submitted to it by then (its gate, a snapshot of the queues'
 //!   values): only then are the records the work before it wrote known. The thread then hands
-//!   the batch's step to the steps' thread ([`steps`]), which records its segments
-//!   (`CommandBufferShared::host_step`), each step a section of the exit guard, and wakes this
-//!   one, which submits the batch in its order. Meanwhile it submits other ready batches, those
-//!   of other queues whose footprint shares nothing with the held batch's
-//!   (`CommandBufferShared::footprint`: a step's, what `commit` bounded its uses by); the
+//!   the batch's step to the steps' threads ([`steps`], a step a thread, up to eight at once),
+//!   one of which records its segments (`CommandBufferShared::host_step`), each step a section of
+//!   the exit guard, and wakes this one, which submits the batch in its order. Meanwhile it
+//!   submits other ready batches, and hands over other queues' steps, those of other queues
+//!   whose footprint shares nothing with the held batch's (`CommandBufferShared::footprint`: a
+//!   step's, what `commit` bounded its uses by): one queue's long step holds back no other
+//!   queue's that Metal does not order after it. The
 //!   completion turns wake it as batches complete while a gate is pending. A
 //!   batch whose step is a predicated loop's check alone waits for its own `VkQueue`'s work
 //!   alone; while the check's thread runs the loop's laying again, the batch waits as for a
@@ -417,7 +419,7 @@ struct SchedulerShared {
     stalls: OnceLock<IdleStalls>,
     /// The passes' turns to run their submission handlers (the module docs).
     turns: Turns,
-    /// The host steps handed to the steps' thread (`steps.rs`).
+    /// The host steps handed to the steps' threads (`steps.rs`).
     steps: steps::Steps,
 }
 

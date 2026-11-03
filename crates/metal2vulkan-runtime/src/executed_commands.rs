@@ -33,9 +33,8 @@ pub type ExecutedCommandsHandler = Arc<dyn Fn(&ExecutedCommands) + Send + Sync +
 pub enum RecordsRead {
     /// In `commit`, on the committing thread: the CPU's records as they stood then.
     Commit,
-    /// In the host step, on the steps' thread (`scheduler/steps.rs`): the records as the GPU and
-    /// the CPU left
-    /// them, once the work before the execution completed.
+    /// In the host step, on one of the steps' threads (`scheduler/steps.rs`): the records as the
+    /// GPU and the CPU left them, once the work before the execution completed.
     HostStep,
     /// Not on the host: the GPU reads them as it runs (`gpu_execute.rs`), so
     /// [`ExecutedCommands::commands`] is empty and
