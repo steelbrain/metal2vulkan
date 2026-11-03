@@ -3611,9 +3611,11 @@ bound.
   its quiet bit). Metal divides correctly rounded, rounds the exact product, rounds a `half` with
   ties away from zero, converts the sRGB twins through its own tables, makes a bfloat NaN
   `0x7fc00000` or `0x7fc0`, and rounds a bfloat sample's `half` toward zero: a linear value within
-  one `f32` ulp, a code within one, an sRGB twin's decoded value within half a `2^-13` step of
-  Metal's table (`R10Unorm_X6_sRGB`'s 1.64 steps) beyond the `Pow`'s bound, a `half` result within
-  one `half` ulp.
+  one `f32` ulp, a code within one (`R10Unorm_X6_sRGB`'s and `RGB10A2Unorm_sRGB`'s colour within
+  two below `0.0031308`, where Metal rounds the value to `2^-13` before its table, a step there
+  spanning 1.6 codes), an sRGB twin's decoded value within half a `2^-13` step of Metal's table
+  (`R10Unorm_X6_sRGB`'s and `RGB10A2Unorm_sRGB`'s colour 1.64 steps) beyond the `Pow`'s bound, a
+  `half` result within one `half` ulp.
 - `metal2vulkan-degrade-color-attachment-groups` (precision).
   `PrecisionNote::ColorAttachmentGroups`: A render pipeline whose color attachments the device
   draws in more than one group (more than the lesser of its `maxColorAttachments` and

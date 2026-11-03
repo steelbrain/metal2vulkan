@@ -1914,10 +1914,12 @@ pub enum PrecisionNote {
     /// NaN by its quiet bit), where Metal divides correctly rounded, rounds the exact product,
     /// rounds a `half` with ties away from zero, converts the sRGB twins through its own tables,
     /// makes a bfloat NaN `0x7fc00000` or `0x7fc0` and rounds a bfloat sample's `half` toward zero:
-    /// a linear value within one `f32` ulp of Metal's, a code within one, an sRGB twin's decoded
-    /// value within half a `2^-13` step of Metal's table (`R10Unorm_X6_sRGB`'s within 1.64 steps)
-    /// beyond the `Pow`'s bound, a `half` result within one `half` ulp. Validation derives no
-    /// tolerance from it.
+    /// a linear value within one `f32` ulp of Metal's, a code within one (`R10Unorm_X6_sRGB`'s and
+    /// `RGB10A2Unorm_sRGB`'s colour within two below `0.0031308`, where Metal rounds the value to
+    /// `2^-13` before its table, a step there spanning 1.6 codes), an sRGB twin's decoded value
+    /// within half a `2^-13` step of Metal's table (`R10Unorm_X6_sRGB`'s and
+    /// `RGB10A2Unorm_sRGB`'s colour within 1.64 steps) beyond the `Pow`'s bound, a `half` result
+    /// within one `half` ulp. Validation derives no tolerance from it.
     DevicePackConversion,
     /// A render pipeline whose color attachments the device draws in more than one group
     /// (`GraphicsState::color_group`, the module docs of `pipeline::compile::color_group`): a
