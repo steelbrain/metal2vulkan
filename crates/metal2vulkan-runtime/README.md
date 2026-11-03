@@ -439,6 +439,12 @@ Calls Metal does not have, for a consumer that emulates a Metal device:
   of guest pages made through dma-bufs; a no-copy object whose pages the consumer resolves to one
   run inside one chunk is bound in the chunk, with no import of its own
   ([HOWTO](../../docs/HOWTO.md#guest-ram-imported-whole)).
+- `BlitCommandEncoder::copy_from_host_ram` and `copy_to_host_ram`: runs of a used guest RAM
+  (4 KiB-aligned host addresses, whole 4 KiB pages) gathered into consecutive bytes of a buffer,
+  or scattered back, by one compute dispatch per chunk the runs touch, from the device's chunk
+  imports, with no view of the pages and no import of their own; ordered and seen as a copy
+  between the buffer and a no-copy buffer over the pages
+  ([HOWTO](../../docs/HOWTO.md#guest-ram-imported-whole)).
 - `HostBytes`: bytes at a pointer that may change while a call reads them (a guest's memory),
   which `Texture::replace_region_with_host_bytes` and `BufferContents::CopyHost` copy once through
   the pointer, where the slice forms would need the caller's own copy first.

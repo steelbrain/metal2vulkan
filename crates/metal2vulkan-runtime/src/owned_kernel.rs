@@ -90,6 +90,9 @@ pub(super) enum OwnedModule {
     /// `bind::rows_copy_module`: many equal rows of words copied from one buffer into another by
     /// a dispatch, in place of a copy's region per row (`row_copies.rs`).
     RowsCopy,
+    /// `bind::pages_copy_module` of one direction: whole 4 KiB pages copied between a chunk of a
+    /// guest RAM and a buffer by a table of them, a gather or a scatter (`host_ram/copy.rs`).
+    PagesCopy(metal2vulkan::bind::PagesCopy),
     /// `bind::extended_canonical_module`: Metal's canonical encoding of `BGRA10_XR` texels
     /// written in place over a buffer's words, after a blit through a texture Metal keeps
     /// losslessly compressed (`extended_canonical.rs`).
@@ -206,13 +209,15 @@ impl OwnedModule {
     }
 
     /// Whether the module's set 0 is pushed on `device` ([`OwnedKernel::pushed`]): the rows
-    /// copy's and a shadowed texture's copies' and merges', on a device with
-    /// `VK_KHR_push_descriptor`, so their commands make no pool on the encoding thread
-    /// (`row_copies.rs`, `shadow_copy_back.rs`, `shadow_copy_in.rs`, `shadow_merge.rs`).
+    /// copy's, a guest RAM's pages copy's and a shadowed texture's copies' and merges', on a
+    /// device with `VK_KHR_push_descriptor`, so their commands make no pool on the encoding
+    /// thread (`row_copies.rs`, `host_ram/copy.rs`, `shadow_copy_back.rs`, `shadow_copy_in.rs`,
+    /// `shadow_merge.rs`).
     fn pushed(self, device: &Device) -> bool {
         matches!(
             self,
             OwnedModule::RowsCopy
+                | OwnedModule::PagesCopy(_)
                 | OwnedModule::ShadowCopyBack(_)
                 | OwnedModule::ShadowCopyIn(_)
                 | OwnedModule::ShadowMerge(_)
@@ -326,6 +331,12 @@ impl OwnedModule {
                     .map_err(Error::Compile)?;
                 let push_bytes = metal2vulkan::bind::RowsCopyModule::PUSH_BYTES;
                 Ok((module.spirv.to_vec(), 2, push_bytes))
+            }
+            OwnedModule::PagesCopy(copy) => {
+                let module = metal2vulkan::bind::pages_copy_module(device.compile_device(), copy)
+                    .map_err(Error::Compile)?;
+                let push_bytes = metal2vulkan::bind::PagesCopyModule::PUSH_BYTES;
+                Ok((module.spirv.to_vec(), 3, push_bytes))
             }
             OwnedModule::ExtendedCanonical => {
                 let module = metal2vulkan::bind::extended_canonical_module(device.compile_device())
@@ -559,6 +570,8 @@ pub(super) struct OwnedKernels {
     index_rewrite_runs: HashMap<RewriteProgram, OwnedKernel>,
     rotate_texels: Option<OwnedKernel>,
     rows_copy: Option<OwnedKernel>,
+    pages_gather: Option<OwnedKernel>,
+    pages_scatter: Option<OwnedKernel>,
     extended_canonical: Option<OwnedKernel>,
     ycbcr_refresh: Option<OwnedKernel>,
     ycbcr_converts: HashMap<(YCbCrConversion, bool), OwnedKernel>,
@@ -605,6 +618,8 @@ impl OwnedKernels {
             self.plane_copy,
             self.rotate_texels,
             self.rows_copy,
+            self.pages_gather,
+            self.pages_scatter,
             self.extended_canonical,
             self.ycbcr_refresh,
             self.two_plane_texels,
@@ -787,6 +802,10 @@ impl OwnedKernels {
             OwnedModule::PlaneCopy => &mut self.plane_copy,
             OwnedModule::RotateTexels => &mut self.rotate_texels,
             OwnedModule::RowsCopy => &mut self.rows_copy,
+            OwnedModule::PagesCopy(metal2vulkan::bind::PagesCopy::Gather) => &mut self.pages_gather,
+            OwnedModule::PagesCopy(metal2vulkan::bind::PagesCopy::Scatter) => {
+                &mut self.pages_scatter
+            }
             OwnedModule::ExtendedCanonical => &mut self.extended_canonical,
             OwnedModule::YCbCrRefresh => &mut self.ycbcr_refresh,
 

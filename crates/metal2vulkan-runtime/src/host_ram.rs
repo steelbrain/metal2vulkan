@@ -44,6 +44,8 @@
 //!   rest of the chunk.
 //! - **The dirty log** ([`HostRam::with_dirty_pages`]): one log for the whole RAM, its offsets
 //!   host addresses, so one stamp per commit serves every copy over the RAM.
+//! - **Copies by the GPU** between runs of the RAM and a buffer, from the chunks' imports
+//!   (`BlitCommandEncoder::copy_from_host_ram`, `copy_to_host_ram`): `host_ram/copy.rs`.
 //!
 //! [`Device::use_host_ram`]: crate::Device::use_host_ram
 
@@ -68,6 +70,8 @@ use std::ops::Range;
 use std::ptr::NonNull;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex, PoisonError, TryLockError, Weak};
+
+pub(crate) mod copy;
 
 /// The bytes of a chunk of the RAM a device imports at once; the last chunk of a range may be
 /// fewer.
@@ -213,6 +217,7 @@ impl std::fmt::Debug for HostRamUse {
 
 impl Drop for HostRamUse {
     fn drop(&mut self) {
+        self.ram.copies.unplace(&self.device);
         let gone = self.device.shared().host_ram.remove(&self.ram);
         // The device's thread sees the use ended, and ends.
         self.ram.wake.notify();
@@ -231,6 +236,8 @@ pub(crate) struct RamOnDevice {
     window: Mutex<Window>,
     /// What wakes the device's thread once the window moves or the use ends.
     wake: Arc<Wake>,
+    /// Its chunks' keys for the copies between it and buffers (`host_ram/copy.rs`).
+    copies: copy::ChunkKeys,
 }
 
 /// The chunks of a RAM the device's thread keeps imported ahead of the objects ([`import_ahead`]):
@@ -337,7 +344,7 @@ impl RamOnDevice {
 
     /// `ram`, none of its chunks imported.
     fn new(ram: &Arc<HostRam>) -> RamOnDevice {
-        let slots = (chunk_spans(&ram.ranges).into_iter())
+        let slots: Vec<ChunkSlot> = (chunk_spans(&ram.ranges).into_iter())
             .map(|span| ChunkSlot {
                 span,
                 chunk: Mutex::new(None),
@@ -347,6 +354,7 @@ impl RamOnDevice {
             .collect();
         RamOnDevice {
             ram: Arc::clone(ram),
+            copies: copy::ChunkKeys::new(slots.len()),
             slots,
             window: Mutex::new(Window::START),
             wake: Arc::default(),

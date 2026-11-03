@@ -349,6 +349,9 @@ pub(crate) struct Counters {
     copied_merges_compared: AtomicU64,
     copied_merges_skipped: AtomicU64,
     copied_dropped_bytes: AtomicU64,
+    host_ram_copies: AtomicU64,
+    host_ram_copy_bytes: AtomicU64,
+    host_ram_copy_dispatches: AtomicU64,
     host_ram_chunks_imported: AtomicU64,
     host_ram_chunks_imported_ahead: AtomicU64,
     host_ram_chunks_given_back: AtomicU64,
@@ -2562,6 +2565,14 @@ impl Counters {
     /// cannot write, taking them out of the copies (`copied.rs`).
     pub(crate) fn copied_dropped(&self, bytes: u64) {
         (self.copied_dropped_bytes).fetch_add(bytes, Ordering::Relaxed);
+    }
+
+    /// A blit encoder recorded a copy of `bytes` between a guest RAM and a buffer in
+    /// `dispatches` dispatches (`host_ram/copy.rs`).
+    pub(crate) fn host_ram_copied(&self, bytes: u64, dispatches: u64) {
+        (self.host_ram_copies).fetch_add(1, Ordering::Relaxed);
+        (self.host_ram_copy_bytes).fetch_add(bytes, Ordering::Relaxed);
+        (self.host_ram_copy_dispatches).fetch_add(dispatches, Ordering::Relaxed);
     }
 
     /// A host import the device never releases while idle, for `because`, was made (`kept`), or
@@ -5233,6 +5244,15 @@ pub struct WorkCounts {
     /// that batches' completions dropped: taken out of the copies, the pages' bytes in their
     /// place, never written to the pages, as Metal drops the GPU's writes to read-only memory.
     pub copied_dropped_bytes: u64,
+    /// The copies between a guest RAM and a buffer blit encoders recorded
+    /// (`BlitCommandEncoder::copy_from_host_ram`, `copy_to_host_ram`), each from the device's
+    /// imports of the RAM's chunks.
+    pub host_ram_copies: u64,
+    /// Their bytes.
+    pub host_ram_copy_bytes: u64,
+    /// Their dispatches: one for each chunk a copy's runs touch (more where its bytes pass the
+    /// device's storage range or its pages of a chunk its workgroup count), never one per run.
+    pub host_ram_copy_dispatches: u64,
     /// The chunks of guest RAM the device imported (`Device::use_host_ram`): 64 MiB of a RAM's
     /// range each (its last fewer), each once, by the device's own thread ahead of the objects
     /// over it or by the first object made over it where that thread had not imported it.
@@ -6448,6 +6468,9 @@ impl Device {
             copied_merges_compared: counters.copied_merges_compared.load(Ordering::Relaxed),
             copied_merges_skipped: counters.copied_merges_skipped.load(Ordering::Relaxed),
             copied_dropped_bytes: counters.copied_dropped_bytes.load(Ordering::Relaxed),
+            host_ram_copies: counters.host_ram_copies.load(Ordering::Relaxed),
+            host_ram_copy_bytes: counters.host_ram_copy_bytes.load(Ordering::Relaxed),
+            host_ram_copy_dispatches: counters.host_ram_copy_dispatches.load(Ordering::Relaxed),
             host_ram_chunks_imported: counters.host_ram_chunks_imported.load(Ordering::Relaxed),
             host_ram_chunks_imported_ahead: counters
                 .host_ram_chunks_imported_ahead

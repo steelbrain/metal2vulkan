@@ -154,6 +154,10 @@ mod host_hold_filter;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod host_import_counts;
 mod host_memory;
+#[cfg(m2v_gpu)]
+mod host_ram_copy_bench;
+#[cfg(any(m2v_gpu, m2v_cpu_icd))]
+mod host_ram_copy_device;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod host_ram_device;
 #[cfg(all(any(m2v_gpu, m2v_cpu_icd), target_os = "linux"))]

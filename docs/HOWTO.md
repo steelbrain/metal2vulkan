@@ -501,6 +501,31 @@ pages then takes a kernel mapping per page) can give the device the guest's RAM 
   dropped after the last.
 - `HostRam::with_dirty_pages` takes one `DirtyPages` log for the whole RAM, its offsets host
   addresses.
+- `BlitCommandEncoder::copy_from_host_ram(ram, runs, destination, offset)` gathers `runs` of a RAM
+  the device uses into consecutive bytes of `destination` from `offset`, in the order given, and
+  `copy_to_host_ram(source, offset, ram, runs)` scatters them back: for a surface whose pages are
+  a scatter of guest pages, with no view of them and no import of its own. Each run is a host
+  address range inside the RAM's ranges, 4 KiB-aligned and whole 4 KiB pages; a run that starts
+  where the one before ended joins it, a descending neighbour stays apart, and each is cut where
+  a chunk ends. The pages become a table of 4 KiB pages in the command buffer's upload arena and
+  one compute dispatch for each chunk they touch, over the chunk's own `VkBuffer` (more only past
+  the device's storage range or workgroup count): never a copy region per run
+  (`WorkCounts::host_ram_copies`, `host_ram_copy_bytes`, `host_ram_copy_dispatches`). A copy takes
+  each chunk it touches as an object over it does: a chunk not yet imported is imported first, or
+  the thread's import of it waited for, and the thread's window moves past it. Each copy is ordered
+  and seen as a copy between the buffer and a no-copy buffer over the pages: the chunk's bytes have
+  a hazard-tracking key placed over its host bytes, as a no-copy buffer's are, so the copy is
+  ordered against every other copy of those bytes and every no-copy buffer or heap over the RAM's
+  own addresses, in the encoder and across encoders, command buffers and queues (an object over
+  another mapping of the same pages is not, as two no-copy buffers over two mappings of one page
+  are not). The CPU's writes made before the commit are seen, the GPU's are in the pages at the
+  completion, and where the RAM came with a log its scatters are reported to it as the GPU's writes
+  in place, so copied buffers and shadows over those pages copy them in at their next commit.
+  Refused: a device without `VK_EXT_external_memory_host` (`Unsupported`); a RAM the device does
+  not use, a run empty, off 4 KiB or outside the RAM, or bytes of the buffer that start off a
+  4-byte word of its memory (`Invalid`, `Problem::HostRam`); bytes past the buffer (`Invalid`,
+  `Problem::RangeOutOfBounds`); a chunk the device cannot import (the import's error). A caller
+  falls back to its own copy on any of them.
 
 ## 7. Check the integration
 

@@ -558,11 +558,14 @@ pub enum Problem {
     /// Basis: ours (a runtime extension's own contract: Metal imports no dma-buf).
     DmaBuf,
     /// Guest RAM, or a run resolver's answer, that breaks its runtime extension's contract
-    /// (`HostRam::new`, `Device::use_host_ram`, `HostMemory::with_runs`; Metal has none). For the
+    /// (`HostRam::new`, `Device::use_host_ram`, `HostMemory::with_runs`,
+    /// `BlitCommandEncoder::copy_from_host_ram` and `copy_to_host_ram`; Metal has none). For the
     /// RAM: no range, or a range that is empty, starts or ends off the host page, runs past the
     /// address space's end or overlaps another (of the same RAM, or of another RAM the device
     /// uses). For an answer: runs that are not whole host pages or do not cover exactly the pages
-    /// asked for.
+    /// asked for. For a copy: a RAM the device does not use, a run that is empty, starts or ends
+    /// off 4 KiB or lies outside the RAM's ranges, or bytes of the buffer that start off a 4-byte
+    /// word of its memory.
     ///
     /// Basis: ours (a runtime extension's own contract: Metal imports no guest RAM).
     HostRam,
