@@ -7,20 +7,22 @@
 //!   rules: `render/executions.rs`, `indirect_execute.rs`) finds what is kept of each chunk its
 //!   range covers ([`Kept`]): a kept recording, none but an execution of the chunk before it with
 //!   no write reaching it since, or neither (the chunk's first execution since a write reached
-//!   it). An execution none of whose chunks ran before so records as one that keeps nothing does,
-//!   so a range executed once pays nothing for keeping. Every other one records each chunk its
-//!   range covers apart, a render chunk into a
-//!   secondary command buffer of the execution's render pass instance, a compute chunk into a
-//!   primary of its segment, from a pool, descriptor arena and upload arena of the chunk's own
-//!   ([`KeptContext`]), lent to the command buffer while it records the chunk and held by every
-//!   command buffer that runs the recording until it completes; a chunk's first execution records
-//!   apart from the command buffer's own, and keeps nothing. A chunk whose recording is plain
-//!   (each encoder's rules: nothing of it records outside its command buffer, and nothing of it
-//!   reaches what the command buffer alone holds) is kept ([`KeptChunk`]): its command buffer,
-//!   begun for simultaneous use, the uses its commands noted, the keys they named, weak holds on
-//!   what they held, their execution records, and what it was recorded from (the encoder's
-//!   inputs, each address its commands named and what it resolved to, the no-copy buffers'
-//!   moves).
+//!   it). An execution none of whose chunks ran before records as one that keeps nothing, so a
+//!   range executed once pays nothing for keeping. Every other one records each chunk its range
+//!   covers apart, a render chunk into a secondary command buffer of the execution's render pass
+//!   instance, a compute chunk into a primary of its segment, from a pool, descriptor arena and
+//!   upload arena of the chunk's own ([`KeptContext`]), lent to the command buffer while it
+//!   records the chunk and held by every command buffer that runs the recording until it
+//!   completes; a chunk's first execution records apart from the command buffer's own, and keeps
+//!   nothing. A chunk whose recording is plain (each encoder's rules: nothing of it records
+//!   outside its command buffer, and nothing of it reaches what the command buffer alone holds) is
+//!   kept ([`KeptChunk`]): its command buffer, begun for simultaneous use, the uses its commands
+//!   noted, the keys they named, weak holds on what they held, their execution records, and what
+//!   it was recorded from (the encoder's inputs, each address its commands named and what it
+//!   resolved to, the no-copy buffers' moves). Of those inputs, the resources made resident are
+//!   one list an execution, which the chunks it records share ([`ResidentKey`]): a later
+//!   execution compares its own with each distinct list among its kept chunks' keys once, whole,
+//!   and with the rest by pointer ([`ResidentMet`]).
 //! - **Run again.** A later execution of the chunk's commands under equal inputs, where every
 //!   address resolves as it did, nothing moved, nothing it named is detached and everything it
 //!   held lives, runs the kept command buffer: its command buffer notes the uses again, keeps the
@@ -45,8 +47,9 @@ use crate::resource::ResourceKey;
 use crate::spares::CommandPool;
 use crate::tracker::Summary;
 use crate::upload::Uploads;
+use crate::work_counts::Counters;
 use ash::vk;
-use metal2vulkan::bind::ReplayFaults;
+use metal2vulkan::bind::{ReplayFaults, UsedResource};
 use std::any::Any;
 use std::collections::{BTreeMap, BTreeSet};
 use std::ops::Range;
@@ -219,6 +222,68 @@ pub(super) fn resolutions(
     buffers.chain(others).collect()
 }
 
+/// The resources an execution's encoders made resident, as the key of a chunk it records holds
+/// them (`Residency::kept_key`): one list an execution, which the chunks it records share, so a
+/// later execution compares its own with a kept chunk's whole once a list ([`ResidentMet`]) and
+/// by pointer after.
+#[derive(Clone)]
+pub(super) struct ResidentKey(Arc<(Vec<UsedResource>, Vec<ResourceKey>)>);
+
+impl ResidentKey {
+    /// The key of `resident`, an execution's (`Residency::kept_key`).
+    pub(super) fn new(resident: (Vec<UsedResource>, Vec<ResourceKey>)) -> ResidentKey {
+        ResidentKey(Arc::new(resident))
+    }
+
+    /// The resources' keys, in token order.
+    pub(super) fn keys(&self) -> &[ResourceKey] {
+        &self.0 .1
+    }
+}
+
+/// Equal where both hold the same resources: one list, or two alike.
+impl PartialEq for ResidentKey {
+    fn eq(&self, other: &ResidentKey) -> bool {
+        Arc::ptr_eq(&self.0, &other.0) || *self.0 == *other.0
+    }
+}
+
+/// The resident keys of the kept chunks an execution met, each with whether it holds what the
+/// execution's own does: each list compared whole once (`WorkCounts::kept_resident_keys_compared`).
+#[derive(Default)]
+pub(super) struct ResidentMet(Vec<(ResidentKey, bool)>);
+
+impl ResidentMet {
+    /// Whether `kept`, a kept chunk's resident key, holds the resources `ours` does, `counts` the
+    /// device's: by pointer, else as an earlier chunk of the same list found, else compared
+    /// whole. Where it does, `ours` takes `kept`'s list, so the keys' comparison is a pointer's
+    /// (`PartialEq for ResidentKey`), and the chunks the execution keeps share it.
+    pub(super) fn same(
+        &mut self,
+        ours: &mut ResidentKey,
+        kept: &ResidentKey,
+        counts: &Counters,
+    ) -> bool {
+        if Arc::ptr_eq(&ours.0, &kept.0) {
+            return true;
+        }
+        let found = (self.0.iter()).find(|(met, _)| Arc::ptr_eq(&met.0, &kept.0));
+        let same = match found {
+            Some(&(_, same)) => same,
+            None => {
+                counts.kept_resident_key_compared();
+                let same = *ours.0 == *kept.0;
+                self.0.push((kept.clone(), same));
+                same
+            }
+        };
+        if same {
+            *ours = kept.clone();
+        }
+        same
+    }
+}
+
 /// A chunk's kept recording (the module docs).
 pub(super) struct KeptChunk {
     context: Arc<KeptContext>,
@@ -261,6 +326,11 @@ impl KeptChunk {
             misses,
             faults,
         }
+    }
+
+    /// The inputs it was recorded from, where they are a `K`.
+    pub(super) fn key<K: 'static>(&self) -> Option<&K> {
+        self.key.downcast_ref()
     }
 
     /// What a command buffer of `command_buffer`'s queue family that runs it again under `key`,

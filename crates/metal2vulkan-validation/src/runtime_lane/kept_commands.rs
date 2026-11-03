@@ -14,7 +14,9 @@
 //! - a write of the GPU's (a blit's reset) runs no kept recording;
 //! - another set of resident resources, or another range, records its chunks again;
 //! - an execution with a check keeps its chunks as an unchecked one does where the check's needs
-//!   rule out what the records may hold, and keeps nothing where they do not.
+//!   rule out what the records may hold, and keeps nothing where they do not;
+//! - an execution compares the resources it made resident with each list its kept chunks were
+//!   recorded under once, whole, and the chunks it records to keep share the list it met.
 //!
 //! And so do compute commands: `icb_replay_template`, command `c` binding its own parameters and
 //! output windows, so every command's dispatch writes words of its own.
@@ -278,6 +280,45 @@ fn unchanged_commands_run_their_kept_recordings() {
         let twice = counted(device, || scene.run(&a, &icb, (0..N, 2), None));
         assert_eq!(twice, [0, 6, 2 * N, 0], "kept twice in one pass");
         assert_eq!(pixels(&a), all);
+    });
+}
+
+/// Across `run`: the chunks run from kept recordings, and the whole comparisons of the resources
+/// made resident with a kept chunk's (`WorkCounts::kept_resident_keys_compared`).
+fn compared(device: &Device, run: impl FnOnce()) -> [u64; 2] {
+    let before = device.work_counts();
+    run();
+    let after = device.work_counts();
+    [
+        after.indirect_chunks_kept - before.indirect_chunks_kept,
+        after.kept_resident_keys_compared - before.kept_resident_keys_compared,
+    ]
+}
+
+/// An execution compares what it made resident with the list its kept chunks were recorded under
+/// once, whole, however many chunks hold it; two in one pass compare once each. A chunk written
+/// and recorded to keep again shares the list its execution met, so its next execution still
+/// compares once.
+#[test]
+fn an_execution_compares_its_resident_resources_once() {
+    on_device(|device, _| {
+        let scene = Scene::new(device);
+        let icb = scene.icb(device);
+        let target = Scene::target(device);
+        let run = |times| compared(device, || scene.run(&target, &icb, (0..N, times), None));
+        assert_eq!(run(1), [0, 0], "the first execution keeps nothing");
+        assert_eq!(run(1), [0, 0], "the second records three chunks to keep");
+        assert_eq!(run(1), [3, 1], "three chunks of one list, compared once");
+        assert_eq!(run(2), [6, 2], "twice in one pass");
+        scene.write(&icb, 300, 300);
+        assert_eq!(run(1), [2, 1], "chunk 1 written");
+        assert_eq!(
+            run(1),
+            [2, 1],
+            "chunk 1 recorded to keep under the list met"
+        );
+        assert_eq!(run(1), [3, 1], "three chunks of one list");
+        assert_eq!(pixels(&target), drawn(0..N, |c| c));
     });
 }
 
@@ -590,6 +631,22 @@ fn compute_commands_run_their_kept_recordings_until_written() {
         let [_, chunks, ..] = counted(device, || work.run(&icb, 0..N));
         assert_eq!(chunks, 0, "no chunk kept after the GPU's write");
         assert_eq!(work.out(), dispatched((0..200).chain(550..N), params));
+    });
+}
+
+/// A compute execution compares what it made resident with the list its kept chunks were
+/// recorded under once, whole, however many chunks hold it.
+#[test]
+fn a_compute_execution_compares_its_resident_resources_once() {
+    on_device(|device, _| {
+        let work = Dispatches::new(device);
+        let icb = work.icb(device);
+        let run = || compared(device, || work.run(&icb, 0..N));
+        assert_eq!(run(), [0, 0], "the first execution keeps nothing");
+        assert_eq!(run(), [0, 0], "the second records three chunks to keep");
+        assert_eq!(run(), [3, 1], "three chunks of one list, compared once");
+        assert_eq!(run(), [3, 1]);
+        assert_eq!(work.out(), dispatched(0..N, |c| c));
     });
 }
 

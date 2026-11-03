@@ -375,7 +375,9 @@ fn moved(before: &WorkCounts, after: &WorkCounts) -> Vec<(String, i128)> {
 /// draw's own binding in each of the two stages that read through it (the entry shape's; the
 /// slot shape's functions read no pointer, so their draws upload no root table), and one index
 /// of the resident buffers by address for the execution's commands to resolve in (none for the
-/// encoder's draws, which resolve nothing). Each frame's `moved` counters, of `frames` frames.
+/// encoder's draws, which resolve nothing), and one whole comparison of what was made resident
+/// with the list the execution's kept chunks were recorded under (none where it keeps none).
+/// Each frame's `moved` counters, of `frames` frames.
 fn assert_bounded(
     case: &str,
     (shape, path, n): (Shape, Path, u64),
@@ -405,6 +407,12 @@ fn assert_bounded(
         made <= indexes * frames,
         "{case} N {n}: {made} address indexes made"
     );
+    // One execution a frame, whose kept chunks hold one list of what was made resident.
+    let compared = count("kept_resident_keys_compared");
+    assert!(
+        compared <= frames,
+        "{case} N {n}: {compared} resident lists compared whole"
+    );
 }
 
 /// FNV-1a of `bytes`.
@@ -431,13 +439,17 @@ fn each_path_draws_what_the_encoder_draws() {
             assert!(drawn > 300, "{shape:?}: {drawn} pixels drawn");
             for own in [true, false] {
                 let draws = Draws::new(&scene, shape, own, 300);
+                // Three frames a path: an indirect command buffer's first execution keeps
+                // nothing, its second records its chunks to keep, and its third runs them.
                 for path in PATHS {
-                    let before = device.work_counts();
-                    draws.frame(path);
-                    let moved = moved(&before, &device.work_counts());
-                    let case = format!("{shape:?} own {own} {path:?}");
-                    assert_bounded(&case, (shape, path, 300), &moved, 1);
-                    assert!(scene.pixels() == expected, "{case}");
+                    for frame in 0..3 {
+                        let before = device.work_counts();
+                        draws.frame(path);
+                        let moved = moved(&before, &device.work_counts());
+                        let case = format!("{shape:?} own {own} {path:?} frame {frame}");
+                        assert_bounded(&case, (shape, path, 300), &moved, 1);
+                        assert!(scene.pixels() == expected, "{case}");
+                    }
                 }
             }
         }

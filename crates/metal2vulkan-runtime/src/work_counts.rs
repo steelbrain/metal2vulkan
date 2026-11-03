@@ -154,6 +154,7 @@ pub(crate) struct Counters {
     indirect_chunks_kept: AtomicU64,
     indirect_commands_kept: AtomicU64,
     kept_contexts_made: AtomicU64,
+    kept_resident_keys_compared: AtomicU64,
     gpu_form_commands: AtomicU64,
     merged_draw_commands: AtomicU64,
     gpu_pool_blocks_made: AtomicU64,
@@ -1177,6 +1178,13 @@ impl Counters {
     /// recording to keep in (`kept_commands::KeptContext`).
     pub(crate) fn kept_context_made(&self) {
         self.kept_contexts_made.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// An execution that may keep its commands compared the resources it made resident with
+    /// those a kept chunk was recorded under, whole (`kept_commands::ResidentMet`).
+    pub(crate) fn kept_resident_key_compared(&self) {
+        self.kept_resident_keys_compared
+            .fetch_add(1, Ordering::Relaxed);
     }
 
     /// `count` commands of an execution of render commands were recorded in its GPU form
@@ -3907,6 +3915,11 @@ pub struct WorkCounts {
     /// time a chunk's second or later execution with no write reaching it since records it apart.
     /// None for a range's first execution, which records as one that keeps nothing.
     pub kept_contexts_made: u64,
+    /// Comparisons, whole, of the resources an execution of indirect commands made resident with
+    /// those a kept chunk of them was recorded under (`kept_commands::ResidentMet`): one for each
+    /// distinct list the execution's kept chunks hold, which the chunks one execution recorded
+    /// share; the chunks after compare by pointer.
+    pub kept_resident_keys_compared: u64,
     /// Commands of executions of render commands recorded in their GPU form, one a command each
     /// time (`render/executions/gpu.rs`): the device read their records, the host none.
     pub gpu_form_commands: u64,
@@ -5888,6 +5901,9 @@ impl Device {
             indirect_chunks_kept: counters.indirect_chunks_kept.load(Ordering::Relaxed),
             indirect_commands_kept: counters.indirect_commands_kept.load(Ordering::Relaxed),
             kept_contexts_made: counters.kept_contexts_made.load(Ordering::Relaxed),
+            kept_resident_keys_compared: counters
+                .kept_resident_keys_compared
+                .load(Ordering::Relaxed),
             gpu_form_commands: counters.gpu_form_commands.load(Ordering::Relaxed),
             merged_draw_commands: counters.merged_draw_commands.load(Ordering::Relaxed),
             gpu_pool_blocks_made: counters.gpu_pool_blocks_made.load(Ordering::Relaxed),

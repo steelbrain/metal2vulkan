@@ -20,7 +20,9 @@
 //!   layers, samples and sample positions, the attachments that are among the resources made
 //!   resident, the encoder's state, scissor rectangles, render target array length and
 //!   amplification at the call, whether the pass holds tile imageblock data, and the resources
-//!   made resident (`Residency::kept_key`). A kept chunk runs again only under an equal key.
+//!   made resident (`Residency::kept_key`, one list an execution, compared whole once a list its
+//!   kept chunks hold: `kept_commands::ResidentMet`). A kept chunk runs again only under an equal
+//!   key.
 //! - **Each chunk** runs its kept recording again, or records apart: its draws into a secondary of
 //!   its own, begun against the instance's compatible pass, through an encoder of the call's
 //!   state over a core of its own (`EncoderCore::capture`), which the pass's core then takes
@@ -48,7 +50,9 @@ use crate::command_buffer::CommandBuffer;
 use crate::encoder::EncoderCore;
 use crate::error::{internal, vulkan, Error};
 use crate::indirect_command_buffer::Reader;
-use crate::kept_commands::{self, Kept, KeptChunk, KeptContext, KeptEffects, Resolution};
+use crate::kept_commands::{
+    self, Kept, KeptChunk, KeptContext, KeptEffects, ResidentKey, ResidentMet, Resolution,
+};
 use crate::pipeline::{BufferForms, RenderPipelineState};
 use crate::render::{memoryless, RenderLowering};
 use crate::render_pass::PassLayout;
@@ -58,7 +62,7 @@ use crate::residency::Residency;
 use crate::resource::ResourceKey;
 use crate::sample_positions::Sixteenths;
 use metal2vulkan::bind::indirect_commands::{BufferStage, CommandRecord};
-use metal2vulkan::bind::{ReplayFaults, UsedResource};
+use metal2vulkan::bind::ReplayFaults;
 use metal2vulkan::metal::IndirectCommandType;
 use std::collections::BTreeSet;
 use std::ops::Range;
@@ -84,7 +88,7 @@ pub(super) struct RenderKey {
     render_target_array_length: u32,
     amplification: Amplification,
     tile_imageblock: bool,
-    resident: (Vec<UsedResource>, Vec<ResourceKey>),
+    resident: ResidentKey,
 }
 
 impl PartialEq for RenderKey {
@@ -181,10 +185,10 @@ impl RenderExecution {
             return None;
         }
         let (kept, read_at) = self.icb.kept_chunks(range.clone())?;
-        let resident = residency.kept_key();
+        let resident = ResidentKey::new(residency.kept_key());
         // An attachment is among them as a texture made resident, or in a heap or over a buffer
         // made resident.
-        let keys: BTreeSet<ResourceKey> = resident.1.iter().copied().collect();
+        let keys: BTreeSet<ResourceKey> = resident.keys().iter().copied().collect();
         let attached = colors
             .map(|color| &color.target.texture)
             .chain(layout.depth_stencil.as_ref().map(|ds| &ds.target.texture))
@@ -228,10 +232,16 @@ impl RenderExecution {
         let device = command_buffer.device().clone();
         let (range, faults) = self.range.commands(self.icb.size())?;
         found.faults = ReplayFaults(found.faults.0 | faults.0);
-        let Keeping { key, kept, read_at } = keeping;
+        let Keeping {
+            mut key,
+            kept,
+            read_at,
+        } = keeping;
         // Counted before the records are read: a write meanwhile records it again.
         self.read_at.store(read_at, Ordering::Release);
         let layout = rendered.backing(&self.snapshot.layout)?;
+        let counts = &device.shared().counts;
+        let mut met = ResidentMet::default();
         let mut draws = Vec::new();
         let mut rest = None;
         for ((chunk, covered), kept) in kept_commands::chunks(range.clone()).zip(kept) {
@@ -241,6 +251,10 @@ impl RenderExecution {
                 Kept::First => (None, false),
             };
             let again = kept.and_then(|kept| {
+                let resident = &kept.key::<RenderKey>()?.resident;
+                if !met.same(&mut key.resident, resident, counts) {
+                    return None;
+                }
                 let held = kept.runs_again(command_buffer, (&key, &covered), residency)?;
                 Some((kept, held))
             });
@@ -249,10 +263,7 @@ impl RenderExecution {
                 found.misses = found.misses.wrapping_add(kept.misses);
                 found.faults = ReplayFaults(found.faults.0 | kept.faults.0);
                 draws.push(kept.raw);
-                device
-                    .shared()
-                    .counts
-                    .indirect_chunk_kept(u64::from(covered.end - covered.start));
+                counts.indirect_chunk_kept(u64::from(covered.end - covered.start));
                 core.retain_shared(kept);
                 continue;
             }

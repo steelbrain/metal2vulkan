@@ -12,8 +12,9 @@
 //!   one that keeps nothing.
 //! - **The key.** A chunk is recorded from its records and from the inputs [`ComputeKey`] holds:
 //!   the inherited pipeline state, whether the encoder runs its dispatches in encoded order, and
-//!   the resources made resident (`Residency::kept_key`). A kept chunk runs again only under an
-//!   equal key.
+//!   the resources made resident (`Residency::kept_key`, one list an execution, compared whole
+//!   once a list its kept chunks hold: `kept_commands::ResidentMet`). A kept chunk runs again only
+//!   under an equal key.
 //! - **Each chunk** runs its kept recording again, or records apart into a primary of its own
 //!   (from a context of its own where an execution ran it before, no write reaching it since,
 //!   else from its command buffer's own, kept by none), as a segment of its own
@@ -31,12 +32,13 @@ use crate::command_buffer::CommandBuffer;
 use crate::encoder::{EncoderCore, RecordedSegment};
 use crate::error::Error;
 use crate::indirect_command_buffer::Reader;
-use crate::kept_commands::{self, Kept, KeptChunk, KeptContext, KeptEffects};
+use crate::kept_commands::{
+    self, Kept, KeptChunk, KeptContext, KeptEffects, ResidentKey, ResidentMet,
+};
 use crate::pipeline::{BufferForms, ComputePipelineState};
 use crate::residency::Residency;
-use crate::resource::ResourceKey;
 use metal2vulkan::bind::indirect_commands::BufferStage;
-use metal2vulkan::bind::{ReplayFaults, UsedResource};
+use metal2vulkan::bind::ReplayFaults;
 use std::ops::Range;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
@@ -47,7 +49,7 @@ use std::sync::Arc;
 pub(super) struct ComputeKey {
     pipeline: Option<ComputePipelineState>,
     ordered: bool,
-    resident: (Vec<UsedResource>, Vec<ResourceKey>),
+    resident: ResidentKey,
 }
 
 /// An execution that keeps its commands (the module docs): its key, what is kept of its range's
@@ -85,7 +87,7 @@ impl Execute {
         let key = ComputeKey {
             pipeline: self.pipeline.clone(),
             ordered: self.ordered,
-            resident: residency.kept_key(),
+            resident: ResidentKey::new(residency.kept_key()),
         };
         Some(Keeping { key, kept, read_at })
     }
@@ -100,10 +102,15 @@ impl Execute {
         keeping: Keeping,
     ) -> Result<RecordedSegment, Error> {
         let (range, faults) = self.range()?;
-        let Keeping { key, kept, read_at } = keeping;
+        let Keeping {
+            mut key,
+            kept,
+            read_at,
+        } = keeping;
         // Counted before the records are read: a write meanwhile records it again.
         self.read_at.store(read_at, Ordering::Release);
         let counts = &command_buffer.device().shared().counts;
+        let mut met = ResidentMet::default();
         let mut parts = Vec::new();
         for ((chunk, covered), kept) in kept_commands::chunks(range).zip(kept) {
             let (kept, keeps): (Option<Arc<KeptChunk>>, bool) = match kept {
@@ -112,6 +119,10 @@ impl Execute {
                 Kept::First => (None, false),
             };
             let again = kept.and_then(|kept| {
+                let resident = &kept.key::<ComputeKey>()?.resident;
+                if !met.same(&mut key.resident, resident, counts) {
+                    return None;
+                }
                 let held = kept.runs_again(command_buffer, (&key, &covered), residency)?;
                 Some((kept, held))
             });
