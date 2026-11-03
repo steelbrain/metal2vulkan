@@ -404,6 +404,9 @@ calls! {
     // A sparse batch's copy of a move's texels (`sparse/emulated.rs`).
     CmdCopyImage => c"vkCmdCopyImage",
     CreateDescriptorPool => c"vkCreateDescriptorPool",
+    // The reset of a predicated loop's run-again arena once the run completed
+    // (`command_buffer/rerun.rs`, `DescriptorArena::reset`).
+    ResetDescriptorPool => c"vkResetDescriptorPool",
     AllocateDescriptorSets => c"vkAllocateDescriptorSets",
     UpdateDescriptorSets => c"vkUpdateDescriptorSets",
     CreateBuffer => c"vkCreateBuffer",

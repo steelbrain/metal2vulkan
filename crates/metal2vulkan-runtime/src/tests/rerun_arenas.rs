@@ -151,8 +151,9 @@ fn a_loop_run_again_holds_no_more_uploads_each_run() {
 
 /// A descriptor arena lent another (`DescriptorArena::lend`, as a run again's work apart records)
 /// allocates every set from the lent one and opens no pool of its own; the lent one's pools,
-/// reset after each of twenty runs of forty sets (`DescriptorArena::reset`, as each run again
-/// completed), take every later run's sets: the pools the first run opened are all it ever opens.
+/// reset inside a section of the exit guard after each of twenty runs of forty sets
+/// (`DescriptorArena::reset`, as each run again completed), take every later run's sets: the pools
+/// the first run opened are all it ever opens.
 #[test]
 fn a_lent_descriptor_arena_takes_every_set_and_its_reset_opens_no_pool() {
     let device = device();
@@ -184,7 +185,11 @@ fn a_lent_descriptor_arena_takes_every_set_and_its_reset_opens_no_pool() {
         );
         let made = device.work_counts().arena_pools_made;
         assert_eq!(*opened.get_or_insert(made), made, "run {run} opened a pool");
+        // Inside a section, as the run again's settle resets it: there the device's functions
+        // are the exit guard's table alone (`device/functions.rs`).
+        let section = crate::exit_guard::enter().expect("a section");
         lock(&lent).reset().unwrap();
+        drop(section);
     }
     own.lend(None);
     assert!(lock(&lent).pools() > 0);

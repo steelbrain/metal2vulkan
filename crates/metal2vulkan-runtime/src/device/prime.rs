@@ -27,7 +27,8 @@
 //! addresses, [`DEVICE_ADDRESS_CALLS`], its address read), and an image with their memory and
 //! views, a depth image, a render pass of each form (`vkCreateRenderPass`, `vkCreateRenderPass2`)
 //! and a framebuffer, a descriptor set layout, a pipeline
-//! layout with a push constant range and a descriptor pool with a set written, and a compute
+//! layout with a push constant range and a descriptor pool with a set written (and reset before its
+//! release), and a compute
 //! pipeline made with a pipeline cache from a shader module, its stage specialized as the runtime's
 //! makings are ([`SPECIALIZED`]), whose data is read; a command buffer, recorded and never
 //! submitted, with what a host step records: the pipeline and the set bound (and, where the device
@@ -1149,6 +1150,17 @@ impl Primer<'_> {
             let pool = device.create_descriptor_pool(&info, None).map_err(vulkan)?;
             self.made(Call::CreateDescriptorPool);
             self.hold(pool);
+            // Reset before it is released, as a predicated loop's run again resets its arena's
+            // pools: released before the pool, after the command pool whose command buffer binds
+            // the pool's set, which is held later.
+            self.held.push(Box::new(move |device: &ash::Device| {
+                // SAFETY: the device is idle when the priming releases what it holds, and the
+                // command buffer that bound the pool's set is freed with its pool before this.
+                let _ = unsafe {
+                    device.reset_descriptor_pool(pool, vk::DescriptorPoolResetFlags::empty())
+                };
+                Call::ResetDescriptorPool
+            }));
             // A set of it, written: the runtime releases its pools with their sets.
             let info = vk::DescriptorSetAllocateInfo::default()
                 .descriptor_pool(pool)
