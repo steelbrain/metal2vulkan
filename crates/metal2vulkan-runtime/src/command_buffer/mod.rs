@@ -2573,10 +2573,17 @@ impl CommandBuffer {
     /// on a thread of its own; the runtime's hands it to its scheduler thread, a wake and a pass
     /// away. Here, where no other submission pass is under way, this thread makes it: it submits
     /// the device's ready batches committed first, this one's among them, while each needs no
-    /// host step, no submission check, no group and no switch of a storage form, up to the pass's
-    /// bound, in commit order. What it leaves goes to the scheduler's thread, which it wakes;
-    /// where a pass is under way, that pass takes this commit in, as for `commit`.
+    /// host step, no group and no switch of a storage form, up to the pass's bound, in commit
+    /// order. What it leaves goes to the scheduler's thread, which it wakes; where a pass is under
+    /// way, that pass takes this commit in, as for `commit`.
     ///
+    /// - **Its submission checks run here**, inside this call, for the batches it submits
+    ///   ([`set_submission_check`](Self::set_submission_check)): each just before its batch's
+    ///   submission, with no lock of the runtime's held, in commit order, as the scheduler's thread
+    ///   runs them, and a code one answers fails its submission as there. A batch whose checks
+    ///   wait for a GPU signal to land (an event value only a submitted GPU signal reaches) is the
+    ///   scheduler thread's, which waits for it, and so is what is behind it. They must take no
+    ///   lock the caller holds and wait for no GPU work, as a submission handler.
     /// - **Its submission handlers run here**, inside this call, for the batches it submitted:
     ///   after the submission, with no lock of the runtime's held, in submission order with
     ///   every other command buffer's ([`add_submission_handler`](Self::add_submission_handler)),
@@ -2591,7 +2598,8 @@ impl CommandBuffer {
     ///   queue's waiter), it commits as `commit` does and submits nothing itself.
     ///
     /// Refused, changing nothing, as [`commit`](Self::commit) is. Counted:
-    /// `WorkCounts::scheduler_passes_at_commit`, `WorkCounts::batches_submitted_at_commit`.
+    /// `WorkCounts::scheduler_passes_at_commit`, `WorkCounts::batches_submitted_at_commit`,
+    /// `WorkCounts::batches_checked_at_commit`.
     pub fn commit_and_submit(&self) -> Result<(), Error> {
         let device = &self.0.device;
         if exit_guard::serving_completion() {

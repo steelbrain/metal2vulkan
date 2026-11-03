@@ -19,7 +19,11 @@
 //!   thread, without its own lock or the command buffer's, it then runs the check of each
 //!   submission that begins in the batch, and again of each that a host step of the batch
 //!   recorded commands for (what they reach is known only then), then submits the batch in its
-//!   order. Where the scheduler groups batches (`CompletionPolicy::Grouped` on a driver that
+//!   order. A thread in `CommandBuffer::commit_and_submit` that makes the submission pass itself
+//!   runs those checks instead, the same way, just before it submits the batch, where the batch
+//!   is the one committed first of all, ready but for them, with no host step and no group, and
+//!   every value it waits for reached on the device or by the host (`scheduler::claim_check`);
+//!   the rest are the scheduler thread's. Where the scheduler groups batches (`CompletionPolicy::Grouped` on a driver that
 //!   merges submissions, `group.rs`), it runs the checks of up to three batches right behind a
 //!   head that goes with the head's, in commit order, each once its batch is otherwise ready and
 //!   its events' values reached on the device or by the host, none committed after another
@@ -59,14 +63,16 @@ use std::sync::Arc;
 
 /// A command buffer's submission check ([`CommandBuffer::set_submission_check`]): a runtime
 /// extension, no Metal type. Called with each submission of the command buffer as Metal splits
-/// it, on the device's scheduler thread, it answers `None` for the submission to run, or the
-/// `MTLCommandBufferError` code to fail it with (8, `OutOfMemory`, for one that uses a resource
-/// whose memory was taken away, as Metal fails it).
+/// it, on the device's scheduler thread, or on the thread of a
+/// [`CommandBuffer::commit_and_submit`] that submits it, it answers `None` for the submission to
+/// run, or the `MTLCommandBufferError` code to fail it with (8, `OutOfMemory`, for one that uses
+/// a resource whose memory was taken away, as Metal fails it).
 ///
-/// It runs with no lock of the runtime's held, and holds back the scheduler thread's submissions
-/// while it runs: a commit made meanwhile returns at once, and its batches wait in the inbox for
-/// the thread's next pass, after this check (`scheduler/inbox.rs`). It must not wait for GPU work,
-/// a command buffer or a handler, and should be quick. It may call the runtime otherwise.
+/// It runs with no lock of the runtime's held, and holds back the submissions of the thread that
+/// runs it: a commit made meanwhile returns at once, and its batches wait in the inbox for the
+/// scheduler thread's next pass, after this check (`scheduler/inbox.rs`). It must take no lock a
+/// caller of `commit_and_submit` holds and must not wait for GPU work, a command buffer or a
+/// handler, and should be quick. It may call the runtime otherwise.
 pub type SubmissionCheck = Arc<dyn Fn(&Submission<'_>) -> Option<NonZeroU64> + Send + Sync>;
 
 /// The `MTLCommandBufferError` code a submission whose check panicked fails with: `Internal`.
@@ -315,7 +321,9 @@ impl CommandBuffer {
     /// nothing, every other submission runs, the event signals fire, the handlers run, and the
     /// command buffer completes with status `Error` and code 8. A check that answers a code
     /// does that to its submission, and [`Submission::used_resources`] says what the submission
-    /// uses and reaches. Setting another check replaces it.
+    /// uses and reaches. Setting another check replaces it. The check runs on the device's
+    /// scheduler thread, or on the thread of a [`commit_and_submit`](Self::commit_and_submit)
+    /// that submits the submission ([`SubmissionCheck`]).
     ///
     /// Refused, changing nothing, once the command buffer is committed (`Invalid`,
     /// `Problem::AlreadyCommitted`).
@@ -340,8 +348,9 @@ impl CommandBufferShared {
                 .is_some_and(|checks| checks.batches <= index)
     }
 
-    /// The submission checks before batch `index` is submitted: on the scheduler's thread,
-    /// without its lock or this command buffer's, inside a section of the exit guard, once the
+    /// The submission checks before batch `index` is submitted: on the scheduler's thread, or a
+    /// committing one that submits the batch next (`scheduler::claim_check`), without the
+    /// scheduler's lock or this command buffer's, inside a section of the exit guard, once the
     /// batch is otherwise ready and its host step recorded. Each due check runs as the program's
     /// code (`exit_guard::program`); a code it answers, or a panic, fails its submission.
     pub(crate) fn run_checks(self: &Arc<Self>, index: usize) {

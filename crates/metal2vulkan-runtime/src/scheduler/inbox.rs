@@ -43,8 +43,9 @@
 //!   and no wake, then passes once as a thread about to block does, where no passer is counted;
 //!   where one is, that passer takes the commit in (the thread's by its look again, a thread's
 //!   that passes once by the wake its [`passed_over`](Inbox::passed_over) reads). It stays
-//!   counted until the work its pass left it (the submission handlers, the holds) ran, so a
-//!   commit made meanwhile is handed to it and from it to the thread as above.
+//!   counted until the work its pass left it (the submission handlers, the holds, a head's
+//!   submission checks and the passes after them, [`Inbox::pass_again`], which take nothing in)
+//!   ran, so a commit made meanwhile is handed to it and from it to the thread as above.
 //! - **A wake is handed off too** ([`Inbox::nudge`]). What a pass reads may change without a
 //!   commit: an event's value rises, a batch completes (a check waits for its signal to land).
 //!   Where the thread is counted, the waker leaves it a nudge and returns, as a commit does: the
@@ -156,8 +157,9 @@ impl<S, C> Inbox<S, C> {
 
     /// [`pass_once`](Self::pass_once), with `after` run on what `pass` answered once the state's
     /// lock is free and before the passer counts out: the work the pass left the caller (its
-    /// submission handlers, the holds it let go of), during which a commit made finds the passer
-    /// counted and is left to it. What `after` answered, where it passed.
+    /// submission handlers, the holds it let go of, a check and the passes after it,
+    /// [`pass_again`](Self::pass_again)), during which a commit made finds the passer counted and
+    /// is left to it. What `after` answered, where it passed.
     pub(crate) fn pass_once_then<R, T>(
         &self,
         pass: impl FnOnce(&mut S, &mut Vec<C>) -> R,
@@ -183,6 +185,15 @@ impl<S, C> Inbox<S, C> {
         let answered = after(passed);
         self.passers.fetch_sub(1, Ordering::SeqCst);
         Some(answered)
+    }
+
+    /// Another pass for a caller of [`pass_once_then`](Self::pass_once_then), from its `after`,
+    /// still counted as the passer: `pass` under the state's lock over what the state holds,
+    /// taking nothing in. What was posted or nudged since stays for the thread that makes passes,
+    /// which the caller wakes once counted out ([`passed_over`](Self::passed_over)); every commit
+    /// posted comes after every one the state holds, so the state's order stays commit order.
+    pub(crate) fn pass_again<R>(&self, pass: impl FnOnce(&mut S) -> R) -> R {
+        pass(&mut lock(&self.state))
     }
 
     /// Whether a commit or a nudge was left to the thread that makes passes, read after

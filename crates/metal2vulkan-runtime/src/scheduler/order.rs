@@ -283,6 +283,15 @@ impl<B> Order<B> {
         Some((queue, sequence, batch, prepared))
     }
 
+    /// The line head committed first of all, the one [`take_first`](Self::take_first) would take,
+    /// to update in place.
+    pub(crate) fn first_mut(&mut self) -> Option<&mut B> {
+        let (_, at) = (self.lines.iter().enumerate())
+            .filter_map(|(at, (_, line))| line.front().map(|(sequence, _)| (*sequence, at)))
+            .min()?;
+        self.lines[at].1.front_mut().map(|(_, head)| head)
+    }
+
     /// The line head of commit sequence number `sequence`, to update in place; `None` where no
     /// head has it ([`Behind`] holds the numbers one pass asked about).
     pub(crate) fn head_mut_at(&mut self, sequence: u64) -> Option<&mut B> {

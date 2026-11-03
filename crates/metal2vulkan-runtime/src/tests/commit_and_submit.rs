@@ -3,18 +3,22 @@
 //! committed first itself and runs their submission handlers inside the call, before the command
 //! buffer reads `Scheduled` (`WorkCounts::scheduler_passes_at_commit`,
 //! `WorkCounts::batches_submitted_at_commit`); submission handlers keep their submission order
-//! whichever thread runs them; and a head with a submission check, with what is behind it on its
-//! queue, is left to the scheduler's thread.
+//! whichever thread runs them; and a head with a submission check is checked by the committing
+//! thread too, just before it submits it (`WorkCounts::batches_checked_at_commit`): a check that
+//! answers a code fails its submission as on the scheduler's thread, and checks keep commit order
+//! whichever thread runs them.
 //!
 //! Device tests: compiled only under the validation crate's GPU safety cfgs (`m2v_gpu`,
 //! `m2v_cpu_icd`), on the kind of device the cfg selects.
 
 use crate::{
-    Buffer, CommandBuffer, CommandBufferStatus, CommandQueue, Device, DeviceKind, DeviceOptions,
-    ResourceOptions, Submission,
+    Buffer, CommandBuffer, CommandBufferError, CommandBufferStatus, CommandQueue, Device,
+    DeviceKind, DeviceOptions, EncoderKind, EventRef, ResourceOptions, Submission,
 };
+use std::num::NonZeroU64;
+use std::ops::Range;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{mpsc, Arc, Mutex};
+use std::sync::{Arc, Mutex};
 use std::thread::ThreadId;
 use std::time::{Duration, Instant};
 
@@ -26,9 +30,6 @@ const PER_THREAD: u64 = 500;
 
 /// How long each submission handler of the order test runs.
 const HANDLER: Duration = Duration::from_micros(30);
-
-/// How long the scheduler's thread may take to reach a submission check.
-const BOUND: Duration = Duration::from_secs(20);
 
 /// The device the cfg selects: a CPU device under `m2v_cpu_icd`, else a GPU.
 fn device() -> Device {
@@ -219,64 +220,320 @@ fn submission_handlers_keep_commit_order_across_commit_and_commit_and_submit() {
     assert!(passes > 0 && batches >= on_committer);
 }
 
-/// A command buffer with a submission check, committed with `commit_and_submit`, is left to the
-/// scheduler's thread, which runs the check, and so is the one committed behind it on its queue
-/// while the check runs (held until then): its submission handler runs there too, after the
-/// check. The committing thread's passes submit neither.
+/// What ran for a command buffer, in order, and on which thread.
+type Events = Arc<Mutex<Vec<(&'static str, ThreadId)>>>;
+
+/// Note `name` and this thread into `events`.
+fn note(events: &Events, name: &'static str) {
+    events
+        .lock()
+        .unwrap()
+        .push((name, std::thread::current().id()));
+}
+
+/// On an idle device, a command buffer with a submission check committed with
+/// `commit_and_submit` is checked and submitted by the committing thread: its check runs on it,
+/// inside the call, then its submission handler, in that order, before the call returns, and it
+/// completes. Counted: a batch checked at commit, and submitted at commit, for each.
 #[test]
-fn a_checked_head_and_what_is_behind_it_are_left_to_the_scheduler() {
+fn a_checked_command_buffer_is_checked_and_submitted_on_the_committing_thread() {
     let device = device();
     let queue = device.new_command_queue().unwrap();
     let target = device.new_buffer(256, ResourceOptions::private()).unwrap();
     let caller = std::thread::current().id();
-    for round in 0..ROUNDS as u8 {
-        let before = device.work_counts();
-        let events: Arc<Mutex<Vec<(&'static str, ThreadId)>>> = Arc::default();
-        let checked = fill(&queue, &target, round);
-        let checks = Arc::clone(&events);
-        let (entered, checking) = mpsc::channel();
-        let (open, gate) = mpsc::channel::<()>();
-        let gate = Mutex::new(gate);
-        checked
+    let before = device.work_counts();
+    let mut here = 0;
+    for round in 0..ROUNDS {
+        let command_buffer = fill(&queue, &target, round as u8);
+        let events: Events = Arc::default();
+        let (checks, handled) = (Arc::clone(&events), Arc::clone(&events));
+        command_buffer
             .set_submission_check(Arc::new(move |_: &Submission<'_>| {
-                let me = std::thread::current().id();
-                checks.lock().unwrap().push(("check", me));
-                let _ = entered.send(());
-                // Until the test drops its end, once the one behind is committed.
-                let _ = gate.lock().unwrap().recv();
+                note(&checks, "check");
                 None
             }))
             .unwrap();
-        let behind = fill(&queue, &target, round ^ 1);
-        let handled = Arc::clone(&events);
-        behind
-            .add_submission_handler(Box::new(move |_: &CommandBuffer| {
-                let me = std::thread::current().id();
-                handled.lock().unwrap().push(("handler", me));
-            }))
+        command_buffer
+            .add_submission_handler(Box::new(move |_: &CommandBuffer| note(&handled, "handler")))
             .unwrap();
-        checked.commit_and_submit().unwrap();
-        checking
-            .recv_timeout(BOUND)
-            .expect("the scheduler's thread checks the submission");
-        behind.commit_and_submit().unwrap();
-        drop(open);
-        behind.wait_until_completed().unwrap();
-        checked.wait_until_completed().unwrap();
-        assert_eq!(checked.status(), CommandBufferStatus::Completed);
-        assert_eq!(behind.status(), CommandBufferStatus::Completed);
-        let after = device.work_counts();
+        command_buffer.commit_and_submit().unwrap();
+        let at_return = events.lock().unwrap().len();
+        command_buffer.wait_until_completed().unwrap();
+        assert_eq!(command_buffer.status(), CommandBufferStatus::Completed);
         let events = events.lock().unwrap();
         let names: Vec<&str> = events.iter().map(|&(name, _)| name).collect();
         assert_eq!(names, ["check", "handler"], "round {round}");
-        assert!(
-            events.iter().all(|&(_, thread)| thread != caller),
-            "round {round}: the committing thread ran {events:?}"
-        );
-        assert_eq!(
-            after.batches_submitted_at_commit - before.batches_submitted_at_commit,
-            0,
-            "round {round}: a committing thread submitted a checked head or what is behind it"
-        );
+        if events.iter().all(|&(_, thread)| thread == caller) {
+            assert_eq!(
+                at_return, 2,
+                "round {round}: the check or the handler ran on the caller after the call returned"
+            );
+            here += 1;
+        }
     }
+    let after = device.work_counts();
+    let checked = after.batches_checked_at_commit - before.batches_checked_at_commit;
+    let batches = after.batches_submitted_at_commit - before.batches_submitted_at_commit;
+    println!(
+        "{here} of {ROUNDS} checked and submitted on the caller; batches checked at commit \
+         {checked}, submitted {batches}"
+    );
+    // A pass of the scheduler's thread under way at the commit (a completion's nudge) takes it
+    // in instead: rarely, on an idle device.
+    assert!(
+        here >= ROUNDS / 2,
+        "{here} of {ROUNDS} command buffers checked and submitted on the committing thread"
+    );
+    assert!(
+        checked >= here && batches >= here,
+        "checked {checked}, submitted {batches}"
+    );
+}
+
+/// The initial bytes of the buffers the refusal test fills, which a fill that runs overwrites.
+const POISON: u8 = 0xee;
+
+/// What a command buffer whose second submission its check failed left: its status and error,
+/// the status its completed handler read, the submissions the check saw, each target's first
+/// byte, and its event's value.
+#[derive(Debug, PartialEq)]
+struct Failed {
+    status: CommandBufferStatus,
+    error: Option<CommandBufferError>,
+    handler_read: Option<CommandBufferStatus>,
+    seen: Vec<(EncoderKind, Range<usize>)>,
+    bytes: [u8; 2],
+    signaled: u64,
+}
+
+/// The first byte of a `Shared` buffer, which no command uses now.
+fn first_byte(buffer: &Buffer) -> u8 {
+    let contents = buffer.contents().expect("a Shared buffer's contents");
+    // SAFETY: the buffer is `Shared`, a byte long at least, and no command uses it now.
+    unsafe { *contents.as_ptr() }
+}
+
+/// Commit, with `commit_and_submit` where `at_commit`, else `commit`, a command buffer of
+/// `queue` of two submissions, two fills split by an event signal, whose check fails the second
+/// with code 8; wait for it: what it left, and the threads its check ran on.
+fn fail_the_second(
+    device: &Device,
+    queue: &CommandQueue,
+    at_commit: bool,
+) -> (Failed, Vec<ThreadId>) {
+    let targets = [0, 1].map(|_| {
+        let buffer = device.new_buffer(256, ResourceOptions::shared()).unwrap();
+        let contents = buffer.contents().unwrap();
+        // SAFETY: the buffer is `Shared` and 256 bytes long, and no command uses it yet.
+        unsafe { std::ptr::write_bytes(contents.as_ptr(), POISON, 256) };
+        buffer
+    });
+    let event = device.new_shared_event().unwrap();
+    let command_buffer = queue.command_buffer().unwrap();
+    for (at, target) in targets.iter().enumerate() {
+        if at == 1 {
+            command_buffer
+                .encode_signal_event(EventRef::from(&event), 1)
+                .unwrap();
+        }
+        let mut blit = command_buffer.blit_command_encoder().unwrap();
+        blit.fill_buffer(target, 0..target.length(), 0x11 * (at as u8 + 1))
+            .unwrap();
+        blit.end_encoding().unwrap();
+    }
+    let seen: Arc<Mutex<Vec<(EncoderKind, Range<usize>, ThreadId)>>> = Arc::default();
+    let checks = Arc::clone(&seen);
+    command_buffer
+        .set_submission_check(Arc::new(move |submission: &Submission<'_>| {
+            let me = std::thread::current().id();
+            checks
+                .lock()
+                .unwrap()
+                .push((submission.kind(), submission.encoders(), me));
+            (submission.encoders().start == 1).then(|| NonZeroU64::new(8).unwrap())
+        }))
+        .unwrap();
+    let read: Arc<Mutex<Option<CommandBufferStatus>>> = Arc::default();
+    let reads = Arc::clone(&read);
+    command_buffer
+        .add_completed_handler(Box::new(move |buffer: &CommandBuffer| {
+            *reads.lock().unwrap() = Some(buffer.status());
+        }))
+        .unwrap();
+    match at_commit {
+        true => command_buffer.commit_and_submit().unwrap(),
+        false => command_buffer.commit().unwrap(),
+    }
+    command_buffer.wait_until_completed().unwrap();
+    // Its completed handler runs before its waiters return.
+    let seen = seen.lock().unwrap();
+    let failed = Failed {
+        status: command_buffer.status(),
+        error: command_buffer.error(),
+        handler_read: *read.lock().unwrap(),
+        seen: (seen.iter())
+            .map(|(kind, encoders, _)| (*kind, encoders.clone()))
+            .collect(),
+        bytes: targets.each_ref().map(first_byte),
+        signaled: event.signaled_value(),
+    };
+    (failed, seen.iter().map(|&(_, _, thread)| thread).collect())
+}
+
+/// A check that answers a code fails its submission alike whether the scheduler's thread runs it
+/// (`commit`) or the committing thread (`commit_and_submit`): of two submissions split by an event
+/// signal, the second's check fails it with code 8, so the first's fill runs and the second's does
+/// not, the signal fires, the completed handler reads `Error`, and the command buffer completes
+/// with `CommandBufferError::Injected(8)`; the check saw each submission once, in order. The
+/// committing thread ran both checks in some rounds at least (`batches_checked_at_commit`).
+#[test]
+fn a_refusing_check_fails_its_submission_alike_at_commit_and_on_the_scheduler() {
+    let device = device();
+    let queue = device.new_command_queue().unwrap();
+    let caller = std::thread::current().id();
+    let expected = Failed {
+        status: CommandBufferStatus::Error,
+        error: Some(CommandBufferError::Injected(8)),
+        handler_read: Some(CommandBufferStatus::Error),
+        seen: vec![(EncoderKind::Blit, 0..1), (EncoderKind::Blit, 1..2)],
+        bytes: [0x11, POISON],
+        signaled: 1,
+    };
+    let before = device.work_counts();
+    let mut here = 0;
+    for round in 0..ROUNDS / 4 {
+        let (scheduled, threads) = fail_the_second(&device, &queue, false);
+        assert_eq!(
+            scheduled, expected,
+            "round {round}, by the scheduler's thread"
+        );
+        assert!(
+            threads.iter().all(|&thread| thread != caller),
+            "round {round}: a check of `commit`'s ran on the caller"
+        );
+        let (committed, threads) = fail_the_second(&device, &queue, true);
+        assert_eq!(committed, expected, "round {round}, at commit");
+        if threads.iter().all(|&thread| thread == caller) {
+            here += 1;
+        }
+    }
+    let after = device.work_counts();
+    let checked = after.batches_checked_at_commit - before.batches_checked_at_commit;
+    println!(
+        "{here} of {} checked on the caller; batches checked at commit {checked}",
+        ROUNDS / 4
+    );
+    assert!(
+        here >= ROUNDS / 8,
+        "{here} command buffers checked on the committing thread"
+    );
+    assert!(checked >= 2 * here, "batches checked at commit {checked}");
+}
+
+/// Two threads commit 1000 command buffers with submission checks to one queue, each in turn
+/// with `commit` and with `commit_and_submit`, their commits in one order (a lock held across
+/// each call): every check, and every submission handler, runs in that order, each check once,
+/// some on a committing thread and some on the scheduler's.
+#[test]
+fn checked_command_buffers_keep_commit_order_across_commit_and_commit_and_submit() {
+    let device = device();
+    let queue = device.new_command_queue().unwrap();
+    let target = device.new_buffer(256, ResourceOptions::private()).unwrap();
+    let next = Mutex::new(0u64);
+    let checks: Arc<Mutex<Vec<(u64, ThreadId)>>> = Arc::default();
+    let handled: Arc<Mutex<Vec<u64>>> = Arc::default();
+    let before = device.work_counts();
+    let spin = |length: Duration| {
+        let started = Instant::now();
+        while started.elapsed() < length {
+            std::hint::spin_loop();
+        }
+    };
+    let (committers, committed): (Vec<ThreadId>, Vec<Vec<CommandBuffer>>) =
+        std::thread::scope(|scope| {
+            let threads: Vec<_> = (0..2u64)
+                .map(|thread| {
+                    let (queue, target, next) = (&queue, &target, &next);
+                    let (checks, handled) = (&checks, &handled);
+                    scope.spawn(move || {
+                        let mut committed = Vec::new();
+                        for at in 0..PER_THREAD {
+                            let command_buffer = fill(queue, target, at as u8);
+                            let sequence = Arc::new(AtomicU64::new(u64::MAX));
+                            let (read, checks) = (Arc::clone(&sequence), Arc::clone(checks));
+                            command_buffer
+                                .set_submission_check(Arc::new(move |_: &Submission<'_>| {
+                                    let me = std::thread::current().id();
+                                    // Long enough that another thread passes while it runs.
+                                    spin(HANDLER);
+                                    checks
+                                        .lock()
+                                        .unwrap()
+                                        .push((read.load(Ordering::SeqCst), me));
+                                    None
+                                }))
+                                .unwrap();
+                            let (read, handled) = (Arc::clone(&sequence), Arc::clone(handled));
+                            command_buffer
+                                .add_submission_handler(Box::new(move |_: &CommandBuffer| {
+                                    // Long enough that a pass's handlers still run when the
+                                    // next pass, on another thread, takes its own.
+                                    spin(HANDLER);
+                                    handled.lock().unwrap().push(read.load(Ordering::SeqCst));
+                                }))
+                                .unwrap();
+                            let mut next = next.lock().unwrap();
+                            sequence.store(*next, Ordering::SeqCst);
+                            *next += 1;
+                            match (at + thread) % 2 {
+                                0 => command_buffer.commit_and_submit().unwrap(),
+                                _ => command_buffer.commit().unwrap(),
+                            }
+                            drop(next);
+                            committed.push(command_buffer);
+                        }
+                        (std::thread::current().id(), committed)
+                    })
+                })
+                .collect();
+            threads
+                .into_iter()
+                .map(|thread| thread.join().unwrap())
+                .unzip()
+        });
+    for command_buffer in committed.iter().flatten() {
+        command_buffer.wait_until_completed().unwrap();
+        assert_eq!(command_buffer.status(), CommandBufferStatus::Completed);
+    }
+    let after = device.work_counts();
+    let total = 2 * PER_THREAD;
+    let in_order = |order: &[u64], what: &str| {
+        let first_out = order.iter().zip(0..).position(|(&ran, at)| ran != at);
+        assert_eq!(
+            first_out,
+            None,
+            "{what} out of commit order near {:?}",
+            first_out.map(|at| &order[at.saturating_sub(3)..(at + 4).min(order.len())])
+        );
+        assert_eq!(order.len() as u64, total, "{what}");
+    };
+    let checks = checks.lock().unwrap();
+    let order: Vec<u64> = checks.iter().map(|&(sequence, _)| sequence).collect();
+    in_order(&order, "checks");
+    in_order(&handled.lock().unwrap(), "submission handlers");
+    let on_committer = checks
+        .iter()
+        .filter(|(_, thread)| committers.contains(thread))
+        .count() as u64;
+    let checked = after.batches_checked_at_commit - before.batches_checked_at_commit;
+    let batches = after.batches_submitted_at_commit - before.batches_submitted_at_commit;
+    println!(
+        "{on_committer} of {total} checks on a committing thread; batches checked at commit \
+         {checked}, submitted {batches}"
+    );
+    assert!(
+        on_committer > 0 && on_committer < total,
+        "{on_committer} of {total} checks ran on a committing thread"
+    );
+    assert!(checked >= on_committer && batches >= checked);
 }

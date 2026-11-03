@@ -2493,6 +2493,7 @@ field	metal2vulkan-runtime::WorkCounts.bare_starts	pub bare_starts: u64
 field	metal2vulkan-runtime::WorkCounts.barrier_buffers_kept	pub barrier_buffers_kept: u64
 field	metal2vulkan-runtime::WorkCounts.batch_hold_nanos	pub batch_hold_nanos: u64
 field	metal2vulkan-runtime::WorkCounts.batch_submit_nanos	pub batch_submit_nanos: u64
+field	metal2vulkan-runtime::WorkCounts.batches_checked_at_commit	pub batches_checked_at_commit: u64
 field	metal2vulkan-runtime::WorkCounts.batches_grouped	pub batches_grouped: u64
 field	metal2vulkan-runtime::WorkCounts.batches_held_past_a_look	pub batches_held_past_a_look: u64
 field	metal2vulkan-runtime::WorkCounts.batches_submitted_at_commit	pub batches_submitted_at_commit: u64

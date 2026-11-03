@@ -17,9 +17,10 @@
 //!   that submission fails.
 //! - **A GPU signal in flight**. A submission whose `Event` or `SharedEvent` wait another command
 //!   buffer's GPU signal meets is checked only once that signal landed (the check reads a companion
-//!   `SharedEvent` the signaller signals first); detached while the signaller runs, it fails. A
-//!   `SharedEvent` the host signals while a GPU signal of it is in flight is checked without
-//!   waiting for the GPU.
+//!   `SharedEvent` the signaller signals first); detached while the signaller runs, it fails,
+//!   whether committed before the signaller or with `commit_and_submit` while its signal is in
+//!   flight (the committing thread leaves that check to the scheduler's). A `SharedEvent` the
+//!   host signals while a GPU signal of it is in flight is checked without waiting for the GPU.
 
 use super::degrade_notices::on_device;
 use super::failed_commits::{Shape, HELD, KERNEL, SHAPES};
@@ -401,7 +402,10 @@ impl Waited {
 /// `target`'s first word, committed with a check, then a signaller on another queue that fills a
 /// 64-MiB buffer `fills` times, signals `landed` to 1, fills a word, and signals `waited` to 1,
 /// committed and scheduled. `landed` reaches 1 no later than `waited` does (one queue's signals
-/// land in order), so it reads 0 only while `waited`'s signal has not landed.
+/// land in order), so it reads 0 only while `waited`'s signal has not landed. Where
+/// `at_commit`, the waiter is committed after the signaller is scheduled instead, with
+/// `commit_and_submit`, its wait then met only by the GPU signal in flight: a committing thread
+/// leaves such a check to the scheduler's thread, which waits for the signal to land.
 struct InFlight {
     waiter: CommandBuffer,
     signaller: CommandBuffer,
@@ -411,10 +415,12 @@ struct InFlight {
     /// Kept until the work completes.
     _big: Buffer,
     _words: Buffer,
+    /// The threads the waiter's checks ran on.
+    checked_on: Arc<Mutex<Vec<std::thread::ThreadId>>>,
 }
 
 impl InFlight {
-    fn start(device: &Device, waited: &Waited, fills: u64) -> InFlight {
+    fn start(device: &Device, waited: &Waited, fills: u64, at_commit: bool) -> InFlight {
         let target = buffer_with(device, &[0; 16]).unwrap();
         let words = buffer_with(device, &[0; 4]).unwrap();
         let big = device.new_buffer(FILL, ResourceOptions::private()).unwrap();
@@ -430,10 +436,17 @@ impl InFlight {
         let mut blit = waiter.blit_command_encoder().unwrap();
         blit.fill_buffer(&target, 0..4, 0x5a).unwrap();
         blit.end_encoding().unwrap();
+        let checked_on = Arc::new(Mutex::new(Vec::new()));
+        let (check, threads) = (detach.check_reading(&landed), Arc::clone(&checked_on));
         waiter
-            .set_submission_check(detach.check_reading(&landed))
+            .set_submission_check(Arc::new(move |submission: &Submission<'_>| {
+                threads.lock().unwrap().push(std::thread::current().id());
+                check(submission)
+            }))
             .unwrap();
-        waiter.commit().unwrap();
+        if !at_commit {
+            waiter.commit().unwrap();
+        }
 
         let signaller = device
             .new_command_queue()
@@ -454,6 +467,9 @@ impl InFlight {
         signaller.encode_signal_event(waited.event(), 1).unwrap();
         signaller.commit().unwrap();
         signaller.wait_until_scheduled().unwrap();
+        if at_commit {
+            waiter.commit_and_submit().unwrap();
+        }
         InFlight {
             waiter,
             signaller,
@@ -462,6 +478,7 @@ impl InFlight {
             detach,
             _big: big,
             _words: words,
+            checked_on,
         }
     }
 
@@ -482,26 +499,33 @@ impl InFlight {
 /// while its signal is in flight (the companion still reads 0 after the detach), the submission
 /// fails with code 8 and its fill does not run. A try whose signaller finished before the
 /// detach proves nothing of the detach, and the next doubles the signaller's work; one try at
-/// least must catch it in flight.
+/// least must catch it in flight. So too for a waiter committed with `commit_and_submit` while
+/// the signal is in flight: its check is left to the scheduler's thread, never run on the
+/// committing thread before the signal landed.
 #[test]
 fn a_submission_detached_while_a_gpu_signal_is_in_flight_fails() {
     on_device(|device, _| {
-        for shared in [false, true] {
+        let caller = std::thread::current().id();
+        for (shared, at_commit) in [(false, false), (true, false), (false, true), (true, true)] {
             let mut caught = None;
             for attempt in 0..ATTEMPTS {
                 let fills = 4u64 << attempt;
                 let waited = Waited::new(device, shared);
-                let run = InFlight::start(device, &waited, fills);
+                let run = InFlight::start(device, &waited, fills, at_commit);
                 run.detach.detach(&run.target);
                 let in_flight = run.landed.signaled_value() == 0;
                 let at_check = run.finish();
                 assert_eq!(
                     at_check, 1,
-                    "shared {shared}: checked before the GPU signal landed"
+                    "shared {shared}, at commit {at_commit}: checked before the GPU signal landed"
                 );
                 if !in_flight {
                     continue;
                 }
+                assert!(
+                    !run.checked_on.lock().unwrap().contains(&caller),
+                    "shared {shared}, at commit {at_commit}: checked on the committing thread"
+                );
                 assert_eq!(
                     run.waiter.status(),
                     CommandBufferStatus::Error,
@@ -521,9 +545,15 @@ fn a_submission_detached_while_a_gpu_signal_is_in_flight_fails() {
                 break;
             }
             let fills = caught.unwrap_or_else(|| {
-                panic!("shared {shared}: the signaller never ran at the detach in {ATTEMPTS} tries")
+                panic!(
+                    "shared {shared}, at commit {at_commit}: the signaller never ran at the detach \
+                     in {ATTEMPTS} tries"
+                )
             });
-            println!("IN-FLIGHT shared={shared} caught with {fills} fills of {FILL} bytes");
+            println!(
+                "IN-FLIGHT shared={shared} at_commit={at_commit} caught with {fills} fills of \
+                 {FILL} bytes"
+            );
         }
     });
 }
@@ -539,7 +569,7 @@ fn a_wait_the_host_meets_is_checked_without_waiting_for_the_gpu() {
         for attempt in 0..ATTEMPTS {
             let fills = 4u64 << attempt;
             let waited = Waited::new(device, true);
-            let run = InFlight::start(device, &waited, fills);
+            let run = InFlight::start(device, &waited, fills, false);
             let Waited::Shared(event) = &waited else {
                 unreachable!()
             };
