@@ -12,7 +12,9 @@ use super::address::{
 use super::address_pool::AddressPool;
 #[cfg(unix)]
 use super::buffer::Pages;
-use super::buffer::{usage, Buffer, BufferParts, HostCell, Lying, Modes, Owner, ReadApart};
+use super::buffer::{
+    usage, Buffer, BufferParts, HostCell, HostPages, Lying, Modes, Owner, ReadApart,
+};
 use super::copied::NotCopied;
 use super::degradation::Degradation;
 use super::device::lock;
@@ -571,7 +573,7 @@ impl Device {
                     shared.counts.host_import_refused_by_host();
                     // SAFETY: the caller's contract.
                     let copied = unsafe { self.copied_buffer(copy, release, dirty, None) };
-                    return copied.map(|buffer| kept_with(kept_log(buffer, log), kept_runs));
+                    return copied.map(|buffer| kept(buffer, log, kept_runs));
                 }
                 // Only a buffer that imports its pages pins them, and so has their writability
                 // asked: one that lies in a live import pins none, that import's making asked for
@@ -617,7 +619,7 @@ impl Device {
                         // SAFETY: the caller's contract.
                         let copied =
                             unsafe { self.copied_buffer(copy, release, dirty, Some(error)) };
-                        return copied.map(|buffer| kept_with(kept_log(buffer, log), kept_runs));
+                        return copied.map(|buffer| kept(buffer, log, kept_runs));
                     }
                     Err(error) => return Err(error),
                 };
@@ -651,18 +653,18 @@ impl Device {
             #[cfg(unix)]
             again,
         });
-        // The caller's log of the pages' writes stays with them (`dirty_pages.rs`). The pages are
-        // looked at (their lock, `WorkCounts::no_copy_lies_read`) only for memory that carries one.
-        if let Some(dirty) = dirty {
-            if let Some(pages) = buffer.host_pages() {
+        // A buffer just made lies in its pages (`HostCell::current`), looked at once (their lock,
+        // `WorkCounts::no_copy_lies_read`) for everything below.
+        let current = buffer.host_cell().and_then(|cell| cell.current());
+        if let Some(pages) = &current {
+            // The caller's log of the pages' writes stays with them (`dirty_pages.rs`).
+            if let Some(dirty) = dirty {
                 pages.keep_dirty(dirty);
             }
+            keep_in(pages, &buffer, log, kept_runs);
         }
-        let buffer = kept_with(kept_log(buffer, log), kept_runs);
         // A buffer over the bytes another no-copy buffer covers joins it (`host_aliases.rs`), and
         // a later one lies in its import; one whose GPU writes are dropped joins none.
-        // A buffer just made lies in its pages (`HostCell::current`).
-        let current = buffer.host_cell().and_then(|cell| cell.current());
         if let (false, false, Some(current)) = (of_heap, drops_writes, current) {
             shared
                 .aliases
@@ -1789,19 +1791,39 @@ impl Device {
 }
 
 /// `buffer`, the logs of the writes to its pages kept with them (`dirty_pages::PagesLog`), where
-/// there are any, which hear of the GPU's writes through it where it lies in them in place; and
-/// where its pages are a copy, its key named to the copy, whose merges back compare it where a
-/// batch wrote that key (`copied.rs`).
-fn kept_log(buffer: Buffer, log: Option<Arc<PagesLog>>) -> Buffer {
+/// there are any, which hear of the GPU's writes through it where it lies in them in place; where
+/// its pages are a copy, its key named to the copy, whose merges back compare it where a batch
+/// wrote that key (`copied.rs`); and the guest RAM and runs its caller resolved its pages to
+/// (`host_ram.rs`) kept with them. Its pages are looked at once (their lock,
+/// `WorkCounts::no_copy_lies_read`).
+fn kept(
+    buffer: Buffer,
+    log: Option<Arc<PagesLog>>,
+    runs: Option<(Arc<RamOnDevice>, Box<[std::ops::Range<u64>]>)>,
+) -> Buffer {
     if let Some(pages) = buffer.host_pages() {
-        let key = buffer.identity().key;
-        if let Some(log) = log {
-            pages.keep_log(log);
-            pages.logged_as(key);
-        }
-        pages.copied_as(key);
+        keep_in(&pages, &buffer, log, runs);
     }
     buffer
+}
+
+/// Give `pages`, the pages `buffer` was just made in, `log` and `runs` to keep, and name the
+/// buffer to their copy where they are one ([`kept`]).
+fn keep_in(
+    pages: &HostPages,
+    buffer: &Buffer,
+    log: Option<Arc<PagesLog>>,
+    runs: Option<(Arc<RamOnDevice>, Box<[std::ops::Range<u64>]>)>,
+) {
+    let key = buffer.identity().key;
+    if let Some(log) = log {
+        pages.keep_log(log);
+        pages.logged_as(key);
+    }
+    pages.copied_as(key);
+    if let Some(runs) = runs {
+        pages.keep_runs(runs);
+    }
 }
 
 /// The logs of the writes to the `length` bytes at `pointer` (`dirty_pages::PagesLog`): their
@@ -1815,21 +1837,6 @@ fn pages_log(
 ) -> Option<Arc<PagesLog>> {
     let ram = runs.and_then(|(ram, runs)| Some((ram.dirty()?, &runs[..], offset)));
     PagesLog::new((pointer.as_ptr() as u64, length), dirty, ram)
-}
-
-/// `buffer`, the guest RAM and runs its caller resolved its pages to (`host_ram.rs`) kept with
-/// its pages, where there are any.
-fn kept_with(
-    buffer: Buffer,
-    runs: Option<(
-        Arc<super::host_ram::RamOnDevice>,
-        Box<[std::ops::Range<u64>]>,
-    )>,
-) -> Buffer {
-    if let (Some(runs), Some(pages)) = (runs, buffer.host_pages()) {
-        pages.keep_runs(runs);
-    }
-    buffer
 }
 
 /// The host pages a no-copy buffer (or a heap's own buffer) of some length imports
