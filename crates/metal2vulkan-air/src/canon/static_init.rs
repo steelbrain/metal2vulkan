@@ -15,7 +15,9 @@
 //! constant, a pointer into a global (`global + byte offset`), or **undefined from an unsupplied
 //! function constant** (the SCCP lattice's `Fc`). What it evaluates: integer arithmetic,
 //! comparisons, and casts ([`Folder`]), `fcmp` on constants, `select`, element and member access,
-//! shuffles, integer-to-float conversions (rounded to nearest even), scalar `fadd`, `fsub`, `fmul`,
+//! shuffles, `air.convert` of an integer or `bool`, a scalar or each lane of a vector, to another
+//! integer (as C++ converts it) or to `bool` (`x != 0`), and of a scalar one to a float (rounded
+//! to nearest even, as `sitofp` and `uitofp` are), scalar `fadd`, `fsub`, `fmul`,
 //! `fdiv`, and `fneg` where every IEEE 754 evaluation agrees (finite normal operands, and a result
 //! that is an exact zero or normal: [`Folder::static_float_binop`]), GEPs with constant indices,
 //! non-volatile loads and stores of globals, `llvm.{s,u}{max,min}` and `llvm.ctpop`, and the two
@@ -29,8 +31,8 @@
 //! `Unsupported{Recursion}`.
 //!
 //! [`super::static_values`] evaluates under [`Unevaluable::Opaque`]: a pure operation the
-//! interpreter does not evaluate (float arithmetic outside the agreement, a conversion other than
-//! integer to float) yields an opaque value instead of refusing, which taints what it flows into
+//! interpreter does not evaluate (float arithmetic outside the agreement, a conversion from a
+//! float or of a vector to floats) yields an opaque value instead of refusing, which taints what it flows into
 //! like an undefined value and leaves the globals it reaches unknown. Everything else still
 //! refuses, as does a branch on, an address from, or a store through an opaque value.
 //!
@@ -530,20 +532,22 @@ impl<'a> Eval<'a> {
                     }
                     _ => return Err(not_evaluable(at)),
                 },
+                // An integer or `bool` source, a scalar or each lane of a vector: to `bool` as
+                // `x != 0`, to another integer as C++ converts it; a scalar to a float rounded to
+                // nearest even.
                 Callee::Air {
                     op: AirIntrinsic::Convert(c),
                     ..
-                } if c.dst_kind == NumKind::Float
-                    && c.src_kind != NumKind::Float
+                } if c.src_kind != NumKind::Float
                     && c.src_fp8.is_none()
-                    && !c.src.is_vector() =>
+                    && (c.dst_kind != NumKind::Float || !c.src.is_vector()) =>
                 {
                     let signed = c.src_kind == NumKind::Signed;
                     let x = match call.args.first() {
                         Some(&x) => val(x)?,
                         None => return Err(not_evaluable(at)),
                     };
-                    self.pure2(x, x, &at, m, |f, x, _, m| f.int_to_float(x, signed, ty, m))?
+                    self.pure2(x, x, &at, m, |f, x, _, m| f.convert_int(x, signed, ty, m))?
                 }
                 // Any other conversion is a pure function of its operand.
                 Callee::Air {

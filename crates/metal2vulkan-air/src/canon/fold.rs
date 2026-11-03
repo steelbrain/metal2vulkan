@@ -724,6 +724,75 @@ impl Folder<'_> {
         self.mk(to, Const::Float(bits), m).map(Some)
     }
 
+    /// `air.convert` of the integer or `bool` constant `x` (a scalar, or a vector converted lane by
+    /// lane) to type `to`: to `bool`, C++'s `x != 0`; to another integer, zero- or sign-extended by
+    /// the source's signedness (`signed`; a `bool` is zero-extended) or truncated, as C++ converts
+    /// it; a scalar to a float, [`Folder::int_to_float`]. A vector to floats is `None`.
+    pub fn convert_int(
+        &mut self,
+        x: ConstId,
+        signed: bool,
+        to: TypeId,
+        m: &mut Meter,
+    ) -> Result<Option<ConstId>, Error> {
+        self.transient(m, |f, m| f.convert_int_in(x, signed, to, m))
+    }
+
+    fn convert_int_in(
+        &mut self,
+        x: ConstId,
+        signed: bool,
+        to: TypeId,
+        m: &mut Meter,
+    ) -> Result<Option<ConstId>, Error> {
+        let Some(Type::Vector { elem, .. }) = self.types.get(to) else {
+            return self.convert_scalar(x, signed, to, m);
+        };
+        let elem = *elem;
+        if self.types.get(elem).is_some_and(Type::is_float) {
+            return Ok(None);
+        }
+        let Some(lanes) = self.members(x, m)? else {
+            return Ok(None);
+        };
+        let mut out = Vec::with_capacity(lanes.len());
+        for lane in lanes {
+            match self.convert_scalar(lane, signed, elem, m)? {
+                Some(c) => out.push(c),
+                None => return Ok(None),
+            }
+        }
+        self.mk(to, Const::Aggregate(out.into_boxed_slice()), m)
+            .map(Some)
+    }
+
+    /// [`Folder::convert_int`] of a scalar.
+    fn convert_scalar(
+        &mut self,
+        x: ConstId,
+        signed: bool,
+        to: TypeId,
+        m: &mut Meter,
+    ) -> Result<Option<ConstId>, Error> {
+        if self.types.get(to).is_some_and(Type::is_float) {
+            return self.int_to_float(x, signed, to, m);
+        }
+        let (Some(from), Some(dst), Some(v)) = (
+            self.ty(x).and_then(|t| self.int_bits(t)),
+            self.int_bits(to),
+            self.int(x),
+        ) else {
+            return Ok(None);
+        };
+        let r = match (dst, from) {
+            (1, _) => u64::from(v & mask(from) != 0),
+            (_, 1) => v & 1,
+            _ if signed => sext(v, from) as u64,
+            _ => v & mask(from),
+        };
+        self.mk_int(to, r, m)
+    }
+
     /// `extractelement vec, idx`.
     pub fn extract_element(
         &mut self,

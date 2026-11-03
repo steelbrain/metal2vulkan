@@ -20,6 +20,7 @@ use crate::ir::{
 
 mod aggregates;
 mod command_buffers;
+mod conversions;
 mod global_builtins;
 mod private_memory;
 mod table_copies;
