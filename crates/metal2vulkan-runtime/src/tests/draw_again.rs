@@ -21,6 +21,7 @@
 use super::blit_holds::{until, Scratch, WAIT};
 use super::encoder_holds::{bytes_of, library, pass, words_of};
 use super::rebind_behind_a_wait::{Page, BYTES};
+#[cfg(debug_assertions)]
 use crate::render::dynamic_compares;
 use crate::{
     BlitOption, Buffer, CommandBufferStatus, Degradation, DegradeNotice, Device, DeviceKind,
@@ -805,6 +806,7 @@ fn draws_after_texture_and_sampler_changes_rebind_what_every_step_binds() {
 /// `between(at)` called before the `at`th draw but the first) changed of the device's counts `of`
 /// and of the compares of dynamic states' values the encoding thread made (`render/bound.rs`),
 /// the first draw's left out.
+#[cfg(debug_assertions)]
 fn compared_by_each(
     device: &Device,
     (state, rectangles, draws): (&RenderPipelineState, &Buffer, u64),
@@ -840,6 +842,7 @@ fn compared_by_each(
 /// before, set them, so it holds them as they set them (`Kept::settled`); a draw that takes every
 /// step compares them.
 #[test]
+#[cfg(debug_assertions)]
 fn draws_rebound_compare_no_dynamic_state_their_record_holds() {
     let scratch = Scratch::new("rebound-compares");
     let device = device(&scratch.0, &[], &Heard::default());
@@ -877,6 +880,7 @@ fn draws_rebound_compare_no_dynamic_state_their_record_holds() {
 /// command; the draws after the split record after their calls (none is recorded as it is
 /// called), so their commands and pixels alone show what they set.
 #[test]
+#[cfg(debug_assertions)]
 fn draws_after_a_state_set_or_a_barrier_set_what_every_step_sets() {
     use metal2vulkan::metal::{BarrierScope, RenderStages};
     let scratch = Scratch::new("rebound-after-recordings");
