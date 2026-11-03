@@ -54,7 +54,7 @@ use std::sync::{Arc, Barrier, Condvar, Mutex};
 use std::time::{Duration, Instant};
 
 /// Wait for `command_buffer`, which must complete without an error.
-fn completed(command_buffer: &CommandBuffer) {
+pub(super) fn completed(command_buffer: &CommandBuffer) {
     command_buffer.wait_until_completed_for(WAIT).unwrap();
     assert_eq!(
         (command_buffer.status(), command_buffer.error()),
@@ -201,11 +201,11 @@ fn a_fresh_texture_s_pattern_notice_follows_the_commit_order() {
 }
 
 /// The texels of the shadowed texture: `SIDE`² `RGBA8Unorm`, rows [`ROW`] bytes apart.
-const SIDE: u64 = 8;
-const ROW: u64 = 48;
-const TEXEL_ROW: u64 = 4 * SIDE;
-const BYTES: u64 = ROW * SIDE;
-const WORDS: u64 = SIDE * SIDE;
+pub(super) const SIDE: u64 = 8;
+pub(super) const ROW: u64 = 48;
+pub(super) const TEXEL_ROW: u64 = 4 * SIDE;
+pub(super) const BYTES: u64 = ROW * SIDE;
+pub(super) const WORDS: u64 = SIDE * SIDE;
 
 /// The command buffers of the shadow test, its threads, and its runs each way.
 const SHADOW_COMMAND_BUFFERS: usize = 8;
@@ -213,10 +213,10 @@ const SHADOW_THREADS: usize = 4;
 const SHADOW_RUNS: u64 = 16;
 
 /// SplitMix64, for the test's bytes and pauses.
-struct Rng(u64);
+pub(super) struct Rng(pub(super) u64);
 
 impl Rng {
-    fn next(&mut self) -> u64 {
+    pub(super) fn next(&mut self) -> u64 {
         self.0 = self.0.wrapping_add(0x9E37_79B9_7F4A_7C15);
         let mut z = self.0;
         z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
@@ -224,18 +224,18 @@ impl Rng {
         z ^ (z >> 31)
     }
 
-    fn bytes(&mut self, len: u64) -> Vec<u8> {
+    pub(super) fn bytes(&mut self, len: u64) -> Vec<u8> {
         (0..len).map(|_| self.next() as u8).collect()
     }
 }
 
 /// The fixture's texel kernels (`seq_programs`): words into texels, and texels into words.
-struct TexelKernels {
-    write: ComputePipelineState,
-    read: ComputePipelineState,
+pub(super) struct TexelKernels {
+    pub(super) write: ComputePipelineState,
+    pub(super) read: ComputePipelineState,
 }
 
-fn texel_kernels(device: &Device) -> TexelKernels {
+pub(super) fn texel_kernels(device: &Device) -> TexelKernels {
     let bitcode = llvm_assemble(&engine_dir().join("seq_programs.ll")).unwrap();
     let library = device.new_library_with_air(&bitcode).unwrap();
     let kernel = |name| {
@@ -251,7 +251,7 @@ fn texel_kernels(device: &Device) -> TexelKernels {
 }
 
 /// One dispatch of `kernel` over the texture's texels, with `words`.
-fn texel_dispatch(
+pub(super) fn texel_dispatch(
     cb: &CommandBuffer,
     kernel: &ComputePipelineState,
     texture: &Texture,
@@ -472,10 +472,10 @@ fn a_shadowed_texture_keeps_each_command_buffer_s_bytes() {
 /// write reported through `wrote`), and the runtime's reports of its own writes kept apart, the
 /// marks the consumer reads.
 #[derive(Default)]
-struct GuestLog(Mutex<GuestLogState>);
+pub(super) struct GuestLog(Mutex<GuestLogState>);
 
 #[derive(Default)]
-struct GuestLogState {
+pub(super) struct GuestLogState {
     /// The publication writes fall in now.
     now: u64,
     /// Each write's bytes, stamp and writer.
@@ -491,14 +491,14 @@ impl GuestLog {
     }
 
     /// Note the CPU's write of the bytes `range`.
-    fn told(&self, range: Range<u64>) {
+    pub(super) fn told(&self, range: Range<u64>) {
         let mut state = self.state();
         let now = state.now;
         state.writes.push((range, now, 0));
     }
 
     /// The runtime's reports since the last call, each once, in order of their bytes.
-    fn marks(&self) -> Vec<(Range<u64>, bool)> {
+    pub(super) fn marks(&self) -> Vec<(Range<u64>, bool)> {
         let mut marks = std::mem::take(&mut self.state().marks);
         marks.sort_by_key(|(range, own)| (range.start, range.end, *own));
         marks.dedup();
@@ -564,7 +564,7 @@ struct GuestRun {
     gated: [u64; 5],
 }
 
-fn gated(counts: &WorkCounts) -> [u64; 5] {
+pub(super) fn gated(counts: &WorkCounts) -> [u64; 5] {
     [
         counts.dirty_copies_in_gated,
         counts.dirty_copies_in_whole,
@@ -575,7 +575,7 @@ fn gated(counts: &WorkCounts) -> [u64; 5] {
 }
 
 /// The texels of `bytes` laid out as the texture's buffer holds them, as words in a row.
-fn texels_of(bytes: &[u8]) -> Vec<u8> {
+pub(super) fn texels_of(bytes: &[u8]) -> Vec<u8> {
     (0..SIDE as usize)
         .flat_map(|row| {
             let at = row * ROW as usize;

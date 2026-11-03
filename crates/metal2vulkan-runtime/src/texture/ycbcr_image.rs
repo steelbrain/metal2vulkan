@@ -388,7 +388,6 @@ impl Device {
             drops_writes: true,
             backing: texels.backing(),
             merge_scratch: ScratchSpares::default(),
-            touched: Default::default(),
             stood: AtomicU64::new(0),
         };
         Ok(Storage::Shadow {
@@ -701,7 +700,6 @@ impl Texture {
             drops_writes: false,
             backing: texels.backing(),
             merge_scratch: ScratchSpares::default(),
-            touched: Default::default(),
             stood: AtomicU64::new(0),
         };
         Ok((image, copies))
@@ -869,7 +867,6 @@ impl Texture {
             drops_writes: false,
             backing: texels.backing(),
             merge_scratch: ScratchSpares::default(),
-            touched: Default::default(),
             stood: AtomicU64::new(0),
         };
         let storage = Storage::Shadow {

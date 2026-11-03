@@ -15,10 +15,15 @@
 //!   while the command buffer ran reached neither a later dispatch of the running encoder nor a
 //!   later encoder of the command buffer, while the same write made before the commit reached
 //!   both, a command buffer committed before the write read the written bytes, and so did the
-//!   encoder after an event wait that another queue's write signalled (an M3 Max under macOS
-//!   27.0.1, each answer every time). So an encoder takes the image its command buffer's earlier
-//!   encoder left holding the truth and copies nothing in ([`ShadowCarry`]), while a later
-//!   command buffer copies in the bytes Metal would read there. A copy in
+//!   encoder after an event wait that another queue's write signalled. A write made once the
+//!   command buffer's own signal of an event was seen, while it ran, reached its reads after the
+//!   signal: in the encoder after it, a later dispatch of that encoder too, and in a later encoder
+//!   (an M3 Max under macOS 27.0.1, each answer every time;
+//!   `metal2vulkan-conformance/probes/cpu_write_after_a_signal.m`). So an encoder takes the image
+//!   its batch's earlier encoder left holding the truth and copies nothing in ([`ShadowCarry`]); an
+//!   encoder that starts another batch, after a signal, a wait or a host step, copies in again
+//!   before its first command that uses the texture, which runs after the commands before it; and
+//!   a later command buffer copies in the bytes Metal would read there. A copy in
 //!   of a one-level, one-slice texture's image moves only the texels inside the rectangle its
 //!   command reads and writes them in, where the command bounds that ([`ShadowUse::loads`]: a
 //!   pass's attachment it loads and takes no other way, inside its draws' scissors). The image's
@@ -205,7 +210,6 @@
 //!   copy in left it.
 
 use super::buffer::{Buffer, CallerMemory, WeakBuffer};
-use super::device::lock;
 use super::dirty_pages::{CopyInGate, ShadowLog};
 use super::error::{Error, RuntimeGap};
 use super::residency::Residency;
@@ -229,7 +233,7 @@ use metal2vulkan::error::{Feature, Unsupported};
 use metal2vulkan::metal::PixelFormat;
 use std::ops::Range;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 /// What a shadowed texture's copies need: its truth, its shadow, and the copies between them.
 pub(super) struct ShadowCopies {
@@ -250,52 +254,11 @@ pub(super) struct ShadowCopies {
     pub(super) backing: Backing,
     /// The scratch buffers its merges are done with, kept for its next ones (`shadow_merge.rs`).
     pub(super) merge_scratch: ScratchSpares,
-    /// How many encoders ended having used the shadow, by their command buffers' logical queues,
-    /// by which a command buffer tells whether the image is still the one its own earlier encoder
-    /// left ([`ShadowCarry`]): every encoder that used it moves its queue's count on as it ends,
-    /// so a carry another queue's encoder's end came between is no longer taken ([`Touched`]).
-    pub(super) touched: Touched,
     /// The identity of the command buffer whose encoder last ended with the image holding the
     /// truth ([`ShadowCarry::id`]), 0 for none ever: by which a first copy in that no carry could
     /// serve is counted as one an earlier command buffer's standing stands behind, or as one of a
     /// shadow that never held a standing ([`CarryTally`]).
     pub(super) stood: AtomicU64,
-}
-
-/// How many encoders ended having used a shadow, by the logical queue of each one's command
-/// buffer ([`ShadowCopies::touched`]), `None` for an encoder of none named (the runtime's own
-/// tests'). A queue's command buffers run in commit order, each one's batches together in the
-/// queue's order (`scheduler/mod.rs`, **The order**), so no encoder of another command buffer of
-/// the same queue runs between two encoders of one: only another queue's may change the image
-/// between them, and only its ends count against a carry. An encoder of no queue named counts
-/// against every carry, and a carry of none named counts every end.
-#[derive(Default)]
-pub(super) struct Touched(Mutex<Vec<(Option<u64>, u64)>>);
-
-impl Touched {
-    /// The ends counted against a carry of `queue`'s command buffer.
-    fn elsewhere(&self, queue: Option<u64>) -> u64 {
-        Self::counted(&lock(&self.0), queue)
-    }
-
-    fn counted(ends: &[(Option<u64>, u64)], queue: Option<u64>) -> u64 {
-        (ends.iter())
-            .filter(|(of, _)| queue.is_none() || *of != queue)
-            .map(|(_, ends)| ends)
-            .sum()
-    }
-
-    /// Count an end of an encoder of `queue`'s command buffer: the ends counted against a carry
-    /// of that queue's just before it and just after it.
-    fn end(&self, queue: Option<u64>) -> (u64, u64) {
-        let mut ends = lock(&self.0);
-        let before = Self::counted(&ends, queue);
-        match ends.iter_mut().find(|(of, _)| *of == queue) {
-            Some((_, count)) => *count += 1,
-            None => ends.push((queue, 1)),
-        }
-        (before, Self::counted(&ends, queue))
-    }
 }
 
 /// The texels of a texture over an IOSurface's plane from which its shadow's copies in count
@@ -2385,11 +2348,6 @@ struct Entry<M> {
     /// first use's copy in is the one the carry takes off the run
     /// (`WorkCounts::shadow_texels_first_copy_in_carried`).
     carried: bool,
-    /// [`ShadowCopies::touched`]'s ends counted against the command buffer's carry when the
-    /// encoder met the shadow: its end carries the image to the command buffer's later encoders
-    /// only where it still stands there, no encoder of another queue having ended with the shadow
-    /// in between ([`ShadowCarry`]).
-    met: u64,
     /// When [`Standing::Current`], the rectangle bounding the texels whose bytes changed since the image's
     /// copy in, where only writes [`Within`] it changed them (the module's rules): the next
     /// command that uses the texture copies those in first, or those of them it reads where it
@@ -2616,30 +2574,21 @@ impl<M> ShadowSync<M> {
 
     /// What the encoder leaves its command buffer's later encoders: every texture whose image
     /// holds the truth as its commands left it, with where it holds it, and the textures it
-    /// never met that it still carried. Every texture it met moves its queue's count of
-    /// [`ShadowCopies::touched`] on, so a command buffer of another queue whose encoder ended
-    /// with the texture between this one's two carries it no longer.
+    /// never met that it still carried.
     pub(super) fn ended(&mut self) -> ShadowCarry {
         let mut carry = ShadowCarry {
             id: self.carry.id,
-            queue: self.carry.queue,
             entries: Vec::new(),
         };
         carry.entries.append(&mut self.carry.entries);
         for entry in &self.entries {
-            let (touched, after) = entry.copies.touched.end(carry.queue);
             if entry.standing != Standing::Current {
                 continue;
             }
-            // The image holds the truth as this command buffer's commands left it, whether or
-            // not this command buffer may carry it on.
+            // The image holds the truth as this command buffer's commands left it.
             (entry.copies.stood).store(carry.id, Ordering::Relaxed);
-            if touched != entry.met {
-                continue;
-            }
             carry.entries.push(Carried {
                 copies: Arc::clone(&entry.copies),
-                touched: after,
                 held: entry.held,
                 stale: entry.stale,
             });
@@ -2666,33 +2615,34 @@ impl<M> ShadowSync<M> {
 ///
 /// Metal shows an encoder the bytes as of its command buffer's commit (the module's **Copy in**
 /// rule), so an image an earlier encoder of the same command buffer left holding the truth holds
-/// what every later encoder of it reads. The carry is dropped wherever that no longer follows:
-/// the encoder that published it did not end holding the truth, an encoder of a command buffer of
-/// another queue ended with the shadow in between ([`ShadowCopies::touched`]: one of the same
-/// queue runs before or after the whole command buffer), a command of the command buffer wrote the truth
-/// another way ([`ShadowSync::wrote`]), work the encoder records apart stands between
-/// ([`ShadowSync::leave`]), or the command buffer waits for an event or a fence, after which
-/// Metal shows the encoder another writer's bytes
-/// (`CommandBuffer::encode_wait_for_event`, `EncoderCore::ordered_other_work`).
+/// what every later encoder of it reads. On the GPU nothing runs between two encoders of one
+/// batch of the command buffer but its own commands: a queue's batches go in commit order, and
+/// another queue's batch that conflicts with this one's uses of the texture (each copy in is a
+/// tracked write of its image) runs wholly before or after it (`scheduler/mod.rs`, **The order**
+/// and **Tracking**). Another queue's work comes between only where the command buffer's batches
+/// split. So the carry is dropped wherever that no longer follows: the encoder that published it
+/// did not end holding the truth, a command of the command buffer wrote the truth another way
+/// ([`ShadowSync::wrote`]), work the encoder records apart stands between
+/// ([`ShadowSync::leave`]), an encoder waits for a fence (`EncoderCore::ordered_other_work`), or
+/// the next encoder starts another batch: after an event or semaphore wait, after a signal, or
+/// past a host step (`State::shadows_to_carry`), where another queue's batch may run first, as
+/// Metal shows the encoder after a wait another queue's write. Another command buffer's encoder
+/// ending in between, on this queue or another, drops nothing: it runs before or after the batch.
 pub(super) struct ShadowCarry {
     /// The command buffer's identity: a number no command buffer of the process had before and
     /// none takes again, so a shadow can name the command buffer that last left its image
     /// holding the truth ([`ShadowCopies::stood`]) without holding it. Metal names a command
     /// buffer by its pointer, which another may take once it is freed.
     id: u64,
-    /// The command buffer's logical queue ([`Touched`]), `None` for none named: every encoder's
-    /// end with a carried texture then counts against it.
-    queue: Option<u64>,
     entries: Vec<Carried>,
 }
 
 impl Default for ShadowCarry {
-    /// A command buffer carrying nothing, under an identity of its own, of no queue named.
+    /// A command buffer carrying nothing, under an identity of its own.
     fn default() -> ShadowCarry {
         static NEXT: AtomicU64 = AtomicU64::new(1);
         ShadowCarry {
             id: NEXT.fetch_add(1, Ordering::Relaxed),
-            queue: None,
             entries: Vec::new(),
         }
     }
@@ -2724,23 +2674,12 @@ pub(super) struct CarryTally {
 /// ([`ShadowCarry`]).
 struct Carried {
     copies: Arc<ShadowCopies>,
-    /// [`ShadowCopies::touched`]'s ends counted against the carry as the encoder that published
-    /// this left it.
-    touched: u64,
     /// [`Entry::held`] and [`Entry::stale`] as it left them.
     held: Option<[u32; 4]>,
     stale: Option<[u32; 4]>,
 }
 
 impl ShadowCarry {
-    /// A command buffer of logical queue `queue` carrying nothing, under an identity of its own.
-    pub(super) fn on(queue: u64) -> ShadowCarry {
-        ShadowCarry {
-            queue: Some(queue),
-            ..ShadowCarry::default()
-        }
-    }
-
     /// Carry nothing, under the same identity: every shadowed texture copies in again at its
     /// next use, and a first copy in of one this command buffer stood behind still reads as that.
     pub(super) fn clear(&mut self) {
@@ -2802,14 +2741,12 @@ impl<M: Clone + KeptArea> ShadowSync<M> {
         {
             Some(i) => i,
             None => {
-                let met = copies.touched.elsewhere(self.carry.queue);
-                // Carried from an earlier encoder of the command buffer, where no encoder ended
-                // with the texture since: the image holds the truth where that one left it, and
-                // this encoder's first use of it takes no copy in ([`ShadowCarry`]).
+                // Carried from an earlier encoder of the command buffer: the image holds the truth
+                // where that one left it, and this encoder's first use of it takes no copy in
+                // ([`ShadowCarry`]).
                 let carried = (self.carry.entries.iter())
                     .position(|carried| carried.copies.shadow_key == copies.shadow_key)
-                    .map(|at| self.carry.entries.swap_remove(at))
-                    .filter(|carried| carried.touched == met);
+                    .map(|at| self.carry.entries.swap_remove(at));
                 let (standing, held, stale) = match &carried {
                     Some(carried) => (Standing::Current, carried.held, carried.stale),
                     None => (Standing::Unread, None, None),
@@ -2824,7 +2761,6 @@ impl<M: Clone + KeptArea> ShadowSync<M> {
                     two_ways: false,
                     scratch: None,
                     stale,
-                    met,
                     carried: carried.is_some(),
                 });
                 self.entries.len() - 1

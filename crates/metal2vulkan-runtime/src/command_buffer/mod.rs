@@ -649,6 +649,9 @@ pub(super) struct State {
     /// another writer's bytes; Metal refuses such a wait while an encoder is open, so one never
     /// finds it lent out.
     shadow_carry: Option<ShadowCarry>,
+    /// How many batches it had once its last ended encoder joined one: the encoder opening next
+    /// carries nothing where it starts another ([`State::shadows_to_carry`]).
+    carry_batches: usize,
     /// The pools of its commands' set 0 (`descriptor_arena.rs`), given back or released with
     /// the uploads.
     pub(super) descriptors: DescriptorArena,
@@ -1390,9 +1393,17 @@ impl State {
     /// What its ended encoders left shadowed textures' images holding, for the encoder opening
     /// now (`shadow::ShadowCarry`): the command buffer carries nothing until it is handed back
     /// by [`shadows_carried`](Self::shadows_carried), so an encoder abandoned without ending
-    /// leaves it carrying none and every texture copies in again.
+    /// leaves it carrying none and every texture copies in again. Nothing either where this
+    /// encoder runs in another batch than the last ended one: the batches split since (a wait, a
+    /// host step, a resource state encoder) or the current one signals, so this encoder starts
+    /// the next (`Batches::encoder`). Another queue's batch may run between the two, and its
+    /// writes reach the truth the image no longer holds.
     pub(super) fn shadows_to_carry(&mut self) -> ShadowCarry {
-        self.shadow_carry.take().unwrap_or_default()
+        let mut carry = self.shadow_carry.take().unwrap_or_default();
+        if self.batches.all().len() != self.carry_batches || self.batches.signals_pending() {
+            carry.clear();
+        }
+        carry
     }
 
     /// Take back what an ended encoder leaves its command buffer's later encoders
@@ -1518,6 +1529,7 @@ impl State {
     pub(super) fn end_encoder(&mut self, command_buffer: &CommandBuffer, recorded: Recorded) {
         self.recorded.push(recorded);
         self.batches.encoder();
+        self.carry_batches = self.batches.all().len();
         self.encoder_open = false;
         let joined = self.recorded.len() - 1;
         command_buffer.0.close_tail(self, Some(joined));
@@ -1913,7 +1925,8 @@ impl CommandBuffer {
                 behind_hang: None,
                 shadow_attachments: Vec::new(),
                 shadows_copied_in: Vec::new(),
-                shadow_carry: Some(ShadowCarry::on(queue.id())),
+                shadow_carry: Some(ShadowCarry::default()),
+                carry_batches: 1,
                 descriptors: DescriptorArena::default(),
                 status_words: None,
                 mesh_grid_past: false,

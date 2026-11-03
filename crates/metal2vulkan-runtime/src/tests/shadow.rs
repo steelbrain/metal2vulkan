@@ -96,7 +96,6 @@ fn shadow_in(
         drops_writes: false,
         backing: Backing::MappedBuffer,
         merge_scratch: ScratchSpares::default(),
-        touched: Default::default(),
         stood: AtomicU64::new(0),
     })
 }
@@ -1435,7 +1434,6 @@ fn view_of(image: ResourceKey, levels: Range<u32>, layers: Range<u32>) -> Arc<Sh
         drops_writes: false,
         backing: Backing::Image,
         merge_scratch: ScratchSpares::default(),
-        touched: Default::default(),
         stood: AtomicU64::new(0),
     })
 }
@@ -1932,20 +1930,9 @@ struct Frame {
 }
 
 impl Frame {
-    /// A command buffer of no queue named: every encoder's end with a texture it carries counts
-    /// against it.
     fn new() -> Frame {
-        Frame::carrying(ShadowCarry::default())
-    }
-
-    /// A command buffer of logical queue `queue`.
-    fn on(queue: u64) -> Frame {
-        Frame::carrying(ShadowCarry::on(queue))
-    }
-
-    fn carrying(carry: ShadowCarry) -> Frame {
         Frame {
-            carry: Some(carry),
+            carry: Some(ShadowCarry::default()),
             made: 0,
             texels: 0,
             tally: (0, 0, 0, 0),
@@ -2080,10 +2067,12 @@ fn a_large_surface_is_copied_in_whole_once_for_a_command_buffer_that_samples_it(
 }
 
 /// A command buffer carries a shadowed texture's image on only while nothing lets another writer
-/// of its truth in: a command of any of its encoders that writes the bytes another way, an
-/// encoder of another command buffer that ended with the texture in between, a wait for an event
-/// or a fence, work the encoder records apart, and an encoder that did not end holding the truth
-/// each leave the next encoder to copy the plane in again.
+/// of its truth in: a command of any of its encoders that writes the bytes another way, a wait for
+/// an event or a fence (or any other split of its batches, `State::shadows_to_carry`), work the
+/// encoder records apart, and an encoder that did not end holding the truth each leave the next
+/// encoder to copy the plane in again. An encoder of another command buffer that ended with the
+/// texture in between, or while this one's encoder was open, does not: on the GPU it runs before
+/// or after the batch (`shadow::ShadowCarry`).
 #[test]
 fn a_carried_surface_is_dropped_by_anything_that_lets_another_writer_in() {
     let plane = ResourceKey::new();
@@ -2109,18 +2098,19 @@ fn a_carried_surface_is_dropped_by_anything_that_lets_another_writer_in() {
         .sampling(&s, 1);
     assert_eq!(frame.texels, SURFACE_TEXELS, "other bytes");
     // An encoder of another command buffer ended with the texture between this command buffer's
-    // two: what this one carries is no longer what the image holds.
+    // two, or while this one's was open: it runs before or after this one's batch, so the image
+    // this one's next encoder runs after is still the one it left. Each carries its own.
     let mut frame = Frame::new();
     frame.sampling(&s, 1);
     let mut other = Frame::new();
     other.sampling(&s, 1);
     frame.sampling(&s, 1);
+    other.sampling(&s, 1);
     assert_eq!(
-        frame.texels, twice,
+        (frame.texels, other.texels),
+        (SURFACE_TEXELS, SURFACE_TEXELS),
         "another command buffer's encoder between"
     );
-    // One that ended with the texture while this command buffer's encoder was still open: its
-    // own end carries nothing either, as the image is no longer the one it left.
     let mut frame = Frame::new();
     let mut sync = frame.encoder();
     let mut made = 0;
@@ -2130,7 +2120,7 @@ fn a_carried_surface_is_dropped_by_anything_that_lets_another_writer_in() {
     frame.end(sync);
     frame.sampling(&s, 1);
     assert_eq!(
-        frame.texels, twice,
+        frame.texels, SURFACE_TEXELS,
         "another command buffer's encoder while open"
     );
     // The command buffer waits for an event or a binary semaphore; an encoder's wait for a
@@ -2184,80 +2174,6 @@ fn a_carried_surface_is_dropped_by_anything_that_lets_another_writer_in() {
     frame.end(sync);
     frame.sampling(&dropped, 1);
     assert_eq!(frame.texels, twice, "writes Metal drops");
-}
-
-/// A command buffer's carry is dropped by an encoder of a command buffer of another queue that
-/// ended with the texture between its two encoders, or while its encoder was open, and never by
-/// one of the same queue's: a queue's command buffers run whole in commit order, so no other
-/// command buffer of the queue runs between two encoders of one (`shadow::Touched`). An encoder
-/// of no queue named counts against every carry.
-///
-/// The counts are this state machine's, taken by this test; they are no measurement of any
-/// program.
-#[test]
-fn only_another_queue_s_encoder_drops_a_carried_surface() {
-    let plane = ResourceKey::new();
-    let s = surface_shadow(plane);
-    let twice = 2 * SURFACE_TEXELS;
-    // Between the command buffer's two encoders.
-    for (between, texels, what) in [
-        (Frame::on(1), SURFACE_TEXELS, "the same queue's"),
-        (Frame::on(2), twice, "another queue's"),
-        (Frame::new(), twice, "no queue's"),
-    ] {
-        let mut frame = Frame::on(1);
-        frame.sampling(&s, 1);
-        let mut between = between;
-        between.sampling(&s, 1);
-        frame.sampling(&s, 1);
-        assert_eq!(frame.texels, texels, "{what} encoder between");
-    }
-    // While the command buffer's encoder was open.
-    for (between, texels, what) in [
-        (Frame::on(1), SURFACE_TEXELS, "the same queue's"),
-        (Frame::on(2), twice, "another queue's"),
-    ] {
-        let mut frame = Frame::on(1);
-        let mut sync = frame.encoder();
-        let mut made = 0;
-        frame.texels += texels_in(&planned(&mut sync, &mut made, &[(&s, false)], &[]));
-        let mut between = between;
-        between.sampling(&s, 1);
-        frame.end(sync);
-        frame.sampling(&s, 1);
-        assert_eq!(frame.texels, texels, "{what} encoder while open");
-    }
-    // Another queue's end, then the same queue's: the other queue's still counts.
-    let mut frame = Frame::on(1);
-    frame.sampling(&s, 1);
-    Frame::on(2).sampling(&s, 1);
-    Frame::on(1).sampling(&s, 1);
-    frame.sampling(&s, 1);
-    assert_eq!(
-        frame.texels, twice,
-        "another queue's, then the same queue's"
-    );
-    // Many of the same queue's command buffers between, each carrying across encoders of its own.
-    let mut frame = Frame::on(1);
-    frame.sampling(&s, 1);
-    let mut others: Vec<Frame> = (0..3).map(|_| Frame::on(1)).collect();
-    for other in &mut others {
-        other.sampling(&s, 1);
-    }
-    for other in &mut others {
-        other.sampling(&s, 1);
-        frame.sampling(&s, 1);
-    }
-    assert_eq!(
-        frame.texels, SURFACE_TEXELS,
-        "the same queue's, interleaved"
-    );
-    for other in &others {
-        assert_eq!(
-            other.texels, SURFACE_TEXELS,
-            "each interleaved command buffer's carry"
-        );
-    }
 }
 
 /// A render pass that renders a large surface's texture as a color attachment it loads pays only

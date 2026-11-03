@@ -332,6 +332,8 @@ mod cross_class_reads;
 #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
 mod cross_class_storage;
 #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+mod cross_queue_shadows;
+#[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
 mod cubic_reach_costs;
 #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
 mod cubic_samplers;

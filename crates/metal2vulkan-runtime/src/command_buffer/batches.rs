@@ -103,6 +103,12 @@ impl<E, S> Batches<E, S> {
         &self.batches
     }
 
+    /// Whether the current batch signals, so the next encoder starts a batch of its own
+    /// ([`encoder`](Self::encoder)).
+    pub(crate) fn signals_pending(&self) -> bool {
+        self.batches.last().is_some_and(Batch::signals_any)
+    }
+
     /// The event waits and the event signals encoded so far, each call counted, binary
     /// semaphores' none: an encoder that ends now has them all before it
     /// (`CommandBuffer::ended_encoders`).

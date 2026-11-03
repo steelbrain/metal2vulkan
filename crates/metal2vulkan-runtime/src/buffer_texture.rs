@@ -1140,7 +1140,6 @@ impl Texels {
             drops_writes: false,
             backing: self.backing(),
             merge_scratch: ScratchSpares::default(),
-            touched: Default::default(),
             stood: AtomicU64::new(0),
         })
     }
@@ -1310,7 +1309,6 @@ impl Texels {
             drops_writes: false,
             backing: texels.backing(),
             merge_scratch: ScratchSpares::default(),
-            touched: Default::default(),
             stood: AtomicU64::new(0),
         };
         texels.staged = Some(Arc::new(copies));
@@ -1440,7 +1438,6 @@ impl Texels {
             drops_writes: false,
             backing: self.backing(),
             merge_scratch: ScratchSpares::default(),
-            touched: Default::default(),
             stood: AtomicU64::new(0),
         })
     }

@@ -238,7 +238,6 @@ impl Device {
             drops_writes: false,
             backing: texels.backing(),
             merge_scratch: ScratchSpares::default(),
-            touched: Default::default(),
             stood: AtomicU64::new(0),
         };
         self.degrade(Degradation::ShadowedTexture, || {

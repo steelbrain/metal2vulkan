@@ -86,6 +86,27 @@ fn an_encoder_after_a_signal_starts_a_batch() {
     );
 }
 
+/// The next encoder starts a batch of its own once the current one signals, an event or a binary
+/// semaphore, which a command buffer's carry of shadowed textures' images reads before it opens
+/// the encoder (`State::shadows_to_carry`); and not before.
+#[test]
+fn a_signal_is_pending_until_the_encoder_after_it_starts_a_batch() {
+    let mut batches = Batches::<char, u8>::default();
+    assert!(!batches.signals_pending());
+    batches.encoder();
+    assert!(!batches.signals_pending(), "an encoder alone");
+    batches.signal('a', 1);
+    assert!(batches.signals_pending(), "an event signal");
+    batches.encoder();
+    assert!(!batches.signals_pending(), "the encoder after it");
+    assert_eq!(batches.all().len(), 2);
+    batches.binary_signal(7);
+    assert!(batches.signals_pending(), "a binary semaphore signal");
+    batches.wait('b', 1);
+    assert!(!batches.signals_pending(), "a wait split the batches");
+    assert_eq!(batches.all().len(), 3);
+}
+
 #[test]
 fn waits_before_any_encoder_share_the_first_batch() {
     let mut batches = Batches::<char, u8>::default();
