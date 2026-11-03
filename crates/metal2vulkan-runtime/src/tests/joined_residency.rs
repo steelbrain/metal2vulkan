@@ -120,7 +120,11 @@ fn shadowed_textures_made_resident_reach_the_next_encoders_in_order() {
         encoder.end_encoding().unwrap();
     };
     resident(&[&plain, &first]);
-    assert_eq!(inherited(), [first.clone()], "after the first encoder");
+    assert_eq!(
+        inherited(),
+        std::slice::from_ref(&first),
+        "after the first encoder"
+    );
     resident(&[&second, &first]);
     assert_eq!(
         inherited(),
