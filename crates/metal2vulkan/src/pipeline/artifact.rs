@@ -965,9 +965,11 @@ pub enum PrecisionNote {
     /// texture record it wherever they are accessed. A two-plane YCbCr texture on the grid `8192`
     /// (the `_sRGB` twins, the unpacked 12-bit and the extended-range formats) keeps Metal's
     /// rounding of one texel's step with ties away from zero, but in a sample through a runtime
-    /// sampler slot: where its word reads one texel, the step rounds to nearest even, one `half`
-    /// ulp apart at a tie, announced by the runtime at a draw or dispatch that binds such a texture
-    /// there.
+    /// sampler slot: where its word reads one texel, the `half` is the device's rounding of the
+    /// step's `float`, announced by the runtime at a draw or dispatch that binds such a texture
+    /// there. Measured on MoltenVK 1.4.2 over the Apple M3 Max (macOS 27.0.1): toward zero, within
+    /// one `half` ulp of Metal's (8,409 channels of the `_sRGB` twins over six surfaces and three
+    /// matrices, `runtime_lane::ycbcr_textures`); unmeasured on other Apple GPUs.
     HalfTexelConversion,
     /// The module samples a texture with a `half` result through a filter (linear minification
     /// or magnification, a linear mip filter, anisotropy, or a runtime sampler) that Metal's own

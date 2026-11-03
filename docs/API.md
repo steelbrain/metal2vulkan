@@ -3116,8 +3116,10 @@ bound.
   texel is Metal's, announced at a draw or dispatch that binds a texture of a class whose Metal
   `half` differs from it (a 32-bit float texel's sample, a 16-bit normalized texel, a format not
   measured) and a two-plane YCbCr texture on the grid `8192` at a slot sampled through a runtime
-  sampler (a sample of one texel rounds to nearest even, one `half` ulp from Metal's ties-away
-  rounding at a tie); a heap element or a depth texture wherever it is accessed.
+  sampler (a sample of one texel is the device's rounding of its step: toward zero on MoltenVK
+  1.4.2 over the Apple M3 Max, within one `half` ulp of Metal's ties-away rounding, measured over
+  8,409 channels; unmeasured on other Apple GPUs); a heap element or a depth texture wherever it
+  is accessed.
 - `metal2vulkan-degrade-half-sample-filter` (precision). `PrecisionNote::HalfSampleFilter`: The
   module samples a texture with a `half` result through a filter (linear minification or
   magnification, or a runtime sampler) that Metal's own sampler (MoltenVK) answers otherwise than

@@ -2188,7 +2188,8 @@ fn select_one(
     // On a device that samples through Metal's own texture unit, the `half` routine reads an
     // access's lanes only for a YCbCr field's one texel (`texture::half`): no sampler word decides
     // them. A slot's texture of a YCbCr format on the grid `8192` (`TexelFormat::YCBCR_8192`) then
-    // rounds a sample of its one texel to nearest even, where Metal rounds it with ties away,
+    // takes the device's rounding of a sample of its one texel (toward zero on MoltenVK over the
+    // M3 Max, measured; unmeasured on other Apple GPUs), where Metal rounds it with ties away,
     // noted where it is bound.
     let one_texel = match one_texel {
         crate::lower::texture::OneTexel::Word(_)
