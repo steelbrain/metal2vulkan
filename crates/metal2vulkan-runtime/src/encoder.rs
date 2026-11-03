@@ -1184,19 +1184,19 @@ impl EncoderCore {
         }
     }
 
-    /// Retain `used`, a resource the encoder first made resident (`use_resource`, `use_heap`),
-    /// until the command buffer completes; and, where it is a buffer over host pages or a heap
-    /// whose bytes are, hold it from the encoder's next command on, whether or not a command
-    /// reaches it, as Metal holds every buffer an encoder made resident from the submission of a
-    /// command it encoded after, and fails that submission where the buffer is detached by then
-    /// (code 8). An encoder that encodes no command after it holds nothing of it, as Metal's.
+    /// `used`, a resource the encoder first made resident (`use_resource`, `use_heap`), which its
+    /// residency holds until the command buffer completes (`Residency::use_resource`): where it is
+    /// a buffer over host pages or a heap whose bytes are, hold it from the encoder's next command
+    /// on, whether or not a command reaches it, as Metal holds every buffer an encoder made
+    /// resident from the submission of a command it encoded after, and fails that submission where
+    /// the buffer is detached by then (code 8). An encoder that encodes no command after it holds
+    /// nothing of it, as Metal's.
     pub(super) fn made_resident(&mut self, used: Used) {
         if let Some(key) = used.bytes_key() {
             if self.device().shared().rebinds.any() {
                 self.resident_unheld.push(key);
             }
         }
-        self.retain(used);
     }
 
     /// Hold the buffers the encoder made resident since its last command (`made_resident`), as

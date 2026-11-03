@@ -93,6 +93,7 @@ use metal2vulkan::bind::{
 use metal2vulkan::error::{BindError, RuntimeDriverDefect};
 use metal2vulkan::metal::{BarrierScope, DispatchType, RenderStages, ResourceUsage};
 use metal2vulkan::pipeline::Stage;
+use std::borrow::Cow;
 use std::collections::BTreeMap;
 use std::ops::Range;
 use std::sync::atomic::AtomicU64;
@@ -1523,9 +1524,7 @@ impl ComputeCommandEncoder {
     /// (`Residency::sync_heaps`), held until the command buffer completes: a command reaches
     /// every texture its heaps hold as it is encoded.
     fn sync_heaps(&mut self) {
-        for used in self.residency.sync_heaps() {
-            self.core.retain(used);
-        }
+        self.residency.sync_heaps();
     }
 
     /// Once a command was encoded, note the heaps the encoder used; and where it reads texture
@@ -1593,9 +1592,7 @@ impl ComputeCommandEncoder {
     /// Make resident here what `residency`, an earlier encoder's of the unit, made resident: a
     /// predicated loop's copy replays that encoder's commands here (`predication.rs`).
     pub(super) fn carry_residency(&mut self, residency: &Residency) {
-        for used in self.residency.carry(residency) {
-            self.core.retain(used);
-        }
+        self.residency.carry(residency);
     }
 
     /// `endEncoding`. What it binds is held until the command buffer completes, as Metal holds
@@ -2498,10 +2495,10 @@ fn record(
     let waits = laying && !apart_samplers(&device, &objects);
     let (pipelines, pending) = match (own.filter(|_| !waits), kept_made) {
         (Some(_), Some(made)) => {
-            if let Some(kept) = kept {
+            if let Some(kept) = kept.filter(|kept| kept.made.get().is_none()) {
                 drop(kept.made.set(made.clone()));
             }
-            (made.clone(), None)
+            (Cow::Borrowed(made.as_slice()), None)
         }
         (Some(dispatch), None) => {
             let begun: Vec<_> = commands
@@ -2534,13 +2531,13 @@ fn record(
                         let keys = begun.iter().map(|(key, _)| key.clone()).collect();
                         drop(planned.made.set((keys, made.clone())));
                     }
-                    (made, None)
+                    (Cow::Owned(made), None)
                 }
                 Some(_) => {
                     device.shared().counts.baked_sampler_dispatch_apart();
-                    (Vec::new(), Some((dispatch, begun)))
+                    (Cow::Owned(Vec::new()), Some((dispatch, begun)))
                 }
-                None => (Vec::new(), Some((dispatch, begun))),
+                None => (Cow::Owned(Vec::new()), Some((dispatch, begun))),
             }
         }
         (None, _) => {
@@ -2548,7 +2545,7 @@ fn record(
             for region in &commands.regions {
                 made.push(variant.region_pipeline(region, formats)?);
             }
-            (made, None)
+            (Cow::Owned(made), None)
         }
     };
     // Set 0: pushed, or the encoder's last set where it holds the same writes, else one from the
@@ -2638,7 +2635,7 @@ fn record(
             }
         }
         None => {
-            let made = &pipelines;
+            let made = &*pipelines;
             core.command_reaching(stages, &uses, uses.resident(), |raw, command_buffer| {
                 // SAFETY: the encoder's command buffer is recording outside a render pass;
                 // every object recorded is live until the command buffer completes (retained
@@ -2684,13 +2681,19 @@ fn record(
             .iter()
             .map(|region| (&region.specialization, Some(formats))),
     );
-    core.retain(pipeline.clone());
-    core.retain(objects);
-    core.retain(pipelines);
+    // Held by reference, each once while the encoder held it lately (`retained.rs`): a
+    // dispatch of the objects of the one before it holds none again.
+    core.retain_shared(pipeline.held());
+    core.retain_shared(objects);
+    for made in pipelines.iter() {
+        core.retain_shared(made.clone());
+    }
     tables.table.retain(core);
-    core.retain(bound.samplers);
+    for sampler in bound.samplers {
+        core.retain_shared(sampler);
+    }
     if let Some((call, _)) = &flat {
-        core.retain(call.buffer.clone());
+        core.retain_shared(call.buffer.held());
     }
     // The tables the heap's function-table array may name: their IDs stay theirs until the
     // command buffer completes.

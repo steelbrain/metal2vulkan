@@ -203,8 +203,10 @@ impl Residency {
     }
 
     /// Make `resource` resident with `usage` in render `stages` (none for a compute encoder),
-    /// joined to the usage and stages it had: the resource, when the encoder first uses it here
-    /// (the caller then holds it until the command buffer completes).
+    /// joined to the usage and stages it had: the resource, when the encoder first uses it here.
+    /// The residency holds what it made resident, and its encoder's record holds the residency
+    /// until the command buffer completes (`command_buffer::State::encoder_ended`), so the caller
+    /// holds none of it again.
     pub(super) fn use_resource(
         &mut self,
         resource: ResourceRef<'_>,
@@ -228,7 +230,7 @@ impl Residency {
     /// for reading in render `stages` (none for a compute encoder), as Metal's `useHeap:` and
     /// `useHeap:stages:` do, joined to the stages the encoder used the heap in before, and
     /// remember the heap for [`sync_heaps`](Self::sync_heaps): those the encoder first uses here
-    /// (the caller then holds them until the command buffer completes).
+    /// (held as [`use_resource`](Self::use_resource) holds what it makes resident).
     pub(super) fn use_heap(&mut self, heap: &Heap, stages: RenderStages) -> Vec<Used> {
         let (textures, next) = heap.textures_from(0);
         let stages = match self.heap_use(heap) {
@@ -273,8 +275,8 @@ impl Residency {
     /// Make resident each texture made in a heap the encoder used since the encoder last looked,
     /// for reading in the stages it used the heap in, as `use_heap` made the heap's textures
     /// (the module docs): an encoder calls it as it encodes each command that reaches its
-    /// resident resources. Those it first uses here (the caller then holds them until the
-    /// command buffer completes). A heap that made no texture since costs one lock.
+    /// resident resources. Those it first uses here (held as [`use_resource`](Self::use_resource)
+    /// holds what it makes resident). A heap that made no texture since costs one lock.
     pub(super) fn sync_heaps(&mut self) -> Vec<Used> {
         let mut made = Vec::new();
         for used in &mut self.heaps {
@@ -323,17 +325,15 @@ impl Residency {
     }
 
     /// Make resident what `from`, an earlier compute encoder's residency, made resident: each
-    /// resource with its usage, and each heap with the textures it holds now. Those this one
-    /// first uses here (the caller then holds them until the command buffer completes).
-    pub(super) fn carry(&mut self, from: &Residency) -> Vec<Used> {
-        let mut first = Vec::new();
+    /// resource with its usage, and each heap with the textures it holds now (held as
+    /// [`use_resource`](Self::use_resource) holds what it makes resident).
+    pub(super) fn carry(&mut self, from: &Residency) {
         for (used, usage, _) in &from.used {
-            first.extend(self.join(used.clone(), *usage, RenderStages::empty()));
+            self.join(used.clone(), *usage, RenderStages::empty());
         }
         for heap in &from.heaps {
-            first.extend(self.use_heap(&heap.heap, RenderStages::empty()));
+            self.use_heap(&heap.heap, RenderStages::empty());
         }
-        first
     }
 
     /// The residency a compute command reaches, stated as a compute encoder's (no render

@@ -350,8 +350,6 @@ impl BlitCommandEncoder {
             // are other buffers.
             unsafe { device.cmd_copy_buffer(raw, raw_source, raw_destination, &copies) };
         })?;
-        self.core().retain(source.clone());
-        self.core().retain(destination.clone());
         Ok(())
     }
 }

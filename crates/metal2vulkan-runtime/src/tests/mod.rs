@@ -258,6 +258,7 @@ mod rerun_arenas;
 mod reserved_queues;
 mod resource;
 mod resource_ids;
+mod retained;
 mod rotated;
 mod sample_interleave;
 mod sample_planes;

@@ -582,7 +582,7 @@ impl BlitCommandEncoder {
                     let format = destination_texture.pixel_format();
                     copy.announce_staging(self.core().device(), format, true);
                     self.core().retain(copy);
-                    self.core().retain(destination_texture.clone());
+                    self.core().retain_shared(destination_texture.held());
                     // Every sample of the region written, as the single-sample path's.
                     let written = multisampled_texels(&region);
                     self.scrub(destination_texture, vec![(aspect.into(), written)])
@@ -754,7 +754,7 @@ impl BlitCommandEncoder {
                             let format = source_texture.pixel_format();
                             copy.announce_staging(this.core().device(), format, false);
                             this.core().retain(copy);
-                            this.core().retain(source_texture.clone());
+                            this.core().retain_shared(source_texture.held());
                             Ok(())
                         }
                         None => Err(Error::NotImplemented(RuntimeGap::MultisampledBufferCopy)),
@@ -1084,8 +1084,7 @@ impl BlitCommandEncoder {
                     });
             }
         }
-        self.core().retain(buffer.clone());
-        self.core().retain(texture.clone());
+        self.core().retain_shared(texture.held());
         if into_texture {
             let written = (plan.regions.iter())
                 .map(|r| (r.image.aspect.into(), Written::of(&r.image)))
@@ -1592,9 +1591,9 @@ impl BlitCommandEncoder {
                 copy.announce(self.core().device(), call, destination);
             }
             self.core().retain(planned);
-            self.core().retain(source.clone());
+            self.core().retain_shared(source.held());
             if source != destination {
-                self.core().retain(destination.clone());
+                self.core().retain_shared(destination.held());
             }
             let written = (copies.iter())
                 .map(|copy| (copy.dst.aspect.into(), Written::of(&copy.dst)))
@@ -1690,9 +1689,9 @@ impl BlitCommandEncoder {
         if let Some((scratch, ..)) = scratch {
             self.core().retain(scratch);
         }
-        self.core().retain(source.clone());
+        self.core().retain_shared(source.held());
         if source != destination {
-            self.core().retain(destination.clone());
+            self.core().retain_shared(destination.held());
         }
         if overlap {
             let texels: u64 = copies
@@ -1897,10 +1896,6 @@ impl BlitCommandEncoder {
                 self.core().retain(sets);
             }
         }
-        self.core().retain(source.clone());
-        if source != destination {
-            self.core().retain(destination.clone());
-        }
         Ok(())
     }
 
@@ -2016,7 +2011,7 @@ impl BlitCommandEncoder {
                 record_blit(device, raw, image, aspects, blit);
             })?;
         }
-        self.core().retain(texture.clone());
+        self.core().retain_shared(texture.held());
         let written = blits
             .iter()
             .map(|blit| {

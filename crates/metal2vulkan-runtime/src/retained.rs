@@ -4,6 +4,10 @@
 //! - **Without a box each.** A shared object (a buffer, a texture, a sampler state, a pipeline
 //!   state, a variant's objects, a made `VkPipeline`) is held by another reference to it, which
 //!   costs no allocation; any other object is boxed. A draw retains several of the first kind.
+//! - **Once each, lately.** A shared object among the last [`RECENT`] the encoder held by
+//!   reference is not held again: the encoder holds it already, until its command buffer
+//!   completes, so no other object has its address meanwhile. A dispatch or draw of the pipeline
+//!   state, variant objects and pipelines of the one before it holds none of them again.
 //! - **One entry.** The holds go to the command buffer as one of its entries, boxed as they
 //!   began: their storage, made at the first hold with room for [`FIRST_HOLDS`], is that box.
 //! - **Let go of last first.** The command buffer lets go of what it holds from the last retained
@@ -18,6 +22,10 @@ use std::sync::Arc;
 /// The holds an encoder's storage makes room for at its first: a pass's draws of a few pipeline
 /// states, each of a few objects, without growing it.
 const FIRST_HOLDS: usize = 32;
+
+/// The shared objects held last that a hold by reference looks among (the module docs): a
+/// dispatch's or draw's few.
+const RECENT: usize = 8;
 
 /// One object held.
 enum Held {
@@ -64,7 +72,12 @@ impl HeldBy {
 
 /// An encoder's holds (the module docs): none stored until the first.
 #[derive(Default)]
-pub(super) struct Retained(Option<Box<Holds>>);
+pub(super) struct Retained {
+    holds: Option<Box<Holds>>,
+    /// The addresses of the last [`RECENT`] shared objects held, 0 where none (no object's), and
+    /// the place the next goes.
+    recent: ([usize; RECENT], usize),
+}
 
 impl Retained {
     /// Hold `object`, boxed.
@@ -72,28 +85,37 @@ impl Retained {
         self.holds().push(Held::Boxed(object));
     }
 
-    /// Hold `object`, a shared one, by another reference to it.
+    /// Hold `object`, a shared one, by another reference to it: none where it is among the last
+    /// [`RECENT`] held so, which it holds already (the module docs).
     pub(super) fn shared(&mut self, object: Arc<dyn Any + Send + Sync>) {
+        let address = Arc::as_ptr(&object).cast::<()>().addr();
+        let (recent, next) = &mut self.recent;
+        if recent.contains(&address) {
+            return;
+        }
+        recent[*next] = address;
+        *next = (*next + 1) % RECENT;
         self.holds().push(Held::Shared(object));
     }
 
     /// The holds' storage, made at the first.
     fn holds(&mut self) -> &mut Vec<Held> {
         let holds = self
-            .0
+            .holds
             .get_or_insert_with(|| Box::new(Holds(Vec::with_capacity(FIRST_HOLDS))));
         &mut holds.0
     }
 
-    /// How many holds it keeps (builds with debug assertions: `render/draw_again.rs`'s check).
-    #[cfg(debug_assertions)]
+    /// How many holds it keeps (builds with debug assertions: `render/draw_again.rs`'s check;
+    /// and the tests).
+    #[cfg(any(test, debug_assertions))]
     pub(super) fn len(&self) -> usize {
-        self.0.as_ref().map_or(0, |holds| holds.0.len())
+        self.holds.as_ref().map_or(0, |holds| holds.0.len())
     }
 
     /// The holds as one entry of a command buffer's (the module docs), or none where there are
     /// none.
     pub(super) fn into_entry(self) -> Option<Box<dyn Any + Send + Sync>> {
-        self.0.map(|holds| holds as Box<dyn Any + Send + Sync>)
+        self.holds.map(|holds| holds as Box<dyn Any + Send + Sync>)
     }
 }

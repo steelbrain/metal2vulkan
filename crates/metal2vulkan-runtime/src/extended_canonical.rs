@@ -168,7 +168,7 @@ impl BlitCommandEncoder {
             }
         })?;
         self.core().retain(scratch);
-        self.core().retain(texture.clone());
+        self.core().retain_shared(texture.held());
         Ok(true)
     }
 

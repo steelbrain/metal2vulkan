@@ -478,10 +478,6 @@ impl BlitCommandEncoder {
                         },
                     )?;
                 }
-                this.core.retain(source_buffer.clone());
-                if source_buffer != destination_buffer {
-                    this.core.retain(destination_buffer.clone());
-                }
                 Ok(())
             },
         )
@@ -553,7 +549,6 @@ impl BlitCommandEncoder {
                         );
                     }
                 })?;
-                this.core.retain(buffer.clone());
                 if split {
                     this.core
                         .device()
@@ -639,7 +634,7 @@ impl BlitCommandEncoder {
                     // (the host copy holds the buffer's bytes from its byte 0).
                     unsafe { device.cmd_copy_buffer(raw, own, host, &[copy]) };
                 })?;
-                this.core.retain(buffer.clone());
+                this.core.retain_shared(buffer.held());
                 Ok(())
             },
         )

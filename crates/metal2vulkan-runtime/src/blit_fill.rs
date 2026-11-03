@@ -953,8 +953,7 @@ impl BlitCommandEncoder {
                     // both, and the buffer's regions are disjoint.
                     unsafe { device.cmd_copy_buffer(raw, source, destination, &regions) };
                 })?;
-                this.core().retain(staging);
-                this.core().retain(buffer.clone());
+                this.core().retain_shared(staging.held());
                 Ok(())
             },
         )
@@ -1114,7 +1113,7 @@ impl BlitCommandEncoder {
                 device.cmd_clear_color_image(raw, image, vk::ImageLayout::GENERAL, &value, &[range])
             };
         })?;
-        self.core().retain(texture.clone());
+        self.core().retain_shared(texture.held());
         let written = ImageRegion {
             aspect: ImageAspectFlags::COLOR,
             level,
@@ -1486,7 +1485,7 @@ impl BlitCommandEncoder {
             }
         }
         self.fill_spans(bytes, &spans, word)?;
-        self.core().retain(texture.clone());
+        self.core().retain_shared(texture.held());
         Ok(())
     }
 
@@ -1530,8 +1529,7 @@ impl BlitCommandEncoder {
             // and the buffer's regions are disjoint.
             unsafe { device.cmd_copy_buffer(raw, source, destination, &regions) };
         })?;
-        self.core().retain(staging);
-        self.core().retain(buffer.clone());
+        self.core().retain_shared(staging.held());
         Ok(())
     }
 
@@ -1588,7 +1586,7 @@ impl BlitCommandEncoder {
                     )
                 });
         }
-        self.core().retain(texture.clone());
+        self.core().retain_shared(texture.held());
         Ok(())
     }
 
@@ -1609,7 +1607,7 @@ impl BlitCommandEncoder {
             .collect();
         let buffer = texels.buffer.clone();
         self.fill_spans(&buffer, &spans, &[0])?;
-        self.core().retain(texture.clone());
+        self.core().retain_shared(texture.held());
         Ok(())
     }
 
