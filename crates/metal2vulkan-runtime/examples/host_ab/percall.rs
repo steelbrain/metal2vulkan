@@ -562,9 +562,6 @@ struct Objects<G: Gpu> {
     event: G::SharedEvent,
     fence: G::Fence,
     pages: *mut u8,
-    /// Two no-copy buffers over pages of their own, which the no-copy commit group's dispatch
-    /// binds.
-    no_copy: Vec<G::Buffer>,
     /// A command buffer of one fill, committed and completed, whose status, times and wait the
     /// read groups take.
     done: G::CommandBuffer,
@@ -617,14 +614,6 @@ impl<G: Gpu> Objects<G> {
             fence: g.fence(),
             // SAFETY: the pages outlive every buffer made over them; nothing unmaps them.
             pages: unsafe { host_pages(NO_COPY_BUFFERS * NO_COPY_EACH) },
-            no_copy: {
-                // SAFETY: as `pages`: page-aligned read-write memory of this many bytes, which
-                // nothing unmaps.
-                let pages = unsafe { host_pages(2 * NO_COPY_EACH) };
-                (0..2)
-                    .map(|i| unsafe { g.buffer_no_copy(pages.add(i * NO_COPY_EACH), NO_COPY_EACH) })
-                    .collect()
-            },
             done,
         }
     }
@@ -680,27 +669,37 @@ pub fn percall<G: Gpu>(g: &G, s: &Scene<G>, library: &G::Library, sizes: &Sizes)
         |held| held.iter().for_each(|cb| g.wait(cb)),
     );
     // And one whose dispatch binds two no-copy buffers, whose host imports the commit counts
-    // (`WorkCounts::host_imports_used`).
+    // (`WorkCounts::host_imports_used`): made in its window over the no-copy pages and gone with
+    // it, so no other group's calls meet live buffers over host pages.
     group(
         g,
         "commit_no_copy_dispatch",
         (16, w),
         || {
-            (0..16)
+            // SAFETY: the pages are page-aligned read-write memory of this many bytes, and they
+            // outlive every buffer made over them (`Objects::pages`).
+            let buffers: Vec<G::Buffer> = (0..2)
+                .map(|i| unsafe { g.buffer_no_copy(o.pages.add(i * NO_COPY_EACH), NO_COPY_EACH) })
+                .collect();
+            let held = (0..16)
                 .map(|_| {
                     let cb = g.command_buffer();
                     let mut e = g.compute_encoder(&cb);
                     g.set_compute_pipeline(&mut e, &s.tiny[0]);
-                    g.set_buffer(&mut e, &o.no_copy[0], 0, 0);
-                    g.set_buffer(&mut e, &o.no_copy[1], 0, 1);
+                    g.set_buffer(&mut e, &buffers[0], 0, 0);
+                    g.set_buffer(&mut e, &buffers[1], 0, 1);
                     g.dispatch(&mut e, 1, 64);
                     g.end_compute(e);
                     cb
                 })
-                .collect::<Vec<_>>()
+                .collect::<Vec<_>>();
+            (buffers, held)
         },
-        |held: &mut Vec<G::CommandBuffer>, i| g.commit(&held[i]),
-        |held| held.iter().for_each(|cb| g.wait(cb)),
+        |(_, held): &mut (Vec<G::Buffer>, Vec<G::CommandBuffer>), i| g.commit(&held[i]),
+        |(buffers, held)| {
+            held.iter().for_each(|cb| g.wait(cb));
+            drop((held, buffers));
+        },
     );
     group(
         g,
