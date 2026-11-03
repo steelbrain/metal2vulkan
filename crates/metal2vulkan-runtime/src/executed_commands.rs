@@ -102,6 +102,12 @@ impl CommandBuffer {
 
     /// Hand the handlers the facts `facts` gathers of an execution of `buffer` read at `read`,
     /// under `residency`, the command buffer's, where it has handlers; with no lock held.
+    /// Whether the command buffer has an executed-commands handler, which an execution reports
+    /// the commands it ran to ([`report_executed`](Self::report_executed)).
+    pub(crate) fn reports_executed(&self) -> bool {
+        !self.state().executed_handlers.is_empty()
+    }
+
     pub(crate) fn report_executed(
         &self,
         buffer: &IndirectCommandBuffer,

@@ -1479,6 +1479,13 @@ pub(crate) struct RenderLowering {
     /// The encoder records an execution's commands (`render/executions.rs`): a draw that needs
     /// another instance than the execution's is refused.
     replaying: bool,
+    /// Every draw it replayed so far was plain: one a direct draw of the encoder's would keep for
+    /// drawing again (`render/draw_again.rs`) but for its being replayed, which no notice the
+    /// device announces at every occurrence met (`kept_commands.rs`). A chunk of an execution's
+    /// commands whose draws were all plain is kept.
+    replay_plain: bool,
+    /// The draw being drawn reached that keep's test and passed it ([`replay_plain`]).
+    plain_drawn: bool,
     /// The place among the command buffer's ended encoders of the encoder whose execution it
     /// replays (`RenderExecution`), which names a draw of the commands it drops
     /// (`CommandBuffer::drop_late_draw`); `None` where it replays none.
@@ -2059,6 +2066,8 @@ impl RenderLowering {
             draw_calls: 0,
             tile_dispatch_calls: 0,
             replaying: false,
+            replay_plain: false,
+            plain_drawn: false,
             executing_encoder: None,
             rerouting: false,
             forms: BufferForms::Bound,
@@ -2112,11 +2121,13 @@ impl CommandBuffer {
         let inheritance = vk::CommandBufferInheritanceInfo::default()
             .render_pass(compatible.raw)
             .subpass(0);
+        // A chunk kept for later command buffers (`kept_commands.rs`) may run in several at once.
+        let submits = match state.keeping() {
+            true => vk::CommandBufferUsageFlags::SIMULTANEOUS_USE,
+            false => vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT,
+        };
         let begin = vk::CommandBufferBeginInfo::default()
-            .flags(
-                vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT
-                    | vk::CommandBufferUsageFlags::RENDER_PASS_CONTINUE,
-            )
+            .flags(submits | vk::CommandBufferUsageFlags::RENDER_PASS_CONTINUE)
             .inheritance_info(&inheritance);
         // SAFETY: the command buffer was just allocated from the pool, under the state lock;
         // the compatible pass lives as long as the encoder, and its command buffer after.
@@ -7195,7 +7206,9 @@ impl RenderLowering {
             color_groups::Turn::Later(false) => return Err(color_groups::gap()),
             color_groups::Turn::Later(true) if self.group_skips() => self.group_skipped(),
             _ => {
+                self.plain_drawn = false;
                 let drawn = self.draw_resident(call, assembly, draw, buffers, empty);
+                self.replay_plain &= self.plain_drawn;
                 self.group_outcome(turn, drawn.is_ok());
                 if drawn.is_err() {
                     self.forget_again();
@@ -7259,6 +7272,8 @@ impl RenderLowering {
                 }
             }
         }
+        // A replayed draw that met a notice announced at every occurrence must meet it again.
+        self.replay_plain &= !watch.met();
         self.kept_again(&watch, (reads, !empty && rasterizes, depth_writes), checked);
         Ok(())
     }
@@ -9777,11 +9792,10 @@ impl RenderLowering {
         let extended = |c: &render_pass::ColorTarget| {
             ExtendedRange::of(c.target.texture.pixel_format()).is_some()
         };
-        let keeps = stepless
+        let plain = stepless
             && !barriered
             && !empty
             && !culled
-            && !self.replaying
             && !self.rerouting
             && self.replayed.is_none()
             && self.grouped.is_none()
@@ -9833,9 +9847,12 @@ impl RenderLowering {
             && live.state.extended_shadows.is_empty()
             && !plan.variant.extended_range.values().any(planes)
             && !(self.layout.colors.iter().flatten()).any(extended)
-            && !plan.descriptors.iter().any(ycbcr)
-            // Its uses noted as the next draw would find them noted (`noted_apart.rs`).
-            && self.core.noted_now(&live.noted);
+            && !plan.descriptors.iter().any(ycbcr);
+        // A replayed draw plain so would be kept but for its being replayed: a chunk of its
+        // execution's commands whose draws all are is kept (`kept_commands.rs`).
+        self.plain_drawn = plain;
+        // Its uses noted as the next draw would find them noted (`noted_apart.rs`).
+        let keeps = plain && !self.replaying && self.core.noted_now(&live.noted);
         if keeps {
             let execution = records.then(|| draw_again::KeptExecution {
                 pipeline: ExecutedPipeline::Render(Arc::clone(variant.shared_pipeline())),

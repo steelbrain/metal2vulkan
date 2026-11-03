@@ -843,6 +843,16 @@ impl ArgumentTable {
         Ok(())
     }
 
+    /// Whether it binds nothing: no buffer, function table, null table, texture, sampler or bytes.
+    pub(super) fn binds_nothing(&self) -> bool {
+        self.buffers.is_empty()
+            && self.function_tables.is_empty()
+            && self.null_tables.is_empty()
+            && self.textures.is_empty()
+            && self.samplers.is_empty()
+            && self.bytes.is_empty()
+    }
+
     /// Whether a texture slot of `stage` that `interface`'s function statically uses holds a
     /// memoryless texture, a texture buffer's too. Plain Metal fails the command buffer of a
     /// command that runs such a function (`CommandBufferError::InvalidResource`), whether or not

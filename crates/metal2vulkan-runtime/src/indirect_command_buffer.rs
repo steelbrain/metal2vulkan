@@ -71,6 +71,7 @@ use super::device::lock;
 use super::error::{internal, invalid, Error, MemoryKind, Problem, RuntimeGap};
 use super::families::GpuFamily;
 use super::indirect_execute::Unforeseen;
+use super::kept_commands::{self, KeptChunk, KeptChunks};
 use super::memory::MemoryClass;
 use super::pipeline::{
     ComputePipelineState, ComputeProgram, RenderPipelineState, RenderProgram, RenderStateKind,
@@ -625,7 +626,7 @@ impl Device {
             inheritance,
             size,
             options,
-            pipelines: Mutex::new(vec![None; size as usize]),
+            pipelines: Mutex::default(),
             gpu_written: AtomicBool::new(false),
             unforeseen: Mutex::new(Vec::new()),
             cpu_writes: AtomicU64::new(0),
@@ -656,6 +657,39 @@ impl Device {
 enum CommandState {
     Compute(WeakComputePipelineState, ComputeProgram, IdStamp, Named),
     Render(WeakRenderPipelineState, RenderProgram, IdStamp, Named),
+}
+
+/// What the CPU left beside a buffer's records: the pipeline state it set on each command it
+/// set one on (`CommandState`), by index, none for the rest, so a buffer of commands never
+/// encoded holds nothing for them; and the kept recordings of its chunks (`kept_commands.rs`),
+/// which each write of a command forgets.
+#[derive(Default)]
+struct Commands {
+    states: BTreeMap<u32, CommandState>,
+    kept: KeptChunks,
+}
+
+impl Commands {
+    /// The state the CPU set on command `index`.
+    fn state(&self, index: u32) -> Option<CommandState> {
+        self.states.get(&index).cloned()
+    }
+
+    /// The states the CPU set on commands `range`, in order.
+    fn states_in(&self, range: Range<u32>) -> Vec<CommandState> {
+        self.states
+            .range(range)
+            .map(|(_, set)| set.clone())
+            .collect()
+    }
+
+    /// Set `set` as the state the CPU set on command `index` (none: none).
+    fn set(&mut self, index: u32, set: Option<CommandState>) {
+        match set {
+            Some(set) => self.states.insert(index, set),
+            None => self.states.remove(&index),
+        };
+    }
 }
 
 /// The ID a state had when the CPU set it on a command, and the serial of its hold of the ID,
@@ -814,6 +848,13 @@ enum Unmatched {
 /// and the getter reads without announcing.
 #[derive(Debug, Default)]
 pub(super) struct Released(Vec<(u32, u64, Unmatched)>);
+
+impl Released {
+    /// Whether no command runs otherwise than Metal's may.
+    pub(super) fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+}
 
 /// The bytes of the records of `size` commands, header included.
 fn storage_length(size: u32) -> u64 {
@@ -979,9 +1020,9 @@ struct IcbShared {
     size: u32,
     /// The options asked for, the hazard tracking mode resolved.
     options: ResourceOptions,
-    /// The pipeline state the CPU set on each command (`CommandState`). Held while the CPU
-    /// writes a record, so writes are one at a time.
-    pipelines: Mutex<Vec<Option<CommandState>>>,
+    /// The pipeline state the CPU set on each command, and the kept recordings of its chunks
+    /// ([`Commands`]). Held while the CPU writes a record, so writes are one at a time.
+    pipelines: Mutex<Commands>,
     /// An encoder made the buffer resident for writing: the GPU may write its records from then
     /// on (`written_by_gpu`). Set, and read where it decides, under `unforeseen`'s lock.
     gpu_written: AtomicBool,
@@ -1450,8 +1491,14 @@ impl IndirectCommandBuffer {
         Ok(read(&view))
     }
 
-    /// Write `record` as command `index` (below the size). The caller holds `pipelines`.
-    fn write(&self, index: u32, record: &CommandRecord) -> Result<(), Error> {
+    /// Write `record` as command `index` (below the size), under `commands`, the caller's hold
+    /// of `pipelines`.
+    fn write(
+        &self,
+        commands: &mut Commands,
+        index: u32,
+        record: &CommandRecord,
+    ) -> Result<(), Error> {
         let mut bytes = [0; COMMAND_BYTES];
         record
             .encode_into(&mut bytes)
@@ -1464,14 +1511,16 @@ impl IndirectCommandBuffer {
                 COMMAND_BYTES,
             );
         }
-        self.wrote();
+        self.wrote(commands, index..index + 1);
         Ok(())
     }
 
-    /// Count a write of the CPU's ([`cpu_writes`](Self::cpu_writes)), made. The caller holds
-    /// `pipelines`.
-    fn wrote(&self) {
+    /// Count a write of the CPU's of commands `range` ([`cpu_writes`](Self::cpu_writes)), made,
+    /// and forget the kept recordings of the chunks they lie in (`kept_commands.rs`), under
+    /// `commands`, the caller's hold of `pipelines`.
+    fn wrote(&self, commands: &mut Commands, range: Range<u32>) {
         self.0.cpu_writes.fetch_add(1, Ordering::Release);
+        commands.kept.wrote(range);
     }
 
     /// The CPU's writes of the records, and of the slots past them, so far: setters, resets and
@@ -1486,12 +1535,12 @@ impl IndirectCommandBuffer {
 
     /// Reset commands `range` (inside the size).
     fn reset_commands(&self, range: Range<u32>) -> Result<(), Error> {
-        let mut pipelines = lock(&self.0.pipelines);
+        let mut commands = lock(&self.0.pipelines);
         for index in range.clone() {
-            self.write(index, &CommandRecord::default())?;
-            pipelines[index as usize] = None;
+            self.write(&mut commands, index, &CommandRecord::default())?;
+            commands.set(index, None);
         }
-        self.clear_overflow(range)
+        self.clear_overflow(&mut commands, range)
     }
 
     /// `range` as commands, refused unless it starts below the size and ends at or before it, as
@@ -1677,7 +1726,7 @@ impl IndirectCommandBuffer {
     /// setter writes its field, the rest of the record as the GPU and the CPU left it
     /// (`CommandRecord::write_field`); then what the record holds joins what its records may.
     fn edit(&self, index: u32, field: RecordField, set: Option<CommandState>) -> Result<(), Error> {
-        let mut pipelines = lock(&self.0.pipelines);
+        let mut commands = lock(&self.0.pipelines);
         let mut bytes = self.record_now(index)?;
         let written =
             CommandRecord::write_field(&mut bytes, field).map_err(|error| match error {
@@ -1696,12 +1745,11 @@ impl IndirectCommandBuffer {
                 written.len(),
             );
         }
-        self.wrote();
-        let pipeline = &mut pipelines[index as usize];
+        self.wrote(&mut commands, index..index + 1);
         if let Some(set) = set {
-            *pipeline = Some(set);
+            commands.set(index, Some(set));
         }
-        let named = pipeline.as_ref().map(CommandState::named);
+        let named = commands.states.get(&index).map(CommandState::named);
         let writes = RecordView::new(&bytes).map_err(|_| undecodable())?.writes();
         self.0.written.add_record(writes, named);
         Ok(())
@@ -1715,11 +1763,13 @@ impl IndirectCommandBuffer {
         index: u32,
         reset: impl FnOnce(&mut CommandRecord, &mut Option<CommandState>),
     ) -> Result<(), Error> {
-        let mut pipelines = lock(&self.0.pipelines);
+        let mut commands = lock(&self.0.pipelines);
         let mut record = self.record(index)?;
-        reset(&mut record, &mut pipelines[index as usize]);
-        self.write(index, &record)?;
-        self.clear_overflow(index..index + 1)
+        let mut set = commands.states.remove(&index);
+        reset(&mut record, &mut set);
+        commands.set(index, set);
+        self.write(&mut commands, index, &record)?;
+        self.clear_overflow(&mut commands, index..index + 1)
     }
 
     /// Set `set`'s buffer on command `index`, for `call`, at the buffer's address plus the offset's
@@ -1775,8 +1825,8 @@ impl IndirectCommandBuffer {
         // Past the slots the record holds no function binds a buffer (Metal's argument tables
         // hold 31): plain Metal keeps it for its private getters, and so does the overflow.
         if slot >= RECORD_BUFFERS {
-            let _writing = lock(&self.0.pipelines);
-            return self.write_overflow(index, stage, slot, Some(binding));
+            let mut commands = lock(&self.0.pipelines);
+            return self.write_overflow(&mut commands, index, stage, slot, Some(binding));
         }
         let field = RecordField::Buffer {
             stage,
@@ -1867,9 +1917,11 @@ impl IndirectCommandBuffer {
     }
 
     /// Write `binding` (none: unset) at `slot` of `stage` of command `index`, past the record's
-    /// slots and below the descriptor's count. The caller holds `pipelines`.
+    /// slots and below the descriptor's count, under `commands`, the caller's hold of
+    /// `pipelines`.
     fn write_overflow(
         &self,
+        commands: &mut Commands,
         index: u32,
         stage: BufferStage,
         slot: u32,
@@ -1891,7 +1943,7 @@ impl IndirectCommandBuffer {
         bytes[..8].copy_from_slice(&address.to_le_bytes());
         bytes[8..].copy_from_slice(&stride.to_le_bytes());
         self.write_overflow_at(at, &bytes)?;
-        self.wrote();
+        self.wrote(commands, index..index + 1);
         Ok(())
     }
 
@@ -1974,8 +2026,9 @@ impl IndirectCommandBuffer {
     }
 
     /// Clear the slots past the record's of commands `range`, as a CPU reset does: all but
-    /// their dispatch words ([`Overflow::cpu_reset_bytes`]). The caller holds `pipelines`.
-    fn clear_overflow(&self, range: Range<u32>) -> Result<(), Error> {
+    /// their dispatch words ([`Overflow::cpu_reset_bytes`]), under `commands`, the caller's hold
+    /// of `pipelines`.
+    fn clear_overflow(&self, commands: &mut Commands, range: Range<u32>) -> Result<(), Error> {
         let Some(overflow) = self.0.overflow.as_ref() else {
             return Ok(());
         };
@@ -1983,7 +2036,7 @@ impl IndirectCommandBuffer {
             .storage
             .contents()
             .ok_or_else(|| internal("an indirect command buffer's overflow is not mapped"))?;
-        for index in range {
+        for index in range.clone() {
             let bytes = overflow.cpu_reset_bytes(index);
             // SAFETY: as `write_overflow`'s; `bytes` lies inside the overflow.
             unsafe {
@@ -1994,7 +2047,7 @@ impl IndirectCommandBuffer {
                 );
             }
         }
-        self.wrote();
+        self.wrote(commands, range);
         Ok(())
     }
 
@@ -2142,9 +2195,9 @@ impl IndirectCommandBuffer {
             return;
         }
         let sets: Vec<Option<CommandState>> = {
-            let pipelines = lock(&self.0.pipelines);
+            let commands = lock(&self.0.pipelines);
             held.iter()
-                .map(|&(index, _)| pipelines.get(index as usize).cloned().flatten())
+                .map(|&(index, _)| commands.state(index))
                 .collect()
         };
         let read = held
@@ -2215,14 +2268,14 @@ impl IndirectCommandBuffer {
         &self,
         index: u32,
     ) -> Result<(Option<NonZeroU64>, Option<NonZeroU64>, Option<CommandState>), Error> {
-        let pipelines = lock(&self.0.pipelines);
+        let commands = lock(&self.0.pipelines);
         let (reported, runs) = self.read_record(index, |view| {
             (
                 view.pipeline(),
                 view.pipeline().or(view.retained_pipeline()),
             )
         })?;
-        Ok((reported, runs, pipelines[index as usize].clone()))
+        Ok((reported, runs, commands.state(index)))
     }
 
     /// What [`commands`](Self::commands) reads of compute command `index`'s pipeline state
@@ -2374,6 +2427,35 @@ impl IndirectCommandBuffer {
         Ok(range.start as u32..range.end as u32)
     }
 
+    /// The kept recordings of the chunks of commands `range` (inside the size), in order, `None`
+    /// for a chunk none is kept of (`kept_commands.rs`); whether an execution last recorded one of
+    /// them otherwise than plainly; and the CPU's writes so far ([`cpu_writes`](Self::cpu_writes)),
+    /// read under the same lock.
+    pub(super) fn kept_chunks(
+        &self,
+        range: Range<u32>,
+    ) -> (Vec<Option<Arc<KeptChunk>>>, bool, u64) {
+        let commands = lock(&self.0.pipelines);
+        let kept = kept_commands::chunks(range.clone())
+            .map(|(chunk, _)| commands.kept.get(chunk))
+            .collect();
+        (kept, commands.kept.stepped_in(range), self.cpu_writes())
+    }
+
+    /// Keep `kept`, the recording of chunk `chunk` from its records as the CPU's writes `read_at`
+    /// left them, or (`None`) note that it was not plain: only where no write came since and the
+    /// GPU may not write the records.
+    pub(super) fn keep_chunk(&self, chunk: u32, kept: Option<Arc<KeptChunk>>, read_at: u64) {
+        let mut commands = lock(&self.0.pipelines);
+        if self.cpu_writes() != read_at || self.gpu_written() {
+            return;
+        }
+        match kept {
+            Some(kept) => commands.kept.keep(chunk, kept),
+            None => commands.kept.stepped(chunk),
+        }
+    }
+
     /// The records' buffer: what an encoder makes resident for the buffer, and where a function's
     /// command encoders write (`gpu_resource_id`).
     pub(super) fn storage(&self) -> &Buffer {
@@ -2402,6 +2484,9 @@ impl IndirectCommandBuffer {
                 if pending.is_empty() {
                     watched.clear();
                     self.0.gpu_written.store(true, Ordering::Release);
+                    drop(watched);
+                    // No execution reads the CPU's records at commit from now on.
+                    lock(&self.0.pipelines).kept.clear();
                     return;
                 }
                 pending
@@ -2434,12 +2519,7 @@ impl IndirectCommandBuffer {
     /// them as Metal's copied records do (`released_programs.rs`).
     pub(super) fn keep_copied(&self, source: &IndirectCommandBuffer, range: Range<u32>) {
         let mut copied = lock(&source.0.kept).clone();
-        let sets: Vec<CommandState> = {
-            let pipelines = lock(&source.0.pipelines);
-            range
-                .filter_map(|index| pipelines.get(index as usize).cloned().flatten())
-                .collect()
-        };
+        let sets: Vec<CommandState> = { lock(&source.0.pipelines).states_in(range) };
         // Upgraded with no lock of either buffer held: a state dropped here releases its ID.
         for (stamp, program) in sets.iter().filter_map(CommandState::kept) {
             copied.keep(stamp.id, stamp.serial, program);
@@ -2544,12 +2624,7 @@ impl IndirectCommandBuffer {
         if kept.is_empty() {
             return Some(states);
         }
-        let sets: Vec<CommandState> = {
-            let pipelines = lock(&self.0.pipelines);
-            range
-                .filter_map(|index| pipelines.get(index as usize).cloned().flatten())
-                .collect()
-        };
+        let sets: Vec<CommandState> = { lock(&self.0.pipelines).states_in(range) };
         // Upgraded with no lock of the buffer held: a state dropped here releases its ID.
         let set_live = sets
             .iter()
@@ -2831,9 +2906,9 @@ impl IndirectCommandBuffer {
             .shared()
             .counts
             .indirect_records_read(range.len() as u64);
-        let pipelines = lock(&self.0.pipelines);
+        let commands = lock(&self.0.pipelines);
         range
-            .map(|index| Ok((self.record(index)?, pipelines[index as usize].clone())))
+            .map(|index| Ok((self.record(index)?, commands.state(index))))
             .collect()
     }
 
@@ -2916,12 +2991,7 @@ impl IndirectCommandBuffer {
     /// (`name_state`), which an execution the GPU alone runs, by the states alive at its commit
     /// (`gpu_execute.rs`), does not hold.
     pub(super) fn sets_a_released_state(&self, range: Range<u32>) -> bool {
-        let sets: Vec<CommandState> = {
-            let pipelines = lock(&self.0.pipelines);
-            range
-                .filter_map(|index| pipelines.get(index as usize).cloned().flatten())
-                .collect()
-        };
+        let sets: Vec<CommandState> = { lock(&self.0.pipelines).states_in(range) };
         // Upgraded with no lock of the buffer held: a state dropped here releases its ID.
         sets.iter().any(CommandState::released)
     }
@@ -2935,10 +3005,10 @@ impl IndirectCommandBuffer {
         of: &Of<S>,
     ) -> (Vec<Option<S>>, Released) {
         let sets: Vec<Option<CommandState>> = {
-            let pipelines = lock(&self.0.pipelines);
+            let commands = lock(&self.0.pipelines);
             (start..)
                 .take(records.len())
-                .map(|index| pipelines.get(index as usize).cloned().flatten())
+                .map(|index| commands.state(index))
                 .collect()
         };
         let mut unmatched = Vec::new();

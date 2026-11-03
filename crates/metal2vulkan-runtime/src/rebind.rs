@@ -726,6 +726,11 @@ impl Holds {
         self.keys.is_empty()
     }
 
+    /// Take `other`'s holds, which it then lets go of nothing of.
+    pub(super) fn join(&mut self, mut other: Holds) {
+        self.keys.append(&mut other.keys);
+    }
+
     /// What a command an encoder encodes again took of `key` ([`Rebinds::pin`]), held by
     /// nothing here.
     pub(super) fn pin(&self, key: ResourceKey) -> Option<Pinned> {
@@ -819,6 +824,11 @@ impl Taken {
     /// Note that a command named `key`.
     pub(super) fn name(&mut self, key: ResourceKey) {
         self.named.insert(key);
+    }
+
+    /// The keys a command named.
+    pub(super) fn named(&self) -> &BTreeSet<ResourceKey> {
+        &self.named
     }
 
     /// Whether a command named a buffer over host pages ([`named_pins`](Self::named_pins) holds

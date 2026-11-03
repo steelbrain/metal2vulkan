@@ -489,6 +489,19 @@ impl Residency {
         used
     }
 
+    /// What a kept recording of commands that resolved and bound against it was recorded from
+    /// (`kept_commands.rs`): its resources as the bind state states them, and each one's key,
+    /// in order.
+    pub(super) fn kept_key(&self) -> (Vec<UsedResource>, Vec<ResourceKey>) {
+        let keys = self.used.iter().map(|(used, ..)| match used {
+            Used::Buffer(buffer) => buffer.identity().key,
+            Used::Heap { bytes, .. } => bytes.identity().key,
+            Used::Texture(texture) => texture.use_key(),
+            Used::IndirectCommandBuffer(icb) => icb.storage().identity().key,
+        });
+        (self.used_resources(), keys.collect())
+    }
+
     /// The resource of `token`.
     pub(super) fn get(&self, token: u32) -> Option<&Used> {
         self.used.get(token as usize).map(|(used, ..)| used)

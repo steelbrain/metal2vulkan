@@ -1567,6 +1567,10 @@ impl<K: Copy + Ord + Hash> KeptUses<K> {
         }
     }
 
+    fn is_empty(&self) -> bool {
+        self.uses.is_empty()
+    }
+
     fn push(&mut self, used: Use<K>) {
         if used.range.is_empty() {
             return;
@@ -1602,6 +1606,11 @@ impl<K: Copy + Ord + Hash> IndirectReads<K> {
         IndirectReads {
             reads: KeptUses::new(),
         }
+    }
+
+    /// Whether it holds no read.
+    pub(super) fn is_empty(&self) -> bool {
+        self.reads.is_empty()
     }
 
     /// Add the indirect argument reads of a draw with `uses`.
@@ -1657,6 +1666,11 @@ impl<K: Copy + Ord + Hash> GeometryWrites<K> {
         GeometryWrites {
             writes: KeptUses::new(),
         }
+    }
+
+    /// Whether it holds no write.
+    pub(super) fn is_empty(&self) -> bool {
+        self.writes.is_empty()
     }
 
     /// Add the writes before its fragments of a draw with `uses`: a use that writes in one of
@@ -1914,13 +1928,11 @@ impl<K: Copy + Ord + Hash> EncoderUses<K> {
 
 impl<K> Summary<K> {
     /// The tracked uses.
-    #[cfg(test)]
     pub(super) fn uses(&self) -> &[Use<K>] {
         &self.uses
     }
 
     /// Every stage the encoder's commands ran in.
-    #[cfg(test)]
     pub(super) fn stages(&self) -> vk::PipelineStageFlags2 {
         self.stages
     }

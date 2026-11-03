@@ -136,6 +136,7 @@ mod indirect_dispatch;
 mod indirect_execute;
 mod interop;
 mod kept_bytes;
+mod kept_commands;
 mod key_hash;
 mod library;
 mod linear_attachment;

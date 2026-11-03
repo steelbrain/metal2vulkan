@@ -964,3 +964,16 @@ else.
   around it in about 1.1e9 checks), while a loading and storing pass rewrites the whole 32x32
   tile it draws in (`shadow.rs`, **Stored attachments**). A blit's partial writes keep the
   kernel's rule. Not announced.
+- **An execution of indirect commands costs a decode and a recording per command at every commit
+  where it runs no kept recording** (`kept_commands.rs`). An execution of commands the CPU encoded
+  runs each 256-command chunk that no write reached since an earlier execution recorded it, under
+  the same inputs, from that recording, reading no record (`WorkCounts::indirect_chunks_kept`,
+  `indirect_commands_kept`). Every other execution reads and records each of its commands at each
+  commit: one of a buffer the GPU may write (from its first `use_resource` for writing or blit
+  into it on), a host step, a range read from a buffer, one with a check, a visibility result,
+  tile threadgroup memory, a rasterization-rate map, a memoryless attachment, a shadowed texture,
+  or an inherited table that binds anything, one in a command buffer with an executed-commands
+  handler, a compute one inside command predication, and one of a range holding a chunk whose last
+  recording was not plain (a mesh or patch draw, a draw that splits its instance or needs work
+  around it, one that meets a notice its device announces at each occurrence), until a write
+  reaches that chunk. Not announced.

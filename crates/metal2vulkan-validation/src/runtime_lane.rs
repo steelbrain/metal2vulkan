@@ -404,6 +404,8 @@ mod event_round_trips;
 #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
 mod events;
 #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+mod execution_costs;
+#[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
 mod executions;
 #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
 mod exits;
@@ -552,6 +554,8 @@ mod keep_alives;
 mod kept_apart;
 #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
 mod kept_buffer_bytes;
+#[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+mod kept_commands;
 #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
 mod kept_images;
 #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]

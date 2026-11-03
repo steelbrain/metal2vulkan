@@ -348,6 +348,7 @@ use std::time::Instant;
 mod ahead;
 mod cause;
 mod gpu;
+mod kept;
 
 /// The call an execution's refusals name.
 const CALL: &str = "execute_commands_in_buffer";
@@ -1362,11 +1363,12 @@ pub(super) struct PassStorage {
     pub(super) shadow: Option<ShadowStencil>,
 }
 
-/// One run of an execution's commands: the secondary command buffer its draws recorded into,
-/// and the shape and views of the render pass instance it runs in where a command's draw needed
-/// another than its instance's (attachments it fetches as storage images, views of its own).
+/// One run of an execution's commands: the secondary command buffers its draws recorded into, in
+/// order (one, but for the chunks of a kept execution's: `kept.rs`), and the shape and views of
+/// the render pass instance it runs in where a command's draw needed another than its instance's
+/// (attachments it fetches as storage images, views of its own).
 struct Run {
-    draws: vk::CommandBuffer,
+    draws: Vec<vk::CommandBuffer>,
     other: Option<(PassShape, ViewSetup)>,
     /// Its draws test and write the stencil in the shader: the shadow is filled before it and
     /// copied back after it, as around an encoder's instance of such draws.
@@ -2010,6 +2012,19 @@ impl RenderExecution {
                 self.record_gpu(core, (command_buffer, residency), form, (storage, rendered))?;
             return self.finish(encoder, found, rendered, &device);
         }
+        // Commands the CPU encoded, which their chunks' kept recordings may run (`kept.rs`).
+        if !step {
+            if let Some(keeping) = self.keeping(command_buffer, residency, rendered) {
+                let rendering = (storage, rendered);
+                return self.record_kept(
+                    core,
+                    (command_buffer, residency),
+                    keeping,
+                    found,
+                    rendering,
+                );
+            }
+        }
         let (commands, faults) = self.commands(&device, step)?;
         found.faults = ReplayFaults(found.faults.0 | faults.0);
         // What the commands run, for the command buffer's handlers (`executed_commands.rs`).
@@ -2063,8 +2078,27 @@ impl RenderExecution {
             (storage, layout, residency),
             forms,
         );
+        self.replay(
+            &mut encoder,
+            commands.into_iter().flatten(),
+            residency,
+            found,
+        )?;
+        self.finish(encoder, found, rendered, &device)
+    }
+
+    /// Replay `commands` through `encoder` (`record`'s), resolving against `residency`, the
+    /// command buffer's, what their draws found noted into `found`. A mesh or patch draw is no
+    /// plain draw (`RenderLowering::replay_plain`).
+    fn replay(
+        &self,
+        encoder: &mut RenderLowering,
+        commands: impl IntoIterator<Item = Command>,
+        residency: &Residency,
+        found: &mut Found,
+    ) -> Result<(), Error> {
         let inherited = self.icb.descriptor().inherit_buffers;
-        for (record, own) in commands.into_iter().flatten() {
+        for (record, own) in commands {
             // A command's barrier: its draw records into the execution's next run, which its
             // pass runs in a render pass instance of its own after a barrier from everything
             // before, so it sees the earlier draws' writes as plain Metal's does; but where the
@@ -2168,7 +2202,10 @@ impl RenderExecution {
                 Draw::Indexed(draw, (buffer, offset)) => {
                     encoder.draw_indexed(CALL, draw, &buffer, offset)?;
                 }
-                Draw::Mesh(grid, object, mesh) => encoder.draw_mesh(CALL, grid, object, mesh)?,
+                Draw::Mesh(grid, object, mesh) => {
+                    encoder.replay_plain = false;
+                    encoder.draw_mesh(CALL, grid, object, mesh)?
+                }
                 Draw::Patches {
                     mut draw,
                     patch_indices,
@@ -2176,6 +2213,7 @@ impl RenderExecution {
                     factors,
                     scale: _,
                 } => {
+                    encoder.replay_plain = false;
                     // Metal draws a command's patches with its pipeline's control points, whatever
                     // the record holds (measured).
                     draw.control_points = control_points.unwrap_or(draw.control_points);
@@ -2201,7 +2239,7 @@ impl RenderExecution {
                 }
             }
         }
-        self.finish(encoder, found, rendered, &device)
+        Ok(())
     }
 
     /// The recording `encoder` made of the commands, its runs ended (`record`'s): what its draws
@@ -2281,7 +2319,7 @@ impl RenderExecution {
                 })
                 .collect::<Result<Vec<_>, Error>>()?;
             runs.push(Run {
-                draws: run.draws,
+                draws: vec![run.draws],
                 other,
                 shadow: run.shadow,
                 steps,
@@ -2289,9 +2327,9 @@ impl RenderExecution {
                 before: run.before,
             });
         }
-        for run in &runs {
+        for raw in runs.iter().flat_map(|run| &run.draws) {
             // SAFETY: only this recording records the secondary command buffers.
-            unsafe { core.command_buffer().end_raw(run.draws) }.map_err(vulkan)?;
+            unsafe { core.command_buffer().end_raw(*raw) }.map_err(vulkan)?;
         }
         Ok(Recorded {
             core,
@@ -2405,6 +2443,8 @@ impl RenderExecution {
             draw_calls: 0,
             tile_dispatch_calls: 0,
             replaying: true,
+            replay_plain: true,
+            plain_drawn: false,
             executing_encoder: Some(self.encoder),
             rerouting: false,
             forms,
@@ -3149,14 +3189,14 @@ impl DeferredPass {
             let mut runs: Vec<(Option<&Run>, Vec<vk::CommandBuffer>)> = vec![(None, Vec::new())];
             for piece in &instance.pieces {
                 let (first, later) = match *piece {
-                    Piece::Draws(draws) => (draws, &[][..]),
+                    Piece::Draws(draws) => (vec![draws], &[][..]),
                     // A draw's own secondary, recorded once its pipeline is made.
                     Piece::Pending(index) => {
                         let draw = self
                             .pending
                             .get(index)
                             .ok_or_else(|| internal("a pending draw the pass does not hold"))?;
-                        (draw.record(command_buffer)?, &[][..])
+                        (vec![draw.record(command_buffer)?], &[][..])
                     }
                     Piece::Execution(index) => match recorded[index].split_first() {
                         // An execution's first run shares its instance's render pass instance
@@ -3164,15 +3204,15 @@ impl DeferredPass {
                         Some((first, _)) if !first.before.is_empty() => {
                             return Err(internal("an execution's first run with steps before it"))
                         }
-                        Some((first, later)) => (first.draws, later),
+                        Some((first, later)) => (first.draws.clone(), later),
                         None => return Err(internal("an execution of no runs")),
                     },
                 };
                 match runs.last_mut() {
-                    Some((last, run)) if last.is_none_or(Run::takes_more) => run.push(first),
-                    _ => runs.push((None, vec![first])),
+                    Some((last, run)) if last.is_none_or(Run::takes_more) => run.extend(first),
+                    _ => runs.push((None, first)),
                 }
-                runs.extend(later.iter().map(|run| (Some(run), vec![run.draws])));
+                runs.extend(later.iter().map(|run| (Some(run), run.draws.clone())));
             }
             let count = runs.len();
             let run_passes = instance

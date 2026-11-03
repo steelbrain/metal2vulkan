@@ -106,6 +106,30 @@ impl Retained {
         self.holds().push(Held::Shared(object));
     }
 
+    /// Hold what `other` holds too, after its own, in its order.
+    pub(super) fn join(&mut self, other: Retained) {
+        let Some(mut holds) = other.holds else {
+            return;
+        };
+        self.holds().append(&mut holds.0);
+    }
+
+    /// Another reference to each object it holds, in order, where every hold is of a shared
+    /// object (`kept_commands.rs`); `None` where one is boxed.
+    pub(super) fn all_shared(&self) -> Option<Vec<Arc<dyn Any + Send + Sync>>> {
+        let Some(holds) = &self.holds else {
+            return Some(Vec::new());
+        };
+        holds
+            .0
+            .iter()
+            .map(|held| match held {
+                Held::Shared(object) => Some(Arc::clone(object)),
+                Held::Boxed(_) => None,
+            })
+            .collect()
+    }
+
     /// The holds' storage, made at the first.
     fn holds(&mut self) -> &mut Vec<Held> {
         let holds = self

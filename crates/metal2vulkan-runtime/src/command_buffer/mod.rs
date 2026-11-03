@@ -85,6 +85,7 @@ use super::gpu_pools::{IndexPool, PoolKind, PoolLease};
 use super::gpu_time::{self, KernelTimes, Life, Placement, Stamped, Times};
 use super::heap::Heap;
 use super::heap_sets::HeapUse;
+use super::kept_commands::KeptContext;
 use super::live_buffers::LiveTable;
 use super::pipeline::budget::Urgency;
 use super::pipeline::kept::StepNumbers;
@@ -552,6 +553,16 @@ pub(super) struct State {
     /// apart (`rerun.rs`): every `VkCommandBuffer` the command buffer hands out meanwhile comes
     /// from it, and goes back to it for the next run again.
     rerun_pool: Option<Arc<Mutex<CommandPool>>>,
+    /// The context of a chunk of an indirect command buffer's commands the commit records to keep
+    /// (`kept_commands.rs`), while it does: every `VkCommandBuffer` the command buffer hands out
+    /// meanwhile comes from its pool, begun for simultaneous use where it is a render pass's
+    /// secondary or a segment's primary, and every set and upload from its arenas; and how many
+    /// its pool had handed out when it was lent.
+    kept: Option<(Arc<KeptContext>, usize)>,
+    /// How many times a command reached what the command buffer alone holds for its commands: its
+    /// execution status words, index pool and mesh records pool. A recording that reached them is
+    /// not kept (`kept_commands.rs`).
+    own_reached: u64,
     /// The ended encoders' recordings, in encoding order.
     recorded: Vec<Recorded>,
     /// The last ended encoder's last `VkCommandBuffer`, still recording: its batch's end goes
@@ -1774,6 +1785,12 @@ impl State {
         }
     }
 
+    /// Whether a chunk's context is lent (`CommandBuffer::lend_kept`): the command buffers it
+    /// hands out are begun for simultaneous use.
+    pub(super) fn keeping(&self) -> bool {
+        self.kept.is_some()
+    }
+
     /// The device address of the command buffer's execution status words, uploaded (all zero,
     /// `ExecutionStatus::initial`) when a command first reaches them; `None` on a device without
     /// device addresses.
@@ -1790,6 +1807,7 @@ impl State {
     /// The command buffer's execution status words, uploaded (all zero, `ExecutionStatus::initial`)
     /// when a command first reaches them.
     pub(super) fn status_words(&mut self, device: &Device) -> Result<Upload, Error> {
+        self.own_reached += 1;
         if let Some(words) = &self.status_words {
             return Ok(words.clone());
         }
@@ -1809,6 +1827,7 @@ impl State {
     /// `CommandQueue::id`), leased from the device (`gpu_pools.rs`): the block's `VkBuffer` and
     /// bytes, the header's included.
     pub(super) fn index_pool(&mut self, device: &Device, queue: u64) -> Result<IndexPool, Error> {
+        self.own_reached += 1;
         if let Some((counter, block)) = &self.index_pool {
             return Ok(IndexPool::of(counter, block));
         }
@@ -1831,6 +1850,7 @@ impl State {
         device: &Device,
         queue: u64,
     ) -> Result<(vk::Buffer, u64), Error> {
+        self.own_reached += 1;
         if let Some(pool) = &self.mesh_pool {
             return Ok((pool.raw(), pool.bytes()));
         }
@@ -1896,6 +1916,8 @@ impl CommandBuffer {
                 committing: false,
                 pool: None,
                 rerun_pool: None,
+                kept: None,
+                own_reached: 0,
                 recorded: Vec::new(),
                 tail: None,
                 folds: Vec::new(),
@@ -2188,6 +2210,42 @@ impl CommandBuffer {
         let live = device.shared().live_buffers.table(device)?;
         self.state().keep_stepped_table(&live);
         Ok(residency.with_live(live))
+    }
+
+    /// The queue family of its queue's `VkQueue`.
+    pub(super) fn queue_family(&self) -> u32 {
+        let shared = self.0.device.shared();
+        shared.queue_family_of(self.0.queue.vk_queue())
+    }
+
+    /// Lend `context` to the command buffer while the commit records a chunk to keep
+    /// (`State::kept`), its arenas taking every set and upload meanwhile; `None`: take back the
+    /// one lent, each `VkCommandBuffer` it handed out meanwhile ended there and counted as ended
+    /// among the command buffer's own (`CommandBufferShared::end_raw`), which no longer counts it.
+    pub(super) fn lend_kept(&self, context: Option<&Arc<KeptContext>>) {
+        let mut state = self.state();
+        state
+            .uploads
+            .lend(context.map(|context| Arc::clone(&context.uploads)));
+        state
+            .descriptors
+            .lend(context.map(|context| Arc::clone(&context.descriptors)));
+        let lent = match context {
+            Some(context) => state
+                .kept
+                .replace((Arc::clone(context), context.handed_out())),
+            None => state.kept.take(),
+        };
+        if let (None, Some((context, handed))) = (context, lent) {
+            let ended = context.handed_out().saturating_sub(handed) as u64;
+            self.0.raws_ended.fetch_sub(ended, Ordering::Relaxed);
+        }
+    }
+
+    /// How many times a command reached what the command buffer alone holds for its commands
+    /// (`State::own_reached`).
+    pub(super) fn own_reached(&self) -> u64 {
+        self.state().own_reached
     }
 
     /// An encoder's primary command buffer, from this command buffer's pool, made on first use:
@@ -4116,6 +4174,9 @@ impl CommandBufferShared {
         state: &mut State,
         level: vk::CommandBufferLevel,
     ) -> Result<vk::CommandBuffer, Error> {
+        if let Some((context, _)) = &state.kept {
+            return context.hand_out(level).map(|(raw, _)| raw);
+        }
         if let Some(pool) = &state.rerun_pool {
             return hand_out(&self.device, &mut lock(pool), level);
         }

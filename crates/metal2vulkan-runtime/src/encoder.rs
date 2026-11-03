@@ -43,6 +43,7 @@ use super::index_rewrite::{
     self, CommandedList, GatherHeld, GatherRequest, GatherRuns, GatheredList,
     IndirectGatherRequest, RewriteRunRequest,
 };
+use super::kept_commands::KeptEffects;
 use super::noted_apart::{NotedApart, NotedInto};
 use super::pending_dispatch::PendingDispatch;
 use super::pipeline::VariantObjects;
@@ -238,6 +239,20 @@ pub(super) struct RecordedSegment {
     /// Why some of its commands ran nothing: records the host step could not run
     /// (`indirect_execute.rs`), which the execution report states.
     pub(super) faults: ReplayFaults,
+}
+
+impl RecordedSegment {
+    /// `other`, recorded after it, joined into it: one segment of both.
+    pub(super) fn join(&mut self, other: RecordedSegment) {
+        self.raws.extend(other.raws);
+        self.summary.join(other.summary);
+        self.retained.join(other.retained);
+        self.executions.extend(other.executions);
+        self.keys.extend(other.keys);
+        self.taken.join(other.taken);
+        self.resident_misses = self.resident_misses.wrapping_add(other.resident_misses);
+        self.faults = ReplayFaults(self.faults.0 | other.faults.0);
+    }
 }
 
 /// The state every open encoder carries.
@@ -533,13 +548,17 @@ impl EncoderCore {
     /// A core of `command_buffer` over a new `VkCommandBuffer` of its pool, begun, that abandons
     /// nothing when dropped.
     fn segment_raw(command_buffer: &CommandBuffer, ordered: bool) -> Result<EncoderCore, Error> {
-        let raw = {
+        let (raw, keeping) = {
             let mut state = command_buffer.state();
-            command_buffer.allocate_raw(&mut state)?
+            (command_buffer.allocate_raw(&mut state)?, state.keeping())
         };
         let device = command_buffer.device().shared().vk();
-        let begin = vk::CommandBufferBeginInfo::default()
-            .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT);
+        // A chunk kept for later command buffers (`kept_commands.rs`) may run in several at once.
+        let submits = match keeping {
+            true => vk::CommandBufferUsageFlags::SIMULTANEOUS_USE,
+            false => vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT,
+        };
+        let begin = vk::CommandBufferBeginInfo::default().flags(submits);
         // SAFETY: the command buffer was just allocated from the pool, and only this core
         // records it.
         unsafe { device.begin_command_buffer(raw, &begin) }.map_err(vulkan)?;
@@ -548,7 +567,22 @@ impl EncoderCore {
             .shared()
             .counts
             .encoder_command_buffer_begun(Begun::Segment);
-        Ok(EncoderCore {
+        Ok(EncoderCore::over(command_buffer, raw, ordered))
+    }
+
+    /// A core that records apart for a segment of `command_buffer`, unordered (`kept_commands.rs`):
+    /// a render execution's chunk, its draws into a secondary of their own, which notes, holds and
+    /// counts apart from the segment's core until that core takes what it did
+    /// ([`absorb`](Self::absorb)). It has no `VkCommandBuffer` until a command records outside the
+    /// draws' secondaries; dropped, it abandons nothing.
+    pub(super) fn capture(command_buffer: &CommandBuffer) -> EncoderCore {
+        EncoderCore::over(command_buffer, vk::CommandBuffer::null(), false)
+    }
+
+    /// A core of `command_buffer` over `raw`, begun, or none (null), recording nothing yet, that
+    /// abandons nothing when dropped.
+    fn over(command_buffer: &CommandBuffer, raw: vk::CommandBuffer, ordered: bool) -> EncoderCore {
+        EncoderCore {
             open: OpenGuard {
                 command_buffer: command_buffer.clone(),
                 ended: true,
@@ -583,7 +617,7 @@ impl EncoderCore {
             replaying: crate::replay::is_replaying(),
             last_set_zero: LastSetZero::default(),
             _not_sync: PhantomData,
-        })
+        }
     }
 
     /// The device.
@@ -2464,6 +2498,226 @@ impl EncoderCore {
             executions,
             keys,
             taken,
+            resident_misses: 0,
+            faults: ReplayFaults::default(),
+        })
+    }
+
+    /// End a core of [`capture`](Self::capture): the gather runs left open recorded, and what it
+    /// recorded outside the draws' secondaries, if anything, ended. Refused (internal) where it
+    /// deferred work, held a render pass or used a shadowed texture, which no execution's chunk
+    /// does.
+    pub(super) fn finish_capture(mut self) -> Result<Captured, Error> {
+        if !self.segments.is_empty() || self.pass.is_some() || self.used_shadows() {
+            return Err(internal(
+                "a recording apart that deferred work, held a pass or used a shadowed texture",
+            ));
+        }
+        self.flush_gathers();
+        if self.raw != vk::CommandBuffer::null() {
+            // SAFETY: as in `barrier`.
+            unsafe { self.open.command_buffer.end_raw(self.raw) }.map_err(vulkan)?;
+            self.ended.push(self.raw);
+        }
+        let EncoderCore {
+            ended,
+            uses,
+            retained,
+            executions,
+            keys,
+            taken,
+            holds,
+            heaps,
+            kept_leases,
+            attachment_shadows,
+            first_copies,
+            twin_writes,
+            fails_command_buffer,
+            faults,
+            resident_unheld,
+            ..
+        } = self;
+        Ok(Captured {
+            raws: ended,
+            summary: uses.finish(),
+            retained,
+            executions,
+            keys,
+            taken,
+            holds,
+            heaps,
+            kept_leases,
+            attachment_shadows,
+            first_copies,
+            twin_writes,
+            fails_command_buffer,
+            faults,
+            resident_unheld,
+        })
+    }
+
+    /// Take what a core of [`capture`](Self::capture) did, as if this core had done it (an
+    /// unordered one: a render pass's segment's): its uses noted, its holds, executions, keys,
+    /// pages and heaps; and what it recorded outside its draws' secondaries placed after what
+    /// this core recorded so far, between barriers from everything before and to everything
+    /// after, this core going on in a new command buffer. Refused where the current one does not
+    /// end or the new one cannot be begun.
+    pub(super) fn absorb(&mut self, captured: Captured) -> Result<(), Error> {
+        let Captured {
+            raws,
+            summary,
+            retained,
+            executions,
+            keys,
+            taken,
+            holds,
+            heaps,
+            kept_leases,
+            attachment_shadows,
+            first_copies,
+            twin_writes,
+            fails_command_buffer,
+            faults,
+            resident_unheld,
+        } = captured;
+        if !raws.is_empty() {
+            self.flush_gathers();
+            self.barrier(Barrier::everything());
+            if self.raw != vk::CommandBuffer::null() {
+                // SAFETY: as in `barrier`.
+                unsafe { self.open.command_buffer.end_raw(self.raw) }.map_err(vulkan)?;
+                self.ended.push(self.raw);
+            }
+            self.ended.extend(raws);
+            self.raw = self.continuation()?.0;
+            self.recorded = true;
+            self.barrier(Barrier::everything());
+        }
+        self.uses.record(summary.stages(), summary.uses(), None);
+        self.retained.join(retained);
+        self.executions.extend(executions);
+        self.keys.extend(keys);
+        self.taken.join(taken);
+        self.holds.join(holds);
+        for heap in heaps {
+            if !self.heaps.contains(&heap) {
+                self.heaps.push(heap);
+            }
+        }
+        self.kept_leases.extend(kept_leases);
+        self.attachment_shadows.extend(attachment_shadows);
+        self.first_copies.extend(first_copies);
+        self.twin_writes.extend(twin_writes);
+        if self.fails_command_buffer.is_none() {
+            self.fails_command_buffer = fails_command_buffer;
+        }
+        if self.faults.is_none() {
+            self.faults = faults;
+        }
+        self.resident_unheld.extend(resident_unheld);
+        Ok(())
+    }
+
+    /// Do what a kept chunk's recording did (`kept_commands.rs`), which this core's command
+    /// buffer runs again: note its uses, those of keys it did not name as reached through the
+    /// resident set alone (`note_reaching`, which holds the pages of buffers over host pages and
+    /// names the rest, as its commands did); keep its keys; hold `held`, what it held, upgraded;
+    /// and add its execution records where the device keeps them. An unordered core's alone.
+    pub(super) fn run_kept(
+        &mut self,
+        effects: &KeptEffects,
+        held: Vec<Arc<dyn Any + Send + Sync>>,
+    ) -> Result<(), Error> {
+        let summary = &effects.summary;
+        let resident: BTreeSet<ResourceKey> = summary
+            .keys()
+            .filter(|key| !effects.named.contains(key))
+            .collect();
+        self.note_reaching(summary.stages(), (summary.uses(), &resident), None)?;
+        self.touch_keys(effects.keys.iter().copied());
+        for object in held {
+            self.retain_shared(object);
+        }
+        if self.records_executions() {
+            self.executions.extend(effects.executions.iter().cloned());
+        }
+        Ok(())
+    }
+}
+
+/// What a core of [`EncoderCore::capture`] did, its recording ended
+/// ([`finish_capture`](EncoderCore::finish_capture)): what its segment's core takes
+/// ([`absorb`](EncoderCore::absorb)), and, of a plain one, what a kept recording does again
+/// (`kept_commands.rs`).
+pub(super) struct Captured {
+    /// What it recorded outside the draws' secondaries, ended, in order.
+    raws: Vec<vk::CommandBuffer>,
+    pub(super) summary: Summary<ResourceKey>,
+    pub(super) retained: Retained,
+    pub(super) executions: Vec<Execution>,
+    pub(super) keys: BTreeSet<ResourceKey>,
+    pub(super) taken: Taken,
+    holds: Holds,
+    heaps: Vec<Heap>,
+    kept_leases: Vec<KeptLease>,
+    attachment_shadows: Vec<ResourceKey>,
+    first_copies: Vec<(ResourceKey, u64)>,
+    twin_writes: Vec<TwinWrite>,
+    fails_command_buffer: Option<CommandBufferError>,
+    faults: Option<CommandBufferError>,
+    resident_unheld: Vec<ResourceKey>,
+}
+
+impl Captured {
+    /// Whether it only noted uses, kept keys, held shared objects, recorded executions and took
+    /// pages of buffers over host pages, which a command buffer that runs its recording again
+    /// does again as it notes the uses ([`EncoderCore::run_kept`]): nothing recorded outside the
+    /// draws' secondaries, no heap reached, no shadowed texture's work, no failure or fault, no
+    /// detached buffer named and no rasterization-rate map taken.
+    pub(super) fn plain(&self) -> bool {
+        self.raws.is_empty()
+            && self.heaps.is_empty()
+            && self.kept_leases.is_empty()
+            && self.attachment_shadows.is_empty()
+            && self.first_copies.is_empty()
+            && self.twin_writes.is_empty()
+            && self.fails_command_buffer.is_none()
+            && self.faults.is_none()
+            && self.resident_unheld.is_empty()
+            && !self.taken.dead()
+            && self.taken.rate_map_id().is_none()
+    }
+
+    /// A segment of what it recorded, then `raws` (a kept chunk's: `indirect_execute/kept.rs`),
+    /// with what it noted, held, executed, kept and took. Refused (internal) where it did more
+    /// than a compute chunk's kept recording does again ([`EncoderCore::run_kept`]): it reached
+    /// a heap, a shadowed texture's work or a rate map, or failed.
+    pub(super) fn into_segment(
+        self,
+        raws: Vec<vk::CommandBuffer>,
+    ) -> Result<RecordedSegment, Error> {
+        let more = !self.heaps.is_empty()
+            || !self.kept_leases.is_empty()
+            || !self.attachment_shadows.is_empty()
+            || !self.first_copies.is_empty()
+            || !self.twin_writes.is_empty()
+            || self.fails_command_buffer.is_some()
+            || self.faults.is_some()
+            || self.taken.rate_map_id().is_some();
+        if more {
+            return Err(internal(
+                "a kept chunk's run that did more than its recording",
+            ));
+        }
+        let mut recorded = self.raws;
+        recorded.extend(raws);
+        Ok(RecordedSegment {
+            raws: recorded,
+            summary: self.summary,
+            retained: self.retained,
+            executions: self.executions,
+            keys: self.keys,
+            taken: self.taken,
             resident_misses: 0,
             faults: ReplayFaults::default(),
         })

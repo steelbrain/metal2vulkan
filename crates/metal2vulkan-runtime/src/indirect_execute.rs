@@ -81,6 +81,8 @@
 //!   serial encoder's where their uses meet; a concurrent one's not at all), and a command with
 //!   its barrier set runs after every earlier command of the segment.
 
+mod kept;
+
 use super::argument_table::ArgumentTable;
 use super::buffer::Buffer;
 use super::command_buffer::CommandBuffer;
@@ -321,20 +323,25 @@ impl Execute {
         command_buffer: &CommandBuffer,
         states: Option<&[ComputePipelineState]>,
     ) -> Result<RecordedSegment, Error> {
-        let mut core = EncoderCore::segment(command_buffer, self.ordered)?;
         // Its host step inside a block of command predication that skips runs nothing.
         if states.is_some() && self.gate.as_ref().is_some_and(HostGate::skips) {
-            return core.end_segment();
+            return EncoderCore::segment(command_buffer, self.ordered)?.end_segment();
         }
-        let max_length = max_length(&core);
+        // Every encoder's resident resources, as the command buffer's are at the commit.
+        let residency = command_buffer.residency()?.kernel();
+        // Commands the CPU encoded, which their chunks' kept recordings may run (`kept.rs`).
+        if states.is_none() {
+            if let Some(keeping) = self.keeping(command_buffer, &residency) {
+                return self.record_kept(command_buffer, &residency, keeping);
+            }
+        }
+        let mut core = EncoderCore::segment(command_buffer, self.ordered)?;
         // The host step's commands take the large-buffer form, whose variants `settle` made.
         let forms = match states {
             Some(_) => BufferForms::Large,
             None => BufferForms::Bound,
         };
         let (commands, faults) = self.commands(states)?;
-        // Every encoder's resident resources, as the command buffer's are at the commit.
-        let residency = command_buffer.residency()?.kernel();
         // What the commands run, for the command buffer's handlers (`executed_commands.rs`).
         let read = match states {
             Some(_) => RecordsRead::HostStep,
@@ -357,15 +364,34 @@ impl Execute {
             (commands, false)
         });
         let mut misses = 0u32;
+        let commands = commands.iter().flatten();
+        self.dispatch(&mut core, commands, (&residency, forms), &mut misses)?;
+        let mut segment = core.end_segment()?;
+        segment.resident_misses = misses;
+        segment.faults = faults;
+        Ok(segment)
+    }
+
+    /// Record `commands`' dispatches through `core`, resolving against `residency`, the command
+    /// buffer's, their variants in `forms` ([`record`](Self::record)'s), each resident-set miss
+    /// counted in `misses`. A command's barrier orders it after the commands before it here.
+    fn dispatch<'a>(
+        &self,
+        core: &mut EncoderCore,
+        commands: impl IntoIterator<Item = &'a Command>,
+        (residency, forms): (&Residency, BufferForms),
+        misses: &mut u32,
+    ) -> Result<(), Error> {
+        let max_length = max_length(core);
         let mut ran = false;
-        for (record, own) in commands.iter().flatten() {
+        for (record, own) in commands {
             let Some((pipeline, dispatch)) = self.runnable(record, own.as_ref()) else {
                 continue;
             };
             if record.barrier && ran {
                 core.barrier(Barrier::between_dispatches());
             }
-            let bindings = self.bindings(record, max_length, &residency, &mut misses);
+            let bindings = self.bindings(record, max_length, residency, misses);
             // A stride past 32 bits that a stage-in layout of `MTLBufferLayoutStrideDynamic`
             // reads: Metal's answer is not measured, and the fetch's `u32` displacement cannot
             // place it.
@@ -389,14 +415,11 @@ impl Execute {
             ) {
                 return Err(refusal);
             }
-            let tables = bindings.tables(self, pipeline, record, &residency, forms)?;
-            record_dispatch(&mut core, &tables, CALL, dispatch)?;
+            let tables = bindings.tables(self, pipeline, record, residency, forms)?;
+            record_dispatch(core, &tables, CALL, dispatch)?;
             ran = true;
         }
-        let mut segment = core.end_segment()?;
-        segment.resident_misses = misses;
-        segment.faults = faults;
-        Ok(segment)
+        Ok(())
     }
 
     /// Settle, on the thread that commits or flags the buffer, what the host step needs to

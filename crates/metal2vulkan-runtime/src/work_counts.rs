@@ -146,6 +146,8 @@ pub(crate) struct Counters {
     visibility_queries_begun: AtomicU64,
     indirect_draws_recorded: AtomicU64,
     indirect_records_read: AtomicU64,
+    indirect_chunks_kept: AtomicU64,
+    indirect_commands_kept: AtomicU64,
     gpu_form_commands: AtomicU64,
     merged_draw_commands: AtomicU64,
     gpu_pool_blocks_made: AtomicU64,
@@ -1125,6 +1127,14 @@ impl Counters {
     pub(crate) fn indirect_records_read(&self, count: u64) {
         self.indirect_records_read
             .fetch_add(count, Ordering::Relaxed);
+    }
+
+    /// An execution ran a chunk of `commands` of an indirect command buffer's from its kept
+    /// recording (`kept_commands.rs`), reading none of their records.
+    pub(crate) fn indirect_chunk_kept(&self, commands: u64) {
+        self.indirect_chunks_kept.fetch_add(1, Ordering::Relaxed);
+        self.indirect_commands_kept
+            .fetch_add(commands, Ordering::Relaxed);
     }
 
     /// `count` commands of an execution of render commands were recorded in its GPU form
@@ -3738,6 +3748,12 @@ pub struct WorkCounts {
     /// `IndirectCommandCheck`) or `IndirectCommandBuffer::commands` reads it; a setter's own
     /// read of the command it changes is not counted.
     pub indirect_records_read: u64,
+    /// Chunks of indirect command buffers' commands an execution ran from the recording an
+    /// earlier one kept, one each time (`kept_commands.rs`): their command buffer runs that
+    /// recording again, and their records are not read.
+    pub indirect_chunks_kept: u64,
+    /// The commands of those chunks, one a command each time.
+    pub indirect_commands_kept: u64,
     /// Commands of executions of render commands recorded in their GPU form, one a command each
     /// time (`render/executions/gpu.rs`): the device read their records, the host none.
     pub gpu_form_commands: u64,
@@ -5661,6 +5677,8 @@ impl Device {
             visibility_queries_begun: counters.visibility_queries_begun.load(Ordering::Relaxed),
             indirect_draws_recorded: counters.indirect_draws_recorded.load(Ordering::Relaxed),
             indirect_records_read: counters.indirect_records_read.load(Ordering::Relaxed),
+            indirect_chunks_kept: counters.indirect_chunks_kept.load(Ordering::Relaxed),
+            indirect_commands_kept: counters.indirect_commands_kept.load(Ordering::Relaxed),
             gpu_form_commands: counters.gpu_form_commands.load(Ordering::Relaxed),
             merged_draw_commands: counters.merged_draw_commands.load(Ordering::Relaxed),
             gpu_pool_blocks_made: counters.gpu_pool_blocks_made.load(Ordering::Relaxed),
