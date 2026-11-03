@@ -16,13 +16,13 @@
 //! the green field. The kernels are the owned fixture `fpv_rgbx_textures`'s, each at its
 //! thread's texel of a 16 by 16 texture.
 
-use super::degrade_notices::{on_device, on_device_with};
+use super::degrade_notices::{counts, on_device, on_device_with};
 use super::{buffer_with, read_buffer, WAIT};
 use crate::air_library::AirLibrary;
 use metal2vulkan::bind::SamplerDescriptor;
 use metal2vulkan::error::{Feature, Needs};
 use metal2vulkan::metal::{PixelFormat, TextureUsage};
-use metal2vulkan::pipeline::{ComputePipelineDescriptor, StageSource};
+use metal2vulkan::pipeline::{ComputePipelineDescriptor, PrecisionNote, StageSource};
 use metal2vulkan_devtools::{engine_dir, llvm_assemble};
 use metal2vulkan_runtime::{
     ClearColor, CommandBufferStatus, ComputePipelineState, Degradation, Device, DeviceOptions,
@@ -249,12 +249,19 @@ fn values(read: Read, bits: u32, seed: u64) -> Vec<u8> {
 }
 
 /// Every kernel write of random values into every RGBX format over bytes of `0xA5`: the twin's
-/// bytes, the X field of each texel the green field.
+/// bytes, the X field of each texel the green field. An sRGB format's codes are the MSL transfer
+/// by the device's `Pow` in both writes, each within one code of Metal's
+/// (`PrecisionNote::DevicePackConversion`, which the runtime announces), so the two lie within
+/// [`SRGB_WRITES_APART`] codes of each other in each field (two of the 256 texels a code apart on
+/// the Apple M3 Max through MoltenVK 1.4.2, where the two modules' `Pow` answer otherwise), and
+/// the X field is the texel's own green exactly.
 #[test]
 fn rgbx_writes_store_green_as_x() {
-    on_device(|device, _| {
+    on_device(|device, messages| {
         let name = device.name().to_owned();
         let mut differ = Vec::new();
+        // The sRGB texels within the bound but not the twin's bytes.
+        let mut apart = 0;
         for (i, (pf, twin, bytes, bits, read)) in FORMATS.into_iter().enumerate() {
             let fill = vec![0xA5u8; TEXELS * bytes];
             let rgbx = texture(device, pf, &fill);
@@ -269,22 +276,46 @@ fn rgbx_writes_store_green_as_x() {
                 let green = texel[field..2 * field].to_vec();
                 texel[3 * field..].copy_from_slice(&green);
             }
-            let wrong = got
-                .chunks_exact(bytes)
-                .zip(want.chunks_exact(bytes))
-                .filter(|(g, w)| g != w)
-                .count();
+            let srgb = twin == PixelFormat::RGBA8UnormSRGB;
+            let within = |g: &[u8], w: &[u8]| {
+                srgb && g[3] == g[1]
+                    && g.iter()
+                        .zip(w)
+                        .all(|(a, b)| a.abs_diff(*b) <= SRGB_WRITES_APART)
+            };
+            let (mut wrong, mut near) = (0, 0);
+            for (g, w) in got.chunks_exact(bytes).zip(want.chunks_exact(bytes)) {
+                match (g == w, within(g, w)) {
+                    (true, _) => {}
+                    (false, true) => near += 1,
+                    (false, false) => wrong += 1,
+                }
+            }
+            apart += near;
             eprintln!(
                 "RGBX write {pf:?} on {name}: {wrong} of {TEXELS} texels differ from the twin's \
-                 with X = green"
+                 with X = green, {near} more within the device's sRGB encode"
             );
             if wrong > 0 {
                 differ.push(format!("{pf:?}: {wrong} of {TEXELS}"));
             }
         }
         assert!(differ.is_empty(), "RGBX writes not Metal's: {differ:#?}");
+        if apart > 0 {
+            let note = Degradation::from_precision_note(PrecisionNote::DevicePackConversion);
+            let announced = counts(&messages.take_notices());
+            assert!(
+                announced.contains_key(&note),
+                "{apart} sRGB texels within the device's encode, unannounced: {announced:?}"
+            );
+        }
     });
 }
+
+/// How many codes apart two writes of the same `float` into an 8-bit sRGB texture may store a
+/// field: each the device's encode, within one code of Metal's
+/// (`PrecisionNote::DevicePackConversion`'s bound).
+const SRGB_WRITES_APART: u8 = 2;
 
 /// Metal's color fills of every RGBX format: three colors' texel bytes, and a
 /// byte fill's pattern cut at the texel. A plain color fill of a format the device renders is the
