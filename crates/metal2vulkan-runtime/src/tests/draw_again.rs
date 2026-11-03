@@ -4,9 +4,13 @@
 //! and pixels as the same draws with a call between each that changes nothing; and only then: not
 //! a draw of other arguments, an indirect draw, a draw that writes memory, a draw after a no-copy
 //! buffer moved (its binding may read elsewhere), nor a draw that meets a notice its device
-//! announces at every occurrence, which announces it at every draw. In builds with debug
-//! assertions, every second draw again takes every step instead, and checks that it changed
-//! nothing the draw again leaves (the module's check), so these tests run that check too.
+//! announces at every occurrence, which announces it at every draw. A draw again after calls that
+//! bound other buffers, offsets or bytes at its buffer slots rebinds those alone
+//! (`render/draw_again/rebound.rs`, `WorkCounts::draws_rebound`), with the same commands and
+//! pixels as the same draws taking every step. In builds with debug assertions, every second draw
+//! again takes every step instead, and checks that it changed nothing the draw again leaves and,
+//! rebound, worked out what every step works out (the modules' checks), so these tests run those
+//! checks too.
 //!
 //! Device tests: compiled only under the validation crate's GPU safety cfgs (`m2v_gpu`,
 //! `m2v_cpu_icd`), on the kind of device the cfg selects. The functions are the owned fixtures
@@ -21,6 +25,7 @@ use crate::{
     DeviceOptions, Error, MessageSink, Origin, PipelineOptions, RenderCommandEncoder,
     RenderPipelineState, ResourceOptions, ShaderCacheOptions, Size, TextureDescriptor, WorkCounts,
 };
+use metal2vulkan::bind::SamplerDescriptor;
 use metal2vulkan::metal::{BlendFactor, IndexType, PixelFormat, PrimitiveType, TextureUsage};
 use metal2vulkan::pipeline::{ColorAttachmentDescriptor, RenderPipelineDescriptor, StageSource};
 use std::collections::BTreeMap;
@@ -495,5 +500,106 @@ fn a_notice_announced_at_each_occurrence_is_announced_at_every_draw() {
                 assert_eq!(ran.counted(as_before), drawn_alone(HITS));
             }
         }
+    }
+}
+
+/// The rectangles of [`offset_rectangles`]' draws, 16 bytes apart: the `at`th from column `at` of
+/// the target to its right edge, so that each column shows how many draws reached it.
+fn rectangles_from_columns(device: &Device) -> Buffer {
+    let rectangles: Vec<f32> = (0..DRAWS)
+        .flat_map(|at| [-1.0 + at as f32 * 2.0 / SIDE as f32, -1.0, 1.0, 1.0])
+        .collect();
+    let bytes = bytes_of(&rectangles, f32::to_le_bytes);
+    device
+        .new_buffer_with_bytes(&bytes, ResourceOptions::shared())
+        .unwrap()
+}
+
+/// [`DRAWS`] draws of `state`'s rectangle, the `at`th of the rectangle at `16 * at` bytes of
+/// `rectangles` (vertex buffer 0's offset set before each draw but the first) in the color
+/// `color(at)` (fragment bytes 0, set before each draw), with `between` called after them.
+fn offset_rectangles(
+    encoder: &mut RenderCommandEncoder,
+    (state, rectangles): (&RenderPipelineState, &Buffer),
+    color: impl Fn(u64) -> f32,
+    between: impl Fn(&mut RenderCommandEncoder),
+) {
+    encoder.set_render_pipeline_state(state).unwrap();
+    encoder.set_vertex_buffer(Some(rectangles), 0, 0).unwrap();
+    for at in 0..DRAWS {
+        if at > 0 {
+            encoder.set_vertex_buffer_offset(16 * at, 0).unwrap();
+            between(encoder);
+        }
+        let bytes = bytes_of(&[color(at); 4], f32::to_le_bytes);
+        encoder.set_fragment_bytes(&bytes, 0).unwrap();
+        rectangle(encoder);
+    }
+}
+
+/// Draws after calls that bound other offsets and bytes at buffer slots their functions read
+/// rebind those slots alone (`WorkCounts::draws_rebound`), with the same commands of every kind,
+/// state commands and noted uses, and the same pixels, as the same draws with a call between each
+/// that changes nothing for them (`set_blend_color` of the color the encoder holds), each of
+/// which takes every step; at another offset each and in another color each, as each column's
+/// count of draws and each draw's color show. A call that changed a slot of another class between
+/// them (a sampler, which the functions do not read) takes every step.
+#[test]
+fn draws_after_buffer_changes_rebind_what_every_step_binds() {
+    let scratch = Scratch::new("draw-again-rebound");
+    let heard = Heard::default();
+    let device = device(&scratch.0, &[], &heard);
+    let state = adding_state(&device);
+    let rectangles = rectangles_from_columns(&device);
+    let sampler = device.new_sampler_state(&SamplerDescriptor::new()).unwrap();
+    let same_color =
+        |encoder: &mut RenderCommandEncoder| encoder.set_blend_color(0.0, 0.0, 0.0, 0.0);
+    let a_sampler = |encoder: &mut RenderCommandEncoder| {
+        encoder
+            .set_fragment_sampler_state(Some(&sampler), 0)
+            .unwrap();
+    };
+    let one = |_| 1.0 / 64.0;
+    let each = |at| (at + 1) as f32 / 64.0;
+    let drawn = (&state, &rectangles);
+    warm(&device, |encoder| {
+        offset_rectangles(encoder, drawn, one, |_| {})
+    });
+    let rebound_count = |counts: &WorkCounts| counts.draws_rebound;
+    let as_before = |counts: &WorkCounts| counts.draws_as_before;
+    for color in [&one as &dyn Fn(u64) -> f32, &each] {
+        let rebound = run(&device, |encoder| {
+            offset_rectangles(encoder, drawn, color, |_| {});
+        });
+        let every = run(&device, |encoder| {
+            offset_rectangles(encoder, drawn, color, same_color);
+        });
+        let sampled = run(&device, |encoder| {
+            offset_rectangles(encoder, drawn, color, a_sampler);
+        });
+        assert_eq!(rebound.counted(rebound_count), drawn_alone(HITS));
+        assert_eq!(rebound.counted(as_before), 0);
+        assert_eq!(every.counted(rebound_count), 0);
+        assert_eq!(sampled.counted(rebound_count), 0);
+        assert_eq!(rebound.commands, every.commands);
+        assert_eq!(rebound.commands, sampled.commands);
+        assert_eq!(rebound.commands["cmd_draw"], DRAWS);
+        assert_eq!(rebound.words, every.words, "the pixels of the draws");
+        assert_eq!(rebound.words, sampled.words, "the pixels of the draws");
+        let counts: [(&str, fn(&WorkCounts) -> u64); 3] = [
+            ("draw_states_recorded", |counts| counts.draw_states_recorded),
+            ("commands_noted_as_before", |counts| {
+                counts.commands_noted_as_before
+            }),
+            ("draws_pushing_set_zero", |counts| {
+                counts.draws_pushing_set_zero
+            }),
+        ];
+        for (name, count) in counts {
+            assert_eq!(rebound.counted(count), every.counted(count), "{name}");
+        }
+        // Column 0 holds the first draw's color alone; the last column every draw's.
+        let last = SIDE as usize - 1;
+        assert_ne!(rebound.words[0], rebound.words[last], "the draws' offsets");
     }
 }

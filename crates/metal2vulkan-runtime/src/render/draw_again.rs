@@ -16,15 +16,21 @@
 //!   meets or are work of the draw's own. Its uses are noted as the next draw would note them
 //!   (`NotedApart`). A draw that met a notice its device announces or refuses at every occurrence
 //!   (`EachWatch`) keeps nothing: its next draw must meet it again.
-//! - **Forgotten at every call.** Every call of the encoder but the two direct draws forgets it as
-//!   it logs itself (`RenderLowering::log`, which every call does: at the call, on the device's
-//!   lowering thread, and encoded again), refused or not, whatever it changes. So the encoder's
-//!   state a draw resolves from is the kept draw's, but for what the kept draw itself left and what
-//!   changes with no call of the encoder: the latter is [`Under`], compared at each draw: the count
-//!   of no-copy buffers' moves (a bound buffer's binding, a detach), the residency's generation
-//!   once the draw made the heaps' new textures resident, whether the device has buffers over host
-//!   pages and its host aliases' version, and the encoder's parts and held images (what noting
-//!   reads, `noted_apart.rs`), with the command buffer the current instance records into.
+//! - **Forgotten at every call but a buffer bind.** Every call of the encoder but the two direct
+//!   draws and the vertex and fragment buffer and bytes binds forgets it as it logs itself
+//!   (`RenderLowering::log`, which every call does: at the call, on the device's lowering thread,
+//!   and encoded again), refused or not, whatever it changes. A buffer or bytes bind changes its
+//!   stage table's slots alone (and takes room in its command buffer's uploads), and a table's
+//!   stamp tells each change apart (`argument_table::Stamp`): the kept draw keeps the four
+//!   tables' stamps as it read them, and a draw whose tables kept them is the kept draw again;
+//!   one after binds is drawn again rebound where it can be (`rebound.rs`), else takes every
+//!   step. So the encoder's state a draw resolves from is the kept draw's, but for the tables'
+//!   slots the stamps tell apart, what the kept draw itself left and what changes with no call
+//!   of the encoder: the latter is [`Under`], compared at each draw: the count of no-copy
+//!   buffers' moves (a bound buffer's binding, a detach), the residency's generation once the
+//!   draw made the heaps' new textures resident, whether the device has buffers over host pages
+//!   and its host aliases' version, and the encoder's parts and held images (what noting reads,
+//!   `noted_apart.rs`), with the command buffer the current instance records into.
 //! - **What a kept draw left holds for the next.** Each of its steps adds to what the encoder
 //!   holds, and adding the same again changes nothing: its drawn area and coverage (rectangles
 //!   and boxes, `clear_reach::DrawnArea`, `linear_attachment::Coverage`), the pass's reads
@@ -48,14 +54,22 @@
 //!   no state command, kept an equal draw, retained only its index buffer again, and left the
 //!   encoder's drawn area, coverage, reads, gathered uses, noted uses and instance as they were.
 
+mod rebound;
+
 use ash::vk;
 use metal2vulkan::bind::{BindShape, DrawCall};
 use std::sync::Arc;
 use std::time::Duration;
 
+pub(super) use rebound::KeptRecording;
+pub(crate) use rebound::KeptStorage;
+
+use super::bound::Recorded;
 use super::{Assembly, DrawBuffers, RenderLowering};
+use crate::argument_table::Stamp;
 use crate::degradation::EachWatch;
 use crate::draw_source::DrawSource;
+use crate::error::Error;
 use crate::execution::{ExecutedPipeline, Execution};
 use crate::noted_apart::NotedInto;
 use crate::resource::ResourceKey;
@@ -81,6 +95,11 @@ struct Counted {
     draws: u64,
     pushing_set_zero: u64,
     last_vertex: u64,
+    /// Of `draws`, those rebound (`rebound.rs`), the stage tables they read in part, and the state
+    /// commands and pushed writes they recorded.
+    rebound: u64,
+    tables: u64,
+    recorded: Recorded,
 }
 
 /// What a kept draw was, what it read, and what a draw again repeats of it (the module docs).
@@ -111,6 +130,12 @@ pub(super) struct Kept {
     pub(super) depth_writes: bool,
     /// Whether it recorded no state command (`Recorded::draw_alone`), as a draw again does.
     pub(super) draw_alone: bool,
+    /// The stamps of its vertex, fragment, object and mesh tables as it read them: a draw whose
+    /// tables kept them binds as it did.
+    pub(super) stamps: [Stamp; 4],
+    /// Whether its encoder's bind state keeps what a draw rebound takes of it (`LiveBind::kept`,
+    /// `rebound.rs`).
+    pub(super) rebinds: bool,
 }
 
 /// An index source as a kept draw read it in place: the Metal buffer, by key, and offset, and
@@ -173,6 +198,8 @@ pub(super) enum Again {
     Check(Box<Checked>),
     /// It is not.
     No,
+    /// It was rebound, and refused as every step of it would refuse it.
+    Refused(Error),
 }
 
 impl DrawAgain {
@@ -212,12 +239,24 @@ impl RenderLowering {
             draws,
             pushing_set_zero,
             last_vertex,
+            rebound,
+            tables,
+            recorded,
         } = self.again.counted;
         if draws > 0 {
             let counts = &self.core.device().shared().counts;
-            counts.draws_drawn_again(draws, pushing_set_zero, last_vertex);
+            counts.draws_drawn_again(draws - rebound, pushing_set_zero, last_vertex);
+            if rebound > 0 {
+                counts.draws_rebound(rebound, tables);
+                recorded.count(counts);
+            }
             self.again.counted = Counted::default();
         }
+    }
+
+    /// The stamps of the encoder's vertex, fragment, object and mesh tables.
+    pub(super) fn table_stamps(&self) -> [Stamp; 4] {
+        [&self.vertex, &self.fragment, &self.object, &self.mesh].map(|table| table.stamp())
     }
 
     /// Whether the draw of `call` assembling `assembly`, `draw` with `buffers`, is the kept draw
@@ -247,12 +286,19 @@ impl RenderLowering {
         if !same {
             return Again::No;
         }
+        let stamps = self.table_stamps();
+        if kept.stamps != stamps {
+            return match kept.rebinds {
+                true => self.draw_rebound(call, (assembly, draw), buffers, stamps),
+                false => Again::No,
+            };
+        }
         #[cfg(debug_assertions)]
         {
             let hits = self.again.hits;
             self.again.hits += 1;
             if hits.is_multiple_of(2) {
-                return Again::Check(Box::new(Checked::of(self)));
+                return Again::Check(Box::new(Checked::of(self, None)));
             }
         }
         let counted = &mut self.again.counted;
@@ -301,9 +347,6 @@ impl RenderLowering {
         (reads, rasterizes, depth_writes): (RenderStages, bool, bool),
         checked: Option<Box<Checked>>,
     ) {
-        if watch.met() {
-            self.forget_again();
-        }
         if let Some(kept) = self.again.kept.as_mut() {
             kept.reads = reads;
             kept.rasterizes = rasterizes;
@@ -311,10 +354,13 @@ impl RenderLowering {
         }
         #[cfg(debug_assertions)]
         if let Some(checked) = checked {
-            checked.check(self);
+            checked.check(self, watch.met());
         }
         #[cfg(not(debug_assertions))]
         let _: Option<Box<Checked>> = checked;
+        if watch.met() {
+            self.forget_again();
+        }
     }
 }
 
@@ -326,6 +372,65 @@ pub(super) struct Checked {
     hits: u64,
     held: Held,
     announced: u64,
+    /// What it worked out of its rebound slots, where it is a draw rebound (`rebound.rs`).
+    rebound: Option<Rebound>,
+}
+
+/// What a draw rebound worked out (`rebound.rs`), which its every step must work out alike.
+#[cfg(debug_assertions)]
+pub(super) struct Rebound {
+    commands: metal2vulkan::bind::DrawCommands,
+    writes: Vec<(u32, crate::binding::SetWrite)>,
+    offsets: Vec<u32>,
+    pushes: Vec<crate::binding::PushWrite>,
+    vertex_buffers: Vec<(u32, vk::Buffer, u64, u64)>,
+    uses: Vec<Use<ResourceKey>>,
+    resident: std::collections::BTreeSet<ResourceKey>,
+}
+
+#[cfg(debug_assertions)]
+impl Rebound {
+    /// What `live` and `binds` hold of a draw rebound.
+    pub(super) fn of(live: &crate::live_bind::LiveBind) -> Rebound {
+        Rebound {
+            commands: live.commands.clone(),
+            writes: Self::writes(live.kept.writes()),
+            offsets: live.offsets.clone(),
+            pushes: live.pushes.clone(),
+            vertex_buffers: live.vertex_buffers.clone(),
+            uses: live.uses.to_vec(),
+            resident: live.uses.resident().clone(),
+        }
+    }
+
+    fn writes(writes: &[crate::binding::Write]) -> Vec<(u32, crate::binding::SetWrite)> {
+        (writes.iter())
+            .map(|write| (write.set, crate::binding::SetWrite::of(write)))
+            .collect()
+    }
+
+    /// Assert that every step of the draw worked out what it did, in `live` and `binds`.
+    fn assert_as(&self, live: &crate::live_bind::LiveBind) {
+        let writes = Self::writes(live.kept.writes());
+        let same_writes = writes.len() == self.writes.len()
+            && (writes.iter().zip(&self.writes))
+                .all(|((set, write), (kept_set, kept))| set == kept_set && write.same(kept));
+        let parts = [
+            ("commands", live.commands == self.commands),
+            ("set-0 writes", same_writes),
+            ("dynamic offsets", live.offsets == self.offsets),
+            ("push bytes", live.pushes == self.pushes),
+            ("vertex buffers", live.vertex_buffers == self.vertex_buffers),
+            ("uses", *live.uses == self.uses[..]),
+            ("resident keys", *live.uses.resident() == self.resident),
+        ];
+        for (part, same) in parts {
+            assert!(
+                same,
+                "a draw rebound worked out other {part} than its every step"
+            );
+        }
+    }
 }
 
 /// No check in builds without debug assertions: no draw again takes every step.
@@ -411,7 +516,8 @@ impl Held {
 
 #[cfg(debug_assertions)]
 impl Checked {
-    fn of(encoder: &mut RenderLowering) -> Checked {
+    /// The check of the draw again about to take every step, `rebound` where it is rebound.
+    pub(super) fn of(encoder: &mut RenderLowering, rebound: Option<Rebound>) -> Checked {
         let kept = encoder.again.kept.take();
         let kept = kept.unwrap_or_else(|| unreachable!("a draw again without its kept draw"));
         Checked {
@@ -419,29 +525,49 @@ impl Checked {
             hits: encoder.again.hits,
             held: Held::of(encoder),
             announced: crate::degradation::announced_here(),
+            rebound,
         }
     }
 
-    /// Check the draw that took every step against the kept one (the module docs).
-    fn check(self, encoder: &mut RenderLowering) {
+    /// Check the draw that took every step, which `met` a notice met at each occurrence or not,
+    /// against the kept one (the module docs).
+    fn check(self, encoder: &mut RenderLowering, met: bool) {
         let Checked {
             kept,
             hits,
             held,
             announced,
+            rebound,
         } = self;
-        assert_eq!(
-            crate::degradation::announced_here(),
-            announced,
-            "a draw again announced a notice"
-        );
-        let executed = kept.execution.is_some();
-        Held::of(encoder).assert_as(&held, (kept.index.is_some(), executed));
+        if let Some(rebound) = &rebound {
+            // Its uses differ from the kept draw's: what noting them adds is every step's own.
+            rebound.assert_as(&crate::device::lock(&encoder.live));
+        } else {
+            assert_eq!(
+                crate::degradation::announced_here(),
+                announced,
+                "a draw again announced a notice"
+            );
+            assert!(!met, "a draw again met a notice met at each occurrence");
+            let executed = kept.execution.is_some();
+            Held::of(encoder).assert_as(&held, (kept.index.is_some(), executed));
+        }
         let again = encoder.again.kept.as_mut();
         let again = again.unwrap_or_else(|| panic!("a draw again kept no draw"));
-        assert!(again.draw_alone, "a draw again recorded a state command");
-        again.draw_alone = kept.draw_alone;
+        let (draw_alone, stamps, under) = (again.draw_alone, again.stamps, again.under);
+        assert!(
+            draw_alone || rebound.is_some(),
+            "a draw again recorded a state command"
+        );
+        assert!(
+            again.rebinds || rebound.is_none(),
+            "a draw rebound whose every step keeps nothing to rebind"
+        );
+        // A draw rebound reads its tables under their stamps now, its uses noted into the state
+        // now.
+        (again.draw_alone, again.stamps, again.under) = (kept.draw_alone, kept.stamps, kept.under);
         assert!(*again == kept, "a draw again kept another draw");
+        (again.draw_alone, again.stamps, again.under) = (draw_alone, stamps, under);
         encoder.again.hits = hits;
     }
 }

@@ -2611,6 +2611,7 @@ field	metal2vulkan-runtime::WorkCounts.draws_as_before	pub draws_as_before: u64
 field	metal2vulkan-runtime::WorkCounts.draws_dropped_still_making	pub draws_dropped_still_making: u64
 field	metal2vulkan-runtime::WorkCounts.draws_dropped_unmade	pub draws_dropped_unmade: u64
 field	metal2vulkan-runtime::WorkCounts.draws_pushing_set_zero	pub draws_pushing_set_zero: u64
+field	metal2vulkan-runtime::WorkCounts.draws_rebound	pub draws_rebound: u64
 field	metal2vulkan-runtime::WorkCounts.draws_settled	pub draws_settled: u64
 field	metal2vulkan-runtime::WorkCounts.driver_diagnostics_withheld	pub driver_diagnostics_withheld: u64
 field	metal2vulkan-runtime::WorkCounts.empty_memory_blocks_live	pub empty_memory_blocks_live: u64
@@ -8426,6 +8427,7 @@ method	metal2vulkan::bind::BindingPlan::instantiate_dispatch	pub fn instantiate_
 method	metal2vulkan::bind::BindingPlan::instantiate_draw	pub fn instantiate_draw(&self, state: &BindState, draw: &DrawCall) -> Result<DrawCommands, BindError>
 method	metal2vulkan::bind::BindingPlan::instantiate_draw_into	pub fn instantiate_draw_into(&self, state: &BindState, draw: &DrawCall, commands: &mut DrawCommands) -> Result<(), BindError>
 method	metal2vulkan::bind::BindingPlan::instantiate_replay	pub fn instantiate_replay(&self, state: &BindState, threads_per_group: [u32; 3]) -> Result<DispatchCommands, BindError>
+method	metal2vulkan::bind::BindingPlan::rebind_draw_buffers_into	pub fn rebind_draw_buffers_into(&self, state: &BindState, slots: &[SlotRef], commands: &mut DrawCommands) -> Result<bool, BindError>
 method	metal2vulkan::bind::BindingPlan::relisted_sampler_tables	pub fn relisted_sampler_tables(&self, device: &crate::device::Device, samplers: &[crate::bind::ArgumentSampler], placement: HeapPlacement) -> Result<Option<Vec<crate::bind::instantiate::DescriptorBytes>>, BindError>
 method	metal2vulkan::bind::BindingPlan::sampler_tables	pub fn sampler_tables(&self) -> Vec<(u32, u32)>
 method	metal2vulkan::bind::BindingPlan::specialized_value	pub fn specialized_value(&self, key: SpecKey) -> Option<u64>

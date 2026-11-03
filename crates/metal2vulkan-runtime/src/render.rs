@@ -430,6 +430,7 @@ use deferral::Logged;
 pub(crate) use deferral::{lowering, DeferredEncoders, EndInFlight};
 #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
 pub(crate) use deferral::{BATCH_CALLS, HANDED_BATCHES};
+pub(crate) use draw_again::KeptStorage;
 #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
 pub(crate) use draw_room::made as draw_rooms_made;
 pub(crate) use draw_room::SpareDrawRooms;
@@ -2633,7 +2634,7 @@ impl RenderLowering {
         offset: u64,
         index: u32,
     ) -> Result<(), Error> {
-        self.log(|log| {
+        self.log_keeping(|log| {
             let buffer = buffer.map(|buffer| log.hold_buffer(buffer));
             RenderCall::Buffer(Table::Vertex, buffer, offset, index)
         });
@@ -2648,7 +2649,7 @@ impl RenderLowering {
         offsets: &[u64],
         first: u32,
     ) -> Result<(), Error> {
-        self.log(|log| {
+        self.log_keeping(|log| {
             RenderCall::Buffers(
                 Table::Vertex,
                 log.buffer_span(buffers),
@@ -2671,14 +2672,14 @@ impl RenderLowering {
         offset: u64,
         index: u32,
     ) -> Result<(), Error> {
-        self.log(|_| RenderCall::BufferOffset(Table::Vertex, offset, index));
+        self.log_keeping(|_| RenderCall::BufferOffset(Table::Vertex, offset, index));
         self.vertex
             .set_buffer_offset(&mut self.core, "set_vertex_buffer_offset", offset, index)
     }
 
     /// The lowering of [`RenderCommandEncoder::set_vertex_bytes`].
     pub(crate) fn set_vertex_bytes(&mut self, bytes: &[u8], index: u32) -> Result<(), Error> {
-        self.log(|log| RenderCall::Bytes(Table::Vertex, log.byte_span(bytes), index));
+        self.log_keeping(|log| RenderCall::Bytes(Table::Vertex, log.byte_span(bytes), index));
         self.vertex
             .set_bytes(&mut self.core, "set_vertex_bytes", bytes, None, index)
     }
@@ -2751,7 +2752,7 @@ impl RenderLowering {
         offset: u64,
         index: u32,
     ) -> Result<(), Error> {
-        self.log(|log| {
+        self.log_keeping(|log| {
             let buffer = buffer.map(|buffer| log.hold_buffer(buffer));
             RenderCall::Buffer(Table::Fragment, buffer, offset, index)
         });
@@ -2766,7 +2767,7 @@ impl RenderLowering {
         offsets: &[u64],
         first: u32,
     ) -> Result<(), Error> {
-        self.log(|log| {
+        self.log_keeping(|log| {
             RenderCall::Buffers(
                 Table::Fragment,
                 log.buffer_span(buffers),
@@ -2789,14 +2790,14 @@ impl RenderLowering {
         offset: u64,
         index: u32,
     ) -> Result<(), Error> {
-        self.log(|_| RenderCall::BufferOffset(Table::Fragment, offset, index));
+        self.log_keeping(|_| RenderCall::BufferOffset(Table::Fragment, offset, index));
         self.fragment
             .set_buffer_offset(&mut self.core, "set_fragment_buffer_offset", offset, index)
     }
 
     /// The lowering of [`RenderCommandEncoder::set_fragment_bytes`].
     pub(crate) fn set_fragment_bytes(&mut self, bytes: &[u8], index: u32) -> Result<(), Error> {
-        self.log(|log| RenderCall::Bytes(Table::Fragment, log.byte_span(bytes), index));
+        self.log_keeping(|log| RenderCall::Bytes(Table::Fragment, log.byte_span(bytes), index));
         self.fragment
             .set_bytes(&mut self.core, "set_fragment_bytes", bytes, None, index)
     }
@@ -3243,7 +3244,7 @@ impl RenderLowering {
         instance_count: u32,
         base_instance: u32,
     ) -> Result<(), Error> {
-        self.log_draw(|_| {
+        self.log_keeping(|_| {
             RenderCall::DrawPrimitives(
                 primitive_type,
                 vertex_start,
@@ -7162,6 +7163,10 @@ impl RenderLowering {
             #[cfg(debug_assertions)]
             draw_again::Again::Check(checked) => Some(checked),
             draw_again::Again::No => None,
+            draw_again::Again::Refused(refused) => {
+                self.forget_again();
+                return Err(refused);
+            }
         };
         self.forget_again();
         let watch = EachWatch::start();
@@ -8379,6 +8384,8 @@ impl RenderLowering {
             ),
             &mut live.uses,
         )?;
+        // How many it holds of its plan's alone: a draw rebound works out those alone.
+        let plan_uses = live.uses.len();
         let uses = &mut live.uses;
         // A use of an attachment's memory other than as the attachment, inside its instance,
         // which no copy serves (`texture/attached_reads.rs`): a draw that reads through snapshots
@@ -9828,6 +9835,34 @@ impl RenderLowering {
                 shape: Arc::clone(&shape),
                 created: created.clone(),
             });
+            // What a draw rebound takes of it (`render/draw_again/rebound.rs`), where its state made
+            // no visible-function table: set-0 writes that hold no keeper, its plan's uses alone,
+            // no push hole, and its one recording's parts (its variant and plan are the bind
+            // state's kept settle).
+            let recorded = match (&draw_states, &draw_pipeline, vk_draws) {
+                (DrawStates::Whole([state]), DrawPipeline::Made(made), [(index, _, command)]) => {
+                    Some(draw_again::KeptRecording {
+                        layout: objects.layout(),
+                        shape: objects.set_zero_shape(),
+                        pipeline: made.raw,
+                        index: *index,
+                        topology,
+                        primitive_restart,
+                        state: state.clone(),
+                        draw: *command,
+                    })
+                }
+                _ => None,
+            };
+            let rebinds = function_tables.is_empty()
+                && uses.len() == plan_uses
+                && bound.holes.is_empty()
+                && writes.iter().all(|write| write.held.is_none());
+            let recorded = recorded.filter(|_| rebinds);
+            let rebinds = recorded.is_some();
+            if let Some(recorded) = recorded {
+                live.kept.keep(&writes, dynamic, recorded);
+            }
             let kept = draw_again::Kept {
                 call,
                 assembly,
@@ -9845,6 +9880,8 @@ impl RenderLowering {
                 rasterizes: false,
                 depth_writes: false,
                 draw_alone,
+                stamps: self.table_stamps(),
+                rebinds,
             };
             self.again.keep(kept);
         }

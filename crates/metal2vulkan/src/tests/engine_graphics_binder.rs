@@ -969,6 +969,94 @@ fn a_per_bind_stride_comes_from_the_bind() {
 }
 
 /// `state` with vertex-stage buffer 0 replaced by `b`.
+/// A rebind of buffer slots writes over a draw's commands the commands a whole instantiation of
+/// the new state writes: for each committed profile, each state of the vertex buffer and the
+/// constant buffer at other offsets and over other allocations that keeps the plan's shape, the
+/// commands of the first state rebound at the slots that changed are the new state's. Where the
+/// rebind writes nothing (`Ok(false)`), the plan reads a slot some other way.
+#[test]
+fn a_rebind_of_buffer_slots_writes_what_an_instantiation_writes() {
+    let Some(bc) = fixture("stage_io") else {
+        return;
+    };
+    let (vertex, scale) = (
+        slot(Stage::Vertex, SlotClass::Buffer, 0),
+        slot(Stage::Vertex, SlotClass::Buffer, 1),
+    );
+    let draw = DrawCall::Primitives {
+        vertex_start: 3,
+        vertex_count: 6,
+        instance_count: 2,
+        base_instance: 5,
+    };
+    // The same allocation's length and offset at another address.
+    let elsewhere = |b: BoundBuffer| match b {
+        BoundBuffer::Buffer {
+            length,
+            offset,
+            device_address,
+            attribute_stride,
+            ..
+        } => BoundBuffer::Buffer {
+            length,
+            offset,
+            gpu_address: 0x7_0000,
+            device_address,
+            attribute_stride,
+        },
+        other => other,
+    };
+    let (mut rebound, mut pushed, mut whole) = (0, 0, 0);
+    for (stem, dev) in devices() {
+        let Ok(p) = render_pipeline(&dev, &bc) else {
+            continue;
+        };
+        // From a constant at an aligned offset, and at one a residual reaches.
+        for first in [render_state(16), render_state(4)] {
+            let Ok(plan) = p.plan(&dev, &first.shape()) else {
+                continue;
+            };
+            let scales = [0, 4, 16, 20, 36, 48, 100, 240, 256];
+            let vertices = [0, 24, 48, 72, 96, 2400];
+            let cases = scales
+                .iter()
+                .flat_map(|&s| vertices.iter().map(move |&v| (s, v)));
+            for ((s, v), moved) in cases.flat_map(|c| [(c, false), (c, true)]) {
+                let mut state = render_state(s);
+                let table = state.stages.get_mut(&Stage::Vertex).expect("vertex");
+                table.buffers.insert(0, buffer(24 * 64 + v, v, None));
+                if moved {
+                    let b = table.buffers.get(&1).copied().expect("scale");
+                    table.buffers.insert(1, elsewhere(b));
+                }
+                if state.shape() != first.shape() {
+                    continue;
+                }
+                let before = plan.instantiate_draw(&first, &draw).expect("first draw");
+                let expected = plan.instantiate_draw(&state, &draw);
+                let mut cmds = before.clone();
+                match plan.rebind_draw_buffers_into(&state, &[vertex, scale], &mut cmds) {
+                    Ok(true) => {
+                        rebound += 1;
+                        pushed += usize::from(cmds.push_constants != before.push_constants);
+                        assert_eq!(Ok(&cmds), expected.as_ref(), "{stem} {s} {v} {moved}");
+                    }
+                    Ok(false) => whole += 1,
+                    Err(e) => assert_eq!(Err(e), expected, "{stem} {s} {v} {moved}"),
+                }
+            }
+        }
+    }
+    assert!(
+        rebound > 0,
+        "no rebind wrote commands ({whole} instantiated whole)"
+    );
+    assert!(
+        pushed > 0,
+        "no rebind wrote a push field ({rebound} rebound)"
+    );
+}
+
 fn with_vertex_buffer(state: &BindState, b: BoundBuffer) -> BindState {
     let mut s = state.clone();
     s.stages

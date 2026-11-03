@@ -1,0 +1,508 @@
+//! A render encoder's kept draw drawn again after calls that bound other buffers or offsets at
+//! vertex or fragment buffer slots (`WorkCounts::draws_rebound`): its every other step is the kept
+//! draw's (`render/draw_again.rs`), so only what those slots decide is worked out again.
+//!
+//! - **Which draw.** The kept draw again ([`RenderLowering::draw_again`]: the same call and
+//!   arguments, under the same `Under`, into the same command buffer) after calls that changed
+//!   only buffer slots of its tables, each table's changes since the kept draw read it still
+//!   listed (`argument_table::Changes`, at most [`SLOTS`] slots), where the kept draw kept what
+//!   this takes ([`KeptStorage`]: a draw whose set-0 writes hold no keeper, of no use beyond its
+//!   plan's and its draw's own, and of a state that made no visible-function table). The kept
+//!   bind state takes the changed slots (`ArgumentTable::refresh_changed`), and the draw goes on
+//!   only where its shape stays: its variant, plan, pipeline and draw state are then the kept
+//!   draw's, functions of the shape and of what no call changed.
+//! - **What it works out again.** Its commands, rebound at those slots
+//!   (`BindingPlan::rebind_draw_buffers_into`: their descriptor ranges, push fields and vertex
+//!   buffers' offsets); set 0's writes of them with their dynamic offsets (`binding::rebind_into`),
+//!   and the set its encoder's last set or its command buffer's holds, else a new one
+//!   (`EncoderCore::set_zero_of`); its push bytes and vertex buffers; and its uses, whole
+//!   (`binding::command_uses_into`). And the checks a draw of changed tables takes: a pulled
+//!   attribute's reach, the stages' function tables, the attachments' reads. Each is the function
+//!   every step of the draw runs, on the same inputs.
+//! - **Where it stops.** At a slot of another class, a changed shape, a plan that reads a changed
+//!   slot some other way, a refusal of any of those steps, a pass whose fragments wrote memory (a
+//!   stage before them may read a copy of it), a shadowed texture among its uses, or a barrier its
+//!   fragments need after an earlier draw's geometry writes: the draw takes every step, which
+//!   answers as it would have. Only the attachments' reads' refusal is answered here, the last of
+//!   its checks, which may have announced.
+//! - **What it records and notes.** Its uses noted as any draw notes them (`note_reaching`, the
+//!   unordered writes, the pass's reads, the instance's gathered uses, indirect reads and geometry
+//!   writes); the state commands that changed and its draw, recorded through the kept draw's
+//!   recording against what its command buffer holds (`render/bound.rs`); its tables' new objects
+//!   retained; and the rest as a draw again: kept for recording again (but where it met a notice
+//!   met at each occurrence, as its every step forgets it then), its execution record, its counts
+//!   until the encoder's next call or its end.
+//! - **Checked in builds with debug assertions.** As a draw again is: the first rebound draw of a
+//!   kept draw and every second after it work out the rebind, then take every step instead,
+//!   which must keep the draw, with the same commands, set-0 writes, dynamic offsets, push bytes,
+//!   vertex buffers and uses.
+
+use ash::vk;
+use metal2vulkan::bind::DrawCall;
+use metal2vulkan::pipeline::{SlotClass, SlotRef, Stage};
+use std::sync::Arc;
+
+use super::{Again, RenderLowering};
+use crate::argument_table::Stamp;
+use crate::binding::{self, SetWrite, Write};
+use crate::draw_source::{DrawSource, IndexBind};
+use crate::error::Error;
+use crate::live_bind::{LiveBind, Reshape};
+use crate::pipeline::{RenderStateKind, Settled};
+use crate::render::{Assembly, DrawBuffers, DrawState, Recording};
+
+/// The most buffer slots a draw rebound takes changed: a draw after more takes every step.
+const SLOTS: usize = 8;
+
+/// What a draw rebound takes of the kept draw (the module docs) but its variant and plan, which
+/// its bind state's kept settle holds (`LiveBind::settled`): in the storage the bind state keeps
+/// from one draw and one encoder to the next (`LiveBind::kept`), read only while the kept draw is
+/// kept for one ([`Kept::rebinds`](super::Kept)). It holds no object alive: its writes hold no
+/// keeper, and its recording names handles alone.
+#[derive(Default)]
+pub(crate) struct KeptStorage {
+    /// Its set-0 writes as its set holds them (`binding::dynamic_writes`).
+    writes: Vec<Write>,
+    /// Its dynamic states.
+    dynamic: Vec<vk::DynamicState>,
+    /// The rest of its recording.
+    recording: Option<KeptRecording>,
+}
+
+/// A kept draw's recording but for what a draw rebound works out again (its set, dynamic
+/// offsets, push bytes and vertex buffers) and its dynamic states (`KeptStorage::dynamic`).
+pub(in crate::render) struct KeptRecording {
+    pub(in crate::render) layout: vk::PipelineLayout,
+    pub(in crate::render) shape: u64,
+    pub(in crate::render) pipeline: vk::Pipeline,
+    pub(in crate::render) index: Option<IndexBind>,
+    pub(in crate::render) topology: metal2vulkan::vk::PrimitiveTopology,
+    pub(in crate::render) primitive_restart: bool,
+    pub(in crate::render) state: DrawState,
+    pub(in crate::render) draw: metal2vulkan::vk::DrawCommand,
+}
+
+impl KeptStorage {
+    /// Keep, over the storage it holds, what a draw rebound takes of the draw just kept: its set-0
+    /// `writes`, each of which holds no keeper, its `dynamic` states and the rest of its
+    /// `recording`.
+    pub(in crate::render) fn keep(
+        &mut self,
+        writes: &[Write],
+        dynamic: &[vk::DynamicState],
+        recording: KeptRecording,
+    ) {
+        self.writes.clear();
+        self.writes.extend(writes.iter().filter_map(Write::unheld));
+        self.dynamic.clear();
+        self.dynamic.extend_from_slice(dynamic);
+        self.recording = Some(recording);
+    }
+
+    /// The kept draw's set-0 writes.
+    #[cfg(debug_assertions)]
+    pub(in crate::render) fn writes(&self) -> &[Write] {
+        &self.writes
+    }
+}
+
+/// Whether `live`'s kept settle holds the variant and plan the kept draw ran: where the draw's
+/// shape is the kept one and the state it draws ran it (`LiveBind::settles_kept`).
+fn settles_kept(encoder: &RenderLowering, live: &LiveBind) -> bool {
+    match encoder.pipeline.as_ref().map(|pipeline| pipeline.kind()) {
+        Some(RenderStateKind::Graphics(pipeline)) => live.settles_kept(pipeline, encoder.forms),
+        _ => false,
+    }
+}
+
+/// The buffer slots calls changed since the kept draw read its tables: at most [`SLOTS`].
+struct Changed {
+    slots: [SlotRef; SLOTS],
+    count: usize,
+}
+
+impl Changed {
+    /// None yet.
+    fn new() -> Changed {
+        let any = SlotRef {
+            stage: Stage::Vertex,
+            class: SlotClass::Buffer,
+            index: 0,
+        };
+        Changed {
+            slots: [any; SLOTS],
+            count: 0,
+        }
+    }
+
+    /// Add `slot`: whether there was room.
+    fn add(&mut self, slot: SlotRef) -> bool {
+        if self.list().contains(&slot) {
+            return true;
+        }
+        let Some(free) = self.slots.get_mut(self.count) else {
+            return false;
+        };
+        *free = slot;
+        self.count += 1;
+        true
+    }
+
+    fn list(&self) -> &[SlotRef] {
+        &self.slots[..self.count]
+    }
+}
+
+impl RenderLowering {
+    /// The kept draw again after calls that bound other buffers or offsets in its tables, whose
+    /// stamps are now `stamps` (the module docs): recorded, refused, or [`Again::No`] where it
+    /// takes every step.
+    pub(super) fn draw_rebound(
+        &mut self,
+        call: &'static str,
+        (assembly, draw): (Assembly, &DrawCall),
+        buffers: &DrawBuffers<'_>,
+        stamps: [Stamp; 4],
+    ) -> Again {
+        // A notice met at each occurrence forgets the draw once recorded, as its every step does.
+        let watch = crate::degradation::EachWatch::start();
+        let live = Arc::clone(&self.live);
+        let mut held = crate::device::lock(&live);
+        let live = &mut *held;
+        let Some((changed, read)) = self.bring_in(live, stamps) else {
+            return Again::No;
+        };
+        if !self.rebind(call, live, &changed, (draw, buffers)) {
+            return Again::No;
+        }
+        #[cfg(debug_assertions)]
+        {
+            let hits = self.again.hits;
+            self.again.hits += 1;
+            if hits.is_multiple_of(2) {
+                let rebound = super::Rebound::of(live);
+                drop(held);
+                return Again::Check(Box::new(super::Checked::of(self, Some(rebound))));
+            }
+        }
+        // The attachments' reads: its last check, refused here, as it may have announced.
+        let attached =
+            (self.core.device()).degrade_attachment_reads(call, &self.layout, &live.uses);
+        if let Err(refused) = attached {
+            return Again::Refused(refused);
+        }
+        let recorded = self.record_rebound(live, (call, assembly, draw), buffers, (stamps, read));
+        if let Err(refused) = recorded {
+            return Again::Refused(refused);
+        }
+        if watch.met() {
+            self.forget_again();
+        }
+        Again::Drawn
+    }
+
+    /// Bring into the kept draw's bind state the slots calls changed since in each table whose
+    /// stamp is no longer the kept draw's: the changed slots, and how many tables were read in
+    /// part; `None` where one is not a buffer slot, a table keeps no list of them, or the shape
+    /// changed (then the kept state makes its shape again, as any draw's does).
+    fn bring_in(&self, live: &mut LiveBind, stamps: [Stamp; 4]) -> Option<(Changed, u64)> {
+        let RenderStateKind::Graphics(pipeline) = self.pipeline.as_ref()?.kind() else {
+            return None;
+        };
+        let kept = self.again.kept.as_ref()?;
+        let interface = &pipeline.base().interface;
+        let views = pipeline.at_bind_views();
+        let moved = crate::buffer::host_cells_moved();
+        let maps = live.read_from.maps().clone();
+        if !live.read_from.reads(interface, &maps, moved) {
+            return None;
+        }
+        let tables = [&self.vertex, &self.fragment, &self.object, &self.mesh];
+        let stages = [Stage::Vertex, Stage::Fragment, Stage::Object, Stage::Mesh];
+        // Each changed table: read last as the kept draw read it, its slots that tell the view
+        // base alignment apart as the state holds them, its changes since listed, all of buffer
+        // slots.
+        let mut changed = Changed::new();
+        for (at, (stage, table)) in stages.into_iter().zip(tables).enumerate() {
+            let under = kept.stamps[at];
+            if stamps[at] == under {
+                continue;
+            }
+            let state = live.state.stages.get(&stage)?;
+            let read = live.read_from.read_under(at) == Some(under);
+            if !read || !views.holds(stage, state.at_bind_views) {
+                return None;
+            }
+            for (class, index) in table.changed_since(under)? {
+                if class != SlotClass::Buffer
+                    || !changed.add(SlotRef {
+                        stage,
+                        class,
+                        index,
+                    })
+                {
+                    return None;
+                }
+            }
+        }
+        // Their slots brought in. What one brought in changed stays told where a later table
+        // takes them no more (`Reshape`), as the draw's every step reads that one again.
+        let mut reshape = Reshape::default();
+        let mut read = 0;
+        for (at, (stage, table)) in stages.into_iter().zip(tables).enumerate() {
+            let under = kept.stamps[at];
+            if stamps[at] == under {
+                continue;
+            }
+            let from = (live.state.stages.entry(stage).or_default(), under);
+            if !table.refresh_changed(from, (stage, interface), (&maps, views), &mut reshape) {
+                live.reshaped(reshape);
+                return None;
+            }
+            read += 1;
+        }
+        live.read_from
+            .read(stamps, (interface, || pipeline.held()), &maps, moved);
+        let reshaped = reshape.may_reshape();
+        live.reshaped(reshape);
+        (!reshaped).then_some((changed, read))
+    }
+
+    /// Work out again in `live` what the slots `changed` decide of the kept draw, `draw` of
+    /// `buffers`: its commands, set-0 writes and dynamic offsets, push bytes, vertex buffers and
+    /// uses, with the checks a draw's steps take of them (the module docs). Whether it did; else
+    /// the draw takes every step, which writes them all again.
+    fn rebind(
+        &mut self,
+        call: &'static str,
+        live: &mut LiveBind,
+        changed: &Changed,
+        (draw, buffers): (&DrawCall, &DrawBuffers<'_>),
+    ) -> bool {
+        let kept = settles_kept(self, live)
+            .then_some(live.settled.as_ref())
+            .flatten();
+        let Some(Settled { variant, plan, .. }) = kept.map(|here| here.settled()) else {
+            return false;
+        };
+        let slots = changed.list();
+        if plan.rebind_draw_buffers_into(&live.state, slots, &mut live.commands) != Ok(true) {
+            return false;
+        }
+        let compiled = variant.pipeline();
+        let interface = &compiled.interface;
+        let checked = self
+            .check_vertex_reach(&compiled.vertex_input.pulled, draw)
+            .is_ok()
+            && (self.vertex)
+                .check_function_tables(call, Stage::Vertex, interface)
+                .is_ok()
+            && (self.fragment)
+                .check_function_tables(call, Stage::Fragment, interface)
+                .is_ok();
+        // The pass's fragment writes, a copy of which a stage before the fragments may read
+        // (`render/pass_start_reads.rs`): none, so each stage reads its encoder's table.
+        if !checked || self.pass_start.fragments_wrote() {
+            return false;
+        }
+        let stages = [
+            (Stage::Vertex, &self.vertex),
+            (Stage::Fragment, &self.fragment),
+            (Stage::Object, &self.object),
+            (Stage::Mesh, &self.mesh),
+        ];
+        let tables = binding::Tables::new(&stages)
+            .with_pass(&self.layout, plan.views)
+            .with_residency(&self.residency)
+            .with_texture_table(None)
+            .with_sampler_table(None)
+            .with_function_tables(&[]);
+        let commands = &live.commands;
+        let command = binding::Command {
+            descriptor_bytes: &commands.descriptor_bytes,
+            descriptor_ranges: &commands.descriptor_ranges,
+            root_tables: Vec::new(),
+            push_holes: &commands.push_holes,
+            uses: &commands.uses,
+            blobs: Vec::new(),
+            mesh: None,
+            tessellation: None,
+        };
+        let objects = variant.objects();
+        let rebound = {
+            let device = self.core.device();
+            let mut state = self.core.command_buffer().state();
+            let writes = &mut live.kept.writes[..];
+            let set_zero = (writes, objects.dynamic_bindings(), &mut live.offsets[..]);
+            binding::rebind_into(
+                device,
+                &mut state,
+                (&**plan, &command, &tables),
+                slots,
+                set_zero,
+            )
+        };
+        let index = buffers.index.as_ref().map(DrawSource::metal);
+        let uses = (&**plan, &command, &tables);
+        let rebound = rebound.is_ok_and(|done| done)
+            && binding::command_uses_into(call, uses, (index, None), &mut live.uses).is_ok()
+            && binding::push_writes_into(&commands.push_constants, &[], &mut live.pushes).is_ok();
+        if !rebound {
+            return false;
+        }
+        // Its fixed-function vertex buffers at the changed slots, in the plan's order.
+        for (bind, at) in plan.vertex_buffers.iter().zip(&mut live.vertex_buffers) {
+            let slot = SlotRef {
+                stage: Stage::Vertex,
+                class: SlotClass::Buffer,
+                index: bind.buffer_index,
+            };
+            if !slots.contains(&slot) {
+                continue;
+            }
+            let offset =
+                (commands.buffer_offsets.iter()).find(|(binding, _)| *binding == bind.binding);
+            let space = match (
+                self.vertex.buffers.get(&bind.buffer_index),
+                self.vertex.bytes.get(&bind.buffer_index),
+            ) {
+                (Some((buffer, _)), _) => buffer.space(),
+                (None, Some(bytes)) => (bytes.region.raw(), bytes.region.offset()),
+                (None, None) => return false,
+            };
+            let (Some(&(_, offset)), (raw, start)) = (offset, space) else {
+                return false;
+            };
+            at.1 = raw;
+            at.2 = start + offset;
+        }
+        // No shadowed texture among its uses, and no barrier its fragments need after an earlier
+        // draw's geometry writes.
+        let textures = (self.vertex.textures.values())
+            .chain(self.fragment.textures.values())
+            .chain(self.object.textures.values())
+            .chain(self.mesh.textures.values())
+            .chain(self.residency.textures());
+        // Nor a detached buffer, a draw of which records nothing (`EncoderCore::skips`).
+        let uses = &live.uses;
+        let named = (uses.iter().map(|used| used.key)).filter(|key| !uses.resident().contains(key));
+        crate::shadow::shadow_uses(textures, uses).is_empty()
+            && self.current.geometry_writes.barrier_before(uses).is_none()
+            && !self.core.would_skip(named)
+    }
+
+    /// Record the draw rebound in `live` (the module docs): its set 0, its uses noted, its state
+    /// commands and draw, and the rest a draw again takes. A refusal is set 0's or the noting's.
+    fn record_rebound(
+        &mut self,
+        live: &mut LiveBind,
+        (call, assembly, draw): (&'static str, Assembly, &DrawCall),
+        buffers: &DrawBuffers<'_>,
+        (stamps, read): ([Stamp; 4], u64),
+    ) -> Result<(), Error> {
+        let kept = settles_kept(self, live)
+            .then_some(live.settled.as_ref())
+            .flatten();
+        let unsettled = || crate::error::internal("a draw rebound unsettled");
+        let objects = kept.ok_or_else(unsettled)?.settled().variant.objects();
+        let (set, written) = match objects.pushes_set_zero() {
+            true => {
+                let immutable = objects.immutable_pushes();
+                SetWrite::push_into(&live.kept.writes, immutable, &mut live.pushed);
+                (None, None)
+            }
+            false => self.core.set_zero_of(objects, &mut live.kept.writes)?,
+        };
+        let pushed: &[SetWrite] = match objects.pushes_set_zero() {
+            true => &live.pushed,
+            false => &[],
+        };
+        let uses = &live.uses;
+        let stages = (uses.iter()).fold(vk::PipelineStageFlags2::empty(), |all, used| {
+            all | used.read.stages | used.write.stages
+        });
+        (self.core).note_reaching(stages, (uses, uses.resident()), Some(&mut live.noted))?;
+        self.unordered.add(uses);
+        self.pass_start.announce(self.core.device(), uses, false);
+        self.pass_start.add(uses);
+        self.gathering().add(&[], uses);
+        self.current.indirect_reads.add(uses);
+        self.current.geometry_writes.add(uses);
+        let owned = (live.kept.recording.as_ref())
+            .ok_or_else(|| crate::error::internal("a draw rebound without its recording"))?;
+        let shared = self.core.device().shared();
+        let recording = Recording {
+            raw: shared.vk(),
+            command_buffer: self.current.draws,
+            layout: owned.layout,
+            shape: owned.shape,
+            pipeline: owned.pipeline,
+            sets: set.as_slice(),
+            offsets: &live.offsets,
+            pushed,
+            push_descriptor: shared.push_descriptor,
+            pushes_after_pipeline_binds: shared.pushes_after_pipeline_binds,
+            heap: None,
+            push: &live.pushes,
+            vertex_buffers: &live.vertex_buffers,
+            index: owned.index,
+            indirect: None,
+            dynamic: &live.kept.dynamic,
+            topology: owned.topology,
+            primitive_restart: owned.primitive_restart,
+            state: &owned.state,
+            extended: shared.extended_dynamic_state,
+            mesh: shared.mesh_draws.as_ref(),
+            draw: owned.draw,
+            pair: None,
+        };
+        let bound = match self.current.inline {
+            true => &mut self.held_bound,
+            false => &mut self.current.bound,
+        };
+        // SAFETY: as the kept draw's recording: the secondary command buffer (or the pass's,
+        // inline) records the kept draw's instance, and only this encoder records it; every
+        // object recorded is live until the command buffer completes (the kept draw's retained,
+        // and the tables' retained below); `bound` is the record of what its draws bound there.
+        let recorded = unsafe { recording.record(bound) };
+        if let Some(written) = written {
+            self.core.keep_set_zero(written, &live.kept.writes);
+        }
+        let kept = (self.again.kept.as_mut())
+            .ok_or_else(|| crate::error::internal("a draw rebound without its kept draw"))?;
+        kept.stamps = stamps;
+        let counted = &mut self.again.counted;
+        counted.draws += 1;
+        counted.rebound += 1;
+        counted.tables += read;
+        counted.recorded += recorded;
+        counted.pushing_set_zero += u64::from(kept.pushes_set_zero);
+        counted.last_vertex += u64::from(kept.last_vertex);
+        self.current.recorded = true;
+        let again = kept.again;
+        let (reads, rasterizes, depth_writes) = (kept.reads, kept.rasterizes, kept.depth_writes);
+        let execution = (kept.execution.as_ref()).map(|execution| {
+            let shape = Arc::clone(&execution.shape);
+            (execution.pipeline.clone(), shape, execution.created.clone())
+        });
+        if let Some((pipeline, shape, created)) = execution {
+            self.core
+                .executed(|| crate::execution::Execution::new(pipeline, shape, created));
+        }
+        self.keep_draw(again, (call, assembly, *draw), buffers.index.as_ref());
+        self.vertex.retain_exclusive(&mut self.core);
+        self.fragment.retain_exclusive(&mut self.core);
+        self.object.retain_exclusive(&mut self.core);
+        self.mesh.retain_exclusive(&mut self.core);
+        let under = self.under();
+        if let Some(kept) = self.again.kept.as_mut() {
+            kept.under = under;
+        }
+        self.draw_calls += 1;
+        self.command_encoded(reads);
+        self.called = true;
+        self.drew |= rasterizes;
+        self.drew_depth_writes |= depth_writes;
+        Ok(())
+    }
+}

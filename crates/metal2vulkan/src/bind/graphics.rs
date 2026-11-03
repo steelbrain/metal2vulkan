@@ -2792,6 +2792,29 @@ impl BindingPlan {
         }
         instantiate(t, state, draw, commands)
     }
+
+    /// [`instantiate_draw_into`](Self::instantiate_draw_into)'s commands of `state`, written over
+    /// `commands`, which hold that method's commands of the same draw of a state that differed
+    /// from `state` only in what the buffer slots `slots` bind (a buffer or inline bytes, at any
+    /// offset), the state's shape the same: only what those slots decide is written again (their
+    /// descriptor ranges, the `SlotBindOffset`, `SlotGuestBase` and pulled-stride push fields that
+    /// read them, and their fixed-function vertex buffers' offsets), so the commands are those
+    /// `instantiate_draw_into` writes. `Ok(false)` where the plan or the draw reads one of them
+    /// some other way (a device-address slot, an argument or root table, a fixed-function binding
+    /// of a per-bind stride, a mesh, patch or de-indexed draw, a uniform view a written slot may
+    /// alias): `commands` then hold no draw's commands, as after an error, and the caller
+    /// instantiates whole. An error is one `instantiate_draw_into` may answer for `state`.
+    pub fn rebind_draw_buffers_into(
+        &self,
+        state: &BindState,
+        slots: &[SlotRef],
+        commands: &mut DrawCommands,
+    ) -> Result<bool, BindError> {
+        match self.graphics.as_ref() {
+            Some(t) if !t.other_layer_variant => rebind_buffers(t, state, slots, commands),
+            _ => Ok(false),
+        }
+    }
 }
 
 /// The Vulkan draw of a Metal draw, and the base vertex and first instance the
@@ -4446,31 +4469,7 @@ fn instantiate(
                     };
                     FieldBytes::of(&word.to_le_bytes())
                 }
-                PushField::VertexBufferStride(layout) => {
-                    let fixed = t.pulled_strides.iter().find(|(l, _)| *l == layout);
-                    let stride = match (fixed, vertex.and_then(|v| v.buffers.get(&layout))) {
-                        (Some(&(_, s)), _) => s,
-                        (
-                            None,
-                            Some(&BoundBuffer::Buffer {
-                                attribute_stride, ..
-                            }),
-                        ) => attribute_stride.unwrap_or(0),
-                        (
-                            None,
-                            Some(&BoundBuffer::Bytes {
-                                attribute_stride, ..
-                            }),
-                        ) => bytes_stride(attribute_stride, vertex_buffer(layout))?,
-                        _ => {
-                            return Err(internal(format!(
-                                "the bind state's shape differs from the plan's at vertex \
-                                 buffer {layout}"
-                            )))
-                        }
-                    };
-                    FieldBytes::of(&stride.to_le_bytes())
-                }
+                PushField::VertexBufferStride(layout) => pulled_stride(t, state, layout)?,
                 field => slot_field(field, &bound.residuals, &t.resources, state)
                     .ok_or_else(|| internal(format!("a render push field {field:?}")))?,
             };
@@ -4671,6 +4670,171 @@ fn instantiate(
     *specialization_out = specialization;
     *tessellation_dispatch_out = tessellation_dispatch;
     Ok(())
+}
+
+/// `PushField::VertexBufferStride(layout)`: the stride the pulled layout `layout` reads, the
+/// pipeline's where it is static, else the vertex buffer's bind's there.
+fn pulled_stride(
+    t: &GraphicsTemplate,
+    state: &BindState,
+    layout: u32,
+) -> Result<FieldBytes, BindError> {
+    let fixed = t.pulled_strides.iter().find(|(l, _)| *l == layout);
+    let vertex = state.stages.get(&Stage::Vertex);
+    let stride = match (fixed, vertex.and_then(|v| v.buffers.get(&layout))) {
+        (Some(&(_, s)), _) => s,
+        (
+            None,
+            Some(&BoundBuffer::Buffer {
+                attribute_stride, ..
+            }),
+        ) => attribute_stride.unwrap_or(0),
+        (
+            None,
+            Some(&BoundBuffer::Bytes {
+                attribute_stride, ..
+            }),
+        ) => bytes_stride(attribute_stride, vertex_buffer(layout))?,
+        _ => {
+            return Err(internal(format!(
+                "the bind state's shape differs from the plan's at vertex buffer {layout}"
+            )))
+        }
+    };
+    Ok(FieldBytes::of(&stride.to_le_bytes()))
+}
+
+/// [`BindingPlan::rebind_draw_buffers_into`] of a render plan's template `t`.
+fn rebind_buffers(
+    t: &GraphicsTemplate,
+    state: &BindState,
+    slots: &[SlotRef],
+    out: &mut DrawCommands,
+) -> Result<bool, BindError> {
+    let changed = |slot: SlotRef| slot.class == SlotClass::Buffer && slots.contains(&slot);
+    // What the slots decide some other way than below: an argument table's bytes or a root
+    // table, a mesh or patch draw's own reads, a de-indexed draw's layout, and a uniform view a
+    // written slot may alias.
+    let other_reads = !out.descriptor_bytes.is_empty()
+        || !out.root_tables.is_empty()
+        || t.stages
+            .iter()
+            .any(|st| st.root_first.is_some() || st.table.is_some())
+        || t.mesh.is_some()
+        || t.tessellation.is_some()
+        || t.deindexed.is_some()
+        || (t.buffers.iter().any(|b| b.disjoint) && t.buffers.iter().any(|b| b.access.write));
+    if other_reads || !slots.iter().all(|&slot| slot.class == SlotClass::Buffer) {
+        return Ok(false);
+    }
+    // Each changed descriptor-form slot's range, at its place among the bound ones' (in
+    // `bind_buffers`' order), and its residual.
+    let mut residuals = crate::bind::instantiate::Residuals::default();
+    let mut at = 0;
+    for pb in &t.buffers {
+        let bound = crate::bind::instantiate::bound_buffer(state, pb.slot, pb.bound)?;
+        let (bind_offset, length) = match bound {
+            Some(&BoundBuffer::Buffer { length, offset, .. }) => (offset, length),
+            Some(&BoundBuffer::Bytes { len, .. }) => (0, u64::from(len.max(1))),
+            None => continue,
+        };
+        let (set, binding) = match (pb.form, pb.binding) {
+            (BufferForm::Descriptor(_), Some(key)) => key,
+            // A device-address slot's root entry.
+            _ if changed(pb.slot) => return Ok(false),
+            _ => continue,
+        };
+        let place = at;
+        at += 1;
+        if !changed(pb.slot) {
+            continue;
+        }
+        let (range, residual) =
+            descriptor_range(bind_offset, length, pb.window, pb.alignment, pb.max_range).map_err(
+                |e| match e {
+                    RangeError::TooLarge { needed } => BindError::DescriptorRangeExceeded {
+                        slot: pb.slot,
+                        needed,
+                        limit: pb.max_range,
+                    },
+                    RangeError::Empty => {
+                        BindError::Unsupported(Unsupported::not_representable(Feature::BufferRange))
+                    }
+                },
+            )?;
+        let Some(written) = out
+            .descriptor_ranges
+            .get_mut(place)
+            .filter(|r| (r.set, r.binding) == (set, binding))
+        else {
+            return Ok(false);
+        };
+        written.range = range;
+        residuals.push(pb.slot, residual);
+    }
+    // The push fields that read them, in each stage's push write.
+    let mut pushes = 0;
+    for st in &t.stages {
+        let (push_start, push_size) = st.push_range.unwrap_or((0, 0));
+        let push = match push_size {
+            0 => None,
+            _ => {
+                pushes += 1;
+                Some(pushes - 1)
+            }
+        };
+        for f in &st.fields {
+            let bytes = match f.field {
+                PushField::SlotBindOffset(slot) | PushField::SlotGuestBase(slot)
+                    if changed(slot) =>
+                {
+                    slot_field(f.field, &residuals, &t.resources, state)
+                        .ok_or_else(|| internal(format!("a render push field {:?}", f.field)))?
+                }
+                PushField::VertexBufferStride(layout)
+                    if changed(SlotRef {
+                        stage: Stage::Vertex,
+                        class: SlotClass::Buffer,
+                        index: layout,
+                    }) =>
+                {
+                    pulled_stride(t, state, layout)?
+                }
+                _ => continue,
+            };
+            let Some(write) = push.and_then(|at| out.push_constants.get_mut(at)) else {
+                return Ok(false);
+            };
+            put(&mut write.bytes, push_start, &mut [], f.loc, &bytes)?;
+        }
+    }
+    // Each changed fixed-function vertex buffer's offset, at its binding's place (bound in
+    // `t.vertex_buffers`' order); a per-bind stride's binding, whose extent and stride may move
+    // with it, is written whole.
+    let vertex = state.stages.get(&Stage::Vertex);
+    for (place, vb) in t.vertex_buffers.iter().enumerate() {
+        if !changed(vb.slot) {
+            continue;
+        }
+        let offset = match vertex.and_then(|v| v.buffers.get(&vb.slot.index)) {
+            Some(&BoundBuffer::Buffer { offset, .. }) => offset,
+            Some(&BoundBuffer::Bytes { .. }) => 0,
+            None => return Err(BindError::UnboundVertexBuffer { slot: vb.slot }),
+        };
+        let fetched = fetchable(vb, &t.vertex_strides, offset_alignment(offset, 0), None);
+        if matches!(vb.stride, VertexStride::PerBind) || !fetched {
+            return Ok(false);
+        }
+        let Some(written) = out
+            .buffer_offsets
+            .get_mut(place)
+            .filter(|(binding, _)| *binding == vb.binding)
+        else {
+            return Ok(false);
+        };
+        written.1 = offset;
+    }
+    Ok(true)
 }
 
 /// The `at`th value of `list`, which holds at least `at`: the one a draw before left there, else

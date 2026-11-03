@@ -534,7 +534,7 @@ pub(crate) struct Residuals {
 
 impl Residuals {
     /// Add `slot`'s residual last.
-    fn push(&mut self, slot: SlotRef, residual: u32) {
+    pub(crate) fn push(&mut self, slot: SlotRef, residual: u32) {
         match self.inline.iter_mut().find(|r| r.is_none()) {
             Some(free) => *free = Some((slot, residual)),
             None => self.rest.push((slot, residual)),

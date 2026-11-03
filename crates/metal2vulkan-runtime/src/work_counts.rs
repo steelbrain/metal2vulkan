@@ -284,6 +284,7 @@ pub(crate) struct Counters {
     draw_shapes_reused: AtomicU64,
     draw_shapes_carried: AtomicU64,
     draws_as_before: AtomicU64,
+    draws_rebound: AtomicU64,
     host_holds_looked_up: AtomicU64,
     dispatches_settled_as_before: AtomicU64,
     dispatches_planned_as_before: AtomicU64,
@@ -1985,6 +1986,15 @@ impl Counters {
             self.provoking_last_pipeline_draws
                 .fetch_add(last_vertex, Ordering::Relaxed);
         }
+    }
+
+    /// `draws` render draws rebound (`WorkCounts::draws_rebound`), whose stage tables `tables`
+    /// reads brought in part: counted at their encoder's next call or its end.
+    pub(crate) fn draws_rebound(&self, draws: u64, tables: u64) {
+        self.draws_rebound.fetch_add(draws, Ordering::Relaxed);
+        self.stage_tables_read.fetch_add(tables, Ordering::Relaxed);
+        self.stage_tables_read_in_part
+            .fetch_add(tables, Ordering::Relaxed);
     }
 
     /// An encoder's hold of a key its commands named first that looked the key up among the
@@ -4559,6 +4569,19 @@ pub struct WorkCounts {
     /// does not take (`draw_shapes_reused`, `set_zero_sets_reused`, `draw_states_recorded`); all
     /// are counted at the encoder's next call or its end.
     pub draws_as_before: u64,
+    /// Render encoders' direct draws recorded as their encoder's last draw again after calls
+    /// that bound other buffers, offsets or bytes at vertex or fragment buffer slots, rather than
+    /// taking every step of a draw: a draw that `draws_as_before` would count but for those
+    /// calls, where the bind state kept its shape, the slots are read through set-0 descriptors
+    /// (dynamic or pushed), push fields or fixed-function vertex buffers alone, and the uses they
+    /// make need no barrier, copy or shadow (`render/draw_again/rebound.rs`). Each reads its
+    /// changed stage tables in part (`stage_tables_read_in_part`), writes again only those slots'
+    /// descriptors, dynamic offsets, push fields and vertex buffers, notes its uses as any draw
+    /// does, and records the state commands that changed (`draw_states_recorded`) and its draw;
+    /// it takes nothing of the shape memo (`draw_shapes_reused`) and settles nothing. Its counts
+    /// of draws, tables read and states recorded are counted at the encoder's next call or its
+    /// end.
+    pub draws_rebound: u64,
     /// Keys an encoder's commands named first, while the device has a buffer over host pages
     /// (`new_buffer_with_bytes_no_copy`), that were looked up among those buffers under the lock
     /// their command buffers' submissions take: the keys of such buffers, and the rare other key
@@ -5845,6 +5868,7 @@ impl Device {
             draw_shapes_reused: counters.draw_shapes_reused.load(Ordering::Relaxed),
             draw_shapes_carried: counters.draw_shapes_carried.load(Ordering::Relaxed),
             draws_as_before: counters.draws_as_before.load(Ordering::Relaxed),
+            draws_rebound: counters.draws_rebound.load(Ordering::Relaxed),
             host_holds_looked_up: counters.host_holds_looked_up.load(Ordering::Relaxed),
             dispatches_settled_as_before: (counters.dispatches_settled_as_before)
                 .load(Ordering::Relaxed),

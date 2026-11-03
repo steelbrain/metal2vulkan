@@ -460,17 +460,70 @@ pub(super) fn dynamic_writes(writes: &mut [Write], dynamic: &[u32], offsets: &mu
     if dynamic.is_empty() {
         return;
     }
-    for write in writes.iter_mut().filter(|write| write.set == 0) {
-        let (Ok(at), Info::Buffer(info)) = (dynamic.binary_search(&write.binding), &mut write.info)
-        else {
-            continue;
-        };
-        write.ty = dynamic_type(write.ty);
-        if let Ok(offset) = u32::try_from(info.offset) {
-            offsets[at] = offset;
-            info.offset = 0;
-        }
+    for write in writes.iter_mut() {
+        dynamic_write(write, dynamic, offsets);
     }
+}
+
+/// [`dynamic_writes`]' work on one write, where it is set 0's at a binding `dynamic` numbers:
+/// made dynamic, its offset its binding's in `offsets`.
+fn dynamic_write(write: &mut Write, dynamic: &[u32], offsets: &mut [u32]) {
+    if write.set != 0 {
+        return;
+    }
+    let (Ok(at), Info::Buffer(info)) = (dynamic.binary_search(&write.binding), &mut write.info)
+    else {
+        return;
+    };
+    write.ty = dynamic_type(write.ty);
+    offsets[at] = 0;
+    if let Ok(offset) = u32::try_from(info.offset) {
+        offsets[at] = offset;
+        info.offset = 0;
+    }
+}
+
+/// Write again, over `writes` and `offsets` (a command's set-0 writes and dynamic offsets as
+/// [`bind_into`] and [`dynamic_writes`] made them, for a variant of the dynamic bindings
+/// `dynamic`), the descriptors of the plan's writes from the buffer slots `slots`, which the
+/// command's tables now bind elsewhere (another buffer, offset or bytes, the shape the same), with
+/// `command`'s ranges for them: the writes and offsets [`bind_into`] and [`dynamic_writes`] make
+/// for the tables now. `Ok(false)` where a write of theirs is not at its place among `writes` (a
+/// heap's, which skips writes): the caller binds whole.
+pub(super) fn rebind_into(
+    device: &Device,
+    state: &mut State,
+    (plan, command, tables): (&BindingPlan, &Command<'_>, &Tables<'_>),
+    slots: &[SlotRef],
+    (writes, dynamic, offsets): (&mut [Write], &[u32], &mut [u32]),
+) -> Result<bool, Error> {
+    if tables.heap.is_some() || writes.len() != plan.descriptors.len() {
+        return Ok(false);
+    }
+    for (write, planned) in writes.iter_mut().zip(&plan.descriptors) {
+        let slot = match planned.source {
+            WriteSource::Buffer { slot } | WriteSource::InlineBytes { slot } => slot,
+            _ => continue,
+        };
+        if !slots.contains(&slot) {
+            continue;
+        }
+        let ty: vk::DescriptorType = planned.ty.into();
+        let place = (write.set, write.binding, write.element);
+        if place != (planned.set, planned.binding, planned.array_element) || write.held.is_some() {
+            return Ok(false);
+        }
+        *write = Write {
+            set: planned.set,
+            binding: planned.binding,
+            element: planned.array_element,
+            ty,
+            info: Info::Buffer(descriptor(device, state, command, tables, planned)?),
+            held: None,
+        };
+        dynamic_write(write, dynamic, offsets);
+    }
+    Ok(true)
 }
 
 /// One descriptor to write: a buffer's or an image's and sampler's.
@@ -483,6 +536,20 @@ pub(super) struct Write {
     /// What keeps what a heap element names while the device's heap set holds it: an argument
     /// sampler's `VkSampler`, a function table's words (`heap_sets.rs`).
     pub(super) held: Option<Keeper>,
+}
+
+impl Write {
+    /// A copy of it, where it holds no keeper.
+    pub(super) fn unheld(&self) -> Option<Write> {
+        self.held.is_none().then_some(Write {
+            set: self.set,
+            binding: self.binding,
+            element: self.element,
+            ty: self.ty,
+            info: self.info,
+            held: None,
+        })
+    }
 }
 
 /// What a descriptor write holds.
@@ -891,7 +958,7 @@ impl SetWrite {
     }
 
     /// `write`'s descriptor, without its set number and keeper.
-    fn of(write: &Write) -> SetWrite {
+    pub(super) fn of(write: &Write) -> SetWrite {
         SetWrite {
             binding: write.binding,
             element: write.element,

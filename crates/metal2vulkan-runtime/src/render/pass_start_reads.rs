@@ -260,6 +260,12 @@ impl PassStartReads {
         }
     }
 
+    /// Whether a fragment stage of the pass wrote memory: else every stage of its draws reads the
+    /// encoder's tables ([`tables`](Self::tables)).
+    pub(super) fn fragments_wrote(&self) -> bool {
+        !self.fragment.is_empty()
+    }
+
     /// The tables a draw of `interface`'s pipeline reads in place of the encoder's `vertex`,
     /// `object` and `mesh`, each as `table` makes it.
     pub(super) fn tables(

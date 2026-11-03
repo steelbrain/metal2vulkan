@@ -1179,6 +1179,15 @@ impl ArgumentTable {
         self.check_reading(kept, read, (maps, views));
     }
 
+    /// The slots the table's calls changed since its stamp was `read`, where it keeps them
+    /// ([`Changes`]): those [`refresh_changed`](Self::refresh_changed) brings in.
+    pub(super) fn changed_since(
+        &self,
+        read: Stamp,
+    ) -> Option<impl Iterator<Item = (SlotClass, u32)> + '_> {
+        self.changes.since(read)
+    }
+
     /// [`refresh_reading`](Self::refresh_reading) of `kept`, read last under the stamp `read`
     /// through the same interface and maps: only the slots the table's calls changed since, where
     /// it keeps them ([`Changes`]) and its slots that tell the view base alignment apart are as

@@ -76,6 +76,7 @@ use super::binding::{CommandUses, PushWrite, SetWrite, Write};
 use super::device::lock;
 use super::noted_apart::NotedApart;
 use super::pipeline::{BufferForms, GraphicsState, ProgramName, Settled};
+use super::render::KeptStorage;
 use super::sampler::OwnedSampler;
 use super::work_counts::Counters;
 
@@ -122,7 +123,8 @@ impl Reshape {
     }
 
     /// Whether a change it was told of may have changed the shape: a compute encoder's kept state
-    /// then finds its shape again (`compute/live.rs`).
+    /// then finds its shape again (`compute/live.rs`), and a draw rebound takes every step
+    /// (`render/draw_again/rebound.rs`).
     pub(super) fn may_reshape(self) -> bool {
         self.0
     }
@@ -213,6 +215,9 @@ pub(super) struct LiveBind {
     /// The storage of the samplers the last draw's writes named (`binding::bind_into`), kept
     /// likewise and empty between draws: its encoder retains them as the draw records.
     pub(super) samplers: Vec<Arc<OwnedSampler>>,
+    /// What a draw rebound takes of its encoder's kept draw beyond its objects, kept likewise
+    /// (`render/draw_again/rebound.rs`).
+    pub(super) kept: KeptStorage,
 }
 
 /// A bind state a [`LiveBind`] set aside, with its shape, its listing's count and what its stage
@@ -238,6 +243,11 @@ pub(super) struct SettledHere {
 }
 
 impl SettledHere {
+    /// What the draw settled.
+    pub(super) fn settled(&self) -> &Settled {
+        &self.settled
+    }
+
     /// What a draw of `pipeline` in `forms` settled.
     pub(super) fn new(pipeline: &GraphicsState, forms: BufferForms, settled: Settled) -> Self {
         SettledHere {
@@ -286,6 +296,11 @@ impl ReadFrom {
         moved: u64,
     ) -> bool {
         self.moved == moved && self.through(interface) && self.maps == *maps
+    }
+
+    /// The maps the tables were read with.
+    pub(super) fn maps(&self) -> &SamplerMaps {
+        &self.maps
     }
 
     /// Whether the tables were read through `interface`: the one at its address, while the
@@ -389,6 +404,13 @@ impl LiveBind {
             && Arc::ptr_eq(&here.settled.shape, shape)
             && pipeline.runs(&here.program);
         same.then_some(&here.settled)
+    }
+
+    /// Whether a draw of `pipeline` in `forms` settles as the state's last recorded draw did
+    /// ([`settled`](Self::settled)), its shape kept: no change since may have changed it.
+    pub(super) fn settles_kept(&self, pipeline: &GraphicsState, forms: BufferForms) -> bool {
+        let shape = self.shape.as_ref();
+        shape.is_some_and(|shape| self.settled(pipeline, shape, forms).is_some())
     }
 
     /// Let go of every state's kept settle, as their encoder ends.

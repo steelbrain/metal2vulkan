@@ -608,6 +608,16 @@ impl EncoderCore {
         (writes, offsets): (&mut [Write], &mut Vec<u32>),
     ) -> Result<(Option<vk::DescriptorSet>, Option<WrittenSet>), Error> {
         binding::dynamic_writes(writes, objects.dynamic_bindings(), offsets);
+        self.set_zero_of(objects, writes)
+    }
+
+    /// [`set_zero`](Self::set_zero)'s set for `writes`, made dynamic already
+    /// (`binding::dynamic_writes`).
+    pub(super) fn set_zero_of(
+        &mut self,
+        objects: &VariantObjects,
+        writes: &mut [Write],
+    ) -> Result<(Option<vk::DescriptorSet>, Option<WrittenSet>), Error> {
         let layout = objects.set_zero_layout();
         if let Some(layout) = layout {
             if let Some(set) = self.last_set_zero.holds(layout, writes) {
@@ -1248,14 +1258,10 @@ impl EncoderCore {
     /// are. Free while no buffer is detached. Call it once every check of the command passed,
     /// before any Vulkan call that takes one of the buffers.
     pub(super) fn skips(&mut self, keys: impl IntoIterator<Item = ResourceKey> + Clone) -> bool {
+        if !self.would_skip(keys.clone()) {
+            return false;
+        }
         if !self.taken.dead() {
-            if self.unattached_as_called {
-                return false;
-            }
-            let rebinds = &self.device().shared().rebinds;
-            if !rebinds.any_detached(keys.clone()) {
-                return false;
-            }
             self.taken.die();
         }
         self.touch_keys(keys.clone());
@@ -1263,6 +1269,14 @@ impl EncoderCore {
             self.taken.name(key);
         }
         true
+    }
+
+    /// Whether [`skips`](Self::skips) skips a command that names `keys`, changing nothing.
+    pub(super) fn would_skip(&self, keys: impl IntoIterator<Item = ResourceKey>) -> bool {
+        if self.taken.dead() {
+            return true;
+        }
+        !self.unattached_as_called && self.device().shared().rebinds.any_detached(keys)
     }
 
     /// The keys its commands named so far, their uses' and their bindings' (`touch`).
