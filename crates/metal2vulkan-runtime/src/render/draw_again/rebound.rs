@@ -1,41 +1,46 @@
-//! A render encoder's kept draw drawn again after calls that bound other buffers or offsets at
-//! vertex or fragment buffer slots (`WorkCounts::draws_rebound`): its every other step is the kept
-//! draw's (`render/draw_again.rs`), so only what those slots decide is worked out again.
+//! A render encoder's kept draw drawn again after calls that bound other buffers, offsets, textures
+//! or sampler states at slots of its tables (`WorkCounts::draws_rebound`): its every other step is
+//! the kept draw's (`render/draw_again.rs`), so only what those slots decide is worked out again.
 //!
 //! - **Which draw.** The kept draw again ([`RenderLowering::draw_again`]: the same call and
-//!   arguments, under the same `Under`, into the same command buffer) after calls that changed
-//!   only buffer slots of its tables, each table's changes since the kept draw read it still
-//!   listed (`argument_table::Changes`, at most [`SLOTS`] slots), where the kept draw kept what
-//!   this takes ([`KeptStorage`]: a draw whose set-0 writes hold no keeper, of no use beyond its
-//!   plan's and its draw's own, and of a state that made no visible-function table). The kept
+//!   arguments, under the same `Under`, into the same command buffer) after calls that changed only
+//!   buffer, texture and sampler slots of its tables, each table's changes since the kept draw read
+//!   it still listed (`argument_table::Changes`, at most [`SLOTS`] slots), where the kept draw kept
+//!   what this takes ([`KeptStorage`]: a draw whose set-0 writes hold no keeper, of no use beyond
+//!   its plan's and its draw's own, and of a state that made no visible-function table). The kept
 //!   bind state takes the changed slots (`ArgumentTable::refresh_changed`), and the draw goes on
-//!   only where its shape stays: its variant, plan, pipeline and draw state are then the kept
-//!   draw's, functions of the shape and of what no call changed.
+//!   only where its shape stays, and its runtime samplers' address modes (`address_map.rs`) with
+//!   it: its variant, plan, pipeline and draw state are then the kept draw's, functions of the
+//!   shape and of what no call changed.
 //! - **What it works out again.** Its commands, rebound at those slots
-//!   (`BindingPlan::rebind_draw_buffers_into`: their descriptor ranges, push fields and vertex
-//!   buffers' offsets); set 0's writes of them with their dynamic offsets (`binding::rebind_into`),
-//!   and the set its encoder's last set or its command buffer's holds, else a new one
-//!   (`EncoderCore::set_zero_of`); its push bytes and vertex buffers; and its uses, whole
+//!   (`BindingPlan::rebind_draw_slots_into`: their descriptor ranges, push fields and vertex
+//!   buffers' offsets); set 0's writes of them with their dynamic offsets (`binding::rebind_into`:
+//!   a texture's view and a sampler state's `VkSampler` as every step makes them, through its
+//!   encoder's memo), and the set its encoder's last set or its command buffer's holds, else a new
+//!   one (`EncoderCore::set_zero_of`); its push bytes and vertex buffers; and its uses, whole
 //!   (`binding::command_uses_into`). And the checks a draw of changed tables takes: a pulled
 //!   attribute's reach, the stages' function tables, the attachments' reads. Each is the function
 //!   every step of the draw runs, on the same inputs.
-//! - **Where it stops.** At a slot of another class, a changed shape, a plan that reads a changed
-//!   slot some other way, a refusal of any of those steps, a pass whose fragments wrote memory (a
-//!   stage before them may read a copy of it), a shadowed texture among its uses, or a barrier its
-//!   fragments need after an earlier draw's geometry writes: the draw takes every step, which
-//!   answers as it would have. Only the attachments' reads' refusal is answered here, the last of
-//!   its checks, which may have announced.
+//! - **Where it stops.** At a changed shape or runtime samplers' address modes, a plan that reads a
+//!   changed slot some other way (a texture buffer, a YCbCr texture's planes, an argument sampler),
+//!   a refusal of any of those steps, a pass whose fragments wrote memory (a stage before them may
+//!   read a copy of it), a changed texture where its functions use a memoryless texture, the plan
+//!   samples or writes a color attachment's texture, or an extended-range texture binds through a
+//!   shadow, a shadowed texture among its uses, or a barrier its fragments need after an earlier
+//!   draw's geometry writes: the draw takes every step, which answers as it would have. Only the
+//!   attachments' reads' refusal is answered here, the last of its checks, which may have
+//!   announced.
 //! - **What it records and notes.** Its uses noted as any draw notes them (`note_reaching`, the
 //!   unordered writes, the pass's reads, the instance's gathered uses, indirect reads and geometry
 //!   writes); the state commands that changed and its draw, recorded through the kept draw's
 //!   recording against what its command buffer holds (`render/bound.rs`); its tables' new objects
-//!   retained; and the rest as a draw again: kept for recording again (but where it met a notice
-//!   met at each occurrence, as its every step forgets it then), its execution record, its counts
-//!   until the encoder's next call or its end.
+//!   and its new samplers retained; and the rest as a draw again: kept for recording again (but
+//!   where it met a notice met at each occurrence, as its every step forgets it then), its
+//!   execution record, its counts until the encoder's next call or its end.
 //! - **Checked in builds with debug assertions.** As a draw again is: the first rebound draw of a
-//!   kept draw and every second after it work out the rebind, then take every step instead,
-//!   which must keep the draw, with the same commands, set-0 writes, dynamic offsets, push bytes,
-//!   vertex buffers and uses.
+//!   kept draw and every second after it work out the rebind, then take every step instead, which
+//!   must keep the draw, with the same commands, set-0 writes, dynamic offsets, push bytes, vertex
+//!   buffers and uses.
 
 use ash::vk;
 use metal2vulkan::bind::DrawCall;
@@ -51,7 +56,7 @@ use crate::live_bind::{LiveBind, Reshape};
 use crate::pipeline::{RenderStateKind, Settled};
 use crate::render::{Assembly, DrawBuffers, DrawState, Recording};
 
-/// The most buffer slots a draw rebound takes changed: a draw after more takes every step.
+/// The most slots a draw rebound takes changed: a draw after more takes every step.
 const SLOTS: usize = 8;
 
 /// What a draw rebound takes of the kept draw (the module docs) but its variant and plan, which
@@ -115,7 +120,8 @@ fn settles_kept(encoder: &RenderLowering, live: &LiveBind) -> bool {
     }
 }
 
-/// The buffer slots calls changed since the kept draw read its tables: at most [`SLOTS`].
+/// The buffer, texture and sampler slots calls changed since the kept draw read its tables: at
+/// most [`SLOTS`].
 struct Changed {
     slots: [SlotRef; SLOTS],
     count: usize,
@@ -151,11 +157,18 @@ impl Changed {
     fn list(&self) -> &[SlotRef] {
         &self.slots[..self.count]
     }
+
+    /// Whether one is a texture or sampler slot.
+    fn images(&self) -> bool {
+        self.list()
+            .iter()
+            .any(|slot| slot.class != SlotClass::Buffer)
+    }
 }
 
 impl RenderLowering {
-    /// The kept draw again after calls that bound other buffers or offsets in its tables, whose
-    /// stamps are now `stamps` (the module docs): recorded, refused, or [`Again::No`] where it
+    /// The kept draw again after calls that bound other buffers, offsets, textures or samplers in
+    /// its tables, whose stamps are now `stamps` (the module docs): recorded, refused, or [`Again::No`] where it
     /// takes every step.
     pub(super) fn draw_rebound(
         &mut self,
@@ -191,7 +204,8 @@ impl RenderLowering {
         if let Err(refused) = attached {
             return Again::Refused(refused);
         }
-        let recorded = self.record_rebound(live, (call, assembly, draw), buffers, (stamps, read));
+        let counted = (stamps, read, changed.images());
+        let recorded = self.record_rebound(live, (call, assembly, draw), buffers, counted);
         if let Err(refused) = recorded {
             return Again::Refused(refused);
         }
@@ -220,8 +234,8 @@ impl RenderLowering {
         let tables = [&self.vertex, &self.fragment, &self.object, &self.mesh];
         let stages = [Stage::Vertex, Stage::Fragment, Stage::Object, Stage::Mesh];
         // Each changed table: read last as the kept draw read it, its slots that tell the view
-        // base alignment apart as the state holds them, its changes since listed, all of buffer
-        // slots.
+        // base alignment apart as the state holds them, its changes since listed, all of buffer,
+        // texture and sampler slots.
         let mut changed = Changed::new();
         for (at, (stage, table)) in stages.into_iter().zip(tables).enumerate() {
             let under = kept.stamps[at];
@@ -234,7 +248,11 @@ impl RenderLowering {
                 return None;
             }
             for (class, index) in table.changed_since(under)? {
-                if class != SlotClass::Buffer
+                let bound = matches!(
+                    class,
+                    SlotClass::Buffer | SlotClass::Texture | SlotClass::Sampler
+                );
+                if !bound
                     || !changed.add(SlotRef {
                         stage,
                         class,
@@ -243,6 +261,26 @@ impl RenderLowering {
                 {
                     return None;
                 }
+            }
+        }
+        // A texture or sampler changed: no texture its functions use memoryless (a draw of one
+        // fails its command buffer, its every step's first check), and the runtime samplers'
+        // address modes as the textures now map them the kept draw's (its every step settles and
+        // binds under them).
+        if changed.images() {
+            if self.uses_memoryless(interface) {
+                return None;
+            }
+            let stages = [
+                (Stage::Vertex, &self.vertex),
+                (Stage::Fragment, &self.fragment),
+                (Stage::Object, &self.object),
+                (Stage::Mesh, &self.mesh),
+            ];
+            let layout = &pipeline.base().layout;
+            let now = crate::address_map::sampler_maps(layout, &stages, Some(&self.residency));
+            if now.ok()? != maps {
+                return None;
             }
         }
         // Their slots brought in. What one brought in changed stays told where a later table
@@ -286,7 +324,7 @@ impl RenderLowering {
             return false;
         };
         let slots = changed.list();
-        if plan.rebind_draw_buffers_into(&live.state, slots, &mut live.commands) != Ok(true) {
+        if plan.rebind_draw_slots_into(&live.state, slots, &mut live.commands) != Ok(true) {
             return false;
         }
         let compiled = variant.pipeline();
@@ -305,18 +343,33 @@ impl RenderLowering {
         if !checked || self.pass_start.fragments_wrote() {
             return false;
         }
+        // A changed texture: none its plan samples or writes is a color attachment's (a draw
+        // that reads one reads its copy, or a snapshot, or records apart), and no extended-range
+        // texture is bound through a shadow (`LiveBind`'s state), as for the kept draw.
+        let images = changed.images();
+        if images
+            && (self.samples_attachment(plan)
+                || self.storage_colors(plan) != 0
+                || !live.state.extended_shadows.is_empty())
+        {
+            return false;
+        }
         let stages = [
             (Stage::Vertex, &self.vertex),
             (Stage::Fragment, &self.fragment),
             (Stage::Object, &self.object),
             (Stage::Mesh, &self.mesh),
         ];
-        let tables = binding::Tables::new(&stages)
+        let mut tables = binding::Tables::new(&stages)
             .with_pass(&self.layout, plan.views)
             .with_residency(&self.residency)
             .with_texture_table(None)
             .with_sampler_table(None)
             .with_function_tables(&[]);
+        // Its runtime samplers' address modes: the kept draw's, as `bring_in` found them.
+        if images {
+            tables = tables.with_sampler_maps(live.read_from.maps().clone());
+        }
         let commands = &live.commands;
         let command = binding::Command {
             descriptor_bytes: &commands.descriptor_bytes,
@@ -334,12 +387,15 @@ impl RenderLowering {
             let mut state = self.core.command_buffer().state();
             let writes = &mut live.kept.writes[..];
             let set_zero = (writes, objects.dynamic_bindings(), &mut live.offsets[..]);
+            let samplers = (Some(&mut self.bind_memo), &mut live.samplers);
             binding::rebind_into(
+                call,
                 device,
                 &mut state,
                 (&**plan, &command, &tables),
                 slots,
                 set_zero,
+                samplers,
             )
         };
         let index = buffers.index.as_ref().map(DrawSource::metal);
@@ -398,7 +454,7 @@ impl RenderLowering {
         live: &mut LiveBind,
         (call, assembly, draw): (&'static str, Assembly, &DrawCall),
         buffers: &DrawBuffers<'_>,
-        (stamps, read): ([Stamp; 4], u64),
+        (stamps, read, images): ([Stamp; 4], u64, bool),
     ) -> Result<(), Error> {
         let kept = settles_kept(self, live)
             .then_some(live.settled.as_ref())
@@ -471,6 +527,10 @@ impl RenderLowering {
         let kept = (self.again.kept.as_mut())
             .ok_or_else(|| crate::error::internal("a draw rebound without its kept draw"))?;
         kept.stamps = stamps;
+        // Whether its uses read an image: what its drawing again notes (`Kept::reads_images`).
+        if images {
+            kept.reads_images = live.uses.iter().any(super::reads_image);
+        }
         let counted = &mut self.again.counted;
         counted.draws += 1;
         counted.rebound += 1;
@@ -494,6 +554,8 @@ impl RenderLowering {
         self.fragment.retain_exclusive(&mut self.core);
         self.object.retain_exclusive(&mut self.core);
         self.mesh.retain_exclusive(&mut self.core);
+        self.last_retained
+            .retain_samplers(&mut self.core, &mut live.samplers);
         let under = self.under();
         if let Some(kept) = self.again.kept.as_mut() {
             kept.under = under;

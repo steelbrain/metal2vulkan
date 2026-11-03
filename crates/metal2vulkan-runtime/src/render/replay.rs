@@ -656,9 +656,9 @@ impl RenderLowering {
     }
 
     /// [`log`](Self::log) a call that keeps the encoder's kept draw: a `draw_primitives` call,
-    /// drawn again as it was kept or keeping itself, and a vertex or fragment buffer or bytes bind,
-    /// which changes its table's slots alone, whose stamp the next draw compares
-    /// (`render/draw_again.rs`).
+    /// drawn again as it was kept or keeping itself, and a vertex or fragment buffer, bytes,
+    /// texture or sampler state bind, which changes its table's slots alone, whose stamp the next
+    /// draw compares (`render/draw_again.rs`).
     pub(crate) fn log_keeping(
         &mut self,
         call: impl FnOnce(&mut CallLog<RenderCall>) -> RenderCall,

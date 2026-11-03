@@ -1035,7 +1035,7 @@ fn a_rebind_of_buffer_slots_writes_what_an_instantiation_writes() {
                 let before = plan.instantiate_draw(&first, &draw).expect("first draw");
                 let expected = plan.instantiate_draw(&state, &draw);
                 let mut cmds = before.clone();
-                match plan.rebind_draw_buffers_into(&state, &[vertex, scale], &mut cmds) {
+                match plan.rebind_draw_slots_into(&state, &[vertex, scale], &mut cmds) {
                     Ok(true) => {
                         rebound += 1;
                         pushed += usize::from(cmds.push_constants != before.push_constants);

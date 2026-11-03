@@ -2690,7 +2690,7 @@ impl RenderLowering {
         texture: Option<&Texture>,
         index: u32,
     ) -> Result<(), Error> {
-        self.log(|log| {
+        self.log_keeping(|log| {
             let texture = texture.map(|texture| log.hold_texture(texture));
             RenderCall::Texture(Table::Vertex, texture, index)
         });
@@ -2704,7 +2704,9 @@ impl RenderLowering {
         textures: &[Option<&Texture>],
         first: u32,
     ) -> Result<(), Error> {
-        self.log(|log| RenderCall::Textures(Table::Vertex, log.texture_span(textures), first));
+        self.log_keeping(|log| {
+            RenderCall::Textures(Table::Vertex, log.texture_span(textures), first)
+        });
         self.vertex
             .set_textures(&mut self.core, "set_vertex_textures", textures, first)
     }
@@ -2715,7 +2717,7 @@ impl RenderLowering {
         sampler: Option<&SamplerState>,
         index: u32,
     ) -> Result<(), Error> {
-        self.log(|log| {
+        self.log_keeping(|log| {
             let sampler = sampler.map(|sampler| log.hold_sampler(sampler));
             RenderCall::Sampler(Table::Vertex, sampler, index)
         });
@@ -2735,7 +2737,9 @@ impl RenderLowering {
         clamps: Option<(&[f32], &[f32])>,
         first: u32,
     ) -> Result<(), Error> {
-        self.log(|_| RenderCall::Samplers(Table::Vertex, Samplers::of(samplers, clamps, first)));
+        self.log_keeping(|_| {
+            RenderCall::Samplers(Table::Vertex, Samplers::of(samplers, clamps, first))
+        });
         self.vertex.set_samplers(
             &mut self.core,
             "set_vertex_sampler_states",
@@ -2808,7 +2812,7 @@ impl RenderLowering {
         texture: Option<&Texture>,
         index: u32,
     ) -> Result<(), Error> {
-        self.log(|log| {
+        self.log_keeping(|log| {
             let texture = texture.map(|texture| log.hold_texture(texture));
             RenderCall::Texture(Table::Fragment, texture, index)
         });
@@ -2822,7 +2826,9 @@ impl RenderLowering {
         textures: &[Option<&Texture>],
         first: u32,
     ) -> Result<(), Error> {
-        self.log(|log| RenderCall::Textures(Table::Fragment, log.texture_span(textures), first));
+        self.log_keeping(|log| {
+            RenderCall::Textures(Table::Fragment, log.texture_span(textures), first)
+        });
         self.fragment
             .set_textures(&mut self.core, "set_fragment_textures", textures, first)
     }
@@ -2833,7 +2839,7 @@ impl RenderLowering {
         sampler: Option<&SamplerState>,
         index: u32,
     ) -> Result<(), Error> {
-        self.log(|log| {
+        self.log_keeping(|log| {
             let sampler = sampler.map(|sampler| log.hold_sampler(sampler));
             RenderCall::Sampler(Table::Fragment, sampler, index)
         });
@@ -2853,7 +2859,9 @@ impl RenderLowering {
         clamps: Option<(&[f32], &[f32])>,
         first: u32,
     ) -> Result<(), Error> {
-        self.log(|_| RenderCall::Samplers(Table::Fragment, Samplers::of(samplers, clamps, first)));
+        self.log_keeping(|_| {
+            RenderCall::Samplers(Table::Fragment, Samplers::of(samplers, clamps, first))
+        });
         self.fragment.set_samplers(
             &mut self.core,
             "set_fragment_sampler_states",

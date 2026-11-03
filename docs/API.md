@@ -1049,11 +1049,13 @@ let commands = plan.instantiate_draw(&state, &draw)?;
 its vectors already hold: keep one from draw to draw (`DrawCommands::default()` to start) and the
 draws allocate none of it again once it holds as much.
 
-`rebind_draw_buffers_into` writes again only what some buffer slots decide, over the commands of
-the same draw of a state of the same shape that differed only in what those slots bind: their
-descriptor ranges, the push fields that read them and their vertex buffers' offsets. It answers
-`Ok(false)` where the plan reads one of them some other way (a device address, an argument or
-root table, a vertex binding of a per-bind stride, a mesh, patch or de-indexed draw) or a uniform
+`rebind_draw_slots_into` writes again only what some buffer, texture and sampler slots decide,
+over the commands of the same draw of a state of the same shape that differed only in what those
+slots bind: the buffers' descriptor ranges, the push fields that read them and their vertex
+buffers' offsets. A texture or sampler slot decides none of the commands; its descriptor is
+yours to write again. It answers `Ok(false)` where the plan reads one of them some other way (a
+device address, an argument or root table, a vertex binding of a per-bind stride, a texture
+buffer's texel range, a YCbCr texture's planes, a mesh, patch or de-indexed draw) or a uniform
 view a written slot may alias; then instantiate the draw whole.
 
 A dispatch is one or more regions (a grid that is not whole threadgroups adds edge regions), each

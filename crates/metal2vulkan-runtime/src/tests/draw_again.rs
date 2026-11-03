@@ -5,9 +5,10 @@
 //! a draw of other arguments, an indirect draw, a draw that writes memory, a draw after a no-copy
 //! buffer moved (its binding may read elsewhere), nor a draw that meets a notice its device
 //! announces at every occurrence, which announces it at every draw. A draw again after calls that
-//! bound other buffers, offsets or bytes at its buffer slots rebinds those alone
-//! (`render/draw_again/rebound.rs`, `WorkCounts::draws_rebound`), with the same commands and
-//! pixels as the same draws taking every step. In builds with debug assertions, every second draw
+//! bound other buffers, offsets or bytes at its buffer slots, or other textures or sampler states
+//! at its texture and sampler slots, rebinds those alone (`render/draw_again/rebound.rs`,
+//! `WorkCounts::draws_rebound`), with the same commands and pixels as the same draws taking every
+//! step. In builds with debug assertions, every second draw
 //! again takes every step instead, and checks that it changed nothing the draw again leaves and,
 //! rebound, worked out what every step works out (the modules' checks), so these tests run those
 //! checks too.
@@ -22,11 +23,14 @@ use super::encoder_holds::{bytes_of, library, pass, words_of};
 use super::rebind_behind_a_wait::{Page, BYTES};
 use crate::{
     BlitOption, Buffer, CommandBufferStatus, Degradation, DegradeNotice, Device, DeviceKind,
-    DeviceOptions, Error, MessageSink, Origin, PipelineOptions, RenderCommandEncoder,
-    RenderPipelineState, ResourceOptions, ShaderCacheOptions, Size, TextureDescriptor, WorkCounts,
+    DeviceOptions, Error, MessageSink, Origin, PipelineOptions, Region, RenderCommandEncoder,
+    RenderPipelineState, ResourceOptions, SamplerState, ShaderCacheOptions, Size, Texture,
+    TextureDescriptor, WorkCounts,
 };
 use metal2vulkan::bind::SamplerDescriptor;
-use metal2vulkan::metal::{BlendFactor, IndexType, PixelFormat, PrimitiveType, TextureUsage};
+use metal2vulkan::metal::{
+    BlendFactor, IndexType, PixelFormat, PrimitiveType, SamplerAddressMode, TextureUsage,
+};
 use metal2vulkan::pipeline::{ColorAttachmentDescriptor, RenderPipelineDescriptor, StageSource};
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -542,8 +546,8 @@ fn offset_rectangles(
 /// state commands and noted uses, and the same pixels, as the same draws with a call between each
 /// that changes nothing for them (`set_blend_color` of the color the encoder holds), each of
 /// which takes every step; at another offset each and in another color each, as each column's
-/// count of draws and each draw's color show. A call that changed a slot of another class between
-/// them (a sampler, which the functions do not read) takes every step.
+/// count of draws and each draw's color show. Calls that changed more slots than a draw rebound
+/// takes between them (samplers 0 to 8, which the functions do not read) take every step.
 #[test]
 fn draws_after_buffer_changes_rebind_what_every_step_binds() {
     let scratch = Scratch::new("draw-again-rebound");
@@ -554,10 +558,12 @@ fn draws_after_buffer_changes_rebind_what_every_step_binds() {
     let sampler = device.new_sampler_state(&SamplerDescriptor::new()).unwrap();
     let same_color =
         |encoder: &mut RenderCommandEncoder| encoder.set_blend_color(0.0, 0.0, 0.0, 0.0);
-    let a_sampler = |encoder: &mut RenderCommandEncoder| {
-        encoder
-            .set_fragment_sampler_state(Some(&sampler), 0)
-            .unwrap();
+    let samplers = |encoder: &mut RenderCommandEncoder| {
+        for index in 0..9 {
+            encoder
+                .set_fragment_sampler_state(Some(&sampler), index)
+                .unwrap();
+        }
     };
     let one = |_| 1.0 / 64.0;
     let each = |at| (at + 1) as f32 / 64.0;
@@ -575,7 +581,7 @@ fn draws_after_buffer_changes_rebind_what_every_step_binds() {
             offset_rectangles(encoder, drawn, color, same_color);
         });
         let sampled = run(&device, |encoder| {
-            offset_rectangles(encoder, drawn, color, a_sampler);
+            offset_rectangles(encoder, drawn, color, samplers);
         });
         assert_eq!(rebound.counted(rebound_count), drawn_alone(HITS));
         assert_eq!(rebound.counted(as_before), 0);
@@ -601,5 +607,148 @@ fn draws_after_buffer_changes_rebind_what_every_step_binds() {
         // Column 0 holds the first draw's color alone; the last column every draw's.
         let last = SIDE as usize - 1;
         assert_ne!(rebound.words[0], rebound.words[last], "the draws' offsets");
+    }
+}
+
+/// [`DRAWS`] 4x4 `RGBA8Unorm` textures, the `at`th's texel in column `x` of the bytes
+/// `(2 * (at + 1), 2 * (x + 1), 0, 1)`: what a draw sampled tells which texture and which of its
+/// columns.
+fn textures(device: &Device) -> Vec<Texture> {
+    let mut descriptor = TextureDescriptor::texture_2d(PixelFormat::RGBA8Unorm, 4, 4, false);
+    descriptor.usage = TextureUsage::SHADER_READ;
+    descriptor.resource_options = ResourceOptions::shared();
+    (0..DRAWS)
+        .map(|at| {
+            let texture = device.new_texture(&descriptor).unwrap();
+            let texels: Vec<u8> = (0..16u8)
+                .flat_map(|texel| [2 * (at as u8 + 1), 2 * (texel % 4 + 1), 0, 1])
+                .collect();
+            let whole = Region::new_2d(0, 0, 4, 4);
+            texture.replace_region(whole, 0, 0, &texels, 16, 0).unwrap();
+            texture
+        })
+        .collect()
+}
+
+/// A sampler state of nearest filtering that addresses outside a texture as `mode` does, its
+/// levels clamped to `[0, lod_max]`.
+fn sampler_addressing(device: &Device, mode: SamplerAddressMode, lod_max: f32) -> SamplerState {
+    let mut descriptor = SamplerDescriptor::new();
+    descriptor.s_address_mode = mode;
+    descriptor.t_address_mode = mode;
+    descriptor.lod_max_clamp = lod_max;
+    device.new_sampler_state(&descriptor).unwrap()
+}
+
+/// [`DRAWS`] draws of `state`'s rectangles from `rectangles` as [`offset_rectangles`] draws them,
+/// the `at`th sampling `textures[texture(at)]` through `samplers[sampler(at)]` (fragment texture
+/// and sampler 0, set before each draw), with `between` called after them.
+fn sampled_rectangles(
+    encoder: &mut RenderCommandEncoder,
+    (state, rectangles): (&RenderPipelineState, &Buffer),
+    (textures, samplers): (&[Texture], &[SamplerState]),
+    (texture, sampler): (&dyn Fn(u64) -> usize, &dyn Fn(u64) -> usize),
+    between: impl Fn(&mut RenderCommandEncoder),
+) {
+    encoder.set_render_pipeline_state(state).unwrap();
+    encoder.set_vertex_buffer(Some(rectangles), 0, 0).unwrap();
+    for at in 0..DRAWS {
+        if at > 0 {
+            encoder.set_vertex_buffer_offset(16 * at, 0).unwrap();
+            between(encoder);
+        }
+        let bound = &textures[texture(at)];
+        encoder.set_fragment_texture(Some(bound), 0).unwrap();
+        let bound = &samplers[sampler(at)];
+        encoder.set_fragment_sampler_state(Some(bound), 0).unwrap();
+        rectangle(encoder);
+    }
+}
+
+/// Draws after calls that bound other textures and sampler states at the slots their fragment
+/// function samples (`tob_sample`, which samples its 4x4 texture at the pixel's position over the
+/// texture's size: inside it in the target's first four columns, outside it in the others) rebind
+/// those slots alone (`WorkCounts::draws_rebound`), with the same commands of every kind, state
+/// commands and noted uses, and the same pixels, as the same draws with a call between each that
+/// changes nothing for them, each of which takes every step: another texture each, as their
+/// pixels, unlike those of the same draws of one texture, show; another sampler state each of the
+/// same shape (levels clamped to 1000 or to `FLT_MAX`, a `VkSampler` each), whose pixels are
+/// those of one; and both. Draws through samplers of another addressing each (clamped to the edge
+/// or repeated, which the pipeline's specialization reads) take every step.
+#[test]
+fn draws_after_texture_and_sampler_changes_rebind_what_every_step_binds() {
+    let scratch = Scratch::new("draw-again-rebound-textures");
+    let heard = Heard::default();
+    let device = device(&scratch.0, &[], &heard);
+    let state = state(&device, "engine/tob_renders.ll", ("tob_rect", "tob_sample"));
+    let rectangles = rectangles_from_columns(&device);
+    let textures = textures(&device);
+    let samplers = [
+        sampler_addressing(&device, SamplerAddressMode::ClampToEdge, f32::MAX),
+        sampler_addressing(&device, SamplerAddressMode::ClampToEdge, 1000.0),
+        sampler_addressing(&device, SamplerAddressMode::Repeat, f32::MAX),
+    ];
+    let same_color =
+        |encoder: &mut RenderCommandEncoder| encoder.set_blend_color(0.0, 0.0, 0.0, 0.0);
+    let drawn = (&state, &rectangles);
+    let bound = (&textures[..], &samplers[..]);
+    let first = |_| 0;
+    let each = |at| at as usize;
+    let alternate = |at| at as usize % 2;
+    let addressing = |at| 2 * (at as usize % 2);
+    let warming: [(&dyn Fn(u64) -> usize, &dyn Fn(u64) -> usize); 2] =
+        [(&each, &alternate), (&first, &addressing)];
+    for chosen in warming {
+        warm(&device, |encoder| {
+            sampled_rectangles(encoder, drawn, bound, chosen, |_| {})
+        });
+    }
+    let rebound_count = |counts: &WorkCounts| counts.draws_rebound;
+    let as_before = |counts: &WorkCounts| counts.draws_as_before;
+    let one = run(&device, |encoder| {
+        sampled_rectangles(encoder, drawn, bound, (&first, &first), |_| {});
+    });
+    // Which draws, whether they rebind, and whether their pixels are one texture's.
+    let choices: [(&dyn Fn(u64) -> usize, &dyn Fn(u64) -> usize, bool, bool); 4] = [
+        (&each, &first, true, false),
+        (&first, &alternate, true, true),
+        (&each, &alternate, true, false),
+        (&first, &addressing, false, false),
+    ];
+    for (texture, sampler, rebinds, one_texture) in choices {
+        let chosen = (texture, sampler);
+        let rebound = run(&device, |encoder| {
+            sampled_rectangles(encoder, drawn, bound, chosen, |_| {});
+        });
+        let every = run(&device, |encoder| {
+            sampled_rectangles(encoder, drawn, bound, chosen, same_color);
+        });
+        let expected = match rebinds {
+            true => drawn_alone(HITS),
+            false => 0,
+        };
+        assert_eq!(rebound.counted(rebound_count), expected);
+        assert_eq!(rebound.counted(as_before), 0);
+        assert_eq!(every.counted(rebound_count), 0);
+        assert_eq!(rebound.commands, every.commands);
+        assert_eq!(rebound.commands["cmd_draw"], DRAWS);
+        assert_eq!(rebound.words, every.words, "the pixels of the draws");
+        assert_eq!(
+            rebound.words == one.words,
+            one_texture,
+            "the draws' bindings"
+        );
+        let counts: [(&str, fn(&WorkCounts) -> u64); 3] = [
+            ("draw_states_recorded", |counts| counts.draw_states_recorded),
+            ("commands_noted_as_before", |counts| {
+                counts.commands_noted_as_before
+            }),
+            ("draws_pushing_set_zero", |counts| {
+                counts.draws_pushing_set_zero
+            }),
+        ];
+        for (name, count) in counts {
+            assert_eq!(rebound.counted(count), every.counted(count), "{name}");
+        }
     }
 }

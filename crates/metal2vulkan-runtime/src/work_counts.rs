@@ -4570,9 +4570,10 @@ pub struct WorkCounts {
     /// are counted at the encoder's next call or its end.
     pub draws_as_before: u64,
     /// Render encoders' direct draws recorded as their encoder's last draw again after calls
-    /// that bound other buffers, offsets or bytes at vertex or fragment buffer slots, rather than
-    /// taking every step of a draw: a draw that `draws_as_before` would count but for those
-    /// calls, where the bind state kept its shape, the slots are read through set-0 descriptors
+    /// that bound other buffers, offsets or bytes at buffer slots, or other textures or sampler
+    /// states at texture and sampler slots, rather than taking every step of a draw: a draw that
+    /// `draws_as_before` would count but for those calls, where the bind state kept its shape and
+    /// its runtime samplers' address modes, the slots are read through set-0 descriptors
     /// (dynamic or pushed), push fields or fixed-function vertex buffers alone, and the uses they
     /// make need no barrier, copy or shadow (`render/draw_again/rebound.rs`). Each reads its
     /// changed stage tables in part (`stage_tables_read_in_part`), writes again only those slots'

@@ -485,40 +485,90 @@ fn dynamic_write(write: &mut Write, dynamic: &[u32], offsets: &mut [u32]) {
 
 /// Write again, over `writes` and `offsets` (a command's set-0 writes and dynamic offsets as
 /// [`bind_into`] and [`dynamic_writes`] made them, for a variant of the dynamic bindings
-/// `dynamic`), the descriptors of the plan's writes from the buffer slots `slots`, which the
-/// command's tables now bind elsewhere (another buffer, offset or bytes, the shape the same), with
-/// `command`'s ranges for them: the writes and offsets [`bind_into`] and [`dynamic_writes`] make
-/// for the tables now. `Ok(false)` where a write of theirs is not at its place among `writes` (a
-/// heap's, which skips writes): the caller binds whole.
+/// `dynamic`), the descriptors of the plan's writes from the buffer, texture and sampler slots
+/// `slots`, which the command's tables now bind otherwise (another buffer, offset or bytes, another
+/// texture or sampler state, the shape the same), with `command`'s ranges for the buffers: the
+/// writes and offsets [`bind_into`] and [`dynamic_writes`] make for the tables now, each image
+/// descriptor's sampler kept in `samplers` (emptied first) as [`bind_into`] keeps it, through
+/// `memo` likewise. `Ok(false)` where a write of theirs is not at its place among `writes` (a
+/// heap's, which skips writes), holds a keeper, or reads a changed slot otherwise (a texel buffer,
+/// a YCbCr texture's planes, an argument sampler): the caller binds whole.
 pub(super) fn rebind_into(
+    call: &'static str,
     device: &Device,
     state: &mut State,
     (plan, command, tables): (&BindingPlan, &Command<'_>, &Tables<'_>),
     slots: &[SlotRef],
     (writes, dynamic, offsets): (&mut [Write], &[u32], &mut [u32]),
+    (mut memo, samplers): (Option<&mut BindMemo>, &mut Vec<Arc<OwnedSampler>>),
 ) -> Result<bool, Error> {
+    samplers.clear();
     if tables.heap.is_some() || writes.len() != plan.descriptors.len() {
         return Ok(false);
     }
+    let changed = |slot: &SlotRef| slots.contains(slot);
     for (write, planned) in writes.iter_mut().zip(&plan.descriptors) {
-        let slot = match planned.source {
-            WriteSource::Buffer { slot } | WriteSource::InlineBytes { slot } => slot,
+        // Whether its descriptor is a buffer's or an image's of a changed slot.
+        let buffer = match &planned.source {
+            WriteSource::Buffer { slot } | WriteSource::InlineBytes { slot } => {
+                if !changed(slot) {
+                    continue;
+                }
+                true
+            }
+            WriteSource::Texture { slot, .. } | WriteSource::Sampler { slot, .. } => {
+                if !changed(slot) {
+                    continue;
+                }
+                false
+            }
+            WriteSource::CombinedImageSampler { image, sampler } => {
+                let image = match image {
+                    ImageSource::Texture { slot, .. } => changed(slot),
+                    ImageSource::Neutral(_) => false,
+                };
+                let sampler = match sampler {
+                    SamplerSource::Slot { slot, .. } => changed(slot),
+                    SamplerSource::Immutable | SamplerSource::Neutral(_) => false,
+                };
+                if !image && !sampler {
+                    continue;
+                }
+                false
+            }
+            // A slot's other reads: a changed one's are its caller's to bind whole.
+            WriteSource::TexelBuffer { slot, .. }
+            | WriteSource::YCbCrInPlace { slot }
+            | WriteSource::YCbCrPlanesImage { slot }
+                if changed(slot) =>
+            {
+                return Ok(false)
+            }
+            WriteSource::ArgumentSampler { .. }
+                if slots.iter().any(|slot| slot.class == SlotClass::Sampler) =>
+            {
+                return Ok(false)
+            }
             _ => continue,
         };
-        if !slots.contains(&slot) {
-            continue;
-        }
         let ty: vk::DescriptorType = planned.ty.into();
         let place = (write.set, write.binding, write.element);
         if place != (planned.set, planned.binding, planned.array_element) || write.held.is_some() {
             return Ok(false);
         }
+        let info = match buffer {
+            true => Info::Buffer(descriptor(device, state, command, tables, planned)?),
+            false => {
+                let kept = (&mut *samplers, memo.as_deref_mut());
+                Info::Image(image_descriptor(call, device, tables, planned, ty, kept)?)
+            }
+        };
         *write = Write {
             set: planned.set,
             binding: planned.binding,
             element: planned.array_element,
             ty,
-            info: Info::Buffer(descriptor(device, state, command, tables, planned)?),
+            info,
             held: None,
         };
         dynamic_write(write, dynamic, offsets);

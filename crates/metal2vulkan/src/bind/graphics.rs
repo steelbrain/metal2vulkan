@@ -2795,23 +2795,25 @@ impl BindingPlan {
 
     /// [`instantiate_draw_into`](Self::instantiate_draw_into)'s commands of `state`, written over
     /// `commands`, which hold that method's commands of the same draw of a state that differed
-    /// from `state` only in what the buffer slots `slots` bind (a buffer or inline bytes, at any
-    /// offset), the state's shape the same: only what those slots decide is written again (their
-    /// descriptor ranges, the `SlotBindOffset`, `SlotGuestBase` and pulled-stride push fields that
-    /// read them, and their fixed-function vertex buffers' offsets), so the commands are those
+    /// from `state` only in what the buffer, texture and sampler slots `slots` bind (a buffer or
+    /// inline bytes at any offset, a texture, a sampler state), the state's shape the same: only
+    /// what those slots decide is written again (the buffers' descriptor ranges, the
+    /// `SlotBindOffset`, `SlotGuestBase` and pulled-stride push fields that read them, and their
+    /// fixed-function vertex buffers' offsets; a texture or sampler slot decides none of the
+    /// commands, its descriptor being the caller's), so the commands are those
     /// `instantiate_draw_into` writes. `Ok(false)` where the plan or the draw reads one of them
     /// some other way (a device-address slot, an argument or root table, a fixed-function binding
-    /// of a per-bind stride, a mesh, patch or de-indexed draw, a uniform view a written slot may
-    /// alias): `commands` then hold no draw's commands, as after an error, and the caller
-    /// instantiates whole. An error is one `instantiate_draw_into` may answer for `state`.
-    pub fn rebind_draw_buffers_into(
+    /// of a per-bind stride, a texture buffer's texel range, a YCbCr texture's planes, a mesh,
+    /// patch or de-indexed draw, a uniform view a written slot may alias): `commands` then hold
+    /// no draw's commands, as after an error, and the caller instantiates whole. An error is one `instantiate_draw_into` may answer for `state`.
+    pub fn rebind_draw_slots_into(
         &self,
         state: &BindState,
         slots: &[SlotRef],
         commands: &mut DrawCommands,
     ) -> Result<bool, BindError> {
         match self.graphics.as_ref() {
-            Some(t) if !t.other_layer_variant => rebind_buffers(t, state, slots, commands),
+            Some(t) if !t.other_layer_variant => rebind_slots(t, state, slots, commands),
             _ => Ok(false),
         }
     }
@@ -4704,8 +4706,8 @@ fn pulled_stride(
     Ok(FieldBytes::of(&stride.to_le_bytes()))
 }
 
-/// [`BindingPlan::rebind_draw_buffers_into`] of a render plan's template `t`.
-fn rebind_buffers(
+/// [`BindingPlan::rebind_draw_slots_into`] of a render plan's template `t`.
+fn rebind_slots(
     t: &GraphicsTemplate,
     state: &BindState,
     slots: &[SlotRef],
@@ -4724,7 +4726,12 @@ fn rebind_buffers(
         || t.tessellation.is_some()
         || t.deindexed.is_some()
         || (t.buffers.iter().any(|b| b.disjoint) && t.buffers.iter().any(|b| b.access.write));
-    if other_reads || !slots.iter().all(|&slot| slot.class == SlotClass::Buffer) {
+    // A texture slot's texels a texture buffer's range bounds, which the commands hold.
+    let texel_range = |slot: &SlotRef| t.resources.texel_buffers.iter().any(|pt| pt.slot == *slot);
+    let texels = slots
+        .iter()
+        .any(|slot| slot.class == SlotClass::Texture && texel_range(slot));
+    if other_reads || texels {
         return Ok(false);
     }
     // Each changed descriptor-form slot's range, at its place among the bound ones' (in
@@ -4800,6 +4807,8 @@ fn rebind_buffers(
                 {
                     pulled_stride(t, state, layout)?
                 }
+                // A changed texture's in-place planes.
+                PushField::YCbCrInPlace(slot) if slots.contains(&slot) => return Ok(false),
                 _ => continue,
             };
             let Some(write) = push.and_then(|at| out.push_constants.get_mut(at)) else {
