@@ -1,7 +1,8 @@
 //! The device's check of the first move in place (`in_place_check.rs`) takes no range of the Metal
 //! address space: its buffers, one per class of pages, lie outside it (`address.rs`, "Outside the
 //! space"), so no pin or pick of the program's depends on whether or when the check runs, and the
-//! space's state changes no verdict.
+//! space's state changes no verdict. Nor does it take a texture ID: its textures are the
+//! runtime's own (`resource_ids.rs`), so the program's IDs are Metal's whether or when it runs.
 //!
 //! A device test: compiled only under the validation crate's GPU safety cfgs (`m2v_gpu`,
 //! `m2v_cpu_icd`), on the kind of device the cfg selects. Each device's shader cache is a fresh
@@ -11,8 +12,9 @@ use super::blit_holds::{device, Scratch};
 use crate::address::{PAGE, SPACE_BASE, SPACE_END};
 use crate::{
     AddressPlacement, Buffer, BufferContents, BufferDescriptor, Device, Error, GpuAddress,
-    ResourceOptions,
+    ResourceId, ResourceIdKind, ResourceOptions, Texture, TextureDescriptor,
 };
+use metal2vulkan::metal::{PixelFormat, TextureUsage};
 use std::time::{Duration, Instant};
 
 /// The longest a check may take.
@@ -95,4 +97,91 @@ fn the_in_place_check_takes_no_range_of_the_metal_space() {
     );
     assert_eq!(answered, reference, "the verdicts with the space held");
     drop((held, pool));
+}
+
+/// A private 4x4 `RGBA8Unorm` texture of the program's, at a plain ID.
+fn texture(device: &Device) -> Texture {
+    let mut descriptor = TextureDescriptor::texture_2d(PixelFormat::RGBA8Unorm, 4, 4, false);
+    descriptor.usage = TextureUsage::SHADER_READ;
+    descriptor.resource_options = ResourceOptions::private();
+    device.new_texture(&descriptor).unwrap()
+}
+
+/// Whether the device's check made a texture: a class it checked, passed or failed.
+fn checked_a_texture(device: &Device) -> bool {
+    let counts = device.work_counts();
+    counts.in_place_checks_passed + counts.in_place_checks_failed > 0
+}
+
+/// The device's check takes no texture ID: its textures are the runtime's own, which answer 0
+/// and count in no plain allocation (`resource_ids.rs`). A check run to its end before the
+/// program's first texture leaves the program's reservation of texture ID 5 taken, so its
+/// textures take 1 to 4, then 6, as Metal's do. A check texture that took a plain ID would have
+/// started the pool, and the reservation would be ignored (Metal's pool logs "reserve() must be
+/// called before any allocation takes place"): 5 would follow 4.
+#[test]
+fn the_in_place_check_takes_no_texture_id() {
+    let scratch = Scratch::new("in-place-check-ids");
+    let device = device(&scratch.0);
+    assert!(device.settle_in_place_checks(WAIT), "the check answered");
+    if !checked_a_texture(&device) {
+        eprintln!(
+            "IN-PLACE-CHECK-IDS on {}: the check made no texture ({:?})",
+            device.name(),
+            device.in_place_check_report()
+        );
+        return;
+    }
+    device
+        .reserve_resource_ids(ResourceIdKind::Texture, &[ResourceId(5)])
+        .unwrap();
+    let made: Vec<Texture> = (0..5).map(|_| texture(&device)).collect();
+    let ids: Vec<u64> = made.iter().map(|t| t.gpu_resource_id().0).collect();
+    assert_eq!(
+        ids,
+        [1, 2, 3, 4, 6],
+        "after the check, on {}",
+        device.name()
+    );
+}
+
+/// The program's textures keep Metal's IDs while the device's check runs on its thread: a
+/// texture made and released over and over takes ID 1 each time, as on a device that makes no
+/// other texture. A check texture holding a plain ID while the program made one would move the
+/// program's to 2, which is how a consumer's sequence of IDs came out one past Metal's under
+/// load (the check started at its texture over a surface's pages, and its first texture took the
+/// next ID).
+#[test]
+fn texture_ids_keep_metals_order_while_the_in_place_check_runs() {
+    let scratch = Scratch::new("in-place-check-ids-during");
+    let device = device(&scratch.0);
+    let started = Instant::now();
+    let mut made = 0;
+    let mut ids = std::collections::BTreeMap::<u64, u64>::new();
+    while !device.settle_in_place_checks(Duration::ZERO) {
+        assert!(started.elapsed() < WAIT, "the check answered");
+        let t = texture(&device);
+        *ids.entry(t.gpu_resource_id().0).or_default() += 1;
+        drop(t);
+        made += 1;
+    }
+    if !checked_a_texture(&device) {
+        eprintln!(
+            "IN-PLACE-CHECK-IDS-DURING on {}: the check made no texture ({:?})",
+            device.name(),
+            device.in_place_check_report()
+        );
+        return;
+    }
+    eprintln!(
+        "IN-PLACE-CHECK-IDS-DURING on {}: {made} textures made while the check ran, by ID: \
+         {ids:?}",
+        device.name()
+    );
+    assert!(made > 0, "no texture was made while the check ran");
+    assert_eq!(
+        ids.keys().copied().collect::<Vec<_>>(),
+        [1],
+        "the IDs of the textures made while the check ran"
+    );
 }

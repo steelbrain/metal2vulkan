@@ -6,7 +6,7 @@
 //!   buffer over anonymous pages it maps, imported by their pointer; a buffer of the runtime's own
 //!   longer than half a pooled block, in fresh pages; a no-copy buffer over pages the device
 //!   refuses by their pointer, imported as dma-bufs), fills a window of it with a pattern, and
-//!   makes a texture over it through `Buffer::new_texture`, as the program does: the texture takes
+//!   makes a texture over it as the program does (`Buffer::new_runtime_texture`): the texture takes
 //!   the image in place exactly as the product's would ([`checking`](crate::in_place::checking)
 //!   lets it whatever the verdict). A thread of its own then writes the pattern's complement into
 //!   the window, each byte once, at a stride that reaches texels, the bytes between rows and the
@@ -20,6 +20,11 @@
 //!   the program makes its resources, so a range of the space it took would refuse a pin of the
 //!   program's there, or move a range the runtime picks for it. Its pages, their import, the
 //!   image and the move do not depend on the address, so neither does a verdict.
+//! - **Its textures take no resource ID** (`IdUse::Runtime`, `resource_ids.rs`): the check runs
+//!   on its thread while the program makes its textures, so a plain ID one of its textures held
+//!   would move the program's next texture's ID past Metal's, and a texture reservation after it
+//!   would be ignored. The ID does not touch the image, its pages or its move, so neither does a
+//!   verdict.
 //! - **Its cost** is the pattern's fill and compare of each window, at the speed of a copy and a
 //!   comparison of memory (a 3840x2160 surface's 33 MB among them), and each image's making and
 //!   first move: the writes themselves run only while the move does.
@@ -246,9 +251,11 @@ fn check_round(pages: &ClassPages, shape: Shape, round: usize, page: u64) -> Rou
     let mut descriptor =
         TextureDescriptor::texture_2d(shape.format, shape.width, shape.height, false);
     descriptor.usage = TextureUsage::SHADER_READ;
+    // The runtime's own texture: it takes no resource ID, so the program's IDs are Metal's
+    // whether or when the check runs.
     let Ok(texture) = pages
         .buffer
-        .new_texture(&descriptor, 0, shape.bytes_per_row)
+        .new_runtime_texture(&descriptor, 0, shape.bytes_per_row)
     else {
         return Round::NotMade;
     };

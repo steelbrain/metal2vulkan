@@ -41,6 +41,7 @@ use super::linear_plan::{
     LINEAR_ALIGNMENT,
 };
 use super::resource::{Identity, ResourceKey};
+use super::resource_ids::IdPlacement;
 use super::rotated::{self, Frame, RotatedCopies};
 use super::shadow::{
     Backing, ShadowBuffer, ShadowCopies, ShadowSource, ShadowStaging, ShadowTarget,
@@ -269,6 +270,25 @@ fn refusal_error(call: &'static str, refusal: BufferRefusal) -> Error {
     }
 }
 
+/// Whose a texture over a buffer is, for its resource ID (`resource_ids.rs`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Whose {
+    /// The program's: its descriptor's placement gives its ID.
+    Program,
+    /// The runtime's own (`Buffer::new_runtime_texture`): no ID.
+    Runtime,
+}
+
+impl Whose {
+    /// How a texture of a descriptor at `placement` takes its ID.
+    fn id_use(self, placement: IdPlacement) -> IdUse {
+        match self {
+            Whose::Program => IdUse::Program(placement),
+            Whose::Runtime => IdUse::Runtime,
+        }
+    }
+}
+
 impl Buffer {
     /// `newTextureWithDescriptor:offset:bytesPerRow:`: a texture of `descriptor` whose texels
     /// are the buffer's bytes from `offset`, rows `bytes_per_row` apart: a 2D texture or a
@@ -304,7 +324,28 @@ impl Buffer {
             descriptor,
             offset,
             bytes_per_row,
-            BufferTextureCall::Texture,
+            (BufferTextureCall::Texture, Whose::Program),
+            None,
+        )
+    }
+
+    /// [`new_texture`](Self::new_texture) of a texture of the runtime's own, which no program
+    /// made: it takes no resource ID (`IdUse::Runtime`, `resource_ids.rs`), whatever the
+    /// descriptor's placement, so it moves no ID the program's textures take, on whichever thread
+    /// it is made. The device's check of textures in place makes its textures here
+    /// (`in_place_check.rs`).
+    pub(crate) fn new_runtime_texture(
+        &self,
+        descriptor: &TextureDescriptor,
+        offset: u64,
+        bytes_per_row: u64,
+    ) -> Result<Texture, Error> {
+        self.texture_over(
+            "new_texture",
+            descriptor,
+            offset,
+            bytes_per_row,
+            (BufferTextureCall::Texture, Whose::Runtime),
             None,
         )
     }
@@ -330,7 +371,7 @@ impl Buffer {
             descriptor,
             offset,
             bytes_per_row,
-            BufferTextureCall::Linear,
+            (BufferTextureCall::Linear, Whose::Program),
             None,
         )
     }
@@ -445,9 +486,12 @@ impl Buffer {
             descriptor,
             plane.offset,
             plane.bytes_per_row,
-            BufferTextureCall::IoSurfacePlane {
-                planar: plane.planar,
-            },
+            (
+                BufferTextureCall::IoSurfacePlane {
+                    planar: plane.planar,
+                },
+                Whose::Program,
+            ),
             plane.ycbcr,
         )?;
         // Metal's device takes a sampler ID as it makes a surface's texture, as for a texture of
@@ -457,21 +501,22 @@ impl Buffer {
     }
 
     /// The texture of `descriptor` over the buffer that `call` (made through `form`) makes, over
-    /// a surface of `surface`'s YCbCr facts where given. Over a heap's buffer it is among the
-    /// heap's textures while it lives: `useHeap:` makes every resource the heap holds resident, so
-    /// an encoder that used the heap makes it resident (`residency.rs`), and a shadow's texels are
-    /// copied in for its commands.
+    /// a surface of `surface`'s YCbCr facts where given, `whose` it is. Over a heap's buffer it is
+    /// among the heap's textures while it lives: `useHeap:` makes every resource the heap holds
+    /// resident, so an encoder that used the heap makes it resident (`residency.rs`), and a
+    /// shadow's texels are copied in for its commands.
     fn texture_over(
         &self,
         call: &'static str,
         descriptor: &TextureDescriptor,
         offset: u64,
         bytes_per_row: u64,
-        form: BufferTextureCall,
+        (form, whose): (BufferTextureCall, Whose),
         ycbcr_surface: Option<IoSurfaceYCbCr>,
     ) -> Result<Texture, Error> {
         let over = (offset, bytes_per_row);
-        let texture = self.make_texture_over(call, descriptor, over, form, ycbcr_surface)?;
+        let texture =
+            self.make_texture_over(call, descriptor, over, (form, whose), ycbcr_surface)?;
         if let Some(heap) = self.heap() {
             heap.hold_texture(&texture);
         }
@@ -484,7 +529,7 @@ impl Buffer {
         call: &'static str,
         descriptor: &TextureDescriptor,
         (offset, bytes_per_row): (u64, u64),
-        form: BufferTextureCall,
+        (form, whose): (BufferTextureCall, Whose),
         ycbcr_surface: Option<IoSurfaceYCbCr>,
     ) -> Result<Texture, Error> {
         // A detach waits for none being made over the bytes (`detach.rs`), nor does a rebind of
@@ -522,6 +567,7 @@ impl Buffer {
             resource_options: options,
             ..asked
         };
+        let id_use = whose.id_use(descriptor.placement);
         // A texture buffer of more than one level is stopped by `linear_plan`, as Metal's
         // buffer creator stops it, not refused as the device's gap.
         let rules = self.device().properties().texture_rules();
@@ -673,7 +719,6 @@ impl Buffer {
                 descriptor,
             );
             let stored = Texels::placed(self.clone(), stored, texel_bytes, descriptor);
-            let id_use = IdUse::Program(descriptor.placement);
             return self.device().new_rotated_texture(
                 call,
                 [rows, stored].map(|texels| texels.with_options(options).over_surface(surface)),
@@ -691,7 +736,6 @@ impl Buffer {
             let texels = Texels::placed(self.clone(), placed, texel_bytes, descriptor)
                 .with_options(options)
                 .over_surface(surface);
-            let id_use = IdUse::Program(descriptor.placement);
             return self
                 .device()
                 .new_surface_planes_texture(call, texels, descriptor, &layout, id_use, alpha);
@@ -700,7 +744,6 @@ impl Buffer {
             let texels = Texels::placed(self.clone(), placed, texel_bytes, descriptor)
                 .with_options(options)
                 .over_surface(surface);
-            let id_use = IdUse::Program(descriptor.placement);
             return self.device().new_converted_texture(
                 call,
                 texels,
@@ -712,12 +755,11 @@ impl Buffer {
         }
         if layout.texture_type == TextureType::TextureBuffer {
             let texels = Texels::texture_buffer(self.clone(), placed.gpu, texel_bytes, descriptor)?;
-            Ok(texels.texture(descriptor, &layout, IdUse::Program(descriptor.placement)))
+            Ok(texels.texture(descriptor, &layout, id_use))
         } else {
             let texels = Texels::placed(self.clone(), placed, texel_bytes, descriptor)
                 .with_options(options)
                 .over_surface(surface);
-            let id_use = IdUse::Program(descriptor.placement);
             let texture = self
                 .device()
                 .new_texture_over_buffer(call, texels, descriptor, &layout, id_use)?;

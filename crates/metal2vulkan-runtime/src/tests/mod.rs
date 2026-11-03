@@ -169,6 +169,8 @@ mod indirect_command_buffer;
 mod inline_continues;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod inline_splits;
+#[cfg(any(m2v_gpu, m2v_cpu_icd))]
+mod internal_texture_ids;
 mod interop;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod joined_residency;
