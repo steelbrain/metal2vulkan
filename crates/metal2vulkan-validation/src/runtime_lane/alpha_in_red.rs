@@ -1035,8 +1035,8 @@ fn a8_resolve_leg(lane: &Lane, what: &str) {
     let r8 = resolved(PixelFormat::R8Unorm);
     assert_eq!(a8, r8, "{what}: A8Unorm's resolve against R8Unorm's");
     // Where the fill's stage leaves its color's conversion to the device
-    // (`device-color-conversion`: the `f32` product rounded with ties to even, where Metal rounds
-    // the exact one), 0.9 may store a code above Metal's 229.
+    // (`device-color-conversion`: the device's rounding of the product, where Metal rounds the
+    // exact one to nearest), 0.9 may store a code above Metal's 229.
     let descriptor = lane.descriptor(
         ("a8r_half_vertex", "a8r_fill"),
         ColorAttachmentDescriptor::new(PixelFormat::A8Unorm),

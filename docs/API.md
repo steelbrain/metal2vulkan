@@ -3205,9 +3205,12 @@ bound.
   kind as Metal does, an attachment that blends with factors other than one and zero
   (`ChannelWrite::Device`), the alpha of attachment 0 under alpha-to-coverage, a format whose
   conversion Metal was not measured with (the packed 16-bit unorm formats, `A8Unorm`, the packed
-  floats). Near a tie between two codes the device may store the other one. Also a `float` texel a
-  function writes to a storage texture that may hold a normalized or half-float format, or
-  `ARGB8Unorm`, on a device not measured to store Metal's codes (or a 1-bit alpha, on one measured
+  floats). Near a tie between two codes the device may store the other one: the RTX 5080 Laptop
+  GPU (NVIDIA 615.71.09) stores 0.5 in an 8-bit unorm channel as `0x7f`, and the lower code of
+  every input up to two `f32` steps above a tie, where Metal stores `0x80` and rounds the exact
+  product to nearest, a tie up; ANV, RADV and lavapipe round the `f32` product with ties to even.
+  Also a `float` texel a function writes to a storage texture that may hold a normalized or
+  half-float format, or `ARGB8Unorm`, on a device not measured to store Metal's codes (or a 1-bit alpha, on one measured
   to store every other normalized channel's); an integer texel written into a storage texture of
   the float class that may hold a half-float or small-float format, which Metal rounds to nearest
   even and the device's store as it rounds a `float` (toward zero on every measured driver, one

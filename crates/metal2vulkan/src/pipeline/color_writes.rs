@@ -5,9 +5,10 @@
 //! float written to a normalized attachment as the exact product with the format's maximum code
 //! rounded to nearest, to an 8-bit sRGB one through its twelve-bit encode, and to a half-float one
 //! rounded toward zero (`metal::format::write_conversion`, probes on an Apple M3 Max and an M4).
-//! Vulkan's drivers round the `f32` product with ties to even and encode sRGB by their own
-//! approximations, so near a tie they may store another code (`runtime_lane::color_writes`: ANV,
-//! RADV, NVIDIA and lavapipe). Their half-float and small-float channels round toward zero as
+//! ANV, RADV and lavapipe round the `f32` product with ties to even, NVIDIA's 615.71.09 on the
+//! RTX 5080 Laptop GPU stores an 8-bit channel's lower code on a tie and up to two `f32` steps above
+//! one (0.5 as `0x7f`, where Metal stores `0x80`), and each encodes sRGB by its own approximation,
+//! so near a tie they may store another code (`runtime_lane::color_writes`). Their half-float and small-float channels round toward zero as
 //! Metal's do where measured (`DriverDeviation::MetalSmallFloatColorWrites`: RADV on the Radeon
 //! 780M, ANV on the Iris Xe and the UHD 770, NVIDIA on the RTX 3090, NaNs aside); only MoltenVK on
 //! Apple's GPUs stores Metal's codes for every format (`VkProperty::MetalColorWrites`). The map names each channel's rule so the

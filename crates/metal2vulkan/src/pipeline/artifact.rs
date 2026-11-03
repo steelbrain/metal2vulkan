@@ -1090,11 +1090,19 @@ pub enum PrecisionNote {
     /// attachment 0 under alpha-to-coverage, a format whose conversion Metal was not measured with
     /// (the packed 16-bit unorm formats, `A8Unorm`, the packed floats). (A `bfloat` output is
     /// refused, as Metal's compiler rejects one.) Near a tie between two codes the device may store
-    /// the other one (every Vulkan driver measured but MoltenVK rounds the `f32` product with ties
-    /// to even, encodes sRGB by its own approximation and rounds a half to nearest, where Metal
-    /// rounds the exact product, encodes through its twelve-bit table and rounds a half toward
-    /// zero), and a NaN stores as its conversion makes it (Metal stores a normalized channel's as
-    /// 0, a blended snorm channel's as -1.0's code). A 32-bit float attachment that so blends
+    /// the other one. Metal rounds a normalized channel's exact product with its maximum code to
+    /// nearest, its one exact tie (0.5 in an 8-bit channel, 127.5) up, encodes sRGB through its
+    /// twelve-bit table and rounds a value written to a half-float channel toward zero. ANV, RADV
+    /// and lavapipe round the `f32` product with ties to even and encode sRGB by their own
+    /// approximations. NVIDIA's 615.71.09 on an RTX 5080 Laptop GPU stores an 8-bit unorm channel's
+    /// lower code for an input on a tie or up to two `f32` steps above one (0.5 as `0x7f`, the
+    /// `f32` nearest 1.5/255 as 1 and the one nearest 2.5/255 as 2, where Metal stores `0x80`, 2
+    /// and 3), and Metal's code elsewhere: measured against an Apple M3 Max under macOS 27.0.1 over
+    /// every code's exact value and every tie with two `f32` steps either side, in `BGRA8Unorm`
+    /// and `RGBA8Unorm`, a draw of an indirect command buffer's as a plain draw. A device not
+    /// measured to store Metal's half-float channels (`MetalSmallFloatColorWrites`) may round
+    /// them otherwise. A NaN stores as its conversion makes it (Metal stores a normalized
+    /// channel's as 0, a blended snorm channel's as -1.0's code). A 32-bit float attachment that so blends
     /// stores the device's blend arithmetic (NVIDIA's 615.71.09 one `f32` ulp from Metal's in some
     /// source-over sums, a NaN as `0x7fffffff` where Metal stores `0x7fc00000`).
     ///
