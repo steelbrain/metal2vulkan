@@ -412,7 +412,13 @@ pub(crate) fn among<F: Copy + Ord>(
 /// driver's compiler moving the
 /// negation onto the `half`, which nothing states, so it stays noted; and a module that carries a
 /// widened `half` elsewhere or reads its bits is outside the measurement
-/// (`narrow::moves_unfolded`). One row per GPU, as measured.
+/// (`narrow::moves_unfolded`). Measured to differ, so outside it too (2026-11-03, every `half` bit
+/// pattern through Metal's compiler, with and without fast math): a merge of a select of the
+/// widened `half` against a constant (`b ? float(h) : 0.0`, as the translation's bounds check
+/// selects a read) with another widened value answers 2045 of the 2046 NaNs `0x7E00`
+/// (`narrow::merges_mixed_selects`), where the select merged with a constant, a select of two
+/// widened values merged with a third, a merge then a select, two selects and two merges keep
+/// every NaN's bits. One row per GPU, as measured.
 ///
 /// `MetalPackConversions`: MoltenVK 1.4.2 hands `GLSL.std.450`'s `PackUnorm4x8`, `PackSnorm4x8`,
 /// `PackUnorm2x16`, `PackSnorm2x16` and their unpacks to Metal's own `pack_float_to_*` and

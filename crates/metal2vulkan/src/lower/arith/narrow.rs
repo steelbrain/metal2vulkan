@@ -1543,10 +1543,12 @@ fn has_bit(bits: &[u64], v: Value) -> bool {
 /// operation, or its bits read) carries the widened `float` out of the registers or reads its bits
 /// before any narrowing. The module holding a 32-bit float constant that is a NaN other than
 /// `0x7FC00000`, such as a `half` NaN constant held widened with its payload, which no conversion
-/// of the device made, is unfolded too. The measurement covers moves through the registers, and
-/// `half` values held as the device's conversions made them. One pass over the constants, then a
-/// pass over the instructions per round of the moves' closure and one more, with four bits per
-/// value of the module charged to `meter` while it runs.
+/// of the device made, is unfolded too, and so is a module that merges a widened value a select
+/// took against a value it does not hold widened with another widened value
+/// (`merges_mixed_selects`), which Metal's compiler does not fold. The measurement covers moves
+/// through the registers, and `half` values held as the device's conversions made them. One pass
+/// over the constants, then a pass over the instructions per round of the moves' closure and two
+/// more, with eight bits per value of the module charged to `meter` while it runs.
 pub fn moves_unfolded(m: &TypedModule, meter: &mut Meter) -> Result<bool, Error> {
     let float32 = |ty| matches!(m.types().get(ty), Ok(Type::Float { width: 32 }));
     let payload = m.consts().iter().any(|(_, c)| match &c.kind {
@@ -1578,7 +1580,7 @@ pub fn moves_unfolded(m: &TypedModule, meter: &mut Meter) -> Result<bool, Error>
         }
         _ => false,
     };
-    meter.charge(16 * words)?;
+    meter.charge(48 * words)?;
     let carried = widenings(m, meter).map(|mut widened| {
         // The widened values' bits, by a bitcast and the moves.
         let mut bits = vec![0u64; words];
@@ -1644,6 +1646,13 @@ pub fn moves_unfolded(m: &TypedModule, meter: &mut Meter) -> Result<bool, Error>
                 }
             }
         }
+        // A merge of a widened value a select took against a value it does not hold widened
+        // (the translation's bounds check selects a read against `0`) with another widened value,
+        // by a phi or by stores to one function variable: Metal's compiler widens and narrows the
+        // NaN there, where it folds each of the two moves alone (measured).
+        if merges_mixed_selects(m, &widened, &local_float) {
+            return true;
+        }
         // Whether pointer `ptr` is to a buffer or to workgroup memory.
         let held_as_float = |ptr| {
             matches!(
@@ -1694,8 +1703,67 @@ pub fn moves_unfolded(m: &TypedModule, meter: &mut Meter) -> Result<bool, Error>
                 })
         })
     });
-    meter.release(16 * words);
+    meter.release(48 * words);
     carried
+}
+
+/// Whether module `m` merges a widened value (one of `widened`) that a select took against a value
+/// it does not hold widened with another widened value ([`moves_unfolded`]): a phi with such a
+/// select among its incoming values and another widened one, or a function variable
+/// (`local_float`) such a select is stored to and another widened value too. Measured on the M3
+/// Max under macOS 27.0.1 (2026-11-03), every `half` bit pattern widened, moved and narrowed by
+/// Metal's compiler, with and without fast math: a merge of `b ? float(h) : 0.0` with
+/// `float(h2)`, or with `b ? float(h2) : 0.0`, answers 2045 of the 2046 NaNs `0x7E00`, where the
+/// select alone, the merge of widened values alone, a select of two widened values merged with a
+/// third, the select merged with a constant, a merge then a select, two selects, two merges, the
+/// select carried to a later block, and a select of the `half` bits before the widening each keep
+/// every NaN's bits. One pass over the instructions, with three bits per value of the module.
+fn merges_mixed_selects(
+    m: &TypedModule,
+    widened: &[u64],
+    local_float: &dyn Fn(Value) -> bool,
+) -> bool {
+    let words = widened.len();
+    // The selects of a widened value against one not held widened.
+    let mut mixed = vec![0u64; words];
+    // The function variables such a select is stored to, those any widened value is stored to,
+    // and those two widened values are.
+    let (mut held, mut once, mut twice) = (vec![0u64; words], vec![0u64; words], vec![0u64; words]);
+    for n in m.blocks().iter().flat_map(|b| &b.insts) {
+        match (&n.inst, n.result) {
+            (Inst::Select { t, f, .. }, Some(r)) => {
+                if has_bit(widened, r) && has_bit(widened, *t) != has_bit(widened, *f) {
+                    set_bit(&mut mixed, r);
+                }
+            }
+            (Inst::Store { ptr, value, .. }, _)
+                if has_bit(widened, *value) && local_float(*ptr) =>
+            {
+                if has_bit(&mixed, *value) {
+                    set_bit(&mut held, *ptr);
+                }
+                match has_bit(&once, *ptr) {
+                    true => set_bit(&mut twice, *ptr),
+                    false => set_bit(&mut once, *ptr),
+                }
+            }
+            _ => {}
+        }
+    }
+    let stored = held
+        .iter()
+        .zip(&twice)
+        .any(|(held, twice)| held & twice != 0);
+    stored
+        || m.blocks().iter().flat_map(|b| &b.phis).any(|phi| {
+            phi.incoming.iter().any(|(s, _)| {
+                has_bit(&mixed, *s)
+                    && phi
+                        .incoming
+                        .iter()
+                        .any(|(v, _)| v != s && has_bit(widened, *v))
+            })
+        })
 }
 
 /// Whether `inst` moves its operands' values into its result unchanged ([`moves_unfolded`]).

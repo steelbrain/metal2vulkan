@@ -3759,11 +3759,14 @@ fn half_sign_operations_keep_a_nan_s_payload_on_every_profile() {
 /// `PrecisionNote::NativeNanEncoding` there and requires `VkProperty::MetalNanMoves`, and records
 /// the note on `lavapipe`, which is not measured. A select with a `half` NaN constant of another
 /// payload (held widened as a `float` NaN that no conversion of the device made) is not in the
-/// measurement, and records the note on both, requiring nothing (`narrow::moves_unfolded`).
+/// measurement, and records the note on both, requiring nothing (`narrow::moves_unfolded`); so
+/// is a phi of a select of the `half` against a constant with the `half` itself, which Metal's
+/// compiler is measured not to fold, where a phi of that select with a constant is folded.
 #[test]
 fn half_moves_are_metals_only_where_the_device_folds_them() {
     let hx = oh("hx", 0xFE01);
     let nan = "  %c = fcmp uno half %hx, 0xH0000\n";
+    let one = "  %e = fcmp une half %hx, 0xH3C00\n";
     let ks = [
         half_nan_kernel("kept", format!("{hx}  %s = freeze half %hx\n"), Some(0xFE01)),
         half_nan_kernel(
@@ -3788,6 +3791,20 @@ fn half_moves_are_metals_only_where_the_device_folds_them() {
             format!("{hx}{nan}  %s = select i1 %c, half 0xH7E01, half %hx\n"),
             None,
         ),
+        half_nan_kernel(
+            "merged_selection",
+            format!(
+                "{hx}{nan}{one}  br i1 %c, label %l, label %u\nl:\n  %t = select i1 %e, half %hx, half 0xH0000\n  br label %j\nu:\n  br label %j\nj:\n  %s = phi half [ %t, %l ], [ %hx, %u ]\n"
+            ),
+            None,
+        ),
+        half_nan_kernel(
+            "merged_selection_constant",
+            format!(
+                "{hx}{nan}{one}  br i1 %c, label %l, label %u\nl:\n  %t = select i1 %e, half %hx, half 0xH0000\n  br label %j\nu:\n  br label %j\nj:\n  %s = phi half [ %t, %l ], [ 0xH3C00, %u ]\n"
+            ),
+            None,
+        ),
     ];
     let Some(bitcode) = assemble("nan-half-moves", &module(&ks)) else {
         return;
@@ -3806,7 +3823,7 @@ fn half_moves_are_metals_only_where_the_device_folds_them() {
                 .unwrap_or_else(|e| panic!("{what}: {e:?}"));
             // A `half` stored as itself is never widened; each select reads it by the widening.
             assert_eq!(widens, kk.name != "kept", "{what}");
-            let folded = moves && kk.name != "payload_constant";
+            let folded = moves && !matches!(kk.name, "payload_constant" | "merged_selection");
             assert_eq!(
                 a.precision.contains(&PrecisionNote::NativeNanEncoding),
                 widens && !folded,
