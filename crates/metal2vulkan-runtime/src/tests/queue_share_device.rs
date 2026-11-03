@@ -15,15 +15,15 @@
 //!   `PerQueue` an unshared queue takes the round robin's next `VkQueue`, as any queue does.
 //! - **Isolation.** A compositor's small command buffers, committed at 4,800 a second and never
 //!   waited for, beside an application's command buffers of about 30 ms each: once the
-//!   application's queue went long (where the device shares), the compositor's 99th percentile
-//!   over 2 s stays under 5 ms with at most one stall over 10 ms; on an unshared queue, from the
-//!   start, with none.
+//!   application's queue went long, the compositor's 99th percentile over 2 s stays under 5 ms
+//!   with at most one stall over 10 ms; on an unshared queue, from the start, with none.
 //!
 //! Where the device does not share (`PerQueue`, its check found no idling, or it has no two
 //! `VkQueue`s of one family: MoltenVK, RADV, lavapipe) each test asserts that no queue moves, and
-//! the isolation tests run only where the compositor's and the application's queues take
-//! `VkQueue`s of their own. A device test: compiled only under the validation crate's GPU safety
-//! cfgs (`m2v_gpu`, `m2v_cpu_icd`).
+//! the isolation tests measure nothing: the runtime moves no queue there, so the latencies are the
+//! driver's own (MoltenVK on an M3 Max, the same workload on two `VkQueue`s of their own: a 99th
+//! percentile of 57 to 60 ms). A device test: compiled only under the validation crate's GPU
+//! safety cfgs (`m2v_gpu`, `m2v_cpu_icd`).
 
 use super::blit_holds::Scratch;
 use crate::{
@@ -37,6 +37,10 @@ use std::time::{Duration, Instant};
 
 /// The longest any wait of these tests lasts.
 const WAIT: Duration = Duration::from_secs(20);
+
+/// How long an isolation run waits past its start before it records: a queue's backlog behind a
+/// long command buffer drains within about 1 ms of its end.
+const SETTLING: Duration = Duration::from_millis(50);
 
 /// The bytes one fill of a long command buffer writes.
 const FILL_BYTES: u64 = 64 << 20;
@@ -377,18 +381,14 @@ fn long(queue: &CommandQueue, target: &Buffer, fills: usize) -> CommandBuffer {
 
 /// A compositor on `compositor` committing one small fill at 4,800 a second, never waiting,
 /// beside an application on its own queue committing long command buffers back to back, each
-/// waited for: the compositor's latencies over 2 s from the moment `ready` answers (bounded).
-/// `None` where the two queues share a `VkQueue` whatever the policy (one queue on the device).
+/// waited for: the compositor's latencies over 2 s from [`SETTLING`] after `ready` answers
+/// (bounded), so that what queued behind a long command buffer before then has completed.
 fn isolation(
     device: &Device,
     compositor: CommandQueue,
     ready: impl Fn(&Device) -> bool,
-) -> Option<Isolation> {
+) -> Isolation {
     let app = device.new_command_queue().unwrap();
-    if app.vk_queue() == compositor.vk_queue() && !device.shares_queues() {
-        println!("the device gives the two queues one VkQueue: no isolation to measure");
-        return None;
-    }
     let big = device
         .new_buffer(FILL_BYTES, ResourceOptions::private())
         .unwrap();
@@ -451,6 +451,7 @@ fn isolation(
         std::thread::sleep(Duration::from_millis(5));
     }
     assert!(ready(device), "the run did not reach its measured part");
+    std::thread::sleep(SETTLING);
     recording.store(true, Ordering::Relaxed);
     std::thread::sleep(Duration::from_secs(2));
     recording.store(false, Ordering::Relaxed);
@@ -463,19 +464,20 @@ fn isolation(
         "{} compositor samples",
         latencies.len()
     );
-    Some(Isolation { latencies })
+    Isolation { latencies }
 }
 
 #[test]
 fn a_compositor_beside_a_long_queue_keeps_its_latency_once_that_queue_went_long() {
     each_policy("isolation", |device, shares| {
-        let compositor = device.new_command_queue().unwrap();
-        let ready = move |device: &Device| !shares || device.work_counts().queues_gone_long >= 1;
-        let Some(run) = isolation(device, compositor, ready) else {
+        if !shares {
             return;
-        };
+        }
+        let compositor = device.new_command_queue().unwrap();
+        let ready = |device: &Device| device.work_counts().queues_gone_long >= 1;
+        let run = isolation(device, compositor, ready);
         println!(
-            "shares {shares}: p99 {:.2} ms, {} stalls of {} samples; {:?}",
+            "p99 {:.2} ms, {} stalls of {} samples; {:?}",
             run.p99(),
             run.stalls(),
             run.latencies.len(),
@@ -489,12 +491,13 @@ fn a_compositor_beside_a_long_queue_keeps_its_latency_once_that_queue_went_long(
 #[test]
 fn an_unshared_compositor_beside_a_long_queue_never_stalls() {
     each_policy("isolation-unshared", |device, shares| {
-        let compositor = device.new_command_queue_unshared(64).unwrap();
-        let Some(run) = isolation(device, compositor, |_| true) else {
+        if !shares {
             return;
-        };
+        }
+        let compositor = device.new_command_queue_unshared(64).unwrap();
+        let run = isolation(device, compositor, |_| true);
         println!(
-            "shares {shares}: p99 {:.2} ms, {} stalls of {} samples",
+            "p99 {:.2} ms, {} stalls of {} samples",
             run.p99(),
             run.stalls(),
             run.latencies.len()
