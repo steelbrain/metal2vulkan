@@ -361,7 +361,7 @@ pub use values::{
     ResourceOptions, Size, StorageMode,
 };
 pub use view_plan::ViewProblem;
-pub use visibility::{VisibilityProblem, VisibilityResultMode};
+pub use visibility::{VisibilityProblem, VisibilityResultMode, VisibilityResultType};
 pub use warm::{PipelineRecord, WarmStatistics};
 pub use work_counts::{CopySite, MemoryFrees, WorkCounts};
 pub use wrapped_buffer::{VkBufferMemory, WrappedBufferProblem};

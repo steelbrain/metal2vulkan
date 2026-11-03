@@ -533,6 +533,73 @@ fn visibility_results_land_where_their_bytes_lie() {
     quiet(probe, &messages);
 }
 
+/// `Accumulate` results in buffers 4 bytes past a page (landed in an upload region, into which each
+/// word is copied before the combine takes the results into it) and 8 past it (in place): a
+/// `Boolean` 0 under a covering draw becomes nonzero, a 2 under a draw covering nothing stays 2, a
+/// `Counting` 100 under a covering draw reads 116 where the device counts, and the words around
+/// them keep their bytes.
+#[test]
+fn accumulated_visibility_results_land_where_their_bytes_lie() {
+    use super::visibility::{complete, encode_pass, precise};
+    use metal2vulkan_runtime::VisibilityResultType::Accumulate;
+    use VisibilityResultMode::{Boolean, Counting};
+    let (messages, _cache, probe) = validated();
+    let counting = precise(&probe);
+    let color = super::render_state::texture(&probe.device, PixelFormat::RGBA8Unorm, 4);
+    let u = 0xaaaa_aaaa_aaaa_aaaa;
+    for at in [4, 8] {
+        let start: Vec<u8> = [u, 0, 2, 100]
+            .iter()
+            .flat_map(|w: &u64| w.to_le_bytes())
+            .collect();
+        let vis = HostBytes::new(&probe.device, &start, at);
+        let command_buffer = probe.queue.command_buffer().unwrap();
+        let mut held = Vec::new();
+        encode_pass(
+            &probe,
+            &command_buffer,
+            &color,
+            &vis.buffer,
+            Accumulate,
+            &mut held,
+            |p, e, h| {
+                let depth = p.depth(0.5, 0.0);
+                e.set_render_pipeline_state(&p.pipeline(WHITE)).unwrap();
+                e.set_vertex_buffer(Some(&depth), 0, 0).unwrap();
+                e.set_visibility_result_mode(Boolean, 8).unwrap();
+                e.draw_primitives(PrimitiveType::Triangle, 0, 3, 1, 0)
+                    .unwrap();
+                e.set_visibility_result_mode(Boolean, 16).unwrap();
+                e.draw_primitives(PrimitiveType::Triangle, 3, 3, 1, 0)
+                    .unwrap();
+                if counting {
+                    e.set_visibility_result_mode(Counting, 24).unwrap();
+                    e.draw_primitives(PrimitiveType::Triangle, 0, 3, 1, 0)
+                        .unwrap();
+                }
+                h.push(depth);
+            },
+        );
+        complete(command_buffer, held);
+        let words: Vec<u64> = vis
+            .bytes()
+            .as_chunks::<8>()
+            .0
+            .iter()
+            .map(|c| u64::from_le_bytes(*c))
+            .collect();
+        let counted = if counting { 116 } else { 100 };
+        assert!(words[1] != 0, "results {at} bytes past a page: {words:?}");
+        assert_eq!(
+            [words[0], words[2], words[3]],
+            [u, 2, counted],
+            "results {at} bytes past a page"
+        );
+        vis.check_around("the visibility buffer");
+    }
+    quiet(probe, &messages);
+}
+
 /// Each degradation these buffers take is announced once on a device, through its message sink,
 /// however often the device takes it: two 2D textures over bytes 4 past a page (shadowed), two
 /// texture buffers 2 past one (staged on every venue), two indexed draws over indices 2 past one

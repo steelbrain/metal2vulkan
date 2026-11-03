@@ -29,9 +29,10 @@ use metal2vulkan::metal::{
 };
 use metal2vulkan::pipeline::{ColorAttachmentDescriptor, RenderPipelineDescriptor, StageSource};
 use metal2vulkan_runtime::{
-    Buffer, ClearColor, Degradation, Error, IndirectCommandBufferDescriptor, Invalid, LoadAction,
-    PipelineOptions, Problem, RenderCommandEncoder, RenderPassDescriptor, RenderPipelineState,
-    ResourceOptions, StoreAction, VisibilityProblem, VisibilityResultMode,
+    Buffer, ClearColor, CommandBuffer, Degradation, Error, IndirectCommandBufferDescriptor,
+    Invalid, LoadAction, PipelineOptions, Problem, RenderCommandEncoder, RenderPassDescriptor,
+    RenderPipelineState, ResourceOptions, StoreAction, Texture, VisibilityProblem,
+    VisibilityResultMode, VisibilityResultType,
 };
 
 /// A word Metal never wrote: the buffer's starting bytes.
@@ -186,13 +187,14 @@ fn boolean_results_store_metals_words() {
     quiet(probe, &messages);
 }
 
-/// The kind a pass writing a `Boolean` result takes ([`boolean_results_announce_the_device_s_value`]).
+/// The kind a pass writing a `Boolean` result takes
+/// ([`boolean_results_announce_the_device_s_value`]).
 pub(super) const BOOLEANS: [Degradation; 1] = [Degradation::DeviceBooleanVisibility];
 
 /// A pass writing a `Boolean` result announces [`BOOLEANS`] once on a device, however many passes
-/// write one, naming the pass's first `Boolean` offset; a pass of `Counting` results alone does not.
-/// Beside it the device announces what the steps force: the white pipeline's making's kinds and
-/// the visibility buffer's system memory.
+/// write one, naming the pass's first `Boolean` offset; a pass of `Counting` results alone does
+/// not. Beside it the device announces what the steps force: the white pipeline's making's kinds
+/// and the visibility buffer's system memory.
 #[test]
 fn boolean_results_announce_the_device_s_value() {
     use VisibilityResultMode::{Boolean, Counting};
@@ -271,6 +273,263 @@ fn boolean_results_are_copied_with_no_dispatch() {
     );
     let words = words(&vis);
     assert!(words[0] != 0 && words[1] == 0, "{words:?}");
+    quiet(probe, &messages);
+}
+
+/// A visibility buffer holding `words`.
+fn buffer_of(probe: &Probe, words: &[u64]) -> Buffer {
+    let bytes: Vec<u8> = words.iter().flat_map(|w| w.to_le_bytes()).collect();
+    super::buffer_with(&probe.device, &bytes).unwrap()
+}
+
+/// Encode one pass over `color` into `command_buffer`, its visibility results of `kind` into
+/// `vis`, `body` encoding into it.
+pub(super) fn encode_pass(
+    probe: &Probe,
+    command_buffer: &CommandBuffer,
+    color: &Texture,
+    vis: &Buffer,
+    kind: VisibilityResultType,
+    held: &mut Vec<Buffer>,
+    body: impl FnOnce(&Probe, &mut RenderCommandEncoder, &mut Vec<Buffer>),
+) {
+    let mut descriptor = RenderPassDescriptor::new();
+    let target = &mut descriptor.color_attachments[0];
+    target.texture = Some(color.clone());
+    target.load_action = LoadAction::Clear;
+    target.clear_color = ClearColor::new(0.0, 0.0, 0.0, 0.0);
+    target.store_action = StoreAction::Store;
+    descriptor.visibility_result_buffer = Some(vis.clone());
+    descriptor.visibility_result_type = kind;
+    let mut encoder = command_buffer.render_command_encoder(&descriptor).unwrap();
+    body(probe, &mut encoder, held);
+    encoder.end_encoding().unwrap();
+}
+
+/// Commit `command_buffer` and wait for it, then drop what its passes held.
+pub(super) fn complete(command_buffer: CommandBuffer, held: Vec<Buffer>) {
+    command_buffer.commit().unwrap();
+    command_buffer
+        .wait_until_completed_for(super::WAIT)
+        .unwrap();
+    assert_eq!(command_buffer.error(), None);
+    drop(held);
+}
+
+/// Whether the probe's device has precise occlusion queries, which `Counting` needs; printed
+/// where it lacks them.
+pub(super) fn precise(probe: &Probe) -> bool {
+    let precise = probe
+        .device
+        .properties()
+        .description
+        .has(metal2vulkan::device::VkFeature::OcclusionQueryPrecise);
+    if !precise {
+        eprintln!(
+            "skipped: Counting visibility results on {}: no precise occlusion queries",
+            probe.device.name()
+        );
+    }
+    precise
+}
+
+/// `Accumulate`, counted, as an Apple M3 Max answers it (the `visibility-counting-accumulate*`
+/// conformance cases): each pass's count added to the word's low 32 bits, a covering draw's 16
+/// samples, a draw covering nothing's none, an offset set with no draw keeping its word, the sum
+/// wrapping at 32 bits with no carry into the high 32, which it keeps; a second pass in the same
+/// command buffer and in the next one adding to the words the first wrote; an offset taken again
+/// adding both of its draws. `Reset` over the same words rewrites every offset the pass set, an
+/// offset set with no draw to 0.
+#[test]
+fn accumulated_counts_add_to_the_words() {
+    use VisibilityResultMode::Counting;
+    use VisibilityResultType::{Accumulate, Reset};
+    let (messages, _cache, probe) = validated();
+    if !precise(&probe) {
+        quiet(probe, &messages);
+        return;
+    }
+    let color = texture(&probe.device, PixelFormat::RGBA8Unorm, 4);
+    let (carry, wrap) = (0xffff_fff8u64, u64::MAX - 7);
+    let start = [100, 5, 7, carry, wrap];
+    let first = |p: &Probe, e: &mut RenderCommandEncoder, h: &mut Vec<Buffer>| {
+        set(e, Counting, 0);
+        draw(p, e, h, WHITE, 0.5, true);
+        set(e, Counting, 8);
+        draw(p, e, h, WHITE, 0.5, false);
+        set(e, Counting, 16);
+        set(e, Counting, 24);
+        draw(p, e, h, WHITE, 0.5, true);
+        set(e, Counting, 32);
+        draw(p, e, h, WHITE, 0.5, true);
+    };
+    let second = |p: &Probe, e: &mut RenderCommandEncoder, h: &mut Vec<Buffer>| {
+        set(e, Counting, 0);
+        draw(p, e, h, WHITE, 0.5, true);
+        set(e, Counting, 8);
+    };
+    // The low halves wrap; the high halves stay.
+    let after_first = [116, 5, 7, 8, 0xffff_ffff_0000_0008];
+    let after_second = [132, 5, 7, 8, 0xffff_ffff_0000_0008];
+    // One command buffer a pass.
+    let vis = buffer_of(&probe, &start);
+    for (body, want, name) in [
+        (
+            &first as &dyn Fn(&Probe, &mut RenderCommandEncoder, &mut Vec<Buffer>),
+            after_first,
+            "the first pass",
+        ),
+        (&second, after_second, "the next command buffer's pass"),
+    ] {
+        let command_buffer = probe.queue.command_buffer().unwrap();
+        let mut held = Vec::new();
+        encode_pass(
+            &probe,
+            &command_buffer,
+            &color,
+            &vis,
+            Accumulate,
+            &mut held,
+            body,
+        );
+        complete(command_buffer, held);
+        assert_eq!(words(&vis), want, "{name}");
+    }
+    // Both passes in one command buffer.
+    let vis = buffer_of(&probe, &start);
+    let command_buffer = probe.queue.command_buffer().unwrap();
+    let mut held = Vec::new();
+    encode_pass(
+        &probe,
+        &command_buffer,
+        &color,
+        &vis,
+        Accumulate,
+        &mut held,
+        first,
+    );
+    encode_pass(
+        &probe,
+        &command_buffer,
+        &color,
+        &vis,
+        Accumulate,
+        &mut held,
+        second,
+    );
+    complete(command_buffer, held);
+    assert_eq!(
+        words(&vis),
+        after_second,
+        "two passes in one command buffer"
+    );
+    // An offset taken again (a continuation of its query) adds both of its draws.
+    let vis = buffer_of(&probe, &[100, 5]);
+    let command_buffer = probe.queue.command_buffer().unwrap();
+    let mut held = Vec::new();
+    encode_pass(
+        &probe,
+        &command_buffer,
+        &color,
+        &vis,
+        Accumulate,
+        &mut held,
+        |p, e, h| {
+            set(e, Counting, 0);
+            draw(p, e, h, WHITE, 0.5, true);
+            set(e, Counting, 8);
+            draw(p, e, h, WHITE, 0.5, true);
+            set(e, Counting, 0);
+            draw(p, e, h, WHITE, 0.5, true);
+        },
+    );
+    complete(command_buffer, held);
+    assert_eq!(words(&vis), [132, 21], "an offset taken again");
+    // `Reset`, the default, over the same words.
+    let vis = buffer_of(&probe, &start);
+    let command_buffer = probe.queue.command_buffer().unwrap();
+    let mut held = Vec::new();
+    encode_pass(
+        &probe,
+        &command_buffer,
+        &color,
+        &vis,
+        Reset,
+        &mut held,
+        first,
+    );
+    complete(command_buffer, held);
+    assert_eq!(words(&vis), [16, 0, 0, 16, 16], "Reset");
+    quiet(probe, &messages);
+}
+
+/// `Accumulate`, `Boolean`, as an Apple M3 Max answers it (the `visibility-boolean-accumulate`
+/// conformance case): a word becomes nonzero where a sample passed and keeps its value where none
+/// did (0, 2 and 3 under each), an offset set with no draw keeps its word, and a later command
+/// buffer's pass ORs into the words the first left. `Reset` over the same words writes the
+/// results alone, 0 where no sample passed.
+#[test]
+fn accumulated_booleans_or_into_the_words() {
+    use VisibilityResultMode::Boolean;
+    use VisibilityResultType::{Accumulate, Reset};
+    let (messages, _cache, probe) = validated();
+    let color = texture(&probe.device, PixelFormat::RGBA8Unorm, 4);
+    let start = [0, 2, 3, 0, 2, 3, 9];
+    let first = |p: &Probe, e: &mut RenderCommandEncoder, h: &mut Vec<Buffer>| {
+        for (at, covering) in [
+            (0, true),
+            (8, true),
+            (16, true),
+            (24, false),
+            (32, false),
+            (40, false),
+        ] {
+            set(e, Boolean, at);
+            draw(p, e, h, WHITE, 0.5, covering);
+        }
+        set(e, Boolean, 48);
+    };
+    let run =
+        |vis: &Buffer, kind, body: &dyn Fn(&Probe, &mut RenderCommandEncoder, &mut Vec<Buffer>)| {
+            let command_buffer = probe.queue.command_buffer().unwrap();
+            let mut held = Vec::new();
+            encode_pass(&probe, &command_buffer, &color, vis, kind, &mut held, body);
+            complete(command_buffer, held);
+            words(vis)
+        };
+    let vis = buffer_of(&probe, &start);
+    let after = run(&vis, Accumulate, &first);
+    assert!(
+        after[..3].iter().all(|&w| w != 0),
+        "where a sample passed: {after:?}"
+    );
+    assert_eq!(
+        after[3..],
+        [0, 2, 3, 9],
+        "where none passed, and set with no draw"
+    );
+    let next = run(&vis, Accumulate, &|p, e, h| {
+        set(e, Boolean, 24);
+        draw(p, e, h, WHITE, 0.5, true);
+    });
+    assert_ne!(next[3], 0, "the next command buffer's pass: {next:?}");
+    assert_eq!(
+        (&next[..3], &next[4..]),
+        (&after[..3], &after[4..]),
+        "the words it did not set"
+    );
+    // `Reset`: the results alone.
+    let vis = buffer_of(&probe, &start);
+    let reset = run(&vis, Reset, &first);
+    assert!(
+        reset[..3].iter().all(|&w| w != 0),
+        "Reset where a sample passed: {reset:?}"
+    );
+    assert_eq!(
+        reset[3..],
+        [0, 0, 0, 0],
+        "Reset where none passed, and set with no draw"
+    );
     quiet(probe, &messages);
 }
 

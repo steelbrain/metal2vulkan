@@ -1607,8 +1607,9 @@ bound.
   its topology class between the vertex and fragment stages, which emits each primitive's vertices
   with the barycentric weights or the first vertex's slice and viewport.
 - `metal2vulkan-degrade-landed-visibility-results` (performance). `LandedVisibilityResults`:
-  Visibility results start where Vulkan writes no query result. Cost: they land in an upload region
-  and are copied on into the buffer after the pass.
+  Visibility results start where Vulkan writes no query result. Cost: they land in an upload region,
+  into which the buffer's words are copied first where they accumulate, and are copied on into the
+  buffer after the pass.
 - `metal2vulkan-degrade-overlapping-buffer-copy` (performance). `OverlappingBufferCopy`: A blit
   copies between overlapping ranges of one buffer, which Vulkan's copy forbids. Cost: the range goes
   through a scratch buffer of its size, which its creation clears by a fill it waits for: two copies
@@ -2917,7 +2918,8 @@ bound.
   writes a `Boolean` visibility result. Where a sample passed, its word is the device's occlusion
   query result without `VK_QUERY_CONTROL_PRECISE_BIT`, which Vulkan states only as nonzero ("When
   any samples are passed, boolean queries will return a non-zero result value, otherwise a result
-  value of zero is returned"), ORed over the pass's render pass instances; where none passed, 0.
+  value of zero is returned"), ORed over the pass's render pass instances (and, under `Accumulate`,
+  into the word the buffer held); where none passed, 0 (the word, under `Accumulate`).
   That is Metal's `Boolean` contract, and Metal's own nonzero value is not one value either: an
   Apple M3 Max (macOS 27.0.1) writes 1, Metal on the AMD Radeon Pro 5300M and the Intel UHD
   Graphics 630 (macOS 26.7.1) the samples that passed. No dispatch rewrites the device's value.

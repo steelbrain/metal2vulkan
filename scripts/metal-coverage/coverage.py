@@ -37,7 +37,7 @@ SIZES = ["S", "M", "L", "XL"]
 # REFUSALS.md.
 ORDER = [
     "labels", "cmdbuf", "queue", "passdesc", "library", "queries", "barriers", "reflection",
-    "function-handles", "functions", "archive", "events", "visibility", "mesh-descriptor", "sparse",
+    "function-handles", "functions", "archive", "events", "mesh-descriptor", "sparse",
     "parallel", "icb-depth-stencil", "lod-bias", "depthbounds", "min-lod", "specialization",
     "sparsebuf", "counters", "residency", "colormap", "viewpool", "logging", "notifications",
     "compression", "capture", "persistent", "shadervalidation", "stitching", "io", "tensor",
@@ -57,7 +57,6 @@ GROUP_NAMES = {
     "functions": "a specialized function's name",
     "archive": "more binary archive entries",
     "events": "the shared event listener",
-    "visibility": "accumulated visibility results",
     "mesh-descriptor": "mesh pipeline descriptor fields",
     "sparse": "placement sparse page sizes",
     "parallel": "parallel render encoding",

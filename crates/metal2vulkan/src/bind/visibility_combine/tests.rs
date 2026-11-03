@@ -1,7 +1,7 @@
 //! The continuation combine module: valid on every committed profile (L3, `G-val`), and exact
-//! on the CPU interpreter (each result's word ORed with its continuation words half by half, or
-//! summed with them as 64-bit integers), in place, for the listed words only, across workgroups
-//! and short ranges; and its plan's windows.
+//! on the CPU interpreter (each result's word ORed with its continuation words half by half,
+//! summed with them as 64-bit integers, or their low halves summed into its low half), in place,
+//! for the listed words only, across workgroups and short ranges; and its plan's windows.
 
 use super::*;
 use crate::spirv::interp::{run, Buffer, Config, Order, Resources};
@@ -116,6 +116,30 @@ fn counting_continuations_are_summed_into_their_result() {
     }
 }
 
+/// A `Counting` result that accumulates takes the sum of its source words' low halves into its
+/// word's low half, wrapping at 32 bits, and keeps its high half, as an Apple M3 Max writes it.
+#[test]
+fn accumulated_counts_are_summed_into_the_low_half() {
+    // Sources: 16, 2^32 - 1, 1 and 2^64 - 1, as 64-bit words.
+    let sources = [16, 0, u32::MAX, 0, 1, 0, u32::MAX, u32::MAX];
+    for (result, first, count, want) in [
+        ([100, 0], 0, 1, [116, 0]),
+        ([0xffff_fff8, 0], 0, 1, [8, 0]),
+        ([0xffff_fff8, u32::MAX], 0, 1, [8, u32::MAX]),
+        ([16, 7], 0, 3, [32, 7]),
+        ([5, 7], 3, 1, [4, 7]),
+        ([9, 3], 1, 0, [9, 3]),
+    ] {
+        let dest = [0xAAAA_AAAA, 0xAAAA_AAAA, result[0], result[1], 7, 9];
+        let out = combine(&[1, first, count, 2], &dest, &sources, 1);
+        assert_eq!(
+            out,
+            [0xAAAA_AAAA, 0xAAAA_AAAA, want[0], want[1], 7, 9],
+            "{result:?} plus {count} from {first}"
+        );
+    }
+}
+
 /// Every listed result combines, across workgroups, each with its own continuations; a word
 /// between them is left as copied, and an invocation past the table does nothing.
 #[test]
@@ -182,6 +206,18 @@ fn the_plan_binds_aligned_windows() {
     assert_eq!(plan[0].table, [3, 0, 1, 0, 9, 1, 2, 1], "sorted by offset");
     assert_eq!(plan[0].group_count, 1);
     assert_eq!(plan[0].table_bytes()[..8], [3, 0, 0, 0, 0, 0, 0, 0]);
+    // A sum into the low half states 2; an OR stays an OR.
+    let low = VisibilityCombine::plan(
+        &[
+            at(8, 0, 1, true).in_low_half(),
+            at(16, 1, 1, false).in_low_half(),
+        ],
+        8,
+        1 << 16,
+        65_535,
+    )
+    .expect("plan");
+    assert_eq!(low[0].table, [0, 0, 1, 2, 1, 1, 1, 0]);
     // Results farther apart than one binding reaches take a dispatch each.
     let plan = VisibilityCombine::plan(&[at(8, 0, 1, false), at(200, 1, 1, false)], 16, 64, 65_535)
         .expect("plan");

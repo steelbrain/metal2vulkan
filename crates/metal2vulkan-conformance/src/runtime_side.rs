@@ -7048,6 +7048,7 @@ fn encode_pass(command_buffer: &CommandBuffer, pass: &RenderPass, pools: &Pools)
             attachment.resolve_texture = Some(texture(resolve)?.clone());
         }
     }
+    descriptor.visibility_result_type = pass.visibility_type;
     if let Some(held) = pass.visibility {
         descriptor.visibility_result_buffer = Some(buffer(held)?.clone());
     }

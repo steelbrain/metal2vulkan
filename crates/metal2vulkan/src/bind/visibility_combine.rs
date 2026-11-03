@@ -8,7 +8,12 @@
 //! result's continuation words into its word. A `Boolean` result ORs them: an imprecise query's
 //! count is any nonzero value when a sample passed, and a sum of such counts could wrap to zero, so
 //! the OR is zero exactly where no instance passed a sample. A `Counting` result, of precise
-//! queries, sums them: the samples that passed in every instance.
+//! queries, sums them: the samples that passed in every instance. A result that accumulates
+//! (`MTLVisibilityResultTypeAccumulate`) is combined the same way, every one of its queries a
+//! source word and the word as the buffer holds it the start; a `Counting` one is summed into the
+//! word's low 32 bits alone, wrapping there, its high 32 bits kept, as an Apple M3 Max writes it
+//! (macOS 27.0.1: 0xffff_fff8 and 16 samples write 8, 0xffff_ffff_ffff_fff8 and 16 write
+//! 0xffff_ffff_0000_0008).
 //!
 //! **The module** (one per device). One `GLCompute` entry `main` with local size
 //! ([`VisibilityCombineModule::LOCAL_SIZE`], 1, 1), no push constants, and three storage buffers in
@@ -22,9 +27,11 @@
 //!
 //! Invocation `i` below the table's entries takes entry `i`, four words: the index of a result's
 //! 64-bit word inside the bound visibility range, the index of its first continuation word among
-//! the sources, its continuation count, and 1 to sum them (0 to OR them). It combines that many
-//! consecutive source words into the result's word: ORed half by half, or added as 64-bit
-//! integers, wrapping. A word past its bound range is skipped, and the loop stops at the sources'
+//! the sources, its continuation count, and how it combines them: 0 to OR them, 1 to sum them, 2 to
+//! sum them into the low half. It combines that many consecutive source words into the result's
+//! word: ORed half by half, added as 64-bit integers, wrapping, or their low halves added to the
+//! word's low half, wrapping at 32 bits, its high half kept. A word past its bound range is
+//! skipped, and the loop stops at the sources'
 //! end, so a wrongly bound range can never make the combine fault or run past its words. Each
 //! result is one entry, so no two invocations write one word.
 //!
@@ -66,7 +73,8 @@ pub struct VisibilityCombine {
     /// The table to upload (little-endian `u32`s) and bind, exactly, at
     /// [`VisibilityCombineModule::TABLE_BINDING`]: per result, ascending by offset, the index of
     /// its 64-bit word inside `dest_range`, the index of its first 64-bit continuation word among
-    /// the sources, its continuation count, and 1 where they are summed (0 where ORed).
+    /// the sources, its continuation count, and 1 where they are summed, 2 where they are summed
+    /// into the word's low half ([`ContinuedResult::low_half`]), 0 where ORed.
     pub table: Vec<u32>,
     /// Workgroups to dispatch along x, each of [`VisibilityCombineModule::LOCAL_SIZE`]
     /// invocations.
@@ -86,6 +94,10 @@ pub struct ContinuedResult {
     /// Whether they are summed (a `Counting` result, of precise queries) rather than ORed (a
     /// `Boolean` one).
     pub sum: bool,
+    /// Whether a sum is taken into the word's low 32 bits alone, wrapping there, its high 32
+    /// bits kept: a `Counting` result that accumulates, as an Apple M3 Max writes it (the module
+    /// docs).
+    pub low_half: bool,
 }
 
 impl ContinuedResult {
@@ -97,6 +109,26 @@ impl ContinuedResult {
             first,
             count,
             sum,
+            low_half: false,
+        }
+    }
+
+    /// The same result, a sum of which is taken into its word's low half alone
+    /// ([`ContinuedResult::low_half`]).
+    #[must_use]
+    pub fn in_low_half(self) -> ContinuedResult {
+        ContinuedResult {
+            low_half: true,
+            ..self
+        }
+    }
+
+    /// How the table states its combine: 0 to OR, 1 to sum, 2 to sum into the low half.
+    fn how(&self) -> u32 {
+        match (self.sum, self.low_half) {
+            (false, _) => 0,
+            (true, false) => 1,
+            (true, true) => 2,
         }
     }
 }
@@ -137,13 +169,13 @@ impl VisibilityCombine {
             u64::from(max_groups).checked_mul(u64::from(VisibilityCombineModule::LOCAL_SIZE))?;
         let items = sorted
             .into_iter()
-            .map(|r| (r.offset, [r.first, r.count, u32::from(r.sum)]));
+            .map(|r| (r.offset, [r.first, r.count, r.how()]));
         windows(items, alignment, max_range, max_entries)?
             .into_iter()
             .map(|(dest_range, entries)| {
                 let table: Vec<u32> = entries
                     .iter()
-                    .flat_map(|&(index, [first, count, sum])| [index, first, count, sum])
+                    .flat_map(|&(index, [first, count, how])| [index, first, count, how])
                     .collect();
                 let groups =
                     (entries.len() as u64).div_ceil(u64::from(VisibilityCombineModule::LOCAL_SIZE));
@@ -324,8 +356,9 @@ pub fn typed_module() -> BResult<TypedModule> {
         let target = entry(f, zero)?;
         let first = entry(f, one)?;
         let count = entry(f, two)?;
-        let sum = entry(f, three)?;
-        let sum = f.binary(BinOp::INotEqual, sum, zero)?;
+        let how = entry(f, three)?;
+        let sum = f.binary(BinOp::INotEqual, how, zero)?;
+        let low_half = f.binary(BinOp::IEqual, how, two)?;
         let low_index = f.binary(BinOp::ShiftLeftLogical, target, one)?;
         let high_index = f.binary(BinOp::IAdd, low_index, one)?;
         let inside = f.binary(BinOp::ULessThan, high_index, dest_len)?;
@@ -362,7 +395,8 @@ pub fn typed_module() -> BResult<TypedModule> {
                 let high = f.load(high_ptr, MemAccess::default())?;
                 let low_so_far = f.load(low_acc, MemAccess::default())?;
                 let high_so_far = f.load(high_acc, MemAccess::default())?;
-                // ORed half by half, or added with the low half's carry into the high half.
+                // ORed half by half, added with the low half's carry into the high half, or the low
+                // halves added, the high half kept.
                 let low_or = f.binary(BinOp::BitwiseOr, low_so_far, low)?;
                 let high_or = f.binary(BinOp::BitwiseOr, high_so_far, high)?;
                 let low_sum = f.binary(BinOp::IAdd, low_so_far, low)?;
@@ -370,6 +404,7 @@ pub fn typed_module() -> BResult<TypedModule> {
                 let carry = f.select(carried, one, zero)?;
                 let high_sum = f.binary(BinOp::IAdd, high_so_far, high)?;
                 let high_sum = f.binary(BinOp::IAdd, high_sum, carry)?;
+                let high_sum = f.select(low_half, high_so_far, high_sum)?;
                 let low_next = f.select(sum, low_sum, low_or)?;
                 let high_next = f.select(sum, high_sum, high_or)?;
                 f.store(low_acc, low_next, MemAccess::default())?;

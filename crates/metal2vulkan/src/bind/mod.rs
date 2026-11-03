@@ -58,14 +58,16 @@
 //! offsets, a `Boolean` one the device's own nonzero value where a sample passed; where a split
 //! pass continues a result's query in a later render pass instance, a [`VisibilityCombine`]
 //! dispatch of [`visibility_combine_module`] sums the continuations' counts into a `Counting`
-//! result and ORs them into a `Boolean` one. A pass whose fetching draws read a multisampled
-//! attachment's sample planes (`StorageAttachmentView::SamplePlanes`) splits the attachment into
-//! them with [`planes_split_module`] and merges them back with [`planes_merge_modules`], through
-//! the [`PlanesCopy`] view of its texel size. A multisampled depth or stencil aspect moves
-//! between images without colour copies through the draws of [`depth_stencil_copy_modules`] and
-//! the kernel of [`stencil_split_module`], and resolves where the device's resolve modes do not
-//! state Metal's filter through the draws of [`depth_stencil_resolve_modules`]. The mipmaps of a
-//! format the device's blits cannot filter are a bilinear filter in `float` through the
+//! result and ORs them into a `Boolean` one, and where the results accumulate it takes every query
+//! into the word the buffer holds, a count into its low half alone. A pass whose fetching draws
+//! read a multisampled attachment's sample planes (`StorageAttachmentView::SamplePlanes`) splits
+//! the attachment into them with [`planes_split_module`] and merges them back with
+//! [`planes_merge_modules`], through the [`PlanesCopy`] view of its texel size. A multisampled
+//! depth or stencil aspect moves between images without colour copies through the draws of
+//! [`depth_stencil_copy_modules`] and the kernel of [`stencil_split_module`], and resolves where
+//! the device's resolve modes do not state Metal's filter through the draws of
+//! [`depth_stencil_resolve_modules`]. The mipmaps of a format the device's blits cannot filter are
+//! a bilinear filter in `float` through the
 //! [`MipmapFilterChain`] dispatches of [`mipmap_filter_module`]. Compute commands
 //! a kernel encodes into an indirect command buffer replay on the device where it has device
 //! addresses: the [`replay_preprocess`] of an execution ([`ReplayExecution`]) over registered

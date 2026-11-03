@@ -4938,7 +4938,7 @@ impl RenderLowering {
         if let Some(last) = instances.last() {
             visibility.end(raw, last.draws);
         }
-        let results = visibility.plan(&mut core)?;
+        let results = visibility.plan(&mut core, layout.visibility_type)?;
         // A shadowed texture the pass renders, resolves into or a draw uses.
         let texels_shadowed = shadows::attachments_shadowed(&layout)
             || instances

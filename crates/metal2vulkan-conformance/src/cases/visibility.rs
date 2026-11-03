@@ -5,7 +5,8 @@
 //! drives, drawn with the owned fixture `rt6_render_state`: the fullscreen triangle covers every
 //! pixel of a 4 by 4 target, and the same draw **from vertex 3** covers none. Each visibility
 //! buffer starts as `0xaa` bytes, so a word Metal never wrote is visible as the bytes that were
-//! there rather than as a zero nobody can tell from a result.
+//! there rather than as a zero nobody can tell from a result; an `Accumulate` shape's starts as
+//! the words it adds to.
 //!
 //! The lane's own table was measured on an M4, and its comment says so. Metal's answer here is
 //! **run**, not copied: record mode takes it on this M3 Max, and this module's tests cross-check
@@ -31,6 +32,10 @@
 //! - An indirect draw of no instances.
 //! - The same questions counted, and the fullscreen triangle's count at **4x**, which is the one
 //!   shape here with a multisampled attachment.
+//! - `Accumulate` (`visibilityResultType`), counted: a draw's samples added to the word, a word
+//!   set with no draw kept, a sum past 32 and past 64 bits, a second pass in the next command
+//!   buffer and in the **same** one (`joined`, read once after both), and an offset taken again.
+//!   `Boolean`: words 0, 2 and 3 under a covering draw and under one covering nothing.
 //!
 //! # How this family's inputs are keyed, and the one key the compiler cannot guard
 //!
@@ -70,7 +75,7 @@ use crate::replay::NOTICES_SITE;
 use crate::transcript::{ByteLayout, Digest, Element, Node, Observed, Sites, Value};
 use metal2vulkan::metal::state::DepthStencilDescriptor;
 use metal2vulkan::metal::{CompareFunction, PixelFormat, PrimitiveType};
-use metal2vulkan_runtime::{Degradation, StoreAction, VisibilityResultMode};
+use metal2vulkan_runtime::{Degradation, StoreAction, VisibilityResultMode, VisibilityResultType};
 use std::collections::BTreeSet;
 
 /// The owned fixture the lane draws with: `rt6_full` takes a depth and a slope as one `float2` at
@@ -136,8 +141,8 @@ struct Depth {
     compare: CompareFunction,
 }
 
-/// What one case asks: its name, its buffer's words, the passes it runs, its depth attachment and
-/// its sample count.
+/// What one case asks: its name, its buffer's words, the passes it runs, its depth attachment, its
+/// sample count, and its passes' visibility result type, starting words and command buffers.
 struct Shape {
     name: &'static str,
     /// 64-bit words the case's visibility buffer holds.
@@ -148,12 +153,29 @@ struct Shape {
     depth: Option<Depth>,
     /// `rasterSampleCount` and the attachment's samples: 1, or 4 for the lane's 4x pass.
     samples: u32,
+    /// Every pass's `visibilityResultType`.
+    kind: VisibilityResultType,
+    /// The words the buffer starts as, `words` of them, or `None` for [`UNWRITTEN`] bytes.
+    start: Option<&'static [u64]>,
+    /// Whether the passes run in **one** command buffer, whose words are read once after it,
+    /// rather than one command buffer a pass, read after each.
+    joined: bool,
 }
 
 /// `Boolean`, `Counting` and `Disabled`, as short as the lane writes them.
 const BOOL: VisibilityResultMode = VisibilityResultMode::Boolean;
 const COUNT: VisibilityResultMode = VisibilityResultMode::Counting;
 const OFF: VisibilityResultMode = VisibilityResultMode::Disabled;
+
+/// `Reset`, Metal's default, and `Accumulate`.
+const RESET: VisibilityResultType = VisibilityResultType::Reset;
+const ACCUMULATE: VisibilityResultType = VisibilityResultType::Accumulate;
+
+/// A word whose low half a count of 16 takes past 32 bits.
+const CARRY: u64 = 0xffff_fff8;
+
+/// A word that a count of 16 would take past 64 bits, were the count added to all of it.
+const WRAP: u64 = u64::MAX - 7;
 
 /// Every case of the family, in the order the report lists them.
 const SHAPES: &[Shape] = &[
@@ -179,6 +201,9 @@ const SHAPES: &[Shape] = &[
         ],
         depth: None,
         samples: 1,
+        kind: RESET,
+        start: None,
+        joined: false,
     },
     // Probe 5's vis_revisit_boolean_then_none: offset 0 taken again after offset 8, whose first
     // draw covered and whose second did not.
@@ -195,6 +220,9 @@ const SHAPES: &[Shape] = &[
         ]],
         depth: None,
         samples: 1,
+        kind: RESET,
+        start: None,
+        joined: false,
     },
     // Probe 5's vis_revisit_none_then_boolean: the same three draws the other way round.
     Shape {
@@ -210,6 +238,9 @@ const SHAPES: &[Shape] = &[
         ]],
         depth: None,
         samples: 1,
+        kind: RESET,
+        start: None,
+        joined: false,
     },
     // Probe 1's visibility_occluded: a draw at 0.5 behind the cleared depth 0.25 under `Less`
     // passes no sample, and one at 0.125 in front of it passes every one.
@@ -232,6 +263,9 @@ const SHAPES: &[Shape] = &[
             compare: CompareFunction::Less,
         }),
         samples: 1,
+        kind: RESET,
+        start: None,
+        joined: false,
     },
     // Probe 5's vis_indirect_no_instances, as Boolean: an indirect draw of three vertices and no
     // instances.
@@ -241,6 +275,9 @@ const SHAPES: &[Shape] = &[
         passes: &[&[Act::Mode(BOOL, 0), Act::DrawIndirect]],
         depth: None,
         samples: 1,
+        kind: RESET,
+        start: None,
+        joined: false,
     },
     // Probe 1's counts at their offsets: drawn, a draw covering nothing, two draws, three
     // instances, set with no draw; beside a `Boolean` offset, and a draw after `Disabled`.
@@ -269,6 +306,9 @@ const SHAPES: &[Shape] = &[
         ]],
         depth: None,
         samples: 1,
+        kind: RESET,
+        start: None,
+        joined: false,
     },
     // Probe 1's visibility_occluded, counted.
     Shape {
@@ -290,6 +330,9 @@ const SHAPES: &[Shape] = &[
             compare: CompareFunction::Less,
         }),
         samples: 1,
+        kind: RESET,
+        start: None,
+        joined: false,
     },
     // Probe 5's vis_revisit_counting: offset 0 taken again after offset 8 sums its draws.
     Shape {
@@ -305,6 +348,9 @@ const SHAPES: &[Shape] = &[
         ]],
         depth: None,
         samples: 1,
+        kind: RESET,
+        start: None,
+        joined: false,
     },
     // Probe 5's vis_revisit_after_disabled: the same, with `Disabled` between.
     Shape {
@@ -320,6 +366,9 @@ const SHAPES: &[Shape] = &[
         ]],
         depth: None,
         samples: 1,
+        kind: RESET,
+        start: None,
+        joined: false,
     },
     // Probe 1's 4x pass: the fullscreen triangle passes every sample of the 4 by 4 target, which
     // is 64 at 4x. The attachment is multisampled and private, and the pass does not store it.
@@ -329,6 +378,98 @@ const SHAPES: &[Shape] = &[
         passes: &[&[Act::Mode(COUNT, 0), Act::draw()]],
         depth: None,
         samples: 4,
+        kind: RESET,
+        start: None,
+        joined: false,
+    },
+    // `Accumulate`, counted, one command buffer a pass: a covering draw adds its 16 samples to
+    // the word, a draw covering nothing adds none, an offset set with no draw keeps its word, and
+    // the sum runs past 32 bits and past 64; a second pass adds to the first's words.
+    Shape {
+        name: "visibility-counting-accumulate",
+        words: 5,
+        passes: &[
+            &[
+                Act::Mode(COUNT, 0),
+                Act::draw(),
+                Act::Mode(COUNT, 8),
+                Act::draw_nothing(),
+                Act::Mode(COUNT, 16),
+                Act::Mode(COUNT, 24),
+                Act::draw(),
+                Act::Mode(COUNT, 32),
+                Act::draw(),
+            ],
+            &[Act::Mode(COUNT, 0), Act::draw(), Act::Mode(COUNT, 8)],
+        ],
+        depth: None,
+        samples: 1,
+        kind: ACCUMULATE,
+        start: Some(&[100, 5, 7, CARRY, WRAP]),
+        joined: false,
+    },
+    // The same two passes' first words in **one** command buffer.
+    Shape {
+        name: "visibility-counting-accumulate-one-command-buffer",
+        words: 2,
+        passes: &[
+            &[Act::Mode(COUNT, 0), Act::draw(), Act::Mode(COUNT, 8)],
+            &[Act::Mode(COUNT, 0), Act::draw()],
+        ],
+        depth: None,
+        samples: 1,
+        kind: ACCUMULATE,
+        start: Some(&[100, 7]),
+        joined: true,
+    },
+    // `Accumulate` of an offset taken again after another offset: both of its draws add to the
+    // word.
+    Shape {
+        name: "visibility-counting-accumulate-revisit",
+        words: 2,
+        passes: &[&[
+            Act::Mode(COUNT, 0),
+            Act::draw(),
+            Act::Mode(COUNT, 8),
+            Act::draw(),
+            Act::Mode(COUNT, 0),
+            Act::draw(),
+        ]],
+        depth: None,
+        samples: 1,
+        kind: ACCUMULATE,
+        start: Some(&[100, 5]),
+        joined: false,
+    },
+    // `Accumulate`, `Boolean`: words 0, 2 and 3 under a covering draw, the same under a draw
+    // covering nothing, and an offset set with no draw; then a second command buffer's covering
+    // draw at the word that stayed 0.
+    Shape {
+        name: "visibility-boolean-accumulate",
+        words: 7,
+        passes: &[
+            &[
+                Act::Mode(BOOL, 0),
+                Act::draw(),
+                Act::Mode(BOOL, 8),
+                Act::draw(),
+                Act::Mode(BOOL, 16),
+                Act::draw(),
+                Act::Mode(BOOL, 24),
+                Act::draw_nothing(),
+                Act::Mode(BOOL, 32),
+                Act::draw_nothing(),
+                Act::Mode(BOOL, 40),
+                Act::draw_nothing(),
+                Act::Mode(BOOL, 48),
+            ],
+            &[Act::Mode(BOOL, 24), Act::draw()],
+        ],
+        depth: None,
+        samples: 1,
+        kind: ACCUMULATE,
+        start: Some(&[0, 2, 3, 0, 2, 3, 9]),
+        joined: false,
     },
 ];
 
@@ -359,9 +500,14 @@ const PASS_NOTICES: &[Degradation] = &[
     Degradation::DontCareStore,
 ];
 
-/// Each pass's `Boolean` results, as (the pass's index, the result's offset): the offsets whose
-/// last mode set, in that pass or one before it, is `Boolean`, which the pass's `words` site holds.
+/// Each read's `Boolean` results, as (the pass's index, the result's offset): the offsets whose
+/// last mode set, in that pass or one before it, is `Boolean`, which the pass's `words` site holds,
+/// at each pass the words are read after ([`groups`]).
 fn boolean_words(shape: &Shape) -> Vec<(usize, u64)> {
+    let read: Vec<usize> = groups(shape)
+        .iter()
+        .filter_map(|g| g.last().copied())
+        .collect();
     let mut held: BTreeSet<u64> = BTreeSet::new();
     let mut out = Vec::new();
     for (index, acts) in shape.passes.iter().enumerate() {
@@ -376,14 +522,29 @@ fn boolean_words(shape: &Shape) -> Vec<(usize, u64)> {
                 Act::Mode(..) | Act::Draw { .. } | Act::DrawIndirect => {}
             }
         }
-        out.extend(held.iter().map(|&offset| (index, offset)));
+        if read.contains(&index) {
+            out.extend(held.iter().map(|&offset| (index, offset)));
+        }
     }
     out
 }
 
-/// The bytes a buffer of `words` 64-bit words starts as.
-fn start(words: usize) -> Vec<u8> {
-    vec![UNWRITTEN; 8 * words]
+/// The shape's passes by command buffer, as indices: all in one where it is `joined`, else one
+/// each.
+fn groups(shape: &Shape) -> Vec<Vec<usize>> {
+    let all = 0..shape.passes.len();
+    match shape.joined {
+        true => vec![all.collect()],
+        false => all.map(|index| vec![index]).collect(),
+    }
+}
+
+/// The bytes the shape's buffer starts as: its `start` words, or [`UNWRITTEN`] bytes.
+fn start(shape: &Shape) -> Vec<u8> {
+    match shape.start {
+        Some(words) => words.iter().flat_map(|word| word.to_le_bytes()).collect(),
+        None => vec![UNWRITTEN; 8 * shape.words],
+    }
 }
 
 /// The eight bytes `rt6_full` reads at vertex buffer 0: the depth, then the slope, which every
@@ -431,7 +592,8 @@ fn word(out: &mut Vec<u8>, value: u64) {
 }
 
 /// The calls a shape's passes make, in order: each act keyed by **the name of the Metal call it
-/// makes and the values handed that call**, with each pass opening on the encoder that runs it.
+/// makes and the values handed that call**, with each pass opening on the encoder that runs it
+/// and, under `Accumulate`, on its descriptor's `visibilityResultType`.
 ///
 /// This replaced `format!("{:?}", shape.passes)`, which keyed a case by the printed text of
 /// [`Act`]: that text moves on any change to the type, including one that changes no call these
@@ -448,6 +610,12 @@ fn act_words(shape: &Shape) -> Vec<u8> {
     let mut out = Vec::new();
     for acts in shape.passes {
         out.extend(b"renderCommandEncoderWithDescriptor");
+        // The descriptor's type, only where it accumulates, so every other case keys as it always
+        // did.
+        if shape.kind != RESET {
+            out.extend(crate::render::VISIBILITY_RESULT_TYPE.as_bytes());
+            word(&mut out, shape.kind.raw() as u64);
+        }
         for act in *acts {
             match act {
                 Act::Mode(mode, offset) => {
@@ -681,9 +849,16 @@ impl Case for Visibility {
             },
             Input::bytes("render-pipeline", &self.pipeline_spec(&colors).words()),
             Input::bytes("target", &self.target_spec().words()),
-            Input::bytes("visibility", &start(self.shape.words)),
+            Input::bytes("visibility", &start(self.shape)),
             Input::bytes("acts", &act_words(self.shape)),
         ];
+        // Named only where a shape runs its passes in one command buffer, so every other case keys
+        // as it always did.
+        if self.shape.joined {
+            let mut words = b"commandBuffer".to_vec();
+            word(&mut words, self.shape.passes.len() as u64);
+            inputs.push(Input::bytes("command-buffer", &words));
+        }
         if let Some(state) = self.depth_state() {
             inputs.push(Input::bytes(
                 "depth-stencil-state",
@@ -747,94 +922,26 @@ impl Case for Visibility {
             )?),
             false => None,
         };
-        let visibility =
-            crate::case::made(sites, "visibility", side.buffer(&start(self.shape.words)))?;
+        let visibility = crate::case::made(sites, "visibility", side.buffer(&start(self.shape)))?;
         let length = 8 * self.shape.words;
-        for (index, acts) in self.shape.passes.iter().enumerate() {
-            let at = format!("pass-{index}");
+        let held = Held {
+            state,
+            depth_state,
+            vertex: &vertex,
+            arguments,
+            visibility,
+        };
+        for group in groups(self.shape) {
+            let mut work = Vec::with_capacity(group.len());
+            for &index in &group {
+                work.push(RenderWork::Pass(self.pass(side, sites, index, &held)?));
+            }
+            // The words are read after the command buffer, at its last pass's site.
+            let last = group.last().copied().unwrap_or_default();
+            let at = format!("pass-{last}");
             let stop = |at: String, failure: Failure| Abort { at, failure };
-            // A fresh target a pass, as the lane makes one a pass, so no pass reads what another
-            // left in the color attachment.
-            let target = crate::case::made(
-                sites,
-                &format!("{at}/target"),
-                side.target(&self.target_spec()),
-            )?;
-            let mut steps = vec![RenderStep::Pipeline(state)];
-            if let Some(held) = depth_state {
-                steps.push(RenderStep::DepthStencilState(held));
-            }
-            for act in *acts {
-                match act {
-                    Act::Mode(mode, offset) => steps.push(RenderStep::VisibilityResultMode {
-                        mode: *mode,
-                        offset: *offset,
-                    }),
-                    Act::Draw {
-                        z,
-                        covering,
-                        instances,
-                    } => {
-                        let held = vertex
-                            .iter()
-                            .find(|(bits, _)| *bits == z.to_bits())
-                            .map(|(_, handle)| *handle)
-                            .ok_or_else(|| {
-                                stop(at.clone(), Failure::named("NoDepthBuffer", format!("{z}")))
-                            })?;
-                        steps.push(RenderStep::vertex_buffer(held, 0));
-                        steps.push(RenderStep::Draw {
-                            primitive: PrimitiveType::Triangle,
-                            first: if *covering { 0 } else { 3 },
-                            count: 3,
-                            instances: *instances,
-                        });
-                    }
-                    Act::DrawIndirect => {
-                        let held = arguments.ok_or_else(|| {
-                            stop(
-                                at.clone(),
-                                Failure::named("NoArguments", "an indirect draw"),
-                            )
-                        })?;
-                        let depth = vertex
-                            .iter()
-                            .find(|(bits, _)| *bits == DEPTH.to_bits())
-                            .map(|(_, handle)| *handle)
-                            .ok_or_else(|| {
-                                stop(
-                                    at.clone(),
-                                    Failure::named("NoDepthBuffer", "an indirect draw"),
-                                )
-                            })?;
-                        steps.push(RenderStep::vertex_buffer(depth, 0));
-                        steps.push(RenderStep::DrawIndirect {
-                            primitive: PrimitiveType::Triangle,
-                            arguments: held,
-                            offset: 0,
-                        });
-                    }
-                }
-            }
-            // At 4x the attachment is private and the pass does not store it: the question is the
-            // samples the draws passed, not the texels.
-            let color = match self.shape.samples {
-                1 => PassColor::cleared(target, [0.0; 4]),
-                _ => PassColor::cleared(target, [0.0; 4]).stored(StoreAction::DontCare),
-            };
-            let mut pass = RenderPass::clearing(vec![color])
-                .drawing(steps.clone())
-                .counting_into(visibility);
-            if let Some(depth) = self.shape.depth {
-                let attachment = crate::case::made(
-                    sites,
-                    &format!("{at}/depth"),
-                    side.target(&TargetSpec::plain(depth.format, [SIDE, SIDE])),
-                )?;
-                pass = pass.with_depth(self.pass_depth(attachment, &depth));
-            }
             let outcome = side
-                .render(&[RenderWork::Pass(pass)])
+                .render(&work)
                 .map_err(|failure| stop(format!("{at}/render"), failure))?;
             let mut node = Node::branch(at.clone(), Vec::new());
             let mut calls = Node::branch("calls", Vec::new());
@@ -848,10 +955,15 @@ impl Case for Visibility {
                 ));
             }
             node = node.with(calls);
-            if let Some(failure) = outcome.refused.iter().flatten().next() {
+            if let Some((piece, failure)) = outcome
+                .refused
+                .iter()
+                .enumerate()
+                .find_map(|(piece, refused)| refused.as_ref().map(|f| (piece, f)))
+            {
                 sites.push(node);
                 return Err(Abort {
-                    at: format!("{at}/calls/0-render"),
+                    at: format!("{at}/calls/{piece}-render"),
                     failure: failure.clone(),
                 });
             }
@@ -883,6 +995,114 @@ impl Case for Visibility {
     }
 }
 
+/// What every pass of a case draws with, made once before them.
+struct Held<'a> {
+    state: Handle,
+    depth_state: Option<Handle>,
+    /// One vertex buffer a depth, by the depth's bits.
+    vertex: &'a [(u32, Handle)],
+    arguments: Option<Handle>,
+    visibility: Handle,
+}
+
+impl Visibility {
+    /// Pass `index` of the shape: a fresh target, as the lane makes one a pass, so no pass reads
+    /// what another left in the color attachment, its acts as steps, and its depth attachment
+    /// where the shape has one.
+    fn pass(
+        &self,
+        side: &mut dyn Side,
+        sites: &mut Sites,
+        index: usize,
+        held: &Held<'_>,
+    ) -> Result<RenderPass, Abort> {
+        let at = format!("pass-{index}");
+        let stop = |at: String, failure: Failure| Abort { at, failure };
+        let target = crate::case::made(
+            sites,
+            &format!("{at}/target"),
+            side.target(&self.target_spec()),
+        )?;
+        let mut steps = vec![RenderStep::Pipeline(held.state)];
+        if let Some(state) = held.depth_state {
+            steps.push(RenderStep::DepthStencilState(state));
+        }
+        for act in self.shape.passes[index] {
+            match act {
+                Act::Mode(mode, offset) => steps.push(RenderStep::VisibilityResultMode {
+                    mode: *mode,
+                    offset: *offset,
+                }),
+                Act::Draw {
+                    z,
+                    covering,
+                    instances,
+                } => {
+                    let depth = held
+                        .vertex
+                        .iter()
+                        .find(|(bits, _)| *bits == z.to_bits())
+                        .map(|(_, handle)| *handle)
+                        .ok_or_else(|| {
+                            stop(at.clone(), Failure::named("NoDepthBuffer", format!("{z}")))
+                        })?;
+                    steps.push(RenderStep::vertex_buffer(depth, 0));
+                    steps.push(RenderStep::Draw {
+                        primitive: PrimitiveType::Triangle,
+                        first: if *covering { 0 } else { 3 },
+                        count: 3,
+                        instances: *instances,
+                    });
+                }
+                Act::DrawIndirect => {
+                    let arguments = held.arguments.ok_or_else(|| {
+                        stop(
+                            at.clone(),
+                            Failure::named("NoArguments", "an indirect draw"),
+                        )
+                    })?;
+                    let depth = held
+                        .vertex
+                        .iter()
+                        .find(|(bits, _)| *bits == DEPTH.to_bits())
+                        .map(|(_, handle)| *handle)
+                        .ok_or_else(|| {
+                            stop(
+                                at.clone(),
+                                Failure::named("NoDepthBuffer", "an indirect draw"),
+                            )
+                        })?;
+                    steps.push(RenderStep::vertex_buffer(depth, 0));
+                    steps.push(RenderStep::DrawIndirect {
+                        primitive: PrimitiveType::Triangle,
+                        arguments,
+                        offset: 0,
+                    });
+                }
+            }
+        }
+        // At 4x the attachment is private and the pass does not store it: the question is the
+        // samples the draws passed, not the texels.
+        let color = match self.shape.samples {
+            1 => PassColor::cleared(target, [0.0; 4]),
+            _ => PassColor::cleared(target, [0.0; 4]).stored(StoreAction::DontCare),
+        };
+        let mut pass = RenderPass::clearing(vec![color])
+            .drawing(steps)
+            .counting_into(held.visibility)
+            .typed(self.shape.kind);
+        if let Some(depth) = self.shape.depth {
+            let attachment = crate::case::made(
+                sites,
+                &format!("{at}/depth"),
+                side.target(&TargetSpec::plain(depth.format, [SIDE, SIDE])),
+            )?;
+            pass = pass.with_depth(self.pass_depth(attachment, &depth));
+        }
+        Ok(pass)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     //! The cross-check the port owes the lane: the words Metal wrote, as the recordings hold them,
@@ -900,7 +1120,7 @@ mod tests {
     /// A word Metal never wrote, as a 64-bit value.
     const U: u64 = u64::from_le_bytes([UNWRITTEN; 8]);
 
-    /// The lane's words, by case: what Metal wrote after each pass, in pass order.
+    /// The lane's words, by case: what Metal wrote after each command buffer, in order.
     const TABLE: &[(&str, &[&[u64]])] = &[
         (
             "visibility-boolean-offsets",
@@ -918,6 +1138,24 @@ mod tests {
         ("visibility-counting-revisit", &[&[32, 16]]),
         ("visibility-counting-revisit-after-disabled", &[&[32, U]]),
         ("visibility-counting-four-samples", &[&[64]]),
+        // The `Accumulate` rows, the lane's too: a count is added to the word's low 32 bits,
+        // which wrap, and its high 32 bits stay.
+        (
+            "visibility-counting-accumulate",
+            &[
+                &[116, 5, 7, 8, 0xffff_ffff_0000_0008],
+                &[132, 5, 7, 8, 0xffff_ffff_0000_0008],
+            ],
+        ),
+        (
+            "visibility-counting-accumulate-one-command-buffer",
+            &[&[132, 7]],
+        ),
+        ("visibility-counting-accumulate-revisit", &[&[132, 21]]),
+        (
+            "visibility-boolean-accumulate",
+            &[&[1, 3, 3, 0, 2, 3, 9], &[1, 3, 3, 1, 2, 3, 9]],
+        ),
     ];
 
     /// The one outcome of `name`'s recorded Metal answer.
@@ -959,12 +1197,20 @@ mod tests {
     #[test]
     fn the_recorded_results_are_the_lanes_words() {
         for (name, passes) in TABLE {
-            assert!(
-                SHAPES.iter().any(|shape| shape.name == *name),
-                "{name}: the table names a case the family does not hold"
-            );
+            let shape = SHAPES
+                .iter()
+                .find(|shape| shape.name == *name)
+                .unwrap_or_else(|| {
+                    panic!("{name}: the table names a case the family does not hold")
+                });
+            // One row a command buffer, read at its last pass.
+            let reads: Vec<usize> = groups(shape)
+                .iter()
+                .filter_map(|g| g.last().copied())
+                .collect();
+            assert_eq!(reads.len(), passes.len(), "{name}: one row a read");
             let recorded = only_outcome(name);
-            for (index, want) in passes.iter().enumerate() {
+            for (&index, want) in reads.iter().zip(passes.iter()) {
                 assert_eq!(
                     words(name, &recorded, &format!("case/pass-{index}/words")),
                     **want,
@@ -1100,6 +1346,9 @@ mod tests {
                 passes: acts,
                 depth: None,
                 samples: 1,
+                kind: RESET,
+                start: None,
+                joined: false,
             })
         };
         let base = one(BASE);

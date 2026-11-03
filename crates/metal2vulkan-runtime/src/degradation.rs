@@ -446,7 +446,8 @@ degradations! {
              or the first vertex's slice and viewport";
         /// Visibility results start where Vulkan writes no query result.
         LandedVisibilityResults = "landed-visibility-results", Performance,
-            "they land in an upload region and are copied on into the buffer after the pass";
+            "they land in an upload region, into which the buffer's words are copied first \
+             where they accumulate, and are copied on into the buffer after the pass";
         /// A blit copies between overlapping ranges of one buffer, which Vulkan's copy forbids.
         OverlappingBufferCopy = "overlapping-buffer-copy", Performance,
             "the range goes through a scratch buffer of its size, which its creation clears by \
@@ -2193,7 +2194,8 @@ degradations! {
         /// `VK_QUERY_CONTROL_PRECISE_BIT`, which Vulkan states only as nonzero ("When any samples
         /// are passed, boolean queries will return a non-zero result value, otherwise a result
         /// value of zero is returned", `occlusionQueryPrecise`), ORed over the pass's render pass
-        /// instances; where none passed, 0. That is Metal's `Boolean` contract, and Metal's own
+        /// instances (and, under `Accumulate`, into the word the buffer held); where none passed,
+        /// 0 (the word, under `Accumulate`). That is Metal's `Boolean` contract, and Metal's own
         /// nonzero value is not one value either: an Apple M3 Max (macOS 27.0.1) writes 1, Metal
         /// on the AMD Radeon Pro 5300M and the Intel UHD Graphics 630 (macOS 26.7.1) the samples
         /// that passed. The device's value is the only form; no dispatch rewrites it. Announced

@@ -10,12 +10,12 @@ Every public item of the macOS 27.0 SDK (Xcode 27.0, 27A266a)'s Metal headers, b
 
 | Status | Items | Of which deprecated |
 |---|---|---|
-| implemented | 960 | 36 |
-| missing | 826 | 27 |
+| implemented | 961 | 36 |
+| missing | 825 | 27 |
 | out of scope | 349 | 5 |
 | all | 2135 | 68 |
 
-Implemented by the runtime: 637; by the translator's values: 323. Missing by size: S 143, M 147, L 160, XL 376.
+Implemented by the runtime: 638; by the translator's values: 323. Missing by size: S 142, M 147, L 160, XL 376.
 
 ## Missing, in build order
 
@@ -35,7 +35,6 @@ Cheap items a plain app calls first, then medium pieces by how often a plain app
 | a specialized function's name | S | 1 | `MTLFunctionDescriptor.specializedName` |
 | more binary archive entries | S | 4 | `MTLBinaryArchive.addMeshRenderPipelineFunctionsWithDescriptor:error:`, `MTLBinaryArchive.addLibraryWithDescriptor:error:`, `MTLBinaryArchive.addFunctionWithDescriptor:library:error:`, ... |
 | the shared event listener | S | 1 | `MTLSharedEventListener.sharedListener` |
-| accumulated visibility results | S | 1 | `MTLRenderPassDescriptor.visibilityResultType` |
 | mesh pipeline descriptor fields | S | 12 | `MTLMeshRenderPipelineDescriptor.maxTotalThreadsPerObjectThreadgroup`, `MTLMeshRenderPipelineDescriptor.maxTotalThreadsPerMeshThreadgroup`, `MTLMeshRenderPipelineDescriptor.objectThreadgroupSizeIsMultipleOfThreadExecutionWidth`, ... |
 | placement sparse page sizes | S | 2 | `MTLHeapDescriptor.maxCompatiblePlacementSparsePageSize`, `MTLTextureDescriptor.placementSparsePageSize` |
 | parallel render encoding | M | 9 | `MTLCommandBuffer.parallelRenderCommandEncoderWithDescriptor:`, `MTLParallelRenderCommandEncoder`, `MTLParallelRenderCommandEncoder.renderCommandEncoder`, ... |
@@ -2179,7 +2178,7 @@ Cheap items a plain app calls first, then medium pieces by how often a plain app
 | `MTLRenderPassDescriptor.getSamplePositions:count:` | method | implemented | `RenderPassDescriptor.sample_positions` (runtime) |
 | `MTLRenderPassDescriptor.rasterizationRateMap` | property | implemented | `RenderPassDescriptor.rasterization_rate_map` (runtime) |
 | `MTLRenderPassDescriptor.sampleBufferAttachments` | property | missing | M: counter sample buffers (`RuntimeGap::CounterSampleBuffers`) |
-| `MTLRenderPassDescriptor.visibilityResultType` | property | missing | S: accumulating visibility results across passes (macOS 15) |
+| `MTLRenderPassDescriptor.visibilityResultType` | property | implemented | `RenderPassDescriptor.visibility_result_type` (runtime) |
 | `MTLRenderPassDescriptor.supportColorAttachmentMapping` | property | missing | M: color attachment mapping (`RuntimeGap::ColorAttachmentMapping`) |
 | `MTLClearColorMake` | function | implemented | `ClearColor::new` (runtime) |
 

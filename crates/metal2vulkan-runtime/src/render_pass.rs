@@ -117,6 +117,7 @@ use super::sample_positions::{self, Sixteenths};
 use super::texture::Texture;
 use super::tile_pass::{self, TilePass, TileRefusal};
 use super::view_plan::ViewRecord;
+use super::visibility::VisibilityResultType;
 use super::Device;
 use ash::vk;
 use metal2vulkan::bind::AstcDecode;
@@ -330,6 +331,10 @@ pub struct RenderPassDescriptor {
     pub stencil_attachment: RenderPassStencilAttachmentDescriptor,
     /// `visibilityResultBuffer`: the buffer the encoder's visibility results are written to.
     pub visibility_result_buffer: Option<Buffer>,
+    /// `visibilityResultType`: whether the encoder's visibility results replace the words at
+    /// their offsets (`Reset`, the default) or are taken into them (`Accumulate`), as an Apple M3
+    /// Max answers it ([`VisibilityResultType`](crate::VisibilityResultType)).
+    pub visibility_result_type: VisibilityResultType,
     /// `renderTargetArrayLength`: the layers a layered pass renders (2 or more); 0 or 1 renders
     /// each attachment's slice alone.
     pub render_target_array_length: u64,
@@ -968,6 +973,8 @@ pub(super) struct PassLayout {
     /// The samples every attachment has (the rasterization samples without attachments).
     pub(super) samples: u32,
     pub(super) visibility: Option<Buffer>,
+    /// The descriptor's `visibilityResultType`.
+    pub(super) visibility_type: VisibilityResultType,
     /// The draws read the color attachments as input attachments in rasterization order: the
     /// device's framebuffer fetch does (`framebuffer_fetch::through_inputs`), and the pass has a
     /// color attachment.
@@ -993,6 +1000,7 @@ impl Clone for PassLayout {
             layers: self.layers,
             samples: self.samples,
             visibility: self.visibility.clone(),
+            visibility_type: self.visibility_type,
             fetch_inputs: self.fetch_inputs,
             tile: self.tile,
             sample_positions: self.sample_positions.clone(),
@@ -1010,6 +1018,7 @@ impl Clone for PassLayout {
             layers,
             samples,
             visibility,
+            visibility_type,
             fetch_inputs,
             tile,
             sample_positions,
@@ -1021,6 +1030,7 @@ impl Clone for PassLayout {
         self.layers = *layers;
         self.samples = *samples;
         self.visibility.clone_from(visibility);
+        self.visibility_type = *visibility_type;
         self.fetch_inputs = *fetch_inputs;
         self.tile = *tile;
         self.sample_positions.clone_from(sample_positions);
@@ -1832,6 +1842,7 @@ pub(super) fn layout(
         layers,
         samples,
         visibility: descriptor.visibility_result_buffer.clone(),
+        visibility_type: descriptor.visibility_result_type,
         fetch_inputs,
         tile,
         sample_positions,

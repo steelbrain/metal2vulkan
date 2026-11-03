@@ -1297,6 +1297,7 @@ enum	metal2vulkan-runtime::TextureProblem	#[derive(Clone, Copy, Debug, PartialEq
 enum	metal2vulkan-runtime::ViewProblem	#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum ViewProblem
 enum	metal2vulkan-runtime::VisibilityProblem	#[derive(Clone, Debug, PartialEq, Eq)] #[non_exhaustive] pub enum VisibilityProblem
 enum	metal2vulkan-runtime::VisibilityResultMode	#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum VisibilityResultMode
+enum	metal2vulkan-runtime::VisibilityResultType	#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum VisibilityResultType
 enum	metal2vulkan-runtime::VkEventSignal	#[derive(Clone, Copy, Debug, PartialEq, Eq)] #[non_exhaustive] pub enum VkEventSignal
 enum	metal2vulkan-runtime::VkEventWait	#[derive(Clone, Copy, Debug, PartialEq, Eq)] #[non_exhaustive] pub enum VkEventWait
 enum	metal2vulkan-runtime::WrappedBufferProblem	#[derive(Clone, Copy, Debug, PartialEq, Eq)] #[non_exhaustive] pub enum WrappedBufferProblem
@@ -2299,6 +2300,7 @@ field	metal2vulkan-runtime::RenderPassDescriptor.threadgroup_memory_length	pub t
 field	metal2vulkan-runtime::RenderPassDescriptor.tile_height	pub tile_height: u64
 field	metal2vulkan-runtime::RenderPassDescriptor.tile_width	pub tile_width: u64
 field	metal2vulkan-runtime::RenderPassDescriptor.visibility_result_buffer	pub visibility_result_buffer: Option<Buffer>
+field	metal2vulkan-runtime::RenderPassDescriptor.visibility_result_type	pub visibility_result_type: VisibilityResultType
 field	metal2vulkan-runtime::RenderPassStencilAttachmentDescriptor.clear_stencil	pub clear_stencil: u32
 field	metal2vulkan-runtime::RenderPassStencilAttachmentDescriptor.depth_plane	pub depth_plane: u64
 field	metal2vulkan-runtime::RenderPassStencilAttachmentDescriptor.level	pub level: u64
@@ -3153,6 +3155,7 @@ field	metal2vulkan::bind::CompensatedViewport.values	pub values: [f32; 4]
 field	metal2vulkan::bind::CompensatedViewport.vertex_clamp	pub vertex_clamp: [f32; 2]
 field	metal2vulkan::bind::ContinuedResult.count	pub count: u32
 field	metal2vulkan::bind::ContinuedResult.first	pub first: u32
+field	metal2vulkan::bind::ContinuedResult.low_half	pub low_half: bool
 field	metal2vulkan::bind::ContinuedResult.offset	pub offset: u64
 field	metal2vulkan::bind::ContinuedResult.sum	pub sum: bool
 field	metal2vulkan::bind::DepthSplitModule.requirements	pub requirements: Requirements
@@ -8364,6 +8367,8 @@ method	metal2vulkan-runtime::VertexAmplificationViewMapping::new	pub fn new(view
 method	metal2vulkan-runtime::Viewport::new	pub fn new(origin_x: f64, origin_y: f64, width: f64, height: f64, znear: f64, zfar: f64) -> Viewport
 method	metal2vulkan-runtime::VisibilityResultMode::from_raw	pub fn from_raw(raw: u64) -> Result<VisibilityResultMode, Error>
 method	metal2vulkan-runtime::VisibilityResultMode::raw	pub fn raw(self) -> u64
+method	metal2vulkan-runtime::VisibilityResultType::from_raw	pub fn from_raw(raw: i64) -> Result<VisibilityResultType, Error>
+method	metal2vulkan-runtime::VisibilityResultType::raw	pub fn raw(self) -> i64
 method	metal2vulkan-runtime::VisibleFunctionTable::allocated_size	pub fn allocated_size(&self) -> u64
 method	metal2vulkan-runtime::VisibleFunctionTable::cpu_cache_mode	pub fn cpu_cache_mode(&self) -> CpuCacheMode
 method	metal2vulkan-runtime::VisibleFunctionTable::device	pub fn device(&self) -> &Device
@@ -8457,6 +8462,7 @@ method	metal2vulkan::bind::CompensatedViewport::new	pub fn new(compensation: Vie
 method	metal2vulkan::bind::CompensatedViewport::with_guard	pub fn with_guard(self, guard: [f32; 2]) -> CompensatedViewport
 method	metal2vulkan::bind::CompensatedViewport::with_mirrors	pub fn with_mirrors(self, mirrors: u32) -> CompensatedViewport
 method	metal2vulkan::bind::CompensatedViewport::with_vertex_clamp	pub fn with_vertex_clamp(self, vertex_clamp: [f32; 2]) -> CompensatedViewport
+method	metal2vulkan::bind::ContinuedResult::in_low_half	#[must_use] pub fn in_low_half(self) -> ContinuedResult
 method	metal2vulkan::bind::ContinuedResult::new	pub fn new(offset: u64, first: u32, count: u32, sum: bool) -> ContinuedResult
 method	metal2vulkan::bind::DepthStencilResolveDraw::new	pub fn new(pick: DepthPick, samples: u32, write: ResolveWrite) -> DepthStencilResolveDraw
 method	metal2vulkan::bind::Dispatch::threads_per_group	pub fn threads_per_group(&self) -> [u32; 3]
@@ -12101,6 +12107,8 @@ variant	metal2vulkan-runtime::VisibilityProblem::OffsetReused	OffsetReused { off
 variant	metal2vulkan-runtime::VisibilityResultMode::Boolean	Boolean
 variant	metal2vulkan-runtime::VisibilityResultMode::Counting	Counting
 variant	metal2vulkan-runtime::VisibilityResultMode::Disabled	Disabled
+variant	metal2vulkan-runtime::VisibilityResultType::Accumulate	Accumulate
+variant	metal2vulkan-runtime::VisibilityResultType::Reset	Reset
 variant	metal2vulkan-runtime::VkEventSignal::Counter	Counter { counter: u64, after: Option<u64> }
 variant	metal2vulkan-runtime::VkEventSignal::Dropped	Dropped
 variant	metal2vulkan-runtime::VkEventWait::Counter	Counter(u64)

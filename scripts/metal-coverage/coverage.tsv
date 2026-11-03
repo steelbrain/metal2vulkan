@@ -1730,7 +1730,7 @@ MTLRenderPass.h	MTLRenderPassDescriptor	method	setSamplePositions:count:		I	runt
 MTLRenderPass.h	MTLRenderPassDescriptor	method	getSamplePositions:count:		I	runtime	RenderPassDescriptor.sample_positions			
 MTLRenderPass.h	MTLRenderPassDescriptor	property	rasterizationRateMap		I	runtime	RenderPassDescriptor.rasterization_rate_map			
 MTLRenderPass.h	MTLRenderPassDescriptor	property	sampleBufferAttachments		M			counter sample buffers (`RuntimeGap::CounterSampleBuffers`)	M	counters
-MTLRenderPass.h	MTLRenderPassDescriptor	property	visibilityResultType		M			accumulating visibility results across passes (macOS 15)	S	visibility
+MTLRenderPass.h	MTLRenderPassDescriptor	property	visibilityResultType		I	runtime	RenderPassDescriptor.visibility_result_type			
 MTLRenderPass.h	MTLRenderPassDescriptor	property	supportColorAttachmentMapping		M			color attachment mapping (`RuntimeGap::ColorAttachmentMapping`)	M	colormap
 MTLRenderPass.h		function	MTLClearColorMake		I	runtime	ClearColor::new			
 MTLRenderPipeline.h	MTLRenderPipelineColorAttachmentDescriptor	class	MTLRenderPipelineColorAttachmentDescriptor		I	translator	ColorAttachmentDescriptor			

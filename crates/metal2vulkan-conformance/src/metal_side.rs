@@ -93,7 +93,7 @@ use metal2vulkan::metal::{
     ArgumentBuffersTier, BindingAccess, BindingType, FunctionOptions, FunctionType, PatchType,
     PixelFormat, ReadWriteTextureTier, RenderStages,
 };
-use metal2vulkan_runtime::{PurgeableState, SparsePageSize};
+use metal2vulkan_runtime::{PurgeableState, SparsePageSize, VisibilityResultType};
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2::{AnyThread, ClassType};
@@ -143,8 +143,8 @@ use objc2_metal::{
     MTLTriangleFillMode, MTLVertexAttribute, MTLVertexAttributeDescriptor,
     MTLVertexAttributeDescriptorArray, MTLVertexBufferLayoutDescriptor,
     MTLVertexBufferLayoutDescriptorArray, MTLVertexDescriptor, MTLVertexFormat,
-    MTLVertexStepFunction, MTLViewport, MTLVisibilityResultMode, MTLVisibleFunctionTable,
-    MTLVisibleFunctionTableDescriptor, MTLWinding,
+    MTLVertexStepFunction, MTLViewport, MTLVisibilityResultMode, MTLVisibilityResultType,
+    MTLVisibleFunctionTable, MTLVisibleFunctionTableDescriptor, MTLWinding,
 };
 
 /// Native Metal, with the objects the case has made.
@@ -8338,6 +8338,12 @@ impl MetalSide {
         }
         if let Some(buffer) = pass.visibility {
             descriptor.setVisibilityResultBuffer(Some(self.held(buffer)?));
+        }
+        // Written only where the pass accumulates, so every other pass is the descriptor it was.
+        if pass.visibility_type != VisibilityResultType::Reset {
+            descriptor.setVisibilityResultType(MTLVisibilityResultType(
+                pass.visibility_type.raw() as isize
+            ));
         }
         // Written whatever it is, since 0 is Metal's own default and the property takes it.
         descriptor.setRenderTargetArrayLength(pass.array_length as usize);

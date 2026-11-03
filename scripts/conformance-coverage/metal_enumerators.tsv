@@ -58,3 +58,5 @@ MTLStoreActionOptions	flags	value	CUSTOM_SAMPLE_POSITIONS	MTLStoreActionOptionCu
 MTLVisibilityResultMode	enum	value	Disabled	MTLVisibilityResultModeDisabled	0
 MTLVisibilityResultMode	enum	value	Boolean	MTLVisibilityResultModeBoolean	1
 MTLVisibilityResultMode	enum	value	Counting	MTLVisibilityResultModeCounting	2
+MTLVisibilityResultType	enum	value	Reset	MTLVisibilityResultTypeReset	0
+MTLVisibilityResultType	enum	value	Accumulate	MTLVisibilityResultTypeAccumulate	1

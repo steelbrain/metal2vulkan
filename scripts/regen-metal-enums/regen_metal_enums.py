@@ -307,6 +307,7 @@ TABLE_ONLY = [
     "MTLStoreAction",
     "MTLStoreActionOptions",
     "MTLVisibilityResultMode",
+    "MTLVisibilityResultType",
 ]
 
 # NS_OPTIONS types, emitted as bit-set newtypes (`metal_flags!`).

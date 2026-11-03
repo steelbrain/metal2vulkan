@@ -67,7 +67,7 @@ use metal2vulkan::metal::{
 };
 use metal2vulkan_runtime::{
     LoadAction, MultisampleDepthResolveFilter, MultisampleStencilResolveFilter, SamplePosition,
-    StoreAction, StoreActionOptions, VisibilityResultMode,
+    StoreAction, StoreActionOptions, VisibilityResultMode, VisibilityResultType,
 };
 
 /// The `MTLBlitOption` a texture read takes, which the suite states in one place
@@ -2434,6 +2434,9 @@ pub const SAMPLE_POSITIONS_CALL: &str = "setSamplePositions";
 /// The name `renderTargetArrayLength` fingerprints under ([`RenderPass::words`]).
 pub const RENDER_TARGET_ARRAY_LENGTH: &str = "renderTargetArrayLength";
 
+/// The name `visibilityResultType` fingerprints under ([`RenderPass::words`]).
+pub const VISIBILITY_RESULT_TYPE: &str = "visibilityResultType";
+
 /// The two sample-position shapes the **Metal leg** must never encode, refused before anything is
 /// made, decided from the positions themselves and the pass's sample count alone.
 ///
@@ -2495,6 +2498,9 @@ pub struct RenderPass {
     pub stencil: Option<PassStencil>,
     /// `visibilityResultBuffer`: the buffer the pass's visibility results are written into.
     pub visibility: Option<Handle>,
+    /// `visibilityResultType`: whether the pass's results replace the buffer's words (`Reset`,
+    /// Metal's default) or are taken into them (`Accumulate`).
+    pub visibility_type: VisibilityResultType,
     /// `renderTargetWidth` and `renderTargetHeight`, where the pass states them. A pass with no
     /// attachment at all must, because Metal takes the extent from the attachments otherwise and a
     /// pass without one has none to take it from.
@@ -2528,6 +2534,7 @@ impl RenderPass {
             depth: None,
             stencil: None,
             visibility: None,
+            visibility_type: VisibilityResultType::Reset,
             size: None,
             array_length: 0,
             steps: Vec::new(),
@@ -2568,6 +2575,13 @@ impl RenderPass {
     #[must_use]
     pub fn counting_into(mut self, buffer: Handle) -> Self {
         self.visibility = Some(buffer);
+        self
+    }
+
+    /// The pass whose visibility results are of `kind` (`visibilityResultType`).
+    #[must_use]
+    pub fn typed(mut self, kind: VisibilityResultType) -> Self {
+        self.visibility_type = kind;
         self
     }
 
@@ -2641,6 +2655,12 @@ impl RenderPass {
         if self.array_length != 0 {
             bytes.extend(RENDER_TARGET_ARRAY_LENGTH.as_bytes());
             bytes.extend(self.array_length.to_le_bytes());
+        }
+        // Appended the same way, **only where the pass accumulates**, so a pass at Metal's default
+        // `Reset` fingerprints to the bytes it always had.
+        if self.visibility_type != VisibilityResultType::Reset {
+            bytes.extend(VISIBILITY_RESULT_TYPE.as_bytes());
+            bytes.extend(self.visibility_type.raw().to_le_bytes());
         }
         bytes
     }
