@@ -110,6 +110,8 @@ mod encoder_holds;
 mod error_kinds;
 mod event_listener;
 mod event_timeline;
+#[cfg(any(m2v_gpu, m2v_cpu_icd))]
+mod event_vk_signal;
 mod exactness;
 mod exit_guard;
 mod families;

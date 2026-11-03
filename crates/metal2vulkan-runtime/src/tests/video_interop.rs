@@ -26,7 +26,7 @@ use std::ffi::CString;
 use std::path::Path;
 use std::ptr::NonNull;
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 /// The NV12 image: its luma plane's extent (the chroma plane's is half of each).
 const WIDTH: u32 = 64;
@@ -47,7 +47,7 @@ const VIDEO_EXTENSIONS: [&std::ffi::CStr; 8] = [
 /// The device the cfg selects, its shader cache in `cache`, with an extra compute queue and an
 /// extra video decode queue, the video extensions where it has them, and its messages kept in
 /// `messages`.
-fn device(cache: &Path, messages: &Arc<Mutex<Vec<String>>>) -> Device {
+pub(super) fn device(cache: &Path, messages: &Arc<Mutex<Vec<String>>>) -> Device {
     let kept = Arc::clone(messages);
     let options = DeviceOptions {
         kinds: match cfg!(m2v_cpu_icd) {
@@ -87,7 +87,7 @@ fn families(device: &Device) -> Vec<vk::QueueFamilyProperties> {
 }
 
 /// The extra queue made for `flags`, if any.
-fn extra(device: &Device, flags: vk::QueueFlags) -> Option<ExtraQueue> {
+pub(super) fn extra(device: &Device, flags: vk::QueueFlags) -> Option<ExtraQueue> {
     // SAFETY: the handles are read while the device lives.
     let raw = unsafe { device.raw() };
     raw.extra_queues.iter().find(|q| q.flags == flags).copied()
@@ -200,13 +200,13 @@ fn extra_queues_are_made_or_reported_and_the_video_features_enabled() {
 
 /// A queue for the test's raw submissions: an extra queue of the device's where it made one,
 /// else a command queue's `VkQueue`.
-enum RawQueue {
+pub(super) enum RawQueue {
     Extra(ExtraQueue),
     Lent(CommandQueue),
 }
 
 impl RawQueue {
-    fn of(device: &Device) -> RawQueue {
+    pub(super) fn of(device: &Device) -> RawQueue {
         match extra(device, vk::QueueFlags::COMPUTE) {
             Some(queue) => RawQueue::Extra(queue),
             None => RawQueue::Lent(device.new_command_queue().unwrap()),
@@ -214,7 +214,7 @@ impl RawQueue {
     }
 
     /// `f` with the `VkQueue` and its family.
-    fn with<R>(&self, f: impl FnOnce(vk::Queue, u32) -> R) -> R {
+    pub(super) fn with<R>(&self, f: impl FnOnce(vk::Queue, u32) -> R) -> R {
         match self {
             RawQueue::Extra(queue) => f(queue.queue, queue.family),
             // SAFETY: `f` submits and returns, keeping no handle and calling no runtime.
@@ -222,21 +222,21 @@ impl RawQueue {
         }
     }
 
-    fn family(&self) -> u32 {
+    pub(super) fn family(&self) -> u32 {
         self.with(|_, family| family)
     }
 }
 
 /// One raw command buffer of the test's, recorded by `record` and submitted to `queue` after a
 /// wait for `waits` and with `signals` of timeline semaphores, its completion waited for on
-/// `fence`; everything it made destroyed after.
-fn submit_raw(
+/// `fence`; everything it made destroyed after. When it was submitted.
+pub(super) fn submit_raw(
     device: &Device,
     queue: &RawQueue,
     waits: &[(vk::Semaphore, u64)],
     signals: &[(vk::Semaphore, u64)],
     record: impl FnOnce(&ash::Device, vk::CommandBuffer),
-) {
+) -> Instant {
     // SAFETY: the handles are used while the device lives, every object made here is destroyed
     // here after its work completed, and the command buffer's allocation is made with the
     // loader's word in place (`Device::with_loader_word`).
@@ -279,16 +279,18 @@ fn submit_raw(
         let fence = vk_device
             .create_fence(&vk::FenceCreateInfo::default(), None)
             .unwrap();
+        let submitted = Instant::now();
         queue.with(|vk_queue, _| vk_device.queue_submit(vk_queue, &[submit], fence).unwrap());
         vk_device.wait_for_fences(&[fence], true, u64::MAX).unwrap();
         vk_device.destroy_fence(fence, None);
         vk_device.destroy_command_pool(pool, None);
+        submitted
     }
 }
 
 /// The queue families the test's own objects are shared among: the device's and the raw
 /// queue's.
-fn shared_families(device: &Device, raw_queue: &RawQueue) -> Vec<u32> {
+pub(super) fn shared_families(device: &Device, raw_queue: &RawQueue) -> Vec<u32> {
     // SAFETY: the handles are read while the device lives.
     let mut families = unsafe { device.raw() }.queue_families.to_vec();
     if !families.contains(&raw_queue.family()) {
@@ -300,9 +302,9 @@ fn shared_families(device: &Device, raw_queue: &RawQueue) -> Vec<u32> {
 /// A buffer of the test's own, of the usage the device's buffers take, in host-visible coherent
 /// memory mapped whole, concurrent among `families` where they are more than one: what a raw
 /// submission to an extra queue of a family the device's own objects are not shared with uses.
-struct CallerBuffer<'a> {
+pub(super) struct CallerBuffer<'a> {
     device: &'a Device,
-    buffer: vk::Buffer,
+    pub(super) buffer: vk::Buffer,
     memory: vk::DeviceMemory,
     type_index: u32,
     contents: NonNull<u8>,
@@ -312,7 +314,7 @@ struct CallerBuffer<'a> {
 }
 
 impl<'a> CallerBuffer<'a> {
-    fn new(device: &'a Device, size: u64, families: Vec<u32>) -> CallerBuffer<'a> {
+    pub(super) fn new(device: &'a Device, size: u64, families: Vec<u32>) -> CallerBuffer<'a> {
         let usage = vk::BufferUsageFlags::from(device.vk_buffer_usage());
         let info = CallerBuffer::info_of(size, usage, &families);
         let host = vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT;
@@ -380,7 +382,7 @@ impl<'a> CallerBuffer<'a> {
     /// # Safety
     ///
     /// The Metal buffer, and every command buffer that uses it, ends before `self`.
-    unsafe fn wrapped(&self) -> Buffer {
+    pub(super) unsafe fn wrapped(&self) -> Buffer {
         let info = CallerBuffer::info_of(self.size, self.usage, &self.families);
         let memory = VkBufferMemory::new(self.memory, 0, self.type_index, Some(self.contents));
         // SAFETY: made with `info`, bound whole at offset 0 of `memory`, of device addresses
@@ -399,7 +401,7 @@ impl<'a> CallerBuffer<'a> {
     }
 
     /// Its bytes, set to `bytes` from byte 0.
-    fn set(&self, bytes: &[u8]) {
+    pub(super) fn set(&self, bytes: &[u8]) {
         assert!(bytes.len() as u64 <= self.size);
         // SAFETY: mapped whole, coherent, and used by no command now.
         unsafe {
