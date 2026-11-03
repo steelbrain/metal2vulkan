@@ -899,8 +899,14 @@ fn a_scheduled_signal_sets_its_value_as_the_command_buffer_is_scheduled() {
         completed(&held);
         assert_eq!(later.signaled_value(), 3);
 
-        // Refused with an encoder open; after the commit, nothing.
+        // Refused with an encoder open; after the commit, nothing. The command buffer waits for
+        // an event the host signals only after the call, so it cannot complete first (a call
+        // after its completion is refused, below).
+        let release = device.new_shared_event().unwrap();
         let command_buffer = first.command_buffer().unwrap();
+        command_buffer
+            .encode_wait_for_event(EventRef::from(&release), 1)
+            .unwrap();
         let mut encoder = command_buffer.blit_command_encoder().unwrap();
         encoder.fill_buffer(&scratch, 0..64, 1).unwrap();
         assert_eq!(
@@ -916,6 +922,7 @@ fn a_scheduled_signal_sets_its_value_as_the_command_buffer_is_scheduled() {
             command_buffer.encode_signal_event_scheduled(&later, 9),
             Ok(())
         );
+        release.set_signaled_value(1);
         completed(&command_buffer);
         assert_eq!(later.signaled_value(), 3);
         // Once it completed, refused: Metal's process ends there.
