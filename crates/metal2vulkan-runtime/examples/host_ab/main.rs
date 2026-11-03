@@ -26,11 +26,12 @@
 //!   creation through `endEncoding`, and the whole process's CPU time until the wait returned.
 //!   Then `dispatch_resident_*`: as many dispatches of the tiny kernel after one
 //!   `useResources:count:usage:` of 0, 1, 256 or 4096 buffers, or of one buffer 4096 times
-//!   (`same_4096`); per variant the `useResources` call, and per dispatch the encoding thread's
-//!   wall time after it and the process's CPU time; `dispatch_resident_moving_0`, `_16`, `_256`
-//!   and `_4096`: as many after none, 16, 256 or 4096 buffers made resident, the output buffer's
-//!   offset moved before each dispatch; `dispatch_resident_textures_256` and `_4096`: as many after
-//!   256 or 4096 textures made resident; `dispatch_handles`: as many of a kernel reading a
+//!   (`same_4096`); per variant the `useResources` call and the `endEncoding` call, and per
+//!   dispatch the encoding thread's wall time between them and the process's CPU time;
+//!   `dispatch_resident_moving_0`, `_16`, `_256` and `_4096`: as many after none, 16, 256 or 4096
+//!   buffers made resident, the output buffer's offset moved before each dispatch;
+//!   `dispatch_resident_textures_256` and `_4096`: as many after 256 or 4096 textures made
+//!   resident; `dispatch_handles`: as many of a kernel reading a
 //!   resident texture through a handle in an argument buffer.
 //! - `fixed`: a command buffer's creation, an encoder of one command each (render, compute,
 //!   blit), and the commit call of a command buffer of 30 such encoders.

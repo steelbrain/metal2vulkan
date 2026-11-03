@@ -735,6 +735,7 @@ fn encode_resident<G: Gpu>(g: &G, s: &Scene<G>, sizes: &Sizes, runs: &dyn Fn(Str
             false => Vec::new(),
         };
         let (mut using, mut wall, mut cpu, mut total) = (vec![], vec![], vec![], vec![]);
+        let mut ending = vec![];
         let mut counts = None;
         for run in 0..sizes.timed + 3 {
             if run == 3 {
@@ -763,12 +764,14 @@ fn encode_resident<G: Gpu>(g: &G, s: &Scene<G>, sizes: &Sizes, runs: &dyn Fn(Str
                 }
                 let t3 = Instant::now();
                 g.end_compute(encoder);
+                let ended = Instant::now();
                 g.commit(&command_buffer);
                 g.wait(&command_buffer);
                 let t4 = Instant::now();
                 let cpu1 = process_cpu();
                 if run >= 3 {
                     using.push(us(t2 - t1));
+                    ending.push(us(ended - t3));
                     wall.push(us(t3 - t2) / n as f64);
                     cpu.push(us(cpu1 - cpu0) / n as f64);
                     total.push(ms(t4 - t0));
@@ -777,6 +780,7 @@ fn encode_resident<G: Gpu>(g: &G, s: &Scene<G>, sizes: &Sizes, runs: &dyn Fn(Str
         }
         let metric = |what: &str| format!("dispatch_resident_{name}_{what}");
         emit("encode", &metric("use_call"), "us", &mut using);
+        emit("encode", &metric("end_call"), "us", &mut ending);
         emit("encode", &metric("encode"), "us/dispatch", &mut wall);
         emit("encode", &metric("process_cpu"), "us/dispatch", &mut cpu);
         emit("encode", &metric("cb_total"), "ms", &mut total);
