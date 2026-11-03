@@ -44,6 +44,12 @@
 //!   (thread g samples `texture2d<float>` at (0.25g, 0.25g), nearest), read by a compute pass
 //!   after each fetching pass, before and after the switch: `(v, 0, 0, 1)` per thread, the
 //!   target's value, Metal's answer for a uniform `R32Float` texture. The ID stays.
+//! - **Beside a command buffer encoding on another thread** (the consumer's host, which encodes a
+//!   queue's command buffers on several threads and commits them in order): each frame's first
+//!   command buffer fetches the target while its second, made before the first commits, is
+//!   encoded on another thread, so the first's commit takes no switch and the second's only where
+//!   the scheduler holds no batch. Every frame's copy holds its value, as serially on a device of
+//!   its own; both take the form once by a lone pass at the end and announce the same kinds.
 //! - **A handed-out image.** A target whose `VkImage` was taken (`vk_image`) keeps it: no switch,
 //!   the same `VkImage` after.
 //! - **Submission checks**. A command buffer with a check takes the switch too, settled at its
@@ -74,10 +80,10 @@ use metal2vulkan_runtime::{
     RenderPipelineState, ResourceOptions, Size, StorageMode, StoreAction, Submission,
     SubmissionCheck, Texture, TextureDescriptor,
 };
-use std::collections::VecDeque;
+use std::collections::{BTreeSet, VecDeque};
 use std::num::NonZeroU64;
 use std::sync::atomic::{AtomicU32, AtomicUsize, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Barrier};
 use std::time::{Duration, Instant};
 
 /// The targets' format.
@@ -384,6 +390,159 @@ fn an_argument_buffer_reaches_the_target_through_its_storage_form() {
     );
     drop(cache);
     quiet(lane, &messages);
+}
+
+/// The frames of [`a_target_fetched_beside_an_encoding_command_buffer_keeps_its_answers`].
+const BESIDE_FRAMES: usize = 8;
+
+/// What a run of [`beside`] saw: the kinds announced, the forms taken after each frame and after
+/// the lone pass, and whether the first pass rendered the target through a scratch.
+struct Beside {
+    device: String,
+    kinds: BTreeSet<Degradation>,
+    taken: Vec<u64>,
+    through_scratch: bool,
+}
+
+/// [`BESIDE_FRAMES`] frames of two command buffers of one queue, the second a fetching pass and a
+/// copy out of the target, then one lone fetching pass: on two threads at once from a barrier,
+/// both made before either commits, where `parallel`, else each made, encoded and committed in
+/// turn; committed in order either way. Every frame's copy holds its value, and the lone pass's.
+fn beside(parallel: bool) -> Beside {
+    let (messages, cache, lane) = lane();
+    let device = lane.device.name().to_owned();
+    let halve = halving(&lane);
+    // The pipeline made first, by a pass over an untracked target (`a_fetched_target_takes_its_
+    // storage_form_once`).
+    let warm = untracked(&lane);
+    steps(&lane, &cleared(&warm, 0, 0, 1.0), &[&halve]).unwrap();
+    let usage = TextureUsage::RENDER_TARGET | TextureUsage::SHADER_READ;
+    let texture = lane.texture(PF, Shape { size: SIDE, ..ONE }, usage);
+    let depth = buffer_with(&lane.device, &Z.to_le_bytes()).unwrap();
+    let bytes = 4 * SIDE * SIDE;
+    let before = taken(&lane);
+    let mut taken_after = Vec::new();
+    let mut value = 1.0f32;
+    for frame in 0..BESIDE_FRAMES {
+        let copy = buffer_with(&lane.device, &vec![0; bytes as usize]).unwrap();
+        let first = |cb: &CommandBuffer| {
+            frame_pass(cb, (&texture, 2 * frame), &halve, &depth, None);
+        };
+        let second = |cb: &CommandBuffer| {
+            frame_pass(cb, (&texture, 2 * frame + 1), &halve, &depth, None);
+            let mut blit = cb.blit_command_encoder().unwrap();
+            blit.copy_from_texture_to_buffer(
+                &texture,
+                0,
+                0,
+                Origin::new(0, 0, 0),
+                Size::new(SIDE, SIDE, 1),
+                &copy,
+                0,
+                4 * SIDE,
+                bytes,
+                BlitOption::None,
+            )
+            .unwrap();
+            blit.end_encoding().unwrap();
+        };
+        let last = if parallel {
+            let one = lane.queue.command_buffer().unwrap();
+            let two = lane.queue.command_buffer().unwrap();
+            let start = Barrier::new(2);
+            std::thread::scope(|scope| {
+                let (start, one, two) = (&start, &one, &two);
+                scope.spawn(move || {
+                    start.wait();
+                    first(one);
+                });
+                scope.spawn(move || {
+                    start.wait();
+                    second(two);
+                });
+            });
+            one.commit().unwrap();
+            two.commit().unwrap();
+            two
+        } else {
+            let one = lane.queue.command_buffer().unwrap();
+            first(&one);
+            one.commit().unwrap();
+            let two = lane.queue.command_buffer().unwrap();
+            second(&two);
+            two.commit().unwrap();
+            two
+        };
+        last.wait_until_completed_for(WAIT).unwrap();
+        assert_eq!(last.error(), None, "frame {frame} on {device}");
+        value /= 4.0;
+        assert_eq!(
+            read_buffer(&copy, 0, bytes).unwrap(),
+            level_of(SIDE, value),
+            "frame {frame}'s copy on {device}, parallel {parallel}"
+        );
+        taken_after.push(taken(&lane) - before);
+    }
+    steps(&lane, &loading(&texture, StoreAction::Store), &[&halve]).unwrap();
+    // A new command buffer waits out a switch under way (`texture/storage_form.rs`).
+    drop(lane.queue.command_buffer().unwrap());
+    taken_after.push(taken(&lane) - before);
+    assert_eq!(
+        read(&lane, &texture, 0, 0),
+        level_of(SIDE, value / 2.0),
+        "the lone pass on {device}, parallel {parallel}"
+    );
+    let notices = messages.take_notices();
+    let through_scratch = scratched(&notices);
+    let kinds = (notices.iter())
+        .filter_map(|message| message.degradation.as_ref())
+        .map(|notice| notice.degradation)
+        .collect();
+    drop(cache);
+    quiet(lane, &messages);
+    Beside {
+        device,
+        kinds,
+        taken: taken_after,
+        through_scratch,
+    }
+}
+
+/// One queue's command buffers encoded on two threads at once, then committed in order (the
+/// consumer's host): each frame's first command buffer fetches the target, halving it, while its
+/// second, made before the first commits, is encoded on another thread: a pass that fetches and
+/// halves it again, and a copy of it out. So each frame's first commit leaves another command
+/// buffer uncommitted and takes no switch (`texture/storage_form.rs`, the commit of the device's
+/// only uncommitted command buffer); the second, the only one then, takes it only where the
+/// scheduler holds no batch, which the first's commit just gave it. Serially, on a device of its
+/// own, each is made, encoded and committed in turn. Both ways every frame's copy holds
+/// 2^-2(f+1), both end with a lone fetching pass after which the target took its storage form
+/// once (where its first pass rendered it through a scratch), and both announce the same kinds.
+/// When each took it is printed (`PARALLEL-STORAGE-FORM`): later in parallel is the cost the
+/// deferral has, the scratch's copies in and out at each pass until then.
+#[test]
+fn a_target_fetched_beside_an_encoding_command_buffer_keeps_its_answers() {
+    let serial = beside(false);
+    let parallel = beside(true);
+    let device = &serial.device;
+    println!(
+        "PARALLEL-STORAGE-FORM on {device}: through a scratch {}, forms taken after each frame          and the lone pass serially {:?}, on two threads {:?}",
+        serial.through_scratch, serial.taken, parallel.taken
+    );
+    assert_eq!(
+        serial.through_scratch, parallel.through_scratch,
+        "on {device}"
+    );
+    let once = u64::from(serial.through_scratch);
+    assert_eq!(
+        (serial.taken.last(), parallel.taken.last()),
+        (Some(&once), Some(&once)),
+        "by the lone pass, on {device}"
+    );
+    assert_eq!(
+        serial.kinds, parallel.kinds,
+        "the kinds announced on {device}"
+    );
 }
 
 /// A target whose `VkImage` was handed out keeps it: no storage form, the same `VkImage` after

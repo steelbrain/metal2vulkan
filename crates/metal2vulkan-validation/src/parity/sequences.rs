@@ -25,6 +25,10 @@
 //!   each sequence, which Metal's records check (`tests`) and which gives a runtime difference
 //!   its expected bytes. A seed whose runtime bytes differ from the model's is shrunk to a
 //!   smaller sequence that still differs (`minimize`), reported with its seed.
+//! - **Parallel encodes** (`parallel`, device tests): the sequences, every command buffer on one
+//!   queue, encoded on 2, 4 and 8 threads under seeded schedules and committed in order, against
+//!   the model and a serial run's notices: a runner of their own, so Metal's records depend on
+//!   none of it.
 //! - **Fingerprint** ([`fingerprint`]): the sources Metal's records depend on (these, not the
 //!   harness's [`HARNESS`](super::HARNESS) beyond the records and the observation, so no other
 //!   scenario's records go stale with them), the version, and the fixture `seq_programs`.
@@ -43,6 +47,8 @@ mod metal;
 mod minimize;
 mod model;
 mod order;
+#[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+mod parallel;
 mod program;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod run;
