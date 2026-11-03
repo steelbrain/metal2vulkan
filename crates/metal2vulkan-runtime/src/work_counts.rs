@@ -186,6 +186,8 @@ pub(crate) struct Counters {
     batch_hold_nanos: AtomicU64,
     scheduler_passes_by_waiters: AtomicU64,
     batches_submitted_by_waiters: AtomicU64,
+    scheduler_passes_at_commit: AtomicU64,
+    batches_submitted_at_commit: AtomicU64,
     command_buffer_wakes: AtomicU64,
     command_buffer_wakes_spared: AtomicU64,
     event_wakes: AtomicU64,
@@ -1390,6 +1392,14 @@ impl Counters {
     pub(crate) fn waiter_passed(&self, batches: usize) {
         (self.scheduler_passes_by_waiters).fetch_add(1, Ordering::Relaxed);
         (self.batches_submitted_by_waiters).fetch_add(batches as u64, Ordering::Relaxed);
+    }
+
+    /// A thread that committed with `CommandBuffer::commit_and_submit` made a pass of its own
+    /// over the scheduler's order and submitted `batches` batches itself
+    /// (`Scheduler::submit_at_commit`).
+    pub(crate) fn committer_passed(&self, batches: usize) {
+        (self.scheduler_passes_at_commit).fetch_add(1, Ordering::Relaxed);
+        (self.batches_submitted_at_commit).fetch_add(batches as u64, Ordering::Relaxed);
     }
 
     /// A batch was submitted, or held in a group, while `pending` earlier batches of its
@@ -3900,6 +3910,15 @@ pub struct WorkCounts {
     /// first batch in commit order that is none of these and leaves the rest to the thread, so
     /// this is below `scheduler_passes_by_waiters` where a command buffer needs it.
     pub batches_submitted_by_waiters: u64,
+    /// Passes a thread made over the scheduler's order itself right after its commit
+    /// (`CommandBuffer::commit_and_submit`, `scheduler/mod.rs`): one where no pass was under
+    /// way. A commit whose pass found one under way leaves its batches to it, uncounted here.
+    pub scheduler_passes_at_commit: u64,
+    /// The batches those passes submitted: those ready with nothing for the scheduler's thread to
+    /// do for them (no host step, no submission check, no group, no switch of a storage form),
+    /// their submission handlers run by the committing thread. A pass stops at the first batch in
+    /// commit order that is none of these and leaves the rest to the thread.
+    pub batches_submitted_at_commit: u64,
     /// Passes the scheduler's thread made over its order (`scheduler/mod.rs`): one takes in what
     /// was committed and submits what is ready; one more follows a submission check or a host
     /// step the thread ran without its lock, a waker's nudge during a pass, and a pass that
@@ -5536,6 +5555,10 @@ impl Device {
                 .load(Ordering::Relaxed),
             batches_submitted_by_waiters: counters
                 .batches_submitted_by_waiters
+                .load(Ordering::Relaxed),
+            scheduler_passes_at_commit: counters.scheduler_passes_at_commit.load(Ordering::Relaxed),
+            batches_submitted_at_commit: counters
+                .batches_submitted_at_commit
                 .load(Ordering::Relaxed),
             wakes_completion_waiters: completion_wakes,
             completion_waiter_parks: completion_parks,

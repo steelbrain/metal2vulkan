@@ -2492,6 +2492,7 @@ field	metal2vulkan-runtime::WorkCounts.batch_hold_nanos	pub batch_hold_nanos: u6
 field	metal2vulkan-runtime::WorkCounts.batch_submit_nanos	pub batch_submit_nanos: u64
 field	metal2vulkan-runtime::WorkCounts.batches_grouped	pub batches_grouped: u64
 field	metal2vulkan-runtime::WorkCounts.batches_held_past_a_look	pub batches_held_past_a_look: u64
+field	metal2vulkan-runtime::WorkCounts.batches_submitted_at_commit	pub batches_submitted_at_commit: u64
 field	metal2vulkan-runtime::WorkCounts.batches_submitted_by_waiters	pub batches_submitted_by_waiters: u64
 field	metal2vulkan-runtime::WorkCounts.batches_with_four_or_more_pending	pub batches_with_four_or_more_pending: u64
 field	metal2vulkan-runtime::WorkCounts.batches_with_none_pending	pub batches_with_none_pending: u64
@@ -2841,6 +2842,7 @@ field	metal2vulkan-runtime::WorkCounts.sampler_sets_shared	pub sampler_sets_shar
 field	metal2vulkan-runtime::WorkCounts.scheduled_where_submitted	pub scheduled_where_submitted: u64
 field	metal2vulkan-runtime::WorkCounts.scheduler_gpu_waits	pub scheduler_gpu_waits: u64
 field	metal2vulkan-runtime::WorkCounts.scheduler_passes	pub scheduler_passes: u64
+field	metal2vulkan-runtime::WorkCounts.scheduler_passes_at_commit	pub scheduler_passes_at_commit: u64
 field	metal2vulkan-runtime::WorkCounts.scheduler_passes_by_waiters	pub scheduler_passes_by_waiters: u64
 field	metal2vulkan-runtime::WorkCounts.scheduler_sleep_slices	pub scheduler_sleep_slices: u64
 field	metal2vulkan-runtime::WorkCounts.scheduler_sleeps	pub scheduler_sleeps: u64
@@ -7614,6 +7616,7 @@ method	metal2vulkan-runtime::CommandBuffer::add_submission_handler	pub fn add_su
 method	metal2vulkan-runtime::CommandBuffer::blit_command_encoder	pub fn blit_command_encoder(&self) -> Result<BlitCommandEncoder, Error>
 method	metal2vulkan-runtime::CommandBuffer::command_queue	pub fn command_queue(&self) -> &CommandQueue
 method	metal2vulkan-runtime::CommandBuffer::commit	pub fn commit(&self) -> Result<(), Error>
+method	metal2vulkan-runtime::CommandBuffer::commit_and_submit	pub fn commit_and_submit(&self) -> Result<(), Error>
 method	metal2vulkan-runtime::CommandBuffer::commit_failed	pub fn commit_failed(&self, failure: CommitFailure) -> Result<(), Error>
 method	metal2vulkan-runtime::CommandBuffer::compute_command_encoder	pub fn compute_command_encoder(&self) -> Result<ComputeCommandEncoder, Error>
 method	metal2vulkan-runtime::CommandBuffer::compute_command_encoder_with_dispatch_type	pub fn compute_command_encoder_with_dispatch_type(&self, dispatch_type: DispatchType) -> Result<ComputeCommandEncoder, Error>

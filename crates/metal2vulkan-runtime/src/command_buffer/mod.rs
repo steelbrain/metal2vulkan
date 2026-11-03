@@ -96,7 +96,7 @@ use super::render::EndInFlight;
 use super::replay::Replay;
 use super::residency::Residency;
 use super::resource::{ObjectId, ResourceKey};
-use super::scheduler::{BatchSync, StepWaits};
+use super::scheduler::{BatchSync, Hand, StepWaits};
 use super::shadow::ShadowCarry;
 use super::spares::CommandPool;
 use super::sparse::encoder::SparseUpdate;
@@ -2201,8 +2201,11 @@ impl CommandBuffer {
     /// holds: once the batch before the hang is taken and Metal's time to read `Scheduled` came.
     ///
     /// - **The thread.** The device's scheduler thread: `commit` returns at once, as Metal's does,
-    ///   and submits nothing itself. It runs with no lock of the runtime's held, after the
-    ///   submission's call returned. A thread about to block for a command buffer's completion
+    ///   and submits nothing itself. Or the thread that committed it with
+    ///   [`commit_and_submit`](Self::commit_and_submit), inside that call, where that thread
+    ///   submitted its last batch; or that of a later such call that submitted it. Whichever it
+    ///   is, the handlers of every command buffer run in submission order. It runs with no lock
+    ///   of the runtime's held, after the submission's call returned. A thread about to block for a command buffer's completion
     ///   submits what still waits in the scheduler's inbox itself, but never a batch of a command
     ///   buffer with a handler of any kind, which stays the scheduler thread's to submit: no
     ///   handler of the program's ever runs on a thread blocking in
@@ -2488,7 +2491,42 @@ impl CommandBuffer {
     /// [`refusal`](Self::refusal) keeps the error): it completes in its queue's order, its
     /// completed handlers run.
     pub fn commit(&self) -> Result<(), Error> {
-        self.commit_as("commit", None)
+        self.commit_as("commit", None, Hand::Wake)
+    }
+
+    /// Commit the command buffer as [`commit`](Self::commit) does, then submit what is ready on
+    /// this thread: a runtime extension, no Metal call (the crate's README, "Runtime
+    /// extensions"). Metal's `commit` returns before its command buffer is scheduled and submits
+    /// on a thread of its own; the runtime's hands it to its scheduler thread, a wake and a pass
+    /// away. Here, where no other submission pass is under way, this thread makes it: it submits
+    /// the device's ready batches committed first, this one's among them, while each needs no
+    /// host step, no submission check, no group and no switch of a storage form, up to the pass's
+    /// bound, in commit order. What it leaves goes to the scheduler's thread, which it wakes;
+    /// where a pass is under way, that pass takes this commit in, as for `commit`.
+    ///
+    /// - **Its submission handlers run here**, inside this call, for the batches it submitted:
+    ///   after the submission, with no lock of the runtime's held, in submission order with
+    ///   every other command buffer's ([`add_submission_handler`](Self::add_submission_handler)),
+    ///   before the command buffer reads `Scheduled`. They must take no lock the caller holds and
+    ///   wait for no GPU work, as there.
+    /// - **Scheduled.** Where this call submitted its last batch and it has no scheduled and no
+    ///   submission handler, it reads `Scheduled` before this returns, unless its queue's handler
+    ///   thread holds an earlier transition. Otherwise its transition to `Scheduled` runs on its
+    ///   queue's handler thread, after its submission handlers, and its scheduled handlers with
+    ///   it, as for `commit`.
+    /// - **Called from the runtime's own threads** (a handler run by the scheduler's thread or a
+    ///   queue's waiter), it commits as `commit` does and submits nothing itself.
+    ///
+    /// Refused, changing nothing, as [`commit`](Self::commit) is. Counted:
+    /// `WorkCounts::scheduler_passes_at_commit`, `WorkCounts::batches_submitted_at_commit`.
+    pub fn commit_and_submit(&self) -> Result<(), Error> {
+        let device = &self.0.device;
+        if exit_guard::serving_completion() {
+            return self.commit();
+        }
+        self.commit_as("commit_and_submit", None, Hand::Pass)?;
+        device.shared().scheduler.submit_at_commit(device);
+        Ok(())
     }
 
     /// Commit the command buffer as failed with `failure`: a runtime extension, no Metal call
@@ -2516,12 +2554,17 @@ impl CommandBuffer {
     /// encoder past the ended ones (`Invalid`, `Problem::IndexOutOfRange`, its `limit` the
     /// number ended). (A code of 0 was refused, `Problem::UndefinedValue`.)
     pub fn commit_failed(&self, failure: CommitFailure) -> Result<(), Error> {
-        self.commit_as("commit_failed", Some(failure))
+        self.commit_as("commit_failed", Some(failure), Hand::Wake)
     }
 
     /// [`commit`](Self::commit) for `call`, or, with `failure`,
-    /// [`commit_failed`](Self::commit_failed).
-    fn commit_as(&self, call: &'static str, failure: Option<CommitFailure>) -> Result<(), Error> {
+    /// [`commit_failed`](Self::commit_failed), its batches handed to the scheduler as `hand` says.
+    fn commit_as(
+        &self,
+        call: &'static str,
+        failure: Option<CommitFailure>,
+        hand: Hand,
+    ) -> Result<(), Error> {
         // Left to wait for the last render encoder's end, where its call left it to the device's
         // lowering thread and the thread has not lowered it, or for the commits left so.
         if failure.is_none() && self.queue_commit(call)? {
@@ -2529,7 +2572,7 @@ impl CommandBuffer {
         }
         // The last render encoder's end, where its call left it to the device's lowering thread.
         self.settle_end();
-        self.commit_settled(call, failure, CommitRun::AtCall)
+        self.commit_settled(call, failure, CommitRun::AtCall, hand)
     }
 
     /// Under `RenderLoweringPolicy::Worker`, where the command buffer holds a render encoder's
@@ -2580,11 +2623,11 @@ impl CommandBuffer {
         let counts = &self.0.device.shared().counts;
         counts.render_log_commit_run(by_thread);
         self.settle_end();
-        let Err(error) = self.commit_settled("commit", None, CommitRun::Queued) else {
+        let Err(error) = self.commit_settled("commit", None, CommitRun::Queued, Hand::Wake) else {
             return;
         };
         self.state().refuse_commit(error);
-        let committed = self.commit_settled("commit", None, CommitRun::Refused);
+        let committed = self.commit_settled("commit", None, CommitRun::Refused, Hand::Wake);
         debug_assert!(
             committed.is_ok(),
             "a refused commit's commit of nothing failed: {committed:?}"
@@ -2612,15 +2655,16 @@ impl CommandBuffer {
         call: &'static str,
         failure: Option<CommitFailure>,
         run: CommitRun,
+        hand: Hand,
     ) -> Result<(), Error> {
         // The waiting fetched render targets take their storage form at this commit where it
         // allows (`storage_form.rs`): one atomic read where none waits. The scheduler's thread
         // ends the switch once it submitted the command buffer. None where nothing of it runs.
         let injected = failure.is_some() || run == CommitRun::Refused;
         if !self.take_storage_forms(injected) {
-            return self.commit_now(call, failure, run);
+            return self.commit_now(call, failure, run, hand);
         }
-        let committed = self.commit_now(call, failure, run);
+        let committed = self.commit_now(call, failure, run, hand);
         if committed.is_err() {
             self.give_up_storage_forms();
         }
@@ -2633,6 +2677,7 @@ impl CommandBuffer {
         call: &'static str,
         failure: Option<CommitFailure>,
         run: CommitRun,
+        hand: Hand,
     ) -> Result<(), Error> {
         let device = &self.0.device;
         let committed = Instant::now();
@@ -3037,7 +3082,7 @@ impl CommandBuffer {
         device
             .shared()
             .scheduler
-            .commit(&self.0, self.0.queue.id(), waits);
+            .commit(&self.0, self.0.queue.id(), waits, hand);
         // Its passes that took a rasterization-rate map since reset, encoded again in this call
         // as a reset's are; its first submission waits for them (marked above). Those it cannot
         // encode again are announced.
@@ -4422,6 +4467,15 @@ impl CommandBufferShared {
     pub(crate) fn submits_without_the_program(&self) -> bool {
         let state = lock(&self.state);
         plain_transition(&state) && state.submission.is_empty() && state.storage_form.is_none()
+    }
+
+    /// Whether the thread that just committed it may submit a batch of it itself
+    /// (`scheduler::plain_ready`, `CommandBuffer::commit_and_submit`): no switch of a fetched
+    /// target's storage form rides on it, which the scheduler's thread settles and announces
+    /// (`texture/storage_form.rs`). Its submission handlers that thread runs, and a transition to
+    /// `Scheduled` with scheduled handlers goes to its queue's context.
+    pub(crate) fn submits_at_commit(&self) -> bool {
+        lock(&self.state).storage_form.is_none()
     }
 
     /// The last batch of the command buffer `buffer` holds finished with `result` (or a batch

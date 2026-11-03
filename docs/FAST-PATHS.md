@@ -122,7 +122,9 @@ recorded here.
   (`runtime_lane::commit_costs`, `frames`) take a median 5.7 to 6.0 ms against 3.2 to 4.5 ms with
   the submissions on the committing thread, the GT held at its efficient 300 MHz by its governor
   (GuC SLPC). A submission check or submission handler, which run on that thread, holds back every
-  other command buffer's submission while it runs.
+  other command buffer's submission while it runs. `CommandBuffer::commit_and_submit`, a runtime
+  extension, submits on the committing thread instead where no other pass is under way, and runs
+  the submission handlers of what it submitted there.
 - **A present that samples a guest plane copies the whole plane in, and Metal requires it.** Where
   a window's sink draws a guest's 3840x2160 plane into its swapchain texture, it does so in its own
   command buffer, and Metal shows a command buffer any CPU write made since its commit -- probed on

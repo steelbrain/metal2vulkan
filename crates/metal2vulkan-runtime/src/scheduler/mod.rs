@@ -13,6 +13,20 @@
 //!   that pass leaves, and the pass that takes it in, never for a check or a step. A commit
 //!   wakes this thread alone.
 //!
+//! - **A committing thread may submit for itself** ([`Scheduler::submit_at_commit`],
+//!   `CommandBuffer::commit_and_submit`, a runtime extension). Its commit is posted with no wake,
+//!   and where no passer is counted it makes one pass as a thread about to block does: it takes
+//!   in what the inbox holds and submits the heads committed first while each is ready and needs
+//!   nothing of this thread (no host step, no submission check, no group, no switch of a storage
+//!   form, no rebind's encoding), up to [`PASS_SUBMISSIONS`]; their submission handlers then run
+//!   on it, in their turn ([`Turns`]), and their transitions to `Scheduled` run on it where plain,
+//!   else go to their queues' contexts. What it leaves goes to this thread, which it wakes, and a
+//!   pass under way takes the commit in instead. One wake and one thread hop fewer per command
+//!   buffer, its submission's cost on the committing thread.
+//! - **Submission handlers run in submission order, whichever thread runs them** ([`Turns`]).
+//!   Each pass that took batches with submission handlers takes a ticket under the lock, in the
+//!   order the passes ran; the handlers of a ticket run once those of every earlier one ran, on
+//!   the thread that made the pass, without the lock.
 //! - **A thread about to block submits for itself** ([`Scheduler::submit_before_waiting`]).
 //!   Metal encodes and commits inline on the program's thread, and a thread that commits and then
 //!   waits for the completion would otherwise wait for a wake and a whole pass before its work
@@ -386,6 +400,69 @@ struct SchedulerShared {
     /// Where the device's driver stalls in one signalling submission of every 1024 to a queue,
     /// what the thread takes those stalls idle with (the module docs).
     stalls: OnceLock<IdleStalls>,
+    /// The passes' turns to run their submission handlers (the module docs).
+    turns: Turns,
+}
+
+/// The passes' turns to run the submission handlers they took (the module docs): a pass that took
+/// batches with handlers takes a ticket under the scheduler's lock (`State::handler_ticket`), and
+/// runs them once every earlier ticket's ran.
+#[derive(Default)]
+struct Turns {
+    /// The next ticket to run, and how many threads wait for theirs.
+    served: Mutex<(u64, usize)>,
+    turned: Condvar,
+}
+
+impl Turns {
+    /// Run `handlers`' submission handlers on this thread, which holds none of the runtime's
+    /// locks, each segment of them (`segments`: where it ends in `handlers`, and its ticket) in
+    /// its turn, in submission order within it; none once the process is exiting, as the
+    /// scheduler's thread then runs nothing more. Each one's transition to `Scheduled` goes on
+    /// after its own (`CommandBufferShared::run_submission_handlers`), and after its switch of
+    /// storage forms ended ([`settle`], run first). Each hold goes after its handlers, outside
+    /// every lock: it may be its command buffer's last reference. Both are emptied.
+    fn run(&self, handlers: &mut Handlers, segments: &mut Vec<(usize, u64)>) {
+        let mut start = 0;
+        let mut held = handlers.drain(..);
+        for (end, ticket) in segments.drain(..) {
+            let turn = self.wait(ticket);
+            for buffer in held.by_ref().take(end - start) {
+                if turn {
+                    buffer.run_submission_handlers();
+                }
+            }
+            start = end;
+            self.served(ticket);
+        }
+        debug_assert!(held.next().is_none(), "a submission handler with no turn");
+    }
+
+    /// Wait for `ticket`'s turn; false once the process is exiting.
+    fn wait(&self, ticket: u64) -> bool {
+        let mut served = lock(&self.served);
+        while served.0 < ticket {
+            if exit_guard::closed() {
+                return false;
+            }
+            served.1 += 1;
+            served = (self.turned)
+                .wait_timeout(served, exit_guard::WAKE)
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .0;
+            served.1 -= 1;
+        }
+        true
+    }
+
+    /// `ticket`'s turn ended: the next one's comes.
+    fn served(&self, ticket: u64) {
+        let mut served = lock(&self.served);
+        served.0 = served.0.max(ticket + 1);
+        if served.1 > 0 {
+            self.turned.notify_all();
+        }
+    }
 }
 
 impl SchedulerShared {
@@ -468,6 +545,8 @@ pub(crate) struct State {
     /// The batches' barrier command buffers, recorded once and submitted again
     /// (`command_buffer/kept_barriers.rs`).
     pub(crate) kept: KeptBarriers,
+    /// The next pass's ticket to run its submission handlers ([`Turns`]).
+    handler_tickets: u64,
     /// The lists each batch's submission fills and empties, with their room
     /// (`command_buffer/submit.rs`).
     pub(crate) lists: BatchLists,
@@ -484,6 +563,14 @@ pub(crate) struct State {
 }
 
 impl State {
+    /// The ticket of a pass that took batches with submission handlers ([`Turns`]), taken under
+    /// the lock in the order the passes ran.
+    fn handler_ticket(&mut self) -> u64 {
+        let ticket = self.handler_tickets;
+        self.handler_tickets += 1;
+        ticket
+    }
+
     /// A waker's mark (the module docs): look for work again, and how the thread sleeps. Where it
     /// waits for the GPU, `nudge` is signalled to the value it waits for, here, under the lock;
     /// none is given for a completion turn's wake, whose signal the thread's own wait sees.
@@ -617,6 +704,7 @@ impl Scheduler {
                 decodes: BTreeMap::new(),
                 untracked_decodes: 0,
                 kept: KeptBarriers::default(),
+                handler_tickets: 0,
                 wake_by: None,
                 lists: BatchLists::default(),
                 group: Group::default(),
@@ -632,6 +720,7 @@ impl Scheduler {
             nudge: OnceLock::new(),
             spare_logs: SpareLogs::default(),
             stalls: OnceLock::new(),
+            turns: Turns::default(),
         });
         let thread = {
             let shared = Arc::clone(&shared);
@@ -688,6 +777,7 @@ impl Scheduler {
         buffer: &Arc<CommandBufferShared>,
         queue: u64,
         batches: Vec<BatchSync>,
+        hand: Hand,
     ) {
         let shared = &*self.shared;
         let committed = Committed {
@@ -696,6 +786,10 @@ impl Scheduler {
             batches,
         };
         buffer.device().shared().counts.commit_handed_off();
+        if hand == Hand::Pass {
+            shared.inbox.post_quietly(committed);
+            return;
+        }
         let mut asleep = Asleep::No;
         let marked = (shared.inbox).post(committed, |state| {
             asleep = state.mark(shared.nudge.get());
@@ -731,7 +825,12 @@ impl Scheduler {
         let (mut submitted, mut left_over) = (0, false);
         let passed = shared.inbox.pass_once(|state, commits| {
             take_in(state, commits, &mut spent);
-            submitted = submit_plain_ready(state, &mut spent);
+            let mut none = Handlers::new();
+            submitted = submit_plain_ready(state, &mut spent, (Passer::Waiting, &mut none));
+            debug_assert!(
+                none.is_empty(),
+                "a waiting thread took a submission handler"
+            );
             left_over = !state.order.is_empty() || !state.grouped.is_empty();
         });
         if !passed {
@@ -755,6 +854,54 @@ impl Scheduler {
         if left_over || shared.inbox.passed_over() {
             self.wake_for(Woken::Host);
         }
+    }
+
+    /// The committing thread's own pass, right after its commit was posted with no wake
+    /// ([`Hand::Pass`], `CommandBuffer::commit_and_submit`; the module docs): where no passer is
+    /// counted it becomes the passer ([`Inbox::pass_once_then`]), takes in what the inbox holds,
+    /// and submits the heads committed first while [`plain_ready`] holds for each
+    /// ([`Passer::Committing`]); then, still counted and without the lock, it runs their
+    /// submission handlers in their turn ([`Turns`]) and lets go of what the pass held, a command
+    /// buffer's last reference on a handler thread. What it leaves, and anything committed or
+    /// nudged meanwhile, goes to the thread, which it wakes. Where a passer is counted, that pass
+    /// takes the commit in. Then it makes the completion turn a command buffer that needs no GPU
+    /// work left it (`Completion::turn_owed`).
+    ///
+    /// It runs the program's code only in the submission handlers of the batches it submitted:
+    /// a scheduled handler is run on its queue's handler thread, as the thread's passes leave it.
+    pub(crate) fn submit_at_commit(&self, device: &Device) {
+        let shared = &*self.shared;
+        let passed = shared.inbox.pass_once_then(
+            |state, commits| {
+                let (mut spent, mut handlers) = (Spent::new(), Handlers::new());
+                take_in(state, commits, &mut spent);
+                let submitted =
+                    submit_plain_ready(state, &mut spent, (Passer::Committing, &mut handlers));
+                let mut segments = Vec::new();
+                if !handlers.is_empty() {
+                    segments.push((handlers.len(), state.handler_ticket()));
+                }
+                let left_over = !state.order.is_empty() || !state.grouped.is_empty();
+                (spent, handlers, segments, submitted, left_over)
+            },
+            |(mut spent, mut handlers, mut segments, submitted, left_over)| {
+                shared.turns.run(&mut handlers, &mut segments);
+                for buffer in spent.drain(..) {
+                    if let Some(last) = buffer.let_go_short_of_last() {
+                        device.let_go_elsewhere(Box::new(last));
+                    }
+                }
+                (submitted, left_over)
+            },
+        );
+        let Some((submitted, left_over)) = passed else {
+            return;
+        };
+        device.shared().counts.committer_passed(submitted);
+        if left_over || shared.inbox.passed_over() {
+            self.wake_for(Woken::Host);
+        }
+        device.shared().completion.turn_owed();
     }
 
     /// What makes the thread look for work again from any thread: a pipeline a held batch's
@@ -1137,9 +1284,12 @@ fn round(shared: &SchedulerShared, left: &mut Left<Work>, passed: &mut Passed) -
     if passed.exiting {
         passed.settled.clear();
         passed.handlers.clear();
+        for (_, ticket) in passed.turns.drain(..) {
+            shared.turns.served(ticket);
+        }
     } else {
         settle(&mut passed.settled);
-        run_submission_handlers(&mut passed.handlers);
+        shared.turns.run(&mut passed.handlers, &mut passed.turns);
         // A command buffer that needs no GPU work, taken with no submission behind no work in
         // flight, is finished by this thread, after its submission handlers and holding no lock
         // (`Completion::turn_owed`). Every command buffer the passes took is in `spent`.
@@ -1159,6 +1309,9 @@ struct Passed {
     spent: Spent,
     settled: Settled,
     handlers: Handlers,
+    /// Where each pass's submission handlers end in `handlers`, with the pass's ticket
+    /// ([`Turns`]).
+    turns: Vec<(usize, u64)>,
     more: bool,
     exiting: bool,
 }
@@ -1207,13 +1360,20 @@ fn pass(
 ) {
     take_in(state, commits, &mut passed.spent);
     state.dirty = false;
-    match submit_ready(
+    let before = passed.handlers.len();
+    let ready = submit_ready(
         state,
         (&mut passed.spent, &mut passed.settled),
         left,
         &mut passed.handlers,
         awaits,
-    ) {
+    );
+    // Its submission handlers run in this pass's turn ([`Turns`]).
+    if passed.handlers.len() > before {
+        let ticket = state.handler_ticket();
+        passed.turns.push((passed.handlers.len(), ticket));
+    }
+    match ready {
         Ok(More(true)) => {
             state.dirty = true;
             passed.more = true;
@@ -1251,7 +1411,7 @@ type Spent = Vec<Hold<CommandBufferShared>>;
 /// settled and goes to `settled`, for the caller to announce without the lock ([`settle`]). A
 /// command buffer whose last batch was submitted, or held in a group (`command_buffer/group.rs`),
 /// with submission handlers goes to `handlers`, in that order, for the caller to run them without
-/// the lock ([`run_submission_handlers`]). Once it let go of [`PASS_SUBMISSIONS`] batches' holds,
+/// the lock ([`Turns::run`]). Once it let go of [`PASS_SUBMISSIONS`] batches' holds,
 /// it stops where no batch is held for a group, answering `More(true)`, for the caller to let go of
 /// them and pass again. `Err` once the process is exiting.
 fn submit_ready(
@@ -1474,7 +1634,11 @@ struct Exiting;
 /// check, where Metal runs neither. So it reads `order`, `binary` and `decodes`, submits against
 /// `tracker`, `values`, `waited`, `kept` and `lists` as a pass does, and leaves `awaits`, `left`,
 /// the group, `dirty` and the sleeps alone. It makes no pass at all while the group holds a batch.
-fn submit_plain_ready(state: &mut State, spent: &mut Spent) -> usize {
+fn submit_plain_ready(
+    state: &mut State,
+    spent: &mut Spent,
+    (passer, handlers): (Passer, &mut Handlers),
+) -> usize {
     let mut submitted = 0;
     while submitted < PASS_SUBMISSIONS && state.grouped.is_empty() {
         let Some(busy) = exit_guard::enter() else {
@@ -1489,7 +1653,7 @@ fn submit_plain_ready(state: &mut State, spent: &mut Spent) -> usize {
                 ..
             } = &mut *state;
             let (binary, decodes, untracked) = (&*binary, &*decodes, *untracked_decodes);
-            order.take_first(|held| plain_ready(held, binary, decodes, untracked))
+            order.take_first(|held| plain_ready(held, binary, decodes, untracked, passer))
         };
         let Some((queue, sequence, mut held, waits)) = taken else {
             drop(busy);
@@ -1509,13 +1673,17 @@ fn submit_plain_ready(state: &mut State, spent: &mut Spent) -> usize {
         match answer {
             Ok(Submitting::Submitted(submission)) => {
                 drop(busy);
-                // The predicate holds out every command buffer with submission handlers and
-                // every switch of storage forms, so there is nothing for the submitting thread
-                // to run once the lock is free, and nothing to settle and announce.
-                debug_assert!(
-                    !submission.runs_handlers(),
-                    "a waiting thread submitted a batch whose handlers it must not run"
-                );
+                // The predicate holds out every switch of storage forms, so there is nothing to
+                // settle and announce, and for a waiting thread every command buffer with
+                // submission handlers: those it takes are a committing thread's to run once the
+                // lock is free.
+                if submission.runs_handlers() {
+                    debug_assert!(
+                        passer == Passer::Committing,
+                        "a waiting thread submitted a batch whose handlers it must not run"
+                    );
+                    handlers.push(held.buffer.hold());
+                }
                 let Held {
                     buffer,
                     binary_needs,
@@ -1546,11 +1714,13 @@ fn submit_plain_ready(state: &mut State, spent: &mut Spent) -> usize {
             // command buffers a thread waits for (`Group::keeps`).
             Ok(Submitting::Grouped) => {
                 drop(busy);
-                let handlers = state.group.schedule_held();
-                debug_assert!(
-                    !handlers,
-                    "a waiting thread held a batch whose handlers it must not run"
-                );
+                if state.group.schedule_held() {
+                    debug_assert!(
+                        passer == Passer::Committing,
+                        "a waiting thread held a batch whose handlers it must not run"
+                    );
+                    handlers.push(held.buffer.hold());
+                }
                 held.buffer.held_in_group();
                 state.grouped.push((queue, held));
                 return submitted;
@@ -1584,8 +1754,30 @@ fn submit_plain_ready(state: &mut State, spent: &mut Spent) -> usize {
     submitted
 }
 
-/// The Vulkan waits for `held`'s events' signal indices where a thread about to block may submit
-/// it itself ([`Scheduler::submit_before_waiting`]); `None` where it may not.
+/// Which thread other than the scheduler's makes a pass for itself.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Passer {
+    /// A thread about to block for a command buffer ([`Scheduler::submit_before_waiting`]),
+    /// which runs none of the program's code.
+    Waiting,
+    /// A thread that just committed ([`Scheduler::submit_at_commit`]), which runs the submission
+    /// handlers of what it submits.
+    Committing,
+}
+
+/// How a commit hands its batches to the scheduler.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Hand {
+    /// Posted, and the thread woken where it sleeps ([`Inbox::post`]).
+    Wake,
+    /// Posted with no wake for the committing thread's own pass, which follows
+    /// ([`Scheduler::submit_at_commit`]).
+    Pass,
+}
+
+/// The Vulkan waits for `held`'s events' signal indices where a thread other than the
+/// scheduler's, `passer`, may submit it itself ([`Scheduler::submit_before_waiting`],
+/// [`Scheduler::submit_at_commit`]); `None` where it may not.
 ///
 /// It is ready as [`submit_ready`] asks of a head: its binary semaphores' signals submitted, no
 /// rebind encoding encoders of its event group again, no CPU decode queued into a twin it may
@@ -1594,9 +1786,11 @@ fn submit_plain_ready(state: &mut State, spent: &mut Spent) -> usize {
 ///
 /// - no segments, so no host step the thread records, and none in its [`Left`] work;
 /// - no submission check, which runs the program's code on the thread that runs it;
-/// - no submission handler and no scheduled handler, so its transition to `Scheduled` is plain
-///   and runs none of the program's code where it is published
-///   (`CommandBufferShared::submits_without_the_program`);
+/// - for a waiting thread, no submission handler and no scheduled handler, so its transition to
+///   `Scheduled` is plain and runs none of the program's code where it is published
+///   (`CommandBufferShared::submits_without_the_program`); a committing thread runs the
+///   submission handlers itself, and a transition with scheduled handlers goes to its queue's
+///   context (`CommandBufferShared::submits_at_commit`);
 /// - no switch of a fetched target's storage form riding on it, which the submitting thread
 ///   settles and announces (`texture/storage_form.rs`);
 /// - and a `VkQueue` whose batches never wait in a group (`command_buffer/group.rs`), which is
@@ -1606,6 +1800,7 @@ fn plain_ready(
     binary: &BinarySignals<vk::Semaphore>,
     decodes: &BTreeMap<ResourceKey, usize>,
     untracked_decodes: usize,
+    passer: Passer,
 ) -> Option<Vec<(vk::Semaphore, u64)>> {
     if held.segments || held.checked {
         return None;
@@ -1619,7 +1814,11 @@ fn plain_ready(
     if untracked_decodes > 0 || (!decodes.is_empty() && reads_decoding(held, decodes)) {
         return None;
     }
-    if held.buffer.groups() || !held.buffer.submits_without_the_program() {
+    let quiet = match passer {
+        Passer::Waiting => held.buffer.submits_without_the_program(),
+        Passer::Committing => held.buffer.submits_at_commit(),
+    };
+    if held.buffer.groups() || !quiet {
         return None;
     }
     event_waits(held)
@@ -1734,7 +1933,7 @@ fn reads_decoding(held: &Held, decodes: &BTreeMap<ResourceKey, usize>) -> bool {
 /// End the switches of storage forms riding on the `settled` command buffers
 /// (`texture/storage_form.rs`) on this thread, with the scheduler's lock free (the device's switch
 /// lock is taken before it, never under it), before their transitions to `Scheduled` go on
-/// ([`run_submission_handlers`]): the program sees each swap, and its announcement, by the time it
+/// ([`Turns::run`]): the program sees each swap, and its announcement, by the time it
 /// can see its command buffer scheduled. A thread that made a command buffer meanwhile may have
 /// ended it first. Each end is a section of the exit guard (it makes Vulkan calls and announces):
 /// once the process is exiting, the switch stays as it is.
@@ -1755,17 +1954,6 @@ type Settled = Vec<Hold<CommandBufferShared>>;
 /// The command buffers whose last batch a pass submitted or held in a group with submission
 /// handlers, in that order, for the submitting thread to run without the lock.
 type Handlers = Vec<Hold<CommandBufferShared>>;
-
-/// Run the submission handlers of `handlers`' command buffers on this thread, which holds none of
-/// the runtime's locks, in submission order; each one's transition to `Scheduled` goes on after
-/// its own (`CommandBufferShared::run_submission_handlers`), and after its switch of storage forms
-/// ended ([`settle`], run first). Each hold goes after its handlers, outside every lock: it may be
-/// its command buffer's last reference.
-fn run_submission_handlers(handlers: &mut Handlers) {
-    for buffer in handlers.drain(..) {
-        buffer.run_submission_handlers();
-    }
-}
 
 /// A batch for the thread to work on without its lock: its command buffer with the batch's index.
 type Work = (Hold<CommandBufferShared>, usize);
