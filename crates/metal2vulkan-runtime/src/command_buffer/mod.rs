@@ -88,9 +88,9 @@ use super::gpu_time::{self, KernelTimes, Life, Placement, Stamped, Times};
 use super::heap::Heap;
 use super::heap_sets::HeapUse;
 use super::kept_commands::KeptContext;
-use super::linear_run::{LinearRuns, RunPoint};
 use super::live_buffers::LiveTable;
 use super::merge_scratch::MergeScratch;
+use super::pass_runs::{PassRuns, RunPoint};
 use super::pipeline::budget::Urgency;
 use super::pipeline::kept::StepNumbers;
 use super::predication::{Event, Predication};
@@ -679,8 +679,8 @@ pub(super) struct State {
     /// carries nothing where it starts another ([`State::shadows_to_carry`]).
     carry_batches: usize,
     /// Its open runs of passes over a linear attachment rendered apart, merged once
-    /// (`linear_run.rs`).
-    linear_runs: LinearRuns,
+    /// (`pass_runs.rs`).
+    pass_runs: PassRuns,
     /// The pools of its commands' set 0 (`descriptor_arena.rs`), given back or released with
     /// the uploads.
     pub(super) descriptors: DescriptorArena,
@@ -1451,7 +1451,7 @@ impl State {
         self.shadow_carry = Some(carry);
     }
 
-    /// Where an encoder ending now ends among its encoders and batches (`linear_run.rs`).
+    /// Where an encoder ending now ends among its encoders and batches (`pass_runs.rs`).
     pub(super) fn run_point(&self) -> RunPoint {
         RunPoint {
             ended: self.recorded.len(),
@@ -1460,9 +1460,9 @@ impl State {
         }
     }
 
-    /// Its open runs of passes over a linear attachment rendered apart (`linear_run.rs`).
-    pub(super) fn linear_runs(&mut self) -> &mut LinearRuns {
-        &mut self.linear_runs
+    /// Its open runs of passes over a linear attachment rendered apart (`pass_runs.rs`).
+    pub(super) fn pass_runs(&mut self) -> &mut PassRuns {
+        &mut self.pass_runs
     }
 
     /// Carry no shadowed texture's image on: the work encoded next reads what another writer the
@@ -1993,7 +1993,7 @@ impl CommandBuffer {
                 shadows_copied_in: Vec::new(),
                 shadow_carry: Some(ShadowCarry::default()),
                 carry_batches: 1,
-                linear_runs: LinearRuns::default(),
+                pass_runs: PassRuns::default(),
                 descriptors: DescriptorArena::default(),
                 status_words: None,
                 mesh_grid_past: false,

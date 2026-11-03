@@ -1893,7 +1893,7 @@ impl EncoderCore {
     }
 
     /// Note the uses `uses`, in `stages`, of work a segment left to a later recording records
-    /// there (a linear attachment's merge left to its batch's submission, `linear_run.rs`), as
+    /// there (a linear attachment's merge left to its batch's submission, `pass_runs.rs`), as
     /// [`command`](Self::command) notes a command's: the tracker orders the commands after the
     /// segment after them, and the encoder's summary holds them. The barrier the tracker plans
     /// before them goes unrecorded: the work records one from every command before it. Whether

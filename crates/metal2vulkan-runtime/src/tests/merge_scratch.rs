@@ -11,7 +11,7 @@
 //! With the device's rule forced (`DeviceShared::linear_rule_forced`), each pass renders a target
 //! that is its own linear image apart, through the image it keeps, its changed words merged back
 //! (`linear_attachment.rs`, `linear_merge.rs`), as NVIDIA's devices render it beside a depth
-//! attachment: the passes form a run or two merged once each (`linear_run.rs`,
+//! attachment: the passes form a run or two merged once each (`pass_runs.rs`,
 //! `tests::linear_runs`), each merge taking one scratch, and the runtime's device memory grows by
 //! no scratch a pass. A target that is a shadow
 //! (host pages on every device, and rows the device's linear images do not lay out) is merged
@@ -382,7 +382,7 @@ fn one_scratch(over: Over, (width, row): (u64, u64)) {
         grown / scratch
     );
     match (linear, merged) {
-        // One run (`linear_run.rs`), or two where the second pass's box reaches past the first's
+        // One run (`pass_runs.rs`), or two where the second pass's box reaches past the first's
         // (then one over the whole target), merged once each.
         (true, _) => {
             assert_eq!(apart, PASSES as u64, "every pass renders the texture apart");

@@ -1,4 +1,4 @@
-//! Runs of passes over a linear attachment rendered apart, merged once (`linear_run.rs`): one
+//! Runs of passes over a linear attachment rendered apart, merged once (`pass_runs.rs`): one
 //! command buffer mixing passes over a render target over a buffer's bytes (each loading and
 //! storing it beside a cleared and stored `Depth32Float` depth attachment, blending a rectangle
 //! over it) with the encoders and commands that end a run or pass it: a 1x1 attachmentless

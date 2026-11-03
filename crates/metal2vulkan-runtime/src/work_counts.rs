@@ -2009,12 +2009,12 @@ impl Counters {
     }
 
     /// A linear attachment's merge was recorded: after its pass, or at its batch's submission
-    /// after the last pass of its run (`linear_run.rs`).
+    /// after the last pass of its run (`pass_runs.rs`).
     pub(crate) fn linear_merge_recorded(&self) {
         self.linear_merges_recorded.fetch_add(1, Ordering::Relaxed);
     }
 
-    /// A pass of a run took over the merge of the run's pass before it (`linear_run.rs`).
+    /// A pass of a run took over the merge of the run's pass before it (`pass_runs.rs`).
     pub(crate) fn linear_merge_taken_over(&self) {
         self.linear_merges_taken_over
             .fetch_add(1, Ordering::Relaxed);
@@ -4702,7 +4702,7 @@ pub struct WorkCounts {
     pub linear_merge_scratches_reused: u64,
     /// The merges of those colors recorded: one after each pass that merges on its own, and one
     /// at its batch's submission for each run of passes over one attachment merged once, in
-    /// place of its earlier passes' (`linear_run.rs`).
+    /// place of its earlier passes' (`pass_runs.rs`).
     pub linear_merges_recorded: u64,
     /// The merges a later pass of their run took over: none of them is recorded, and the run's
     /// last merge writes what they would have.

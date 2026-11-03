@@ -11,7 +11,7 @@
 //! - **Lent.** A merge takes the smallest free scratch of its kind of at least the bytes it needs
 //!   ([`MergeScratch::take`]); its encoder gives it back as it ends: a linear attachment's merge
 //!   once its pass's merge is recorded (`LinearMerge::record_merge`), or a run's of passes merged
-//!   once as the pass that ends the run ends, after which its merge lies (`linear_run.rs`); a
+//!   once as the pass that ends the run ends, after which its merge lies (`pass_runs.rs`); a
 //!   shadow's as the encoder that planned it goes (its [`ScratchLease`], held with the encoder's
 //!   kept-image leases). A
 //!   scratch the pool lends is held by the merges that used it, which their command buffer

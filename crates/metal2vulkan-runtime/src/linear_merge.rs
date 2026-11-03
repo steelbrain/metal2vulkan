@@ -43,7 +43,7 @@
 //!   (`WorkCounts::linear_merge_scratches_made`, `linear_merge_scratches_reused`).
 //! - **Runs.** Passes over one attachment one after another, with nothing between them that may
 //!   touch its bytes or the kept image, keep once and merge once, after the last
-//!   (`linear_run.rs`): one copy in, keep and merge a run, not one a pass.
+//!   (`pass_runs.rs`): one copy in, keep and merge a run, not one a pass.
 //!
 //! - **Reloaded at a barrier.** A draw after a memory barrier inside the pass may read the
 //!   surface's bytes (a sampled texture over them, a buffer): before the render pass instance that
@@ -166,7 +166,7 @@ impl LinearMerge {
         let counts = &device.shared().counts;
         // An encoder encoded again (`command_buffer/reencode.rs`) borrows none: it takes the
         // place of one among the command buffer's encoders, where a run of passes holding the
-        // scratch they lent may span it (`linear_run.rs`).
+        // scratch they lent may span it (`pass_runs.rs`).
         let lent = match crate::replay::is_replaying() {
             true => None,
             false => pool.take(ScratchKind::Linear, 2 * part),
@@ -379,14 +379,14 @@ impl LinearMerge {
     }
 
     /// The merge's uses, which a merge left to its batch's submission notes as its pass ends
-    /// (`linear_run.rs`): a read of the image the pass renders, and a read and a write of the
+    /// (`pass_runs.rs`): a read of the image the pass renders, and a read and a write of the
     /// surface's bytes.
     pub(super) fn merge_uses(&self) -> &[Use<ResourceKey>] {
         &self.merge_uses
     }
 
     /// Record the merge into `command_buffer` on its own, between barriers from everything
-    /// before and to everything after: a run's, at its batch's submission (`linear_run.rs`).
+    /// before and to everything after: a run's, at its batch's submission (`pass_runs.rs`).
     ///
     /// # Safety
     ///

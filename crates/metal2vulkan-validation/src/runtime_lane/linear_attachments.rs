@@ -1872,7 +1872,7 @@ fn many_reference(queue: &CommandQueue, pipeline: &RenderPipelineState, width: u
 /// [`many_passes`] over a target over `over`'s buffer of `width` texels a row, `row` bytes apart
 /// (`merge_scratch.rs`): its texels equal those the same passes leave in a private texture, and
 /// the bytes between its rows keep theirs. Where the device renders it apart by the rule
-/// (`linear_merge.rs`), the passes form a run or two merged once each (`linear_run.rs`), each
+/// (`linear_merge.rs`), the passes form a run or two merged once each (`pass_runs.rs`), each
 /// merge taking one scratch; where it is a shadow merged back (`shadow_merge.rs`), every
 /// merge after the first takes a scratch an earlier encoder was done with. Either way the device's
 /// memory grows by less than an eighth of a scratch a pass while they are encoded.
@@ -1914,7 +1914,7 @@ fn many_passes_over(over: ManyOver, (width, row): (u64, u64)) {
              {grown} bytes while encoding",
             device.name()
         );
-        // One run (`linear_run.rs`), or two where the second pass's box reaches past the
+        // One run (`pass_runs.rs`), or two where the second pass's box reaches past the
         // first's (then one over the whole target), merged once each.
         if apart {
             assert_eq!(through, MANY as u64, "every pass renders the texture apart");

@@ -15,7 +15,7 @@
 //!   word one of the passes changed, and no other. A pass whose box reaches past its run's ends
 //!   that run and opens the next over its whole render area, which every later box lies in.
 //! - **The merge goes last.** Each pass of a run leaves its merge to its batch's submission
-//!   ([`RunMerge`], `Deferred::LinearMerge`), a segment between its own command buffers and the
+//!   ([`RunMerge`], `Deferred::RunMerge`), a segment between its own command buffers and the
 //!   next encoder's; a later pass of the run, as its encoder ends, takes it over, and that
 //!   segment records nothing. The merge recorded is the run's last pass's, in that pass's place,
 //!   between the same barriers. Its uses are noted as each pass ends, as a merge recorded there
@@ -63,7 +63,7 @@ use ash::vk;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
-/// A run's pass's merge, left to its batch's submission (`Deferred::LinearMerge`): recorded
+/// A run's pass's merge, left to its batch's submission (`Deferred::RunMerge`): recorded
 /// there unless a later pass of the run took it over.
 pub(super) struct RunMerge {
     merge: Arc<LinearMerge>,
@@ -129,7 +129,7 @@ pub(super) struct Joining {
     pub(super) area: [u32; 4],
 }
 
-/// What a color that may join a run takes as its pass ends ([`LinearRuns::end_of`]).
+/// What a color that may join a run takes as its pass ends ([`PassRuns::end_of`]).
 pub(super) enum Joined {
     /// It goes on with the run before it: the run's box, its merge, and its last pass's merge
     /// left to its submission, which the pass takes over once it left its own.
@@ -173,11 +173,11 @@ fn within(inner: [u32; 4], outer: [u32; 4]) -> bool {
 
 /// A command buffer's open runs (the module docs).
 #[derive(Default)]
-pub(super) struct LinearRuns {
+pub(super) struct PassRuns {
     open: Vec<Open>,
 }
 
-impl LinearRuns {
+impl PassRuns {
     /// For a render encoder ending at `now`, whose colors `joining` may join a run: what each
     /// takes, and the merges of the runs it ends, to lend their scratch on. A run goes on with
     /// the color of its key and bytes where the pass follows its last (`Open::follows`) and the

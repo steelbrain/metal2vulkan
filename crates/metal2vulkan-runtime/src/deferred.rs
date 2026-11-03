@@ -12,7 +12,7 @@ use super::error::{internal, Error};
 use super::gpu_execute::{self, Rerecord};
 use super::indirect_dispatch::ArgumentDispatch;
 use super::indirect_execute::{self, Execute, Settled, Unforeseen};
-use super::linear_run::RunMerge;
+use super::pass_runs::RunMerge;
 use super::pending_dispatch::PendingDispatch;
 use super::pipeline::ComputePipelineState;
 use super::render::DeferredPass;
@@ -40,10 +40,10 @@ pub(super) enum Deferred {
     /// a scrub, neither `commit` nor a host step records it, but its batch's submission, once the
     /// commit's stamp is published (`shadow::GatedCopyIn`, `dirty_pages.rs`).
     GatedCopyIn(Arc<GatedCopyIn>),
-    /// The merge of a run's pass over a linear attachment rendered apart (`linear_run.rs`): as
+    /// The merge of a run's pass over a linear attachment rendered apart (`pass_runs.rs`): as
     /// with a scrub, neither `commit` nor a host step records it, but its batch's submission,
     /// unless a later pass of the run took it over.
-    LinearMerge(Arc<RunMerge>),
+    RunMerge(Arc<RunMerge>),
     /// A render pass that executes render commands (`render/executions.rs`).
     RenderPass(Arc<DeferredPass>),
     /// A compute encoder's dispatch whose pipelines were being made (`pending_dispatch.rs`).
@@ -113,7 +113,7 @@ impl Deferred {
             (Deferred::Dispatch(a), Deferred::Dispatch(b)) => Arc::ptr_eq(a, b),
             (Deferred::SparseScrub(a), Deferred::SparseScrub(b)) => Arc::ptr_eq(a, b),
             (Deferred::GatedCopyIn(a), Deferred::GatedCopyIn(b)) => Arc::ptr_eq(a, b),
-            (Deferred::LinearMerge(a), Deferred::LinearMerge(b)) => Arc::ptr_eq(a, b),
+            (Deferred::RunMerge(a), Deferred::RunMerge(b)) => Arc::ptr_eq(a, b),
             (Deferred::RenderPass(a), Deferred::RenderPass(b)) => Arc::ptr_eq(a, b),
             (Deferred::Pending(a), Deferred::Pending(b)) => Arc::ptr_eq(a, b),
             (Deferred::Loop(a), Deferred::Loop(b)) => Arc::ptr_eq(a, b),
@@ -128,7 +128,7 @@ impl Deferred {
     /// Nor is a dispatch whose pipelines were being made: its shadowed textures were copied in
     /// at the dispatch, and its writes are its encoder's to copy back. Nor is a gated copy in,
     /// which is one of the encoder's shadow copies, nor a linear attachment's merge, which
-    /// touches no shadowed texture (`linear_run.rs`).
+    /// touches no shadowed texture (`pass_runs.rs`).
     pub(super) fn leaves_shadows(&self) -> bool {
         match self {
             Deferred::Execute(_)
@@ -138,7 +138,7 @@ impl Deferred {
             Deferred::RenderPass(_)
             | Deferred::Pending(_)
             | Deferred::GatedCopyIn(_)
-            | Deferred::LinearMerge(_) => false,
+            | Deferred::RunMerge(_) => false,
         }
     }
 
@@ -158,7 +158,7 @@ impl Deferred {
             Deferred::Dispatch(_) | Deferred::Loop(_) => true,
             Deferred::SparseScrub(_)
             | Deferred::GatedCopyIn(_)
-            | Deferred::LinearMerge(_)
+            | Deferred::RunMerge(_)
             | Deferred::Pending(_) => false,
             Deferred::RenderPass(pass) => pass.gpu_written(),
         }
@@ -248,7 +248,7 @@ impl Deferred {
             Deferred::Dispatch(_) => Err(internal(
                 "an indirect dispatch recorded before the work it waits for completed",
             )),
-            Deferred::SparseScrub(_) | Deferred::GatedCopyIn(_) | Deferred::LinearMerge(_) => {
+            Deferred::SparseScrub(_) | Deferred::GatedCopyIn(_) | Deferred::RunMerge(_) => {
                 Ok(Prepared {
                     recorded: None,
                     for_good: false,
@@ -373,7 +373,7 @@ impl Deferred {
             Deferred::Dispatch(_)
             | Deferred::SparseScrub(_)
             | Deferred::GatedCopyIn(_)
-            | Deferred::LinearMerge(_)
+            | Deferred::RunMerge(_)
             | Deferred::Pending(_)
             | Deferred::Loop(_) => Ok(None),
         }
@@ -421,7 +421,7 @@ impl Deferred {
             Deferred::Dispatch(dispatch) => dispatch.record(command_buffer),
             Deferred::SparseScrub(_) => Err(internal("a sparse scrub's host step")),
             Deferred::GatedCopyIn(_) => Err(internal("a gated copy in's host step")),
-            Deferred::LinearMerge(_) => Err(internal("a linear merge's host step")),
+            Deferred::RunMerge(_) => Err(internal("a linear merge's host step")),
             Deferred::RenderPass(pass) => pass.record(command_buffer, true),
             Deferred::Pending(dispatch) => dispatch.record(command_buffer),
             Deferred::Loop(check) => check.step(command_buffer),
@@ -440,7 +440,7 @@ impl Deferred {
             Deferred::Dispatch(_)
             | Deferred::SparseScrub(_)
             | Deferred::GatedCopyIn(_)
-            | Deferred::LinearMerge(_)
+            | Deferred::RunMerge(_)
             | Deferred::Pending(_)
             | Deferred::Loop(_) => false,
         }
@@ -457,7 +457,7 @@ impl Deferred {
             Deferred::Dispatch(_)
             | Deferred::SparseScrub(_)
             | Deferred::GatedCopyIn(_)
-            | Deferred::LinearMerge(_)
+            | Deferred::RunMerge(_)
             | Deferred::Pending(_)
             | Deferred::Loop(_) => false,
         }
@@ -472,7 +472,7 @@ impl Deferred {
             | Deferred::Dispatch(_)
             | Deferred::SparseScrub(_)
             | Deferred::GatedCopyIn(_)
-            | Deferred::LinearMerge(_)
+            | Deferred::RunMerge(_)
             | Deferred::RenderPass(_)
             | Deferred::Pending(_) => false,
         }
@@ -487,7 +487,7 @@ impl Deferred {
             | Deferred::Dispatch(_)
             | Deferred::SparseScrub(_)
             | Deferred::GatedCopyIn(_)
-            | Deferred::LinearMerge(_)
+            | Deferred::RunMerge(_)
             | Deferred::Loop(_) => false,
         }
     }
@@ -504,7 +504,7 @@ impl Deferred {
             Deferred::Execute(_) | Deferred::Dispatch(_) | Deferred::SparseScrub(_) => true,
             Deferred::RenderPass(pass) => pass.executes(),
             Deferred::GatedCopyIn(_)
-            | Deferred::LinearMerge(_)
+            | Deferred::RunMerge(_)
             | Deferred::Pending(_)
             | Deferred::Loop(_) => false,
         }
@@ -528,7 +528,7 @@ impl Deferred {
             | Deferred::Dispatch(_)
             | Deferred::SparseScrub(_)
             | Deferred::GatedCopyIn(_)
-            | Deferred::LinearMerge(_)
+            | Deferred::RunMerge(_)
             | Deferred::Loop(_) => false,
         }
     }
@@ -546,7 +546,7 @@ impl Deferred {
             | Deferred::Dispatch(_)
             | Deferred::SparseScrub(_)
             | Deferred::GatedCopyIn(_)
-            | Deferred::LinearMerge(_)
+            | Deferred::RunMerge(_)
             | Deferred::Loop(_) => false,
         }
     }
@@ -564,7 +564,7 @@ impl Deferred {
             | Deferred::Dispatch(_)
             | Deferred::SparseScrub(_)
             | Deferred::GatedCopyIn(_)
-            | Deferred::LinearMerge(_)
+            | Deferred::RunMerge(_)
             | Deferred::Loop(_) => None,
         }
     }
@@ -578,7 +578,7 @@ impl Deferred {
             | Deferred::Dispatch(_)
             | Deferred::SparseScrub(_)
             | Deferred::GatedCopyIn(_)
-            | Deferred::LinearMerge(_)
+            | Deferred::RunMerge(_)
             | Deferred::Loop(_) => {}
         }
     }
@@ -593,7 +593,7 @@ impl Deferred {
             | Deferred::Dispatch(_)
             | Deferred::SparseScrub(_)
             | Deferred::GatedCopyIn(_)
-            | Deferred::LinearMerge(_)
+            | Deferred::RunMerge(_)
             | Deferred::Loop(_) => {}
         }
     }
@@ -605,7 +605,7 @@ impl Deferred {
             Deferred::Dispatch(dispatch) => dispatch.degrade(device),
             Deferred::SparseScrub(_)
             | Deferred::GatedCopyIn(_)
-            | Deferred::LinearMerge(_)
+            | Deferred::RunMerge(_)
             | Deferred::Pending(_)
             | Deferred::Loop(_) => {}
             Deferred::RenderPass(pass) => pass.degrade(device),

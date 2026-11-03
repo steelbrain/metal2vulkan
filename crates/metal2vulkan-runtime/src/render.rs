@@ -300,10 +300,10 @@ use super::index_rewrite::{self, Listed, RewritePass, RewriteSteps, WrittenList}
 use super::kept_bytes;
 use super::linear_attachment;
 use super::linear_merge::{LinearMerge, MERGE_STAGES};
-use super::linear_run::{Joined, Joining, RunKey, RunMerge};
 use super::live_bind::{Emptied, LiveBind, Reshape, SettledHere};
 use super::nan_clear::{keeps_nan_sign, NanDepthWrite};
 use super::owned_kernel::OwnedModule;
+use super::pass_runs::{Joined, Joining, RunKey, RunMerge};
 use super::pipeline::Settled;
 use super::pipeline::{BufferForms, DrawPipeline};
 use super::pipeline::{DrawDynamic, RawPipeline, RenderVariant, VariantObjects};
@@ -1076,7 +1076,7 @@ impl InterlockedStorage {
 }
 
 /// A pass's color over a linear attachment rendered apart that joins a run as the pass ends
-/// (`linear_run.rs`): its index, its run's key, bytes and box, and where it goes on with the run
+/// (`pass_runs.rs`): its index, its run's key, bytes and box, and where it goes on with the run
 /// before it, that run's merge and its last pass's merge left to its submission.
 struct RunColor {
     index: usize,
@@ -4692,7 +4692,7 @@ impl RenderLowering {
             })
             .collect::<Vec<_>>();
         // A linear attachment's passes rendered apart, one after another, merge once, after the
-        // last (`linear_run.rs`): the colors whose merge the pass leaves to its batch's
+        // last (`pass_runs.rs`): the colors whose merge the pass leaves to its batch's
         // submission, each with what it took from the runs, and the runs it goes on with, ends
         // or passes. Nothing changes where the encoder is encoded again.
         let mut runs: Vec<RunColor> = Vec::new();
@@ -4806,7 +4806,7 @@ impl RenderLowering {
             let (joined, ended) = core
                 .command_buffer()
                 .state()
-                .linear_runs()
+                .pass_runs()
                 .end_of(now, &joining, touches);
             // Each run it ends lends its scratch on: its merge lies before this pass.
             for merge in ended {
@@ -4883,7 +4883,7 @@ impl RenderLowering {
         // stand-in, arriving later, takes the attachment's texels right after it, not before the
         // pass (`render/inline_first.rs`).
         // A pass going on with a run copies nothing in for its color: the image holds what the
-        // run's pass before left (`linear_run.rs`).
+        // run's pass before left (`pass_runs.rs`).
         let mut copied_in = match inline {
             true => scratch(&|_, _| true),
             false => scratch(&|index, c| loaded(index, c) && !goes_on(index)),
@@ -5760,19 +5760,19 @@ impl RenderLowering {
                 merge.record_merge(&mut core);
                 continue;
             };
-            // Left to its batch's submission, its uses noted here (`linear_run.rs`); the run's
+            // Left to its batch's submission, its uses noted here (`pass_runs.rs`); the run's
             // merge before it, taken over once it is.
             if !core.note_left_uses(MERGE_STAGES, merge.merge_uses()) {
                 continue;
             }
             let left = RunMerge::new(Arc::clone(merge));
-            core.defer(Deferred::LinearMerge(Arc::clone(&left)))?;
+            core.defer(Deferred::RunMerge(Arc::clone(&left)))?;
             if let Some((_, last)) = &run.on {
                 last.take_over();
                 device.shared().counts.linear_merge_taken_over();
             }
             let now = run_point.ok_or_else(|| internal("a run's pass encoded again"))?;
-            (core.command_buffer().state().linear_runs()).open(
+            (core.command_buffer().state().pass_runs()).open(
                 run.joining,
                 Arc::clone(merge),
                 left,
