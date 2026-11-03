@@ -219,6 +219,18 @@ kernel void tiny_kernel_b(device uint *out [[buffer(0)]],
     out[tid] = value * 3u + tid + uint(NONCE);
 }
 
+// The handle dispatches' kernel: it reads its texture through a handle in an argument buffer, so
+// each of its dispatches binds the device's texture table (`dispatch_handles`).
+struct TinyHandles {
+    texture2d<float> texture;
+};
+
+kernel void tiny_handle_kernel(device uint *out [[buffer(0)]],
+                               constant TinyHandles &handles [[buffer(1)]],
+                               uint tid [[thread_position_in_grid]]) {
+    out[tid] = uint(handles.texture.read(uint2(0, 0)).x * 255.0) + tid + uint(NONCE);
+}
+
 // The many-draws workload's functions: a small rectangle per draw, of its own uniforms, and four
 // fragment functions over two textures and one sampler.
 struct DrawUniforms {

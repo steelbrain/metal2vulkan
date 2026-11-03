@@ -502,7 +502,13 @@ pub fn threads<G: Gpu>(g: &G, library: &G::Library, shared: &G::RenderPipeline, 
 /// The CPU cost of encoding: per draw and per dispatch, on the encoding thread (wall) and in the
 /// whole process (CPU time of every thread, from the command buffer's creation until its wait
 /// returned, which takes in work moved off the encoding thread to commit or to other threads).
-pub fn encode<G: Gpu>(g: &G, s: &Scene<G>, sizes: &Sizes, variants: &[String]) {
+pub fn encode<G: Gpu>(
+    g: &G,
+    s: &Scene<G>,
+    library: &G::Library,
+    sizes: &Sizes,
+    variants: &[String],
+) {
     let n = sizes.draws;
     let runs = |name: String| variants.is_empty() || variants.contains(&name);
     for churn in [
@@ -611,6 +617,64 @@ pub fn encode<G: Gpu>(g: &G, s: &Scene<G>, sizes: &Sizes, variants: &[String]) {
         emit_memo_shares(g, counts, dispatches, &format!("dispatch_{name}"));
     }
     encode_resident(g, s, sizes, &runs);
+    encode_handles(g, s, library, sizes, &runs);
+}
+
+/// The encode workload's `dispatch_handles` variant: a compute encoder of `draws`
+/// single-threadgroup dispatches of `tiny_handle_kernel`, which reads a texture made resident
+/// through its handle in an argument buffer, so each dispatch binds the device's texture table.
+/// Per dispatch: the encoding thread's wall time and the process's CPU time.
+fn encode_handles<G: Gpu>(
+    g: &G,
+    s: &Scene<G>,
+    library: &G::Library,
+    sizes: &Sizes,
+    runs: &dyn Fn(String) -> bool,
+) {
+    if !runs("dispatch_handles".to_owned()) {
+        return;
+    }
+    let n = sizes.draws;
+    let pipeline = g.compute_pipeline(library, "tiny_handle_kernel");
+    let texture = &s.textures[0];
+    let handles = g.buffer_with(&g.texture_id(texture).to_le_bytes());
+    let (mut wall, mut cpu) = (vec![], vec![]);
+    for run in 0..sizes.timed + 3 {
+        g.pool(|| {
+            let cpu0 = process_cpu();
+            let command_buffer = g.command_buffer();
+            let mut encoder = g.compute_encoder(&command_buffer);
+            g.set_compute_pipeline(&mut encoder, &pipeline);
+            g.set_buffer(&mut encoder, &s.tiny_out, 0, 0);
+            g.set_buffer(&mut encoder, &handles, 0, 1);
+            g.use_textures(&mut encoder, &[texture]);
+            let t0 = Instant::now();
+            for _ in 0..n {
+                g.dispatch(&mut encoder, 1, 64);
+            }
+            let t1 = Instant::now();
+            g.end_compute(encoder);
+            g.commit(&command_buffer);
+            g.wait(&command_buffer);
+            let cpu1 = process_cpu();
+            if run >= 3 {
+                wall.push(us(t1 - t0) / n as f64);
+                cpu.push(us(cpu1 - cpu0) / n as f64);
+            }
+        });
+    }
+    emit(
+        "encode",
+        "dispatch_handles_encode",
+        "us/dispatch",
+        &mut wall,
+    );
+    emit(
+        "encode",
+        "dispatch_handles_process_cpu",
+        "us/dispatch",
+        &mut cpu,
+    );
 }
 
 /// The resident buffers of the encode workload's `dispatch_resident` variants, of 256 bytes each.

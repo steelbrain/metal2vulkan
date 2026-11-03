@@ -96,6 +96,8 @@ pub trait Gpu: Sync {
     fn commands_id(&self, commands: &Self::IndirectCommands) -> u64;
     /// The `gpuResourceID` of `state`, made with `supportIndirectCommandBuffers`.
     fn pipeline_id(&self, state: &Self::ComputePipeline) -> u64;
+    /// The `gpuResourceID` of `texture`, as a kernel reads it from an argument buffer.
+    fn texture_id(&self, texture: &Self::Texture) -> u64;
     /// `newIndirectCommandBufferWithDescriptor:maxCommandCount:options:` of `count` concurrent
     /// dispatches of `Shared` storage that inherit nothing and bind one kernel buffer, for the
     /// CPU to encode.

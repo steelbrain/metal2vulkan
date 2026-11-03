@@ -253,6 +253,10 @@ impl Gpu for Native {
         state.gpuResourceID().to_raw()
     }
 
+    fn texture_id(&self, texture: &Self::Texture) -> u64 {
+        texture.gpuResourceID().to_raw()
+    }
+
     fn cpu_indirect_commands(&self, count: usize) -> Self::IndirectCommands {
         let descriptor = MTLIndirectCommandBufferDescriptor::new();
         descriptor.setCommandTypes(MTLIndirectCommandType::ConcurrentDispatch);

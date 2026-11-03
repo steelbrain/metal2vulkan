@@ -273,6 +273,10 @@ impl Gpu for Runtime {
         state.gpu_resource_id().0
     }
 
+    fn texture_id(&self, texture: &rt::Texture) -> u64 {
+        texture.gpu_resource_id().0
+    }
+
     fn cpu_indirect_commands(&self, count: usize) -> rt::IndirectCommandBuffer {
         let mut descriptor = rt::IndirectCommandBufferDescriptor::new();
         descriptor.command_types = IndirectCommandType::CONCURRENT_DISPATCH;
