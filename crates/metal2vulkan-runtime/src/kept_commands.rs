@@ -3,12 +3,18 @@
 //! under the same inputs, runs that recording again and records nothing of them.
 //!
 //! - **By chunk.** The buffer's commands fall into chunks of [`CHUNK`], aligned on their indices.
-//!   An execution that may keep its commands (each encoder's rules: `render/executions.rs`,
-//!   `indirect_execute.rs`) records each chunk its range covers apart, a render chunk into a
+//! - **From the second execution.** An execution that may keep its commands (each encoder's
+//!   rules: `render/executions.rs`, `indirect_execute.rs`) finds what is kept of each chunk its
+//!   range covers ([`Kept`]): a kept recording, none but an execution of the chunk before it with
+//!   no write reaching it since, or neither (the chunk's first execution since a write reached
+//!   it). An execution none of whose chunks ran before so records as one that keeps nothing does,
+//!   so a range executed once pays nothing for keeping. Every other one records each chunk its
+//!   range covers apart, a render chunk into a
 //!   secondary command buffer of the execution's render pass instance, a compute chunk into a
 //!   primary of its segment, from a pool, descriptor arena and upload arena of the chunk's own
 //!   ([`KeptContext`]), lent to the command buffer while it records the chunk and held by every
-//!   command buffer that runs the recording until it completes. A chunk whose recording is plain
+//!   command buffer that runs the recording until it completes; a chunk's first execution records
+//!   apart from the command buffer's own, and keeps nothing. A chunk whose recording is plain
 //!   (each encoder's rules: nothing of it records outside its command buffer, and nothing of it
 //!   reaches what the command buffer alone holds) is kept ([`KeptChunk`]): its command buffer,
 //!   begun for simultaneous use, the uses its commands noted, the keys they named, weak holds on
@@ -95,6 +101,7 @@ impl KeptContext {
         let device = command_buffer.device();
         let family = command_buffer.queue_family();
         let pool = command_pool(device, family)?;
+        device.shared().counts.kept_context_made();
         Ok(Arc::new(KeptContext {
             device: device.clone(),
             family,
@@ -286,61 +293,145 @@ impl KeptChunk {
     }
 }
 
-/// The kept chunks of a buffer's commands, and those whose last recording was not plain, by
-/// chunk: held under the lock every CPU write of the buffer's records takes
-/// (`IndirectCommandBuffer::kept`).
+/// What an execution that may keep its commands finds of one of its chunks (the module docs).
+pub(super) enum Kept {
+    /// Its kept recording.
+    Recording(Arc<KeptChunk>),
+    /// None, but an execution of it ran before, no write reaching it since: its recording now is
+    /// kept.
+    Again,
+    /// Its first execution since a write reached it: it records from its command buffer's own,
+    /// kept by none.
+    First,
+}
+
+/// The kept chunks of a buffer's commands, those whose last recording was not plain, and those
+/// an execution ran, by chunk: held under the lock every CPU write of the buffer's records takes
+/// (`IndirectCommandBuffer::kept`). A state a chunk, from chunk 0 to the furthest an execution
+/// looked up or noted, so a write of commands costs the chunks it covers, however many others hold
+/// a state, and nothing while none does.
 #[derive(Default)]
 pub(super) struct KeptChunks {
-    kept: BTreeMap<u32, Arc<KeptChunk>>,
-    /// The chunks an execution last recorded otherwise than plainly: an execution of them records
-    /// as one, until a write reaches one.
-    stepped: BTreeSet<u32>,
+    chunks: Vec<ChunkState>,
+    /// Whether a chunk took a state since the buffer's records were last forgotten for good.
+    any: bool,
+}
+
+/// What [`KeptChunks`] holds of one chunk.
+#[derive(Default)]
+struct ChunkState {
+    kept: Option<Arc<KeptChunk>>,
+    /// An execution last recorded it otherwise than plainly: an execution of it records as one,
+    /// until a write reaches it.
+    stepped: bool,
+    /// An execution that may keep its commands ran it since a write last reached it.
+    seen: bool,
 }
 
 impl KeptChunks {
-    /// The CPU wrote commands `range`: forget the chunks they lie in.
-    pub(super) fn wrote(&mut self, range: Range<u32>) {
-        if self.kept.is_empty() && self.stepped.is_empty() {
-            return;
+    /// The CPU wrote commands `range`: forget the chunks they lie in. How many chunks' states it
+    /// looked at: those `range` covers that hold one, none while no chunk holds a state.
+    pub(super) fn wrote(&mut self, range: Range<u32>) -> usize {
+        if !self.any {
+            return 0;
         }
-        let chunks = chunks_of(range);
-        self.kept.retain(|chunk, _| !chunks.contains(chunk));
-        self.stepped.retain(|chunk| !chunks.contains(chunk));
+        let held = self.held(chunks_of(range));
+        let looked = held.len();
+        for state in &mut self.chunks[held] {
+            *state = ChunkState::default();
+        }
+        looked
     }
 
     /// The GPU may write the records from now on: forget every chunk.
     pub(super) fn clear(&mut self) {
-        self.kept.clear();
-        self.stepped.clear();
+        self.chunks.clear();
+        self.any = false;
     }
 
-    /// The kept chunk `chunk`, if any.
-    pub(super) fn get(&self, chunk: u32) -> Option<Arc<KeptChunk>> {
-        self.kept.get(&chunk).cloned()
+    /// What an execution that may keep its commands finds of each chunk of `range`, in order,
+    /// each noted as run now.
+    pub(super) fn look_up(&mut self, range: Range<u32>) -> Vec<Kept> {
+        chunks(range)
+            .map(|(chunk, _)| {
+                let state = self.state(chunk);
+                let first = !state.seen;
+                state.seen = true;
+                match (&state.kept, first) {
+                    (Some(kept), _) => Kept::Recording(Arc::clone(kept)),
+                    (None, false) => Kept::Again,
+                    (None, true) => Kept::First,
+                }
+            })
+            .collect()
     }
 
     /// Whether an execution last recorded a chunk of `range` otherwise than plainly.
     pub(super) fn stepped_in(&self, range: Range<u32>) -> bool {
-        let chunks = chunks_of(range);
-        self.stepped.range(chunks).next().is_some()
+        let held = self.held(chunks_of(range));
+        self.chunks[held].iter().any(|state| state.stepped)
     }
 
     /// Keep `kept`, chunk `chunk`'s recording.
     pub(super) fn keep(&mut self, chunk: u32, kept: Arc<KeptChunk>) {
-        self.stepped.remove(&chunk);
-        self.kept.insert(chunk, kept);
+        let state = self.state(chunk);
+        state.stepped = false;
+        state.kept = Some(kept);
     }
 
     /// Note that chunk `chunk`'s recording was not plain.
     pub(super) fn stepped(&mut self, chunk: u32) {
-        self.kept.remove(&chunk);
-        self.stepped.insert(chunk);
+        let state = self.state(chunk);
+        state.kept = None;
+        state.stepped = true;
+    }
+
+    /// Where in the list the states of `chunks` lie that it holds.
+    fn held(&self, chunks: Range<u32>) -> Range<usize> {
+        let at = |chunk: u32| (chunk as usize).min(self.chunks.len());
+        at(chunks.start)..at(chunks.end)
+    }
+
+    /// Chunk `chunk`'s state, the list grown to hold it.
+    fn state(&mut self, chunk: u32) -> &mut ChunkState {
+        let at = chunk as usize;
+        if at >= self.chunks.len() {
+            self.chunks.resize_with(at + 1, ChunkState::default);
+        }
+        self.any = true;
+        &mut self.chunks[at]
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{chunks, chunks_of, CHUNK};
+    use super::{chunks, chunks_of, Kept, KeptChunks, CHUNK};
+
+    /// A write looks at the states of the chunks it covers alone, however many others hold one,
+    /// and at none while no chunk holds a state; it forgets those, and no other.
+    #[test]
+    fn a_write_costs_the_chunks_it_covers() {
+        let mut kept = KeptChunks::default();
+        assert_eq!(kept.wrote(0..CHUNK * 4), 0, "no state held");
+        let firsts = kept.look_up(0..CHUNK * 1000);
+        assert!(firsts.iter().all(|kept| matches!(kept, Kept::First)));
+        kept.stepped(500);
+        assert_eq!(kept.wrote(CHUNK * 7 + 5..CHUNK * 7 + 6), 1);
+        assert_eq!(kept.wrote(CHUNK * 499..CHUNK * 501), 2);
+        assert_eq!(
+            kept.wrote(CHUNK * 999..CHUNK * 2000),
+            1,
+            "past the furthest held"
+        );
+        assert!(!kept.stepped_in(CHUNK * 500..CHUNK * 501), "forgotten");
+        let again = kept.look_up(CHUNK * 6..CHUNK * 9);
+        let kinds: Vec<bool> = again.iter().map(|k| matches!(k, Kept::First)).collect();
+        assert_eq!(kinds, [false, true, false], "chunk 7 alone written");
+        kept.stepped(8);
+        assert!(kept.stepped_in(CHUNK * 8..CHUNK * 8 + 1));
+        kept.clear();
+        assert_eq!(kept.wrote(0..CHUNK * 1000), 0, "forgotten for good");
+    }
 
     #[test]
     fn chunks_cover_a_range_in_aligned_pieces() {

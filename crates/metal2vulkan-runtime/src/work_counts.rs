@@ -153,6 +153,7 @@ pub(crate) struct Counters {
     indirect_records_read: AtomicU64,
     indirect_chunks_kept: AtomicU64,
     indirect_commands_kept: AtomicU64,
+    kept_contexts_made: AtomicU64,
     gpu_form_commands: AtomicU64,
     merged_draw_commands: AtomicU64,
     gpu_pool_blocks_made: AtomicU64,
@@ -1169,6 +1170,12 @@ impl Counters {
         self.indirect_chunks_kept.fetch_add(1, Ordering::Relaxed);
         self.indirect_commands_kept
             .fetch_add(commands, Ordering::Relaxed);
+    }
+
+    /// A chunk of an indirect command buffer's commands took a context of its own to record a
+    /// recording to keep in (`kept_commands::KeptContext`).
+    pub(crate) fn kept_context_made(&self) {
+        self.kept_contexts_made.fetch_add(1, Ordering::Relaxed);
     }
 
     /// `count` commands of an execution of render commands were recorded in its GPU form
@@ -3888,6 +3895,11 @@ pub struct WorkCounts {
     pub indirect_chunks_kept: u64,
     /// The commands of those chunks, one a command each time.
     pub indirect_commands_kept: u64,
+    /// Chunks of indirect command buffers' commands recorded to keep, each in a context of its own
+    /// (a command pool, a descriptor arena and uploads, `kept_commands::KeptContext`): one each
+    /// time a chunk's second or later execution with no write reaching it since records it apart.
+    /// None for a range's first execution, which records as one that keeps nothing.
+    pub kept_contexts_made: u64,
     /// Commands of executions of render commands recorded in their GPU form, one a command each
     /// time (`render/executions/gpu.rs`): the device read their records, the host none.
     pub gpu_form_commands: u64,
@@ -5861,6 +5873,7 @@ impl Device {
             indirect_records_read: counters.indirect_records_read.load(Ordering::Relaxed),
             indirect_chunks_kept: counters.indirect_chunks_kept.load(Ordering::Relaxed),
             indirect_commands_kept: counters.indirect_commands_kept.load(Ordering::Relaxed),
+            kept_contexts_made: counters.kept_contexts_made.load(Ordering::Relaxed),
             gpu_form_commands: counters.gpu_form_commands.load(Ordering::Relaxed),
             merged_draw_commands: counters.merged_draw_commands.load(Ordering::Relaxed),
             gpu_pool_blocks_made: counters.gpu_pool_blocks_made.load(Ordering::Relaxed),

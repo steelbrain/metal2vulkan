@@ -28,9 +28,11 @@
 //! With `--kept`, the compute row also runs its encoding after executions that kept the
 //! buffer's chunks' recordings (`kept_commands.rs`), as a consumer's frame executes the buffer and
 //! then encodes it again: before each repetition, untimed, a compute encoder executes every
-//! command twice, each in a command buffer committed and waited for, the second running every
-//! chunk from the first's recordings (the printed `indirect_chunks_kept` of each second one). That
-//! mode submits work to the GPU; the rest submits nothing.
+//! command three times, each in a command buffer committed and waited for. The first records as
+//! one that keeps nothing (a range's first execution since a write keeps nothing), the second
+//! records every chunk to keep, and the third runs every chunk from those recordings (the printed
+//! `indirect_chunks_kept` of each third one). That mode submits work to the GPU; the rest submits
+//! nothing.
 //!
 //! The pipeline states are the owned fixture's (`runtime_examples.ll`'s `colored_vertex`,
 //! `colored_fragment` and `scale_and_offset`), assembled by `llvm-as` from `PATH` or
@@ -331,8 +333,10 @@ fn compute(device: &Device, repetitions: usize, (calls, kept): (bool, bool)) -> 
     if kept {
         let queue = device.new_command_queue()?;
         let chunks = std::cell::RefCell::new(Vec::new());
-        // Twice: the second execution runs every chunk from the first's kept recordings.
+        // Three times: the first keeps nothing, the second records every chunk to keep, and the
+        // third runs every chunk from those recordings.
         let prepare = || {
+            execute(&queue, &icb, &buffers);
             execute(&queue, &icb, &buffers);
             let before = device.work_counts().indirect_chunks_kept;
             execute(&queue, &icb, &buffers);
@@ -358,7 +362,7 @@ fn compute(device: &Device, repetitions: usize, (calls, kept): (bool, bool)) -> 
         }
         let mut chunks = chunks.into_inner();
         chunks.dedup();
-        println!("  (chunks each second execution ran from kept recordings: {chunks:?})");
+        println!("  (chunks each third execution ran from kept recordings: {chunks:?})");
     }
     if !calls {
         return Ok(());

@@ -71,7 +71,7 @@ use super::device::lock;
 use super::error::{internal, invalid, Error, MemoryKind, Problem, RuntimeGap};
 use super::families::GpuFamily;
 use super::indirect_execute::Unforeseen;
-use super::kept_commands::{self, KeptChunk, KeptChunks};
+use super::kept_commands::{Kept, KeptChunk, KeptChunks};
 use super::memory::MemoryClass;
 use super::pipeline::{
     ComputePipelineState, ComputeProgram, RenderPipelineState, RenderProgram, RenderStateKind,
@@ -2514,19 +2514,21 @@ impl IndirectCommandBuffer {
         Ok(range.start as u32..range.end as u32)
     }
 
-    /// The kept recordings of the chunks of commands `range` (inside the size), in order, `None`
-    /// for a chunk none is kept of (`kept_commands.rs`); whether an execution last recorded one of
-    /// them otherwise than plainly; and the CPU's writes so far ([`cpu_writes`](Self::cpu_writes)),
-    /// read under the same lock.
-    pub(super) fn kept_chunks(
-        &self,
-        range: Range<u32>,
-    ) -> (Vec<Option<Arc<KeptChunk>>>, bool, u64) {
-        let commands = lock(&self.0.pipelines);
-        let kept = kept_commands::chunks(range.clone())
-            .map(|(chunk, _)| commands.kept.get(chunk))
-            .collect();
-        (kept, commands.kept.stepped_in(range), self.cpu_writes())
+    /// What is kept of each chunk of commands `range` (inside the size), in order, each noted as
+    /// run now (`kept_commands.rs`), and the CPU's writes so far
+    /// ([`cpu_writes`](Self::cpu_writes)), read under the same lock; `None` where the execution
+    /// records as one that keeps nothing: an execution last recorded one of them otherwise than
+    /// plainly, or none of them ran before since a write last reached it.
+    pub(super) fn kept_chunks(&self, range: Range<u32>) -> Option<(Vec<Kept>, u64)> {
+        let mut commands = lock(&self.0.pipelines);
+        if commands.kept.stepped_in(range.clone()) {
+            return None;
+        }
+        let kept = commands.kept.look_up(range);
+        if kept.iter().all(|kept| matches!(kept, Kept::First)) {
+            return None;
+        }
+        Some((kept, self.cpu_writes()))
     }
 
     /// Keep `kept`, the recording of chunk `chunk` from its records as the CPU's writes `read_at`

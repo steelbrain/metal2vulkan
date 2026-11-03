@@ -6,9 +6,10 @@
 //! target, so every command's draw is a pixel of its own. They draw as Metal's draws of the
 //! commands do, and:
 //!
-//! - an execution of commands no write reached since an earlier one recorded them runs that
-//!   recording again, chunk by chunk, reading no record: in another command buffer, into another
-//!   target, and twice in one pass;
+//! - a range's first execution keeps nothing, and its second records each chunk to keep;
+//! - an execution of commands no write reached since an earlier one recorded them to keep runs
+//!   that recording again, chunk by chunk, reading no record: in another command buffer, into
+//!   another target, and twice in one pass;
 //! - a command encoded again or reset records its chunk again, and only it;
 //! - a write of the GPU's (a blit's reset) runs no kept recording;
 //! - another set of resident resources, or another range, records its chunks again.
@@ -187,9 +188,9 @@ fn drawn(drawn: impl IntoIterator<Item = u64>, vertex: impl Fn(u64) -> u64) -> V
     out
 }
 
-/// Across `run`: the records the host read, the chunks run from kept recordings and the commands
-/// those held.
-fn counted(device: &Device, run: impl FnOnce()) -> [u64; 3] {
+/// Across `run`: the records the host read, the chunks run from kept recordings, the commands
+/// those held, and the chunks recorded to keep, each in a context of its own.
+fn counted(device: &Device, run: impl FnOnce()) -> [u64; 4] {
     let before = device.work_counts();
     run();
     let after = device.work_counts();
@@ -197,11 +198,14 @@ fn counted(device: &Device, run: impl FnOnce()) -> [u64; 3] {
         after.indirect_records_read - before.indirect_records_read,
         after.indirect_chunks_kept - before.indirect_chunks_kept,
         after.indirect_commands_kept - before.indirect_commands_kept,
+        after.kept_contexts_made - before.kept_contexts_made,
     ]
 }
 
-/// An execution of commands no write reached since one recorded them runs that recording again,
-/// reading no record: in another command buffer, into another target, and twice in one pass.
+/// A range's first execution reads every record and keeps nothing; its second records each
+/// chunk to keep; and an execution of commands no write reached since one recorded them to keep
+/// runs that recording again, reading no record: in another command buffer, into another target,
+/// and twice in one pass.
 #[test]
 fn unchanged_commands_run_their_kept_recordings() {
     on_device(|device, _| {
@@ -210,21 +214,29 @@ fn unchanged_commands_run_their_kept_recordings() {
         let (a, b) = (Scene::target(device), Scene::target(device));
         let all = drawn(0..N, |c| c);
         let first = counted(device, || scene.run(&a, &icb, (0..N, 1), None));
-        assert_eq!(first, [N, 0, 0], "the first execution reads every record");
+        assert_eq!(first, [N, 0, 0, 0], "the first execution keeps nothing");
+        assert_eq!(pixels(&a), all);
+        let second = counted(device, || scene.run(&a, &icb, (0..N, 1), None));
+        assert_eq!(
+            second,
+            [N, 0, 0, 3],
+            "the second records three chunks to keep"
+        );
         assert_eq!(pixels(&a), all);
         let again = counted(device, || scene.run(&a, &icb, (0..N, 1), None));
-        assert_eq!(again, [0, 3, N], "three chunks kept");
+        assert_eq!(again, [0, 3, N, 0], "three chunks kept");
         assert_eq!(pixels(&a), all);
         let other = counted(device, || scene.run(&b, &icb, (0..N, 1), None));
-        assert_eq!(other, [0, 3, N], "kept into another target");
+        assert_eq!(other, [0, 3, N, 0], "kept into another target");
         assert_eq!(pixels(&b), all);
         let twice = counted(device, || scene.run(&a, &icb, (0..N, 2), None));
-        assert_eq!(twice, [0, 6, 2 * N], "kept twice in one pass");
+        assert_eq!(twice, [0, 6, 2 * N, 0], "kept twice in one pass");
         assert_eq!(pixels(&a), all);
     });
 }
 
-/// A command encoded again, or reset, records its chunk again, and only it; the next execution
+/// A command encoded again, or reset, records its chunk again, and only it, keeping nothing of
+/// it at that first execution since the write; the next records it to keep, and the one after
 /// runs every chunk's kept recording again.
 #[test]
 fn a_command_written_again_records_its_chunk_alone() {
@@ -233,20 +245,25 @@ fn a_command_written_again_records_its_chunk_alone() {
         let icb = scene.icb(device);
         let target = Scene::target(device);
         scene.run(&target, &icb, (0..N, 1), None);
+        scene.run(&target, &icb, (0..N, 1), None);
         // Command 300 draws vertex 1000 now; command 520 is reset, and draws nothing.
         scene.write(&icb, 300, 1000);
         icb.reset_with_range(520..521).unwrap();
         let vertex = |c| if c == 300 { 1000 } else { c };
         let expected = drawn((0..N).filter(|&c| c != 520), vertex);
         let written = counted(device, || scene.run(&target, &icb, (0..N, 1), None));
+        let recorded = 256 + (N - 512);
         assert_eq!(
             written,
-            [256 + (N - 512), 1, 256],
+            [recorded, 1, 256, 0],
             "chunks 1 and 2 recorded again"
         );
         assert_eq!(pixels(&target), expected);
-        let again = counted(device, || scene.run(&target, &icb, (0..N, 1), None));
-        assert_eq!(again, [0, 3, N]);
+        let kept = counted(device, || scene.run(&target, &icb, (0..N, 1), None));
+        assert_eq!(kept, [recorded, 1, 256, 2], "and recorded to keep");
+        assert_eq!(pixels(&target), expected);
+        let kept = counted(device, || scene.run(&target, &icb, (0..N, 1), None));
+        assert_eq!(kept, [0, 3, N, 0]);
         assert_eq!(pixels(&target), expected);
     });
 }
@@ -266,7 +283,7 @@ fn a_gpu_write_runs_no_kept_recording() {
         blit.reset_commands_in_buffer(&icb, 200..550).unwrap();
         blit.end_encoding().unwrap();
         complete(&command_buffer);
-        let [_, chunks, _] = counted(device, || scene.run(&target, &icb, (0..N, 1), None));
+        let [_, chunks, ..] = counted(device, || scene.run(&target, &icb, (0..N, 1), None));
         assert_eq!(chunks, 0, "no chunk kept after the GPU's write");
         let expected = drawn((0..200).chain(550..N), |c| c);
         assert_eq!(pixels(&target), expected);
@@ -284,26 +301,27 @@ fn another_residency_or_range_records_its_chunks_again() {
         let extra = buffer_with(device, &[0; 16]).unwrap();
         let all = drawn(0..N, |c| c);
         scene.run(&target, &icb, (0..N, 1), None);
+        scene.run(&target, &icb, (0..N, 1), None);
         let resident = counted(device, || scene.run(&target, &icb, (0..N, 1), Some(&extra)));
-        assert_eq!(resident, [N, 0, 0], "another residency records again");
+        assert_eq!(resident, [N, 0, 0, 3], "another residency records again");
         assert_eq!(pixels(&target), all);
         let again = counted(device, || scene.run(&target, &icb, (0..N, 1), Some(&extra)));
-        assert_eq!(again, [0, 3, N]);
+        assert_eq!(again, [0, 3, N, 0]);
         assert_eq!(pixels(&target), all);
         // Commands 100..400: chunk 0 from 100, and chunk 1 to 400, both recorded again.
         let part = counted(device, || {
             scene.run(&target, &icb, (100..400, 1), Some(&extra))
         });
-        assert_eq!(part, [300, 0, 0], "another range records again");
+        assert_eq!(part, [300, 0, 0, 2], "another range records again");
         assert_eq!(pixels(&target), drawn(100..400, |c| c));
         let part = counted(device, || {
             scene.run(&target, &icb, (100..400, 1), Some(&extra))
         });
-        assert_eq!(part, [0, 2, 300]);
+        assert_eq!(part, [0, 2, 300, 0]);
         assert_eq!(pixels(&target), drawn(100..400, |c| c));
         // The whole range again: chunk 2 kept from the first executions.
         let whole = counted(device, || scene.run(&target, &icb, (0..N, 1), Some(&extra)));
-        assert_eq!(whole, [512, 1, N - 512]);
+        assert_eq!(whole, [512, 1, N - 512, 2]);
         assert_eq!(pixels(&target), all);
     });
 }
@@ -416,9 +434,10 @@ fn dispatched(ran: impl IntoIterator<Item = u64>, params: impl Fn(u64) -> u64) -
     out
 }
 
-/// Compute commands no write reached since an execution recorded them run that recording again,
-/// reading no record; a command encoded again records its chunk again, and only it; and after a
-/// blit's reset of commands, no kept recording runs.
+/// Compute commands keep nothing at their range's first execution, record each chunk to keep at
+/// its second, and run that recording again from then on while no write reaches them, reading no
+/// record; a command encoded again records its chunk again, and only it, keeping it from the
+/// execution after; and after a blit's reset of commands, no kept recording runs.
 #[test]
 fn compute_commands_run_their_kept_recordings_until_written() {
     on_device(|device, _| {
@@ -426,26 +445,36 @@ fn compute_commands_run_their_kept_recordings_until_written() {
         let icb = work.icb(device);
         let all = dispatched(0..N, |c| c);
         let first = counted(device, || work.run(&icb, 0..N));
-        assert_eq!(first, [N, 0, 0], "the first execution reads every record");
+        assert_eq!(first, [N, 0, 0, 0], "the first execution keeps nothing");
+        assert_eq!(work.out(), all);
+        let second = counted(device, || work.run(&icb, 0..N));
+        assert_eq!(
+            second,
+            [N, 0, 0, 3],
+            "the second records three chunks to keep"
+        );
         assert_eq!(work.out(), all);
         let again = counted(device, || work.run(&icb, 0..N));
-        assert_eq!(again, [0, 3, N], "three chunks kept");
+        assert_eq!(again, [0, 3, N, 0], "three chunks kept");
         assert_eq!(work.out(), all);
         // Command 300 takes command 7's parameters now.
         work.write(&icb, 300, 7);
         let params = |c| if c == 300 { 7 } else { c };
         let written = counted(device, || work.run(&icb, 0..N));
-        assert_eq!(written, [256, 2, N - 256], "chunk 1 recorded again");
+        assert_eq!(written, [256, 2, N - 256, 0], "chunk 1 recorded again");
+        assert_eq!(work.out(), dispatched(0..N, params));
+        let kept = counted(device, || work.run(&icb, 0..N));
+        assert_eq!(kept, [256, 2, N - 256, 1], "and recorded to keep");
         assert_eq!(work.out(), dispatched(0..N, params));
         let again = counted(device, || work.run(&icb, 0..N));
-        assert_eq!(again, [0, 3, N]);
+        assert_eq!(again, [0, 3, N, 0]);
         assert_eq!(work.out(), dispatched(0..N, params));
         let command_buffer = work.queue.command_buffer().unwrap();
         let mut blit = command_buffer.blit_command_encoder().unwrap();
         blit.reset_commands_in_buffer(&icb, 200..550).unwrap();
         blit.end_encoding().unwrap();
         complete(&command_buffer);
-        let [_, chunks, _] = counted(device, || work.run(&icb, 0..N));
+        let [_, chunks, ..] = counted(device, || work.run(&icb, 0..N));
         assert_eq!(chunks, 0, "no chunk kept after the GPU's write");
         assert_eq!(work.out(), dispatched((0..200).chain(550..N), params));
     });

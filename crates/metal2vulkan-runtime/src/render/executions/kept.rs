@@ -10,7 +10,9 @@
 //!   write before the fragments and no indirect read of the encoder's draws before the call, no
 //!   fragment write of the pass noted before it, no inherited table that binds anything, in a
 //!   command buffer with no executed-commands handler that is not encoded again after its commit;
-//!   and no chunk of its range last recorded otherwise than plainly.
+//!   no chunk of its range last recorded otherwise than plainly; and a chunk of its range run
+//!   before, no write reaching it since (`kept_commands.rs`, **From the second execution**): a
+//!   range's first execution records as one that keeps nothing.
 //! - **The key.** A chunk is recorded from its records and from the inputs [`RenderKey`] holds:
 //!   the inherited pipeline state, the instance's compatible pass and shape, the pass's extent,
 //!   layers, samples and sample positions, the attachments that are among the resources made
@@ -20,13 +22,15 @@
 //! - **Each chunk** runs its kept recording again, or records apart: its draws into a secondary of
 //!   its own, begun against the instance's compatible pass, through an encoder of the call's
 //!   state over a core of its own (`EncoderCore::capture`), which the pass's core then takes
-//!   (`EncoderCore::absorb`). Its draws are plain where each one is (`RenderLowering::replay_plain`)
-//!   and they left the pass's storage and layout as they found them in one run: such a chunk's
-//!   secondary joins the others in the execution's first run, and is kept where its recording
-//!   did nothing a later command buffer cannot do again (`Captured::plain`) and reached nothing
-//!   its command buffer alone holds (`CommandBuffer::own_reached`). Plain draws write no memory,
-//!   so no draw of a later chunk depends on them but through the attachments, which the chunks'
-//!   order in their subpass keeps.
+//!   (`EncoderCore::absorb`); from a context of its own where an execution ran it before, no
+//!   write reaching it since, else from its command buffer's own, kept by none. Its draws are
+//!   plain where each one is (`RenderLowering::replay_plain`) and they left the pass's storage
+//!   and layout as they found them in one run: such a chunk's secondary joins the others in the
+//!   execution's first run, and is kept where it was recorded from a context of its own, its
+//!   recording did nothing a later command buffer cannot do again (`Captured::plain`) and it
+//!   reached nothing its command buffer alone holds (`CommandBuffer::own_reached`). Plain draws
+//!   write no memory, so no draw of a later chunk depends on them but through the attachments,
+//!   which the chunks' order in their subpass keeps.
 //! - **A chunk that is not plain** is no more apart: its encoder records the rest of the range
 //!   too, as the execution's would, its runs after the plain chunks' (its first sharing their
 //!   run, as an execution's first run shares its instance with the encoder's draws before the
@@ -42,7 +46,7 @@ use crate::command_buffer::CommandBuffer;
 use crate::encoder::EncoderCore;
 use crate::error::{internal, vulkan, Error};
 use crate::indirect_command_buffer::Reader;
-use crate::kept_commands::{self, KeptChunk, KeptContext, KeptEffects, Resolution};
+use crate::kept_commands::{self, Kept, KeptChunk, KeptContext, KeptEffects, Resolution};
 use crate::pipeline::{BufferForms, RenderPipelineState};
 use crate::render::{memoryless, RenderLowering};
 use crate::render_pass::PassLayout;
@@ -100,11 +104,11 @@ impl PartialEq for RenderKey {
     }
 }
 
-/// An execution that keeps its commands (the module docs): its key, its range's kept chunks in
-/// order, and the CPU's writes of the buffer as they were looked up.
+/// An execution that keeps its commands (the module docs): its key, what is kept of its range's
+/// chunks in order, and the CPU's writes of the buffer as they were looked up.
 pub(super) struct Keeping {
     key: RenderKey,
-    kept: Vec<Option<Arc<KeptChunk>>>,
+    kept: Vec<Kept>,
     read_at: u64,
 }
 
@@ -174,10 +178,7 @@ impl RenderExecution {
         if !keeps {
             return None;
         }
-        let (kept, stepped, read_at) = self.icb.kept_chunks(range.clone());
-        if stepped {
-            return None;
-        }
+        let (kept, read_at) = self.icb.kept_chunks(range.clone())?;
         let resident = residency.kept_key();
         // An attachment is among them as a texture made resident, or in a heap or over a buffer
         // made resident.
@@ -232,6 +233,11 @@ impl RenderExecution {
         let mut draws = Vec::new();
         let mut rest = None;
         for ((chunk, covered), kept) in kept_commands::chunks(range.clone()).zip(kept) {
+            let (kept, keeps) = match kept {
+                Kept::Recording(kept) => (Some(kept), true),
+                Kept::Again => (None, true),
+                Kept::First => (None, false),
+            };
             let again = kept.and_then(|kept| {
                 let held = kept.runs_again(command_buffer, (&key, &covered), residency)?;
                 Some((kept, held))
@@ -248,10 +254,16 @@ impl RenderExecution {
                 core.retain_shared(kept);
                 continue;
             }
-            let context = KeptContext::new(command_buffer)?;
-            core.retain_shared(Arc::clone(&context) as _);
+            // A chunk's first execution records from its command buffer's own.
+            let context = match keeps {
+                true => Some(KeptContext::new(command_buffer)?),
+                false => None,
+            };
+            if let Some(context) = &context {
+                core.retain_shared(Arc::clone(context) as _);
+                command_buffer.lend_kept(Some(context));
+            }
             let reached = command_buffer.own_reached();
-            command_buffer.lend_kept(Some(&context));
             let mut chunk_found = Found::default();
             let apart = self.record_apart(
                 (command_buffer, residency),
@@ -259,7 +271,9 @@ impl RenderExecution {
                 (&storage, &layout),
                 &mut chunk_found,
             );
-            command_buffer.lend_kept(None);
+            if context.is_some() {
+                command_buffer.lend_kept(None);
+            }
             let Apart {
                 encoder,
                 resolved,
@@ -280,7 +294,7 @@ impl RenderExecution {
             let captured = capture.finish_capture()?;
             let held = captured.retained.all_shared();
             let keeps = captured.plain() && !released && command_buffer.own_reached() == reached;
-            if let (true, Some(held)) = (keeps, held) {
+            if let (true, Some(held), Some(context)) = (keeps, held, context) {
                 let effects = KeptEffects::new(
                     captured.summary.clone(),
                     (captured.keys.clone(), captured.taken.named().clone()),

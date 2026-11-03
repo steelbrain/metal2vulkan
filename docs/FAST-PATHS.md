@@ -969,8 +969,11 @@ else.
   where it runs no kept recording** (`kept_commands.rs`). An execution of commands the CPU encoded
   runs each 256-command chunk that no write reached since an earlier execution recorded it, under
   the same inputs, from that recording, reading no record (`WorkCounts::indirect_chunks_kept`,
-  `indirect_commands_kept`). Every other execution reads and records each of its commands at each
-  commit: one of a buffer the GPU may write (from its first `use_resource` for writing or blit
+  `indirect_commands_kept`). A chunk is recorded to keep from its second execution with no write
+  reaching it since (`WorkCounts::kept_contexts_made`); a range's first execution, and one every
+  chunk of which a write reached since, records as one that keeps nothing, so a range executed
+  once pays nothing for keeping. Every other execution reads and records each of its commands at
+  each commit: one of a buffer the GPU may write (from its first `use_resource` for writing or blit
   into it on), one of a buffer of mesh or patch draws alone (neither `DRAW` nor `DRAW_INDEXED`
   among its command types), a host step, a range read from a buffer, one with a check, a
   visibility result, tile threadgroup memory, a rasterization-rate map, a memoryless attachment, a

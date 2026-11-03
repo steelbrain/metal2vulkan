@@ -2760,6 +2760,7 @@ field	metal2vulkan-runtime::WorkCounts.internal_submissions	pub internal_submiss
 field	metal2vulkan-runtime::WorkCounts.joins_withheld_from_unshared	pub joins_withheld_from_unshared: u64
 field	metal2vulkan-runtime::WorkCounts.kept_backings_made	pub kept_backings_made: u64
 field	metal2vulkan-runtime::WorkCounts.kept_bytes_passes	pub kept_bytes_passes: u64
+field	metal2vulkan-runtime::WorkCounts.kept_contexts_made	pub kept_contexts_made: u64
 field	metal2vulkan-runtime::WorkCounts.line_band_draws	pub line_band_draws: u64
 field	metal2vulkan-runtime::WorkCounts.linear_merge_scratches_made	pub linear_merge_scratches_made: u64
 field	metal2vulkan-runtime::WorkCounts.linear_merge_scratches_reused	pub linear_merge_scratches_reused: u64
