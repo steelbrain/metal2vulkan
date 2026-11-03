@@ -1066,6 +1066,12 @@ const DFL_DENORMAL_ROWS: &[usize] = &[0, 1, 2, 3, 4, 5, 10, 11, 12, 13, 14, 15];
 /// device's roots' rounding, not their denormals.
 const DFL_ROOT_ROWS: &[usize] = &[8, 9];
 
+/// The `fmin(a, b) * c` row of a [`DFL_DENORMAL_CASES`] thread: where the stage records
+/// `PrecisionNote::NativeMinMax` (its `fmin` the device's `NMin`), a lane whose minimum picks
+/// between `+0` and `-0` (or two denormals the device flushes) answers either zero, its product a
+/// zero of either sign, as the note's bound states; Metal answers the second operand.
+const DFL_MIN_ROW: usize = 14;
+
 /// The owned `half` edge fixtures (`dfl_half_edge`, `dfl_half_edge_fast`): 64 threads of 16 words,
 /// every word a `half` pair rounded at the edge of the `half` range or among its denormals.
 const DFL_HALF_EDGE_CASES: [&str; 2] = [
@@ -1085,8 +1091,10 @@ const DFL_TRIG_OPERAND: usize = 11;
 /// The owned fixtures answer Metal: in the denormal cases every lane of [`DFL_DENORMAL_ROWS`] and
 /// the special lanes of [`DFL_ROOT_ROWS`] where the profile takes
 /// `DriverDeviation::MetalFloatDenormals` (elsewhere a denormal is the device's own, and the test
-/// prints how many words differ), the kernels requiring `VkProperty::MetalFloatDenormals` exactly
-/// where the profile takes the deviation; in the `half`
+/// prints how many words differ), but a minimum's zero of either sign in [`DFL_MIN_ROW`] where the
+/// stage records `PrecisionNote::NativeMinMax`, which the runtime then announces, the kernels
+/// requiring `VkProperty::MetalFloatDenormals` exactly where the profile takes the deviation; in
+/// the `half`
 /// edge cases every word where the kernel rounds as Metal does (under the float controls), the
 /// device's words printed where it rounds by its own form (its conversion, or its quantize);
 /// and in [`DFL_TRIG_CASE`] every word whose Metal answer is a NaN (the functions' other words are
@@ -1124,19 +1132,28 @@ fn owned_float_fixtures_answer_metal() {
                 "{case_name} on {name}: the kernel leaves its denormals to the device exactly \
                  where the profile takes the deviation"
             );
+            // The minimum's pick of `+0` and `-0` (of two denormals flushed, too) is either zero
+            // where the stage's `fmin` is the device's `NMin` (`PrecisionNote::NativeMinMax`).
+            let native_min = case_notes(&device, &case).contains(&PrecisionNote::NativeMinMax);
             let run = run_case(&device, &case).unwrap();
             let metal = metal_row(&case, METAL_ENVIRONMENT);
             assert_eq!(run.output.len(), metal.len(), "{case_name} on {name}");
-            let (mut checked, mut differ, mut nans) = (0, Vec::new(), 0);
+            let (mut checked, mut differ, mut nans, mut zeros) = (0, Vec::new(), 0, 0);
             let mut others = std::collections::BTreeMap::<usize, usize>::new();
             for i in 0..metal.len() / 4 {
                 let row = i % 64 / 4;
                 let (got, want) = (word(&run.output, i), word(&metal, i));
                 let check = DFL_DENORMAL_ROWS.contains(&row)
                     || (DFL_ROOT_ROWS.contains(&row) && special(want));
+                let zero = |w: u32| w & 0x7FFF_FFFF == 0;
                 if check {
                     checked += 1;
-                    if !float_word_holds(got, want, canonical) {
+                    if row == DFL_MIN_ROW && zero(got) && zero(want) && got != want {
+                        zeros += 1;
+                        if !native_min {
+                            differ.push((i / 64, i % 64, got, want));
+                        }
+                    } else if !float_word_holds(got, want, canonical) {
                         differ.push((i / 64, i % 64, got, want));
                     } else if got != want {
                         nans += 1;
@@ -1146,11 +1163,15 @@ fn owned_float_fixtures_answer_metal() {
                 }
             }
             eprintln!(
-                "owned float denormals {case_name} on {name} (the device's: {denormals}): {} of \
-                 {checked} checked words differ from Metal, {nans} more NaNs of the device's \
-                 bits; other words differing, by row: {others:?}",
+                "owned float denormals {case_name} on {name} (the device's: {denormals}; the \
+                 device's minimum: {native_min}): {} of {checked} checked words differ from \
+                 Metal, {nans} more NaNs of the device's bits, {zeros} minimums' zeros of the \
+                 other sign; other words differing, by row: {others:?}",
                 differ.len()
             );
+            if zeros > 0 && native_min {
+                announces.push((case_name, PrecisionNote::NativeMinMax));
+            }
             if denormals && !differ.is_empty() {
                 failures.push(format!(
                     "{case_name} on {name}: {} words differ from Metal (thread, word, device, \
