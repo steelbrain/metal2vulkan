@@ -1037,13 +1037,15 @@ impl ArgumentTable {
         stage: Stage,
         interface: &PipelineInterface,
     ) -> Result<(), Error> {
-        for (slot, slot_interface) in &interface.slots {
+        // No slot is refused where the table binds no visible-function table and no offset made
+        // one null: the check below holds for each slot.
+        if self.function_tables.is_empty() && self.null_tables.is_empty() {
+            return Ok(());
+        }
+        for (slot, slot_interface) in interface.slots.range(buffer_slots(stage)) {
             let SlotInterface::Buffer(buffer) = slot_interface else {
                 continue;
             };
-            if slot.stage != stage || slot.class != SlotClass::Buffer {
-                continue;
-            }
             let index = slot.index;
             let table = self.function_tables.contains_key(&index);
             let unmeasured = match buffer.kind {
@@ -1072,10 +1074,11 @@ impl ArgumentTable {
         stage: Stage,
         interface: &PipelineInterface,
     ) -> Result<(), Error> {
-        for slot in interface.slots.keys() {
-            if slot.stage != stage || slot.class != SlotClass::Buffer {
-                continue;
-            }
+        for slot in interface
+            .slots
+            .range(buffer_slots(stage))
+            .map(|(slot, _)| slot)
+        {
             if let Some((buffer, offset)) = self.buffers.get(&slot.index) {
                 let (offset, length) = (*offset, buffer.length());
                 if offset > length {
@@ -1627,6 +1630,17 @@ fn retain_into(
     if taken > 0 {
         core.device().shared().counts.argument_table_retained(taken);
     }
+}
+
+/// The buffer slots of `stage`, every index, as an interface's slots order them (by stage, class
+/// and index).
+fn buffer_slots(stage: Stage) -> std::ops::RangeInclusive<SlotRef> {
+    let slot = |index| SlotRef {
+        stage,
+        class: SlotClass::Buffer,
+        index,
+    };
+    slot(0)..=slot(u32::MAX)
 }
 
 /// The `count` indices from `first`, as many as lie below `u32::MAX`.
