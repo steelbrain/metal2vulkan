@@ -235,6 +235,7 @@ pub(crate) struct Counters {
     dispatch_shapes_found: AtomicU64,
     dispatch_used_resources_listed: AtomicU64,
     resident_textures_looked_at: AtomicU64,
+    heap_tables_worked_out: AtomicU64,
     argument_samplers_taken: AtomicU64,
     bind_views_worked_out: AtomicU64,
     stage_tables_read: AtomicU64,
@@ -1691,6 +1692,12 @@ impl Counters {
     pub(crate) fn resident_textures_looked_at(&self) {
         self.resident_textures_looked_at
             .fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// A command's pipeline layout was read for the device's texture and sampler tables it binds
+    /// (`heap_sets::HeapTables`, `texture_table`, `sampler_table`).
+    pub(crate) fn heap_tables_worked_out(&self) {
+        self.heap_tables_worked_out.fetch_add(1, Ordering::Relaxed);
     }
 
     /// A draw took the device's live sampler states to list (`sampler::ArgumentSamplers`).
@@ -4232,6 +4239,11 @@ pub struct WorkCounts {
     /// texture handles after each change of what it made resident. None for a dispatch after which
     /// neither changed, however many textures it made resident.
     pub resident_textures_looked_at: u64,
+    /// Reads of a pipeline layout for the device's texture and sampler tables its commands bind
+    /// (`heap_sets.rs`): one per variant for compute dispatches, at its first (`HeapTables`); one
+    /// per table looked for at each draw and tile dispatch (`heap_sets::texture_table`,
+    /// `sampler_table`).
+    pub heap_tables_worked_out: u64,
     /// Draws (and commands of other encoders that settle as draws do) that took the device's
     /// live sampler states to list as their argument samplers: none for a draw whose kept bind
     /// state lists them at the count of their slots' changes that still holds, whose variant has
@@ -5626,6 +5638,7 @@ impl Device {
                 .load(Ordering::Relaxed),
             resident_textures_looked_at: (counters.resident_textures_looked_at)
                 .load(Ordering::Relaxed),
+            heap_tables_worked_out: counters.heap_tables_worked_out.load(Ordering::Relaxed),
             argument_samplers_taken: counters.argument_samplers_taken.load(Ordering::Relaxed),
             bind_views_worked_out: counters.bind_views_worked_out.load(Ordering::Relaxed),
             stage_tables_read: counters.stage_tables_read.load(Ordering::Relaxed),

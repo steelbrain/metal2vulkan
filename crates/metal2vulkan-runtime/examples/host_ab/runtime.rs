@@ -1740,6 +1740,7 @@ impl Gpu for Runtime {
                 c.dispatch_used_resources_listed,
             ),
             ("resident_textures_looked_at", c.resident_textures_looked_at),
+            ("heap_tables_worked_out", c.heap_tables_worked_out),
             ("argument_samplers_taken", c.argument_samplers_taken),
             ("bind_views_worked_out", c.bind_views_worked_out),
             ("stage_tables_read", c.stage_tables_read),

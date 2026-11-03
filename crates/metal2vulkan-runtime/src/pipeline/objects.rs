@@ -27,7 +27,7 @@ use crate::device::{lock, shared_draw_lock, DeviceShared};
 use crate::error::{internal, vulkan, Error};
 use crate::exit_guard;
 use crate::generated_commands::INDIRECT_BINDABLE;
-use crate::heap_sets::{self, HeapSet};
+use crate::heap_sets::{self, HeapSet, HeapTables};
 use crate::release;
 use crate::shader_cache::driver::Making;
 use crate::ycbcr_device::YCbCrSampler;
@@ -37,7 +37,7 @@ use metal2vulkan::bind::{DispatchRegion, DynamicViewsModule};
 use metal2vulkan::cache::{Hash256, SpecializationKey};
 use metal2vulkan::error::{Feature, RuntimeDriverDefect, Unsupported};
 use metal2vulkan::pipeline::{
-    DescriptorSetLayout, PipelineLayout, RenderPipeline, SlotRef, StageModule,
+    DescriptorSetLayout, PipelineLayout, RenderPipeline, RuntimeDependency, SlotRef, StageModule,
 };
 use std::ffi::CString;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -437,6 +437,9 @@ pub(crate) struct VariantObjects {
     /// The device's heap set of that layout, from the variant's first command that binds it
     /// (`heap_sets.rs`).
     heap: Mutex<Option<Arc<HeapSet>>>,
+    /// What its layout binds of the device's texture and sampler tables, from its first command
+    /// ([`heap_tables`](Self::heap_tables)).
+    heap_tables: OnceLock<HeapTables>,
     /// The variant instance its objects are, where its last release keeps them for a variant of
     /// the same compiled pipeline made again (`kept.rs`); `None` destroys them.
     keep: Option<Instance>,
@@ -649,6 +652,7 @@ impl VariantObjects {
                 .collect(),
             heap_layout: layout.sets.get(1).cloned(),
             heap: Mutex::new(None),
+            heap_tables: OnceLock::new(),
             kinds: Kinds::of(stages, pipeline, understates_support(device)),
             tested: tested_slots_of(stages),
             bound: Mutex::new(None),
@@ -736,6 +740,7 @@ impl VariantObjects {
                 .collect(),
             heap_layout: layout.sets.get(1).cloned(),
             heap: Mutex::new(None),
+            heap_tables: OnceLock::new(),
             kinds: Kinds::of(stages, pipeline, understates_support(device)),
             tested: tested_slots_of(stages),
             bound: Mutex::new(None),
@@ -910,6 +915,17 @@ impl VariantObjects {
             }
             _ => Ok(None),
         }
+    }
+
+    /// What its layout, `layout`, of a pipeline stating `dependencies` (the caller's: those of
+    /// the compiled pipeline it is the objects of), binds of the device's tables, worked out at
+    /// its first command (`heap_sets::HeapTables`).
+    pub(crate) fn heap_tables(
+        &self,
+        layout: &PipelineLayout,
+        dependencies: &[RuntimeDependency],
+    ) -> &HeapTables {
+        (self.heap_tables).get_or_init(|| HeapTables::of(&self.device, layout, dependencies))
     }
 
     /// The device's heap set of the layout's set 1 (`heap_sets.rs`), which the variant holds

@@ -2663,6 +2663,7 @@ field	metal2vulkan-runtime::WorkCounts.heap_sample_move_images_lent	pub heap_sam
 field	metal2vulkan-runtime::WorkCounts.heap_sample_move_images_made	pub heap_sample_move_images_made: u64
 field	metal2vulkan-runtime::WorkCounts.heap_slot_writes_deferred	pub heap_slot_writes_deferred: u64
 field	metal2vulkan-runtime::WorkCounts.heap_slots_rewritten	pub heap_slots_rewritten: u64
+field	metal2vulkan-runtime::WorkCounts.heap_tables_worked_out	pub heap_tables_worked_out: u64
 field	metal2vulkan-runtime::WorkCounts.heap_texture_block_compressed_layouts	pub heap_texture_block_compressed_layouts: u64
 field	metal2vulkan-runtime::WorkCounts.heap_texture_lossless_layouts	pub heap_texture_lossless_layouts: u64
 field	metal2vulkan-runtime::WorkCounts.heap_texture_untiled_layouts	pub heap_texture_untiled_layouts: u64

@@ -95,9 +95,9 @@ pub(super) struct Tables<'a> {
     /// Where the plan's heap writes go, when the command writes a heap.
     heap: Option<&'a HeapElements>,
     /// The device's texture table, which the layout's texture handle tables bind.
-    texture_table: Option<&'a TextureTable>,
+    texture_table: Option<&'a TextureTable<'a>>,
     /// The device's sampler table, which the layout's sampler tables bind.
-    sampler_table: Option<&'a SamplerTable>,
+    sampler_table: Option<&'a SamplerTable<'a>>,
     /// The tables the bind state lists as function tables, in its order.
     function_tables: &'a [VisibleFunctionTable],
     /// A tile dispatch's scratch images, by color index, which its storage attachments read and
@@ -342,7 +342,7 @@ impl<'a> Tables<'a> {
     }
 
     /// The tables, with the device's texture table at the layout's texture handle tables.
-    pub(super) fn with_texture_table(self, table: Option<&'a TextureTable>) -> Tables<'a> {
+    pub(super) fn with_texture_table(self, table: Option<&'a TextureTable<'a>>) -> Tables<'a> {
         Tables {
             texture_table: table,
             ..self
@@ -350,7 +350,7 @@ impl<'a> Tables<'a> {
     }
 
     /// The tables, with the device's sampler table at the layout's sampler tables.
-    pub(super) fn with_sampler_table(self, table: Option<&'a SamplerTable>) -> Tables<'a> {
+    pub(super) fn with_sampler_table(self, table: Option<&'a SamplerTable<'a>>) -> Tables<'a> {
         Tables {
             sampler_table: table,
             ..self

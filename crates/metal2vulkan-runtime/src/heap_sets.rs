@@ -124,9 +124,10 @@ use metal2vulkan::pipeline::{
     RuntimeDependency, RuntimeFact, Stage, SyntheticBinding,
 };
 use std::any::Any;
+use std::borrow::Cow;
 use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Weak};
+use std::sync::{Arc, OnceLock, Weak};
 
 /// The heap's set number.
 pub(super) const HEAP_SET: u32 = 1;
@@ -497,7 +498,7 @@ impl DeviceHeaps {
         if let Some(table) = &self.table {
             table.put(id, id, 0, 0);
         }
-        self.unplace(id);
+        self.unplace(device, id);
         for entry in self.sets.values_mut() {
             let placed = texture_writes(device, &entry.images, id, &texture, notes)?;
             entry.write(device, placed.writes)?;
@@ -519,19 +520,28 @@ impl DeviceHeaps {
                 texture: weak,
             },
         );
+        self.note_textures_end(device);
         notes.placed(&texture, !self.sets.is_empty());
         Ok(())
     }
 
     /// Forget the texture placed at ID `id`.
-    fn unplace(&mut self, id: u64) {
+    fn unplace(&mut self, device: &Device, id: u64) {
         self.textures.remove(&id);
+        self.note_textures_end(device);
+    }
+
+    /// One past the highest ID a texture is placed at, 0 for none, where a command reads it
+    /// without the lock (`DeviceShared::heap_textures_end`, [`TextureTableAt::table`]).
+    fn note_textures_end(&self, device: &Device) {
+        let end = self.textures.keys().next_back().map_or(0, |&id| id + 1);
+        (device.shared().heap_textures_end).store(end, Ordering::Release);
     }
 
     /// Clear ID `id`: the neutral's entry, no element of it kept for a version made later, and
     /// the neutral at it in each version a command buffer has yet to commit (the module docs).
     fn clear(&mut self, device: &Device, id: u64) -> Result<(), Error> {
-        self.unplace(id);
+        self.unplace(device, id);
         for entry in self.sets.values_mut() {
             entry.shadows.remove(&id);
             entry.twins.remove(&id);
@@ -1923,121 +1933,239 @@ impl Drop for Ticket {
 
 /// Where a command binds the device's texture table: its layout's texture handle tables, and
 /// the table's entries its heap arrays reach ([`texture_table`]).
-pub(super) struct TextureTable {
+pub(super) struct TextureTable<'a> {
     pub(super) info: vk::DescriptorBufferInfo,
     /// The `(set, binding)` of each texture handle table.
-    pub(super) at: Vec<(u32, u32)>,
+    pub(super) at: Cow<'a, [(u32, u32)]>,
 }
 
 /// The texture table a command of `layout` binds at its texture handle tables, over the entries
-/// its heap arrays' count reaches: `None` for a layout without one.
+/// its heap arrays' count reaches: `None` for a layout without one. A variant's commands take it
+/// from what their variant worked out once ([`HeapTables`]).
 pub(super) fn texture_table(
     device: &Device,
     layout: &PipelineLayout,
-) -> Result<Option<TextureTable>, Error> {
-    let at: Vec<(u32, u32)> = layout
-        .sets
-        .iter()
-        .flat_map(|set| set.bindings.iter().map(move |b| (set.set, b)))
-        .filter(|(_, b)| {
-            matches!(
-                b.source,
-                BindingSource::Synthetic {
-                    binding: SyntheticBinding::HandleTable,
-                    ..
-                }
-            )
-        })
-        .map(|(set, b)| (set, b.binding))
-        .collect();
-    if at.is_empty() {
+) -> Result<Option<TextureTable<'static>>, Error> {
+    device.shared().counts.heap_tables_worked_out();
+    let Some(at) = TextureTableAt::of(layout) else {
         return Ok(None);
-    }
-    // A table without heap arrays (a function that only tests handles for null) reaches every
-    // entry.
-    let capacity = layout
-        .sets
-        .get(HEAP_SET as usize)
-        .and_then(|set| set.bindings.iter().map(|b| b.count).min())
-        .unwrap_or(TABLE_ENTRIES);
-    let entries = capacity.min(TABLE_ENTRIES);
-    let mut heaps = lock(&device.shared().heaps);
-    let past = heaps
-        .textures
-        .keys()
-        .next_back()
-        .copied()
-        .filter(|&id| id >= u64::from(entries));
-    let info = heaps.table(device)?.entries(entries);
-    drop(heaps);
-    if let Some(id) = past {
-        Notes {
-            past: Some((id, entries)),
-            ..Notes::default()
+    };
+    let table = at.table(device)?;
+    Ok(Some(TextureTable {
+        info: table.info,
+        at: Cow::Owned(at.at),
+    }))
+}
+
+/// Where a layout binds the device's texture table (its texture handle tables) and over how many
+/// entries, worked out from the layout alone; and the table's descriptor once read, which stays:
+/// the device makes its table once.
+pub(super) struct TextureTableAt {
+    at: Vec<(u32, u32)>,
+    entries: u32,
+    info: OnceLock<vk::DescriptorBufferInfo>,
+}
+
+impl TextureTableAt {
+    /// `layout`'s, `None` for a layout without a texture handle table.
+    fn of(layout: &PipelineLayout) -> Option<TextureTableAt> {
+        let at: Vec<(u32, u32)> = layout
+            .sets
+            .iter()
+            .flat_map(|set| set.bindings.iter().map(move |b| (set.set, b)))
+            .filter(|(_, b)| {
+                matches!(
+                    b.source,
+                    BindingSource::Synthetic {
+                        binding: SyntheticBinding::HandleTable,
+                        ..
+                    }
+                )
+            })
+            .map(|(set, b)| (set, b.binding))
+            .collect();
+        if at.is_empty() {
+            return None;
         }
-        .announce(device);
+        // A table without heap arrays (a function that only tests handles for null) reaches
+        // every entry.
+        let capacity = layout
+            .sets
+            .get(HEAP_SET as usize)
+            .and_then(|set| set.bindings.iter().map(|b| b.count).min())
+            .unwrap_or(TABLE_ENTRIES);
+        Some(TextureTableAt {
+            at,
+            entries: capacity.min(TABLE_ENTRIES),
+            info: OnceLock::new(),
+        })
     }
-    Ok(Some(TextureTable { info, at }))
+
+    /// The table a command binds at them, the device's, a texture placed at an ID past the
+    /// entries announced (`Degradation::UnnamedTexturesPastCapacity`): the highest ID placed read
+    /// without the `heaps` lock (`DeviceShared::heap_textures_end`), and the table's descriptor
+    /// under it only until read once.
+    fn table(&self, device: &Device) -> Result<TextureTable<'_>, Error> {
+        let entries = self.entries;
+        let end = (device.shared().heap_textures_end).load(Ordering::Acquire);
+        let past = end.checked_sub(1).filter(|&id| id >= u64::from(entries));
+        let info = match self.info.get() {
+            Some(info) => *info,
+            None => {
+                let info = lock(&device.shared().heaps).table(device)?.entries(entries);
+                *self.info.get_or_init(|| info)
+            }
+        };
+        if let Some(id) = past {
+            Notes {
+                past: Some((id, entries)),
+                ..Notes::default()
+            }
+            .announce(device);
+        }
+        Ok(TextureTable {
+            info,
+            at: Cow::Borrowed(&self.at),
+        })
+    }
 }
 
 /// Where a command binds a device sampler table: its layout's sampler tables, and the entries of
 /// the table of the kind they read ([`sampler_table`]).
-pub(super) struct SamplerTable {
+pub(super) struct SamplerTable<'a> {
     pub(super) info: vk::DescriptorBufferInfo,
     /// The `(set, binding)` of each sampler table.
-    pub(super) at: Vec<(u32, u32)>,
+    pub(super) at: Cow<'a, [(u32, u32)]>,
 }
 
 /// The sampler table a command of `layout`, of a pipeline stating `dependencies`, binds at its
 /// sampler tables, every entry of it: the table of the element count of its set-1 sampler arrays
 /// (every element where it has none), mapping cubic states where each stage with a sampler table
 /// tests the states it reaches for a cubic filter (`RuntimeFact::CubicArgumentSampler`). `None`
-/// for a layout without one.
+/// for a layout without one. A variant's commands take it from what their variant worked out once
+/// ([`HeapTables`]).
 pub(super) fn sampler_table(
     device: &Device,
     layout: &PipelineLayout,
     dependencies: &[RuntimeDependency],
-) -> Result<Option<SamplerTable>, Error> {
-    let tables: Vec<(Stage, u32, u32)> = layout
-        .sets
-        .iter()
-        .flat_map(|set| set.bindings.iter().map(move |b| (set.set, b)))
-        .filter_map(|(set, b)| match b.source {
-            BindingSource::Synthetic {
-                stage,
-                binding: SyntheticBinding::SamplerTable,
-            } => Some((stage, set, b.binding)),
-            _ => None,
-        })
-        .collect();
-    if tables.is_empty() {
+) -> Result<Option<SamplerTable<'static>>, Error> {
+    device.shared().counts.heap_tables_worked_out();
+    let Some(at) = SamplerTableAt::of(layout, dependencies) else {
         return Ok(None);
-    }
-    let capacity = layout
-        .sets
-        .get(HEAP_SET as usize)
-        .and_then(|set| {
-            set.bindings
-                .iter()
-                .filter(|b| matches!(b.source, BindingSource::Heap(HandleClass::Sampler { .. })))
-                .map(|b| b.count)
-                .min()
-        })
-        .unwrap_or(TABLE_ENTRIES);
-    let cubic = tables.iter().all(|&(stage, ..)| {
-        dependencies
+    };
+    let table = at.table(device)?;
+    Ok(Some(SamplerTable {
+        info: table.info,
+        at: Cow::Owned(at.at),
+    }))
+}
+
+/// Where a layout binds the device's sampler table (its sampler tables) and of which kind, worked
+/// out from the layout and its pipeline's dependencies alone; and the table's descriptor once
+/// read, which stays: the device makes its table of a kind once.
+pub(super) struct SamplerTableAt {
+    at: Vec<(u32, u32)>,
+    kind: SamplerTableKind,
+    info: OnceLock<vk::DescriptorBufferInfo>,
+}
+
+impl SamplerTableAt {
+    /// `layout`'s, of a pipeline stating `dependencies`; `None` for a layout without a sampler
+    /// table.
+    fn of(layout: &PipelineLayout, dependencies: &[RuntimeDependency]) -> Option<SamplerTableAt> {
+        let tables: Vec<(Stage, u32, u32)> = layout
+            .sets
             .iter()
-            .any(|d| d.fact == RuntimeFact::CubicArgumentSampler { stage })
-    });
-    let kind = SamplerTableKind { capacity, cubic };
-    let info = lock(&device.shared().heaps)
-        .sampler_table(device, kind)?
-        .entries(TABLE_ENTRIES);
-    let at = tables
-        .into_iter()
-        .map(|(_, set, binding)| (set, binding))
-        .collect();
-    Ok(Some(SamplerTable { info, at }))
+            .flat_map(|set| set.bindings.iter().map(move |b| (set.set, b)))
+            .filter_map(|(set, b)| match b.source {
+                BindingSource::Synthetic {
+                    stage,
+                    binding: SyntheticBinding::SamplerTable,
+                } => Some((stage, set, b.binding)),
+                _ => None,
+            })
+            .collect();
+        if tables.is_empty() {
+            return None;
+        }
+        let capacity = layout
+            .sets
+            .get(HEAP_SET as usize)
+            .and_then(|set| {
+                set.bindings
+                    .iter()
+                    .filter(|b| {
+                        matches!(b.source, BindingSource::Heap(HandleClass::Sampler { .. }))
+                    })
+                    .map(|b| b.count)
+                    .min()
+            })
+            .unwrap_or(TABLE_ENTRIES);
+        let cubic = tables.iter().all(|&(stage, ..)| {
+            dependencies
+                .iter()
+                .any(|d| d.fact == RuntimeFact::CubicArgumentSampler { stage })
+        });
+        let at = tables
+            .into_iter()
+            .map(|(_, set, binding)| (set, binding))
+            .collect();
+        Some(SamplerTableAt {
+            at,
+            kind: SamplerTableKind { capacity, cubic },
+            info: OnceLock::new(),
+        })
+    }
+
+    /// The table a command binds at them, the device's of their kind: its descriptor under the
+    /// `heaps` lock only until read once.
+    fn table(&self, device: &Device) -> Result<SamplerTable<'_>, Error> {
+        let info = match self.info.get() {
+            Some(info) => *info,
+            None => {
+                let info = (lock(&device.shared().heaps).sampler_table(device, self.kind)?)
+                    .entries(TABLE_ENTRIES);
+                *self.info.get_or_init(|| info)
+            }
+        };
+        Ok(SamplerTable {
+            info,
+            at: Cow::Borrowed(&self.at),
+        })
+    }
+}
+
+/// What a variant's layout binds of the device's tables ([`TextureTableAt`],
+/// [`SamplerTableAt`]), worked out at its first command (`VariantObjects::heap_tables`): its
+/// commands then read the layout no more, and take the `heaps` lock in [`bind`] alone.
+pub(crate) struct HeapTables {
+    texture: Option<TextureTableAt>,
+    sampler: Option<SamplerTableAt>,
+}
+
+impl HeapTables {
+    /// `layout`'s, of a pipeline stating `dependencies`, of `device`.
+    pub(super) fn of(
+        device: &Device,
+        layout: &PipelineLayout,
+        dependencies: &[RuntimeDependency],
+    ) -> HeapTables {
+        device.shared().counts.heap_tables_worked_out();
+        HeapTables {
+            texture: TextureTableAt::of(layout),
+            sampler: SamplerTableAt::of(layout, dependencies),
+        }
+    }
+
+    /// The texture table a command binds ([`texture_table`]).
+    pub(super) fn texture_table(&self, device: &Device) -> Result<Option<TextureTable<'_>>, Error> {
+        self.texture.as_ref().map(|at| at.table(device)).transpose()
+    }
+
+    /// The sampler table a command binds ([`sampler_table`]).
+    pub(super) fn sampler_table(&self, device: &Device) -> Result<Option<SamplerTable<'_>>, Error> {
+        self.sampler.as_ref().map(|at| at.table(device)).transpose()
+    }
 }
 
 /// The heap set a command of `objects` (a layout of two sets) binds, with `writes` (its set-1

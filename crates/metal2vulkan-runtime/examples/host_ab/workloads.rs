@@ -639,7 +639,11 @@ fn encode_handles<G: Gpu>(
     let texture = &s.textures[0];
     let handles = g.buffer_with(&g.texture_id(texture).to_le_bytes());
     let (mut wall, mut cpu) = (vec![], vec![]);
+    let mut counts = None;
     for run in 0..sizes.timed + 3 {
+        if run == 3 {
+            counts = Some(g.work_counts());
+        }
         g.pool(|| {
             let cpu0 = process_cpu();
             let command_buffer = g.command_buffer();
@@ -675,6 +679,8 @@ fn encode_handles<G: Gpu>(
         "us/dispatch",
         &mut cpu,
     );
+    let dispatches = (sizes.timed * n) as f64;
+    emit_memo_shares(g, counts, dispatches, "dispatch_handles");
 }
 
 /// The resident buffers of the encode workload's `dispatch_resident` variants, of 256 bytes each.
@@ -780,8 +786,9 @@ fn encode_resident<G: Gpu>(g: &G, s: &Scene<G>, sizes: &Sizes, runs: &dyn Fn(Str
 }
 
 /// The share of `dispatches` since `counts` the runtime took as settled before
-/// (`dispatches_settled_as_before`) and as planned before (`dispatches_planned_as_before`), as
-/// the encode workload's `<variant>_rt_*` lines.
+/// (`dispatches_settled_as_before`) and as planned before (`dispatches_planned_as_before`), and
+/// the reads of a layout for the device's tables per dispatch (`heap_tables_worked_out`), as the
+/// encode workload's `<variant>_rt_*` lines.
 fn emit_memo_shares<G: Gpu>(
     g: &G,
     counts: Option<Vec<(&'static str, f64)>>,
@@ -793,6 +800,7 @@ fn emit_memo_shares<G: Gpu>(
         let metric = match *counted {
             "dispatches_settled_as_before" => "rt_settled_as_before",
             "dispatches_planned_as_before" => "rt_planned_as_before",
+            "heap_tables_worked_out" => "rt_heap_tables_worked_out",
             _ => continue,
         };
         let share = (now - before) / dispatches;

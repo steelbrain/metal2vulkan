@@ -497,6 +497,9 @@ pub(super) struct DeviceShared {
     /// The usage shadows its textures made (`texture/usage_shadow.rs`): a kept list of resident
     /// textures' shadows is listed again where it moved (`shadow::ResidentShadows`).
     pub(super) usage_shadows_made: std::sync::atomic::AtomicU64,
+    /// One past the highest resource ID a texture is placed at in its heap sets, 0 for none,
+    /// stored under `heaps` as it changes and read without it (`heap_sets::TextureTableAt`).
+    pub(super) heap_textures_end: std::sync::atomic::AtomicU64,
     /// The bind memos its ended render encoders left, which the next ones take (`binding.rs`).
     pub(super) bind_memos: crate::binding::SpareBindMemos,
     /// The rooms its ended render encoders' draws gathered into, which the next ones take
@@ -1970,6 +1973,7 @@ impl Device {
             live_binds: Default::default(),
             live_dispatches: Default::default(),
             usage_shadows_made: Default::default(),
+            heap_textures_end: Default::default(),
             bind_memos: Default::default(),
             draw_rooms: Default::default(),
             kept_rooms: Default::default(),

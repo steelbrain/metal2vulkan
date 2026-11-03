@@ -2350,9 +2350,10 @@ fn record(
     // and sampler tables at the handle tables.
     let compiled = variant.pipeline();
     let heap = heap_sets::heap_elements(&compiled.layout, plan, state)?;
-    let texture_table = heap_sets::texture_table(core.device(), &compiled.layout)?;
-    let sampler_table =
-        heap_sets::sampler_table(core.device(), &compiled.layout, &compiled.dependencies)?;
+    // What the variant's layout binds of the device's tables, worked out once (`heap_sets.rs`).
+    let heap_tables = (variant.objects()).heap_tables(&compiled.layout, &compiled.dependencies);
+    let texture_table = heap_tables.texture_table(core.device())?;
+    let sampler_table = heap_tables.sampler_table(core.device())?;
     let stages = [(Stage::Kernel, tables.table)];
     let mut bound_tables = binding::Tables::new(&stages)
         .with_residency(tables.residency)

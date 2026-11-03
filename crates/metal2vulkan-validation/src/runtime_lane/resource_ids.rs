@@ -523,6 +523,29 @@ impl Reads {
     }
 }
 
+/// A kernel reading texture handles from memory binds the device's texture table: its variant
+/// reads its layout for the device's tables at its first dispatch alone
+/// (`WorkCounts::heap_tables_worked_out`), so the dispatches after it read it no more, and read the
+/// case's texels as the first did.
+#[test]
+fn a_variant_reads_its_layout_for_the_device_tables_once() {
+    on_device(|device, messages| {
+        let sampling = Sampling::new(device);
+        let texture = sampling.texture();
+        let worked_out = || device.work_counts().heap_tables_worked_out;
+        let at_start = worked_out();
+        let mut seen = Vec::new();
+        for _ in 0..4 {
+            let before = worked_out();
+            let output = sampling.run(device, texture, Some(texture));
+            assert_eq!(output, sampling.case.metal_output, "the case's own texture");
+            seen.push(worked_out() - before);
+        }
+        assert_eq!(seen, [1, 0, 0, 0], "from {at_start}");
+        sampling.announced(device, messages, &[]);
+    });
+}
+
 /// A texture placed at a live texture's ID takes it over: a kernel reading the ID reaches the
 /// new texture though the encoder made only the old one resident, as it does with only the new one
 /// resident, and both answer the ID. With neither resident it reaches the new one too, as
