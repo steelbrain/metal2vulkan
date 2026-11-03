@@ -233,6 +233,7 @@ mod pool_room;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod pool_room_creations;
 mod private_properties;
+mod push_raw_writes;
 mod queue;
 mod queue_share;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]

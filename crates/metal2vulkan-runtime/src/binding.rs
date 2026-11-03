@@ -46,6 +46,8 @@
 //! - Every other write source names a later step's resource and is refused, typed, before
 //!   anything is recorded.
 
+use std::mem::MaybeUninit;
+
 use super::address_map::SamplerMaps;
 use super::argument_table::{ArgumentTable, InlineBytes};
 use super::buffer::Buffer;
@@ -610,6 +612,17 @@ pub(super) enum Info {
     Texel(vk::BufferView),
 }
 
+impl Info {
+    /// `write` with this as its one descriptor: pointing at it where it lies, with no copy.
+    fn written<'a>(&'a self, write: vk::WriteDescriptorSet<'a>) -> vk::WriteDescriptorSet<'a> {
+        match self {
+            Info::Buffer(info) => write.buffer_info(std::slice::from_ref(info)),
+            Info::Image(info) => write.image_info(std::slice::from_ref(info)),
+            Info::Texel(view) => write.texel_buffer_view(std::slice::from_ref(view)),
+        }
+    }
+}
+
 /// What a write holds, as [`SetWrite::same`] compares it: its handles, offset, range and layout,
 /// the layout by its raw value (ash's info structures print nothing).
 impl std::fmt::Debug for Info {
@@ -1037,6 +1050,16 @@ impl SetWrite {
         }
     }
 
+    /// Its raw write, of no set (a push's), pointing at its info.
+    pub(super) fn raw(&self) -> vk::WriteDescriptorSet<'_> {
+        self.info.written(
+            vk::WriteDescriptorSet::default()
+                .dst_binding(self.binding)
+                .dst_array_element(self.element)
+                .descriptor_type(self.ty),
+        )
+    }
+
     /// Whether it writes what `other` writes.
     pub(super) fn same(&self, other: &SetWrite) -> bool {
         (self.binding, self.element, self.ty) == (other.binding, other.element, other.ty)
@@ -1088,8 +1111,8 @@ pub(crate) unsafe fn push_descriptor_command(
 }
 
 /// Push `writes` as set 0 of `layout` at `point` into `command_buffer`, in one
-/// `vkCmdPushDescriptorSet` (`push`): their infos on the stack up to [`WRITES_AT_ONCE`], else on
-/// the heap.
+/// `vkCmdPushDescriptorSet` (`push`): each raw write pointing at its write's own info, the raw
+/// writes on the stack up to [`WRITES_AT_ONCE`], else on the heap.
 ///
 /// # Safety
 ///
@@ -1102,72 +1125,55 @@ pub(super) unsafe fn push_set(
     layout: vk::PipelineLayout,
     writes: &[SetWrite],
 ) {
-    let count = writes.len();
-    if count <= WRITES_AT_ONCE {
-        let mut buffer_infos = [[vk::DescriptorBufferInfo::default()]; WRITES_AT_ONCE];
-        let mut image_infos = [[vk::DescriptorImageInfo::default()]; WRITES_AT_ONCE];
-        let mut texel_views = [[vk::BufferView::null()]; WRITES_AT_ONCE];
-        let mut raw = [vk::WriteDescriptorSet::default(); WRITES_AT_ONCE];
-        fill_pushed(
-            writes,
-            (&mut buffer_infos, &mut image_infos, &mut texel_views),
-            &mut raw,
-        );
-        // SAFETY: the caller's contract; every array `raw` points at is live for the call.
-        unsafe { push(command_buffer, point, layout, 0, count as u32, raw.as_ptr()) };
+    if writes.len() <= WRITES_AT_ONCE {
+        let mut places = [const { MaybeUninit::uninit() }; WRITES_AT_ONCE];
+        let raw = fill_raw(writes.iter().map(SetWrite::raw), &mut places);
+        // SAFETY: the caller's contract; every info `raw` points at is `writes`', live for the
+        // call.
+        unsafe {
+            push(
+                command_buffer,
+                point,
+                layout,
+                0,
+                raw.len() as u32,
+                raw.as_ptr(),
+            )
+        };
     } else {
-        let mut buffer_infos = vec![[vk::DescriptorBufferInfo::default()]; count];
-        let mut image_infos = vec![[vk::DescriptorImageInfo::default()]; count];
-        let mut texel_views = vec![[vk::BufferView::null()]; count];
-        let mut raw = vec![vk::WriteDescriptorSet::default(); count];
-        fill_pushed(
-            writes,
-            (&mut buffer_infos, &mut image_infos, &mut texel_views),
-            &mut raw,
-        );
+        let raw: Vec<_> = writes.iter().map(SetWrite::raw).collect();
         // SAFETY: as above.
-        unsafe { push(command_buffer, point, layout, 0, count as u32, raw.as_ptr()) };
-    }
-}
-
-/// The infos of a push's `writes` into `infos`, one place each, and its writes into `raw`, each
-/// pointing at its info.
-fn fill_pushed<'a>(
-    writes: &[SetWrite],
-    infos: (
-        &'a mut [[vk::DescriptorBufferInfo; 1]],
-        &'a mut [[vk::DescriptorImageInfo; 1]],
-        &'a mut [[vk::BufferView; 1]],
-    ),
-    raw: &mut [vk::WriteDescriptorSet<'a>],
-) {
-    let (buffer_infos, image_infos, texel_views) = infos;
-    for (i, write) in writes.iter().enumerate() {
-        match write.info {
-            Info::Buffer(info) => buffer_infos[i] = [info],
-            Info::Image(info) => image_infos[i] = [info],
-            Info::Texel(view) => texel_views[i] = [view],
-        }
-    }
-    let infos = buffer_infos
-        .iter()
-        .zip(image_infos.iter())
-        .zip(texel_views.iter());
-    for ((write, ((buffer, image), texel)), raw) in writes.iter().zip(infos).zip(raw) {
-        let set = vk::WriteDescriptorSet::default()
-            .dst_binding(write.binding)
-            .dst_array_element(write.element)
-            .descriptor_type(write.ty);
-        *raw = match write.info {
-            Info::Buffer(_) => set.buffer_info(buffer),
-            Info::Image(_) => set.image_info(image),
-            Info::Texel(_) => set.texel_buffer_view(texel),
+        unsafe {
+            push(
+                command_buffer,
+                point,
+                layout,
+                0,
+                raw.len() as u32,
+                raw.as_ptr(),
+            )
         };
     }
 }
 
-/// The descriptor writes [`write_sets`] hands the driver in one call: their infos sit on the stack.
-const WRITES_AT_ONCE: usize = 16;
+/// `raw` written into `places`' first places, as many as fit: those places, which nothing else
+/// writes or zeroes.
+pub(super) fn fill_raw<'a, 'p>(
+    raw: impl Iterator<Item = vk::WriteDescriptorSet<'a>>,
+    places: &'p mut [MaybeUninit<vk::WriteDescriptorSet<'a>>; WRITES_AT_ONCE],
+) -> &'p [vk::WriteDescriptorSet<'a>] {
+    let mut count = 0;
+    for (place, write) in places.iter_mut().zip(raw) {
+        place.write(write);
+        count += 1;
+    }
+    // SAFETY: the first `count` places were written above, and a `MaybeUninit<T>` has `T`'s
+    // layout.
+    unsafe { std::slice::from_raw_parts(places.as_ptr().cast(), count) }
+}
+
+/// The descriptor writes [`push_set`] and [`write_sets`] hand the driver from the stack in one call.
+pub(super) const WRITES_AT_ONCE: usize = 16;
 
 /// Write `writes` into `sets`, the descriptor sets of their layout by set number: in order,
 /// [`WRITES_AT_ONCE`] at a time.
@@ -1185,36 +1191,20 @@ pub(super) unsafe fn write_sets(
         return Err(internal("a descriptor write to a set the layout lacks"));
     }
     for writes in writes.chunks(WRITES_AT_ONCE) {
-        let mut buffer_infos = [[vk::DescriptorBufferInfo::default()]; WRITES_AT_ONCE];
-        let mut image_infos = [[vk::DescriptorImageInfo::default()]; WRITES_AT_ONCE];
-        let mut texel_views = [[vk::BufferView::null()]; WRITES_AT_ONCE];
-        for (i, write) in writes.iter().enumerate() {
-            match write.info {
-                Info::Buffer(info) => buffer_infos[i] = [info],
-                Info::Image(info) => image_infos[i] = [info],
-                Info::Texel(view) => texel_views[i] = [view],
-            }
-        }
-        let mut raw = [vk::WriteDescriptorSet::default(); WRITES_AT_ONCE];
-        for (i, write) in writes.iter().enumerate() {
-            let set = vk::WriteDescriptorSet::default()
-                .dst_set(sets[write.set as usize])
-                .dst_binding(write.binding)
-                .dst_array_element(write.element)
-                .descriptor_type(write.ty);
-            raw[i] = match write.info {
-                Info::Buffer(_) => set.buffer_info(&buffer_infos[i]),
-                Info::Image(_) => set.image_info(&image_infos[i]),
-                Info::Texel(_) => set.texel_buffer_view(&texel_views[i]),
-            };
-        }
-        // SAFETY: the caller's contract; every array `raw` points at is live for the call.
-        unsafe {
-            device
-                .shared()
-                .vk()
-                .update_descriptor_sets(&raw[..writes.len()], &[])
-        };
+        let raw = writes.iter().map(|write| {
+            write.info.written(
+                vk::WriteDescriptorSet::default()
+                    .dst_set(sets[write.set as usize])
+                    .dst_binding(write.binding)
+                    .dst_array_element(write.element)
+                    .descriptor_type(write.ty),
+            )
+        });
+        let mut places = [const { MaybeUninit::uninit() }; WRITES_AT_ONCE];
+        let raw = fill_raw(raw, &mut places);
+        // SAFETY: the caller's contract; every info `raw` points at is `writes`', live for the
+        // call.
+        unsafe { device.shared().vk().update_descriptor_sets(raw, &[]) };
     }
     Ok(())
 }
