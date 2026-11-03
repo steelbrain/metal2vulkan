@@ -278,6 +278,8 @@ pub(crate) struct Counters {
     linear_passes_through_copies: AtomicU64,
     linear_merge_scratches_made: AtomicU64,
     linear_merge_scratches_reused: AtomicU64,
+    linear_merges_recorded: AtomicU64,
+    linear_merges_taken_over: AtomicU64,
     kept_bytes_passes: AtomicU64,
     color_group_passes: AtomicU64,
     color_group_twins: AtomicU64,
@@ -1981,6 +1983,18 @@ impl Counters {
             false => &self.linear_merge_scratches_reused,
         };
         counter.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// A linear attachment's merge was recorded: after its pass, or at its batch's submission
+    /// after the last pass of its run (`linear_run.rs`).
+    pub(crate) fn linear_merge_recorded(&self) {
+        self.linear_merges_recorded.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// A pass of a run took over the merge of the run's pass before it (`linear_run.rs`).
+    pub(crate) fn linear_merge_taken_over(&self) {
+        self.linear_merges_taken_over
+            .fetch_add(1, Ordering::Relaxed);
     }
 
     /// A pass rendered a texture over a buffer it does not store through the image its texture
@@ -4635,6 +4649,13 @@ pub struct WorkCounts {
     pub linear_merge_scratches_made: u64,
     /// Those merges that took a scratch an earlier pass of their command buffer was done with.
     pub linear_merge_scratches_reused: u64,
+    /// The merges of those colors recorded: one after each pass that merges on its own, and one
+    /// at its batch's submission for each run of passes over one attachment merged once, in
+    /// place of its earlier passes' (`linear_run.rs`).
+    pub linear_merges_recorded: u64,
+    /// The merges a later pass of their run took over: none of them is recorded, and the run's
+    /// last merge writes what they would have.
+    pub linear_merges_taken_over: u64,
     /// Passes that rendered a color attachment over a buffer's bytes, which they do not store
     /// (`DontCare`, `MultisampleResolve`), through the image its texture keeps, so that the buffer
     /// keeps its bytes (`kept_bytes.rs`).
@@ -6029,6 +6050,8 @@ impl Device {
             linear_merge_scratches_reused: counters
                 .linear_merge_scratches_reused
                 .load(Ordering::Relaxed),
+            linear_merges_recorded: counters.linear_merges_recorded.load(Ordering::Relaxed),
+            linear_merges_taken_over: counters.linear_merges_taken_over.load(Ordering::Relaxed),
             kept_bytes_passes: counters.kept_bytes_passes.load(Ordering::Relaxed),
             color_group_passes: counters.color_group_passes.load(Ordering::Relaxed),
             color_group_twins: counters.color_group_twins.load(Ordering::Relaxed),

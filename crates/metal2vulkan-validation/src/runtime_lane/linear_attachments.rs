@@ -1872,8 +1872,8 @@ fn many_reference(queue: &CommandQueue, pipeline: &RenderPipelineState, width: u
 /// [`many_passes`] over a target over `over`'s buffer of `width` texels a row, `row` bytes apart
 /// (`merge_scratch.rs`): its texels equal those the same passes leave in a private texture, and
 /// the bytes between its rows keep theirs. Where the device renders it apart by the rule
-/// (`linear_merge.rs`), every pass merges, the merges taking one scratch for the command buffer
-/// and lending it to every later one; where it is a shadow merged back (`shadow_merge.rs`), every
+/// (`linear_merge.rs`), the passes form a run or two merged once each (`linear_run.rs`), each
+/// merge taking one scratch; where it is a shadow merged back (`shadow_merge.rs`), every
 /// merge after the first takes a scratch an earlier encoder was done with. Either way the device's
 /// memory grows by less than an eighth of a scratch a pass while they are encoded.
 fn many_passes_over(over: ManyOver, (width, row): (u64, u64)) {
@@ -1900,6 +1900,8 @@ fn many_passes_over(over: ManyOver, (width, row): (u64, u64)) {
         let through = delta(|c| c.linear_passes_through_copies);
         let made = delta(|c| c.linear_merge_scratches_made);
         let reused = delta(|c| c.linear_merge_scratches_reused);
+        let recorded = delta(|c| c.linear_merges_recorded);
+        let taken_over = delta(|c| c.linear_merges_taken_over);
         let shadow_reused = delta(|c| c.shadow_merge_scratches_reused);
         let grown = encoded.device_memory_allocated - before.device_memory_allocated;
         // A merge of every texel's rows: its kept and changed parts.
@@ -1907,14 +1909,29 @@ fn many_passes_over(over: ManyOver, (width, row): (u64, u64)) {
         println!(
             "LINEAR-ATTACHMENT many passes over {over:?} {width}x{MANY_H}, rows of {row}, on {}: \
              apart by the rule {apart}, shadow {shadow}; {through} passes through copies, linear \
-             scratches {made} made and {reused} reused, shadow scratches {shadow_reused} reused; \
-             device memory grew {grown} bytes while encoding",
+             merges {recorded} recorded and {taken_over} taken over, linear scratches {made} made \
+             and {reused} reused, shadow scratches {shadow_reused} reused; device memory grew \
+             {grown} bytes while encoding",
             device.name()
         );
+        // One run (`linear_run.rs`), or two where the second pass's box reaches past the
+        // first's (then one over the whole target), merged once each.
         if apart {
             assert_eq!(through, MANY as u64, "every pass renders the texture apart");
-            assert_eq!(made, 1, "the command buffer's merges make one scratch");
-            assert_eq!(reused, MANY as u64 - 1, "every later merge takes it");
+            assert!(
+                recorded <= 2,
+                "the passes merge once a run: {recorded} merges"
+            );
+            assert_eq!(
+                recorded + taken_over,
+                MANY as u64,
+                "every later pass takes its run's"
+            );
+            assert_eq!(
+                made + reused,
+                recorded,
+                "each run's merge takes one scratch"
+            );
         }
         if shadow {
             assert!(

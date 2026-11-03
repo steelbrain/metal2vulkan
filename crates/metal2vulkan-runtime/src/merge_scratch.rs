@@ -10,8 +10,10 @@
 //!   `endEncoding` failed out of device memory).
 //! - **Lent.** A merge takes the smallest free scratch of its kind of at least the bytes it needs
 //!   ([`MergeScratch::take`]); its encoder gives it back as it ends: a linear attachment's merge
-//!   once its pass's merge is recorded (`LinearMerge::record_merge`), a shadow's as the encoder
-//!   that planned it goes (its [`ScratchLease`], held with the encoder's kept-image leases). A
+//!   once its pass's merge is recorded (`LinearMerge::record_merge`), or a run's of passes merged
+//!   once as the pass that ends the run ends, after which its merge lies (`linear_run.rs`); a
+//!   shadow's as the encoder that planned it goes (its [`ScratchLease`], held with the encoder's
+//!   kept-image leases). A
 //!   scratch the pool lends is held by the merges that used it, which their command buffer
 //!   retains until it completes; the pool holds none of them (a weak reference each), so the
 //!   bytes go as before, once the command buffer completed: a shadow's back to its spares, for a
@@ -22,14 +24,17 @@
 //!      attachment's by its pass's fill and keep after the copy in, its reloads at the pass's
 //!      barriers and its merge after the pass, all recorded at the pass's end into its encoder's
 //!      `VkCommandBuffer`s or the segments it leaves between them, which go between them in
-//!      submission order; a shadow's by its keeps and merges, which the encoder records before
-//!      its next command that touches the bytes another way, or as it ends (`shadow.rs`).
+//!      submission order (a run's, by its first pass's fill and keep and the merge its last pass
+//!      leaves, between which it is lent to none); a shadow's by its keeps and merges, which the
+//!      encoder records before its next command that touches the bytes another way, or as it
+//!      ends (`shadow.rs`).
 //!   2. A command buffer's encoders go in order: one is open at a time (a render encoder's end
 //!      left to the lowering thread is lowered before the next encoder opens,
 //!      `render/deferral.rs`), and its batches go to its queue's one `VkQueue` in order, which the
 //!      queue keeps from the command buffer's making to its completion (`queue_share.rs`). A
 //!      predicated loop's laying submitted again, and an encoder a rebind encodes again
-//!      (`command_buffer/reencode.rs`), repeat or replace whole encoders. So the spans from the
+//!      (`command_buffer/reencode.rs`), repeat or replace whole encoders; the latter's linear
+//!      merges borrow no scratch, as its place may lie inside a run's span. So the spans from the
 //!      first to the last command of two encoders that took one scratch never interleave in
 //!      submission order.
 //!   3. Each span writes every byte of the scratch it reads before reading it (the copies into

@@ -142,6 +142,7 @@ mod library;
 mod linear_attachment;
 mod linear_merge;
 mod linear_plan;
+mod linear_run;
 mod live_bind;
 mod live_buffers;
 mod loaded;

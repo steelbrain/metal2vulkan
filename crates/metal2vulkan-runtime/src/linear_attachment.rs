@@ -18,9 +18,10 @@
 //!   attachment through the image its texture keeps for the queue
 //!   (`attachment_stand_in::kept_backing`), copied in where the pass loads the attachment over the
 //!   box its draws write in ([`Coverage`]), and, where it stores it, the words the pass changed
-//!   merged back into the texture's bytes (`linear_merge.rs`): never a copy back of the box, which
-//!   would write the pixels no draw wrote with what the copy in read, where Metal on a Mac family
-//!   GPU writes none of them (another writer's bytes there survive the pass). Decided as the pass
+//!   merged back into the texture's bytes (`linear_merge.rs`), once for a run of such passes one
+//!   after another (`linear_run.rs`): never a copy back of the box, which would write the pixels
+//!   no draw wrote with what the copy in read, where Metal on a Mac family GPU writes none of them
+//!   (another writer's bytes there survive the pass). Decided as the pass
 //!   begins, from its descriptor ([`apart`]), so every use a draw makes of the attachment (a
 //!   framebuffer fetch's view, a view in another format) finds the image the pass renders; and
 //!   again as it ends ([`settle`]), where a draw made an attachment of the runtime's (a fetched

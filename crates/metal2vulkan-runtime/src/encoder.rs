@@ -246,6 +246,21 @@ pub(super) struct RecordedSegment {
 }
 
 impl RecordedSegment {
+    /// A segment its batch's submission recorded into `raws` (`command_buffer/submit.rs`): of
+    /// uses its encoder noted already, or none.
+    pub(super) fn submitted(raws: Vec<vk::CommandBuffer>) -> RecordedSegment {
+        RecordedSegment {
+            raws,
+            summary: EncoderUses::new(true).finish(),
+            retained: Retained::default(),
+            executions: Vec::new(),
+            keys: Default::default(),
+            taken: Default::default(),
+            resident_misses: 0,
+            faults: ReplayFaults::default(),
+        }
+    }
+
     /// `other`, recorded after it, joined into it: one segment of both.
     pub(super) fn join(&mut self, other: RecordedSegment) {
         self.raws.extend(other.raws);
@@ -1875,6 +1890,28 @@ impl EncoderCore {
         self.release_pass()?;
         let next = self.continuation()?;
         self.defer_into(next, work)
+    }
+
+    /// Note the uses `uses`, in `stages`, of work a segment left to a later recording records
+    /// there (a linear attachment's merge left to its batch's submission, `linear_run.rs`), as
+    /// [`command`](Self::command) notes a command's: the tracker orders the commands after the
+    /// segment after them, and the encoder's summary holds them. The barrier the tracker plans
+    /// before them goes unrecorded: the work records one from every command before it. Whether
+    /// they were noted: not where they name a detached buffer, after which nothing records
+    /// ([`skips`](Self::skips)).
+    pub(super) fn note_left_uses(
+        &mut self,
+        stages: vk::PipelineStageFlags2,
+        uses: &[Use<ResourceKey>],
+    ) -> bool {
+        let none = BTreeSet::new();
+        self.track(stages, uses, (&none, Reach::Unnamed), &[])
+            .is_some()
+    }
+
+    /// Whether this core encodes an ended encoder again (`command_buffer/reencode.rs`).
+    pub(super) fn encodes_again(&self) -> bool {
+        self.replaying
     }
 
     /// The new `VkCommandBuffer` the encoder's commands go on in after a segment

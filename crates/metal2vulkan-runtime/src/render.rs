@@ -299,7 +299,8 @@ use super::index_bounds::{self, Bounded, BoundsPass, BoundsSteps};
 use super::index_rewrite::{self, Listed, RewritePass, RewriteSteps, WrittenList};
 use super::kept_bytes;
 use super::linear_attachment;
-use super::linear_merge::LinearMerge;
+use super::linear_merge::{LinearMerge, MERGE_STAGES};
+use super::linear_run::{Joined, Joining, RunKey, RunMerge};
 use super::live_bind::{Emptied, LiveBind, Reshape, SettledHere};
 use super::nan_clear::{keeps_nan_sign, NanDepthWrite};
 use super::owned_kernel::OwnedModule;
@@ -1070,6 +1071,15 @@ impl InterlockedStorage {
             depth: self.depth || other.depth,
         }
     }
+}
+
+/// A pass's color over a linear attachment rendered apart that joins a run as the pass ends
+/// (`linear_run.rs`): its index, its run's key, bytes and box, and where it goes on with the run
+/// before it, that run's merge and its last pass's merge left to its submission.
+struct RunColor {
+    index: usize,
+    joining: Joining,
+    on: Option<(Arc<LinearMerge>, Arc<RunMerge>)>,
 }
 
 /// One render pass instance of an encoder's pass (the module docs).
@@ -4071,6 +4081,7 @@ impl RenderLowering {
         // Whether a command of the pass may read an attachment's bytes it did not name.
         let unnamed_reads =
             self.barrier_inside || self.reaches_unnamed || !self.executions.is_empty();
+        let rate_mapped = self.rate_map.is_some();
         let RenderLowering {
             mut core,
             earlier,
@@ -4594,30 +4605,12 @@ impl RenderLowering {
         // covers, and the copy back returns those texels as they came, not the stand-in's.
         // And a stand-in's over the box its draws write in alone (`StandIn::area`).
         let tiled = |taken: bool| taken && tiles.is_some();
-        let area_of = |c: &render_pass::ColorTarget, own: &StandIn| {
+        let own_box = |c: &render_pass::ColorTarget, own: &StandIn| {
             let [width, height] = match c.load == LoadAction::Clear {
                 true => clear_reach::cleared(&layout, c.target.extent, called),
                 false => layout.extent,
             };
             own.area.unwrap_or([0, 0, width, height])
-        };
-        let scratch = |copied: &dyn Fn(usize, &render_pass::ColorTarget) -> bool| {
-            layout
-                .colors
-                .iter()
-                .enumerate()
-                .filter_map(|(index, c)| {
-                    let c = c.as_ref()?;
-                    let own = c.stand_in.as_ref().filter(|s| s.copies())?;
-                    let area = area_of(c, own);
-                    copied(index, c).then_some((
-                        &c.target,
-                        &own.own,
-                        area,
-                        vk::ImageAspectFlags::COLOR,
-                    ))
-                })
-                .collect::<Vec<_>>()
         };
         // A depth/stencil texture's stand-in made for the pass's custom sample positions, or for
         // a texture without render target usage: each aspect copied in where the pass loads it
@@ -4686,7 +4679,7 @@ impl RenderLowering {
         // area copied in, never a copy back of the area, which would write the pixels no draw
         // wrote with what the copy in read (`linear_merge.rs`).
         let over_bytes = |own: &StandIn| own.copies() && own.own.texture.aliases_buffer();
-        let merged: Vec<(usize, Arc<LinearMerge>)> = layout
+        let merging = layout
             .colors
             .iter()
             .enumerate()
@@ -4695,11 +4688,183 @@ impl RenderLowering {
                 let own = c.stand_in.as_ref().filter(|s| over_bytes(s))?;
                 (loaded(index, c) && stored(c)).then_some((index, c, own))
             })
-            .map(|(index, c, own)| {
-                LinearMerge::new(core.command_buffer(), &c.target, &own.own, area_of(c, own))
+            .collect::<Vec<_>>();
+        // A linear attachment's passes rendered apart, one after another, merge once, after the
+        // last (`linear_run.rs`): the colors whose merge the pass leaves to its batch's
+        // submission, each with what it took from the runs, and the runs it goes on with, ends
+        // or passes. Nothing changes where the encoder is encoded again.
+        let mut runs: Vec<RunColor> = Vec::new();
+        let run_point = match core.encodes_again() || crate::replay::is_replaying() {
+            true => None,
+            false => Some(core.command_buffer().state().run_point()),
+        };
+        if let Some(now) = run_point {
+            // A quiet pass touches nothing but what its commands name and its attachments: no
+            // command reaches memory it does not name, nor a heap; no draw or tile dispatch
+            // records later; one color group and one part, no fence, no reload between
+            // instances; no resolve or visibility results, which write past its attachments;
+            // and no rasterization-rate map, whose reset encodes it again
+            // (`rate_mapped_pass.rs`).
+            let resolves = layout
+                .colors
+                .iter()
+                .flatten()
+                .any(|c| c.resolve.is_some() || c.copied_resolve.is_some())
+                || layout.depth_stencil.iter().any(|ds| ds.resolve.is_some());
+            let quiet = !unnamed_reads
+                && !reached_heaps
+                && pending.is_empty()
+                && dispatches.is_empty()
+                && grouped.is_none()
+                && !resolves
+                && reload_at.is_empty()
+                && layout.visibility.is_none()
+                && !rate_mapped
+                && !core.uses().fenced()
+                && core.uses().parts() == 1;
+            let named = core.named_keys();
+            let rebinds = &device.shared().rebinds;
+            // Overlapping host ranges name the same bytes (`may_read` above).
+            let host_overlap = |key: ResourceKey| {
+                rebinds.host_range(key).is_some_and(|bytes| {
+                    named.iter().any(|&other| {
+                        rebinds
+                            .host_range(other)
+                            .is_some_and(|o| o.start < bytes.end && bytes.start < o.end)
+                    })
+                })
+            };
+            // The keys and images of the pass's attachments: their textures', their stand-ins'
+            // and their planes'.
+            let mut attached: Vec<(ResourceKey, Option<vk::Image>)> = Vec::new();
+            let mut attach = |texture: &Texture| {
+                attached.push((texture.use_key(), texture.raw_image().ok()));
+            };
+            for c in layout.colors.iter().flatten() {
+                attach(&c.target.texture);
+                if let Some(own) = &c.stand_in {
+                    attach(&own.own.texture);
+                }
+                if let Some(planes) = &c.planes {
+                    attach(&planes.texture);
+                }
+            }
+            if let Some(ds) = &layout.depth_stencil {
+                attach(&ds.target.texture);
+                if let Some(own) = &ds.stand_in {
+                    attach(&own.own.texture);
+                }
+                for target in ds.separate.iter().flat_map(Separate::targets) {
+                    attach(&target.texture);
+                }
+            }
+            // A pass encoded once: neither its commands nor its attachments name a buffer over
+            // host pages, which a rebind moves (`command_buffer/reencode.rs`); outside a
+            // predicated loop's laying.
+            let laying = core.command_buffer().state().predication_mut().laying();
+            let over_pages = |key: &ResourceKey| rebinds.host_range(*key).is_some();
+            let once = !named.iter().any(over_pages)
+                && !attached.iter().any(|(key, _)| over_pages(key))
+                && !laying;
+            let mut joining = Vec::new();
+            for &(index, c, own) in &merging {
+                let bytes = own.own.texture.use_key();
+                let key = RunKey {
+                    backing: c.target.texture.raw_image()?,
+                    surface: own.own.texture.raw_image()?,
+                    subresource: (own.own.level, own.own.layer, own.own.layers),
+                };
+                // Its bytes are its own attachment's alone: no other attachment lies over them.
+                let alone = attached.iter().filter(|&&(k, _)| k == bytes).count() == 1;
+                let joins = quiet
+                    && once
+                    && !inline
+                    && own.cause == Cause::Linear
+                    && !named.contains(&bytes)
+                    && !host_overlap(bytes)
+                    && alone;
+                if joins {
+                    let area = own_box(c, own);
+                    runs.push(RunColor {
+                        index,
+                        joining: Joining { key, bytes, area },
+                        on: None,
+                    });
+                    joining.push(Joining { key, bytes, area });
+                }
+            }
+            let touches = |key: &RunKey, bytes: ResourceKey| {
+                !quiet
+                    || named.contains(&bytes)
+                    || host_overlap(bytes)
+                    || attached.iter().any(|&(k, image)| {
+                        k == bytes || image.is_some_and(|i| i == key.backing || i == key.surface)
+                    })
+            };
+            let (joined, ended) = core
+                .command_buffer()
+                .state()
+                .linear_runs()
+                .end_of(now, &joining, touches);
+            // Each run it ends lends its scratch on: its merge lies before this pass.
+            for merge in ended {
+                merge.lend();
+            }
+            let whole = [0, 0, layout.extent[0], layout.extent[1]];
+            for (run, joined) in runs.iter_mut().zip(joined) {
+                match joined {
+                    Joined::On { area, merge, last } => {
+                        run.joining.area = area;
+                        run.on = Some((merge, last));
+                    }
+                    Joined::Outgrew => run.joining.area = whole,
+                    Joined::Opens => {}
+                }
+            }
+        }
+        // Each color's box: a run's where it joins one, else the one its draws write in.
+        let area_of = |index: usize, c: &render_pass::ColorTarget, own: &StandIn| match runs
+            .iter()
+            .find(|run| run.index == index)
+        {
+            Some(run) => run.joining.area,
+            None => own_box(c, own),
+        };
+        let scratch = |copied: &dyn Fn(usize, &render_pass::ColorTarget) -> bool| {
+            layout
+                .colors
+                .iter()
+                .enumerate()
+                .filter_map(|(index, c)| {
+                    let c = c.as_ref()?;
+                    let own = c.stand_in.as_ref().filter(|s| s.copies())?;
+                    let area = area_of(index, c, own);
+                    copied(index, c).then_some((
+                        &c.target,
+                        &own.own,
+                        area,
+                        vk::ImageAspectFlags::COLOR,
+                    ))
+                })
+                .collect::<Vec<_>>()
+        };
+        let merged: Vec<(usize, Arc<LinearMerge>)> = merging
+            .iter()
+            .map(|&(index, c, own)| {
+                let on = runs.iter().find(|run| run.index == index);
+                if let Some((merge, _)) = on.and_then(|run| run.on.as_ref()) {
+                    return Ok((index, Arc::clone(merge)));
+                }
+                let area = area_of(index, c, own);
+                LinearMerge::new(core.command_buffer(), &c.target, &own.own, area)
                     .map(|merge| (index, Arc::new(merge)))
             })
             .collect::<Result<_, Error>>()?;
+        // A color going on with a run is copied in and kept by the run's first pass.
+        let goes_on = |index: usize| {
+            runs.iter()
+                .any(|run| run.index == index && run.on.is_some())
+        };
         // One such color the pass does not load, and stores, is copied back over the clear's
         // reach before each instance after a memory barrier too, so a draw after it reads what
         // the pass drew (`reload_at`).
@@ -4715,9 +4880,11 @@ impl RenderLowering {
         // Where the first instance recorded inline, it rendered the attachments themselves: every
         // stand-in, arriving later, takes the attachment's texels right after it, not before the
         // pass (`render/inline_first.rs`).
+        // A pass going on with a run copies nothing in for its color: the image holds what the
+        // run's pass before left (`linear_run.rs`).
         let mut copied_in = match inline {
             true => scratch(&|_, _| true),
-            false => scratch(&loaded),
+            false => scratch(&|index, c| loaded(index, c) && !goes_on(index)),
         };
         copied_in.extend(depth_stencil_copies(false));
         let stand_ins_in = StandInCopies::plan_aspects(&copied_in, true)?;
@@ -5142,9 +5309,12 @@ impl RenderLowering {
         if let Some(copies) = stand_ins_in {
             copies.record(&mut core);
         }
-        // What the merged colors hold once copied in, before any step writes them.
-        for (_, merge) in &merged {
-            merge.record_keep(&mut core);
+        // What the merged colors hold once copied in, before any step writes them: kept by a
+        // run's first pass alone.
+        for (index, merge) in &merged {
+            if !goes_on(*index) {
+                merge.record_keep(&mut core);
+            }
         }
         if let Some(clears) = reach_clears {
             clears.record(&mut core);
@@ -5583,8 +5753,29 @@ impl RenderLowering {
         if let Some(copies) = stand_ins_out {
             copies.record(&mut core);
         }
-        for (_, merge) in &merged {
-            merge.record_merge(&mut core);
+        for (index, merge) in &merged {
+            let Some(run) = runs.iter().find(|run| run.index == *index) else {
+                merge.record_merge(&mut core);
+                continue;
+            };
+            // Left to its batch's submission, its uses noted here (`linear_run.rs`); the run's
+            // merge before it, taken over once it is.
+            if !core.note_left_uses(MERGE_STAGES, merge.merge_uses()) {
+                continue;
+            }
+            let left = RunMerge::new(Arc::clone(merge));
+            core.defer(Deferred::LinearMerge(Arc::clone(&left)))?;
+            if let Some((_, last)) = &run.on {
+                last.take_over();
+                device.shared().counts.linear_merge_taken_over();
+            }
+            let now = run_point.ok_or_else(|| internal("a run's pass encoded again"))?;
+            (core.command_buffer().state().linear_runs()).open(
+                run.joining,
+                Arc::clone(merge),
+                left,
+                now,
+            );
         }
         if let Some(copies) = resolve_copies {
             copies.record(&mut core);

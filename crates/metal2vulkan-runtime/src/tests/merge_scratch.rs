@@ -11,8 +11,9 @@
 //! With the device's rule forced (`DeviceShared::linear_rule_forced`), each pass renders a target
 //! that is its own linear image apart, through the image it keeps, its changed words merged back
 //! (`linear_attachment.rs`, `linear_merge.rs`), as NVIDIA's devices render it beside a depth
-//! attachment: the merges make one scratch for the whole command buffer, every later one taking
-//! it, and the runtime's device memory grows by no scratch a pass. A target that is a shadow
+//! attachment: the passes form a run or two merged once each (`linear_run.rs`,
+//! `tests::linear_runs`), each merge taking one scratch, and the runtime's device memory grows by
+//! no scratch a pass. A target that is a shadow
 //! (host pages on every device, and rows the device's linear images do not lay out) is merged
 //! back at each encoder's end (`shadow_merge.rs`): its merges after the first take the scratch an
 //! earlier encoder was done with. Either way the texels equal those the same passes leave in a
@@ -36,8 +37,8 @@ use std::ptr::NonNull;
 use std::sync::atomic::Ordering;
 
 /// The targets' height and texel bytes (`RGBA8Unorm`).
-const H: u64 = 96;
-const TEXEL: u64 = 4;
+pub(super) const H: u64 = 96;
+pub(super) const TEXEL: u64 = 4;
 
 /// The passes of the command buffer.
 const PASSES: usize = 240;
@@ -48,7 +49,7 @@ const BETWEEN: u8 = 0xa5;
 /// The state that blends a half-transparent rectangle (`tob_rect`, corners from vertex buffer 0)
 /// of the color in fragment buffer 0 (`tob_solid`) over an `RGBA8Unorm` color, beside a
 /// `Depth32Float` depth attachment it does not test.
-fn blending(device: &Device) -> RenderPipelineState {
+pub(super) fn blending(device: &Device) -> RenderPipelineState {
     let library = library(device, "engine/tob_renders.ll");
     let function = |name: &str| {
         let function = library.new_function_with_name(name).unwrap();
@@ -72,7 +73,7 @@ fn blending(device: &Device) -> RenderPipelineState {
 /// What a target's bytes hold first, of `width` texels a row, `row` bytes apart: each texel's
 /// bytes a counting pattern of its place among the texels (so a target of any rows holds the
 /// same texels), which no pass draws, and [`BETWEEN`] between the rows.
-fn first_bytes(width: u64, row: u64) -> Vec<u8> {
+pub(super) fn first_bytes(width: u64, row: u64) -> Vec<u8> {
     (0..row * H)
         .map(|i| match i % row < width * TEXEL {
             true => ((i / row * width * TEXEL + i % row) * 7 % 251) as u8,
@@ -82,7 +83,7 @@ fn first_bytes(width: u64, row: u64) -> Vec<u8> {
 }
 
 /// The texels of `bytes`, rows `row` bytes apart, packed.
-fn texels(bytes: &[u8], width: u64, row: u64) -> Vec<u8> {
+pub(super) fn texels(bytes: &[u8], width: u64, row: u64) -> Vec<u8> {
     (bytes.chunks(row as usize))
         .flat_map(|r| &r[..(width * TEXEL) as usize])
         .copied()
@@ -90,7 +91,7 @@ fn texels(bytes: &[u8], width: u64, row: u64) -> Vec<u8> {
 }
 
 /// A `Shared` buffer holding `bytes`.
-fn staged(device: &Device, bytes: &[u8]) -> Buffer {
+pub(super) fn staged(device: &Device, bytes: &[u8]) -> Buffer {
     let buffer = device
         .new_buffer(bytes.len() as u64, ResourceOptions::shared())
         .unwrap();
@@ -106,14 +107,14 @@ fn write(buffer: &Buffer, bytes: &[u8]) {
 }
 
 /// The first `length` bytes of `buffer`, host-visible, which no command uses now.
-fn read(buffer: &Buffer, length: u64) -> Vec<u8> {
+pub(super) fn read(buffer: &Buffer, length: u64) -> Vec<u8> {
     let contents = buffer.contents().unwrap();
     // SAFETY: inside the buffer's length, which no command writes now.
     unsafe { std::slice::from_raw_parts(contents.as_ptr(), length as usize) }.to_vec()
 }
 
 /// Run one blit encoder's commands, `encode` encoding them, in a command buffer that completes.
-fn blit(queue: &CommandQueue, encode: impl FnOnce(&mut crate::BlitCommandEncoder)) {
+pub(super) fn blit(queue: &CommandQueue, encode: impl FnOnce(&mut crate::BlitCommandEncoder)) {
     let command_buffer = queue.command_buffer().unwrap();
     let mut encoder = command_buffer.blit_command_encoder().unwrap();
     encode(&mut encoder);
@@ -125,10 +126,10 @@ fn blit(queue: &CommandQueue, encode: impl FnOnce(&mut crate::BlitCommandEncoder
 
 /// Page-aligned host memory of `length` bytes (whole pages of any host), freed when dropped:
 /// declared before the device's buffer over it, so dropped after it.
-struct Host(NonNull<u8>, Layout);
+pub(super) struct Host(NonNull<u8>, Layout);
 
 impl Host {
-    fn new(length: u64) -> Host {
+    pub(super) fn new(length: u64) -> Host {
         let layout =
             Layout::from_size_align(length.next_multiple_of(64 << 10) as usize, 64 << 10).unwrap();
         // SAFETY: the layout's size is not zero.
@@ -146,7 +147,7 @@ impl Drop for Host {
 
 /// Where a target's bytes lie.
 #[derive(Clone, Copy, Debug, PartialEq)]
-enum Over {
+pub(super) enum Over {
     /// A `Shared` buffer.
     Shared,
     /// A `Private` buffer: written and read through blits.
@@ -157,7 +158,7 @@ enum Over {
 
 /// A target of `width` texels a row, `row` bytes apart, over a buffer of `over`'s holding
 /// [`first_bytes`]; `None`, printed, where the device imports no host memory.
-fn target(
+pub(super) fn target(
     queue: &CommandQueue,
     over: Over,
     (width, row): (u64, u64),
@@ -211,7 +212,7 @@ fn target(
 }
 
 /// The bytes of `buffer` (`length` of them), read through a blit where it is `Private`.
-fn bytes(queue: &CommandQueue, over: Over, buffer: &Buffer, length: u64) -> Vec<u8> {
+pub(super) fn bytes(queue: &CommandQueue, over: Over, buffer: &Buffer, length: u64) -> Vec<u8> {
     if over != Over::Private {
         return read(buffer, length);
     }
@@ -226,7 +227,7 @@ fn bytes(queue: &CommandQueue, over: Over, buffer: &Buffer, length: u64) -> Vec<
 
 /// Pass `i`'s rectangle, in normalized device coordinates (`[x0, y0, x1, y1]`), and its color:
 /// rectangles over a grid of places, each overlapping its neighbours, half transparent.
-fn drawn(i: usize) -> ([f32; 4], [f32; 4]) {
+pub(super) fn drawn(i: usize) -> ([f32; 4], [f32; 4]) {
     let (x, y) = ((i % 12) as f32, ((i / 12) % 6) as f32);
     let x0 = -1.0 + 0.125 * x;
     let y0 = -1.0 + 0.25 * y;
@@ -335,9 +336,9 @@ fn reference(queue: &CommandQueue, state: &RenderPipelineState, width: u64) -> V
 
 /// [`passes`] over a target over `over`'s buffer of `width` texels a row, `row` bytes apart, the
 /// rule forced: its texels equal the private texture's, the bytes between its rows keep theirs,
-/// and its merges (where it is a linear image, or a shadow merged back) take one scratch, lent to
-/// every later one, the device's memory growing by less than an eighth of what a scratch a pass
-/// would take.
+/// and its merges take few scratches (a linear image's, one a run; a shadow's merged back, one
+/// lent to every later one), the device's memory growing by less than an eighth of what a
+/// scratch a pass would take.
 fn one_scratch(over: Over, (width, row): (u64, u64)) {
     let cache = Scratch::new(&format!("merge-scratch-{over:?}-{width}"));
     let host = Host::new(row * H);
@@ -367,21 +368,38 @@ fn one_scratch(over: Over, (width, row): (u64, u64)) {
     let apart = delta(|c| c.linear_passes_through_copies);
     let made = delta(|c| c.linear_merge_scratches_made);
     let reused = delta(|c| c.linear_merge_scratches_reused);
+    let recorded = delta(|c| c.linear_merges_recorded);
+    let taken_over = delta(|c| c.linear_merges_taken_over);
     let shadow_reused = delta(|c| c.shadow_merge_scratches_reused);
     let grown = encoded.device_memory_allocated - before.device_memory_allocated;
     // A merge of every texel's rows: its kept and changed parts.
     let scratch = 2 * width * TEXEL * H;
     println!(
-        "MERGE-SCRATCH {over:?}: {apart} passes apart, linear scratches {made} made and {reused} \
-         reused, shadow scratches {shadow_reused} reused; device memory grew {grown} bytes while \
-         encoding ({} merges' scratch)",
+        "MERGE-SCRATCH {over:?}: {apart} passes apart, linear merges {recorded} recorded and \
+         {taken_over} taken over, linear scratches {made} made and {reused} reused, shadow \
+         scratches {shadow_reused} reused; device memory grew {grown} bytes while encoding ({} \
+         merges' scratch)",
         grown / scratch
     );
     match (linear, merged) {
+        // One run (`linear_run.rs`), or two where the second pass's box reaches past the first's
+        // (then one over the whole target), merged once each.
         (true, _) => {
             assert_eq!(apart, PASSES as u64, "every pass renders the texture apart");
-            assert_eq!(made, 1, "the command buffer's merges make one scratch");
-            assert_eq!(reused, PASSES as u64 - 1, "every later merge takes it");
+            assert!(
+                recorded <= 2,
+                "the passes merge once a run: {recorded} merges"
+            );
+            assert_eq!(
+                recorded + taken_over,
+                PASSES as u64,
+                "every later pass takes its run's"
+            );
+            assert_eq!(
+                made + reused,
+                recorded,
+                "each run's merge takes one scratch"
+            );
         }
         (false, true) => assert!(
             shadow_reused >= PASSES as u64 - 1,
@@ -438,3 +456,4 @@ fn many_passes_over_packed_rows_take_one_scratch() {
 fn many_passes_over_host_pages_take_one_scratch() {
     one_scratch(Over::HostPages, (300, 1200));
 }
+

@@ -1366,6 +1366,11 @@ impl<K: Copy + Ord + Hash> EncoderUses<K> {
         add_fence(&mut self.waits, FenceUse { fence, draws });
     }
 
+    /// Whether the encoder waits for or updates a fence.
+    pub(super) fn fenced(&self) -> bool {
+        !self.waits.is_empty() || !self.updates.is_empty()
+    }
+
     /// `update_fence`: the fence is updated after the encoder's work; after the draw stages
     /// `draws` alone where `Some` ([`FenceUse`]): a later wait orders after the encoder's draws in
     /// those stages and its commands outside its draws, not after its draws' other stages.

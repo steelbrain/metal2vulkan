@@ -88,6 +88,7 @@ use super::gpu_time::{self, KernelTimes, Life, Placement, Stamped, Times};
 use super::heap::Heap;
 use super::heap_sets::HeapUse;
 use super::kept_commands::KeptContext;
+use super::linear_run::{LinearRuns, RunPoint};
 use super::live_buffers::LiveTable;
 use super::merge_scratch::MergeScratch;
 use super::pipeline::budget::Urgency;
@@ -677,6 +678,9 @@ pub(super) struct State {
     /// How many batches it had once its last ended encoder joined one: the encoder opening next
     /// carries nothing where it starts another ([`State::shadows_to_carry`]).
     carry_batches: usize,
+    /// Its open runs of passes over a linear attachment rendered apart, merged once
+    /// (`linear_run.rs`).
+    linear_runs: LinearRuns,
     /// The pools of its commands' set 0 (`descriptor_arena.rs`), given back or released with
     /// the uploads.
     pub(super) descriptors: DescriptorArena,
@@ -1445,6 +1449,20 @@ impl State {
         self.shadow_carry = Some(carry);
     }
 
+    /// Where an encoder ending now ends among its encoders and batches (`linear_run.rs`).
+    pub(super) fn run_point(&self) -> RunPoint {
+        RunPoint {
+            ended: self.recorded.len(),
+            batches: self.batches.all().len(),
+            signals: self.batches.signals_pending(),
+        }
+    }
+
+    /// Its open runs of passes over a linear attachment rendered apart (`linear_run.rs`).
+    pub(super) fn linear_runs(&mut self) -> &mut LinearRuns {
+        &mut self.linear_runs
+    }
+
     /// Carry no shadowed texture's image on: the work encoded next reads what another writer the
     /// wait orders before it left in the truth, which every texture copies in again to hold
     /// (`shadow::ShadowCarry`).
@@ -1973,6 +1991,7 @@ impl CommandBuffer {
                 shadows_copied_in: Vec::new(),
                 shadow_carry: Some(ShadowCarry::default()),
                 carry_batches: 1,
+                linear_runs: LinearRuns::default(),
                 descriptors: DescriptorArena::default(),
                 status_words: None,
                 mesh_grid_past: false,

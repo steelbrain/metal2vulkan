@@ -206,17 +206,15 @@ use crate::exit_guard::{self, Call};
 use crate::gpu_time;
 use crate::release;
 use crate::resource::ResourceKey;
-use crate::retained::Retained;
 use crate::scheduler;
 use crate::sparse::bind::{bind_batch, BindFailure, Bound};
 use crate::sparse::encoder::SparseUpdate;
 use crate::texture::decoded_twin::{SecondDecode, TwinWrite};
 use crate::texture::wrapped::Transition;
 use crate::texture::Texture;
-use crate::tracker::{Barrier, EncoderUses, Point, Summary};
+use crate::tracker::{Barrier, Point, Summary};
 use crate::work_counts::Begun;
 use ash::vk;
-use metal2vulkan::bind::ReplayFaults;
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
@@ -1303,7 +1301,9 @@ impl CommandBufferShared {
     /// Record the segments of encoders `range` that their batch's submission records: the
     /// scrubs (`Deferred::SparseScrub`), with the mappings it applied, and the gated copies in
     /// (`Deferred::GatedCopyIn`), with the regions their logs say changed since the commit's
-    /// stamp, published by now.
+    /// stamp, published by now; and the merges of runs of passes over a linear attachment
+    /// (`Deferred::LinearMerge`), each the run's last pass's, the ones taken over recording
+    /// nothing.
     fn record_scrubs(
         &self,
         state: &mut State,
@@ -1314,7 +1314,7 @@ impl CommandBufferShared {
             for (at, segment) in recorded.segments.iter().enumerate() {
                 let at_submission = matches!(
                     segment.work,
-                    Deferred::SparseScrub(_) | Deferred::GatedCopyIn(_)
+                    Deferred::SparseScrub(_) | Deferred::GatedCopyIn(_) | Deferred::LinearMerge(_)
                 );
                 if at_submission && segment.recorded.is_none() {
                     scrubs.push((range.start + encoder, at, segment.work.clone()));
@@ -1323,6 +1323,14 @@ impl CommandBufferShared {
         }
         let device = &self.device;
         for (encoder, at, work) in scrubs {
+            // A run's merge a later pass took over records nothing (`linear_run.rs`).
+            if let Deferred::LinearMerge(merge) = &work {
+                if merge.taken() {
+                    state.recorded[encoder].segments[at].recorded =
+                        Some(RecordedSegment::submitted(Vec::new()));
+                    continue;
+                }
+            }
             let raw = self.record_raw(state, |state, buffer| {
                 match &work {
                     // SAFETY: the command buffer is recording; the texture is live (its encoder's
@@ -1339,20 +1347,19 @@ impl CommandBufferShared {
                     Deferred::GatedCopyIn(copy) => unsafe {
                         copy.record(device.shared().vk(), buffer)
                     },
+                    // SAFETY: the command buffer is recording, outside a render pass; the merge,
+                    // its images and its scratch are held until it completes (its pass's encoder
+                    // retains them), and the images rest in `GENERAL`.
+                    Deferred::LinearMerge(merge) => {
+                        unsafe { merge.record(device.shared().vk(), buffer) };
+                        device.shared().counts.linear_merge_recorded();
+                    }
                     _ => {}
                 }
                 Ok(())
             })?;
-            state.recorded[encoder].segments[at].recorded = Some(RecordedSegment {
-                raws: vec![raw],
-                summary: EncoderUses::new(true).finish(),
-                retained: Retained::default(),
-                executions: Vec::new(),
-                keys: Default::default(),
-                taken: Default::default(),
-                resident_misses: 0,
-                faults: ReplayFaults::default(),
-            });
+            state.recorded[encoder].segments[at].recorded =
+                Some(RecordedSegment::submitted(vec![raw]));
         }
         Ok(())
     }
