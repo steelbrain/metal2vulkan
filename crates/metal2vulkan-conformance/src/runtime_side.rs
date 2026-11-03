@@ -6246,6 +6246,113 @@ impl Side for RuntimeSide<'_> {
             state_encoder_status,
         ))
     }
+
+    fn empty_command_buffers(
+        &mut self,
+    ) -> Answer<crate::empty_command_buffers::EmptyCommandBuffers> {
+        use crate::empty_command_buffers::{
+            Alone, Behind, EmptyCommandBuffers, ARRIVAL, EMPTY, FILL, FILL_BYTES,
+        };
+        use crate::event_orders::Status;
+        use std::sync::{mpsc, Arc, Mutex};
+        let order: Arc<Mutex<Vec<String>>> = Arc::default();
+        // A handler that sends the status its command buffer reads inside it, and records `name`
+        // in `order` where one is given.
+        let sender = |name: Option<&'static str>| {
+            let (sent, received) = mpsc::channel();
+            let order = Arc::clone(&order);
+            let handler = Box::new(move |own: &CommandBuffer| {
+                if let (Some(name), Ok(mut order)) = (name, order.lock()) {
+                    order.push(name.to_owned());
+                }
+                let _ = sent.send(format!("{:?}", own.status()));
+            });
+            (handler, received)
+        };
+        let settled = |received: &mpsc::Receiver<String>| match received.recv_timeout(ARRIVAL) {
+            Ok(word) => Status::read(word),
+            Err(_) => Status::NeverSettled,
+        };
+        let waited =
+            |command_buffer: &CommandBuffer| match command_buffer.wait_until_completed_for(WAIT) {
+                Ok(()) => Status::read(format!("{:?}", command_buffer.status())),
+                Err(_) => Status::NeverSettled,
+            };
+        let queue = self
+            .device
+            .new_command_queue()
+            .map_err(Failure::from_error)?;
+        // Alone on an idle queue.
+        let alone: CommandBuffer = queue.command_buffer().map_err(Failure::from_error)?;
+        let (scheduled, in_scheduled) = sender(None);
+        let (completed, in_completed) = sender(None);
+        alone
+            .add_scheduled_handler(scheduled)
+            .map_err(Failure::from_error)?;
+        alone
+            .add_completed_handler(completed)
+            .map_err(Failure::from_error)?;
+        let kernel_before = [alone.kernel_start_time(), alone.kernel_end_time()];
+        let gpu_before = gpu_times(&alone);
+        alone.commit().map_err(Failure::from_error)?;
+        let after_the_wait = waited(&alone);
+        let statuses = [
+            settled(&in_scheduled),
+            settled(&in_completed),
+            after_the_wait,
+        ];
+        let kernel_after = [alone.kernel_start_time(), alone.kernel_end_time()];
+        let gpu = match (gpu_before, gpu_times(&alone)) {
+            (Ok(before), Ok(after)) => Ok((before, after)),
+            (Err(failure), _) | (_, Err(failure)) => Err(failure),
+        };
+        let alone = Alone::new(statuses, (kernel_before, kernel_after), gpu);
+        // Behind a fill of the same queue.
+        let target = self
+            .device
+            .new_buffer(FILL_BYTES, ResourceOptions::private())
+            .map_err(Failure::from_error)?;
+        let fill: CommandBuffer = queue.command_buffer().map_err(Failure::from_error)?;
+        let mut blit = fill.blit_command_encoder().map_err(Failure::from_error)?;
+        blit.fill_buffer(&target, 0..FILL_BYTES, 0x5a)
+            .map_err(Failure::from_error)?;
+        blit.end_encoding().map_err(Failure::from_error)?;
+        let (filled, _) = sender(Some(FILL));
+        fill.add_completed_handler(filled)
+            .map_err(Failure::from_error)?;
+        let empty: CommandBuffer = queue.command_buffer().map_err(Failure::from_error)?;
+        // The empty one's completed handler records itself and reads the fill's status.
+        let (fills_status, fill_read) = mpsc::channel();
+        {
+            let (order, fill) = (Arc::clone(&order), fill.clone());
+            empty
+                .add_completed_handler(Box::new(move |_: &CommandBuffer| {
+                    if let Ok(mut order) = order.lock() {
+                        order.push(EMPTY.to_owned());
+                    }
+                    let _ = fills_status.send(format!("{:?}", fill.status()));
+                }))
+                .map_err(Failure::from_error)?;
+        }
+        fill.commit().map_err(Failure::from_error)?;
+        empty.commit().map_err(Failure::from_error)?;
+        let after_the_wait = waited(&empty);
+        let fills_status = settled(&fill_read);
+        // Settled before the times are read: its handler may still be running.
+        let _ = waited(&fill);
+        let handler_order = order.lock().map(|order| order.clone()).unwrap_or_default();
+        let gpu = match (gpu_times(&fill), gpu_times(&empty)) {
+            (Ok(fill), Ok(empty)) => Ok((fill, empty)),
+            (Err(failure), _) | (_, Err(failure)) => Err(failure),
+        };
+        let behind = Behind::new(
+            handler_order,
+            [fills_status, after_the_wait],
+            (empty.kernel_start_time(), fill.kernel_end_time()),
+            gpu,
+        );
+        Ok(EmptyCommandBuffers { alone, behind })
+    }
 }
 
 /// The storage mode a [`Storage`] names, as the runtime's own enumeration spells it.

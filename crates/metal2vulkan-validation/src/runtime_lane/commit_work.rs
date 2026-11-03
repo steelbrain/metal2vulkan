@@ -8,11 +8,13 @@
 //!   the scheduler's section, where no spare is taken. A command buffer's first encoder records
 //!   into its spare pool's primary begun ahead, as the command buffer that gave the pool back
 //!   completed; before, it began one on the thread that encodes (8 to 20 us on ANV).
-//! - **Empty submissions.** A command buffer that encoded nothing and waits for nothing is one
-//!   `vkQueueSubmit` of no `VkCommandBuffer`: its signals alone. Before, it carried one of the
-//!   barrier to the host, and ANV on i915 lists every `VkDeviceMemory` of the device in a kernel
-//!   submission of commands (47 objects at 32 host imports on an Iris Xe), where it lists two in
-//!   one of none.
+//! - **No empty submissions.** A command buffer that encoded nothing and waits for and signals
+//!   nothing makes no `vkQueueSubmit` where no first work of the device's waits
+//!   (`WorkCounts::command_buffers_unsubmitted`): it completes in its queue's order, once the work
+//!   submitted before it did. Before, it was one `vkQueueSubmit` of no `VkCommandBuffer`, its
+//!   signals alone, and before that it carried one of the barrier to the host, and ANV on i915
+//!   lists every `VkDeviceMemory` of the device in a kernel submission of commands (47 objects at
+//!   32 host imports on an Iris Xe), where it lists two in one of none.
 //! - **First work rides along.** A new texture's first work (`texture/first_move.rs`) is a
 //!   `VkSubmitInfo` of the next submission's own `vkQueueSubmit`, a commit's or an internal one's
 //!   (handing its `VkImage` out): one call each, which Mesa's drivers run as one kernel submission;
@@ -181,10 +183,9 @@ fn a_first_encoder_takes_the_primary_its_spare_pool_began_ahead() {
     });
 }
 
-/// Empty command buffers one after another submit no `VkCommandBuffer`: each is one
-/// `vkQueueSubmit` of its signals alone (the module docs).
+/// Empty command buffers one after another make no `vkQueueSubmit` (the module docs).
 #[test]
-fn empty_command_buffers_submit_no_command_buffer() {
+fn empty_command_buffers_make_no_submission() {
     on_device(|device, _| {
         let queue = device.new_command_queue().unwrap();
         // The first takes any first work the device's creation left.
@@ -194,7 +195,11 @@ fn empty_command_buffers_submit_no_command_buffer() {
             finish(&queue.command_buffer().unwrap());
         }
         let after = device.work_counts();
-        assert_eq!(after.queue_submissions - before.queue_submissions, 8);
+        assert_eq!(after.queue_submissions, before.queue_submissions);
+        assert_eq!(
+            after.command_buffers_unsubmitted - before.command_buffers_unsubmitted,
+            8
+        );
         assert_eq!(
             after.command_buffers_submitted,
             before.command_buffers_submitted

@@ -1098,6 +1098,13 @@ impl FirstMoves {
         }
     }
 
+    /// Whether no work waits for the device's next submission: a command buffer that needs no GPU
+    /// work then goes with no submission, and one that finds work waiting carries it as before
+    /// (`command_buffer/submit.rs`).
+    pub(crate) fn none_waiting(&self) -> bool {
+        lock(&self.waiting).is_empty()
+    }
+
     /// Whether a host call's copy waits for the images of what is at `keeper` (the address of
     /// what [`register_texels`](Self::register_texels) was given). A decode alone waiting
     /// ([`TexelCopy::decode_only`]) is not: it writes the decoded twin, never the texels a copy

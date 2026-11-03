@@ -1937,6 +1937,18 @@ pub trait Side {
         Err(Failure::unavailable("command_buffer_facts"))
     }
 
+    /// What two command buffers with nothing encoded answer
+    /// ([`crate::empty_command_buffers::EmptyCommandBuffers`]): one on an idle queue, its
+    /// statuses in its handlers and after its wait and the shape of its four timing getters; one
+    /// committed behind a fill of [`crate::empty_command_buffers::FILL_BYTES`] of its queue, the
+    /// order of the two's completed handlers, the fill's status in the empty one's, and its kernel
+    /// and GPU times against the fill's. Times are recorded as signs and orders, never as times.
+    fn empty_command_buffers(
+        &mut self,
+    ) -> Answer<crate::empty_command_buffers::EmptyCommandBuffers> {
+        Err(Failure::unavailable("empty_command_buffers"))
+    }
+
     /// A command queue's limit on uncompleted command buffers, by the probe both sides run
     /// ([`crate::queue_slots`]): the queue is made with `max` as its
     /// `maxCommandBufferCount` (`newCommandQueue` where `max` is `None`), and at most `cap` command

@@ -59,6 +59,7 @@ pub mod coverage;
 pub mod device;
 pub mod device_queries;
 pub mod diff;
+pub mod empty_command_buffers;
 pub mod event_orders;
 pub mod fixture;
 pub mod function_bindings;

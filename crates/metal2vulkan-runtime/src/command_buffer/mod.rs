@@ -2406,9 +2406,12 @@ impl CommandBuffer {
     /// paravirtualized device's interrupt) takes it here, and a command buffer with such
     /// handlers and no completed handler finishes with no handler thread woken.
     ///
-    /// - **The thread.** The queue's waiter that saw the command buffer's work complete. Where its
-    ///   transition to `Completed` runs on its queue's handler thread instead, so do these
-    ///   handlers, at the same point of it: where it has a completed handler, an earlier
+    /// - **The thread.** The queue's waiter that saw the command buffer's work complete; for one
+    ///   that needs no GPU work (nothing it encoded recorded work, and it waits for and signals no
+    ///   event), taken with no submission where its queue had no work in flight, the scheduler's
+    ///   thread that took it. Where its transition to `Completed` runs on its queue's handler
+    ///   thread instead, so do these handlers, at the same point of it: where it has a completed
+    ///   handler, an earlier
     ///   transition of its queue still runs or waits there (a scheduled or completed handler), or
     ///   the runtime holds a deallocator of the program's
     ///   ([`Device::new_buffer_with_bytes_no_copy`](super::Device::new_buffer_with_bytes_no_copy)),
@@ -2420,7 +2423,8 @@ impl CommandBuffer {
     ///   [`wait_until_completed`](Self::wait_until_completed) returns, and before its queue's next
     ///   command buffer completes: in its queue's commit order, as completed handlers run.
     /// - **Keep it short, and never block.** On a queue's waiter it holds back the completion of
-    ///   every queue's command buffers until it returns. A wait in it for what has not happened (a
+    ///   every queue's command buffers until it returns; on the scheduler's thread, their
+    ///   submission too. A wait in it for what has not happened (a
     ///   command buffer's scheduling or completion, a slot of a full queue) is refused, wherever it
     ///   runs (`WaitWouldDeadlock` of [`DeadlockCause::CompletionSeenHandler`]); it must not wait
     ///   otherwise, nor take a lock that a thread holds while it waits for the device. What it

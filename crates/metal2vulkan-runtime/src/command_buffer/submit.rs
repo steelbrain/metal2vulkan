@@ -87,7 +87,8 @@
 //! orders only its own `VkSubmitInfo`'s commands, and a signal follows commands, not waits
 //! (`vkQueueSubmit`'s synchronization scopes), so a signal after a wait needs both in one, with
 //! the end's barrier, a command, between. Where it has no wait, no image to move back and no
-//! timestamp to write either (an empty command buffer's batch, one of signals alone), its end
+//! timestamp to write either (an empty command buffer's batch that carries the device's first
+//! work, one of signals alone), its end
 //! records nothing and the `VkSubmitInfo` holds no `VkCommandBuffer`: none of its commands wrote
 //! anything, every batch before it made its own writes visible to the host before its signals,
 //! and its signals follow every command submitted before them. ANV on i915 lists every
@@ -173,6 +174,20 @@
 //! The submission of a command buffer's last batch, or its hold in a group (`group.rs`), leaves its
 //! submission handlers to the submitting thread, once the scheduler's lock is free; its transition
 //! to `Scheduled` waits for them.
+//!
+//! **No GPU work, no submission** ([`State::needs_no_gpu`]). A command buffer whose encoders
+//! recorded nothing and whose one batch waits for and signals no event and no binary semaphore (so
+//! presents no drawable) is taken, once it leads its logical queue's line, no group is held and
+//! no first work of the device's waits (`texture/first_move.rs`), with no `vkQueueSubmit`: its batch is watched at its `VkQueue`'s last submitted value, so it
+//! completes in its queue's order, once the queue's work before it completed, or at once where the
+//! queue has none in flight (`Completion::watch_unsubmitted`). Everything else its last batch's
+//! taking does is done as for a submitted one: its kernel times, its scheduling (by a hang's
+//! thread where one makes it), its submission handlers, its holds. Metal completes such a command
+//! buffer without its GPU too: on the M3 Max (macOS 27.0.1) one committed and waited for on an
+//! idle queue returned in 15 us at the median of 1000, its `GPUStartTime` equal to its
+//! `GPUEndTime` (within 0.3 us) 1 to 2 us after its `kernelEndTime`; one committed behind a fill
+//! completed after the fill, its GPU times 65 to 135 us after the fill's `GPUEndTime`. Counted:
+//! `WorkCounts::command_buffers_unsubmitted`.
 
 use super::completion::Submitted;
 use super::gate::Hold;
@@ -246,6 +261,9 @@ pub(crate) struct Submission {
     /// Its command buffer became `Scheduled` as it was held in a group
     /// ([`schedule_held`](Submission::schedule_held)).
     scheduled: bool,
+    /// It was taken with no `vkQueueSubmit`: its command buffer needs no GPU work
+    /// ([`State::needs_no_gpu`]).
+    unsubmitted: bool,
 }
 
 /// What [`CommandBufferShared::submit_batch`] did with a batch.
@@ -326,6 +344,24 @@ impl Submission {
     }
 }
 
+impl State {
+    /// Whether the command buffer needs no GPU work (the module docs): none of its encoders
+    /// recorded anything (none ended, and no storage form's switch rides on it with a part of its
+    /// own), and its one batch waits for and signals no event and no binary semaphore. Read from
+    /// what it recorded, never from a name.
+    pub(super) fn needs_no_gpu(&self) -> bool {
+        let [batch] = self.batches.all() else {
+            return false;
+        };
+        self.recorded.is_empty()
+            && self.storage_form.is_none()
+            && batch.waits.is_empty()
+            && batch.signals.is_empty()
+            && batch.binary_waits.is_empty()
+            && batch.binary_signals.is_empty()
+    }
+}
+
 impl CommandBufferShared {
     /// Submit batch `index` of the command buffer (`last` when it ends it) after the Vulkan waits
     /// `event_waits` for its events, against the scheduler's tracker and timeline values. The
@@ -399,6 +435,17 @@ impl CommandBufferShared {
         // its own batch is submitted, after the batch's checks: one a check failed keeps the
         // check's code.
         let rebound = state.failing_at(device, index);
+        // One that needs no GPU work goes with no submission, in its queue's order (the module
+        // docs); behind a group held, it goes with the group as any batch that joins does, and
+        // where the device's first work waits, it carries it as any batch does.
+        if !rebound
+            && !scheduler.group.holds()
+            && state.needs_no_gpu()
+            && shared.textures.first_moves.none_waiting()
+        {
+            let taken = self.take_unsubmitted(&mut state, index, last, scheduler);
+            return Ok(Submitting::Submitted(taken));
+        }
         let range = state.batch_range(index);
         // A batch that begins with resource state encoders binds their updates first, after its
         // waits, which its work then waits for through the bind.
@@ -1080,6 +1127,7 @@ impl CommandBufferShared {
             forms,
             schedules,
             scheduled: false,
+            unsubmitted: false,
         };
         if !grouped {
             return Ok(Submitting::Submitted(submission));
@@ -1104,6 +1152,62 @@ impl CommandBufferShared {
         Ok(Submitting::Grouped)
     }
 
+    /// Take batch `index` (`last` where it ends the command buffer) of a command buffer that needs
+    /// no GPU work ([`State::needs_no_gpu`]) with no submission, as its submission would take it
+    /// but for the `vkQueueSubmit` (the module docs): its batch is watched at its `VkQueue`'s last
+    /// submitted value in `scheduler`, with no fence and no signal.
+    fn take_unsubmitted(
+        self: &Arc<Self>,
+        state: &mut State,
+        index: usize,
+        last: bool,
+        scheduler: &scheduler::State,
+    ) -> Submission {
+        let device = &self.device;
+        let queue = self.queue.vk_queue();
+        if index == 0 && self.kernel.start() == 0 {
+            self.kernel.begin();
+        }
+        // What it holds until it completes, as a submitted batch takes it.
+        let own: Vec<Texture> = lock(&self.own_textures).drain(..).collect();
+        if !own.is_empty() {
+            state.retained.push(Box::new(own));
+        }
+        if let Some(ticket) = state.heaps.submit(device) {
+            state.retained.push(Box::new(ticket));
+        }
+        // Scheduled by its last batch's taking, unless a hang's thread makes it (`hang.rs`).
+        let (schedules, took) = hang::schedules(&mut state.hang_scheduling, index, last);
+        if took {
+            let parked = state.parked > 0;
+            self.wake_parked(parked);
+        }
+        if schedules {
+            self.kernel.end_at(gpu_time::host_nanos());
+        }
+        let forms = last && state.storage_form.is_some();
+        let handlers = (schedules && !state.submission.is_empty()) || forms;
+        state.submitting = handlers;
+        let holds = state.holds_until(index);
+        device.shared().counts.command_buffer_unsubmitted();
+        Submission {
+            queue,
+            batch: Submitted {
+                value: scheduler.values[queue],
+                buffer: self.hold(),
+                last,
+                fence: None,
+                signals: Vec::new(),
+                holds,
+            },
+            handlers,
+            forms,
+            schedules,
+            scheduled: false,
+            unsubmitted: true,
+        }
+    }
+
     /// Publish a batch [`submit_batch`](Self::submit_batch) submitted, after the section that
     /// submitted it ended: when it ends the command buffer, its transition to `Scheduled`
     /// (`CommandBufferShared::schedule`) unless it made it as it was held in a group
@@ -1117,6 +1221,7 @@ impl CommandBufferShared {
             batch,
             schedules,
             scheduled,
+            unsubmitted,
             ..
         } = submission;
         if schedules && !scheduled {
@@ -1124,7 +1229,13 @@ impl CommandBufferShared {
             // transition to `Scheduled` first.
             self.schedule();
         }
-        self.device.shared().completion.watch(queue, batch);
+        let completion = &self.device.shared().completion;
+        match unsubmitted {
+            // The caller makes the turn that finishes it where its queue reached its value and no
+            // turn is under way, once it holds no lock (`Completion::turn_owed`).
+            true => completion.watch_unsubmitted(queue, batch),
+            false => completion.watch(queue, batch),
+        }
     }
 
     /// A command buffer of this command buffer's pool holding what `record` records into it,

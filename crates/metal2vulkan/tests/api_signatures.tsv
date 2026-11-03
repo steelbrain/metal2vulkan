@@ -2519,6 +2519,7 @@ field	metal2vulkan-runtime::WorkCounts.command_buffers_begun_kept_barriers	pub c
 field	metal2vulkan-runtime::WorkCounts.command_buffers_begun_secondaries	pub command_buffers_begun_secondaries: u64
 field	metal2vulkan-runtime::WorkCounts.command_buffers_begun_segments	pub command_buffers_begun_segments: u64
 field	metal2vulkan-runtime::WorkCounts.command_buffers_submitted	pub command_buffers_submitted: u64
+field	metal2vulkan-runtime::WorkCounts.command_buffers_unsubmitted	pub command_buffers_unsubmitted: u64
 field	metal2vulkan-runtime::WorkCounts.command_pools_made	pub command_pools_made: u64
 field	metal2vulkan-runtime::WorkCounts.commands_noted_as_before	pub commands_noted_as_before: u64
 field	metal2vulkan-runtime::WorkCounts.commands_recorded	pub commands_recorded: CommandsRecorded
@@ -2530,6 +2531,7 @@ field	metal2vulkan-runtime::WorkCounts.completion_arms_after_a_wake	pub completi
 field	metal2vulkan-runtime::WorkCounts.completion_reads_ran_ahead	pub completion_reads_ran_ahead: u64
 field	metal2vulkan-runtime::WorkCounts.completion_seen_handlers_run	pub completion_seen_handlers_run: u64
 field	metal2vulkan-runtime::WorkCounts.completion_seen_handlers_where_seen	pub completion_seen_handlers_where_seen: u64
+field	metal2vulkan-runtime::WorkCounts.completion_turns_where_taken	pub completion_turns_where_taken: u64
 field	metal2vulkan-runtime::WorkCounts.compute_pipeline_create_nanos	pub compute_pipeline_create_nanos: u64
 field	metal2vulkan-runtime::WorkCounts.copied_copy_in_bytes	pub copied_copy_in_bytes: u64
 field	metal2vulkan-runtime::WorkCounts.copied_copy_in_bytes_skipped	pub copied_copy_in_bytes_skipped: u64

@@ -80,6 +80,7 @@ pub mod device_queries;
 pub mod discard_hoist;
 pub mod draw_state_changes;
 pub mod dynamic_libraries;
+pub mod empty_command_buffers;
 pub mod etc_textures;
 pub mod event_orders;
 pub mod extended_range_blends;
@@ -496,6 +497,7 @@ pub fn all() -> Vec<Box<dyn Case>> {
     }
     cases.extend(sparse_mappings::all());
     cases.extend(command_buffer_facts::all());
+    cases.extend(empty_command_buffers::all());
     cases.extend(fresh_contents::all());
     cases.extend(sample_positions::all());
     cases.extend(

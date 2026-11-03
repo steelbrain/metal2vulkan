@@ -6798,6 +6798,131 @@ impl Side for MetalSide {
             state_encoder_status,
         ))
     }
+
+    fn empty_command_buffers(
+        &mut self,
+    ) -> Answer<crate::empty_command_buffers::EmptyCommandBuffers> {
+        use crate::empty_command_buffers::{
+            Alone, Behind, EmptyCommandBuffers, ARRIVAL, EMPTY, FILL, FILL_BYTES,
+        };
+        use crate::event_orders::Status;
+        use std::sync::{mpsc, Arc, Mutex};
+        type Block =
+            block2::RcBlock<dyn Fn(std::ptr::NonNull<ProtocolObject<dyn MTLCommandBuffer>>)>;
+        // A block that sends the status its command buffer reads inside it, and records `name`
+        // in `order` where one is given.
+        let sender = |name: Option<&'static str>, order: &Arc<Mutex<Vec<String>>>| {
+            let (sent, received) = mpsc::channel();
+            let order = Arc::clone(order);
+            let block: Block = block2::RcBlock::new(
+                move |own: std::ptr::NonNull<ProtocolObject<dyn MTLCommandBuffer>>| {
+                    if let (Some(name), Ok(mut order)) = (name, order.lock()) {
+                        order.push(name.to_owned());
+                    }
+                    // SAFETY: Metal hands the handler its own command buffer, alive for the call.
+                    let status = unsafe { own.as_ref() }.status();
+                    let _ = sent.send(status_word(status).to_owned());
+                },
+            );
+            (block, received)
+        };
+        let settled = |received: &mpsc::Receiver<String>| match received.recv_timeout(ARRIVAL) {
+            Ok(word) => Status::read(word),
+            Err(_) => Status::NeverSettled,
+        };
+        objc2::rc::autoreleasepool(|_| {
+            let queue = self
+                .device
+                .newCommandQueue()
+                .ok_or_else(|| Failure::named("NewCommandQueue", "returned nil"))?;
+            let order: Arc<Mutex<Vec<String>>> = Arc::default();
+            // Alone on an idle queue.
+            let alone: Retained<ProtocolObject<dyn MTLCommandBuffer>> = queue
+                .commandBuffer()
+                .ok_or_else(|| Failure::named("CommandBuffer", "returned nil"))?;
+            let (scheduled, in_scheduled) = sender(None, &order);
+            let (completed, in_completed) = sender(None, &order);
+            // SAFETY: both blocks are valid heap blocks held for the rest of this probe, which
+            // does not return before both handlers ran or their bounds ran out.
+            unsafe {
+                alone.addScheduledHandler(block2::RcBlock::as_ptr(&scheduled));
+                alone.addCompletedHandler(block2::RcBlock::as_ptr(&completed));
+            }
+            let kernel_before = [alone.kernelStartTime(), alone.kernelEndTime()];
+            let gpu_before = [alone.GPUStartTime(), alone.GPUEndTime()];
+            alone.commit();
+            alone.waitUntilCompleted();
+            let after_the_wait = Status::read(status_word(alone.status()));
+            let statuses = [
+                settled(&in_scheduled),
+                settled(&in_completed),
+                after_the_wait,
+            ];
+            let kernel_after = [alone.kernelStartTime(), alone.kernelEndTime()];
+            let gpu_after = [alone.GPUStartTime(), alone.GPUEndTime()];
+            let alone = Alone::new(
+                statuses,
+                (kernel_before, kernel_after),
+                Ok((gpu_before, gpu_after)),
+            );
+            // Behind a fill of the same queue.
+            let target = self
+                .device
+                .newBufferWithLength_options(
+                    FILL_BYTES as usize,
+                    MTLResourceOptions::StorageModePrivate,
+                )
+                .ok_or_else(|| Failure::named("NewBuffer", "returned nil"))?;
+            let fill: Retained<ProtocolObject<dyn MTLCommandBuffer>> = queue
+                .commandBuffer()
+                .ok_or_else(|| Failure::named("CommandBuffer", "returned nil"))?;
+            let encoder = fill
+                .blitCommandEncoder()
+                .ok_or_else(|| Failure::named("BlitCommandEncoder", "returned nil"))?;
+            encoder.fillBuffer_range_value(&target, NSRange::new(0, FILL_BYTES as usize), 0x5a);
+            encoder.endEncoding();
+            let (filled, _) = sender(Some(FILL), &order);
+            let empty: Retained<ProtocolObject<dyn MTLCommandBuffer>> = queue
+                .commandBuffer()
+                .ok_or_else(|| Failure::named("CommandBuffer", "returned nil"))?;
+            // The empty one's completed handler records itself and reads the fill's status.
+            let (fills_status, fill_read) = mpsc::channel();
+            let emptied: Block = {
+                let order = Arc::clone(&order);
+                let fill = fill.clone();
+                block2::RcBlock::new(
+                    move |_: std::ptr::NonNull<ProtocolObject<dyn MTLCommandBuffer>>| {
+                        if let Ok(mut order) = order.lock() {
+                            order.push(EMPTY.to_owned());
+                        }
+                        let _ = fills_status.send(status_word(fill.status()).to_owned());
+                    },
+                )
+            };
+            // SAFETY: as above.
+            unsafe {
+                fill.addCompletedHandler(block2::RcBlock::as_ptr(&filled));
+                empty.addCompletedHandler(block2::RcBlock::as_ptr(&emptied));
+            }
+            fill.commit();
+            empty.commit();
+            empty.waitUntilCompleted();
+            let after_the_wait = Status::read(status_word(empty.status()));
+            let fills_status = settled(&fill_read);
+            fill.waitUntilCompleted();
+            let handler_order = order.lock().map(|order| order.clone()).unwrap_or_default();
+            let behind = Behind::new(
+                handler_order,
+                [fills_status, after_the_wait],
+                (empty.kernelStartTime(), fill.kernelEndTime()),
+                Ok((
+                    [fill.GPUStartTime(), fill.GPUEndTime()],
+                    [empty.GPUStartTime(), empty.GPUEndTime()],
+                )),
+            );
+            Ok(EmptyCommandBuffers { alone, behind })
+        })
+    }
 }
 
 /// Metal's `MTLHeapType` for a case's heap type, by its raw value, so the two spellings cannot

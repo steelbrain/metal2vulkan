@@ -741,6 +741,10 @@ impl Scheduler {
                 device.let_go_elsewhere(Box::new(last));
             }
         }
+        // A command buffer that needs no GPU work, taken with no submission behind no work in
+        // flight, is finished by this thread, which holds no lock: it runs only the transitions
+        // that run none of the program's code, and posts the rest (`Completion::turn_owed`).
+        device.shared().completion.turn_owed();
         // This pass never looks again (`inbox.rs`): what is left in the order, and anything
         // posted or nudged during it, goes to the thread that makes passes.
         if left_over || shared.inbox.passed_over() {
@@ -1117,6 +1121,12 @@ fn round(shared: &SchedulerShared, left: &mut Left<Work>, passed: &mut Passed) -
     } else {
         settle(&mut passed.settled);
         run_submission_handlers(&mut passed.handlers);
+        // A command buffer that needs no GPU work, taken with no submission behind no work in
+        // flight, is finished by this thread, after its submission handlers and holding no lock
+        // (`Completion::turn_owed`). Every command buffer the passes took is in `spent`.
+        if let Some(buffer) = passed.spent.first() {
+            buffer.device().shared().completion.turn_owed();
+        }
     }
     passed.spent.clear();
     !passed.exiting

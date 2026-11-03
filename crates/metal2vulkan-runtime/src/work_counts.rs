@@ -55,6 +55,7 @@ pub(crate) struct Counters {
     completed_where_seen: AtomicU64,
     completion_seen_handlers_run: AtomicU64,
     completion_seen_handlers_where_seen: AtomicU64,
+    command_buffers_unsubmitted: AtomicU64,
     scheduled_where_submitted: AtomicU64,
     timestamp_slots_taken: AtomicU64,
     timestamp_slots_reset_on_host: AtomicU64,
@@ -837,6 +838,13 @@ impl Counters {
             self.completion_seen_handlers_where_seen
                 .fetch_add(1, Ordering::Relaxed);
         }
+    }
+
+    /// A command buffer that needs no GPU work was taken with no submission
+    /// (`command_buffer/submit.rs`).
+    pub(crate) fn command_buffer_unsubmitted(&self) {
+        self.command_buffers_unsubmitted
+            .fetch_add(1, Ordering::Relaxed);
     }
 
     /// A command buffer's transition to `Scheduled` ran on the scheduler's thread as its last
@@ -3060,6 +3068,16 @@ pub struct WorkCounts {
     /// its transition ran there (`completed_where_seen`); the others ran on its queue's handler
     /// thread.
     pub completion_seen_handlers_where_seen: u64,
+    /// Command buffers taken with no `vkQueueSubmit`: nothing encoded in them recorded work, and
+    /// their one batch waits for and signals no event or semaphore and presents no drawable
+    /// (`command_buffer/submit.rs`). Each completes in its queue's order, once the work submitted
+    /// before it completed.
+    pub command_buffers_unsubmitted: u64,
+    /// Completion turns made by the thread that took such a command buffer, the scheduler's or
+    /// one about to block for a command buffer, where its queue had no work in flight before it
+    /// and no turn was under way: no queue waiter woken for it
+    /// (`command_buffer/completion.rs`).
+    pub completion_turns_where_taken: u64,
     /// Command buffers whose transition to `Scheduled` ran on the scheduler's thread as their last
     /// batch went, with no handler thread woken: those with no scheduled handler and no
     /// submission handler, whose queue's context held nothing and ran on no thread then
@@ -5167,6 +5185,9 @@ impl Device {
                 .load(Ordering::Relaxed),
             completion_seen_handlers_where_seen: (counters.completion_seen_handlers_where_seen)
                 .load(Ordering::Relaxed),
+            command_buffers_unsubmitted: (counters.command_buffers_unsubmitted)
+                .load(Ordering::Relaxed),
+            completion_turns_where_taken: self.shared().completion.turns_where_taken(),
             scheduled_where_submitted: (counters.scheduled_where_submitted).load(Ordering::Relaxed),
             timestamp_slots_taken: counters.timestamp_slots_taken.load(Ordering::Relaxed),
             timestamp_slots_reset_on_host: (counters.timestamp_slots_reset_on_host)

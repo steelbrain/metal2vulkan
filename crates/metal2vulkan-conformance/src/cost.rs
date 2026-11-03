@@ -457,7 +457,7 @@ const POOLED: &str = "an object made because no spare was free, where a spare co
 /// replays of a larger case set — which reads like a regression and is not one. See [`BORROWED`].
 /// `slot_returns` beside it stays gated: it counts work items, one a command buffer, and has held
 /// still alone and in both case sets.
-const RACY: [(&str, &str); 34] = [
+const RACY: [(&str, &str); 35] = [
     ("fences_made", POOLED),
     // What is alive, parked or waiting at the instant the counts were read.
     ("memory_blocks_live", INSTANTANEOUS),
@@ -498,6 +498,12 @@ const RACY: [(&str, &str); 34] = [
     ("primaries_begun_ahead", AHEAD),
     ("commands_recorded.begin_command_buffer", BEGUN),
     ("completed_where_seen", COMPLEMENT),
+    (
+        "completion_turns_where_taken",
+        "which of our own threads finished a command buffer taken with no submission: the one \
+         that took it where its queue's earlier work had completed by then, else a queue's \
+         waiter, so it moves with when the GPU finished that work",
+    ),
     ("pooled_memory_blocks_freed", QUIET),
     ("finales_folded", FOLDED),
     ("command_pools_made", POOLED),
@@ -789,7 +795,7 @@ const TRANSLATION: [&str; 19] = [
 
 /// The name prefixes that put a count in [`Region::Submission`]: the commit path, our own other
 /// threads and the GPU.
-const SUBMISSION: [&str; 48] = [
+const SUBMISSION: [&str; 50] = [
     "commands_recorded.",
     "command_buffers_",
     "command_pools_made",
@@ -830,6 +836,8 @@ const SUBMISSION: [&str; 48] = [
     "trail_waits",
     "missed_completion_wakes",
     "completed_where_seen",
+    "completion_seen_handlers_",
+    "completion_turns_where_taken",
     "scheduled_where_submitted",
     "timestamp_slots_",
     "calibration",

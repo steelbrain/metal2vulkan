@@ -82,6 +82,16 @@
 //!   every light queue's burst of the queue storm (`runtime_lane::queue_storms`) into its tail.
 //!   While its waiter makes a turn, a queue's next batch waits for that turn to end before its wait
 //!   begins; its fence and value stay signaled meanwhile.
+//! - **No GPU work: finished where it is taken** ([`Completion::watch_unsubmitted`]). A command
+//!   buffer that needs no GPU work is taken with no submission (`submit.rs`) and watched at its
+//!   `VkQueue`'s last submitted value, behind its queue's earlier batches: it finishes in the turn
+//!   that finishes the batch before it, by the waiter that saw that one complete. Where its queue
+//!   reached that value already and no turn is under way, no waiter is woken for it: the thread
+//!   that took it makes the turn itself once it holds no lock ([`Completion::turn_owed`]), the
+//!   scheduler's or a thread about to block for a command buffer, which runs only plain
+//!   transitions (`CommandBufferShared::finish_here`). A turn takes every queue's batches seen
+//!   reached, so the one turn at a time on the device keeps every order above. Counted:
+//!   `WorkCounts::completion_turns_where_taken`.
 //! - **Published once a host wait returned for it** ([`seen`]). The host sees a batch's writes once
 //!   the batch completed: its last command buffer makes them available to the host
 //!   (`Barrier::to_host`, or `Barrier::to_all`), before its signal in submission order, and the
@@ -141,7 +151,7 @@ use crate::release;
 use crate::Device;
 use ash::vk;
 use std::collections::VecDeque;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 use std::thread::JoinHandle;
 use std::time::Duration;
@@ -168,6 +178,15 @@ struct Watch {
     /// The notifies made, and those spared as no waiter slept (`WorkCounts`).
     woke: AtomicU64,
     spared: AtomicU64,
+    /// A batch watched with no submission ([`Completion::watch_unsubmitted`]) found its queue's
+    /// value reached and no turn under way, and woke no waiter: the thread that took it makes the
+    /// turn ([`Completion::turn_owed`]). Set under `pending`'s lock.
+    owed: AtomicBool,
+    /// The fence lists of the turns [`Completion::turn_owed`] makes, kept with their room: one
+    /// turn at a time runs on the device (`turning`), so one thread at a time takes them.
+    lists: Mutex<FenceLists>,
+    /// The turns made so ([`Completion::turn_owed`], `WorkCounts::completion_turns_where_taken`).
+    turns_where_taken: AtomicU64,
 }
 
 impl Watch {
@@ -256,6 +275,9 @@ impl Completion {
             drained: Condvar::new(),
             woke: AtomicU64::new(0),
             spared: AtomicU64::new(0),
+            owed: AtomicBool::new(false),
+            lists: Mutex::new(FenceLists::default()),
+            turns_where_taken: AtomicU64::new(0),
         });
         let completion = Completion {
             watch: Arc::clone(&watch),
@@ -290,6 +312,66 @@ impl Completion {
             pending.parked[queue]
         };
         self.watch.notify(&self.watch.wakes[queue], parked);
+    }
+
+    /// Wait for `batch`, of a command buffer that needs no GPU work, taken with no submission and
+    /// watched at the last value submitted to `VkQueue` `queue` (`submit.rs`), with no fence: as
+    /// [`watch`](Self::watch), but where its queue reached that value already, no failure is
+    /// pending and no turn is under way, no waiter is woken, and the turn that finishes it is owed
+    /// to the caller, which makes it once it holds no lock ([`turn_owed`](Self::turn_owed)). A
+    /// turn under way takes it at its next look, which takes this lock.
+    pub(crate) fn watch_unsubmitted(&self, queue: usize, batch: Submitted) {
+        debug_assert!(
+            batch.fence.is_none(),
+            "a batch with no submission has no fence"
+        );
+        let parked = {
+            let mut pending = lock(&self.watch.pending);
+            pending.queues[queue].push_back(batch);
+            let owed = !pending.turning
+                && !pending.holding
+                && !pending.exiting
+                && pending.failed.is_none()
+                && front_reached(&pending, queue);
+            if owed {
+                self.watch.owed.store(true, Ordering::SeqCst);
+                drop(pending);
+                self.watch.spared.fetch_add(1, Ordering::Relaxed);
+                return;
+            }
+            pending.parked[queue]
+        };
+        self.watch.notify(&self.watch.wakes[queue], parked);
+    }
+
+    /// Make the turn a batch watched with no submission left to this thread
+    /// ([`watch_unsubmitted`](Self::watch_unsubmitted)), where one is owed, no turn is under way
+    /// and a queue's batches are still seen reached: one look at a flag where none is owed. The
+    /// caller holds no lock of the runtime's: the turn finishes command buffers, takes the
+    /// scheduler's lock to wake it, and may run their transitions here
+    /// (`CommandBufferShared::finish_here`).
+    pub(crate) fn turn_owed(&self) {
+        let watch = &*self.watch;
+        if !watch.owed.swap(false, Ordering::SeqCst) {
+            return;
+        }
+        {
+            let mut pending = lock(&watch.pending);
+            let reached = (0..pending.queues.len()).any(|queue| front_reached(&pending, queue));
+            if pending.turning || pending.exiting || !reached {
+                return;
+            }
+            pending.turning = true;
+        }
+        watch.turns_where_taken.fetch_add(1, Ordering::Relaxed);
+        let mut lists = lock(&watch.lists);
+        turns(watch, &mut lists);
+    }
+
+    /// The turns made by the thread that took a command buffer needing no GPU work
+    /// ([`turn_owed`](Self::turn_owed)).
+    pub(crate) fn turns_where_taken(&self) -> u64 {
+        self.watch.turns_where_taken.load(Ordering::Relaxed)
     }
 
     /// The notifies made to the waiters, and those spared as none slept.
@@ -342,11 +424,12 @@ fn exit(watch: &Watch) {
     watch.wake_all();
 }
 
-/// Turns, made by the waiter that called this once it set `turning` (the module docs): each looks
+/// Turns, made by the waiter that called this once it set `turning`, or by the thread a batch with
+/// no submission left one to ([`Completion::turn_owed`]) (the module docs): each looks
 /// for the batches the queues' waiters saw reached, or a waiter's failure, and finishes them
 /// ([`finish`]), or finishes every pending batch with the failure ([`fail`]); until a look finds
 /// nothing, which clears `turning` under the lock it took: a waiter that saw a value reached while
-/// `turning` was set left it to that look. `lists` is the waiter's own, kept from turn to turn: a
+/// `turning` was set left it to that look. `lists` is the caller's own, kept from turn to turn: a
 /// turn fills them again within the room the earlier ones left, so in a steady state it allocates
 /// none. False once the process is exiting.
 fn turns(watch: &Watch, lists: &mut FenceLists) -> bool {
@@ -367,13 +450,18 @@ fn turns(watch: &Watch, lists: &mut FenceLists) -> bool {
                     pending.turning = false;
                     return true;
                 }
-                // The waiters of the queues whose batches it took, where they sleep.
+                // The waiters of the queues whose batches it took, where they sleep and their
+                // queue still holds a batch to arm for, or they stop: one whose queue it emptied
+                // has nothing to do, and the next batch watched wakes it.
                 for (queue, _) in &finished {
                     if lists.woken.last() != Some(queue) {
                         lists.woken.push(*queue);
                     }
                 }
-                lists.woken.retain(|&queue| pending.parked[queue]);
+                let stopping = pending.stopping;
+                lists.woken.retain(|&queue| {
+                    pending.parked[queue] && (stopping || !pending.queues[queue].is_empty())
+                });
                 Turn::Finished(finished)
             }
         };
@@ -802,10 +890,15 @@ fn wait_for_queue(watch: &Watch, queue: usize) {
 /// Whether a turn has work that `queue`'s waiter sees: a waiter's failure, or its queue's first
 /// pending batch reached.
 fn due(pending: &Pending, queue: usize) -> bool {
-    pending.failed.is_some()
-        || pending.queues[queue]
-            .front()
-            .is_some_and(|batch| batch.value <= pending.reached[queue])
+    pending.failed.is_some() || front_reached(pending, queue)
+}
+
+/// Whether `queue`'s first pending batch is reached: its value is at most the one its waiter saw
+/// its timeline reach.
+fn front_reached(pending: &Pending, queue: usize) -> bool {
+    pending.queues[queue]
+        .front()
+        .is_some_and(|batch| batch.value <= pending.reached[queue])
 }
 
 /// Wait up to one slice for `front`, the first pending batch of `device`'s `VkQueue` `queue`: for

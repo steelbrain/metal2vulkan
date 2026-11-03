@@ -748,6 +748,13 @@ impl<S: Side, W: Watcher> Side for Watching<S, W> {
         self.inner.command_buffer_facts()
     }
 
+    fn empty_command_buffers(
+        &mut self,
+    ) -> Answer<crate::empty_command_buffers::EmptyCommandBuffers> {
+        let _span = self.watch("empty_command_buffers");
+        self.inner.empty_command_buffers()
+    }
+
     fn sparse_tile_size_in_bytes(&mut self, page: crate::sparse_query::QueryPage) -> Answer<u64> {
         let _span = self.watch("sparse_tile_size_in_bytes");
         self.inner.sparse_tile_size_in_bytes(page)
