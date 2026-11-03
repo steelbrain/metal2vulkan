@@ -1881,7 +1881,7 @@ impl RenderLowering {
             (&mut argument_samplers, &mut None),
             (&function_tables, &mut None),
         )?;
-        let Settled { variant, plan, .. } = settled;
+        let (Settled { variant, plan, .. }, _) = settled;
         let device = self.core.device();
         let stages = &variant.pipeline().stages;
         device.degrade_argument_pixel_samplers(stages, argument_samplers.take(device));

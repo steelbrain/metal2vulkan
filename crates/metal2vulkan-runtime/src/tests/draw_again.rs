@@ -28,17 +28,17 @@ use std::path::Path;
 use std::sync::{Arc, Mutex};
 
 /// The draws an encoder of a test draws.
-const DRAWS: u64 = 9;
+pub(super) const DRAWS: u64 = 9;
 
 /// The side of the target.
 const SIDE: u64 = 16;
 
 /// The notices a device announced.
-type Heard = Arc<Mutex<Vec<DegradeNotice>>>;
+pub(super) type Heard = Arc<Mutex<Vec<DegradeNotice>>>;
 
 /// A device of the kind the cfg selects that announces the kinds of `each` at every occurrence,
 /// its notices into `heard`.
-fn device(cache: &Path, each: &[Degradation], heard: &Heard) -> Device {
+pub(super) fn device(cache: &Path, each: &[Degradation], heard: &Heard) -> Device {
     let heard = Arc::clone(heard);
     let options = DeviceOptions {
         kinds: match cfg!(m2v_cpu_icd) {
@@ -79,7 +79,7 @@ fn drawn_alone(hits: u64) -> u64 {
 
 /// The state that draws a rectangle (`tob_rect`, `tob_solid`) into `RGBA8Unorm`, adding its color
 /// to the target's, so that a target shows how many draws ran.
-fn adding_state(device: &Device) -> RenderPipelineState {
+pub(super) fn adding_state(device: &Device) -> RenderPipelineState {
     state(device, "engine/tob_renders.ll", ("tob_rect", "tob_solid"))
 }
 
@@ -105,7 +105,7 @@ fn state(device: &Device, path: &str, (vertex, fragment): (&str, &str)) -> Rende
 
 /// What a run recorded and drew: its commands recorded by kind, the target's words, and the
 /// device's counts after it, with the counts' change over it.
-struct Ran {
+pub(super) struct Ran {
     commands: BTreeMap<String, u64>,
     words: Vec<u32>,
     before: WorkCounts,
@@ -136,7 +136,7 @@ fn commands(device: &Device) -> BTreeMap<String, u64> {
 
 /// Encode `encode` in one pass into a new cleared `RGBA8Unorm` target, commit and wait: what it
 /// recorded and drew.
-fn run(device: &Device, encode: impl Fn(&mut RenderCommandEncoder)) -> Ran {
+pub(super) fn run(device: &Device, encode: impl Fn(&mut RenderCommandEncoder)) -> Ran {
     let mut descriptor = TextureDescriptor::texture_2d(PixelFormat::RGBA8Unorm, SIDE, SIDE, false);
     descriptor.usage = TextureUsage::RENDER_TARGET;
     descriptor.resource_options = ResourceOptions::private();
@@ -189,7 +189,7 @@ fn run(device: &Device, encode: impl Fn(&mut RenderCommandEncoder)) -> Ran {
 /// Run `encode` on `device` until a run draws no key's residual form and the device's pool is
 /// idle: every later draw finds its key's own pipeline made, as a draw that is kept to draw again
 /// does (a draw recorded against a making, or of a residual form, keeps nothing).
-fn warm(device: &Device, encode: impl Fn(&mut RenderCommandEncoder)) {
+pub(super) fn warm(device: &Device, encode: impl Fn(&mut RenderCommandEncoder)) {
     until("every key's own pipeline made", || {
         let residual = device.work_counts().residual_form_draws;
         run(device, &encode);
@@ -201,7 +201,7 @@ fn warm(device: &Device, encode: impl Fn(&mut RenderCommandEncoder)) {
 }
 
 /// Set `state`, the rectangle over the whole target and its color, `1 / 64` in each channel.
-fn set_rectangle(encoder: &mut RenderCommandEncoder, state: &RenderPipelineState) {
+pub(super) fn set_rectangle(encoder: &mut RenderCommandEncoder, state: &RenderPipelineState) {
     encoder.set_render_pipeline_state(state).unwrap();
     let corners = bytes_of(&[-1.0f32, -1.0, 1.0, 1.0], f32::to_le_bytes);
     encoder.set_vertex_bytes(&corners, 0).unwrap();
@@ -210,7 +210,7 @@ fn set_rectangle(encoder: &mut RenderCommandEncoder, state: &RenderPipelineState
 }
 
 /// The rectangle's draw: two triangles.
-fn rectangle(encoder: &mut RenderCommandEncoder) {
+pub(super) fn rectangle(encoder: &mut RenderCommandEncoder) {
     let drawn = encoder.draw_primitives(PrimitiveType::Triangle, 0, 6, 1, 0);
     assert_eq!(drawn, Ok(()));
 }

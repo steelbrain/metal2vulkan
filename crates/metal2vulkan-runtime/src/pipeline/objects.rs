@@ -23,7 +23,7 @@ use crate::degradation::{
     tested_slots_of, BoundFormats, BoundNotice, CompiledPipeline, Kinds, Occurrence, TestedFormats,
 };
 use crate::descriptor_arena::{DescriptorArena, SetNeeds};
-use crate::device::{lock, DeviceShared};
+use crate::device::{lock, shared_draw_lock, DeviceShared};
 use crate::error::{internal, vulkan, Error};
 use crate::exit_guard;
 use crate::generated_commands::INDIRECT_BINDABLE;
@@ -428,6 +428,10 @@ pub(crate) struct VariantObjects {
     /// The formats at its tested slots under which its notes of the bound formats last named
     /// nothing (`degrade_bound_formats`).
     quiet_formats: Mutex<Option<TestedFormats>>,
+    /// Whether its notes of the bound formats named nothing at a bind, where it tests no slot
+    /// (`tested` empty): they name nothing again under any formats (`degrade_bound_formats`),
+    /// which a bind then tells with no lock.
+    quiet_untested: AtomicBool,
     /// The layout's set 1, the heap, where it has one.
     heap_layout: Option<DescriptorSetLayout>,
     /// The device's heap set of that layout, from the variant's first command that binds it
@@ -649,6 +653,7 @@ impl VariantObjects {
             tested: tested_slots_of(stages),
             bound: Mutex::new(None),
             quiet_formats: Mutex::new(None),
+            quiet_untested: AtomicBool::new(false),
             keep: None,
             content: variant_content(layout, stages, &words),
             words: Arc::clone(&words),
@@ -735,6 +740,7 @@ impl VariantObjects {
             tested: tested_slots_of(stages),
             bound: Mutex::new(None),
             quiet_formats: Mutex::new(None),
+            quiet_untested: AtomicBool::new(false),
             keep: Some(instance),
             content: back.objects.content,
             words: back.objects.words,
@@ -770,8 +776,9 @@ impl VariantObjects {
     /// that binds `formats` (`Device::degrade_bound_formats`), but where the formats at its tested
     /// slots are those under which they last named nothing (`quiet_formats`): what they name is a
     /// function of those formats, of its stages, and of the kinds the device has yet to announce,
-    /// which only shrink, so they name nothing again. A command whose formats are unknown (an
-    /// indirect command's) announces as before.
+    /// which only shrink, so they name nothing again. A variant that tests no slot keeps that
+    /// answer with no lock (`quiet_untested`). A command whose formats are unknown (an indirect
+    /// command's) announces as before.
     pub(crate) fn degrade_bound_formats(
         &self,
         stages: &[StageModule],
@@ -781,7 +788,16 @@ impl VariantObjects {
             self.device.degrade_bound_formats(stages, None);
             return;
         };
-        let quiet = lock(&self.quiet_formats)
+        if self.tested.is_empty() {
+            if self.quiet_untested.load(Ordering::Acquire) {
+                return;
+            }
+            if !self.device.degrade_bound_formats(stages, Some(formats)) {
+                self.quiet_untested.store(true, Ordering::Release);
+            }
+            return;
+        }
+        let quiet = shared_draw_lock(&self.quiet_formats)
             .as_ref()
             .is_some_and(|quiet| quiet.iter().all(|&(slot, format)| formats(slot) == format));
         if quiet {

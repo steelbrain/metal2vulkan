@@ -722,7 +722,7 @@ impl RenderLowering {
         let pass_start = PassStartTables::default();
         let sampler_maps = self.sampler_maps(state, &pass_start)?;
         let mut live = lock(&live);
-        let Settled { variant, plan, .. } = self.settle_draw(
+        let (Settled { variant, plan, .. }, _) = self.settle_draw(
             &mut live,
             (
                 state,

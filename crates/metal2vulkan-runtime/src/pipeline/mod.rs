@@ -97,10 +97,10 @@ pub(super) use render::DrawPipeline;
 pub use render::RenderPipelineState;
 pub(super) use render::RenderProgram;
 pub(super) use render::RenderVariant;
-pub(super) use render::Settled;
 pub(super) use render::WeakRenderPipelineState;
 pub(super) use render::{reads_views_at_bind, residual_form};
 pub(super) use render::{GraphicsState, Kind as RenderStateKind, StateShared as RenderShared};
+pub(super) use render::{ProgramName, Settled};
 pub(super) use tile::TileState;
 
 use super::binary_archive;

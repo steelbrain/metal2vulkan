@@ -54,7 +54,7 @@ use crate::argument_table::AtBindViews;
 use crate::binary_archive::{self, Used};
 use crate::color_reformat::Routing;
 use crate::degradation::{BoundFormats, CompiledPipeline, Degradation, Occurrence};
-use crate::device::{device_error, lock};
+use crate::device::{device_error, lock, shared_draw_lock};
 use crate::error::{internal, invalid, ArchivedPipeline, Error, Problem, RuntimeGap};
 use crate::released_programs::KeptProgram;
 use crate::render::KeptShapes;
@@ -83,6 +83,7 @@ use metal2vulkan::pipeline::{
 use metal2vulkan::reflection::{LinkedUseAnswers, RenderPipelineReflection};
 use std::any::Any;
 use std::collections::VecDeque;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock, Weak};
 use std::time::Instant;
 
@@ -126,6 +127,10 @@ impl WeakRenderPipelineState {
             .map(|state| RenderPipelineState(Kind::Graphics(GraphicsState(state))))
     }
 }
+
+/// A drawing state's program, named without holding it ([`GraphicsState::program_name`]): its
+/// allocation outlives the name, so no other program lies at its address while the name is kept.
+pub(crate) struct ProgramName(Weak<Program>);
 
 /// What a drawing state runs, held without its ID: an indirect render command keeps the program
 /// of the state set on it past the program's last release of the state, as Metal's runs it,
@@ -248,6 +253,9 @@ pub(crate) struct Program {
     /// What its last [`SETTLED`] settles of other shapes settled, in which buffer forms, the
     /// latest used first (`GraphicsState::settle_shape`).
     settled: Mutex<VecDeque<(BufferForms, Settled)>>,
+    /// Whether it made a visible function table (`GraphicsState::function_tables`): set once,
+    /// at the first, never cleared.
+    made_tables: AtomicBool,
     /// The `VkPipeline`s its last draws found made in their variants' memos, the latest found
     /// first, at most [`LAST_PIPELINES`] (`RenderVariant::begin_graphics_pipeline`).
     last_pipelines: Mutex<VecDeque<LastPipeline>>,
@@ -1849,6 +1857,7 @@ impl GraphicsState {
                 descriptor_key: key.map_or_else(OnceLock::new, OnceLock::from),
                 compiled_key: OnceLock::new(),
                 settled: Mutex::new(VecDeque::with_capacity(SETTLED)),
+                made_tables: AtomicBool::new(false),
                 last_pipelines: Mutex::new(VecDeque::with_capacity(LAST_PIPELINES)),
                 routed: Mutex::new(None),
                 pieces: PieceHolds::new(),
@@ -2042,6 +2051,29 @@ impl GraphicsState {
         Arc::ptr_eq(&self.0.program, &other.0.program)
     }
 
+    /// Note that it made a visible function table (`function_table.rs`).
+    pub(crate) fn made_a_table(&self) {
+        self.0.made_tables.store(true, Ordering::Release);
+    }
+
+    /// Whether it made a visible function table, ever: a state that made none has none live
+    /// (`GraphicsState::function_tables`).
+    pub(crate) fn made_tables(&self) -> bool {
+        self.0.made_tables.load(Ordering::Acquire)
+    }
+
+    /// Its program, named without holding it: what a draw's encoder keeps the state's last
+    /// settle under (`live_bind.rs`), which [`runs`](Self::runs) tells apart.
+    pub(crate) fn program_name(&self) -> ProgramName {
+        ProgramName(Arc::downgrade(&self.0.program))
+    }
+
+    /// Whether it runs the program `name` names, as [`is`](Self::is) tells states apart, without
+    /// touching either's counts.
+    pub(crate) fn runs(&self, name: &ProgramName) -> bool {
+        std::ptr::eq(Arc::as_ptr(&self.0.program), name.0.as_ptr())
+    }
+
     /// How many of `stage`'s function's last `binary_functions` were added without the stage's
     /// support flag (`StateShared::added_unsupported`): none for another stage.
     pub(crate) fn added_unsupported(&self, stage: metal2vulkan::pipeline::Stage) -> usize {
@@ -2203,7 +2235,7 @@ impl GraphicsState {
         forms: BufferForms,
     ) -> Result<Settled, Error> {
         {
-            let mut kept = lock(&self.0.settled);
+            let mut kept = shared_draw_lock(&self.0.settled);
             // The very shape first, as a draw's encoder keeps the one it found here; else an
             // equal one, compared whole.
             let found = (kept.iter())

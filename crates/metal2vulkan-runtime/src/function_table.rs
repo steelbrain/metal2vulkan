@@ -54,7 +54,7 @@
 
 use super::address::AddressPlacement;
 use super::buffer::{Buffer, Modes};
-use super::device::lock;
+use super::device::{lock, shared_draw_lock};
 use super::error::{internal, invalid, nil, Error, Problem, RuntimeGap};
 use super::library::Function;
 use super::memory::MemoryClass;
@@ -341,6 +341,9 @@ impl Maker {
         // The ID was free, so a table the registry still names under it is gone.
         lock(&device.shared().function_tables)
             .insert(table.gpu_resource_id().0, Arc::downgrade(&table.0));
+        if let Maker::Render(state, _) = &table.0.state {
+            state.made_a_table();
+        }
         Ok(table)
     }
 }
@@ -349,7 +352,7 @@ impl Maker {
 /// argument buffer can name for a command of the state (`BindState::function_tables`). Gone ones
 /// leave the device's registry.
 fn live_tables(device: &Device, made: impl Fn(&Maker) -> bool) -> Vec<VisibleFunctionTable> {
-    let mut live = lock(&device.shared().function_tables);
+    let mut live = shared_draw_lock(&device.shared().function_tables);
     live.retain(|_, table| table.strong_count() > 0);
     live.values()
         .filter_map(|table| table.upgrade().map(VisibleFunctionTable))
@@ -542,7 +545,11 @@ fn not_one_stage(call: &'static str, stage: RenderStages, table: bool) -> Error 
 impl GraphicsState {
     /// The live tables this state made, for any stage, in resource-ID order: what an argument
     /// buffer can name for a draw of the state (`BindState::function_tables`).
+    /// A state that never made one takes none, and no lock of the device's registry.
     pub(crate) fn function_tables(&self) -> Vec<VisibleFunctionTable> {
+        if !self.made_tables() {
+            return Vec::new();
+        }
         live_tables(self.device(), |made| match made {
             Maker::Render(state, _) => state.is(self),
             Maker::Compute(_) | Maker::Unlinked(_) => false,

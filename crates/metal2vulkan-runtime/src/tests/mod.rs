@@ -281,6 +281,8 @@ mod shadow_host_writes;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod shadow_merge_read;
 mod shadow_stencil;
+#[cfg(all(debug_assertions, any(m2v_gpu, m2v_cpu_icd)))]
+mod shared_draw_locks;
 #[cfg(all(unix, any(m2v_gpu, m2v_cpu_icd)))]
 mod shared_pointers;
 mod sorted_chunks;

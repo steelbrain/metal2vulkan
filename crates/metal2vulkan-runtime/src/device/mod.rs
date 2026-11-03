@@ -958,6 +958,28 @@ impl QueueSlot {
     }
 }
 
+#[cfg(debug_assertions)]
+thread_local! {
+    /// The locks this thread took of what its draws share with draws on other threads (builds
+    /// with debug assertions): a pipeline state's settles, the device's function tables, a
+    /// variant's quiet formats.
+    static SHARED_DRAW_LOCKS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+/// [`lock`] of something draws on other threads share (`SHARED_DRAW_LOCKS`, counted in builds
+/// with debug assertions): what a test of a draw that takes none counts.
+pub(super) fn shared_draw_lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
+    #[cfg(debug_assertions)]
+    SHARED_DRAW_LOCKS.with(|locks| locks.set(locks.get() + 1));
+    lock(mutex)
+}
+
+/// How many [`shared_draw_lock`]s this thread took so far.
+#[cfg(all(test, debug_assertions, any(m2v_gpu, m2v_cpu_icd)))]
+pub(super) fn shared_draw_locks() -> u64 {
+    SHARED_DRAW_LOCKS.with(std::cell::Cell::get)
+}
+
 /// `mutex`'s guard; a lock poisoned by a panicking holder is taken over (the runtime's state is
 /// updated before any call that can panic).
 pub(super) fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {

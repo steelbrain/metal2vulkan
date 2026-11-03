@@ -300,7 +300,7 @@ use super::index_rewrite::{self, Listed, RewritePass, RewriteSteps, WrittenList}
 use super::kept_bytes;
 use super::linear_attachment;
 use super::linear_merge::LinearMerge;
-use super::live_bind::{Emptied, LiveBind, Reshape};
+use super::live_bind::{Emptied, LiveBind, Reshape, SettledHere};
 use super::nan_clear::{keeps_nan_sign, NanDepthWrite};
 use super::owned_kernel::OwnedModule;
 use super::pipeline::Settled;
@@ -7433,6 +7433,10 @@ impl RenderLowering {
             pipeline.refuse_band(primitive);
             routed = self.routed_draw(call, &pipeline, (assembly, primitives), &draw)?;
         };
+        // What the state keeps for its next draw once this one recorded, where it settled afresh.
+        let (settled, found) = settled;
+        let settled_here =
+            (!found).then(|| SettledHere::new(&pipeline, self.forms, settled.clone()));
         let Settled {
             shape,
             variant,
@@ -9922,6 +9926,9 @@ impl RenderLowering {
         if heap.is_some() && !function_tables.is_empty() {
             self.core.retain(function_tables);
         }
+        if let Some(here) = settled_here {
+            live.settled = Some(here);
+        }
         Ok(())
     }
 
@@ -10104,7 +10111,7 @@ impl RenderLowering {
         (pass_start, sampler_maps): (&PassStartTables, &SamplerMaps),
         (argument_samplers, unlisted): (&mut ArgumentSamplers, &mut Option<(u64, u64)>),
         (function_tables, snapshot): (&[VisibleFunctionTable], &mut Option<snapshot::Wanted>),
-    ) -> Result<Settled, Error> {
+    ) -> Result<(Settled, bool), Error> {
         // The pass's extended-range colors' shadows, which a variant that writes or reads them
         // reads and writes beside the codes (`render/extended_shadow.rs`).
         let mut shadows = self.extended_shadows_bound();
@@ -10169,8 +10176,13 @@ impl RenderLowering {
             live.reshaped(reshape);
             let counts = &self.core.device().shared().counts;
             let shape = live.shape(counts, |state| pipeline.kept_shape(state));
-            // Through what the pipeline state settled lately (`GraphicsState::settle_shape`).
-            let settled = match pipeline.settle_shape(&shape, self.forms) {
+            // As the state's last recorded draw settled, where it settled the same
+            // (`live_bind.rs`): no lock of the pipeline state's; else through what the pipeline
+            // state settled lately (`GraphicsState::settle_shape`).
+            let kept = live.settled(pipeline, &shape, self.forms).cloned();
+            let found = kept.is_some();
+            let settled = kept.map_or_else(|| pipeline.settle_shape(&shape, self.forms), Ok);
+            let settled = match settled {
                 // A band variant the translator refuses for the draw's shape: the caller routes
                 // the draw again (`LineRoute::refused`).
                 Err(refused) if settings.line.refused(&refused).is_some() => return Err(refused),
@@ -10219,7 +10231,7 @@ impl RenderLowering {
             }
             let set = settled.variant.pipeline().layout.sets.get(1);
             if argument_samplers.fit(set, unlisted) {
-                return Ok(settled);
+                return Ok((settled, found));
             }
             // A variant of set-1 arrays writes the listed states' elements: it takes the states,
             // listed again (alike, where the kept listing is current) against them.

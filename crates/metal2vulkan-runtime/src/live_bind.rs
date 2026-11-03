@@ -36,6 +36,13 @@
 //!   stage tables read through their own interface, where no slot of theirs changed its shape.
 //!   Exact for the reason a draw's is: whichever state a draw starts from, it brings every field
 //!   in place, and the starting state decides only whether the shape is kept.
+//! - **The settle kept with the state.** Beside each state, the variant and plan its last recorded
+//!   draw settled ([`SettledHere`]), with its program and buffer forms: a draw of the same program
+//!   in the same forms whose shape is the kept one (the very `Arc`) settles as it did, taking no
+//!   lock of its program's (`GraphicsState::settle_shape`, whose answer is a function of the
+//!   shape and forms alone). Only a draw that recorded keeps it, so its encoder holds its pipeline
+//!   state (and the command buffer the variant's objects); it goes as the encoder ends
+//!   ([`SpareLiveBinds::give`]), so a spare state holds nothing alive.
 //! - **Kept from one encoder to the next.** An encoder that ends gives its state, with its shape,
 //!   to its device ([`SpareLiveBinds`]), and the next render encoder opened starts from it, as a
 //!   draw starts from the draw before it: its first draw brings it in place, so a pass that binds
@@ -68,6 +75,7 @@ use super::argument_table::Stamp;
 use super::binding::{CommandUses, PushWrite, SetWrite, Write};
 use super::device::lock;
 use super::noted_apart::NotedApart;
+use super::pipeline::{BufferForms, GraphicsState, ProgramName, Settled};
 use super::sampler::OwnedSampler;
 use super::work_counts::Counters;
 
@@ -172,6 +180,9 @@ pub(super) struct LiveBind {
     /// How many times a state went aside: each set aside holds the count as it went, so the one
     /// set aside longest holds the least.
     asides: u64,
+    /// What the state's last recorded draw settled, while its encoder lasts ([`SettledHere`]):
+    /// set by a draw that recorded, in place of what the state kept.
+    pub(super) settled: Option<SettledHere>,
     /// The last draw its encoder noted apart (`noted_apart.rs`), kept here so its storage goes
     /// from one encoder to the next.
     pub(super) noted: NotedApart,
@@ -206,8 +217,29 @@ struct SetAside {
     shape: Option<Arc<BindShape>>,
     listed_at: Option<u64>,
     read_from: ReadFrom,
+    settled: Option<SettledHere>,
     /// [`LiveBind::asides`] as it went aside.
     at: u64,
+}
+
+/// What a recorded draw settled of its state's shape (`GraphicsState::settle_shape`): the variant
+/// and plan, the program it ran (named without being held) and the buffer forms it took; the shape
+/// is the state's kept one, compared by identity.
+pub(super) struct SettledHere {
+    program: ProgramName,
+    forms: BufferForms,
+    settled: Settled,
+}
+
+impl SettledHere {
+    /// What a draw of `pipeline` in `forms` settled.
+    pub(super) fn new(pipeline: &GraphicsState, forms: BufferForms, settled: Settled) -> Self {
+        SettledHere {
+            program: pipeline.program_name(),
+            forms,
+            settled,
+        }
+    }
 }
 
 /// What a kept state's stage tables were read from at the draw that read them last
@@ -334,7 +366,31 @@ impl LiveBind {
         std::mem::swap(&mut self.shape, &mut aside.shape);
         std::mem::swap(&mut self.listed_at, &mut aside.listed_at);
         std::mem::swap(&mut self.read_from, &mut aside.read_from);
+        std::mem::swap(&mut self.settled, &mut aside.settled);
         aside.at = self.asides;
+    }
+
+    /// What the state's last recorded draw settled, where it drew `pipeline` in `forms` and its
+    /// shape was `shape` (the very one): what `GraphicsState::settle_shape` answers for them.
+    pub(super) fn settled(
+        &self,
+        pipeline: &GraphicsState,
+        shape: &Arc<BindShape>,
+        forms: BufferForms,
+    ) -> Option<&Settled> {
+        let here = self.settled.as_ref()?;
+        let same = here.forms == forms
+            && Arc::ptr_eq(&here.settled.shape, shape)
+            && pipeline.runs(&here.program);
+        same.then_some(&here.settled)
+    }
+
+    /// Let go of every state's kept settle, as their encoder ends.
+    fn forget_settles(&mut self) {
+        self.settled = None;
+        for aside in &mut self.set_aside {
+            aside.settled = None;
+        }
     }
 
     /// Take the changes brought into the state since its shape was made.
@@ -429,10 +485,14 @@ impl SpareLiveBinds {
     /// [`SPARE_LIVE_BINDS`] are kept; else it goes. A draw that panicked holding it left it as
     /// far as it got, which the next draw brings in place as any.
     pub(super) fn give(&self, mut live: Arc<Mutex<LiveBind>>) {
-        if Arc::get_mut(&mut live).is_none() {
+        let Some(cell) = Arc::get_mut(&mut live) else {
             return;
+        };
+        cell.clear_poison();
+        // What its draws settled goes with the encoder (the module docs).
+        if let Ok(state) = cell.get_mut() {
+            state.forget_settles();
         }
-        live.clear_poison();
         let mut spare = lock(&self.0);
         if spare.len() < SPARE_LIVE_BINDS {
             spare.push(live);
