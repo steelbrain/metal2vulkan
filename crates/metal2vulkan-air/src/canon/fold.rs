@@ -545,7 +545,7 @@ impl Folder<'_> {
 
     /// Whether no part of `c` is `undef` or `poison`. The worklist and visited set are charged
     /// as they grow and released on return.
-    fn fully_defined(&self, c: ConstId, m: &mut Meter) -> Result<bool, Error> {
+    pub fn fully_defined(&self, c: ConstId, m: &mut Meter) -> Result<bool, Error> {
         let mut held = 0usize;
         let r = self.walk_defined(c, m, &mut held);
         m.release(held);

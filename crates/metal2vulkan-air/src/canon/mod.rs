@@ -28,9 +28,10 @@
 //!    function addresses direct, reads visible-function tables as buffers of words, and makes each
 //!    call through a table a switch over the functions it may call; the direct calls this makes are
 //!    inlined in turn, round after round, until none is made.
-//! 7. **SCCP** over the inlined entry, including `air.is_function_constant_defined` and loads of
-//!    bound constants; unreachable blocks are deleted. A value use of an unsupplied constant that
-//!    survives is `Error::NeedsInput(FunctionConstant)`.
+//! 7. **SCCP** over the inlined entry, including `air.is_function_constant_defined`, loads of
+//!    bound constants, and loads of the integer fields of a constant-space global whose value is
+//!    its initializer (`const_loads`); unreachable blocks are deleted. A value use of an unsupplied
+//!    constant that survives is `Error::NeedsInput(FunctionConstant)`.
 //! 8. **Post-check**: no unknown intrinsic, indirect call, or call to an undefined non-intrinsic
 //!    function survives, and no reachable branch tests `undef`. A table call's refused candidate,
 //!    a table call no linked function answers, and a function pointer used as a value are refused

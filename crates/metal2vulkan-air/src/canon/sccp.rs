@@ -41,6 +41,7 @@ use crate::intrinsics::{AirIntrinsic, FunctionConstant};
 use crate::ir::{Arena, BlockId, Body, Callee, Const, ConstId, ConstTable, Constant, Global};
 use crate::ir::{ArgIdx, BinOp, GlobalId, Idx, InstId, InstKind, Type, Value};
 
+use super::const_loads;
 use super::fold::Folder;
 use super::rewrite::{apply, filled, invariant, scoped, BodyEdit};
 
@@ -935,14 +936,23 @@ impl<'b> Solver<'b> {
                     _ => Ok(None),
                 })?
             }
-            InstKind::Gep { base, indices, .. } => match self.lat(*base) {
+            InstKind::Gep {
+                src_ty,
+                base,
+                indices,
+                inbounds,
+            } => match self.lat(*base) {
                 // An address in an unsupplied constant's global, whatever its indices.
                 Lat::Fc(i) => Lat::Fc(i),
                 _ => {
                     let mut ops = Vec::with_capacity(indices.len() + 1);
                     ops.push(*base);
                     ops.extend_from_slice(indices);
-                    self.pure(&ops, cx, m, never)?
+                    // A field of a constant global SCCP reads is its address constant.
+                    let (gep, globals) = ((*src_ty, *inbounds, ty), cx.globals);
+                    self.pure(&ops, cx, m, |f, c, m| {
+                        const_loads::constant_field_address(f, globals, gep, c, m)
+                    })?
                 }
             },
             InstKind::Select { c, t, f, .. } => match self.lat(*c) {
@@ -968,18 +978,22 @@ impl<'b> Solver<'b> {
                 Lat::Fc(i) => Lat::Fc(i),
                 Lat::Bottom => Lat::Bottom,
                 Lat::Const(k) => match cx.folder.consts.get(k).map(|c| &c.value) {
-                    Some(Const::GlobalAddr(g)) => match cx.globals.get(*g) {
-                        Some(g)
-                            if g.constant
+                    Some(Const::GlobalAddr(g))
+                        if cx.globals.get(*g).is_some_and(|g| {
+                            g.constant
                                 && !g.externally_initialized
                                 && g.value_ty == ty
-                                && g.init.is_some() =>
-                        {
-                            g.init.map_or(Lat::Bottom, Lat::Const)
-                        }
-                        _ => Lat::Bottom,
-                    },
-                    _ => Lat::Bottom,
+                                && g.init.is_some()
+                        }) =>
+                    {
+                        cx.globals
+                            .get(*g)
+                            .and_then(|g| g.init)
+                            .map_or(Lat::Bottom, Lat::Const)
+                    }
+                    // An integer field of a constant global: the initializer's constant there.
+                    _ => const_loads::constant_field_load(&mut cx.folder, cx.globals, k, ty, m)?
+                        .map_or(Lat::Bottom, Lat::Const),
                 },
             },
             InstKind::Call(call) if is_normalize(&inst.kind) => match call.args.first() {
@@ -1159,6 +1173,9 @@ impl<'b> Solver<'b> {
                     || is_normalize(&inst.kind)
                     || is_defined_arg(&inst.kind, cx.folder.consts, cx.fcs).is_some();
                 match (&inst.kind, lat) {
+                    // A field's address constant serves the loads it folds; the instruction stays,
+                    // and goes when nothing uses it.
+                    (InstKind::Gep { .. }, Lat::Const(_)) => {}
                     (_, Lat::Const(c)) if deletable => edit.replace(i, Value::Const(c)),
                     // An undefined value is its type's zero; an address computed from a constant's
                     // global still names the global.

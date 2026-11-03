@@ -20,6 +20,7 @@ use crate::ir::{
 
 mod aggregates;
 mod command_buffers;
+mod constant_fields;
 mod conversions;
 mod global_builtins;
 mod private_memory;
@@ -1810,7 +1811,17 @@ fn a_deeply_nested_written_global_is_rebuilt_on_a_small_stack() {
         static_init(&mut m, "init", |f| store(f, five, gaddr));
         let fty = m.fn_ty(void, &[dev]);
         let mut f = m.define("k", fty);
-        let v = load(&mut f, i32t, gaddr);
+        // A volatile read keeps the global: SCCP reads a plain one as the initializer's leaf.
+        let v = f.push(
+            i32t,
+            InstKind::Load {
+                ptr: gaddr,
+                align: Align::from_bytes(4),
+                volatile: true,
+                atomic: None,
+                range: None,
+            },
+        );
         store(&mut f, v, arg(0));
         f.ret(None);
         let k = f.finish();

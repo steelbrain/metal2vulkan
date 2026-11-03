@@ -1356,9 +1356,10 @@ fn the_recorded_shapes_are_released_when_selection_ends() {
 /// A kernel whose alloca `a` is a struct DAG `depth` levels deep: `%e1 = { i32, i32 }` and
 /// `%e{k} = { %e{k-1}, %e{k-1} }`, `2^depth` leaves through `depth + 1` types. It stores `t` at
 /// byte 0 and 7 at byte 4, then `v0` reads byte 0 and `v1` byte 4. With `constant`, `v0` also
-/// adds word 0 of `@g`, a closed constant of the same type, all zero. Every access is a plain
-/// `i32` load or store at a constant offset, so `a` and `@g` are typed objects within the
-/// function's room of unshared type size.
+/// adds word 1 of `@g`, a closed constant of the same type, all zero, read at its byte address
+/// (SCCP reads an integer field at a typed address as its constant, which would leave no load of
+/// `@g` to plan). Every access is a plain `i32` load or store at a constant offset, so `a` and
+/// `@g` are typed objects within the function's room of unshared type size.
 fn struct_dag_kernel(depth: u32, constant: bool) -> String {
     let mut types = String::from("%e1 = type { i32, i32 }\n");
     for k in 2..=depth {
@@ -1367,7 +1368,7 @@ fn struct_dag_kernel(depth: u32, constant: bool) -> String {
     let read = if constant {
         types +=
             &format!("@g = internal addrspace(2) constant %e{depth} zeroinitializer, align 4\n");
-        "  %x = load i32, ptr %a, align 4\n  %y = load i32, ptr addrspace(2) @g, align 4\n  %v0 = add i32 %x, %y"
+        "  %x = load i32, ptr %a, align 4\n  %gq = getelementptr inbounds i8, ptr addrspace(2) @g, i32 4\n  %y = load i32, ptr addrspace(2) %gq, align 4\n  %v0 = add i32 %x, %y"
     } else {
         "  %v0 = load i32, ptr %a, align 4"
     };
@@ -1501,9 +1502,11 @@ fn a_struct_dag_keeps_its_values_typed_or_untyped() {
 /// DAG of `struct_dag_kernel`. Its unshared type size is the DAG's 32,752 (`i32` and `%e1` to
 /// `%e13`) and `%big`'s `32,767 + extra`: with 17 extra members exactly `alloca::MAX_UNSHARED`
 /// (65,536), with 18 one more. With `constant`, `%big` is the type of `@g`, a closed constant whose
-/// DAG halves are zero and whose extra member `i` is `i + 1`, and `v0 = t + @g.2`, `v1 = @g.18`;
-/// otherwise of the alloca `a`, which stores `t` at byte 0 and 7 in member 2 (byte 65,536) and
-/// reads them back as `v0` and `v1`.
+/// DAG halves are zero and whose extra member `i` is `i + 1`, and `v0 = t + @g.2`, `v1 = @g.18`,
+/// each read at its byte address (65,536 and 65,600: SCCP reads an integer field at a typed
+/// address as its constant, which would leave no load of `@g` to plan); otherwise of the alloca
+/// `a`, which stores `t` at byte 0 and 7 in member 2 (byte 65,536) and reads them back as `v0` and
+/// `v1`.
 fn room_kernel(extra: u32, constant: bool) -> String {
     let mut types = String::from("%e1 = type { i32, i32 }\n");
     for k in 2..=13 {
@@ -1518,10 +1521,10 @@ fn room_kernel(extra: u32, constant: bool) -> String {
         types += &format!(
             "@g = internal addrspace(2) constant %big {{ %e13 zeroinitializer, %e13 zeroinitializer{ints} }}, align 4\n"
         );
-        r#"  %p2 = getelementptr inbounds %big, ptr addrspace(2) @g, i32 0, i32 2
+        r#"  %p2 = getelementptr inbounds i8, ptr addrspace(2) @g, i32 65536
   %g2 = load i32, ptr addrspace(2) %p2, align 4
   %v0 = add i32 %t, %g2
-  %q = getelementptr inbounds %big, ptr addrspace(2) @g, i32 0, i32 18
+  %q = getelementptr inbounds i8, ptr addrspace(2) @g, i32 65600
   %v1 = load i32, ptr addrspace(2) %q, align 4"#
             .to_string()
     } else {
