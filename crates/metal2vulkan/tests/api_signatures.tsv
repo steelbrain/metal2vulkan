@@ -215,6 +215,15 @@ assoc-const	metal2vulkan::bind::MipmapFilterModule::PARAMS_BINDING	pub const PAR
 assoc-const	metal2vulkan::bind::MipmapFilterModule::SET	pub const SET: u32
 assoc-const	metal2vulkan::bind::MipmapFilterModule::SOURCE_BINDING	pub const SOURCE_BINDING: u32
 assoc-const	metal2vulkan::bind::NeutralResource::SINK_BYTES	pub const SINK_BYTES: u32
+assoc-const	metal2vulkan::bind::PagesCopy::ALL	pub const ALL: [PagesCopy; 2]
+assoc-const	metal2vulkan::bind::PagesCopyModule::CONSECUTIVE_BINDING	pub const CONSECUTIVE_BINDING: u32
+assoc-const	metal2vulkan::bind::PagesCopyModule::LOCAL_SIZE	pub const LOCAL_SIZE: u32
+assoc-const	metal2vulkan::bind::PagesCopyModule::PAGE_BYTES	pub const PAGE_BYTES: u32
+assoc-const	metal2vulkan::bind::PagesCopyModule::PUSH_BYTES	pub const PUSH_BYTES: u32
+assoc-const	metal2vulkan::bind::PagesCopyModule::SCATTERED_BINDING	pub const SCATTERED_BINDING: u32
+assoc-const	metal2vulkan::bind::PagesCopyModule::SET	pub const SET: u32
+assoc-const	metal2vulkan::bind::PagesCopyModule::TABLE_BINDING	pub const TABLE_BINDING: u32
+assoc-const	metal2vulkan::bind::PagesCopyModule::WORDS	pub const WORDS: u32
 assoc-const	metal2vulkan::bind::PlaneBytesCopyModule::DESTINATION_BINDING	pub const DESTINATION_BINDING: u32
 assoc-const	metal2vulkan::bind::PlaneBytesCopyModule::LOCAL_SIZE	pub const LOCAL_SIZE: u32
 assoc-const	metal2vulkan::bind::PlaneBytesCopyModule::SET	pub const SET: u32
@@ -681,6 +690,15 @@ assoc-const-value	metal2vulkan::bind::MipmapFilterModule::PARAMS_BINDING	2
 assoc-const-value	metal2vulkan::bind::MipmapFilterModule::SET	0
 assoc-const-value	metal2vulkan::bind::MipmapFilterModule::SOURCE_BINDING	0
 assoc-const-value	metal2vulkan::bind::NeutralResource::SINK_BYTES	64
+assoc-const-value	metal2vulkan::bind::PagesCopy::ALL	[PagesCopy::Gather, PagesCopy::Scatter]
+assoc-const-value	metal2vulkan::bind::PagesCopyModule::CONSECUTIVE_BINDING	1
+assoc-const-value	metal2vulkan::bind::PagesCopyModule::LOCAL_SIZE	128
+assoc-const-value	metal2vulkan::bind::PagesCopyModule::PAGE_BYTES	4096
+assoc-const-value	metal2vulkan::bind::PagesCopyModule::PUSH_BYTES	16
+assoc-const-value	metal2vulkan::bind::PagesCopyModule::SCATTERED_BINDING	0
+assoc-const-value	metal2vulkan::bind::PagesCopyModule::SET	0
+assoc-const-value	metal2vulkan::bind::PagesCopyModule::TABLE_BINDING	2
+assoc-const-value	metal2vulkan::bind::PagesCopyModule::WORDS	8
 assoc-const-value	metal2vulkan::bind::PlaneBytesCopyModule::DESTINATION_BINDING	1
 assoc-const-value	metal2vulkan::bind::PlaneBytesCopyModule::LOCAL_SIZE	64
 assoc-const-value	metal2vulkan::bind::PlaneBytesCopyModule::SET	0
@@ -1334,6 +1352,7 @@ enum	metal2vulkan::bind::MeshArgumentsForm	#[cfg_attr(feature = "serde", derive(
 enum	metal2vulkan::bind::MeshGroups	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum MeshGroups
 enum	metal2vulkan::bind::MeshRecordsRegion	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum MeshRecordsRegion
 enum	metal2vulkan::bind::NeutralResource	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] #[non_exhaustive] pub enum NeutralResource
+enum	metal2vulkan::bind::PagesCopy	#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] pub enum PagesCopy
 enum	metal2vulkan::bind::PlanDiagnostic	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum PlanDiagnostic
 enum	metal2vulkan::bind::PlaneSource	#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum PlaneSource
 enum	metal2vulkan::bind::PlanesCopy	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] #[non_exhaustive] pub enum PlanesCopy
@@ -3412,6 +3431,8 @@ field	metal2vulkan::bind::ObjectFold.dispatch	pub dispatch: [u32; 3]
 field	metal2vulkan::bind::ObjectFold.past	pub past: bool
 field	metal2vulkan::bind::ObjectFold.pieces	pub pieces: u32
 field	metal2vulkan::bind::ObjectFold.record	pub record: [u32; 8]
+field	metal2vulkan::bind::PagesCopyModule.requirements	pub requirements: Requirements
+field	metal2vulkan::bind::PagesCopyModule.spirv	pub spirv: Arc<[u32]>
 field	metal2vulkan::bind::PlaneBytes.alpha	pub alpha: u32
 field	metal2vulkan::bind::PlaneBytes.blit	pub blit: u32
 field	metal2vulkan::bind::PlaneBytes.color	pub color: u32
@@ -4701,6 +4722,7 @@ fn	metal2vulkan::bind::mesh_object_arguments_module	pub fn mesh_object_arguments
 fn	metal2vulkan::bind::mesh_scan_module	pub fn mesh_scan_module(device: &Device) -> Result<MeshScanModule, Error>
 fn	metal2vulkan::bind::metal_object_grid	pub fn metal_object_grid(groups: [u32; 3], threads: [u32; 3], direct: bool) -> Option<([u32; 3], [u32; 3])>
 fn	metal2vulkan::bind::mipmap_filter_module	pub fn mipmap_filter_module(device: &Device, kernel: MipmapFilterKernel) -> Result<MipmapFilterModule, Error>
+fn	metal2vulkan::bind::pages_copy_module	pub fn pages_copy_module(device: &Device, copy: PagesCopy) -> Result<PagesCopyModule, Error>
 fn	metal2vulkan::bind::plane_bytes_copy_module	pub fn plane_bytes_copy_module(device: &Device) -> Result<PlaneBytesCopyModule, Error>
 fn	metal2vulkan::bind::plane_copy_module	pub fn plane_copy_module(device: &Device) -> Result<PlaneCopyModule, Error>
 fn	metal2vulkan::bind::plane_words_module	pub fn plane_words_module(device: &Device) -> Result<PlaneWordsModule, Error>
@@ -8612,6 +8634,9 @@ method	metal2vulkan::bind::MipmapFilterKernel::fetches	pub fn fetches(&self) -> 
 method	metal2vulkan::bind::NeutralResource::for_image	pub fn for_image(class: &ImageHandleClass) -> Option<NeutralResource>
 method	metal2vulkan::bind::NeutralResource::format	pub fn format(&self) -> Option<vk::Format>
 method	metal2vulkan::bind::ObjectFold::bytes	pub fn bytes(&self) -> Vec<u8>
+method	metal2vulkan::bind::PagesCopyModule::entry	pub fn entry(scattered: u32, consecutive: u32) -> [u8; 8]
+method	metal2vulkan::bind::PagesCopyModule::groups	pub fn groups(entries: u32) -> [u32; 3]
+method	metal2vulkan::bind::PagesCopyModule::shape	pub fn shape(first_entry: u32, first_word: u32) -> [u8; 16]
 method	metal2vulkan::bind::PlaneBytes::new	pub fn new(color: u32, alpha: u32, blit: u32, end: u32) -> PlaneBytes
 method	metal2vulkan::bind::PlaneBytesCopyModule::alpha_words	pub fn alpha_words(destination: &PlaneBytes, width: u32) -> u32
 method	metal2vulkan::bind::PlaneBytesCopyModule::invocations	pub fn invocations(destination: &PlaneBytes, size: [u32; 2]) -> u64
@@ -9652,6 +9677,7 @@ struct	metal2vulkan::bind::MipmapFilterKernel	#[cfg_attr(feature = "serde", deri
 struct	metal2vulkan::bind::MipmapFilterLevel	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub struct MipmapFilterLevel
 struct	metal2vulkan::bind::MipmapFilterModule	#[derive(Clone, Debug, PartialEq, Eq)] #[non_exhaustive] pub struct MipmapFilterModule
 struct	metal2vulkan::bind::ObjectFold	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub struct ObjectFold
+struct	metal2vulkan::bind::PagesCopyModule	#[derive(Clone, Debug, PartialEq, Eq)] #[non_exhaustive] pub struct PagesCopyModule
 struct	metal2vulkan::bind::PlaneBytes	#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub struct PlaneBytes
 struct	metal2vulkan::bind::PlaneBytesCopyModule	#[derive(Clone, Debug, PartialEq, Eq)] #[non_exhaustive] pub struct PlaneBytesCopyModule
 struct	metal2vulkan::bind::PlaneCopyModule	#[derive(Clone, Debug, PartialEq, Eq)] #[non_exhaustive] pub struct PlaneCopyModule
@@ -12313,6 +12339,8 @@ variant	metal2vulkan::bind::NeutralResource::Sampler	Sampler { compare: bool }
 variant	metal2vulkan::bind::NeutralResource::Sink	Sink { min_bytes: u32 }
 variant	metal2vulkan::bind::NeutralResource::TexelBuffer	TexelBuffer { format: vk::Format }
 variant	metal2vulkan::bind::NeutralResource::ZeroBuffer	ZeroBuffer { min_bytes: u32 }
+variant	metal2vulkan::bind::PagesCopy::Gather	Gather
+variant	metal2vulkan::bind::PagesCopy::Scatter	Scatter
 variant	metal2vulkan::bind::PlanDiagnostic::AstcStorageNeutral	AstcStorageNeutral { slot: SlotRef, substituted: NeutralResource }
 variant	metal2vulkan::bind::PlanDiagnostic::CrossClassHeapNeutral	CrossClassHeapNeutral { stage: Stage, class: HandleClass, element: u32, source: HeapSource }
 variant	metal2vulkan::bind::PlanDiagnostic::CrossClassNeutral	CrossClassNeutral { slot: SlotRef, substituted: NeutralResource }

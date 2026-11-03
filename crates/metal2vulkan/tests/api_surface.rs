@@ -641,6 +641,9 @@ surface! {
         struct ShadowCopyInModule N;
         fn rows_copy_module;
         struct RowsCopyModule N;
+        fn pages_copy_module;
+        enum PagesCopy E;
+        struct PagesCopyModule N;
         fn extended_canonical_module;
         fn extended_range_canonical;
         struct ExtendedCanonicalModule N;

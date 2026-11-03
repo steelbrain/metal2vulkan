@@ -152,6 +152,7 @@ pub(crate) mod mesh_arguments;
 pub(crate) mod mesh_scan;
 pub(crate) mod mipmap_filter;
 pub(crate) mod neutral;
+pub(crate) mod pages_copy;
 pub(crate) mod plan;
 pub(crate) mod plane_bytes_copy;
 pub(crate) mod plane_copy;
@@ -249,6 +250,7 @@ pub use mipmap_filter::{
     MipmapFilterModule,
 };
 pub use neutral::NeutralResource;
+pub use pages_copy::{pages_copy_module, PagesCopy, PagesCopyModule};
 pub use plan::resources::sampler_desc;
 pub use plan::{
     AccessClass, BindingPlan, ByteRange, ComputeTemplate, DescriptorWrite, FieldLocation,
