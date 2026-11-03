@@ -78,7 +78,7 @@ use metal2vulkan::pipeline::ColorAttachmentState;
 
 /// What a pass's draws write of each color attachment, as far as the host bounds it: the box an
 /// attachment rendered apart is copied in and merged back over ([`choose`]).
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub(super) struct Coverage {
     /// By color index: the box of every pixel a draw may write, `[x0, y0, x1, y1]`, half-open.
     colors: [Option<[u32; 4]>; MAX_COLOR_ATTACHMENTS],

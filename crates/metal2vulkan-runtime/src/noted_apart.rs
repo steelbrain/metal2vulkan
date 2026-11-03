@@ -33,7 +33,7 @@ use super::resource::ResourceKey;
 use super::tracker::Use;
 
 /// What the last command noted apart was noted with (the module docs).
-#[derive(Default)]
+#[derive(Clone, Default, PartialEq)]
 pub(super) struct NotedApart {
     /// The core of the encoder that noted it and kept it, if any.
     core: Option<u64>,
@@ -81,6 +81,18 @@ impl NotedApart {
             && self.into() == into
             && *self.uses == *uses
             && self.resident.iter().eq(resident)
+    }
+
+    /// Whether the last command was noted into `into`: then a command noted with its stages and
+    /// uses, reaching the same keys through the resident set alone, is noted already
+    /// ([`holds`](Self::holds)).
+    pub(super) fn noted_into(&self, into: NotedInto) -> bool {
+        self.core == Some(into.core) && self.into() == into
+    }
+
+    /// The last command's uses, as given.
+    pub(super) fn uses(&self) -> &[Use<ResourceKey>] {
+        &self.uses
     }
 
     /// Keep the command just noted, of `stages` with `uses`, of which it reached the keys

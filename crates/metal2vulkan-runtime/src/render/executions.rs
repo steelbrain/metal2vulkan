@@ -2445,6 +2445,7 @@ impl RenderExecution {
             heaps_noted: None,
             inline: super::inline_first::Inline::Never,
             held_bound: Default::default(),
+            again: Default::default(),
             // No pass of several color groups executes render commands
             // (`render/color_groups.rs`).
             grouped: None,

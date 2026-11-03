@@ -393,6 +393,7 @@ mod bound;
 mod call_checks;
 mod color_groups;
 mod deferral;
+mod draw_again;
 mod draw_room;
 mod draw_shape;
 mod executions;
@@ -1604,6 +1605,8 @@ pub(crate) struct RenderLowering {
     /// What the draws recorded inline into the pass's command buffer bound there, in its every
     /// render pass instance (`render/inline_splits.rs`).
     held_bound: Bound,
+    /// The last direct draw, kept for drawing again while no call comes (`render/draw_again.rs`).
+    again: draw_again::DrawAgain,
     /// The pass's color group, where the device draws its colors in groups: the encoder draws
     /// that group's (`render/color_groups.rs`).
     grouped: Option<Box<color_groups::Grouped>>,
@@ -2093,6 +2096,7 @@ impl RenderLowering {
                 None => inline_first::Inline::Never,
             },
             held_bound: Bound::default(),
+            again: draw_again::DrawAgain::default(),
             grouped,
         })
     }
@@ -3239,7 +3243,7 @@ impl RenderLowering {
         instance_count: u32,
         base_instance: u32,
     ) -> Result<(), Error> {
-        self.log(|_| {
+        self.log_draw(|_| {
             RenderCall::DrawPrimitives(
                 primitive_type,
                 vertex_start,
@@ -4012,6 +4016,8 @@ impl RenderLowering {
     /// color groups draw (`render/color_groups.rs`).
     fn end_pass(mut self: Box<Self>) -> Result<color_groups::Ended, Error> {
         const CALL: &str = "end_encoding";
+        // Its draws again counted (`render/draw_again.rs`).
+        self.forget_again();
         // Over a mutable rasterization-rate map: Metal's GPU hangs at a pass of no draw call until
         // a command buffer with a draw call over such a map was committed (`rate_mapped_pass.rs`).
         if self.rate_map.as_ref().is_some_and(RateMappedPass::mutable) {
@@ -7149,6 +7155,16 @@ impl RenderLowering {
         empty: bool,
     ) -> Result<(), Error> {
         self.sync_heaps();
+        // The encoder's kept draw again, which no call came between: its Vulkan draw alone
+        // (`render/draw_again.rs`). Any other draw forgets it, and keeps itself where it can.
+        let checked = match self.draw_again(call, assembly, &draw, &buffers) {
+            draw_again::Again::Drawn => return Ok(()),
+            #[cfg(debug_assertions)]
+            draw_again::Again::Check(checked) => Some(checked),
+            draw_again::Again::No => None,
+        };
+        self.forget_again();
+        let watch = EachWatch::start();
         // And whether it rasterizes, without which its primitives reach no tile (`no_raster_t11`).
         // And whether it chooses its viewport.
         let (reads, rasterizes, selects) =
@@ -7169,6 +7185,9 @@ impl RenderLowering {
             _ => {
                 let drawn = self.draw_resident(call, assembly, draw, buffers, empty);
                 self.group_outcome(turn, drawn.is_ok());
+                if drawn.is_err() {
+                    self.forget_again();
+                }
                 drawn?;
             }
         }
@@ -7184,7 +7203,8 @@ impl RenderLowering {
         self.called = true;
         self.drew |= !empty && rasterizes;
         // A draw that records a command hands the device's pass its depth/stencil state.
-        self.drew_depth_writes |= !empty && self.state.depth_writes();
+        let depth_writes = !empty && self.state.depth_writes();
+        self.drew_depth_writes |= depth_writes;
         // The pixels it may write: its viewports' within its scissors, every viewport where it
         // chooses one or an amplification offsets it, and anywhere through a rate map.
         if !empty && rasterizes {
@@ -7209,10 +7229,10 @@ impl RenderLowering {
                     match self.pipeline.as_ref().map(RenderPipelineState::kind) {
                         Some(RenderStateKind::Graphics(state)) => {
                             let colors = &state.base().graphics.color_attachments;
-                            let routing = self
-                                .shape_inputs()
-                                .routing(state)
-                                .map_err(|_| internal("a draw of a state its pass refuses"))?;
+                            let Ok(routing) = self.shape_inputs().routing(state) else {
+                                self.again = Default::default();
+                                return Err(internal("a draw of a state its pass refuses"));
+                            };
                             let zeroed = !self
                                 .shape_inputs()
                                 .routed_colors(state, &routing)
@@ -7227,6 +7247,7 @@ impl RenderLowering {
                 }
             }
         }
+        self.kept_again(&watch, (reads, !empty && rasterizes, depth_writes), checked);
         Ok(())
     }
 
@@ -9303,6 +9324,26 @@ impl RenderLowering {
                 "a draw replay's draw of other recordings than one",
             ));
         }
+        // Whether the draw takes no step of its own beside its Vulkan draw, and records into the
+        // current instance as it stood, for keeping it to draw again (`render/draw_again.rs`):
+        // read before its steps below take their parts.
+        let stepless = rewrite.is_none()
+            && listed.is_none()
+            && bounds.is_none()
+            && fold.is_none()
+            && arguments.is_none()
+            && mesh_steps.is_none()
+            && tessellation_steps.is_none()
+            && !before_instance
+            && made.is_none()
+            && made_stand_in.is_none()
+            && made_imageblock.is_none()
+            && pending.is_none()
+            && inline.is_none()
+            && split_inline.is_none()
+            && matches!(next, Next::Current)
+            && stood.is_none()
+            && continuation.is_none();
         // Recording starts here: nothing below can be refused.
         if let Some(written) = written {
             self.core.keep_set_zero(written, &writes);
@@ -9355,6 +9396,8 @@ impl RenderLowering {
         self.barrier_splits += usize::from(run_barrier_split);
         self.run_barrier = false;
         self.gathering().add(&draw_shadows, uses);
+        // Whether it recorded a barrier in its instance, or a state command (`Recorded`).
+        let (mut barriered, mut draw_alone) = (false, false);
         if !empty && !culled {
             for source in index.into_iter().chain(indirect) {
                 match (source.copy_steps(&mut self.core), before_instance) {
@@ -9409,6 +9452,7 @@ impl RenderLowering {
             // imageblock's, a color's or the depth's stand-in, records after the barrier
             // (`InterlockedStorage`).
             let after_writes = interlocked.meets(self.current.interlocked_writes);
+            barriered |= after_writes;
             let mut storage_barrier = None;
             if after_writes {
                 let view_mask = self.current.shape.view_mask;
@@ -9437,6 +9481,7 @@ impl RenderLowering {
             // Instances follow one another behind a barrier from everything before.
             let written = self.current.indirect_reads.written_in(uses) & PASS_DRAW_STAGES;
             let mut indirect_barrier = None;
+            barriered |= !written.is_empty();
             if !written.is_empty() {
                 let view_mask = self.current.shape.view_mask;
                 let stages = tracker::legacy_stages(written, vk::PipelineStageFlags::ALL_GRAPHICS);
@@ -9462,6 +9507,7 @@ impl RenderLowering {
             // and mesh functions before any draw's fragments.
             let mut geometry_barrier = None;
             if let Some(barrier) = self.current.geometry_writes.barrier_before(uses) {
+                barriered = true;
                 let view_mask = self.current.shape.view_mask;
                 let scopes = render_target::GEOMETRY_SELF_DEPENDENCY;
                 let mut legacy = barrier.legacy();
@@ -9625,6 +9671,7 @@ impl RenderLowering {
                     }
                 }
             }
+            draw_alone = states_recorded.draw_alone();
             states_recorded.count(&device.shared().counts);
             if let Some((making, state, draws, query)) = split {
                 // The record's times: the pipeline's, then those of the other `VkPipeline`s the
@@ -9688,6 +9735,114 @@ impl RenderLowering {
                     (object, reason)
                 });
             }
+        }
+        // The draw, kept for drawing again where it took no step of its own, no notice it met
+        // aside (`kept_again`), and where nothing it left changes what the next draw meets
+        // (`render/draw_again.rs`).
+        // Its uses: none written, none read as indirect arguments, and whether one reads an image
+        // other than as an attachment.
+        let (unwritten, reads_images) = {
+            let mut reads_images = false;
+            let unwritten = uses.iter().all(|used| {
+                reads_images |= draw_again::reads_image(used);
+                used.write.is_empty()
+                    && !(used.read.stages).intersects(vk::PipelineStageFlags2::DRAW_INDIRECT)
+            });
+            (unwritten, reads_images)
+        };
+        let ycbcr = |write: &metal2vulkan::bind::DescriptorWrite| {
+            matches!(
+                write.source,
+                WriteSource::YCbCrInPlace { .. } | WriteSource::YCbCrPlanesImage { .. }
+            )
+        };
+        let extended = |c: &render_pass::ColorTarget| {
+            ExtendedRange::of(c.target.texture.pixel_format()).is_some()
+        };
+        let keeps = stepless
+            && !barriered
+            && !empty
+            && !culled
+            && !self.replaying
+            && !self.rerouting
+            && self.replayed.is_none()
+            && self.grouped.is_none()
+            && self.rate_map.is_none()
+            && self.current.kept.is_none()
+            && matches!(draw_pipeline, DrawPipeline::Made(_))
+            && tessellation.is_none()
+            && !meshes
+            && pushes.len() == 1
+            && vk_draws.len() == 1
+            && chunked.is_empty()
+            && pair_base.is_none()
+            && matches!(draw_states, DrawStates::Whole(_))
+            && snapshot.is_none()
+            && draw_shadows.is_empty()
+            && !attached
+            && stencil_use.is_none()
+            && tests_use.is_none()
+            && imageblock_use.is_none()
+            && tile_buffer.is_none()
+            && heap.is_none()
+            && texture_table.is_none()
+            && sampler_table.is_none()
+            && unlisted.is_none()
+            && bound_each.is_none()
+            && !reads_tile_memory
+            && !apart
+            && !first_write
+            && storage_colors == 0
+            && reformats.is_empty()
+            && views == ViewSetup::default()
+            && resumed.is_none()
+            && commands.root_tables.is_empty()
+            && commands.push_holes.is_empty()
+            && pass_start.reads_encoders()
+            && matches!(settings.line, LineRoute::Plain)
+            && matches!(
+                provoking,
+                provoking::Provoking::AsIs | provoking::Provoking::Native
+            )
+            && restarted.is_none()
+            && !private.private_list
+            && !private.quad_primitive_ids
+            && variant.key().primitive_id_indices.is_none()
+            && indirect.is_none()
+            && index.is_none_or(DrawSource::in_place)
+            && unwritten
+            && !self.extended.keeps_draws()
+            && live.state.extended_shadows.is_empty()
+            && !plan.variant.extended_range.values().any(planes)
+            && !(self.layout.colors.iter().flatten()).any(extended)
+            && !plan.descriptors.iter().any(ycbcr)
+            // Its uses noted as the next draw would find them noted (`noted_apart.rs`).
+            && self.core.noted_now(&live.noted);
+        if keeps {
+            let execution = records.then(|| draw_again::KeptExecution {
+                pipeline: ExecutedPipeline::Render(Arc::clone(variant.shared_pipeline())),
+                shape: Arc::clone(&shape),
+                created: created.clone(),
+            });
+            let kept = draw_again::Kept {
+                call,
+                assembly,
+                draw,
+                index: index.and_then(draw_again::KeptIndex::of),
+                under: self.under(),
+                command_buffer: self.current.draws,
+                command: vk_draws[0].2,
+                again,
+                pushes_set_zero: !pushed.is_empty(),
+                last_vertex: provoking == provoking::Provoking::Native,
+                reads_images,
+                execution,
+                reads: RenderStages::empty(),
+                rasterizes: false,
+                depth_writes: false,
+                draw_alone,
+            };
+            self.again.keep(kept);
         }
         let padding = index.and_then(DrawSource::padding);
         if let (Some(source), Some(positions)) = (index, padding) {
@@ -11337,95 +11492,116 @@ impl Recording<'_> {
             if let Some(pair) = &self.pair {
                 pair.record(raw, cb, self.layout);
             }
-            match self.draw {
-                metal2vulkan::vk::DrawCommand::Draw {
-                    vertex_count,
-                    instance_count,
-                    first_vertex,
-                    first_instance,
-                } => raw.cmd_draw(
-                    cb,
-                    vertex_count,
-                    instance_count,
-                    first_vertex,
-                    first_instance,
-                ),
-                metal2vulkan::vk::DrawCommand::DrawIndexed {
-                    index_count,
-                    instance_count,
-                    first_index,
-                    vertex_offset,
-                    first_instance,
-                    ..
-                } => raw.cmd_draw_indexed(
-                    cb,
-                    index_count,
-                    instance_count,
-                    first_index,
-                    vertex_offset,
-                    first_instance,
-                ),
-                metal2vulkan::vk::DrawCommand::DrawIndirect {
-                    offset,
-                    draw_count,
-                    stride,
-                } => {
-                    if let Some(buffer) = self.indirect {
-                        raw.cmd_draw_indirect(cb, buffer, offset, draw_count, stride);
-                    }
-                }
-                metal2vulkan::vk::DrawCommand::DrawIndexedIndirect {
-                    offset,
-                    draw_count,
-                    stride,
-                    ..
-                } => {
-                    if let Some(buffer) = self.indirect {
-                        raw.cmd_draw_indexed_indirect(cb, buffer, offset, draw_count, stride);
-                    }
-                }
-                // A mesh render pipeline's state compiles only where the device enabled
-                // `meshShader`, which loads the commands.
-                metal2vulkan::vk::DrawCommand::DrawMeshTasks {
-                    group_count_x,
-                    group_count_y,
-                    group_count_z,
-                } => {
-                    if let Some(mesh) = self.mesh {
-                        mesh.cmd_draw_mesh_tasks(cb, group_count_x, group_count_y, group_count_z);
-                    }
-                }
-                metal2vulkan::vk::DrawCommand::DrawMeshTasksIndirect {
-                    offset,
-                    draw_count,
-                    stride,
-                } => {
-                    if let (Some(mesh), Some(buffer)) = (self.mesh, self.indirect) {
-                        mesh.cmd_draw_mesh_tasks_indirect(cb, buffer, offset, draw_count, stride);
-                    }
-                }
-                metal2vulkan::vk::DrawCommand::DrawMeshTasksIndirectCount {
-                    offset,
-                    count_offset,
-                    max_draw_count,
-                    stride,
-                } => {
-                    if let (Some(mesh), Some(buffer)) = (self.mesh, self.indirect) {
-                        mesh.cmd_draw_mesh_tasks_indirect_count(
-                            cb,
-                            buffer,
-                            (offset, count_offset),
-                            max_draw_count,
-                            stride,
-                        );
-                    }
-                }
-            }
+            record_draw_command(raw, cb, self.draw, self.indirect, self.mesh);
         }
         Recorded {
             states: recorded,
             writes_pushed,
             equal_shapes,
+        }
+    }
+}
+
+/// Record `draw`, the Vulkan draw command, into `cb`: an indirect one from `indirect`, a mesh one
+/// through `mesh`, the device's mesh draw commands.
+///
+/// # Safety
+///
+/// `cb` is recording inside a pass compatible with the bound pipeline's, with every state the
+/// pipeline and the command take bound or set, and every handle live until it completes; `mesh`
+/// is the device's, where it enabled `meshShader`.
+unsafe fn record_draw_command(
+    raw: &ash::Device,
+    cb: vk::CommandBuffer,
+    draw: metal2vulkan::vk::DrawCommand,
+    indirect: Option<vk::Buffer>,
+    mesh: Option<&crate::recorder::MeshDraws>,
+) {
+    // SAFETY: the caller's contract.
+    unsafe {
+        match draw {
+            metal2vulkan::vk::DrawCommand::Draw {
+                vertex_count,
+                instance_count,
+                first_vertex,
+                first_instance,
+            } => raw.cmd_draw(
+                cb,
+                vertex_count,
+                instance_count,
+                first_vertex,
+                first_instance,
+            ),
+            metal2vulkan::vk::DrawCommand::DrawIndexed {
+                index_count,
+                instance_count,
+                first_index,
+                vertex_offset,
+                first_instance,
+                ..
+            } => raw.cmd_draw_indexed(
+                cb,
+                index_count,
+                instance_count,
+                first_index,
+                vertex_offset,
+                first_instance,
+            ),
+            metal2vulkan::vk::DrawCommand::DrawIndirect {
+                offset,
+                draw_count,
+                stride,
+            } => {
+                if let Some(buffer) = indirect {
+                    raw.cmd_draw_indirect(cb, buffer, offset, draw_count, stride);
+                }
+            }
+            metal2vulkan::vk::DrawCommand::DrawIndexedIndirect {
+                offset,
+                draw_count,
+                stride,
+                ..
+            } => {
+                if let Some(buffer) = indirect {
+                    raw.cmd_draw_indexed_indirect(cb, buffer, offset, draw_count, stride);
+                }
+            }
+            // A mesh render pipeline's state compiles only where the device enabled
+            // `meshShader`, which loads the commands.
+            metal2vulkan::vk::DrawCommand::DrawMeshTasks {
+                group_count_x,
+                group_count_y,
+                group_count_z,
+            } => {
+                if let Some(mesh) = mesh {
+                    mesh.cmd_draw_mesh_tasks(cb, group_count_x, group_count_y, group_count_z);
+                }
+            }
+            metal2vulkan::vk::DrawCommand::DrawMeshTasksIndirect {
+                offset,
+                draw_count,
+                stride,
+            } => {
+                if let (Some(mesh), Some(buffer)) = (mesh, indirect) {
+                    mesh.cmd_draw_mesh_tasks_indirect(cb, buffer, offset, draw_count, stride);
+                }
+            }
+            metal2vulkan::vk::DrawCommand::DrawMeshTasksIndirectCount {
+                offset,
+                count_offset,
+                max_draw_count,
+                stride,
+            } => {
+                if let (Some(mesh), Some(buffer)) = (mesh, indirect) {
+                    mesh.cmd_draw_mesh_tasks_indirect_count(
+                        cb,
+                        buffer,
+                        (offset, count_offset),
+                        max_draw_count,
+                        stride,
+                    );
+                }
+            }
         }
     }
 }

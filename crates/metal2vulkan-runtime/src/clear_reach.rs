@@ -346,7 +346,7 @@ fn set_bits(row: &mut [u64; ROW_WORDS], bits: std::ops::Range<u32>) {
 /// other tile keeps its texels). The whole render area where a draw's pixels are not bounded so:
 /// an execution of render commands, a tile dispatch, a pass through a rasterization-rate map, or
 /// more than [`MOST_RECTS`] distinct rectangles.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub(super) struct DrawnArea {
     /// Each distinct `[x0, y0, x1, y1]`, half-open, inside the render area.
     rects: Rects,
@@ -356,7 +356,7 @@ pub(super) struct DrawnArea {
 /// Distinct pixel rectangles: the first held in place, as a pass's draws mostly reach one (its
 /// render area), so such a pass allocates none for them; the others in order, each once, in a
 /// list that keeps its room when cleared ([`DrawnArea::clear`]).
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, PartialEq)]
 struct Rects {
     first: Option<[u32; 4]>,
     /// Empty while `first` is `None`; never holds `first`.

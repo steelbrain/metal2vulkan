@@ -1244,8 +1244,10 @@ pub(super) fn on_device_both_ways(test: impl Fn(&Device)) {
 /// Draws of an unchanged state into one render pass instance record its state commands once:
 /// past the first, a draw records nothing, so no pipeline, descriptor set, push constant, buffer
 /// or dynamic state is set again: where the device binds set 0, each draw past the first binds
-/// the set its last draw wrote, the same descriptors (`WorkCounts::set_zero_sets_reused`), and
-/// where it pushes set 0 ([`pushes`]), every draw pushes it, its writes the same. The first draw records them all, and the target is the
+/// the set its last draw wrote, the same descriptors (`WorkCounts::set_zero_sets_reused`), or
+/// draws as its encoder's last draw again (`draws_as_before`), which binds what that draw bound;
+/// and where it pushes set 0 ([`pushes`]), every draw pushes it, its writes the same, a draw
+/// again as the draw it repeats (counted at the encoder's end). The first draw records them all, and the target is the
 /// texture's. Every draw takes its key's own pipeline, made beforehand ([`make`]), none the
 /// residual form, so no pipeline is bound again past the first draw. Both ways
 /// ([`on_device_both_ways`]).
@@ -1265,10 +1267,12 @@ fn draws_of_an_unchanged_state_record_its_commands_once() {
         let later: Vec<u64> = (1..DRAWS)
             .map(|_| recorded_by(device, &mut encoder))
             .collect();
+        encoder.end_encoding().unwrap();
         let after = device.work_counts();
         let pushed = grew(&before, &after, |c| c.draws_pushing_set_zero);
-        let reused = grew(&before, &after, |c| c.set_zero_sets_reused);
-        encoder.end_encoding().unwrap();
+        let reused = grew(&before, &after, |c| {
+            c.set_zero_sets_reused + c.draws_as_before
+        });
         let residual = grew(&before, &after, |c| c.residual_form_draws);
         assert_eq!(
             residual, 0,

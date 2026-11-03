@@ -2667,6 +2667,19 @@ thread_local! {
     static MET_EACH: Cell<u64> = const { Cell::new(0) };
 }
 
+#[cfg(debug_assertions)]
+thread_local! {
+    /// The messages delivered on this thread (builds with debug assertions).
+    static DELIVERED: Cell<u64> = const { Cell::new(0) };
+}
+
+/// How many messages were delivered on this thread so far (builds with debug assertions): what a
+/// check that some work announced nothing compares (`render/draw_again.rs`).
+#[cfg(debug_assertions)]
+pub(crate) fn announced_here() -> u64 {
+    DELIVERED.with(Cell::get)
+}
+
 /// Count a notice met on this thread that its device announces, or refuses, at every occurrence.
 fn met_each() {
     MET_EACH.with(|met| met.set(met.get().wrapping_add(1)));
@@ -3192,6 +3205,8 @@ impl Device {
 
     /// Hand `message` to the device's message sink, else write it on stderr.
     fn deliver(&self, message: &DebugMessage) {
+        #[cfg(debug_assertions)]
+        DELIVERED.with(|delivered| delivered.set(delivered.get() + 1));
         match self.shared().instance.sink() {
             Some(sink) => sink.deliver(message),
             None => eprintln!("{}", message.text),

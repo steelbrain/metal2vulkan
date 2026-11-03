@@ -647,8 +647,16 @@ pub(crate) struct DrawIndexedPatchesIndirect {
 
 impl RenderLowering {
     /// Log the call `call` makes of the log, before it runs, where the encoder logs (the module
-    /// docs).
+    /// docs). Every call but a direct draw logs itself so, which forgets the encoder's kept draw,
+    /// whatever the call changes (`render/draw_again.rs`).
     pub(crate) fn log(&mut self, call: impl FnOnce(&mut CallLog<RenderCall>) -> RenderCall) {
+        self.forget_again();
+        self.log_draw(call);
+    }
+
+    /// [`log`](Self::log) a `draw_primitives` call, which keeps the encoder's kept draw: a draw
+    /// is drawn again as it was kept, or keeps itself (`render/draw_again.rs`).
+    pub(crate) fn log_draw(&mut self, call: impl FnOnce(&mut CallLog<RenderCall>) -> RenderCall) {
         if let Some(log) = &mut self.log {
             let call = call(&mut log.calls);
             let extra = call.extra();
@@ -676,7 +684,8 @@ impl RenderLowering {
     }
 
     /// Log a `draw_indexed_primitives` call, whose arguments `draw` makes of the log, before it
-    /// runs, where the encoder logs: its arguments go into the log's list of them.
+    /// runs, where the encoder logs: its arguments go into the log's list of them. It keeps the
+    /// encoder's kept draw, as [`log_draw`](Self::log_draw) does.
     pub(crate) fn log_indexed(
         &mut self,
         draw: impl FnOnce(&mut CallLog<RenderCall>) -> DrawIndexed,

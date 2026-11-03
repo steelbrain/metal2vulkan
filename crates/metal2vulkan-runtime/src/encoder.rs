@@ -1349,17 +1349,10 @@ impl EncoderCore {
             self.touch_reaching(uses, resident);
             return Ok(());
         };
-        let shared = self.device().shared();
         // Read before the host aliases' uses are worked out, so a change made since counts.
-        let into = NotedInto {
-            core: self.id,
-            parts: self.uses.parts(),
-            held: self.uses.held().len(),
-            rebinds: shared.rebinds.any(),
-            aliases: shared.aliases.version(),
-        };
+        let into = self.noted_into();
         if noted.holds(stages, (uses, resident), into) {
-            shared.counts.command_noted_as_before();
+            self.device().shared().counts.command_noted_as_before();
             return Ok(());
         }
         let fresh = noted.fresh(uses, into);
@@ -1367,6 +1360,50 @@ impl EncoderCore {
         self.touch_reaching(uses, resident);
         noted.note(stages, (uses, resident), into);
         Ok(())
+    }
+
+    /// The encoder's state a command noted apart now is noted into (`NotedInto`).
+    pub(super) fn noted_into(&self) -> NotedInto {
+        let shared = self.device().shared();
+        NotedInto {
+            core: self.id,
+            parts: self.uses.parts(),
+            held: self.uses.held().len(),
+            rebinds: shared.rebinds.any(),
+            aliases: shared.aliases.version(),
+        }
+    }
+
+    /// Whether the command apart `noted` keeps, the last one [`note_reaching`](Self::note_reaching)
+    /// noted, was noted into the encoder's state now: then a command of its stages and uses,
+    /// reaching the keys it reached through the resident set alone, is noted already, and noting
+    /// it notes only its reads of fresh textures and what the encoder made resident since
+    /// ([`note_again`](Self::note_again)).
+    pub(super) fn noted_now(&self, noted: &NotedApart) -> bool {
+        !self.uses.ordered() && noted.noted_into(self.noted_into())
+    }
+
+    /// Note again a command apart noted already ([`noted_now`](Self::noted_now)) with `uses`, as
+    /// [`note_reaching`](Self::note_reaching) notes it, but for its count
+    /// (`WorkCounts::commands_noted_as_before`), which its caller counts: its reads of fresh
+    /// textures, and the buffers the encoder made resident since its last command. `uses` may
+    /// leave out the uses that read no image other than as an attachment, which note nothing.
+    pub(super) fn note_again(&mut self, uses: &[Use<ResourceKey>]) {
+        self.observe_fresh(uses, &[]);
+        self.hold_resident();
+    }
+
+    /// Whether noting a command's reads of fresh textures may announce one
+    /// (`fresh_unwritten.rs`): the device has a texture still unwritten since it was made.
+    pub(super) fn observes_fresh(&self) -> bool {
+        self.device().shared().fresh.any()
+    }
+
+    /// How many holds and execution records the encoder keeps for its command buffer (builds
+    /// with debug assertions: `render/draw_again.rs`'s check).
+    #[cfg(debug_assertions)]
+    pub(super) fn retained_holds(&self) -> (usize, usize) {
+        (self.retained.len(), self.executions.len())
     }
 
     /// Record one command apart that runs in `stages` with `uses`, and the uses of the host

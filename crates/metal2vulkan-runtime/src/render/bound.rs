@@ -101,6 +101,11 @@ impl std::ops::AddAssign for Recorded {
 }
 
 impl Recorded {
+    /// Whether the draw recorded no state command and pushed no write: its Vulkan draw alone.
+    pub(super) fn draw_alone(&self) -> bool {
+        self.states == 0 && self.writes_pushed == 0 && self.equal_shapes == EqualShapes::default()
+    }
+
     /// Add them to `counts` (`WorkCounts::draw_states_recorded`, `set_zero_writes_pushed`,
     /// `set_zero_equal_shape_switches` and kin).
     pub(super) fn count(self, counts: &crate::work_counts::Counters) {

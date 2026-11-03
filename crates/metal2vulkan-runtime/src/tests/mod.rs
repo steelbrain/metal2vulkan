@@ -90,6 +90,8 @@ mod dirty_pages_device;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod dispatch_pending;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
+mod draw_again;
+#[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod draw_shape_notices;
 mod driver_defects;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]

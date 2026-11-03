@@ -2,7 +2,8 @@
 //! announces at every occurrence (`DeviceOptions::announce_each`): a draw whose shape's derivation
 //! meets such a kind derives it anew and announces it at every draw, as a device without the memo
 //! would; a draw whose shape meets none takes it from the memo, whatever other kinds the device
-//! announces at each (`WorkCounts::draw_shapes_reused`), as a device that announces every kind
+//! announces at each (`WorkCounts::draw_shapes_reused`, or `draws_as_before` for a draw of the
+//! encoder's last draw again, which takes that draw's), as a device that announces every kind
 //! once does. A draw after a new scissor rectangle reuses its shape too, through its own scissor
 //! (`render_state::ScissorRects`). An encoder's first draw takes the shape an earlier encoder's
 //! draw of its drawing state derived from the same values (`WorkCounts::draw_shapes_carried`), so
@@ -141,7 +142,8 @@ struct Draws<'a> {
 
 impl Draws<'_> {
     /// Encode the draws in one pass into a new `RGBA8Unorm` target, commit and wait: the draws
-    /// that reused their shapes.
+    /// that reused their shapes, each draw of the encoder's last draw again among them, which
+    /// records as the draw it repeats, of that draw's shape (`render/draw_again.rs`).
     fn run(&self, device: &Device) -> u64 {
         let target = target(device, PixelFormat::RGBA8Unorm);
         let mut descriptor: RenderPassDescriptor = pass(&target);
@@ -154,11 +156,12 @@ impl Draws<'_> {
         }
         let queue = device.new_command_queue().unwrap();
         let command_buffer = queue.command_buffer().unwrap();
-        let reused = device.work_counts().draw_shapes_reused;
+        let reused = |counts: crate::WorkCounts| counts.draw_shapes_reused + counts.draws_as_before;
+        let before = reused(device.work_counts());
         let mut encoder = command_buffer.render_command_encoder(&descriptor).unwrap();
         self.encode(&mut encoder);
         encoder.end_encoding().unwrap();
-        let reused = device.work_counts().draw_shapes_reused - reused;
+        let reused = reused(device.work_counts()) - before;
         command_buffer.commit().unwrap();
         command_buffer.wait_until_completed_for(WAIT).unwrap();
         assert_eq!(command_buffer.status(), CommandBufferStatus::Completed);

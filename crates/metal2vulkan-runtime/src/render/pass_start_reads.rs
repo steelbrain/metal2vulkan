@@ -95,6 +95,10 @@ impl Written {
             }
         };
         let ranges = &mut self.lists[at].1;
+        // A range held already adds nothing: a pass's draws mostly name the same bytes again.
+        if ranges.contains(range) {
+            return;
+        }
         ranges.push(range.clone());
         if ranges.len() > RANGES_PER_KEY {
             let start = ranges.iter().map(|r| r.start).min().unwrap_or(0);
@@ -157,6 +161,12 @@ pub(super) struct PassStartReads {
     copies: Vec<PassStartCopy>,
 }
 
+/// What a pass's reads note ([`PassStartReads::held`]): its lists' keys and ranges, and its
+/// copies' count.
+#[cfg(debug_assertions)]
+#[derive(PartialEq)]
+pub(super) struct HeldReads([Vec<(ResourceKey, Vec<Range<u64>>)>; 3], usize);
+
 /// The tables a draw's stages before its fragments read in place of the encoder's: each with the
 /// copies of bytes the pass's fragment stages wrote, `None` where the stage reads the encoder's.
 #[derive(Default)]
@@ -176,6 +186,11 @@ impl PassStartTables {
             _ => None,
         };
         table.unwrap_or(encoder)
+    }
+
+    /// Whether every stage reads the encoder's table: no copy replaces a buffer of any.
+    pub(super) fn reads_encoders(&self) -> bool {
+        self.vertex.is_none() && self.object.is_none() && self.mesh.is_none()
     }
 }
 
@@ -199,6 +214,17 @@ impl PassStartReads {
                 self.fragment_reads.add(used.key, range);
             }
         }
+    }
+
+    /// What it notes, without its copies' buffers (builds with debug assertions:
+    /// `render/draw_again.rs`'s check).
+    #[cfg(debug_assertions)]
+    pub(super) fn held(&self) -> HeldReads {
+        let held = |written: &Written| written.lists[..written.held].to_vec();
+        HeldReads(
+            [&self.fragment, &self.fragment_reads, &self.other].map(held),
+            self.copies.len(),
+        )
     }
 
     /// The entries its lists and copies hold room for.

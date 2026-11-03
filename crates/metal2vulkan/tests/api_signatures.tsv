@@ -2592,6 +2592,7 @@ field	metal2vulkan-runtime::WorkCounts.draw_shapes_found	pub draw_shapes_found: 
 field	metal2vulkan-runtime::WorkCounts.draw_shapes_made	pub draw_shapes_made: u64
 field	metal2vulkan-runtime::WorkCounts.draw_shapes_reused	pub draw_shapes_reused: u64
 field	metal2vulkan-runtime::WorkCounts.draw_states_recorded	pub draw_states_recorded: u64
+field	metal2vulkan-runtime::WorkCounts.draws_as_before	pub draws_as_before: u64
 field	metal2vulkan-runtime::WorkCounts.draws_dropped_still_making	pub draws_dropped_still_making: u64
 field	metal2vulkan-runtime::WorkCounts.draws_dropped_unmade	pub draws_dropped_unmade: u64
 field	metal2vulkan-runtime::WorkCounts.draws_pushing_set_zero	pub draws_pushing_set_zero: u64

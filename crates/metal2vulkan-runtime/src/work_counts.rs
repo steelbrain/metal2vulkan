@@ -267,6 +267,7 @@ pub(crate) struct Counters {
     set_zero_sets_found: AtomicU64,
     draw_shapes_reused: AtomicU64,
     draw_shapes_carried: AtomicU64,
+    draws_as_before: AtomicU64,
     host_holds_looked_up: AtomicU64,
     dispatches_settled_as_before: AtomicU64,
     dispatches_planned_as_before: AtomicU64,
@@ -1857,6 +1858,23 @@ impl Counters {
     /// encoder's draw of the same drawing state and values (`render/draw_shape.rs`).
     pub(crate) fn draw_shape_carried(&self) {
         self.draw_shapes_carried.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// `draws` draws a render encoder recorded as its last draw again (`render/draw_again.rs`),
+    /// of which `pushing_set_zero` were of a variant that pushes set 0 and `last_vertex` ran a
+    /// `VkPipeline` of the last provoking vertex: each a draw whose uses were noted already.
+    pub(crate) fn draws_drawn_again(&self, draws: u64, pushing_set_zero: u64, last_vertex: u64) {
+        self.draws_as_before.fetch_add(draws, Ordering::Relaxed);
+        self.commands_noted_as_before
+            .fetch_add(draws, Ordering::Relaxed);
+        if pushing_set_zero > 0 {
+            self.draws_pushing_set_zero
+                .fetch_add(pushing_set_zero, Ordering::Relaxed);
+        }
+        if last_vertex > 0 {
+            self.provoking_last_pipeline_draws
+                .fetch_add(last_vertex, Ordering::Relaxed);
+        }
     }
 
     /// An encoder's hold of a key its commands named first that looked the key up among the
@@ -4302,7 +4320,7 @@ pub struct WorkCounts {
     /// Draws and dispatches that bound the set 0 their encoder's last command allocated and wrote,
     /// rather than allocating and writing their own: those that write the same descriptors into a
     /// set of the same layout (`binding::LastSetZero`). Their recording binds no set where the set
-    /// is bound already.
+    /// is bound already. Not a draw drawn again (`draws_as_before`), which binds no set.
     pub set_zero_sets_reused: u64,
     /// Draws and dispatches that bound a set 0 an earlier command of their command buffer, in any
     /// of its encoders, allocated and wrote, rather than allocating and writing their own: those
@@ -4322,7 +4340,8 @@ pub struct WorkCounts {
     /// shape by version or value, and the assembly, the pass's sample positions, the vertex
     /// strides, the fixed state and the topology by value (`render/draw_shape.rs`). None of a
     /// shape whose derivation announces a notice the device announces at every occurrence
-    /// (`DeviceOptions::announce_each`).
+    /// (`DeviceOptions::announce_each`). Not a draw drawn again (`draws_as_before`), which takes
+    /// nothing of the memo.
     pub draw_shapes_reused: u64,
     /// Render encoders' draws that found no shape in their encoder's memo and took their
     /// settings, with the draw state and `VkPipeline` an earlier draw of them found, from an
@@ -4333,6 +4352,21 @@ pub struct WorkCounts {
     /// rate-mapped pass, nor of a shape whose derivation announces a notice the device announces
     /// at every occurrence.
     pub draw_shapes_carried: u64,
+    /// Render encoders' direct draws recorded as their encoder's last draw again, its Vulkan draw
+    /// command alone, rather than taking every step of a draw: a draw of the same call with the
+    /// same arguments (its index buffer read in place at the same offset), which no call of the
+    /// encoder came between, while no no-copy buffer moved, the encoder's residency kept its
+    /// generation, the device's host aliases kept their version and the encoder kept its parts
+    /// and held images, after a draw that recorded one Vulkan draw into the instance as it
+    /// stood, through a `VkPipeline` made ahead, with no barrier in its instance, no write among
+    /// its uses, no copy, shadow, snapshot, split, gather, index bounds or rewrite pass, mesh or
+    /// tessellation work, set 1, root table, rate map, color group or extended-range color, and
+    /// no notice the device announces at every occurrence (`render/draw_again.rs`). Each is
+    /// counted in `commands_noted_as_before`, `draws_pushing_set_zero` and
+    /// `provoking_last_pipeline_draws` as the draw it repeats was, and in no count of work it
+    /// does not take (`draw_shapes_reused`, `set_zero_sets_reused`, `draw_states_recorded`); all
+    /// are counted at the encoder's next call or its end.
+    pub draws_as_before: u64,
     /// Keys an encoder's commands named first, while the device has a buffer over host pages
     /// (`new_buffer_with_bytes_no_copy`), that were looked up among those buffers under the lock
     /// their command buffers' submissions take: the keys of such buffers, and the rare other key
@@ -5580,6 +5614,7 @@ impl Device {
             set_zero_sets_found: counters.set_zero_sets_found.load(Ordering::Relaxed),
             draw_shapes_reused: counters.draw_shapes_reused.load(Ordering::Relaxed),
             draw_shapes_carried: counters.draw_shapes_carried.load(Ordering::Relaxed),
+            draws_as_before: counters.draws_as_before.load(Ordering::Relaxed),
             host_holds_looked_up: counters.host_holds_looked_up.load(Ordering::Relaxed),
             dispatches_settled_as_before: (counters.dispatches_settled_as_before)
                 .load(Ordering::Relaxed),

@@ -85,6 +85,12 @@ impl Retained {
         &mut holds.0
     }
 
+    /// How many holds it keeps (builds with debug assertions: `render/draw_again.rs`'s check).
+    #[cfg(debug_assertions)]
+    pub(super) fn len(&self) -> usize {
+        self.0.as_ref().map_or(0, |holds| holds.0.len())
+    }
+
     /// The holds as one entry of a command buffer's (the module docs), or none where there are
     /// none.
     pub(super) fn into_entry(self) -> Option<Box<dyn Any + Send + Sync>> {

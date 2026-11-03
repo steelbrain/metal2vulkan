@@ -209,7 +209,29 @@ fn insert(ranges: &mut Vec<Range<u64>>, mut range: Range<u64>) {
     }
 }
 
+/// What an instance's draws gathered ([`InstanceShadows::gathered`]): its shadows' count, its
+/// buffers' ranges, its images' and the last draw's uses.
+#[cfg(debug_assertions)]
+#[derive(PartialEq)]
+pub(super) struct HeldGathered(
+    usize,
+    Vec<((ResourceKey, bool), Vec<Range<u64>>)>,
+    Vec<((ResourceKey, bool), UseRange)>,
+    Vec<Use<ResourceKey>>,
+);
+
 impl InstanceShadows {
+    /// What its draws gathered (builds with debug assertions: `render/draw_again.rs`'s check).
+    #[cfg(debug_assertions)]
+    pub(super) fn gathered(&self) -> HeldGathered {
+        HeldGathered(
+            self.shadows.len(),
+            self.bytes[..self.held].to_vec(),
+            self.images.clone(),
+            self.last.clone(),
+        )
+    }
+
     /// Whether the draws use no shadowed texture.
     pub(super) fn is_empty(&self) -> bool {
         self.shadows.is_empty()
