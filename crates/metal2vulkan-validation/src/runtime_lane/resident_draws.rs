@@ -1,7 +1,6 @@
-//! What a pass's draws cost on the device the cfg selects when each binds a resource of its own
-//! and the pass makes every one resident, as a page's render bundle does with a bind group a
-//! draw, without the validation layer: report only, in release builds, to find what grows with
-//! the draws and with the resources made resident.
+//! Draws that each bind a resource of their own while the pass makes every one resident, as a
+//! page's render bundle does with a bind group a draw, on the device the cfg selects: what they
+//! draw, and what they cost.
 //!
 //! Two shapes of draw, `resident_draws.metal`, each placing one small triangle into a 512x512
 //! `RGBA8Unorm` target:
@@ -16,19 +15,21 @@
 //! (`one`). Three paths for each: the encoder's own draws (`encoder`), an indirect command
 //! buffer's execution of the same draws made resident for reading (`read`: `commit` records the
 //! CPU's records), and the same execution after a compute encoder made the buffer resident for
-//! writing (`write`: a host step records it).
+//! writing (`write`: a host step records it, resolving each record's addresses among the
+//! resources made resident).
 //!
-//! Printed as `RESIDENT-DRAWS` lines: for each shape, binding, draw count and path, the frame's
+//! [`each_path_draws_what_the_encoder_draws`] checks, under the validation layer, that every path
+//! and binding of a shape draws the same pixels. [`resident_draws`] measures, without the layer:
+//! printed as `RESIDENT-DRAWS` lines, for each shape, binding, draw count and path, the frame's
 //! time (encoding to completion) over [`frames`] frames after one to warm, median and largest,
-//! per draw, and the device's counters over those frames.
-//!
-//! [`COUNTS_VAR`] lists the draw counts (500, 1000, 2000 and 5000 by default), [`FRAMES_VAR`] the
-//! frames timed, and [`ONLY_VAR`] keeps the cases whose name (`shape binding path`, such as
-//! `slot own write`) contains it.
-//!
-//! Ignored by default: a measurement, not a check. Run it by name with `--run-ignored all`, in a
-//! build with `--cfg m2v_system_alloc`.
+//! per draw, and the device's counters over those frames. [`COUNTS_VAR`] lists the draw counts
+//! (500, 1000, 2000 and 5000 by default), [`FRAMES_VAR`] the frames timed, [`ONLY_VAR`] keeps the
+//! cases whose name (`shape binding path`, such as `slot own write`) contains it, and
+//! [`DUMP_VAR`] prints every counter a case's frames moved, and a hash of what its last frame
+//! drew, as `RESIDENT-DRAWS-COUNTS` lines, to compare two builds. It is ignored by default: run it
+//! by name with `--run-ignored all`, in a build with `--cfg m2v_system_alloc`.
 
+use super::degrade_notices::on_device;
 use super::{buffer_with, validated_device_with, Messages, ScratchCache, WAIT};
 use crate::air_library::AirLibrary;
 use crate::gpu::TEST_DEVICE;
@@ -42,7 +43,7 @@ use metal2vulkan::pipeline::{
 use metal2vulkan_devtools::{engine_dir, llvm_assemble};
 use metal2vulkan_runtime::{
     Buffer, CommandBufferStatus, CommandQueue, ComputePipelineState, Device, IndirectCommandBuffer,
-    IndirectCommandBufferDescriptor, LoadAction, PipelineOptions, RenderCommandEncoder,
+    IndirectCommandBufferDescriptor, LoadAction, PipelineOptions, Region, RenderCommandEncoder,
     RenderPassDescriptor, RenderPipelineState, ResourceOptions, ResourceRef, SamplerState,
     SamplerStateOptions, Size, StoreAction, Texture, TextureDescriptor, WorkCounts,
 };
@@ -54,6 +55,11 @@ const COUNTS_VAR: &str = "RESIDENT_DRAWS_COUNTS";
 const FRAMES_VAR: &str = "RESIDENT_DRAWS_FRAMES";
 /// The variable that keeps the cases whose name contains it.
 const ONLY_VAR: &str = "RESIDENT_DRAWS_ONLY";
+/// The variable that prints every counter a case moved, and its pixels' hash.
+const DUMP_VAR: &str = "RESIDENT_DRAWS_DUMP";
+
+/// The target's width and height.
+const SIDE: u64 = 512;
 
 /// The draw counts: 500, 1000, 2000 and 5000 unless [`COUNTS_VAR`] lists others, comma-separated.
 fn counts() -> Vec<u64> {
@@ -84,6 +90,10 @@ enum Path {
     Write,
 }
 
+/// Every path, in the order a buffer's executions take them: once made resident for writing, a
+/// buffer stays written by the GPU.
+const PATHS: [Path; 3] = [Path::Encoder, Path::Read, Path::Write];
+
 /// The bytes of an argument-table entry.
 const ENTRY: u64 = 24;
 
@@ -101,7 +111,7 @@ struct Scene {
 }
 
 impl Scene {
-    fn new(device: Device) -> Scene {
+    fn new(device: &Device) -> Scene {
         let bitcode = llvm_assemble(&engine_dir().join("resident_draws.ll")).unwrap();
         let library = device.new_library_with_air(&bitcode).unwrap();
         let function = |name: &str| {
@@ -131,25 +141,36 @@ impl Scene {
         let mut sampled = TextureDescriptor::texture_2d(PixelFormat::RGBA8Unorm, 4, 4, false);
         sampled.usage = TextureUsage::SHADER_READ;
         sampled.resource_options = ResourceOptions::shared();
+        let sampled = device.new_texture(&sampled).unwrap();
+        let texels: Vec<u8> = [40u8, 160, 220, 255].repeat(16);
+        (sampled.replace_region(Region::new_2d(0, 0, 4, 4), 0, 0, &texels, 16, 0)).unwrap();
         let mut options = SamplerStateOptions::default();
         options.support_argument_buffers = true;
         let sampler = device
             .new_sampler_state_with_options(&SamplerDescriptor::new(), options)
             .unwrap();
-        let mut target = TextureDescriptor::texture_2d(PixelFormat::RGBA8Unorm, 512, 512, false);
+        let mut target = TextureDescriptor::texture_2d(PixelFormat::RGBA8Unorm, SIDE, SIDE, false);
         target.usage = TextureUsage::RENDER_TARGET;
-        target.resource_options = ResourceOptions::private();
+        target.resource_options = ResourceOptions::shared();
         Scene {
             slot: state("rd_slot_vertex", "rd_color_fragment"),
             entry: state("rd_entry_vertex", "rd_entry_fragment"),
             touch,
-            count: buffer_with(&device, &[0; 4]).unwrap(),
-            sampled: device.new_texture(&sampled).unwrap(),
+            count: buffer_with(device, &[0; 4]).unwrap(),
+            sampled,
             sampler,
             target: device.new_texture(&target).unwrap(),
             queue: device.new_command_queue().unwrap(),
-            device,
+            device: device.clone(),
         }
+    }
+
+    /// The target's bytes.
+    fn pixels(&self) -> Vec<u8> {
+        let mut bytes = vec![0u8; (4 * SIDE * SIDE) as usize];
+        let region = Region::new_2d(0, 0, SIDE, SIDE);
+        (self.target.get_bytes(&mut bytes, 4 * SIDE, 0, region, 0, 0)).unwrap();
+        bytes
     }
 }
 
@@ -329,21 +350,56 @@ impl<'s> Draws<'s> {
     }
 }
 
-/// The counters `after` minus `before`, each a frame's over `frames`, printed.
-fn counters(before: &WorkCounts, after: &WorkCounts, frames: usize) -> String {
-    let per = |f: fn(&WorkCounts) -> u64| (f(after) - f(before)) as f64 / frames as f64;
-    format!(
-        "a frame's host steps {:.0} taking {:.2} ms, records read {:.0}, chunks kept {:.0}, \
-         graphics pipelines looked up {:.0}, heap tables worked out {:.0}, resident resources \
-         joined {:.0}",
-        per(|c| c.host_steps_recorded),
-        per(|c| c.host_step_nanos) / 1e6,
-        per(|c| c.indirect_records_read),
-        per(|c| c.indirect_chunks_kept),
-        per(|c| c.graphics_pipelines_looked_up),
-        per(|c| c.heap_tables_worked_out),
-        per(|c| c.resident_resources_joined),
-    )
+/// Each counter `after` holds above `before`, by name, from their `Debug` forms (`WorkCounts`
+/// derives it, a `name: value` a field).
+fn moved(before: &WorkCounts, after: &WorkCounts) -> Vec<(String, i128)> {
+    let fields = |counts: &WorkCounts| -> Vec<(String, u64)> {
+        let text = format!("{counts:?}");
+        let inner = text.split_once('{').map_or("", |(_, rest)| rest);
+        (inner.trim_end_matches('}').split(','))
+            .filter_map(|field| {
+                let (name, value) = field.split_once(':')?;
+                Some((name.trim().to_owned(), value.trim().parse().ok()?))
+            })
+            .collect()
+    };
+    (fields(before).into_iter().zip(fields(after)))
+        .filter(|((_, a), (_, b))| a != b)
+        .map(|((name, a), (_, b))| (name, i128::from(b) - i128::from(a)))
+        .collect()
+}
+
+/// FNV-1a of `bytes`.
+fn hashed(bytes: &[u8]) -> u64 {
+    bytes.iter().fold(0xcbf2_9ce4_8422_2325, |hash, &byte| {
+        (hash ^ u64::from(byte)).wrapping_mul(0x100_0000_01b3)
+    })
+}
+
+/// Every path of each shape, with a position buffer a draw and with one buffer at offsets, draws
+/// what the encoder's own draws of positions in one buffer draw: 300 draws, past a chunk of an
+/// indirect command buffer's records, each resolving its own buffer's address among the many made
+/// resident (the `write` path's host step resolves each record's binding there).
+#[test]
+fn each_path_draws_what_the_encoder_draws() {
+    on_device(|device, _| {
+        let scene = Scene::new(device);
+        for shape in [Shape::Slot, Shape::Entry] {
+            let one = Draws::new(&scene, shape, false, 300);
+            one.frame(Path::Encoder);
+            let expected = scene.pixels();
+            let drawn = expected.chunks(4).filter(|p| p[3] != 0).count();
+            assert!(drawn > 300, "{shape:?}: {drawn} pixels drawn");
+            for own in [true, false] {
+                let draws = Draws::new(&scene, shape, own, 300);
+                for path in PATHS {
+                    draws.frame(path);
+                    let pixels = scene.pixels();
+                    assert!(pixels == expected, "{shape:?} own {own} {path:?}");
+                }
+            }
+        }
+    });
 }
 
 #[test]
@@ -358,33 +414,57 @@ fn resident_draws() {
     })
     .unwrap();
     let name = device.name().to_owned();
-    let scene = Scene::new(device);
+    let scene = Scene::new(&device);
     let frames = frames();
     let only = std::env::var(ONLY_VAR).ok();
+    let dump = std::env::var(DUMP_VAR).is_ok_and(|dump| dump == "1");
     for shape in [Shape::Slot, Shape::Entry] {
         for own in [true, false] {
             let binding = if own { "own" } else { "one" };
             for n in counts() {
                 let draws = Draws::new(&scene, shape, own, n);
-                // In this order: a buffer made resident for writing stays written by the GPU.
-                for path in [Path::Encoder, Path::Read, Path::Write] {
+                for path in PATHS {
                     let case = format!("{shape:?} {binding} {path:?}").to_lowercase();
                     if only.as_deref().is_some_and(|only| !case.contains(only)) {
                         continue;
                     }
                     draws.frame(path);
-                    let before = scene.device.work_counts();
+                    let before = device.work_counts();
                     let mut times: Vec<f64> = (0..frames).map(|_| draws.frame(path)).collect();
-                    let after = scene.device.work_counts();
+                    let after = device.work_counts();
                     times.sort_by(f64::total_cmp);
                     let median = times[times.len() / 2];
+                    let per = |name: &str| {
+                        let moved = moved(&before, &after);
+                        let count = moved.iter().find(|(field, _)| field == name);
+                        count.map_or(0.0, |&(_, count)| count as f64 / frames as f64)
+                    };
                     eprintln!(
                         "RESIDENT-DRAWS {name}: {case} N {n}: frame {median:.2} ms median, \
-                         {:.2} largest, {:.2} us a draw; {}",
+                         {:.2} largest, {:.2} us a draw; a frame's host steps {:.0} taking \
+                         {:.2} ms, records read {:.0}, chunks kept {:.0}, heap tables worked out \
+                         {:.0}, resident resources joined {:.0}",
                         times[times.len() - 1],
                         median * 1e3 / n as f64,
-                        counters(&before, &after, frames)
+                        per("host_steps_recorded"),
+                        per("host_step_nanos") / 1e6,
+                        per("indirect_records_read"),
+                        per("indirect_chunks_kept"),
+                        per("heap_tables_worked_out"),
+                        per("resident_resources_joined"),
                     );
+                    if dump {
+                        let moved = moved(&before, &after);
+                        let listed: Vec<String> = (moved.iter())
+                            .filter(|(field, _)| !field.ends_with("nanos"))
+                            .map(|(field, count)| format!("{field}={count}"))
+                            .collect();
+                        eprintln!(
+                            "RESIDENT-DRAWS-COUNTS {case} N {n}: pixels {:016x}; {}",
+                            hashed(&scene.pixels()),
+                            listed.join(" ")
+                        );
+                    }
                 }
             }
         }
