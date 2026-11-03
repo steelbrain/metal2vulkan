@@ -2654,7 +2654,8 @@ impl<M> ShadowSync<M> {
 /// and **Tracking**). Another queue's work comes between only where the command buffer's batches
 /// split. So the carry is dropped wherever that no longer follows: the encoder that published it
 /// did not end holding the truth, a command of the command buffer wrote the truth another way
-/// ([`ShadowSync::wrote`]), work the encoder records apart stands between
+/// ([`ShadowSync::wrote`]), a copy back or merge of another shadowed texture over the same bytes
+/// wrote them (`ShadowSync::copy_back`), work the encoder records apart stands between
 /// ([`ShadowSync::leave`]), an encoder waits for a fence (`EncoderCore::ordered_other_work`), or
 /// the next encoder starts another batch: after an event or semaphore wait, after a signal, or
 /// past a host step (`State::shadows_to_carry`), where another queue's batch may run first, as
@@ -2801,18 +2802,19 @@ impl<M: Clone + KeptArea> ShadowSync<M> {
         }
     }
 
-    /// Copy back entry `i` (dirty): its image's bytes replace the buffer's, so every other
-    /// texture over them is no longer current, or, where the copy back covers a rectangle of
-    /// texels laid out as its own, stale there alone (the module's rules). One kept is merged
-    /// instead: one kept before a command that wrote its bytes two ways is then no longer current
-    /// either, as the buffer holds the other way's writes too, and leaves every other texture
-    /// over the bytes no longer current; one kept as it merges back still holds what the
-    /// encoder's commands left in them, and its merge changes only words they changed through
-    /// it, inside the area they wrote in where they bound it, so it leaves the others stale there
-    /// alone, as a copy back of that area does. A copy back covers only the
-    /// area the commands wrote in, where they bound it: the image's other texels are what the last
-    /// copy in left, which the buffer still holds (a write of its bytes another way leaves the
-    /// image stale, and copies in again before the next use).
+    /// Copy back entry `i` (dirty): its image's bytes replace the buffer's, so every other texture
+    /// over them is no longer current, or, where the copy back covers a rectangle of texels laid
+    /// out as its own, stale there alone (the module's rules); one the encoder has not met that its
+    /// command buffer carries ([`ShadowCarry`]) is carried no further, and copies in at its next
+    /// use. One kept is merged instead: one kept before a command that wrote its bytes two ways is
+    /// then no longer current either, as the buffer holds the other way's writes too, and leaves
+    /// every other texture over the bytes no longer current; one kept as it merges back still holds
+    /// what the encoder's commands left in them, and its merge changes only words they changed
+    /// through it, inside the area they wrote in where they bound it, so it leaves the others stale
+    /// there alone, as a copy back of that area does. A copy back covers only the area the commands
+    /// wrote in, where they bound it: the image's other texels are what the last copy in left,
+    /// which the buffer still holds (a write of its bytes another way leaves the image stale, and
+    /// copies in again before the next use).
     fn copy_back(&mut self, i: usize, copies: &mut Vec<ShadowCopy<M>>) {
         let entry = &mut self.entries[i];
         let two_ways = entry.two_ways;
@@ -2853,6 +2855,8 @@ impl<M: Clone + KeptArea> ShadowSync<M> {
                 other.changed(&written, changed, Lost::OtherShadow);
             }
         }
+        // A carried image holds the bytes as they were before this write.
+        (self.carry.entries).retain(|carried| !carried.copies.shares_truth(&written));
     }
 
     /// Go on with a run of passes over the texture of `copies` (`pass_runs.rs`): its image, which
