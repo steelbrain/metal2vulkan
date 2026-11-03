@@ -4,8 +4,11 @@
 //! - **Handed to the thread** ([`Inbox`]). `commit` leaves its batches in the inbox and returns
 //!   at once, as Metal's `commit` returns before its command buffer is scheduled: it makes no
 //!   pass and submits nothing, so no driver call holds it. This thread takes them in, in commit
-//!   order, at its next pass, and submits what is ready. The commit wakes the thread where it is
-//!   not making a pass; where it is, the thread looks at the inbox again once its pass ends. The
+//!   order, at its next pass, and submits what is ready. The commit wakes the thread where it
+//!   sleeps, once a sleep: the waker that finds it asleep marks it awake as it notifies it, under
+//!   the lock, so a commit made before the thread ran finds it awake and makes no system call
+//!   ([`State::mark`]). Where it is making a pass, the thread looks at the inbox again once its
+//!   pass ends. The
 //!   order sees every commit in commit order, and every batch is planned as it is submitted. This
 //!   thread stops looking at the inbox again at a pass that leaves it a check or a host step, and
 //!   before each one it runs passes again for as long as the inbox holds commits, and looks at it
@@ -240,7 +243,7 @@ impl Nudge {
 /// How the thread slept as a waker marked the state ([`State::mark`]).
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Asleep {
-    /// It made a pass or was about to look again: no wake needed.
+    /// It made a pass, was about to look again, or a waker before woke it: no wake needed.
     No,
     /// On its condition variable: notify it.
     OnCondvar,
@@ -471,9 +474,10 @@ impl SchedulerShared {
     /// mark first), counted as `woken`; else the notify, a system call, is spared.
     fn woken(&self, woken: Woken, asleep: Asleep) {
         match asleep {
+            // The thread alone waits on it.
             Asleep::OnCondvar => {
                 self.wakings[woken as usize].fetch_add(1, Ordering::Relaxed);
-                self.wake.notify_all();
+                self.wake.notify_one();
             }
             Asleep::Nudged => {
                 self.wakings[woken as usize].fetch_add(1, Ordering::Relaxed);
@@ -528,7 +532,8 @@ pub(crate) struct State {
     binary: BinarySignals<vk::Semaphore>,
     /// A commit or a host signal came since the thread last looked.
     dirty: bool,
-    /// The thread sleeps on its condition variable: a waker notifies it only then.
+    /// The thread sleeps on its condition variable and no waker notified it yet: a waker
+    /// notifies it only then, and clears this as it does ([`State::mark`]).
     asleep: bool,
     /// The thread waits for the GPU, and for the nudge to reach this value: a waker signals it
     /// to that value under the lock, instead of notifying (the module docs).
@@ -573,10 +578,14 @@ impl State {
 
     /// A waker's mark (the module docs): look for work again, and how the thread sleeps. Where it
     /// waits for the GPU, `nudge` is signalled to the value it waits for, here, under the lock;
-    /// none is given for a completion turn's wake, whose signal the thread's own wait sees.
+    /// none is given for a completion turn's wake, whose signal the thread's own wait sees. Where
+    /// it sleeps on its condition variable, it is marked awake here, for this waker to notify:
+    /// it then holds `dirty` and will pass, so a later waker before it ran notifies nothing (as
+    /// the nudge, once signalled, is not signalled again).
     fn mark(&mut self, nudge: Option<&Nudge>) -> Asleep {
         self.dirty = true;
         if self.asleep {
+            self.asleep = false;
             return Asleep::OnCondvar;
         }
         match (self.on_gpu, nudge) {

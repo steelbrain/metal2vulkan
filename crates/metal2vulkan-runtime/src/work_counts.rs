@@ -3884,7 +3884,9 @@ pub struct WorkCounts {
     pub scheduler_sleeps: u64,
     /// Times a commit woke the scheduler's thread, which slept: it left its batches to the
     /// thread. Each waking here is a notify of its condition variable, or a signal of its nudge
-    /// where it slept on the GPU, made only where it slept.
+    /// where it slept on the GPU, made only where it slept, and once a sleep: a later waker
+    /// before the thread ran makes none. With the completion and host wakings, at most one a
+    /// sleep (`scheduler_sleeps`).
     pub scheduler_wakes_commit: u64,
     /// Times a completion woke it: what a head waited for from the GPU (its gate's values
     /// completed, an event value its checks wait for landed) was met, seen by a completion turn or

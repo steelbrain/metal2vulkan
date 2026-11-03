@@ -271,6 +271,8 @@ mod sampler_cache_live;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod sampler_sets;
 mod scheduler;
+#[cfg(any(m2v_gpu, m2v_cpu_icd))]
+mod scheduler_wakes;
 mod shader_cache;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod shader_cache_off_thread;
